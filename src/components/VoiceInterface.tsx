@@ -13,12 +13,45 @@ const VoiceInterface: React.FC<VoiceInterfaceProps> = ({ onTaskUpdate }) => {
   const [isConnected, setIsConnected] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [processingStatus, setProcessingStatus] = useState<string>('');
   const [messages, setMessages] = useState<any[]>([]);
   const assistantRef = useRef<RealtimeVoiceAssistant | null>(null);
 
   const handleMessage = (message: any) => {
     console.log('Voice message:', message);
     setMessages(prev => [...prev, message]);
+    
+    // Handle processing status updates
+    if (message.type === 'response.function_call_arguments.delta' || 
+        message.type === 'response.function_call_arguments.done') {
+      if (message.name === 'get_tasks') {
+        if (message.type === 'response.function_call_arguments.delta') {
+          setIsProcessing(true);
+          setProcessingStatus('Checking local tasks...');
+        } else if (message.type === 'response.function_call_arguments.done') {
+          setProcessingStatus('Querying assistant...');
+          setTimeout(() => {
+            setIsProcessing(false);
+            setProcessingStatus('');
+            onTaskUpdate?.();
+          }, 2000);
+        }
+      }
+    }
+    
+    // Show processing for hybrid routing
+    if (message.type === 'conversation.item.create' && message.item?.role === 'user') {
+      const userText = message.item.content?.[0]?.text?.toLowerCase() || '';
+      if (userText.includes('task') || userText.includes('todo') || userText.includes('week')) {
+        setIsProcessing(true);
+        setProcessingStatus('Processing query...');
+        setTimeout(() => {
+          setIsProcessing(false);
+          setProcessingStatus('');
+        }, 3000);
+      }
+    }
     
     // Trigger task refresh when function calls are made
     if (message.type === 'response.function_call_arguments.done') {
@@ -102,7 +135,14 @@ const VoiceInterface: React.FC<VoiceInterfaceProps> = ({ onTaskUpdate }) => {
       <div className="flex flex-col items-center gap-4">
         {/* Status indicator */}
         <div className="text-center">
-          {isSpeaking && (
+          {isProcessing && (
+            <div className="flex items-center gap-2 px-4 py-2 bg-focus/10 rounded-full shadow-lg border animate-fade-up">
+              <div className="w-4 h-4 border-2 border-focus border-t-transparent rounded-full animate-spin" />
+              <span className="text-sm text-focus font-medium">{processingStatus}</span>
+            </div>
+          )}
+          
+          {isSpeaking && !isProcessing && (
             <div className="flex items-center gap-2 px-4 py-2 bg-card rounded-full shadow-lg border animate-fade-up">
               <Volume2 className="w-4 h-4 text-primary" />
               <span className="text-sm text-muted-foreground">Assistant is speaking...</span>
@@ -118,7 +158,7 @@ const VoiceInterface: React.FC<VoiceInterfaceProps> = ({ onTaskUpdate }) => {
             </div>
           )}
           
-          {isListening && !isSpeaking && (
+          {isListening && !isSpeaking && !isProcessing && (
             <div className="flex items-center gap-2 px-4 py-2 bg-primary/10 rounded-full shadow-lg border animate-fade-up">
               <Mic className="w-4 h-4 text-primary animate-pulse" />
               <span className="text-sm text-primary font-medium">Listening...</span>

@@ -111,15 +111,89 @@ async function handleGetTasks(args: any) {
     const { data, error } = await query.limit(10);
     
     if (error) {
-      console.error('Error getting tasks:', error);
-      return { success: false, message: 'Failed to get tasks' };
+      console.error('Error getting tasks from local database:', error);
     }
     
-    return { 
-      success: true, 
-      message: `Found ${data.length} tasks`,
-      tasks: data 
-    };
+    // If we have local tasks, return them
+    if (data && data.length > 0) {
+      console.log(`Found ${data.length} tasks in local database`);
+      return { 
+        success: true, 
+        message: `Found ${data.length} tasks`,
+        tasks: data 
+      };
+    }
+    
+    // Fallback to OpenAI Assistant API when local database is empty or insufficient
+    console.log('Local database empty or insufficient, querying OpenAI Assistant...');
+    
+    try {
+      const assistantId = 'asst_BcZBxlx9zH8VIPvfJrhPP3EF';
+      const userId = '00000000-0000-0000-0000-000000000000';
+      // Generate a new thread ID for this assistant query
+      const fallbackThreadId = crypto.randomUUID();
+      
+      // Create a thread record for the assistant query
+      try {
+        await supabase
+          .from('ai_threads')
+          .insert({
+            id: fallbackThreadId,
+            user_id: userId
+          })
+          .select()
+          .single();
+      } catch (error) {
+        console.log('Thread record creation failed (may already exist):', error);
+      }
+      
+      // Create a query for the assistant based on the args
+      let assistantQuery = 'Get my current tasks';
+      if (args.status_filter) {
+        assistantQuery += ` with status ${args.status_filter}`;
+      }
+      if (args.time_filter) {
+        assistantQuery += ` ${args.time_filter}`;
+      }
+      
+      const assistantResponse = await fetch('https://wwxgajrtmslzklnyplah.functions.supabase.co/hybrid-assistant-api', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          userInput: assistantQuery,
+          userId: userId,
+          threadId: fallbackThreadId,
+          assistantId: assistantId,
+          contextualInstructions: 'Please provide a list of current tasks. Format your response as a structured task list.'
+        })
+      });
+      
+      if (assistantResponse.ok) {
+        const assistantData = await assistantResponse.json();
+        console.log('OpenAI Assistant response received');
+        
+        return {
+          success: true,
+          message: 'Tasks retrieved from OpenAI Assistant',
+          assistant_response: assistantData.response,
+          source: 'openai_assistant'
+        };
+      } else {
+        console.error('Failed to query OpenAI Assistant:', await assistantResponse.text());
+        return { 
+          success: false, 
+          message: 'Failed to retrieve tasks from both local database and OpenAI Assistant' 
+        };
+      }
+    } catch (assistantError) {
+      console.error('Error querying OpenAI Assistant:', assistantError);
+      return { 
+        success: false, 
+        message: 'Failed to retrieve tasks from both local database and OpenAI Assistant' 
+      };
+    }
   } catch (error) {
     console.error('Error in handleGetTasks:', error);
     return { success: false, message: 'Failed to get tasks' };
