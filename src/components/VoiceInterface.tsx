@@ -5,10 +5,10 @@ import { RealtimeVoiceAssistant } from '@/utils/RealtimeVoiceAssistant';
 import { Mic, MicOff, Volume2 } from 'lucide-react';
 
 interface VoiceInterfaceProps {
-  onItineraryUpdate?: () => void;
+  onTaskUpdate?: () => void;
 }
 
-const VoiceInterface: React.FC<VoiceInterfaceProps> = ({ onItineraryUpdate }) => {
+const VoiceInterface: React.FC<VoiceInterfaceProps> = ({ onTaskUpdate }) => {
   const { toast } = useToast();
   const [isConnected, setIsConnected] = useState(false);
   const [isListening, setIsListening] = useState(false);
@@ -20,9 +20,9 @@ const VoiceInterface: React.FC<VoiceInterfaceProps> = ({ onItineraryUpdate }) =>
     console.log('Voice message:', message);
     setMessages(prev => [...prev, message]);
     
-    // Trigger itinerary refresh when function calls are made
+    // Trigger task refresh when function calls are made
     if (message.type === 'response.function_call_arguments.done') {
-      onItineraryUpdate?.();
+      onTaskUpdate?.();
     }
   };
 
@@ -55,7 +55,7 @@ const VoiceInterface: React.FC<VoiceInterfaceProps> = ({ onItineraryUpdate }) =>
       
       toast({
         title: "Voice Assistant Connected",
-        description: "Start speaking to manage your itinerary",
+        description: "Start speaking to manage your tasks",
       });
     } catch (error) {
       console.error('Error connecting to voice assistant:', error);
@@ -132,7 +132,7 @@ const VoiceInterface: React.FC<VoiceInterfaceProps> = ({ onItineraryUpdate }) =>
             <Button 
               onClick={connectToAssistant}
               size="lg"
-              className="bg-gradient-to-r from-ocean to-ocean-light hover:from-ocean-dark hover:to-ocean text-white rounded-full px-8 py-4 shadow-lg hover:shadow-xl transition-all duration-300"
+              className="bg-gradient-to-r from-focus to-focus-light hover:from-focus-dark hover:to-focus text-white rounded-full px-8 py-4 shadow-lg hover:shadow-xl transition-all duration-300"
             >
               <Mic className="w-5 h-5 mr-2" />
               Start Voice Assistant
@@ -146,7 +146,7 @@ const VoiceInterface: React.FC<VoiceInterfaceProps> = ({ onItineraryUpdate }) =>
                 className={`rounded-full p-4 shadow-lg transition-all duration-300 ${
                   isListening 
                     ? 'bg-destructive hover:bg-destructive/90 animate-pulse-voice' 
-                    : 'bg-gradient-to-r from-ocean to-ocean-light hover:from-ocean-dark hover:to-ocean text-white'
+                    : 'bg-gradient-to-r from-focus to-focus-light hover:from-focus-dark hover:to-focus text-white'
                 }`}
               >
                 {isListening ? (

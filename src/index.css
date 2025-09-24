@@ -8,7 +8,7 @@ All colors MUST be HSL.
 
 @layer base {
   :root {
-    /* Travel-inspired color palette */
+    /* Productivity-focused color palette */
     --background: 220 20% 98%;
     --foreground: 222 15% 12%;
 
@@ -18,54 +18,75 @@ All colors MUST be HSL.
     --popover: 0 0% 100%;
     --popover-foreground: 222 15% 12%;
 
-    /* Ocean blues for primary */
-    --primary: 207 90% 54%;
+    /* Focus blue for primary */
+    --primary: 214 87% 55%;
     --primary-foreground: 0 0% 100%;
-    --primary-glow: 207 85% 65%;
+    --primary-glow: 214 82% 65%;
 
-    /* Soft neutrals for secondary */
+    /* Clean neutrals for secondary */
     --secondary: 220 14% 96%;
     --secondary-foreground: 222 15% 12%;
 
     --muted: 220 14% 96%;
     --muted-foreground: 215 16% 47%;
 
-    /* Warm accent colors */
-    --accent: 35 100% 94%;
-    --accent-foreground: 35 84% 20%;
+    /* Success green accent */
+    --accent: 142 72% 29%;
+    --accent-foreground: 0 0% 100%;
 
     --destructive: 0 84% 60%;
     --destructive-foreground: 0 0% 100%;
 
     --border: 220 13% 91%;
     --input: 220 13% 91%;
-    --ring: 207 90% 54%;
+    --ring: 214 87% 55%;
 
     --radius: 0.75rem;
 
-    /* Custom travel theme colors */
-    --ocean: 207 90% 54%;
-    --ocean-light: 207 85% 65%;
-    --ocean-dark: 207 95% 42%;
-    --sunset: 35 100% 74%;
-    --sunset-light: 35 100% 85%;
-    --mountain: 162 25% 45%;
-    --sky: 200 100% 95%;
+    /* Task management theme colors */
+    --focus: 214 87% 55%;
+    --focus-light: 214 82% 65%;
+    --focus-dark: 214 92% 45%;
+    --success: 142 72% 29%;
+    --success-light: 142 67% 39%;
+    --warning: 45 93% 47%;
+    --warning-light: 45 88% 57%;
+    --productivity: 262 52% 47%;
+    --productivity-light: 262 47% 57%;
+    
+    /* Task status colors */
+    --status-backlog: 220 13% 91%;
+    --status-todo: 214 87% 55%;
+    --status-doing: 45 93% 47%;
+    --status-done: 142 72% 29%;
+    
+    /* Priority colors */
+    --priority-low: 142 72% 29%;
+    --priority-medium: 45 93% 47%;
+    --priority-high: 25 95% 53%;
+    --priority-urgent: 0 84% 60%;
+    
+    /* Category colors */
+    --category-life: 168 76% 42%;
+    --category-career: 262 52% 47%;
+    --category-ventures: 25 95% 53%;
+    --category-education: 214 87% 55%;
     
     /* Gradients */
-    --gradient-ocean: linear-gradient(135deg, hsl(207 90% 54%) 0%, hsl(207 85% 65%) 100%);
-    --gradient-sunset: linear-gradient(135deg, hsl(35 100% 74%) 0%, hsl(25 95% 70%) 100%);
-    --gradient-travel: linear-gradient(135deg, hsl(207 90% 54%) 0%, hsl(35 100% 74%) 100%);
-    --gradient-sky: linear-gradient(180deg, hsl(200 100% 95%) 0%, hsl(220 20% 98%) 100%);
+    --gradient-focus: linear-gradient(135deg, hsl(214 87% 55%) 0%, hsl(214 82% 65%) 100%);
+    --gradient-success: linear-gradient(135deg, hsl(142 72% 29%) 0%, hsl(142 67% 39%) 100%);
+    --gradient-productivity: linear-gradient(135deg, hsl(214 87% 55%) 0%, hsl(262 52% 47%) 100%);
+    --gradient-dashboard: linear-gradient(180deg, hsl(220 20% 98%) 0%, hsl(214 82% 65% / 0.1) 100%);
 
     /* Voice interface animations */
-    --voice-pulse: 0 0 20px hsl(207 90% 54% / 0.6);
-    --voice-glow: 0 0 40px hsl(207 85% 65% / 0.8);
+    --voice-pulse: 0 0 20px hsl(214 87% 55% / 0.6);
+    --voice-glow: 0 0 40px hsl(214 82% 65% / 0.8);
     
     /* Shadows */
     --shadow-soft: 0 2px 8px hsl(220 13% 91% / 0.4);
-    --shadow-travel: 0 4px 20px hsl(207 90% 54% / 0.1);
-    --shadow-voice: 0 8px 32px hsl(207 90% 54% / 0.2);
+    --shadow-focus: 0 4px 20px hsl(214 87% 55% / 0.1);
+    --shadow-voice: 0 8px 32px hsl(214 87% 55% / 0.2);
+    --shadow-elevated: 0 8px 32px hsl(220 13% 91% / 0.6);
 
     /* Transitions */
     --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);

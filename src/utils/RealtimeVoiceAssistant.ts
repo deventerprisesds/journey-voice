@@ -252,15 +252,19 @@ export class RealtimeVoiceAssistant {
       type: 'session.update',
       session: {
         modalities: ['text', 'audio'],
-        instructions: `You are a helpful travel assistant specializing in itinerary management. Help users plan, organize, and manage their travel itineraries. You can:
+        instructions: `You are a helpful task management assistant specializing in personal productivity. Help users organize and manage their tasks across different areas of life. You can:
         
-        1. Add new activities, restaurants, or accommodations to their itinerary
-        2. Modify existing itinerary items (change times, locations, descriptions)
-        3. Suggest travel recommendations based on their preferences
-        4. Provide information about destinations, travel tips, and local insights
-        5. Help organize itineraries by date, location, or category
+        1. Create new tasks with appropriate priority, category, and timing
+        2. Update existing tasks (change status, priority, descriptions, due dates)
+        3. Suggest task organization and productivity strategies
+        4. Help users break down complex projects into manageable tasks
+        5. Provide time management advice and task prioritization guidance
         
-        Be conversational, friendly, and focus on creating amazing travel experiences. Always confirm actions before making changes to their itinerary.`,
+        Categories available: LIFE, CAREER, VENTURES, EDUCATION
+        Priorities available: LOW, MEDIUM, HIGH, URGENT
+        Statuses available: BACKLOG, TODO, DOING, DONE
+        
+        Be conversational, encouraging, and focus on helping users achieve their goals. Always confirm actions before making changes to their tasks.`,
         voice: 'alloy',
         input_audio_format: 'pcm16',
         output_audio_format: 'pcm16',
@@ -276,36 +280,48 @@ export class RealtimeVoiceAssistant {
         tools: [
           {
             type: 'function',
-            name: 'add_itinerary_item',
-            description: 'Add a new item to the user\'s itinerary',
+            name: 'create_task',
+            description: 'Create a new task in the user\'s task board',
             parameters: {
               type: 'object',
               properties: {
-                title: { type: 'string', description: 'Title of the itinerary item' },
-                description: { type: 'string', description: 'Description of the activity' },
-                location: { type: 'string', description: 'Location or address' },
-                category: { type: 'string', enum: ['activity', 'accommodation', 'transport', 'food', 'other'] },
-                start_time: { type: 'string', description: 'Start time in ISO format' },
-                end_time: { type: 'string', description: 'End time in ISO format' }
+                title: { type: 'string', description: 'Title of the task' },
+                description: { type: 'string', description: 'Detailed description of the task' },
+                priority: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH', 'URGENT'], description: 'Task priority level' },
+                category: { type: 'string', enum: ['LIFE', 'CAREER', 'VENTURES', 'EDUCATION'], description: 'Task category' },
+                due_date: { type: 'string', description: 'Due date in ISO format (optional)' },
+                estimate_minutes: { type: 'number', description: 'Estimated time to complete in minutes (optional)' }
               },
               required: ['title', 'category']
             }
           },
           {
             type: 'function',
-            name: 'update_itinerary_item',
-            description: 'Update an existing itinerary item',
+            name: 'update_task',
+            description: 'Update an existing task',
             parameters: {
               type: 'object',
               properties: {
-                item_id: { type: 'string', description: 'ID of the item to update' },
+                task_id: { type: 'string', description: 'ID of the task to update' },
                 title: { type: 'string' },
                 description: { type: 'string' },
-                location: { type: 'string' },
-                start_time: { type: 'string' },
-                end_time: { type: 'string' }
+                priority: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH', 'URGENT'] },
+                status: { type: 'string', enum: ['BACKLOG', 'TODO', 'DOING', 'DONE'] },
+                due_date: { type: 'string' },
+                estimate_minutes: { type: 'number' }
               },
-              required: ['item_id']
+              required: ['task_id']
+            }
+          },
+          {
+            type: 'function',
+            name: 'get_tasks',
+            description: 'Get current tasks to reference for updates',
+            parameters: {
+              type: 'object',
+              properties: {
+                status_filter: { type: 'string', enum: ['BACKLOG', 'TODO', 'DOING', 'DONE'], description: 'Optional status filter' }
+              }
             }
           }
         ],

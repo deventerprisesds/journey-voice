@@ -58,18 +58,45 @@ export default {
           border: "hsl(var(--sidebar-border))",
           ring: "hsl(var(--sidebar-ring))",
         },
-        // Custom travel theme colors
-        ocean: {
-          DEFAULT: "hsl(var(--ocean))",
-          light: "hsl(var(--ocean-light))",
-          dark: "hsl(var(--ocean-dark))",
+        // Task management theme colors
+        focus: {
+          DEFAULT: "hsl(var(--focus))",
+          light: "hsl(var(--focus-light))",
+          dark: "hsl(var(--focus-dark))",
         },
-        sunset: {
-          DEFAULT: "hsl(var(--sunset))",
-          light: "hsl(var(--sunset-light))",
+        success: {
+          DEFAULT: "hsl(var(--success))",
+          light: "hsl(var(--success-light))",
         },
-        mountain: "hsl(var(--mountain))",
-        sky: "hsl(var(--sky))",
+        warning: {
+          DEFAULT: "hsl(var(--warning))",
+          light: "hsl(var(--warning-light))",
+        },
+        productivity: {
+          DEFAULT: "hsl(var(--productivity))",
+          light: "hsl(var(--productivity-light))",
+        },
+        // Task status colors
+        status: {
+          backlog: "hsl(var(--status-backlog))",
+          todo: "hsl(var(--status-todo))",
+          doing: "hsl(var(--status-doing))",
+          done: "hsl(var(--status-done))",
+        },
+        // Priority colors
+        priority: {
+          low: "hsl(var(--priority-low))",
+          medium: "hsl(var(--priority-medium))",
+          high: "hsl(var(--priority-high))",
+          urgent: "hsl(var(--priority-urgent))",
+        },
+        // Category colors
+        category: {
+          life: "hsl(var(--category-life))",
+          career: "hsl(var(--category-career))",
+          ventures: "hsl(var(--category-ventures))",
+          education: "hsl(var(--category-education))",
+        },
       },
       borderRadius: {
         lg: "var(--radius)",
