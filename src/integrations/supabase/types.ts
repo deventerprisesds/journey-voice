@@ -14,6 +14,145 @@ export type Database = {
   }
   public: {
     Tables: {
+      ai_threads: {
+        Row: {
+          created_at: string
+          id: string
+          openai_thread_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          openai_thread_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          openai_thread_id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      boards: {
+        Row: {
+          color: string | null
+          created_at: string
+          description: string | null
+          id: string
+          is_default: boolean | null
+          name: string
+          position: number
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          color?: string | null
+          created_at?: string
+          description?: string | null
+          id?: string
+          is_default?: boolean | null
+          name: string
+          position?: number
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          color?: string | null
+          created_at?: string
+          description?: string | null
+          id?: string
+          is_default?: boolean | null
+          name?: string
+          position?: number
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      columns: {
+        Row: {
+          board_id: string
+          created_at: string
+          id: string
+          name: string
+          position: number
+          status: Database["public"]["Enums"]["task_status"]
+          updated_at: string
+        }
+        Insert: {
+          board_id: string
+          created_at?: string
+          id?: string
+          name: string
+          position?: number
+          status: Database["public"]["Enums"]["task_status"]
+          updated_at?: string
+        }
+        Update: {
+          board_id?: string
+          created_at?: string
+          id?: string
+          name?: string
+          position?: number
+          status?: Database["public"]["Enums"]["task_status"]
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "columns_board_id_fkey"
+            columns: ["board_id"]
+            isOneToOne: false
+            referencedRelation: "boards"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      delivery_logs: {
+        Row: {
+          channel: Database["public"]["Enums"]["notification_channel"]
+          created_at: string
+          delivered_at: string | null
+          failed_at: string | null
+          failure_reason: string | null
+          id: string
+          notification_id: string
+          response_data: Json | null
+        }
+        Insert: {
+          channel: Database["public"]["Enums"]["notification_channel"]
+          created_at?: string
+          delivered_at?: string | null
+          failed_at?: string | null
+          failure_reason?: string | null
+          id?: string
+          notification_id: string
+          response_data?: Json | null
+        }
+        Update: {
+          channel?: Database["public"]["Enums"]["notification_channel"]
+          created_at?: string
+          delivered_at?: string | null
+          failed_at?: string | null
+          failure_reason?: string | null
+          id?: string
+          notification_id?: string
+          response_data?: Json | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "delivery_logs_notification_id_fkey"
+            columns: ["notification_id"]
+            isOneToOne: false
+            referencedRelation: "scheduled_notifications"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       extracted_content: {
         Row: {
           case_studies: string[] | null
@@ -154,6 +293,281 @@ export type Database = {
           },
         ]
       }
+      notification_prefs: {
+        Row: {
+          channels: Database["public"]["Enums"]["notification_channel"][] | null
+          created_at: string
+          daily_digest_enabled: boolean | null
+          due_reminders_enabled: boolean | null
+          id: string
+          overdue_reminders_enabled: boolean | null
+          quiet_hours_end: string | null
+          quiet_hours_start: string | null
+          timezone: string | null
+          updated_at: string
+          user_id: string
+          weekly_digest_enabled: boolean | null
+        }
+        Insert: {
+          channels?:
+            | Database["public"]["Enums"]["notification_channel"][]
+            | null
+          created_at?: string
+          daily_digest_enabled?: boolean | null
+          due_reminders_enabled?: boolean | null
+          id?: string
+          overdue_reminders_enabled?: boolean | null
+          quiet_hours_end?: string | null
+          quiet_hours_start?: string | null
+          timezone?: string | null
+          updated_at?: string
+          user_id: string
+          weekly_digest_enabled?: boolean | null
+        }
+        Update: {
+          channels?:
+            | Database["public"]["Enums"]["notification_channel"][]
+            | null
+          created_at?: string
+          daily_digest_enabled?: boolean | null
+          due_reminders_enabled?: boolean | null
+          id?: string
+          overdue_reminders_enabled?: boolean | null
+          quiet_hours_end?: string | null
+          quiet_hours_start?: string | null
+          timezone?: string | null
+          updated_at?: string
+          user_id?: string
+          weekly_digest_enabled?: boolean | null
+        }
+        Relationships: []
+      }
+      scheduled_notifications: {
+        Row: {
+          body: string
+          created_at: string
+          delivered_at: string | null
+          failed_at: string | null
+          failure_reason: string | null
+          id: string
+          notification_type: string
+          scheduled_for: string
+          task_id: string | null
+          title: string
+          user_id: string
+        }
+        Insert: {
+          body: string
+          created_at?: string
+          delivered_at?: string | null
+          failed_at?: string | null
+          failure_reason?: string | null
+          id?: string
+          notification_type: string
+          scheduled_for: string
+          task_id?: string | null
+          title: string
+          user_id: string
+        }
+        Update: {
+          body?: string
+          created_at?: string
+          delivered_at?: string | null
+          failed_at?: string | null
+          failure_reason?: string | null
+          id?: string
+          notification_type?: string
+          scheduled_for?: string
+          task_id?: string | null
+          title?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "scheduled_notifications_task_id_fkey"
+            columns: ["task_id"]
+            isOneToOne: false
+            referencedRelation: "tasks"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      sources: {
+        Row: {
+          config: Json | null
+          created_at: string
+          id: string
+          name: string
+          source_type: Database["public"]["Enums"]["task_source"]
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          config?: Json | null
+          created_at?: string
+          id?: string
+          name: string
+          source_type: Database["public"]["Enums"]["task_source"]
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          config?: Json | null
+          created_at?: string
+          id?: string
+          name?: string
+          source_type?: Database["public"]["Enums"]["task_source"]
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      task_columns: {
+        Row: {
+          column_id: string
+          created_at: string
+          id: string
+          position: number
+          task_id: string
+        }
+        Insert: {
+          column_id: string
+          created_at?: string
+          id?: string
+          position?: number
+          task_id: string
+        }
+        Update: {
+          column_id?: string
+          created_at?: string
+          id?: string
+          position?: number
+          task_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "task_columns_column_id_fkey"
+            columns: ["column_id"]
+            isOneToOne: false
+            referencedRelation: "columns"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "task_columns_task_id_fkey"
+            columns: ["task_id"]
+            isOneToOne: false
+            referencedRelation: "tasks"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      task_events: {
+        Row: {
+          created_at: string
+          event_type: string
+          id: string
+          new_values: Json | null
+          old_values: Json | null
+          task_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          event_type: string
+          id?: string
+          new_values?: Json | null
+          old_values?: Json | null
+          task_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          event_type?: string
+          id?: string
+          new_values?: Json | null
+          old_values?: Json | null
+          task_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "task_events_task_id_fkey"
+            columns: ["task_id"]
+            isOneToOne: false
+            referencedRelation: "tasks"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tasks: {
+        Row: {
+          blocked_by: string[] | null
+          board_id: string
+          category: Database["public"]["Enums"]["task_category"]
+          completed_at: string | null
+          created_at: string
+          description: string | null
+          due_date: string | null
+          estimate_minutes: number | null
+          id: string
+          priority: Database["public"]["Enums"]["task_priority"]
+          source_id: string | null
+          status: Database["public"]["Enums"]["task_status"]
+          title: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          blocked_by?: string[] | null
+          board_id: string
+          category?: Database["public"]["Enums"]["task_category"]
+          completed_at?: string | null
+          created_at?: string
+          description?: string | null
+          due_date?: string | null
+          estimate_minutes?: number | null
+          id?: string
+          priority?: Database["public"]["Enums"]["task_priority"]
+          source_id?: string | null
+          status?: Database["public"]["Enums"]["task_status"]
+          title: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          blocked_by?: string[] | null
+          board_id?: string
+          category?: Database["public"]["Enums"]["task_category"]
+          completed_at?: string | null
+          created_at?: string
+          description?: string | null
+          due_date?: string | null
+          estimate_minutes?: number | null
+          id?: string
+          priority?: Database["public"]["Enums"]["task_priority"]
+          source_id?: string | null
+          status?: Database["public"]["Enums"]["task_status"]
+          title?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tasks_board_id_fkey"
+            columns: ["board_id"]
+            isOneToOne: false
+            referencedRelation: "boards"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tasks_source_id_fkey"
+            columns: ["source_id"]
+            isOneToOne: false
+            referencedRelation: "sources"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
@@ -162,7 +576,11 @@ export type Database = {
       [_ in never]: never
     }
     Enums: {
-      [_ in never]: never
+      notification_channel: "WEB_PUSH" | "EMAIL" | "IN_APP"
+      task_category: "LIFE" | "CAREER" | "VENTURES" | "EDUCATION"
+      task_priority: "LOW" | "MEDIUM" | "HIGH" | "URGENT"
+      task_source: "CHAT" | "EMBA_SHEET" | "MIT_SHEET" | "MANUAL"
+      task_status: "BACKLOG" | "TODO" | "DOING" | "DONE"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -289,6 +707,12 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      notification_channel: ["WEB_PUSH", "EMAIL", "IN_APP"],
+      task_category: ["LIFE", "CAREER", "VENTURES", "EDUCATION"],
+      task_priority: ["LOW", "MEDIUM", "HIGH", "URGENT"],
+      task_source: ["CHAT", "EMBA_SHEET", "MIT_SHEET", "MANUAL"],
+      task_status: ["BACKLOG", "TODO", "DOING", "DONE"],
+    },
   },
 } as const
