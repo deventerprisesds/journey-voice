@@ -137,6 +137,8 @@ serve(async (req) => {
   const { socket, response } = Deno.upgradeWebSocket(req);
   
   let openAISocket: WebSocket | null = null;
+  let currentThreadId: string | null = null;
+  let voiceSessionId = crypto.randomUUID();
   
   socket.onopen = () => {
     console.log("Client WebSocket connected");
@@ -159,6 +161,42 @@ serve(async (req) => {
         try {
           const data = JSON.parse(event.data);
           console.log("OpenAI message type:", data.type);
+          
+          // Create thread ID when session starts
+          if (data.type === "session.created") {
+            currentThreadId = crypto.randomUUID();
+            console.log("Created thread ID for session:", currentThreadId);
+            
+            // Create thread record in database
+            try {
+              await supabase.from('ai_threads').insert({
+                id: currentThreadId,
+                user_id: '00000000-0000-0000-0000-000000000000' // Using anonymous UUID
+              });
+            } catch (error) {
+              console.error("Error creating thread record:", error);
+            }
+          }
+          
+          // Handle assistant responses for RAG storage
+          if (data.type === "response.audio_transcript.done" && data.transcript && currentThreadId) {
+            console.log("Storing assistant response transcript for RAG");
+            await fetch('https://wwxgajrtmslzklnyplah.functions.supabase.co/generate-embeddings', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                userId: '00000000-0000-0000-0000-000000000000',
+                threadId: currentThreadId,
+                content: data.transcript,
+                messageType: 'assistant',
+                role: 'assistant',
+                voiceSessionId: voiceSessionId,
+                metadata: { source: 'realtime_api' }
+              })
+            }).catch(error => console.error("Error storing assistant response:", error));
+          }
           
           // Handle function calls for task management
           if (data.type === 'response.function_call_arguments.done') {
@@ -226,10 +264,136 @@ serve(async (req) => {
     }
   };
 
-  socket.onmessage = (event) => {
+  socket.onmessage = async (event) => {
     try {
       const data = JSON.parse(event.data);
       console.log("Client message type:", data.type);
+      
+      // Handle conversation.item.create to capture user text input for RAG
+      if (data.type === 'conversation.item.create' && 
+          data.item?.content?.[0]?.type === 'input_text') {
+        const userText = data.item.content[0].text;
+        console.log("User text input:", userText);
+        
+        // Check for hybrid routing and get context
+        try {
+          const contextResponse = await fetch('https://wwxgajrtmslzklnyplah.functions.supabase.co/rag-context-retrieval', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              userInput: userText,
+              userId: '00000000-0000-0000-0000-000000000000',
+              threadId: currentThreadId,
+              action: 'should_use_assistant'
+            })
+          });
+          
+          if (contextResponse.ok) {
+            const contextData = await contextResponse.json();
+            console.log("Routing decision:", contextData);
+            
+            if (contextData.useAssistantAPI) {
+              console.log("Routing to Assistant API for complex query");
+              
+              // Get full context and enhanced instructions
+              const fullContextResponse = await fetch('https://wwxgajrtmslzklnyplah.functions.supabase.co/rag-context-retrieval', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  userInput: userText,
+                  userId: '00000000-0000-0000-0000-000000000000',
+                  threadId: currentThreadId,
+                  action: 'get_context'
+                })
+              });
+              
+              if (fullContextResponse.ok) {
+                const fullContext = await fullContextResponse.json();
+                
+                // Make Assistant API call
+                const assistantResponse = await fetch('https://wwxgajrtmslzklnyplah.functions.supabase.co/hybrid-assistant-api', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({
+                    userInput: userText,
+                    userId: '00000000-0000-0000-0000-000000000000',
+                    threadId: currentThreadId || (currentThreadId = crypto.randomUUID()),
+                    contextualInstructions: fullContext.contextualInstructions
+                  })
+                });
+                
+                if (assistantResponse.ok) {
+                  const assistantData = await assistantResponse.json();
+                  console.log("Assistant API response received");
+                  
+                  // Store the assistant response for RAG
+                  await fetch('https://wwxgajrtmslzklnyplah.functions.supabase.co/generate-embeddings', {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                      userId: '00000000-0000-0000-0000-000000000000',
+                      threadId: currentThreadId,
+                      content: assistantData.response,
+                      messageType: 'assistant',
+                      role: 'assistant',
+                      voiceSessionId: voiceSessionId,
+                      metadata: { source: 'assistant_api', routing_reason: contextData.reason }
+                    })
+                  }).catch(error => console.error("Error storing assistant response:", error));
+                  
+                  // Send the response back to the client as a text message that will be spoken
+                  socket.send(JSON.stringify({
+                    type: 'conversation.item.create',
+                    item: {
+                      type: 'message',
+                      role: 'assistant',
+                      content: [
+                        {
+                          type: 'text',
+                          text: assistantData.response
+                        }
+                      ]
+                    }
+                  }));
+                  
+                  socket.send(JSON.stringify({ type: 'response.create' }));
+                  
+                  return; // Don't forward to OpenAI Realtime API
+                }
+              }
+            }
+          }
+        } catch (error) {
+          console.error("Error in hybrid routing:", error);
+        }
+        
+        // Store user input for RAG
+        if (currentThreadId) {
+          await fetch('https://wwxgajrtmslzklnyplah.functions.supabase.co/generate-embeddings', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              userId: '00000000-0000-0000-0000-000000000000',
+              threadId: currentThreadId,
+              content: userText,
+              messageType: 'user',
+              role: 'user',
+              voiceSessionId: voiceSessionId,
+              metadata: { source: 'realtime_api' }
+            })
+          }).catch(error => console.error("Error storing user input:", error));
+        }
+      }
       
       // Forward client messages to OpenAI
       if (openAISocket && openAISocket.readyState === WebSocket.OPEN) {
