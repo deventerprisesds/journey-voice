@@ -8,35 +8,68 @@ All colors MUST be HSL.
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    /* Travel-inspired color palette */
+    --background: 220 20% 98%;
+    --foreground: 222 15% 12%;
 
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card-foreground: 222 15% 12%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
+    --popover-foreground: 222 15% 12%;
 
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
+    /* Ocean blues for primary */
+    --primary: 207 90% 54%;
+    --primary-foreground: 0 0% 100%;
+    --primary-glow: 207 85% 65%;
 
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
+    /* Soft neutrals for secondary */
+    --secondary: 220 14% 96%;
+    --secondary-foreground: 222 15% 12%;
 
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
+    --muted: 220 14% 96%;
+    --muted-foreground: 215 16% 47%;
 
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
+    /* Warm accent colors */
+    --accent: 35 100% 94%;
+    --accent-foreground: 35 84% 20%;
 
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
 
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
+    --border: 220 13% 91%;
+    --input: 220 13% 91%;
+    --ring: 207 90% 54%;
 
-    --radius: 0.5rem;
+    --radius: 0.75rem;
+
+    /* Custom travel theme colors */
+    --ocean: 207 90% 54%;
+    --ocean-light: 207 85% 65%;
+    --ocean-dark: 207 95% 42%;
+    --sunset: 35 100% 74%;
+    --sunset-light: 35 100% 85%;
+    --mountain: 162 25% 45%;
+    --sky: 200 100% 95%;
+    
+    /* Gradients */
+    --gradient-ocean: linear-gradient(135deg, hsl(207 90% 54%) 0%, hsl(207 85% 65%) 100%);
+    --gradient-sunset: linear-gradient(135deg, hsl(35 100% 74%) 0%, hsl(25 95% 70%) 100%);
+    --gradient-travel: linear-gradient(135deg, hsl(207 90% 54%) 0%, hsl(35 100% 74%) 100%);
+    --gradient-sky: linear-gradient(180deg, hsl(200 100% 95%) 0%, hsl(220 20% 98%) 100%);
+
+    /* Voice interface animations */
+    --voice-pulse: 0 0 20px hsl(207 90% 54% / 0.6);
+    --voice-glow: 0 0 40px hsl(207 85% 65% / 0.8);
+    
+    /* Shadows */
+    --shadow-soft: 0 2px 8px hsl(220 13% 91% / 0.4);
+    --shadow-travel: 0 4px 20px hsl(207 90% 54% / 0.1);
+    --shadow-voice: 0 8px 32px hsl(207 90% 54% / 0.2);
+
+    /* Transitions */
+    --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    --transition-bounce: all 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55);
 
     --sidebar-background: 0 0% 98%;
 

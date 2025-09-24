@@ -68,6 +68,92 @@ export type Database = {
         }
         Relationships: []
       }
+      itineraries: {
+        Row: {
+          created_at: string
+          description: string | null
+          end_date: string | null
+          id: string
+          location: string | null
+          start_date: string | null
+          title: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          description?: string | null
+          end_date?: string | null
+          id?: string
+          location?: string | null
+          start_date?: string | null
+          title: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          description?: string | null
+          end_date?: string | null
+          id?: string
+          location?: string | null
+          start_date?: string | null
+          title?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      itinerary_items: {
+        Row: {
+          category: string | null
+          created_at: string
+          description: string | null
+          end_time: string | null
+          id: string
+          itinerary_id: string
+          location: string | null
+          notes: string | null
+          start_time: string | null
+          title: string
+          updated_at: string
+        }
+        Insert: {
+          category?: string | null
+          created_at?: string
+          description?: string | null
+          end_time?: string | null
+          id?: string
+          itinerary_id: string
+          location?: string | null
+          notes?: string | null
+          start_time?: string | null
+          title: string
+          updated_at?: string
+        }
+        Update: {
+          category?: string | null
+          created_at?: string
+          description?: string | null
+          end_time?: string | null
+          id?: string
+          itinerary_id?: string
+          location?: string | null
+          notes?: string | null
+          start_time?: string | null
+          title?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "itinerary_items_itinerary_id_fkey"
+            columns: ["itinerary_id"]
+            isOneToOne: false
+            referencedRelation: "itineraries"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never

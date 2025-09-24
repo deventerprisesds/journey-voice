@@ -1,0 +1,182 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { Button } from '@/components/ui/button';
+import { useToast } from '@/components/ui/use-toast';
+import { RealtimeVoiceAssistant } from '@/utils/RealtimeVoiceAssistant';
+import { Mic, MicOff, Volume2 } from 'lucide-react';
+
+interface VoiceInterfaceProps {
+  onItineraryUpdate?: () => void;
+}
+
+const VoiceInterface: React.FC<VoiceInterfaceProps> = ({ onItineraryUpdate }) => {
+  const { toast } = useToast();
+  const [isConnected, setIsConnected] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [messages, setMessages] = useState<any[]>([]);
+  const assistantRef = useRef<RealtimeVoiceAssistant | null>(null);
+
+  const handleMessage = (message: any) => {
+    console.log('Voice message:', message);
+    setMessages(prev => [...prev, message]);
+    
+    // Trigger itinerary refresh when function calls are made
+    if (message.type === 'response.function_call_arguments.done') {
+      onItineraryUpdate?.();
+    }
+  };
+
+  const handleConnectionChange = (connected: boolean) => {
+    setIsConnected(connected);
+    if (!connected) {
+      setIsListening(false);
+      setIsSpeaking(false);
+    }
+  };
+
+  const handleListeningChange = (listening: boolean) => {
+    setIsListening(listening);
+  };
+
+  const handleSpeakingChange = (speaking: boolean) => {
+    setIsSpeaking(speaking);
+  };
+
+  const connectToAssistant = async () => {
+    try {
+      assistantRef.current = new RealtimeVoiceAssistant(
+        handleMessage,
+        handleConnectionChange,
+        handleListeningChange,
+        handleSpeakingChange
+      );
+      
+      await assistantRef.current.connect();
+      
+      toast({
+        title: "Voice Assistant Connected",
+        description: "Start speaking to manage your itinerary",
+      });
+    } catch (error) {
+      console.error('Error connecting to voice assistant:', error);
+      toast({
+        title: "Connection Error",
+        description: error instanceof Error ? error.message : 'Failed to connect to voice assistant',
+        variant: "destructive",
+      });
+    }
+  };
+
+  const toggleListening = async () => {
+    if (!assistantRef.current || !isConnected) return;
+    
+    try {
+      if (isListening) {
+        assistantRef.current.stopListening();
+      } else {
+        await assistantRef.current.startListening();
+      }
+    } catch (error) {
+      console.error('Error toggling listening:', error);
+      toast({
+        title: "Microphone Error",
+        description: "Failed to access microphone. Please check permissions.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const disconnectAssistant = () => {
+    assistantRef.current?.disconnect();
+    assistantRef.current = null;
+  };
+
+  useEffect(() => {
+    return () => {
+      assistantRef.current?.disconnect();
+    };
+  }, []);
+
+  return (
+    <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50">
+      <div className="flex flex-col items-center gap-4">
+        {/* Status indicator */}
+        <div className="text-center">
+          {isSpeaking && (
+            <div className="flex items-center gap-2 px-4 py-2 bg-card rounded-full shadow-lg border animate-fade-up">
+              <Volume2 className="w-4 h-4 text-primary" />
+              <span className="text-sm text-muted-foreground">Assistant is speaking...</span>
+              <div className="flex gap-1">
+                {[...Array(3)].map((_, i) => (
+                  <div
+                    key={i}
+                    className="w-1 h-4 bg-primary rounded-full animate-wave"
+                    style={{ animationDelay: `${i * 0.2}s` }}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+          
+          {isListening && !isSpeaking && (
+            <div className="flex items-center gap-2 px-4 py-2 bg-primary/10 rounded-full shadow-lg border animate-fade-up">
+              <Mic className="w-4 h-4 text-primary animate-pulse" />
+              <span className="text-sm text-primary font-medium">Listening...</span>
+            </div>
+          )}
+        </div>
+
+        {/* Main control buttons */}
+        <div className="flex items-center gap-4">
+          {!isConnected ? (
+            <Button 
+              onClick={connectToAssistant}
+              size="lg"
+              className="bg-gradient-to-r from-ocean to-ocean-light hover:from-ocean-dark hover:to-ocean text-white rounded-full px-8 py-4 shadow-lg hover:shadow-xl transition-all duration-300"
+            >
+              <Mic className="w-5 h-5 mr-2" />
+              Start Voice Assistant
+            </Button>
+          ) : (
+            <div className="flex items-center gap-3">
+              <Button
+                onClick={toggleListening}
+                size="lg"
+                variant={isListening ? "destructive" : "default"}
+                className={`rounded-full p-4 shadow-lg transition-all duration-300 ${
+                  isListening 
+                    ? 'bg-destructive hover:bg-destructive/90 animate-pulse-voice' 
+                    : 'bg-gradient-to-r from-ocean to-ocean-light hover:from-ocean-dark hover:to-ocean text-white'
+                }`}
+              >
+                {isListening ? (
+                  <MicOff className="w-6 h-6" />
+                ) : (
+                  <Mic className="w-6 h-6" />
+                )}
+              </Button>
+              
+              <Button
+                onClick={disconnectAssistant}
+                variant="outline"
+                size="sm"
+                className="border-border/50"
+              >
+                Disconnect
+              </Button>
+            </div>
+          )}
+        </div>
+        
+        {/* Connection status */}
+        {isConnected && (
+          <div className="text-xs text-muted-foreground text-center animate-fade-up">
+            Voice assistant ready • Tap microphone to talk
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default VoiceInterface;
