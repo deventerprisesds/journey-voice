@@ -2,3 +2,6 @@ project_id = "wwxgajrtmslzklnyplah"
 
 [functions.realtime-voice-assistant]
 verify_jwt = false
+
+[functions.generate-realtime-token]
+verify_jwt = false

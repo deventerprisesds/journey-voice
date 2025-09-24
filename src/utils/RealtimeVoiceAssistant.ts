@@ -1,3 +1,5 @@
+import { supabase } from '@/integrations/supabase/client';
+
 export class AudioRecorder {
   private stream: MediaStream | null = null;
   private audioContext: AudioContext | null = null;
@@ -58,6 +60,7 @@ export class AudioRecorder {
   }
 }
 
+// Audio encoding utility
 export const encodeAudioForAPI = (float32Array: Float32Array): string => {
   const int16Array = new Int16Array(float32Array.length);
   for (let i = 0; i < float32Array.length; i++) {
@@ -76,6 +79,8 @@ export const encodeAudioForAPI = (float32Array: Float32Array): string => {
   
   return btoa(binary);
 };
+
+// Audio queue for sequential playback
 
 class AudioQueue {
   private queue: Uint8Array[] = [];
@@ -176,202 +181,235 @@ export const playAudioData = async (audioContext: AudioContext, audioData: Uint8
 };
 
 export class RealtimeVoiceAssistant {
-  private ws: WebSocket | null = null;
-  private audioRecorder: AudioRecorder | null = null;
-  private audioContext: AudioContext;
-  private isConnected = false;
+  private pc: RTCPeerConnection | null = null;
+  private dc: RTCDataChannel | null = null;
+  private audioEl: HTMLAudioElement;
+  private recorder: AudioRecorder | null = null;
+  private audioContext: AudioContext | null = null;
   private isListening = false;
-  
+
   constructor(
     private onMessage: (message: any) => void,
     private onConnectionChange: (connected: boolean) => void,
     private onListeningChange: (listening: boolean) => void,
-    private onSpeaking: (speaking: boolean) => void
+    private onSpeakingChange: (speaking: boolean) => void
   ) {
-    this.audioContext = new AudioContext();
+    this.audioEl = document.createElement("audio");
+    this.audioEl.autoplay = true;
   }
 
   async connect() {
     try {
-      console.log('Connecting to voice assistant...');
+      console.log('Getting ephemeral token...');
       
-      // Connect to our Supabase edge function via WebSocket
-      this.ws = new WebSocket(`wss://wwxgajrtmslzklnyplah.supabase.co/functions/v1/realtime-voice-assistant`);
+      // Get ephemeral token from our Supabase Edge Function
+      const { data, error } = await supabase.functions.invoke('generate-realtime-token');
       
-      this.ws.onopen = () => {
-        console.log('WebSocket connected');
-        this.isConnected = true;
+      if (error || !data?.client_secret?.value) {
+        throw new Error(error?.message || 'Failed to get ephemeral token');
+      }
+
+      const EPHEMERAL_KEY = data.client_secret.value;
+      console.log('Ephemeral token received, establishing WebRTC connection...');
+
+      // Initialize audio context
+      this.audioContext = new AudioContext({ sampleRate: 24000 });
+
+      // Create peer connection
+      this.pc = new RTCPeerConnection();
+
+      // Set up remote audio
+      this.pc.ontrack = e => {
+        console.log('Received remote audio track');
+        this.audioEl.srcObject = e.streams[0];
+      };
+
+      // Add local audio track
+      const ms = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          sampleRate: 24000,
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        } 
+      });
+      this.pc.addTrack(ms.getTracks()[0]);
+      console.log('Added local audio track');
+
+      // Set up data channel
+      this.dc = this.pc.createDataChannel("oai-events");
+      this.dc.addEventListener("message", (e) => {
+        const event = JSON.parse(e.data);
+        console.log("Received event:", event);
+        this.handleMessage(event);
+      });
+
+      // Handle data channel state changes
+      this.dc.addEventListener("open", () => {
+        console.log("Data channel opened");
         this.onConnectionChange(true);
-      };
+      });
 
-      this.ws.onmessage = async (event) => {
-        const data = JSON.parse(event.data);
-        console.log('Received message:', data.type);
-        
-        this.onMessage(data);
-        
-        if (data.type === 'response.audio.delta') {
-          // Convert base64 to Uint8Array and play
-          const binaryString = atob(data.delta);
-          const bytes = new Uint8Array(binaryString.length);
-          for (let i = 0; i < binaryString.length; i++) {
-            bytes[i] = binaryString.charCodeAt(i);
-          }
-          await playAudioData(this.audioContext, bytes);
-          this.onSpeaking(true);
-        } else if (data.type === 'response.audio.done') {
-          this.onSpeaking(false);
-        } else if (data.type === 'session.created') {
-          // Send session update after connection is established
-          this.sendSessionUpdate();
-        }
-      };
-
-      this.ws.onerror = (error) => {
-        console.error('WebSocket error:', error);
-        this.isConnected = false;
+      this.dc.addEventListener("close", () => {
+        console.log("Data channel closed");
         this.onConnectionChange(false);
-      };
+      });
 
-      this.ws.onclose = () => {
-        console.log('WebSocket disconnected');
-        this.isConnected = false;
-        this.onConnectionChange(false);
+      // Create and set local description
+      const offer = await this.pc.createOffer();
+      await this.pc.setLocalDescription(offer);
+      console.log('Created local offer');
+
+      // Connect to OpenAI's Realtime API
+      const baseUrl = "https://api.openai.com/v1/realtime";
+      const model = "gpt-4o-realtime-preview-2024-12-17";
+      const sdpResponse = await fetch(`${baseUrl}?model=${model}`, {
+        method: "POST",
+        body: offer.sdp,
+        headers: {
+          Authorization: `Bearer ${EPHEMERAL_KEY}`,
+          "Content-Type": "application/sdp"
+        },
+      });
+
+      if (!sdpResponse.ok) {
+        throw new Error(`WebRTC connection failed: ${sdpResponse.status}`);
+      }
+
+      const answer = {
+        type: "answer" as RTCSdpType,
+        sdp: await sdpResponse.text(),
       };
+      
+      await this.pc.setRemoteDescription(answer);
+      console.log("WebRTC connection established successfully");
 
     } catch (error) {
-      console.error('Error connecting to voice assistant:', error);
+      console.error("Error connecting:", error);
+      this.onConnectionChange(false);
       throw error;
     }
   }
 
-  private sendSessionUpdate() {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    
-    const sessionUpdate = {
-      type: 'session.update',
-      session: {
-        modalities: ['text', 'audio'],
-        instructions: `You are a helpful task management assistant specializing in personal productivity. Help users organize and manage their tasks across different areas of life. You can:
-        
-        1. Create new tasks with appropriate priority, category, and timing
-        2. Update existing tasks (change status, priority, descriptions, due dates)
-        3. Suggest task organization and productivity strategies
-        4. Help users break down complex projects into manageable tasks
-        5. Provide time management advice and task prioritization guidance
-        
-        Categories available: LIFE, CAREER, VENTURES, EDUCATION
-        Priorities available: LOW, MEDIUM, HIGH, URGENT
-        Statuses available: BACKLOG, TODO, DOING, DONE
-        
-        Be conversational, encouraging, and focus on helping users achieve their goals. Always confirm actions before making changes to their tasks.`,
-        voice: 'alloy',
-        input_audio_format: 'pcm16',
-        output_audio_format: 'pcm16',
-        input_audio_transcription: {
-          model: 'whisper-1'
-        },
-        turn_detection: {
-          type: 'server_vad',
-          threshold: 0.5,
-          prefix_padding_ms: 300,
-          silence_duration_ms: 1000
-        },
-        tools: [
-          {
-            type: 'function',
-            name: 'create_task',
-            description: 'Create a new task in the user\'s task board',
-            parameters: {
-              type: 'object',
-              properties: {
-                title: { type: 'string', description: 'Title of the task' },
-                description: { type: 'string', description: 'Detailed description of the task' },
-                priority: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH', 'URGENT'], description: 'Task priority level' },
-                category: { type: 'string', enum: ['LIFE', 'CAREER', 'VENTURES', 'EDUCATION'], description: 'Task category' },
-                due_date: { type: 'string', description: 'Due date in ISO format (optional)' },
-                estimate_minutes: { type: 'number', description: 'Estimated time to complete in minutes (optional)' }
-              },
-              required: ['title', 'category']
-            }
-          },
-          {
-            type: 'function',
-            name: 'update_task',
-            description: 'Update an existing task',
-            parameters: {
-              type: 'object',
-              properties: {
-                task_id: { type: 'string', description: 'ID of the task to update' },
-                title: { type: 'string' },
-                description: { type: 'string' },
-                priority: { type: 'string', enum: ['LOW', 'MEDIUM', 'HIGH', 'URGENT'] },
-                status: { type: 'string', enum: ['BACKLOG', 'TODO', 'DOING', 'DONE'] },
-                due_date: { type: 'string' },
-                estimate_minutes: { type: 'number' }
-              },
-              required: ['task_id']
-            }
-          },
-          {
-            type: 'function',
-            name: 'get_tasks',
-            description: 'Get current tasks to reference for updates',
-            parameters: {
-              type: 'object',
-              properties: {
-                status_filter: { type: 'string', enum: ['BACKLOG', 'TODO', 'DOING', 'DONE'], description: 'Optional status filter' }
-              }
-            }
-          }
-        ],
-        tool_choice: 'auto',
-        temperature: 0.8,
-        max_response_output_tokens: 'inf'
+  private handleMessage(event: any) {
+    this.onMessage(event);
+
+    // Handle different event types
+    switch (event.type) {
+      case 'response.audio.delta':
+        this.handleAudioDelta(event);
+        break;
+      case 'response.audio.done':
+        this.onSpeakingChange(false);
+        break;
+      case 'response.function_call_arguments.done':
+        this.handleFunctionCall(event);
+        break;
+      case 'input_audio_buffer.speech_started':
+        this.onListeningChange(true);
+        break;
+      case 'input_audio_buffer.speech_stopped':
+        this.onListeningChange(false);
+        break;
+    }
+  }
+
+  private async handleAudioDelta(event: any) {
+    if (!this.audioContext || !event.delta) return;
+
+    try {
+      this.onSpeakingChange(true);
+      
+      // Convert base64 to Uint8Array
+      const binaryString = atob(event.delta);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
       }
-    };
+      
+      await playAudioData(this.audioContext, bytes);
+    } catch (error) {
+      console.error('Error playing audio delta:', error);
+    }
+  }
+
+  private async handleFunctionCall(event: any) {
+    console.log('Function call completed:', event);
     
-    console.log('Sending session update');
-    this.ws.send(JSON.stringify(sessionUpdate));
+    try {
+      const args = JSON.parse(event.arguments);
+      const functionName = event.name;
+
+      let result;
+      switch (functionName) {
+        case 'create_task':
+          result = await this.createTask(args);
+          break;
+        case 'update_task':  
+          result = await this.updateTask(args);
+          break;
+        case 'get_tasks':
+          result = await this.getTasks(args);
+          break;
+        default:
+          result = { error: `Unknown function: ${functionName}` };
+      }
+
+      // Send function result back
+      if (this.dc && this.dc.readyState === 'open') {
+        this.dc.send(JSON.stringify({
+          type: 'conversation.item.create',
+          item: {
+            type: 'function_call_output',
+            call_id: event.call_id,
+            output: JSON.stringify(result)
+          }
+        }));
+      }
+    } catch (error) {
+      console.error('Error handling function call:', error);
+    }
   }
 
   async startListening() {
-    if (!this.isConnected || this.isListening) return;
-    
+    if (!this.audioContext || !this.dc || this.isListening) return;
+
     try {
-      this.audioRecorder = new AudioRecorder((audioData) => {
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-          const encodedAudio = encodeAudioForAPI(audioData);
-          this.ws.send(JSON.stringify({
+      this.recorder = new AudioRecorder((audioData) => {
+        if (this.dc?.readyState === 'open') {
+          this.dc.send(JSON.stringify({
             type: 'input_audio_buffer.append',
-            audio: encodedAudio
+            audio: encodeAudioForAPI(audioData)
           }));
         }
       });
       
-      await this.audioRecorder.start();
+      await this.recorder.start();
       this.isListening = true;
       this.onListeningChange(true);
-      console.log('Started listening...');
+      console.log('Started audio recording');
     } catch (error) {
-      console.error('Error starting audio recording:', error);
+      console.error('Error starting recording:', error);
       throw error;
     }
   }
 
   stopListening() {
-    if (this.audioRecorder) {
-      this.audioRecorder.stop();
-      this.audioRecorder = null;
+    if (this.recorder) {
+      this.recorder.stop();
+      this.recorder = null;
+      this.isListening = false;
+      this.onListeningChange(false);
+      console.log('Stopped audio recording');
     }
-    this.isListening = false;
-    this.onListeningChange(false);
-    console.log('Stopped listening');
   }
 
-  sendTextMessage(text: string) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    
+  async sendTextMessage(text: string) {
+    if (!this.dc || this.dc.readyState !== 'open') {
+      throw new Error('Data channel not ready');
+    }
+
     const event = {
       type: 'conversation.item.create',
       item: {
@@ -385,18 +423,122 @@ export class RealtimeVoiceAssistant {
         ]
       }
     };
-    
-    this.ws.send(JSON.stringify(event));
-    this.ws.send(JSON.stringify({type: 'response.create'}));
+
+    this.dc.send(JSON.stringify(event));
+    this.dc.send(JSON.stringify({type: 'response.create'}));
   }
 
   disconnect() {
+    console.log('Disconnecting voice assistant...');
+    
     this.stopListening();
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
+    
+    if (this.dc) {
+      this.dc.close();
+      this.dc = null;
     }
-    this.isConnected = false;
+    
+    if (this.pc) {
+      this.pc.close();
+      this.pc = null;
+    }
+    
+    if (this.audioContext) {
+      this.audioContext.close();
+      this.audioContext = null;
+    }
+    
     this.onConnectionChange(false);
+    this.onListeningChange(false);
+    this.onSpeakingChange(false);
+  }
+
+  // Task management functions
+  private async createTask(args: any) {
+    try {
+      const { data, error } = await supabase
+        .from('boards')
+        .select('id')
+        .eq('is_default', true)
+        .single();
+
+      if (error || !data) {
+        throw new Error('Default board not found');
+      }
+
+      const taskData = {
+        title: args.title,
+        description: args.description || null,
+        priority: args.priority || 'MEDIUM',
+        category: args.category || 'LIFE',
+        status: 'BACKLOG' as const,
+        board_id: data.id,
+        user_id: (await supabase.auth.getUser()).data.user?.id
+      };
+
+      if (!taskData.user_id) {
+        throw new Error('User not authenticated');
+      }
+
+      const { data: task, error: taskError } = await supabase
+        .from('tasks')
+        .insert(taskData)
+        .select()
+        .single();
+
+      if (taskError) throw taskError;
+
+      return { success: true, task };
+    } catch (error) {
+      console.error('Error creating task:', error);
+      return { error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  }
+
+  private async updateTask(args: any) {
+    try {
+      const updateData: any = {};
+      if (args.title) updateData.title = args.title;
+      if (args.description !== undefined) updateData.description = args.description;
+      if (args.priority) updateData.priority = args.priority;
+      if (args.status) updateData.status = args.status;
+      if (args.category) updateData.category = args.category;
+
+      const { data, error } = await supabase
+        .from('tasks')
+        .update(updateData)
+        .eq('id', args.task_id)
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      return { success: true, task: data };
+    } catch (error) {
+      console.error('Error updating task:', error);
+      return { error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  }
+
+  private async getTasks(args: any) {
+    try {
+      let query = supabase
+        .from('tasks')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (args.status_filter) {
+        query = query.eq('status', args.status_filter);
+      }
+
+      const { data, error } = await query;
+
+      if (error) throw error;
+
+      return { success: true, tasks: data };
+    } catch (error) {
+      console.error('Error getting tasks:', error);
+      return { error: error instanceof Error ? error.message : 'Unknown error' };
+    }
   }
 }
