@@ -38,6 +38,39 @@ export type Database = {
         }
         Relationships: []
       }
+      assistant_knowledge_chunks: {
+        Row: {
+          assistant_id: string
+          content: string
+          created_at: string
+          embedding: string | null
+          id: string
+          metadata: Json | null
+          source_type: string
+          user_id: string
+        }
+        Insert: {
+          assistant_id: string
+          content: string
+          created_at?: string
+          embedding?: string | null
+          id?: string
+          metadata?: Json | null
+          source_type: string
+          user_id: string
+        }
+        Update: {
+          assistant_id?: string
+          content?: string
+          created_at?: string
+          embedding?: string | null
+          id?: string
+          metadata?: Json | null
+          source_type?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       boards: {
         Row: {
           color: string | null
@@ -108,6 +141,94 @@ export type Database = {
             columns: ["board_id"]
             isOneToOne: false
             referencedRelation: "boards"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      conversation_embeddings: {
+        Row: {
+          content: string
+          embedding: string | null
+          id: string
+          message_type: string
+          metadata: Json | null
+          thread_id: string | null
+          timestamp: string
+          user_id: string
+          voice_session_id: string | null
+        }
+        Insert: {
+          content: string
+          embedding?: string | null
+          id?: string
+          message_type: string
+          metadata?: Json | null
+          thread_id?: string | null
+          timestamp?: string
+          user_id: string
+          voice_session_id?: string | null
+        }
+        Update: {
+          content?: string
+          embedding?: string | null
+          id?: string
+          message_type?: string
+          metadata?: Json | null
+          thread_id?: string | null
+          timestamp?: string
+          user_id?: string
+          voice_session_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "conversation_embeddings_thread_id_fkey"
+            columns: ["thread_id"]
+            isOneToOne: false
+            referencedRelation: "ai_threads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      conversation_messages: {
+        Row: {
+          audio_transcript: string | null
+          content: string
+          created_at: string
+          id: string
+          metadata: Json | null
+          role: string
+          thread_id: string | null
+          user_id: string
+          voice_session_id: string | null
+        }
+        Insert: {
+          audio_transcript?: string | null
+          content: string
+          created_at?: string
+          id?: string
+          metadata?: Json | null
+          role: string
+          thread_id?: string | null
+          user_id: string
+          voice_session_id?: string | null
+        }
+        Update: {
+          audio_transcript?: string | null
+          content?: string
+          created_at?: string
+          id?: string
+          metadata?: Json | null
+          role?: string
+          thread_id?: string | null
+          user_id?: string
+          voice_session_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "conversation_messages_thread_id_fkey"
+            columns: ["thread_id"]
+            isOneToOne: false
+            referencedRelation: "ai_threads"
             referencedColumns: ["id"]
           },
         ]
@@ -573,7 +694,131 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      binary_quantize: {
+        Args: { "": string } | { "": unknown }
+        Returns: unknown
+      }
+      halfvec_avg: {
+        Args: { "": number[] }
+        Returns: unknown
+      }
+      halfvec_out: {
+        Args: { "": unknown }
+        Returns: unknown
+      }
+      halfvec_send: {
+        Args: { "": unknown }
+        Returns: string
+      }
+      halfvec_typmod_in: {
+        Args: { "": unknown[] }
+        Returns: number
+      }
+      hnsw_bit_support: {
+        Args: { "": unknown }
+        Returns: unknown
+      }
+      hnsw_halfvec_support: {
+        Args: { "": unknown }
+        Returns: unknown
+      }
+      hnsw_sparsevec_support: {
+        Args: { "": unknown }
+        Returns: unknown
+      }
+      hnswhandler: {
+        Args: { "": unknown }
+        Returns: unknown
+      }
+      ivfflat_bit_support: {
+        Args: { "": unknown }
+        Returns: unknown
+      }
+      ivfflat_halfvec_support: {
+        Args: { "": unknown }
+        Returns: unknown
+      }
+      ivfflathandler: {
+        Args: { "": unknown }
+        Returns: unknown
+      }
+      l2_norm: {
+        Args: { "": unknown } | { "": unknown }
+        Returns: number
+      }
+      l2_normalize: {
+        Args: { "": string } | { "": unknown } | { "": unknown }
+        Returns: string
+      }
+      match_assistant_knowledge: {
+        Args: {
+          assistant_id_param: string
+          match_count?: number
+          match_threshold?: number
+          query_embedding: string
+          user_id_param: string
+        }
+        Returns: {
+          content: string
+          id: string
+          metadata: Json
+          similarity: number
+          source_type: string
+        }[]
+      }
+      match_conversation_embeddings: {
+        Args: {
+          match_count?: number
+          match_threshold?: number
+          query_embedding: string
+          thread_id_param?: string
+          user_id_param: string
+        }
+        Returns: {
+          content: string
+          id: string
+          message_timestamp: string
+          message_type: string
+          metadata: Json
+          similarity: number
+        }[]
+      }
+      sparsevec_out: {
+        Args: { "": unknown }
+        Returns: unknown
+      }
+      sparsevec_send: {
+        Args: { "": unknown }
+        Returns: string
+      }
+      sparsevec_typmod_in: {
+        Args: { "": unknown[] }
+        Returns: number
+      }
+      vector_avg: {
+        Args: { "": number[] }
+        Returns: string
+      }
+      vector_dims: {
+        Args: { "": string } | { "": unknown }
+        Returns: number
+      }
+      vector_norm: {
+        Args: { "": string }
+        Returns: number
+      }
+      vector_out: {
+        Args: { "": string }
+        Returns: unknown
+      }
+      vector_send: {
+        Args: { "": string }
+        Returns: string
+      }
+      vector_typmod_in: {
+        Args: { "": unknown[] }
+        Returns: number
+      }
     }
     Enums: {
       notification_channel: "WEB_PUSH" | "EMAIL" | "IN_APP"
