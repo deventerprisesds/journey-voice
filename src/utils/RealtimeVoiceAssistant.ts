@@ -460,9 +460,13 @@ export class RealtimeVoiceAssistant {
         .from('boards')
         .select('id')
         .eq('is_default', true)
-        .single();
+        .maybeSingle();
 
-      if (error || !data) {
+      if (error) {
+        throw new Error(`Database error: ${error.message}`);
+      }
+
+      if (!data) {
         throw new Error('Default board not found');
       }
 

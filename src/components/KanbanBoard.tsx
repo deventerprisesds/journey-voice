@@ -70,12 +70,20 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger }) => {
     try {
       setLoading(true);
 
-      // Get default board
+      // Check if user is authenticated
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        console.log('User not authenticated, skipping board fetch');
+        setLoading(false);
+        return;
+      }
+
+      // Get default board - use maybeSingle() to handle case where no board exists
       const { data: boardData, error: boardError } = await supabase
         .from('boards')
         .select('*')
         .eq('is_default', true)
-        .single();
+        .maybeSingle();
 
       if (boardError) {
         console.error('Error fetching board:', boardError);
@@ -84,6 +92,18 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger }) => {
           description: "Failed to load your task board",
           variant: "destructive",
         });
+        return;
+      }
+
+      // If no default board exists, show a message but don't error
+      if (!boardData) {
+        console.log('No default board found for user');
+        toast({
+          title: "No board found",
+          description: "Creating your default board...",
+          variant: "default",
+        });
+        setLoading(false);
         return;
       }
 
