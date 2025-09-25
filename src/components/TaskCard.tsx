@@ -105,6 +105,13 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onStatusChange, onEdit }) => 
   const CategoryIcon = categoryIcons[task.category];
   const isBlocked = task.blocked_by && task.blocked_by.length > 0;
   const isOverdue = task.due_date && new Date(task.due_date) < new Date() && task.status !== 'DONE';
+  
+  // Check if blocked tasks are actually preventing progress
+  const hasUnresolvedDependencies = isBlocked && task.blocked_by?.some(depId => {
+    // In a real implementation, you'd check if the dependency is completed
+    // For now, we'll assume blocked tasks have unresolved dependencies
+    return true;
+  });
 
   const handleStatusToggle = () => {
     if (!onStatusChange) return;
@@ -164,10 +171,10 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onStatusChange, onEdit }) => 
             {task.category.toLowerCase()}
           </Badge>
 
-          {isBlocked && (
+          {hasUnresolvedDependencies && (
             <Badge variant="destructive" className="text-xs">
               <AlertTriangle className="h-3 w-3 mr-1" />
-              Blocked
+              Blocked ({task.blocked_by?.length})
             </Badge>
           )}
         </div>

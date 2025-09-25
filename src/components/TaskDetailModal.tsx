@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -8,12 +9,15 @@ import { Badge } from '@/components/ui/badge';
 import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Label } from '@/components/ui/label';
-import { CalendarIcon, X, Plus, Clock, AlertTriangle } from 'lucide-react';
+import { CalendarIcon, X, Plus, Clock, AlertTriangle, Timer, GitBranch } from 'lucide-react';
+import DependencyTree from './DependencyTree';
+import TimeTracker from './TimeTracker';
 import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 import { Task } from '@/types/task';
+import { useMemo } from 'react';
 
 interface TaskDetailModalProps {
   task: Task | null;
@@ -202,14 +206,78 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
 
   if (!task) return null;
 
+  const validateDependencies = (newDependencies: string[]): boolean => {
+    // Check for circular dependencies using DFS
+    const visited = new Set<string>();
+    const recursionStack = new Set<string>();
+    
+    const hasCycle = (taskId: string): boolean => {
+      if (recursionStack.has(taskId)) return true;
+      if (visited.has(taskId)) return false;
+      
+      visited.add(taskId);
+      recursionStack.add(taskId);
+      
+      const taskDeps = taskId === task.id ? newDependencies : (taskMap[taskId]?.blocked_by || []);
+      
+      for (const depId of taskDeps) {
+        if (hasCycle(depId)) return true;
+      }
+      
+      recursionStack.delete(taskId);
+      return false;
+    };
+    
+    return !hasCycle(task.id);
+  };
+
+  const handleAddDependencyWithValidation = (dependencyId: string) => {
+    const currentBlocked = editedTask.blocked_by || [];
+    const newDependencies = [...currentBlocked, dependencyId];
+    
+    if (validateDependencies(newDependencies)) {
+      setEditedTask({
+        ...editedTask,
+        blocked_by: newDependencies
+      });
+    } else {
+      toast({
+        title: "Circular dependency detected",
+        description: "Adding this dependency would create a circular reference",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const taskMap = useMemo(() => {
+    return allTasks.reduce((map, t) => {
+      map[t.id] = t;
+      return map;
+    }, {} as Record<string, Task>);
+  }, [allTasks]);
+
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Edit Task</DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-6">
+        <Tabs defaultValue="details" className="w-full">
+          <TabsList className="grid w-full grid-cols-4">
+            <TabsTrigger value="details">Details</TabsTrigger>
+            <TabsTrigger value="dependencies">
+              <GitBranch className="h-4 w-4 mr-1" />
+              Dependencies
+            </TabsTrigger>
+            <TabsTrigger value="time">
+              <Timer className="h-4 w-4 mr-1" />
+              Time Tracking
+            </TabsTrigger>
+            <TabsTrigger value="tree">Dependency Tree</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="details" className="space-y-6">
           {/* Title */}
           <div className="space-y-2">
             <Label htmlFor="title">Title</Label>
@@ -410,7 +478,7 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
 
             {/* Add dependency dropdown */}
             {availableTasks.length > 0 && (
-              <Select onValueChange={handleAddDependency}>
+              <Select onValueChange={handleAddDependencyWithValidation}>
                 <SelectTrigger>
                   <SelectValue placeholder="Add a dependency..." />
                 </SelectTrigger>
@@ -434,7 +502,78 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
               {isSaving ? 'Saving...' : 'Save Changes'}
             </Button>
           </div>
-        </div>
+          </TabsContent>
+
+          <TabsContent value="dependencies" className="space-y-4">
+            <div className="space-y-4">
+              <div>
+                <h3 className="text-sm font-medium mb-2">Manage Dependencies</h3>
+                <p className="text-xs text-muted-foreground mb-4">
+                  Tasks that must be completed before this one can start
+                </p>
+                
+                {/* Current dependencies */}
+                {blockedByTasks.length > 0 && (
+                  <div className="space-y-2 mb-4">
+                    <Label className="text-xs font-medium">Current Dependencies</Label>
+                    <div className="flex flex-wrap gap-2">
+                      {blockedByTasks.map((dep) => (
+                        <Badge key={dep.id} variant="secondary" className="flex items-center gap-1">
+                          <AlertTriangle className="h-3 w-3" />
+                          {dep.title}
+                          <button
+                            onClick={() => handleRemoveDependency(dep.id)}
+                            className="ml-1 hover:text-destructive"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                
+                {/* Add dependency */}
+                {availableTasks.length > 0 && (
+                  <div className="space-y-2">
+                    <Label className="text-xs font-medium">Add Dependency</Label>
+                    <Select onValueChange={handleAddDependencyWithValidation}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select a task to depend on..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {availableTasks.map((availableTask) => (
+                          <SelectItem key={availableTask.id} value={availableTask.id}>
+                            <div className="flex items-center gap-2">
+                              <Badge variant="outline" className="text-xs">
+                                {availableTask.priority.toLowerCase()}
+                              </Badge>
+                              {availableTask.title}
+                            </div>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+                
+                {availableTasks.length === 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    No available tasks to add as dependencies
+                  </p>
+                )}
+              </div>
+            </div>
+          </TabsContent>
+
+          <TabsContent value="time">
+            {task && <TimeTracker task={task} onTimeUpdate={() => {}} />}
+          </TabsContent>
+
+          <TabsContent value="tree">
+            <DependencyTree tasks={allTasks} selectedTaskId={task?.id} />
+          </TabsContent>
+        </Tabs>
       </DialogContent>
     </Dialog>
   );
