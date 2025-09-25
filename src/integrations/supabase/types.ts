@@ -424,6 +424,7 @@ export type Database = {
           overdue_reminders_enabled: boolean | null
           quiet_hours_end: string | null
           quiet_hours_start: string | null
+          task_created_enabled: boolean | null
           timezone: string | null
           updated_at: string
           user_id: string
@@ -440,6 +441,7 @@ export type Database = {
           overdue_reminders_enabled?: boolean | null
           quiet_hours_end?: string | null
           quiet_hours_start?: string | null
+          task_created_enabled?: boolean | null
           timezone?: string | null
           updated_at?: string
           user_id: string
@@ -456,6 +458,7 @@ export type Database = {
           overdue_reminders_enabled?: boolean | null
           quiet_hours_end?: string | null
           quiet_hours_start?: string | null
+          task_created_enabled?: boolean | null
           timezone?: string | null
           updated_at?: string
           user_id?: string

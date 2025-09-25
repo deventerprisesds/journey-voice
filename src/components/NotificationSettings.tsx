@@ -30,6 +30,7 @@ interface NotificationPrefs {
   overdue_reminders_enabled: boolean;
   daily_digest_enabled: boolean;
   weekly_digest_enabled: boolean;
+  task_created_enabled: boolean;
   quiet_hours_start: string;
   quiet_hours_end: string;
   timezone: string;
@@ -56,6 +57,7 @@ const NotificationSettings: React.FC = () => {
     overdue_reminders_enabled: true,
     daily_digest_enabled: false,
     weekly_digest_enabled: false,
+    task_created_enabled: true,
     quiet_hours_start: '22:00',
     quiet_hours_end: '08:00',
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -89,8 +91,9 @@ const NotificationSettings: React.FC = () => {
           overdue_reminders_enabled: data.overdue_reminders_enabled,
           daily_digest_enabled: data.daily_digest_enabled,
           weekly_digest_enabled: data.weekly_digest_enabled,
-          quiet_hours_start: data.quiet_hours_start || '22:00',
-          quiet_hours_end: data.quiet_hours_end || '08:00',
+          task_created_enabled: data.task_created_enabled ?? true,
+          quiet_hours_start: data.quiet_hours_start ? data.quiet_hours_start.substring(0, 5) : '22:00',
+          quiet_hours_end: data.quiet_hours_end ? data.quiet_hours_end.substring(0, 5) : '08:00',
           timezone: data.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
           channels: (data.channels as NotificationChannel[]) || ['WEB_PUSH', 'IN_APP']
         });
@@ -113,6 +116,11 @@ const NotificationSettings: React.FC = () => {
 
     setIsSaving(true);
     try {
+      // Ensure time format is HH:MM:SS for database
+      const formatTime = (time: string) => {
+        return time.length === 5 ? `${time}:00` : time;
+      };
+
       const { error } = await supabase
         .from('notification_prefs')
         .upsert([{
@@ -121,8 +129,9 @@ const NotificationSettings: React.FC = () => {
           overdue_reminders_enabled: prefs.overdue_reminders_enabled,
           daily_digest_enabled: prefs.daily_digest_enabled,
           weekly_digest_enabled: prefs.weekly_digest_enabled,
-          quiet_hours_start: prefs.quiet_hours_start,
-          quiet_hours_end: prefs.quiet_hours_end,
+          task_created_enabled: prefs.task_created_enabled,
+          quiet_hours_start: formatTime(prefs.quiet_hours_start),
+          quiet_hours_end: formatTime(prefs.quiet_hours_end),
           timezone: prefs.timezone,
           channels: prefs.channels
         }]);
@@ -131,7 +140,7 @@ const NotificationSettings: React.FC = () => {
         console.error('Error saving notification preferences:', error);
         toast({
           title: "Error",
-          description: "Failed to save notification preferences",
+          description: `Failed to save notification preferences: ${error.message}`,
           variant: "destructive",
         });
         return;
@@ -341,6 +350,23 @@ const NotificationSettings: React.FC = () => {
               }
             />
           </div>
+
+          <Separator />
+
+          <div className="flex items-center justify-between">
+            <div>
+              <Label className="text-sm font-medium">Task Created</Label>
+              <p className="text-xs text-muted-foreground">
+                Get notified when new tasks are added
+              </p>
+            </div>
+            <Switch
+              checked={prefs.task_created_enabled}
+              onCheckedChange={(checked) => 
+                setPrefs(prev => ({ ...prev, task_created_enabled: checked }))
+              }
+            />
+          </div>
         </CardContent>
       </Card>
 
@@ -422,6 +448,17 @@ const NotificationSettings: React.FC = () => {
               <Switch
                 checked={prefs.channels.includes('IN_APP')}
                 onCheckedChange={() => handleToggleChannel('IN_APP')}
+              />
+            </div>
+
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Mail className="h-4 w-4" />
+                <Label className="text-sm">Email Notifications</Label>
+              </div>
+              <Switch
+                checked={prefs.channels.includes('EMAIL')}
+                onCheckedChange={() => handleToggleChannel('EMAIL')}
               />
             </div>
           </div>
