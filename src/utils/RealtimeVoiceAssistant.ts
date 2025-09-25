@@ -522,20 +522,50 @@ export class RealtimeVoiceAssistant {
 
   private async getTasks(args: any) {
     try {
+      // Prefer searching recent chat history for task-related messages via Edge Function
+      const userInput = (args?.query || args?.status_filter || '').toString();
+      console.log('[getTasks] Invoking external-db-query with:', {
+        action: 'search_tasks',
+        user_input: userInput || 'latest task',
+        time_filter: args?.time_filter,
+      });
+
+      const { data: extData, error: extError } = await supabase.functions.invoke('external-db-query', {
+        body: {
+          action: 'search_tasks',
+          user_input: userInput || 'latest task',
+          time_filter: args?.time_filter,
+          match_threshold: 0.6,
+          match_count: 20,
+        },
+      });
+
+      if (extError) {
+        console.error('[getTasks] external-db-query error:', extError);
+      }
+
+      // If the external search returned results, surface them to the assistant
+      if (extData?.success && Array.isArray(extData.data) && extData.data.length > 0) {
+        console.log(`[getTasks] Found ${extData.data.length} results in external chat history`);
+        return { success: true, results: extData.data };
+      }
+
+      // Fallback: query local tasks table (status filter supported)
+      console.log('[getTasks] Falling back to local tasks table');
       let query = supabase
         .from('tasks')
         .select('*')
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .limit(10);
 
-      if (args.status_filter) {
+      if (args?.status_filter) {
         query = query.eq('status', args.status_filter);
       }
 
-      const { data, error } = await query;
-
+      const { data: tasks, error } = await query;
       if (error) throw error;
 
-      return { success: true, tasks: data };
+      return { success: true, tasks };
     } catch (error) {
       console.error('Error getting tasks:', error);
       return { error: error instanceof Error ? error.message : 'Unknown error' };
