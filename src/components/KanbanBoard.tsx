@@ -440,12 +440,36 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger }) => {
     const sampleTask = {
       title: 'Sample Task',
       description: 'This is a sample task to get you started. Try asking the voice assistant to create more tasks!',
-      status: 'TODO' as const,
+      status: 'BLOCKED' as const,
       priority: 'MEDIUM' as const,
       category: 'LIFE' as const,
       board_id: board.id,
       user_id: board.user_id,
     };
+
+    if (isDemoMode) {
+      // Demo mode: save to localStorage
+      const demoTask = {
+        ...sampleTask,
+        id: `demo-task-${Date.now()}`,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+
+      // Update local state
+      setTasks(prev => [demoTask, ...prev]);
+
+      // Save to localStorage
+      const currentTasks = JSON.parse(localStorage.getItem('kanban-demo-tasks') || '[]');
+      currentTasks.unshift(demoTask);
+      localStorage.setItem('kanban-demo-tasks', JSON.stringify(currentTasks));
+
+      toast({
+        title: "Sample task added",
+        description: "Try using the voice assistant to create more tasks!",
+      });
+      return;
+    }
 
     try {
       const { data, error } = await supabase
