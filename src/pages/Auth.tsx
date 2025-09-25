@@ -89,10 +89,11 @@ const Auth = () => {
 
   const handleGoogleSignIn = async () => {
     setLoading(true);
-    const { error } = await supabase.auth.signInWithOAuth({
+    const { data, error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: `${window.location.origin}/`
+        redirectTo: `${window.location.origin}/`,
+        skipBrowserRedirect: true
       }
     });
 
@@ -102,6 +103,21 @@ const Auth = () => {
         title: "Google sign in failed",
         description: error.message
       });
+      setLoading(false);
+      return;
+    }
+
+    if (data?.url) {
+      // Open OAuth URL in new tab for Lovable preview compatibility
+      const newWindow = window.open(data.url, '_blank');
+      if (!newWindow) {
+        // Fallback: navigate top window if popup blocked
+        if (window.top) {
+          window.top.location.href = data.url;
+        } else {
+          window.location.href = data.url;
+        }
+      }
     }
     setLoading(false);
   };
