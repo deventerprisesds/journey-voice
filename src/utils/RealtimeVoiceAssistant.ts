@@ -474,6 +474,9 @@ export class RealtimeVoiceAssistant {
     
     this.stopListening();
     
+    // CRITICAL: Stop all WebRTC tracks first to release microphone access
+    this.stopAllMediaTracks();
+    
     if (this.dc) {
       this.dc.close();
       this.dc = null;
@@ -492,6 +495,33 @@ export class RealtimeVoiceAssistant {
     this.onConnectionChange(false);
     this.onListeningChange(false);
     this.onSpeakingChange(false);
+  }
+
+  // Helper method to stop all media tracks and release microphone access
+  private stopAllMediaTracks() {
+    console.log('🔴 Stopping all media tracks to release microphone...');
+    
+    if (this.pc) {
+      // Stop all senders (outgoing audio tracks)
+      const senders = this.pc.getSenders();
+      senders.forEach(sender => {
+        if (sender.track) {
+          console.log('🔴 Stopping sender track:', sender.track.kind);
+          sender.track.stop();
+        }
+      });
+      
+      // Stop all receivers (incoming audio tracks) 
+      const receivers = this.pc.getReceivers();
+      receivers.forEach(receiver => {
+        if (receiver.track) {
+          console.log('🔴 Stopping receiver track:', receiver.track.kind);
+          receiver.track.stop();
+        }
+      });
+      
+      console.log('🔴 All WebRTC tracks stopped');
+    }
   }
 
   // Task management functions
