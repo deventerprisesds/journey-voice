@@ -84,26 +84,45 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger }) => {
         return;
       }
 
-      // Get default board - use maybeSingle() to handle case where no board exists
-      const { data: boardData, error: boardError } = await supabase
+      // Get default board for this user. Use maybeSingle() first, then fall back to first board
+      let { data: boardData, error: boardError } = await supabase
         .from('boards')
         .select('*')
+        .eq('user_id', user.id)
         .eq('is_default', true)
         .maybeSingle();
 
       if (boardError) {
-        console.error('Error fetching board:', boardError);
-        toast({
-          title: "Error loading board",
-          description: "Failed to load your task board",
-          variant: "destructive",
-        });
-        return;
+        console.warn('Error fetching default board with maybeSingle, falling back:', boardError);
       }
 
-      // If no default board exists, create one
+      // Fallback: pick the first board if multiple/no default
       if (!boardData) {
-        console.log('No default board found for user, creating one...');
+        const { data: anyBoards, error: anyBoardsError } = await supabase
+          .from('boards')
+          .select('*')
+          .eq('user_id', user.id)
+          .order('position')
+          .limit(1);
+
+        if (anyBoardsError) {
+          console.error('Error fetching boards:', anyBoardsError);
+          toast({
+            title: 'Error loading board',
+            description: 'Failed to load your task board',
+            variant: 'destructive',
+          });
+          return;
+        }
+
+        if (anyBoards && anyBoards.length > 0) {
+          boardData = anyBoards[0] as any;
+        }
+      }
+
+      // If no board exists at all, create one
+      if (!boardData) {
+        console.log('No board found for user, creating default board & columns...');
         await createDefaultBoardAndColumns();
         return;
       }
@@ -277,7 +296,6 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger }) => {
 
   const createDefaultBoardAndColumns = async () => {
     try {
-      // Check if user is authenticated
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         console.log('User not authenticated, cannot create board');
@@ -285,54 +303,74 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger }) => {
         return;
       }
 
-      console.log('Creating default board for user:', user.id);
+      // Create default board directly
+      const { data: newBoard, error: boardInsertError } = await supabase
+        .from('boards')
+        .insert([
+          {
+            name: 'Personal Tasks',
+            description: 'Your main task board',
+            user_id: user.id,
+            is_default: true,
+            position: 0,
+          },
+        ])
+        .select()
+        .single();
 
-      // First, ensure the user has a profile
-      const { data: profileData, error: profileError } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('user_id', user.id)
-        .maybeSingle();
-
-      if (profileError && profileError.code !== 'PGRST116') {
-        console.error('Error checking profile:', profileError);
+      if (boardInsertError || !newBoard) {
+        console.error('Error creating default board:', boardInsertError);
+        toast({
+          title: 'Error',
+          description: 'Failed to create default board',
+          variant: 'destructive',
+        });
+        setLoading(false);
         return;
       }
 
-      // If no profile exists, create one (this will trigger the board creation)
-      if (!profileData) {
-        console.log('Creating profile for user...');
-        const { error: createProfileError } = await supabase
-          .from('profiles')
-          .insert([{
-            user_id: user.id,
-            email: user.email,
-            full_name: user.user_metadata?.full_name || user.email?.split('@')[0] || 'User'
-          }]);
+      // Create default columns for the new board
+      const defaultColumns = [
+        { name: 'Backlog', status: 'BACKLOG' as const, position: 0 },
+        { name: 'To Do', status: 'TODO' as const, position: 1 },
+        { name: 'In Progress', status: 'DOING' as const, position: 2 },
+        { name: 'Done', status: 'DONE' as const, position: 3 },
+      ].map((c) => ({ ...c, board_id: newBoard.id }));
 
-        if (createProfileError) {
-          console.error('Error creating profile:', createProfileError);
-          toast({
-            title: "Error",
-            description: "Failed to create user profile. Please refresh the page.",
-            variant: "destructive",
-          });
-          return;
-        }
+      const { data: newColumns, error: columnsInsertError } = await supabase
+        .from('columns')
+        .insert(defaultColumns)
+        .select();
+
+      if (columnsInsertError) {
+        console.error('Error creating default columns:', columnsInsertError);
+        toast({
+          title: 'Warning',
+          description: 'Board created but columns failed to create. Please refresh.',
+        });
       }
 
-      // Wait a moment for the trigger to complete, then retry fetching
-      setTimeout(() => {
-        fetchBoardData();
-      }, 1000);
+      // Optionally ensure notification prefs exist (ignore errors)
+      await supabase
+        .from('notification_prefs')
+        .insert([{ user_id: user.id }])
+        .select()
+        .maybeSingle();
 
+      // Update local state
+      setBoard(newBoard as Board);
+      setColumns((newColumns || []) as Column[]);
+      setTasks([]);
+
+      toast({ title: 'Your board is ready', description: 'Default board and columns created' });
     } catch (error) {
-      console.error('Error creating default board:', error);
+      console.error('Error creating default board & columns:', error);
       toast({
-        title: "Error",
-        description: "Failed to create default board. Please refresh the page.",
-        variant: "destructive",
+        title: 'Error',
+        description: 'Failed to set up your default board',
+        variant: 'destructive',
       });
+    } finally {
       setLoading(false);
     }
   };
