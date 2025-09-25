@@ -212,8 +212,14 @@ export class RealtimeVoiceAssistant {
       const EPHEMERAL_KEY = data.client_secret.value;
       console.log('Ephemeral token received, establishing WebRTC connection...');
 
-      // Initialize audio context
+      // Initialize audio context with user gesture for autoplay policy
       this.audioContext = new AudioContext({ sampleRate: 24000 });
+      
+      // Resume audio context if suspended (required for autoplay policy)
+      if (this.audioContext.state === 'suspended') {
+        await this.audioContext.resume();
+        console.log('Audio context resumed');
+      }
 
       // Create peer connection
       this.pc = new RTCPeerConnection();
@@ -295,12 +301,22 @@ export class RealtimeVoiceAssistant {
   private handleMessage(event: any) {
     this.onMessage(event);
 
+    // Enhanced debugging for audio events
+    if (event.type === 'response.audio.delta') {
+      console.log('🔊 Audio delta received, size:', event.delta?.length || 0);
+    } else if (event.type === 'response.audio.done') {
+      console.log('🔊 Audio response completed');
+    } else if (event.type === 'response.function_call_arguments.done') {
+      console.log('🔧 Function call completed:', event.name);
+    }
+
     // Handle different event types
     switch (event.type) {
       case 'response.audio.delta':
         this.handleAudioDelta(event);
         break;
       case 'response.audio.done':
+        console.log('Audio playback finished');
         this.onSpeakingChange(false);
         break;
       case 'response.function_call_arguments.done':
@@ -312,13 +328,28 @@ export class RealtimeVoiceAssistant {
       case 'input_audio_buffer.speech_stopped':
         this.onListeningChange(false);
         break;
+      case 'response.created':
+        console.log('🎯 AI response started');
+        break;
+      case 'response.done':
+        console.log('🎯 AI response completed');
+        break;
     }
   }
 
   private async handleAudioDelta(event: any) {
-    if (!this.audioContext || !event.delta) return;
+    if (!this.audioContext || !event.delta) {
+      console.warn('Audio delta ignored - no context or data');
+      return;
+    }
 
     try {
+      // Resume audio context if suspended
+      if (this.audioContext.state === 'suspended') {
+        await this.audioContext.resume();
+        console.log('Audio context resumed for playback');
+      }
+
       this.onSpeakingChange(true);
       
       // Convert base64 to Uint8Array
@@ -328,6 +359,7 @@ export class RealtimeVoiceAssistant {
         bytes[i] = binaryString.charCodeAt(i);
       }
       
+      console.log(`🔊 Playing audio chunk: ${bytes.length} bytes`);
       await playAudioData(this.audioContext, bytes);
     } catch (error) {
       console.error('Error playing audio delta:', error);
@@ -335,7 +367,7 @@ export class RealtimeVoiceAssistant {
   }
 
   private async handleFunctionCall(event: any) {
-    console.log('Function call completed:', event);
+    console.log('🔧 Function call completed:', event.name, 'with args:', event.arguments);
     
     try {
       const args = JSON.parse(event.arguments);
@@ -356,8 +388,11 @@ export class RealtimeVoiceAssistant {
           result = { error: `Unknown function: ${functionName}` };
       }
 
+      console.log('🔧 Function result:', result);
+
       // Send function result back
       if (this.dc && this.dc.readyState === 'open') {
+        // Send the function output
         this.dc.send(JSON.stringify({
           type: 'conversation.item.create',
           item: {
@@ -365,6 +400,12 @@ export class RealtimeVoiceAssistant {
             call_id: event.call_id,
             output: JSON.stringify(result)
           }
+        }));
+
+        // CRITICAL: Trigger a response to generate spoken response after function call
+        console.log('🎯 Triggering AI response after function completion');
+        this.dc.send(JSON.stringify({
+          type: 'response.create'
         }));
       }
     } catch (error) {
