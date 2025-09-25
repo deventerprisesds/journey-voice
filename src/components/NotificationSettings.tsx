@@ -35,6 +35,7 @@ interface NotificationPrefs {
   quiet_hours_end: string;
   timezone: string;
   channels: NotificationChannel[];
+  email_address?: string;
 }
 
 const NotificationSettings: React.FC = () => {
@@ -61,7 +62,8 @@ const NotificationSettings: React.FC = () => {
     quiet_hours_start: '22:00',
     quiet_hours_end: '08:00',
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    channels: ['WEB_PUSH', 'IN_APP'] as NotificationChannel[]
+    channels: ['WEB_PUSH', 'IN_APP'] as NotificationChannel[],
+    email_address: ''
   });
 
   const [isSaving, setIsSaving] = useState(false);
@@ -74,29 +76,43 @@ const NotificationSettings: React.FC = () => {
 
   const loadNotificationPrefs = async () => {
     try {
-      const { data, error } = await supabase
-        .from('notification_prefs')
-        .select('*')
-        .eq('user_id', user?.id)
-        .maybeSingle();
+      // Load both notification prefs and user profile
+      const [prefsResponse, profileResponse] = await Promise.all([
+        supabase
+          .from('notification_prefs')
+          .select('*')
+          .eq('user_id', user?.id)
+          .maybeSingle(),
+        supabase
+          .from('profiles')
+          .select('email')
+          .eq('user_id', user?.id)
+          .maybeSingle()
+      ]);
 
-      if (error && error.code !== 'PGRST116') {
-        console.error('Error loading notification preferences:', error);
+      if (prefsResponse.error && prefsResponse.error.code !== 'PGRST116') {
+        console.error('Error loading notification preferences:', prefsResponse.error);
         return;
       }
 
-      if (data) {
+      const userEmail = profileResponse.data?.email || user?.email || '';
+
+      if (prefsResponse.data) {
         setPrefs({
-          due_reminders_enabled: data.due_reminders_enabled,
-          overdue_reminders_enabled: data.overdue_reminders_enabled,
-          daily_digest_enabled: data.daily_digest_enabled,
-          weekly_digest_enabled: data.weekly_digest_enabled,
-          task_created_enabled: data.task_created_enabled ?? true,
-          quiet_hours_start: data.quiet_hours_start ? data.quiet_hours_start.substring(0, 5) : '22:00',
-          quiet_hours_end: data.quiet_hours_end ? data.quiet_hours_end.substring(0, 5) : '08:00',
-          timezone: data.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
-          channels: (data.channels as NotificationChannel[]) || ['WEB_PUSH', 'IN_APP']
+          due_reminders_enabled: prefsResponse.data.due_reminders_enabled,
+          overdue_reminders_enabled: prefsResponse.data.overdue_reminders_enabled,
+          daily_digest_enabled: prefsResponse.data.daily_digest_enabled,
+          weekly_digest_enabled: prefsResponse.data.weekly_digest_enabled,
+          task_created_enabled: prefsResponse.data.task_created_enabled ?? true,
+          quiet_hours_start: prefsResponse.data.quiet_hours_start ? prefsResponse.data.quiet_hours_start.substring(0, 5) : '22:00',
+          quiet_hours_end: prefsResponse.data.quiet_hours_end ? prefsResponse.data.quiet_hours_end.substring(0, 5) : '08:00',
+          timezone: prefsResponse.data.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
+          channels: (prefsResponse.data.channels as NotificationChannel[]) || ['WEB_PUSH', 'IN_APP'],
+          email_address: userEmail
         });
+      } else {
+        // Set default email if no preferences exist yet
+        setPrefs(prev => ({ ...prev, email_address: userEmail }));
       }
     } catch (error) {
       console.error('Error loading notification preferences:', error);
@@ -134,7 +150,9 @@ const NotificationSettings: React.FC = () => {
           quiet_hours_end: formatTime(prefs.quiet_hours_end),
           timezone: prefs.timezone,
           channels: prefs.channels
-        }]);
+        }], {
+          onConflict: 'user_id'
+        });
 
       if (error) {
         console.error('Error saving notification preferences:', error);
@@ -451,15 +469,31 @@ const NotificationSettings: React.FC = () => {
               />
             </div>
 
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Mail className="h-4 w-4" />
-                <Label className="text-sm">Email Notifications</Label>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Mail className="h-4 w-4" />
+                  <Label className="text-sm">Email Notifications</Label>
+                </div>
+                <Switch
+                  checked={prefs.channels.includes('EMAIL')}
+                  onCheckedChange={() => handleToggleChannel('EMAIL')}
+                />
               </div>
-              <Switch
-                checked={prefs.channels.includes('EMAIL')}
-                onCheckedChange={() => handleToggleChannel('EMAIL')}
-              />
+              {prefs.channels.includes('EMAIL') && (
+                <div className="ml-6 space-y-2">
+                  <Label className="text-xs text-muted-foreground">Email Address</Label>
+                  <Input
+                    type="email"
+                    value={prefs.email_address || ''}
+                    onChange={(e) => 
+                      setPrefs(prev => ({ ...prev, email_address: e.target.value }))
+                    }
+                    placeholder="Enter email address for notifications"
+                    className="text-sm"
+                  />
+                </div>
+              )}
             </div>
           </div>
         </CardContent>
