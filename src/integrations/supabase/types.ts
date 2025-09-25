@@ -888,7 +888,18 @@ export type Database = {
       task_category: "LIFE" | "CAREER" | "VENTURES" | "EDUCATION"
       task_priority: "LOW" | "MEDIUM" | "HIGH" | "URGENT"
       task_source: "CHAT" | "EMBA_SHEET" | "MIT_SHEET" | "MANUAL"
-      task_status: "BACKLOG" | "TODO" | "DOING" | "DONE"
+      task_status:
+        | "BACKLOG"
+        | "TODO"
+        | "DOING"
+        | "DONE"
+        | "BLOCKED"
+        | "CAREER"
+        | "PROF_EDUCATION"
+        | "VENTURES"
+        | "PLANNING"
+        | "READY"
+        | "UP_NEXT"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -1021,7 +1032,19 @@ export const Constants = {
       task_category: ["LIFE", "CAREER", "VENTURES", "EDUCATION"],
       task_priority: ["LOW", "MEDIUM", "HIGH", "URGENT"],
       task_source: ["CHAT", "EMBA_SHEET", "MIT_SHEET", "MANUAL"],
-      task_status: ["BACKLOG", "TODO", "DOING", "DONE"],
+      task_status: [
+        "BACKLOG",
+        "TODO",
+        "DOING",
+        "DONE",
+        "BLOCKED",
+        "CAREER",
+        "PROF_EDUCATION",
+        "VENTURES",
+        "PLANNING",
+        "READY",
+        "UP_NEXT",
+      ],
     },
   },
 } as const
