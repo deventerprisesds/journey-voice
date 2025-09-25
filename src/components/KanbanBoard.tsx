@@ -841,6 +841,7 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         onSave={handleTaskSave}
+        allTasks={filteredTasks.length > 0 ? filteredTasks : tasks}
       />
 
       <TaskCreationModal

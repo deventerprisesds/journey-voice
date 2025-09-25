@@ -116,14 +116,24 @@ const VoiceInterface: React.FC<VoiceInterfaceProps> = ({ onTaskUpdate }) => {
         title: "Voice Assistant Connected",
         description: "Start speaking to manage your tasks",
       });
-    } catch (error) {
-      console.error('Error connecting to voice assistant:', error);
-      toast({
-        title: "Connection Error",
-        description: error instanceof Error ? error.message : 'Failed to connect to voice assistant',
-        variant: "destructive",
-      });
-    }
+        } catch (error) {
+          console.error('Error connecting to voice assistant:', error);
+          
+          // Check if it's a quota error
+          if (error instanceof Error && error.message.includes('insufficient_quota')) {
+            toast({
+              title: "OpenAI Quota Exceeded",
+              description: "Your OpenAI API quota has been exceeded. Please check your OpenAI billing settings.",
+              variant: "destructive",
+            });
+          } else {
+            toast({
+              title: "Connection Error",
+              description: error instanceof Error ? error.message : 'Failed to connect to voice assistant',
+              variant: "destructive",
+            });
+          }
+        }
   };
 
   const toggleListening = async () => {

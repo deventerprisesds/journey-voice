@@ -135,7 +135,10 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onStatusChange, onEdit }) => 
   };
 
   return (
-    <Card className={`group relative transition-all duration-200 hover:shadow-elevated border-l-4 ${priorityColors[task.priority]} ${isBlocked ? 'opacity-75' : ''}`}>
+    <Card 
+      className={`group relative transition-all duration-200 hover:shadow-elevated border-l-4 cursor-pointer ${priorityColors[task.priority]} ${isBlocked ? 'opacity-75' : ''}`}
+      onDoubleClick={() => onEdit?.(task)}
+    >
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between gap-2">
           <div className="flex items-center gap-2 flex-1 min-w-0">

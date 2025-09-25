@@ -263,7 +263,23 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
           <DialogTitle>Edit Task</DialogTitle>
         </DialogHeader>
 
-        <Tabs defaultValue="details" className="w-full">
+        {!task ? (
+          <>
+            <div className="flex items-center justify-center py-8">
+              <div className="text-center">
+                <h3 className="text-lg font-medium text-muted-foreground">No task selected</h3>
+                <p className="text-sm text-muted-foreground">Please select a task to edit.</p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-6">
+              <Button variant="outline" onClick={onClose}>
+                Close
+              </Button>
+            </div>
+          </>
+        ) : (
+          <>
+            <Tabs defaultValue="details" className="w-full">
           <TabsList className="grid w-full grid-cols-4">
             <TabsTrigger value="details">Details</TabsTrigger>
             <TabsTrigger value="dependencies">
@@ -573,7 +589,18 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
           <TabsContent value="tree">
             <DependencyTree tasks={allTasks} selectedTaskId={task?.id} />
           </TabsContent>
-        </Tabs>
+            </Tabs>
+
+            <div className="flex justify-end gap-2 mt-6">
+              <Button variant="outline" onClick={onClose} disabled={isSaving}>
+                Cancel
+              </Button>
+              <Button onClick={handleSave} disabled={isSaving}>
+                {isSaving ? 'Saving...' : 'Save Changes'}
+              </Button>
+            </div>
+          </>
+        )}
       </DialogContent>
     </Dialog>
   );

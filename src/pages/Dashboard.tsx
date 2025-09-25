@@ -121,10 +121,16 @@ const Dashboard = () => {
                 )}
               </div>
               <div className="flex items-center gap-2">
+                <Link to="/settings">
+                  <Button variant="outline" size="sm">
+                    <Settings className="h-4 w-4 mr-2" />
+                    Settings
+                  </Button>
+                </Link>
                 {isAdmin && (
                   <Link to="/admin">
                     <Button variant="outline" size="sm">
-                      <Settings className="h-4 w-4 mr-2" />
+                      <Crown className="h-4 w-4 mr-2" />
                       Admin
                     </Button>
                   </Link>
