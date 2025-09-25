@@ -63,10 +63,14 @@ async function handleUpdateTask(args: any) {
     if (args.title) updates.title = args.title;
     if (args.description) updates.description = args.description;
     if (args.priority) updates.priority = args.priority;
+    if (args.category) updates.category = args.category;
+    if (args.blocked_by !== undefined) updates.blocked_by = args.blocked_by;
     if (args.status) {
       updates.status = args.status;
       if (args.status === 'DONE') {
         updates.completed_at = new Date().toISOString();
+      } else {
+        updates.completed_at = null;
       }
     }
     if (args.due_date) updates.due_date = args.due_date;
@@ -92,6 +96,102 @@ async function handleUpdateTask(args: any) {
   } catch (error) {
     console.error('Error in handleUpdateTask:', error);
     return { success: false, message: 'Failed to update task' };
+  }
+}
+
+async function handleScheduleTasks(args: any) {
+  try {
+    console.log('Scheduling tasks:', args);
+    
+    const {
+      target_date = null,
+      working_hours = 7,
+      include_weekends = false
+    } = args;
+
+    // Get all pending tasks
+    const { data: tasks, error: tasksError } = await supabase
+      .from('tasks')
+      .select('*')
+      .neq('status', 'DONE')
+      .order('priority', { ascending: false })
+      .order('due_date', { ascending: true });
+
+    if (tasksError) {
+      console.error('Error fetching tasks:', tasksError);
+      return { success: false, message: 'Failed to fetch tasks for scheduling' };
+    }
+
+    if (!tasks || tasks.length === 0) {
+      return {
+        success: true,
+        message: "No pending tasks to schedule",
+        scheduled_tasks: []
+      };
+    }
+
+    // Simple scheduling logic - prioritize by urgency and due dates
+    const scheduledTasks = [];
+    const targetDateObj = target_date ? new Date(target_date) : new Date();
+    targetDateObj.setDate(targetDateObj.getDate() + 1); // Default to tomorrow
+    const dailyMinutes = working_hours * 60;
+    let currentMinutes = 0;
+
+    // Priority mapping for sorting
+    const priorityWeights = { 'URGENT': 4, 'HIGH': 3, 'MEDIUM': 2, 'LOW': 1 };
+    
+    // Sort tasks by priority and due date
+    const sortedTasks = tasks.sort((a, b) => {
+      const priorityDiff = priorityWeights[b.priority] - priorityWeights[a.priority];
+      if (priorityDiff !== 0) return priorityDiff;
+      
+      if (a.due_date && b.due_date) {
+        return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
+      }
+      if (a.due_date) return -1;
+      if (b.due_date) return 1;
+      
+      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+    });
+
+    for (const task of sortedTasks) {
+      const estimateMinutes = task.estimate_minutes || 60; // Default 1 hour
+      
+      if (currentMinutes + estimateMinutes <= dailyMinutes) {
+        const startTime = new Date(targetDateObj);
+        startTime.setHours(9); // Start at 9 AM
+        startTime.setMinutes(currentMinutes);
+        
+        const endTime = new Date(startTime);
+        endTime.setMinutes(endTime.getMinutes() + estimateMinutes);
+
+        scheduledTasks.push({
+          task_id: task.id,
+          title: task.title,
+          priority: task.priority,
+          category: task.category,
+          scheduled_start: startTime.toISOString(),
+          scheduled_end: endTime.toISOString(),
+          estimate_minutes: estimateMinutes
+        });
+
+        currentMinutes += estimateMinutes + 15; // 15 min buffer
+      }
+    }
+
+    console.log('Generated schedule with', scheduledTasks.length, 'tasks');
+    
+    return {
+      success: true,
+      message: `Generated schedule for ${scheduledTasks.length} tasks on ${targetDateObj.toDateString()}`,
+      scheduled_tasks: scheduledTasks,
+      total_time_hours: Math.round(currentMinutes / 60 * 10) / 10,
+      date: targetDateObj.toISOString().split('T')[0]
+    };
+
+  } catch (error) {
+    console.error('Error in handleScheduleTasks:', error);
+    return { success: false, message: 'Failed to schedule tasks' };
   }
 }
 
@@ -348,6 +448,9 @@ serve(async (req) => {
                   break;
                 case 'get_tasks':
                   functionResult = await handleGetTasks(args);
+                  break;
+                case 'schedule_tasks':
+                  functionResult = await handleScheduleTasks(args);
                   break;
                 default:
                   functionResult = { success: false, message: `Unknown function: ${data.name}` };

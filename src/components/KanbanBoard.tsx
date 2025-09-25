@@ -1,10 +1,13 @@
 import React, { useState, useEffect } from 'react';
+import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Plus, MoreHorizontal } from 'lucide-react';
+import { Plus, MoreHorizontal, Calendar, Clock } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 import TaskCard from './TaskCard';
+import TaskDetailModal from './TaskDetailModal';
+import { itineraryEngine } from '@/utils/ItineraryEngine';
 
 interface Task {
   id: string;
@@ -65,6 +68,9 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger }) => {
   const [board, setBoard] = useState<Board | null>(null);
   const [columns, setColumns] = useState<Column[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isGeneratingSchedule, setIsGeneratingSchedule] = useState(false);
 
   const fetchBoardData = async () => {
     try {
@@ -186,6 +192,90 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger }) => {
     }
   };
 
+  const handleDragEnd = async (result: DropResult) => {
+    const { destination, source, draggableId } = result;
+
+    // If dropped outside or in same position, do nothing
+    if (!destination || 
+        (destination.droppableId === source.droppableId && destination.index === source.index)) {
+      return;
+    }
+
+    // Find the column that matches the destination
+    const targetColumn = columns.find(col => col.id === destination.droppableId);
+    if (!targetColumn) return;
+
+    // Update task status based on column
+    await handleStatusChange(draggableId, targetColumn.status);
+  };
+
+  const handleTaskEdit = (task: Task) => {
+    setSelectedTask(task);
+    setIsModalOpen(true);
+  };
+
+  const handleTaskSave = (updatedTask: Task) => {
+    setTasks(prevTasks => 
+      prevTasks.map(task => 
+        task.id === updatedTask.id ? updatedTask : task
+      )
+    );
+    setIsModalOpen(false);
+    setSelectedTask(null);
+  };
+
+  const generateDailySchedule = async () => {
+    if (tasks.length === 0) {
+      toast({
+        title: "No tasks to schedule",
+        description: "Add some tasks first to generate a schedule",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsGeneratingSchedule(true);
+    try {
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      
+      const scheduledTasks = await itineraryEngine.generateDailySchedule(tasks, tomorrow);
+      
+      if (scheduledTasks.length === 0) {
+        toast({
+          title: "No tasks scheduled",
+          description: "All your tasks might be blocked by dependencies or already completed",
+        });
+        return;
+      }
+
+      // Create an itinerary with the scheduled tasks
+      await itineraryEngine.saveScheduleAsItinerary(
+        [{
+          date: tomorrow.toISOString().split('T')[0],
+          tasks: scheduledTasks,
+          totalMinutes: scheduledTasks.reduce((sum, st) => sum + (st.task.estimate_minutes || 60), 0),
+          availableMinutes: 420
+        }],
+        `Daily Schedule - ${tomorrow.toLocaleDateString()}`
+      );
+
+      toast({
+        title: "Schedule generated!",
+        description: `Created schedule with ${scheduledTasks.length} tasks for tomorrow`,
+      });
+    } catch (error) {
+      console.error('Error generating schedule:', error);
+      toast({
+        title: "Error",
+        description: "Failed to generate schedule",
+        variant: "destructive",
+      });
+    } finally {
+      setIsGeneratingSchedule(false);
+    }
+  };
+
   const getTasksByStatus = (status: Task['status']) => {
     return tasks.filter(task => task.status === status);
   };
@@ -258,9 +348,20 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger }) => {
             <p className="text-muted-foreground mt-1">{board.description}</p>
           )}
         </div>
-        <Button variant="outline" size="sm">
-          <MoreHorizontal className="h-4 w-4" />
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button 
+            onClick={generateDailySchedule}
+            disabled={isGeneratingSchedule}
+            size="sm"
+            className="bg-productivity hover:bg-productivity/90 text-white"
+          >
+            <Calendar className="h-4 w-4 mr-2" />
+            {isGeneratingSchedule ? 'Generating...' : 'Schedule Tasks'}
+          </Button>
+          <Button variant="outline" size="sm">
+            <MoreHorizontal className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
 
       {/* Empty State */}
@@ -289,41 +390,80 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger }) => {
         </Card>
       )}
 
-      {/* Kanban Columns */}
+      {/* Kanban Columns with Drag & Drop */}
       {hasAnyTasks && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          {columns.map((column) => {
-            const columnTasks = getTasksByStatus(column.status);
-            
-            return (
-              <Card key={column.id} className={`${statusColors[column.status]} border-t-4`}>
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-sm font-medium flex items-center justify-between">
-                    <span>{column.name}</span>
-                    <span className="text-xs bg-background/50 px-2 py-1 rounded-full">
-                      {columnTasks.length}
-                    </span>
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {columnTasks.map((task) => (
-                    <TaskCard
-                      key={task.id}
-                      task={task}
-                      onStatusChange={handleStatusChange}
-                    />
-                  ))}
-                  {columnTasks.length === 0 && (
-                    <div className="text-center py-8 text-muted-foreground text-xs">
-                      No tasks in {column.name.toLowerCase()}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            );
-          })}
-        </div>
+        <DragDropContext onDragEnd={handleDragEnd}>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            {columns.map((column) => {
+              const columnTasks = getTasksByStatus(column.status);
+              
+              return (
+                <Card key={column.id} className={`${statusColors[column.status]} border-t-4`}>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-sm font-medium flex items-center justify-between">
+                      <span>{column.name}</span>
+                      <span className="text-xs bg-background/50 px-2 py-1 rounded-full">
+                        {columnTasks.length}
+                      </span>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <Droppable droppableId={column.id}>
+                      {(provided, snapshot) => (
+                        <div
+                          ref={provided.innerRef}
+                          {...provided.droppableProps}
+                          className={`space-y-3 min-h-[200px] transition-colors ${
+                            snapshot.isDraggingOver ? 'bg-muted/50 rounded-lg' : ''
+                          }`}
+                        >
+                          {columnTasks.map((task, index) => (
+                            <Draggable key={task.id} draggableId={task.id} index={index}>
+                              {(provided, snapshot) => (
+                                <div
+                                  ref={provided.innerRef}
+                                  {...provided.draggableProps}
+                                  {...provided.dragHandleProps}
+                                  className={`transition-transform ${
+                                    snapshot.isDragging ? 'rotate-2 scale-105' : ''
+                                  }`}
+                                >
+                                  <TaskCard
+                                    task={task}
+                                    onStatusChange={handleStatusChange}
+                                    onEdit={handleTaskEdit}
+                                  />
+                                </div>
+                              )}
+                            </Draggable>
+                          ))}
+                          {provided.placeholder}
+                          {columnTasks.length === 0 && (
+                            <div className="text-center py-8 text-muted-foreground text-xs">
+                              Drop tasks here or no tasks in {column.name.toLowerCase()}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </Droppable>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        </DragDropContext>
       )}
+      {/* Task Detail Modal */}
+      <TaskDetailModal
+        task={selectedTask}
+        isOpen={isModalOpen}
+        onClose={() => {
+          setIsModalOpen(false);
+          setSelectedTask(null);
+        }}
+        onSave={handleTaskSave}
+        allTasks={tasks}
+      />
     </div>
   );
 };
