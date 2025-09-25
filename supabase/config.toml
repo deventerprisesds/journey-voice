@@ -8,3 +8,6 @@ verify_jwt = false
 
 [functions.external-db-query]
 verify_jwt = false
+
+[functions.test-external-db]
+verify_jwt = false
