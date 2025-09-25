@@ -335,7 +335,7 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
         title: newTaskTitle.trim(),
         status: 'BACKLOG' as const,
         priority: 'MEDIUM' as const,
-        category: 'LIFE' as const,
+        category: groupBy === 'category' && tasks.length > 0 ? tasks[0].category : 'LIFE' as const,
         user_id: isDemoMode ? 'demo-user' : '',
         board_id: isDemoMode ? 'demo-board' : '',
         created_at: new Date().toISOString(),
@@ -656,21 +656,41 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
                                   </div>
                                 </TableCell>
                                 <TableCell>
-                                  <Badge 
-                                    variant="outline" 
-                                    className={cn("capitalize", statusColors[task.status as keyof typeof statusColors])}
-                                  >
-                                    {task.status.toLowerCase().replace('_', ' ')}
-                                  </Badge>
+                                  {renderEditableCell(
+                                    task, 
+                                    'status', 
+                                    task.status, 
+                                    'select', 
+                                    ['BLOCKED', 'BACKLOG', 'LIFE', 'CAREER', 'PROF_EDUCATION', 'VENTURES', 'PLANNING', 'READY', 'UP_NEXT', 'DOING', 'DONE']
+                                  )}
+                                  {editingCell?.taskId !== task.id || editingCell?.field !== 'status' ? (
+                                    <Badge 
+                                      variant="outline" 
+                                      className={cn("capitalize cursor-pointer", statusColors[task.status as keyof typeof statusColors])}
+                                      onClick={() => startEditing(task.id, 'status', task.status)}
+                                    >
+                                      {task.status.toLowerCase().replace('_', ' ')}
+                                    </Badge>
+                                  ) : null}
                                 </TableCell>
                                 <TableCell>
-                                  <Badge 
-                                    variant="outline" 
-                                    className={cn("capitalize", priorityColors[task.priority])}
-                                  >
-                                    <Flag className="h-3 w-3 mr-1" />
-                                    {task.priority.toLowerCase()}
-                                  </Badge>
+                                  {renderEditableCell(
+                                    task, 
+                                    'priority', 
+                                    task.priority, 
+                                    'select', 
+                                    ['LOW', 'MEDIUM', 'HIGH', 'URGENT']
+                                  )}
+                                  {editingCell?.taskId !== task.id || editingCell?.field !== 'priority' ? (
+                                    <Badge 
+                                      variant="outline" 
+                                      className={cn("capitalize cursor-pointer", priorityColors[task.priority])}
+                                      onClick={() => startEditing(task.id, 'priority', task.priority)}
+                                    >
+                                      <Flag className="h-3 w-3 mr-1" />
+                                      {task.priority.toLowerCase()}
+                                    </Badge>
+                                  ) : null}
                                 </TableCell>
                                 <TableCell>
                                   <div className="space-y-1">
@@ -729,14 +749,27 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
                                             {formatDate(task.created_at)}
                                           </p>
                                         </div>
-                                        <div>
-                                          <span className="font-medium">Category:</span>
-                                          <p className="text-muted-foreground">
-                                            <Badge variant="secondary" className={cn("capitalize", categoryColors[task.category])}>
-                                              {task.category.toLowerCase()}
-                                            </Badge>
-                                          </p>
-                                        </div>
+                                         <div>
+                                           <span className="font-medium">Category:</span>
+                                           <div className="text-muted-foreground">
+                                             {renderEditableCell(
+                                               task, 
+                                               'category', 
+                                               task.category, 
+                                               'select', 
+                                               ['LIFE', 'CAREER', 'VENTURES', 'EDUCATION']
+                                             )}
+                                             {editingCell?.taskId !== task.id || editingCell?.field !== 'category' ? (
+                                               <Badge 
+                                                 variant="secondary" 
+                                                 className={cn("capitalize cursor-pointer", categoryColors[task.category])}
+                                                 onClick={() => startEditing(task.id, 'category', task.category)}
+                                               >
+                                                 {task.category.toLowerCase()}
+                                               </Badge>
+                                             ) : null}
+                                           </div>
+                                         </div>
                                         {task.completed_at && (
                                           <div>
                                             <span className="font-medium">Completed:</span>

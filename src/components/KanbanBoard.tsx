@@ -519,18 +519,19 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
 
       console.log('Board created successfully:', boardData);
 
-      // Create default columns with new 10-column structure including LIFE
+      // Create default columns with BACKLOG and LIFE columns in correct order
       const defaultColumns = [
         { name: 'Blocked', status: 'BLOCKED' as const, position: 0 },
-        { name: 'Life', status: 'LIFE' as const, position: 1 },
-        { name: 'Career', status: 'CAREER' as const, position: 2 },
-        { name: 'Prof. Education', status: 'PROF_EDUCATION' as const, position: 3 },
-        { name: 'Ventures', status: 'VENTURES' as const, position: 4 },
-        { name: 'Planning', status: 'PLANNING' as const, position: 5 },
-        { name: 'Ready', status: 'READY' as const, position: 6 },
-        { name: 'Up Next', status: 'UP_NEXT' as const, position: 7 },
-        { name: 'Doing', status: 'DOING' as const, position: 8 },
-        { name: 'Done', status: 'DONE' as const, position: 9 }
+        { name: 'Backlog', status: 'BACKLOG' as const, position: 1 },
+        { name: 'Life', status: 'LIFE' as const, position: 2 },
+        { name: 'Career', status: 'CAREER' as const, position: 3 },
+        { name: 'Prof. Education', status: 'PROF_EDUCATION' as const, position: 4 },
+        { name: 'Ventures', status: 'VENTURES' as const, position: 5 },
+        { name: 'Planning', status: 'PLANNING' as const, position: 6 },
+        { name: 'Ready', status: 'READY' as const, position: 7 },
+        { name: 'Up Next', status: 'UP_NEXT' as const, position: 8 },
+        { name: 'Doing', status: 'DOING' as const, position: 9 },
+        { name: 'Done', status: 'DONE' as const, position: 10 }
       ];
 
       const { data: columnsData, error: columnsError } = await supabase
