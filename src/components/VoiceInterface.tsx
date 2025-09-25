@@ -21,29 +21,55 @@ const VoiceInterface: React.FC<VoiceInterfaceProps> = ({ onTaskUpdate }) => {
   const handleMessage = (message: any) => {
     console.log('Voice message:', message);
     setMessages(prev => [...prev, message]);
-    
-    // Handle processing status updates
+
+    // Client-side status events emitted by RealtimeVoiceAssistant
+    if (message.type === 'client.processing') {
+      setIsProcessing(true);
+      setProcessingStatus(message.status || 'Processing...');
+      return;
+    }
+    if (message.type === 'client.done') {
+      setIsProcessing(true);
+      setProcessingStatus(message.status || 'Done');
+      setTimeout(() => {
+        setIsProcessing(false);
+        setProcessingStatus('');
+      }, 1200);
+      return;
+    }
+    if (message.type === 'client.error') {
+      setIsProcessing(false);
+      setProcessingStatus('');
+      toast({
+        title: 'Assistant Error',
+        description: message.message || 'Something went wrong',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    // Handle processing status updates from function calls
     if (message.type === 'response.function_call_arguments.delta' || 
         message.type === 'response.function_call_arguments.done') {
       if (message.name === 'get_tasks') {
         if (message.type === 'response.function_call_arguments.delta') {
           setIsProcessing(true);
-          setProcessingStatus('Checking local tasks...');
+          setProcessingStatus('Analyzing your request...');
         } else if (message.type === 'response.function_call_arguments.done') {
-          setProcessingStatus('Querying assistant...');
+          setProcessingStatus('Generating answer...');
           setTimeout(() => {
             setIsProcessing(false);
             setProcessingStatus('');
             onTaskUpdate?.();
-          }, 2000);
+          }, 1500);
         }
       }
     }
-    
-    // Show processing for hybrid routing
+
+    // Show processing for hybrid routing (heuristic)
     if (message.type === 'conversation.item.create' && message.item?.role === 'user') {
       const userText = message.item.content?.[0]?.text?.toLowerCase() || '';
-      if (userText.includes('task') || userText.includes('todo') || userText.includes('week')) {
+      if (userText.includes('task') || userText.includes('todo') || userText.includes('week') || userText.includes('latest')) {
         setIsProcessing(true);
         setProcessingStatus('Processing query...');
         setTimeout(() => {
@@ -52,8 +78,8 @@ const VoiceInterface: React.FC<VoiceInterfaceProps> = ({ onTaskUpdate }) => {
         }, 3000);
       }
     }
-    
-    // Trigger task refresh when function calls are made
+
+    // Trigger task refresh when function calls are completed
     if (message.type === 'response.function_call_arguments.done') {
       onTaskUpdate?.();
     }

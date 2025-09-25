@@ -456,6 +456,9 @@ export class RealtimeVoiceAssistant {
   // Task management functions
   private async createTask(args: any) {
     try {
+      // UI status: creating task
+      this.onMessage?.({ type: 'client.processing', status: 'Creating task...' });
+
       const { data, error } = await supabase
         .from('boards')
         .select('id')
@@ -492,15 +495,20 @@ export class RealtimeVoiceAssistant {
 
       if (taskError) throw taskError;
 
+      this.onMessage?.({ type: 'client.done', status: 'Task created' });
       return { success: true, task };
     } catch (error) {
       console.error('Error creating task:', error);
+      this.onMessage?.({ type: 'client.error', message: error instanceof Error ? error.message : 'Unknown error' });
       return { error: error instanceof Error ? error.message : 'Unknown error' };
     }
   }
 
   private async updateTask(args: any) {
     try {
+      // UI status: updating task
+      this.onMessage?.({ type: 'client.processing', status: 'Updating task...' });
+
       const updateData: any = {};
       if (args.title) updateData.title = args.title;
       if (args.description !== undefined) updateData.description = args.description;
@@ -517,16 +525,20 @@ export class RealtimeVoiceAssistant {
 
       if (error) throw error;
 
+      this.onMessage?.({ type: 'client.done', status: 'Task updated' });
       return { success: true, task: data };
     } catch (error) {
       console.error('Error updating task:', error);
+      this.onMessage?.({ type: 'client.error', message: error instanceof Error ? error.message : 'Unknown error' });
       return { error: error instanceof Error ? error.message : 'Unknown error' };
     }
   }
 
   private async getTasks(args: any) {
     try {
-      // Prefer searching recent chat history for task-related messages via Edge Function
+      // UI status: searching chat history first
+      this.onMessage?.({ type: 'client.processing', status: 'Searching your recent chat history...' });
+
       const userInput = (args?.query || args?.status_filter || '').toString();
       console.log('[getTasks] Invoking external-db-query with:', {
         action: 'search_tasks',
@@ -548,13 +560,14 @@ export class RealtimeVoiceAssistant {
         console.error('[getTasks] external-db-query error:', extError);
       }
 
-      // If the external search returned results, surface them to the assistant
       if (extData?.success && Array.isArray(extData.data) && extData.data.length > 0) {
         console.log(`[getTasks] Found ${extData.data.length} results in external chat history`);
+        this.onMessage?.({ type: 'client.done', status: `Found ${extData.data.length} result(s) in chat history` });
         return { success: true, results: extData.data };
       }
 
       // Fallback: query local tasks table (status filter supported)
+      this.onMessage?.({ type: 'client.processing', status: 'Looking in your task board...' });
       console.log('[getTasks] Falling back to local tasks table');
       let query = supabase
         .from('tasks')
@@ -569,9 +582,11 @@ export class RealtimeVoiceAssistant {
       const { data: tasks, error } = await query;
       if (error) throw error;
 
+      this.onMessage?.({ type: 'client.done', status: `Loaded ${tasks?.length || 0} task(s)` });
       return { success: true, tasks };
     } catch (error) {
       console.error('Error getting tasks:', error);
+      this.onMessage?.({ type: 'client.error', message: error instanceof Error ? error.message : 'Unknown error' });
       return { error: error instanceof Error ? error.message : 'Unknown error' };
     }
   }
