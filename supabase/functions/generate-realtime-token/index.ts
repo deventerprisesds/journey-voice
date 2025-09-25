@@ -30,12 +30,91 @@ serve(async (req) => {
       body: JSON.stringify({
         model: "gpt-4o-realtime-preview-2024-12-17",
         voice: "alloy",
+        input_audio_format: "pcm16",
+        output_audio_format: "pcm16",
+        turn_detection: {
+          type: "server_vad",
+          threshold: 0.5,
+          prefix_padding_ms: 300,
+          silence_duration_ms: 800
+        },
+        tool_choice: "auto",
+        tools: [
+          {
+            type: "function",
+            name: "get_tasks",
+            description: "Retrieve tasks and chat history. Can search by time period, keywords, or status. Use this for any historical queries like 'tasks from last week' or 'what did I work on yesterday'.",
+            parameters: {
+              type: "object",
+              properties: {
+                query: { 
+                  type: "string", 
+                  description: "Search query or keywords to find in tasks/messages" 
+                },
+                time_filter: { 
+                  type: "string", 
+                  description: "Time period like 'past week', 'last month', 'yesterday', 'last 7 days'" 
+                },
+                status: { 
+                  type: "string", 
+                  enum: ["BACKLOG", "TODO", "DOING", "DONE"],
+                  description: "Filter by task status" 
+                }
+              }
+            }
+          },
+          {
+            type: "function",
+            name: "create_task",
+            description: "Create a new task with specified details",
+            parameters: {
+              type: "object",
+              properties: {
+                title: { type: "string", description: "Task title" },
+                description: { type: "string", description: "Task description" },
+                priority: { 
+                  type: "string", 
+                  enum: ["low", "medium", "high", "urgent"],
+                  description: "Task priority level" 
+                },
+                category: { type: "string", description: "Task category or project" }
+              },
+              required: ["title"]
+            }
+          },
+          {
+            type: "function",
+            name: "update_task",
+            description: "Update an existing task's properties",
+            parameters: {
+              type: "object",
+              properties: {
+                task_id: { type: "string", description: "ID of the task to update" },
+                title: { type: "string", description: "New task title" },
+                description: { type: "string", description: "New task description" },
+                status: { 
+                  type: "string", 
+                  enum: ["BACKLOG", "TODO", "DOING", "DONE"],
+                  description: "New task status" 
+                },
+                priority: { 
+                  type: "string", 
+                  enum: ["low", "medium", "high", "urgent"],
+                  description: "New task priority" 
+                }
+              },
+              required: ["task_id"]
+            }
+          }
+        ],
         instructions: `You are a helpful task management assistant. You can help users create, update, and manage their tasks through voice commands.
 
+When users ask about historical information like "tasks from last week" or "what did I work on yesterday", use the get_tasks function with appropriate time_filter parameters.
+
 Available functions:
-- create_task: Create a new task with title, description, priority, and category
-- update_task: Update existing tasks (status, title, description, priority)  
-- get_tasks: Retrieve tasks with optional status filtering
+- get_tasks: Retrieve tasks and chat history with time/keyword filtering
+- create_task: Create new tasks with title, description, priority, and category
+- update_task: Update existing tasks (status, title, description, priority)
 
 Always confirm actions you take and provide helpful feedback about task management.`
       }),
