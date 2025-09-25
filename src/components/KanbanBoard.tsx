@@ -52,6 +52,8 @@ interface Column {
 
 interface KanbanBoardProps {
   refreshTrigger?: number;
+  onTasksLoaded?: (tasks: Task[]) => void;
+  onTaskEdit?: (task: Task) => void;
 }
 
 const statusLabels = {
@@ -84,7 +86,7 @@ const statusColors = {
   TODO: 'border-blue-500 bg-blue-50',
 };
 
-const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger }) => {
+const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger, onTasksLoaded, onTaskEdit }) => {
   const { toast } = useToast();
   const { user, isDemoMode } = useAuth();
   const [loading, setLoading] = useState(true);
@@ -112,9 +114,18 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger }) => {
         const demoTasks = localStorage.getItem('kanban-demo-tasks');
 
         if (demoBoard && demoColumns) {
-          setBoard(JSON.parse(demoBoard));
-          setColumns(JSON.parse(demoColumns) as Column[]);
-          setTasks(JSON.parse(demoTasks || '[]') as Task[]);
+          const parsedBoard = JSON.parse(demoBoard);
+          const parsedColumns = JSON.parse(demoColumns) as Column[];
+          const parsedTasks = JSON.parse(demoTasks || '[]') as Task[];
+          
+          setBoard(parsedBoard);
+          setColumns(parsedColumns);
+          setTasks(parsedTasks);
+          
+          // Notify parent component about loaded tasks
+          if (onTasksLoaded && parsedTasks) {
+            onTasksLoaded(parsedTasks);
+          }
         } else {
           // Create demo data
           const result = await createDefaultBoardAndColumns(user.id);
@@ -203,6 +214,11 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger }) => {
       console.log('Tasks data:', tasksData);
       setTasks((tasksData || []) as Task[]);
       
+      // Notify parent component about loaded tasks
+      if (onTasksLoaded && tasksData) {
+        onTasksLoaded(tasksData as Task[]);
+      }
+      
     } catch (error) {
       console.error('Error in fetchBoardData:', error);
       // In case of any error, try to create default board
@@ -275,6 +291,9 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger }) => {
   };
 
   const handleTaskEdit = (task: Task) => {
+    if (onTaskEdit) {
+      onTaskEdit(task);
+    }
     setSelectedTask(task);
     setIsModalOpen(true);
   };
