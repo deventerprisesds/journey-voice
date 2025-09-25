@@ -4,7 +4,7 @@ interface Task {
   id: string;
   title: string;
   description?: string;
-  status: 'BACKLOG' | 'TODO' | 'DOING' | 'DONE';
+  status: 'BLOCKED' | 'CAREER' | 'PROF_EDUCATION' | 'VENTURES' | 'PLANNING' | 'READY' | 'UP_NEXT' | 'DOING' | 'DONE' | 'BACKLOG' | 'TODO';
   priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
   category: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION';
   due_date?: string;

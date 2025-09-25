@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Plus, MoreHorizontal, Calendar, Clock } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
+import { useAuth } from '@/hooks/useAuth';
 import TaskCard from './TaskCard';
 import TaskDetailModal from './TaskDetailModal';
 import { itineraryEngine } from '@/utils/ItineraryEngine';
@@ -13,7 +14,7 @@ interface Task {
   id: string;
   title: string;
   description?: string;
-  status: 'BACKLOG' | 'TODO' | 'DOING' | 'DONE';
+  status: 'BLOCKED' | 'CAREER' | 'PROF_EDUCATION' | 'VENTURES' | 'PLANNING' | 'READY' | 'UP_NEXT' | 'DOING' | 'DONE' | 'BACKLOG' | 'TODO';
   priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
   category: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION';
   due_date?: string;
@@ -41,7 +42,7 @@ interface Column {
   name: string;
   board_id: string;
   position: number;
-  status: 'BACKLOG' | 'TODO' | 'DOING' | 'DONE';
+  status: 'BLOCKED' | 'CAREER' | 'PROF_EDUCATION' | 'VENTURES' | 'PLANNING' | 'READY' | 'UP_NEXT' | 'DOING' | 'DONE' | 'BACKLOG' | 'TODO';
 }
 
 interface KanbanBoardProps {
@@ -49,21 +50,38 @@ interface KanbanBoardProps {
 }
 
 const statusLabels = {
+  BLOCKED: 'Blocked',
+  CAREER: 'Career',
+  PROF_EDUCATION: 'Prof. Education',
+  VENTURES: 'Ventures',
+  PLANNING: 'Planning',
+  READY: 'Ready',
+  UP_NEXT: 'Up Next',
+  DOING: 'Doing',
+  DONE: 'Done',
+  // Legacy statuses for compatibility
   BACKLOG: 'Backlog',
   TODO: 'To Do',
-  DOING: 'In Progress', 
-  DONE: 'Done',
 };
 
 const statusColors = {
-  BACKLOG: 'border-status-backlog bg-status-backlog/5',
-  TODO: 'border-status-todo bg-status-todo/5',
-  DOING: 'border-status-doing bg-status-doing/5',
-  DONE: 'border-status-done bg-status-done/5',
+  BLOCKED: 'border-red-500 bg-red-50',
+  CAREER: 'border-blue-500 bg-blue-50',
+  PROF_EDUCATION: 'border-purple-500 bg-purple-50',
+  VENTURES: 'border-green-500 bg-green-50',
+  PLANNING: 'border-yellow-500 bg-yellow-50',
+  READY: 'border-orange-500 bg-orange-50',
+  UP_NEXT: 'border-indigo-500 bg-indigo-50',
+  DOING: 'border-primary bg-primary/10',
+  DONE: 'border-emerald-500 bg-emerald-50',
+  // Legacy statuses for compatibility  
+  BACKLOG: 'border-red-500 bg-red-50',
+  TODO: 'border-blue-500 bg-blue-50',
 };
 
 const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger }) => {
   const { toast } = useToast();
+  const { user, isDemoMode } = useAuth();
   const [loading, setLoading] = useState(true);
   const [board, setBoard] = useState<Board | null>(null);
   const [columns, setColumns] = useState<Column[]>([]);
@@ -73,19 +91,45 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger }) => {
   const [isGeneratingSchedule, setIsGeneratingSchedule] = useState(false);
 
   const fetchBoardData = async () => {
-    try {
-      setLoading(true);
+    if (!user) return;
+    
+    setLoading(true);
+    console.log('Fetching board data for user:', user.id);
+    
+    // Handle demo mode - use localStorage
+    if (isDemoMode) {
+      try {
+        const demoBoard = localStorage.getItem('kanban-demo-board');
+        const demoColumns = localStorage.getItem('kanban-demo-columns');
+        const demoTasks = localStorage.getItem('kanban-demo-tasks');
 
-      // Check if user is authenticated
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        console.log('User not authenticated, skipping board fetch');
+        if (demoBoard && demoColumns) {
+          setBoard(JSON.parse(demoBoard));
+          setColumns(JSON.parse(demoColumns) as Column[]);
+          setTasks(JSON.parse(demoTasks || '[]') as Task[]);
+        } else {
+          // Create demo data
+          const result = await createDefaultBoardAndColumns(user.id);
+          setBoard(result.board);
+          setColumns(result.columns as Column[]);
+          setTasks([]);
+        }
+      } catch (error) {
+        console.error('Error loading demo data:', error);
+        // Create demo data as fallback
+        const result = await createDefaultBoardAndColumns(user.id);
+        setBoard(result.board);
+        setColumns(result.columns as Column[]);
+        setTasks([]);
+      } finally {
         setLoading(false);
-        return;
       }
+      return;
+    }
 
-      // Get default board for this user. Use maybeSingle() first, then fall back to first board
-      let { data: boardData, error: boardError } = await supabase
+    try {
+      // Fetch user's default board with explicit user_id filter
+      const { data: boardData, error: boardError } = await supabase
         .from('boards')
         .select('*')
         .eq('user_id', user.id)
@@ -93,43 +137,24 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger }) => {
         .maybeSingle();
 
       if (boardError) {
-        console.warn('Error fetching default board with maybeSingle, falling back:', boardError);
+        console.error('Error fetching board:', boardError);
+        throw boardError;
       }
 
-      // Fallback: pick the first board if multiple/no default
+      console.log('Board data:', boardData);
+
       if (!boardData) {
-        const { data: anyBoards, error: anyBoardsError } = await supabase
-          .from('boards')
-          .select('*')
-          .eq('user_id', user.id)
-          .order('position')
-          .limit(1);
-
-        if (anyBoardsError) {
-          console.error('Error fetching boards:', anyBoardsError);
-          toast({
-            title: 'Error loading board',
-            description: 'Failed to load your task board',
-            variant: 'destructive',
-          });
-          return;
-        }
-
-        if (anyBoards && anyBoards.length > 0) {
-          boardData = anyBoards[0] as any;
-        }
-      }
-
-      // If no board exists at all, create one
-      if (!boardData) {
-        console.log('No board found for user, creating default board & columns...');
-        await createDefaultBoardAndColumns();
+        console.log('No default board found, creating one...');
+        const result = await createDefaultBoardAndColumns(user.id);
+        setBoard(result.board);
+        setColumns(result.columns as Column[]);
+        setTasks([]);
         return;
       }
 
       setBoard(boardData);
 
-      // Get columns for this board
+      // Fetch columns for this board
       const { data: columnsData, error: columnsError } = await supabase
         .from('columns')
         .select('*')
@@ -138,31 +163,49 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger }) => {
 
       if (columnsError) {
         console.error('Error fetching columns:', columnsError);
+        throw columnsError;
+      }
+
+      console.log('Columns data:', columnsData);
+
+      if (!columnsData || columnsData.length === 0) {
+        console.log('No columns found, creating default columns...');
+        const result = await createDefaultBoardAndColumns(user.id);
+        setBoard(result.board);
+        setColumns(result.columns as Column[]);
+        setTasks([]);
         return;
       }
 
-      setColumns(columnsData || []);
+      setColumns(columnsData as Column[]);
 
-      // Get tasks for this board
+      // Fetch tasks for this board
       const { data: tasksData, error: tasksError } = await supabase
         .from('tasks')
         .select('*')
         .eq('board_id', boardData.id)
-        .order('created_at', { ascending: false });
+        .eq('user_id', user.id)
+        .order('created_at');
 
       if (tasksError) {
         console.error('Error fetching tasks:', tasksError);
-        return;
+        throw tasksError;
       }
 
-      setTasks(tasksData || []);
+      console.log('Tasks data:', tasksData);
+      setTasks((tasksData || []) as Task[]);
+      
     } catch (error) {
       console.error('Error in fetchBoardData:', error);
-      toast({
-        title: "Error",
-        description: "Failed to load board data",
-        variant: "destructive",
-      });
+      // In case of any error, try to create default board
+      try {
+        const result = await createDefaultBoardAndColumns(user.id);
+        setBoard(result.board);
+        setColumns(result.columns as Column[]);
+        setTasks([]);
+      } catch (createError) {
+        console.error('Error creating default board:', createError);
+      }
     } finally {
       setLoading(false);
     }
@@ -294,84 +337,100 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger }) => {
     return tasks.filter(task => task.status === status);
   };
 
-  const createDefaultBoardAndColumns = async () => {
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        console.log('User not authenticated, cannot create board');
-        setLoading(false);
-        return;
-      }
+  const createDefaultBoardAndColumns = async (userId: string) => {
+    console.log('Creating default board and columns for user:', userId);
+    
+    // Handle demo mode - use localStorage instead of Supabase
+    if (isDemoMode) {
+      const demoBoard = {
+        id: 'demo-board-1',
+        name: 'Personal Tasks',
+        description: 'Your main task board',
+        user_id: userId,
+        is_default: true,
+        position: 0,
+        color: '#3B82F6',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
 
-      // Create default board directly
-      const { data: newBoard, error: boardInsertError } = await supabase
+      const demoColumns = [
+        { id: 'demo-col-1', name: 'Blocked', status: 'BLOCKED' as const, position: 0, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+        { id: 'demo-col-2', name: 'Career', status: 'CAREER' as const, position: 1, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+        { id: 'demo-col-3', name: 'Prof. Education', status: 'PROF_EDUCATION' as const, position: 2, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+        { id: 'demo-col-4', name: 'Ventures', status: 'VENTURES' as const, position: 3, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+        { id: 'demo-col-5', name: 'Planning', status: 'PLANNING' as const, position: 4, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+        { id: 'demo-col-6', name: 'Ready', status: 'READY' as const, position: 5, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+        { id: 'demo-col-7', name: 'Up Next', status: 'UP_NEXT' as const, position: 6, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+        { id: 'demo-col-8', name: 'Doing', status: 'DOING' as const, position: 7, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+        { id: 'demo-col-9', name: 'Done', status: 'DONE' as const, position: 8, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+      ];
+
+      // Save to localStorage
+      localStorage.setItem('kanban-demo-board', JSON.stringify(demoBoard));
+      localStorage.setItem('kanban-demo-columns', JSON.stringify(demoColumns));
+      localStorage.setItem('kanban-demo-tasks', JSON.stringify([]));
+
+      return { board: demoBoard, columns: demoColumns };
+    }
+    
+    try {
+      // Create default board
+      const { data: boardData, error: boardError } = await supabase
         .from('boards')
-        .insert([
-          {
-            name: 'Personal Tasks',
-            description: 'Your main task board',
-            user_id: user.id,
-            is_default: true,
-            position: 0,
-          },
-        ])
+        .insert({
+          name: 'Personal Tasks',
+          description: 'Your main task board',
+          user_id: userId,
+          is_default: true,
+          position: 0
+        })
         .select()
         .single();
 
-      if (boardInsertError || !newBoard) {
-        console.error('Error creating default board:', boardInsertError);
-        toast({
-          title: 'Error',
-          description: 'Failed to create default board',
-          variant: 'destructive',
-        });
-        setLoading(false);
-        return;
+      if (boardError) {
+        console.error('Error creating board:', boardError);
+        throw boardError;
       }
 
-      // Create default columns for the new board
-      const defaultColumns = [
-        { name: 'Backlog', status: 'BACKLOG' as const, position: 0 },
-        { name: 'To Do', status: 'TODO' as const, position: 1 },
-        { name: 'In Progress', status: 'DOING' as const, position: 2 },
-        { name: 'Done', status: 'DONE' as const, position: 3 },
-      ].map((c) => ({ ...c, board_id: newBoard.id }));
+      console.log('Board created successfully:', boardData);
 
-      const { data: newColumns, error: columnsInsertError } = await supabase
+      // Create default columns with new 9-column structure
+      const defaultColumns = [
+        { name: 'Blocked', status: 'BLOCKED' as const, position: 0 },
+        { name: 'Career', status: 'CAREER' as const, position: 1 },
+        { name: 'Prof. Education', status: 'PROF_EDUCATION' as const, position: 2 },
+        { name: 'Ventures', status: 'VENTURES' as const, position: 3 },
+        { name: 'Planning', status: 'PLANNING' as const, position: 4 },
+        { name: 'Ready', status: 'READY' as const, position: 5 },
+        { name: 'Up Next', status: 'UP_NEXT' as const, position: 6 },
+        { name: 'Doing', status: 'DOING' as const, position: 7 },
+        { name: 'Done', status: 'DONE' as const, position: 8 }
+      ];
+
+      const { data: columnsData, error: columnsError } = await supabase
         .from('columns')
-        .insert(defaultColumns)
+        .insert(
+          defaultColumns.map(col => ({
+            name: col.name,
+            board_id: boardData.id,
+            status: col.status as any,
+            position: col.position
+          }))
+        )
         .select();
 
-      if (columnsInsertError) {
-        console.error('Error creating default columns:', columnsInsertError);
-        toast({
-          title: 'Warning',
-          description: 'Board created but columns failed to create. Please refresh.',
-        });
+      if (columnsError) {
+        console.error('Error creating columns:', columnsError);
+        throw columnsError;
       }
 
-      // Optionally ensure notification prefs exist (ignore errors)
-      await supabase
-        .from('notification_prefs')
-        .insert([{ user_id: user.id }])
-        .select()
-        .maybeSingle();
+      console.log('Columns created successfully:', columnsData);
 
-      // Update local state
-      setBoard(newBoard as Board);
-      setColumns((newColumns || []) as Column[]);
-      setTasks([]);
-
-      toast({ title: 'Your board is ready', description: 'Default board and columns created' });
+      return { board: boardData, columns: columnsData };
     } catch (error) {
-      console.error('Error creating default board & columns:', error);
-      toast({
-        title: 'Error',
-        description: 'Failed to set up your default board',
-        variant: 'destructive',
-      });
-    } finally {
-      setLoading(false);
+      console.error('Error in createDefaultBoardAndColumns:', error);
+      throw error;
     }
   };
 
@@ -488,12 +547,12 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger }) => {
       {/* Kanban Columns with Drag & Drop */}
       {hasAnyTasks && (
         <DragDropContext onDragEnd={handleDragEnd}>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-9 gap-4 overflow-x-auto">
             {columns.map((column) => {
               const columnTasks = getTasksByStatus(column.status);
               
               return (
-                <Card key={column.id} className={`${statusColors[column.status]} border-t-4`}>
+                <Card key={column.id} className={`${statusColors[column.status]} border-t-4 min-w-[280px]`}>
                   <CardHeader className="pb-3">
                     <CardTitle className="text-sm font-medium flex items-center justify-between">
                       <span>{column.name}</span>
