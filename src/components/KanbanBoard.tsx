@@ -40,6 +40,7 @@ const statusLabels = {
 
 const statusColors = {
   BLOCKED: 'border-red-500 bg-red-50',
+  BACKLOG: 'border-gray-500 bg-gray-50',
   LIFE: 'border-pink-500 bg-pink-50',
   CAREER: 'border-blue-500 bg-blue-50',
   PROF_EDUCATION: 'border-purple-500 bg-purple-50',
@@ -50,7 +51,6 @@ const statusColors = {
   DOING: 'border-primary bg-primary/10',
   DONE: 'border-emerald-500 bg-emerald-50',
   // Legacy statuses for compatibility  
-  BACKLOG: 'border-red-500 bg-red-50',
   TODO: 'border-blue-500 bg-blue-50',
 };
 
@@ -478,15 +478,16 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
 
       const demoColumns = [
         { id: 'demo-col-1', name: 'Blocked', status: 'BLOCKED' as const, position: 0, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
-        { id: 'demo-col-2', name: 'Life', status: 'LIFE' as const, position: 1, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
-        { id: 'demo-col-3', name: 'Career', status: 'CAREER' as const, position: 2, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
-        { id: 'demo-col-4', name: 'Prof. Education', status: 'PROF_EDUCATION' as const, position: 3, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
-        { id: 'demo-col-5', name: 'Ventures', status: 'VENTURES' as const, position: 4, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
-        { id: 'demo-col-6', name: 'Planning', status: 'PLANNING' as const, position: 5, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
-        { id: 'demo-col-7', name: 'Ready', status: 'READY' as const, position: 6, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
-        { id: 'demo-col-8', name: 'Up Next', status: 'UP_NEXT' as const, position: 7, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
-        { id: 'demo-col-9', name: 'Doing', status: 'DOING' as const, position: 8, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
-        { id: 'demo-col-10', name: 'Done', status: 'DONE' as const, position: 9, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+        { id: 'demo-col-2', name: 'Backlog', status: 'BACKLOG' as const, position: 1, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+        { id: 'demo-col-3', name: 'Life', status: 'LIFE' as const, position: 2, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+        { id: 'demo-col-4', name: 'Career', status: 'CAREER' as const, position: 3, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+        { id: 'demo-col-5', name: 'Prof. Education', status: 'PROF_EDUCATION' as const, position: 4, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+        { id: 'demo-col-6', name: 'Ventures', status: 'VENTURES' as const, position: 5, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+        { id: 'demo-col-7', name: 'Planning', status: 'PLANNING' as const, position: 6, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+        { id: 'demo-col-8', name: 'Ready', status: 'READY' as const, position: 7, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+        { id: 'demo-col-9', name: 'Up Next', status: 'UP_NEXT' as const, position: 8, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+        { id: 'demo-col-10', name: 'Doing', status: 'DOING' as const, position: 9, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+        { id: 'demo-col-11', name: 'Done', status: 'DONE' as const, position: 10, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
       ];
 
       // Save to localStorage

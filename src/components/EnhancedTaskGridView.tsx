@@ -322,15 +322,91 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
     setExpandedGroups(new Set(Object.keys(groupedTasks)));
   }, [groupedTasks]);
 
-  if (tasks.length === 0) {
+  // Quick add task functionality
+  const [newTaskTitle, setNewTaskTitle] = useState('');
+  const [isAddingTask, setIsAddingTask] = useState(false);
+
+  const handleQuickAddTask = async () => {
+    if (!newTaskTitle.trim()) return;
+
+    try {
+      const newTask = {
+        id: crypto.randomUUID(),
+        title: newTaskTitle.trim(),
+        status: 'BACKLOG' as const,
+        priority: 'MEDIUM' as const,
+        category: 'LIFE' as const,
+        user_id: isDemoMode ? 'demo-user' : '',
+        board_id: isDemoMode ? 'demo-board' : '',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      if (isDemoMode) {
+        const demoTasks = localStorage.getItem('kanban-demo-tasks');
+        const tasks = demoTasks ? JSON.parse(demoTasks) : [];
+        tasks.unshift(newTask);
+        localStorage.setItem('kanban-demo-tasks', JSON.stringify(tasks));
+      } else {
+        // Get the user's default board
+        const { data: boards } = await supabase
+          .from('boards')
+          .select('id')
+          .eq('is_default', true)
+          .limit(1);
+
+        if (boards && boards.length > 0) {
+          const { error } = await supabase
+            .from('tasks')
+            .insert([{ ...newTask, board_id: boards[0].id }]);
+
+          if (error) {
+            console.error('Error creating task:', error);
+            toast({
+              title: "Error",
+              description: "Failed to create task",
+              variant: "destructive",
+            });
+            return;
+          }
+        }
+      }
+
+      setNewTaskTitle('');
+      setIsAddingTask(false);
+      onTaskUpdate?.();
+
+      toast({
+        title: "Task created",
+        description: "New task added to Backlog",
+      });
+    } catch (error) {
+      console.error('Error creating task:', error);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleQuickAddTask();
+    } else if (e.key === 'Escape') {
+      setNewTaskTitle('');
+      setIsAddingTask(false);
+    }
+  };
+
+  if (tasks.length === 0 && !isAddingTask) {
     return (
       <Card>
         <CardContent className="flex flex-col items-center justify-center py-16">
           <Target className="h-12 w-12 text-muted-foreground mb-4" />
           <h3 className="text-lg font-medium mb-2">No Tasks Found</h3>
-          <p className="text-muted-foreground text-center max-w-sm">
-            Get started by creating your first task. Switch to Kanban view to add tasks using the AI assistant or manual entry.
+          <p className="text-muted-foreground text-center max-w-sm mb-4">
+            Get started by creating your first task with rapid-fire entry below.
           </p>
+          <Button onClick={() => setIsAddingTask(true)} className="gap-2">
+            <Plus className="h-4 w-4" />
+            Add First Task
+          </Button>
         </CardContent>
       </Card>
     );
@@ -436,18 +512,18 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
                 <CollapsibleContent>
                   <CardContent className="p-0">
                     <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead className="w-8"></TableHead>
-                          <TableHead 
-                            className="cursor-pointer hover:bg-muted/50"
-                            onClick={() => handleSort('title')}
-                          >
-                            Task Name
-                            {sortBy === 'title' && (
-                              <span className="ml-1">{sortOrder === 'asc' ? '↑' : '↓'}</span>
-                            )}
-                          </TableHead>
+                       <TableHeader>
+                         <TableRow>
+                           <TableHead className="w-8"></TableHead>
+                           <TableHead 
+                             className="cursor-pointer hover:bg-muted/50"
+                             onClick={() => handleSort('title')}
+                           >
+                             Task Name
+                             {sortBy === 'title' && (
+                               <span className="ml-1">{sortOrder === 'asc' ? '↑' : '↓'}</span>
+                             )}
+                           </TableHead>
                           <TableHead 
                             className="cursor-pointer hover:bg-muted/50 w-32"
                             onClick={() => handleSort('status')}
@@ -487,8 +563,72 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
                           </TableHead>
                           <TableHead className="w-16">Actions</TableHead>
                         </TableRow>
-                      </TableHeader>
-                      <TableBody>
+                       </TableHeader>
+                       <TableBody>
+                         {/* Quick Add Row */}
+                         {(isAddingTask || tasks.length === 0) && (
+                           <TableRow className="bg-muted/30 border-dashed">
+                             <TableCell>
+                               <Plus className="h-4 w-4 text-muted-foreground" />
+                             </TableCell>
+                             <TableCell>
+                               <Input
+                                 value={newTaskTitle}
+                                 onChange={(e) => setNewTaskTitle(e.target.value)}
+                                 onKeyDown={handleKeyDown}
+                                 onBlur={() => newTaskTitle.trim() ? handleQuickAddTask() : setIsAddingTask(false)}
+                                 placeholder="Enter task title and press Enter..."
+                                 className="border-none shadow-none focus-visible:ring-0 bg-transparent"
+                                 autoFocus
+                               />
+                             </TableCell>
+                             <TableCell>
+                               <Badge variant="outline" className="bg-gray-50 text-gray-700">
+                                 Backlog
+                               </Badge>
+                             </TableCell>
+                             <TableCell>
+                               <Badge variant="outline" className="bg-blue-100 text-blue-700">
+                                 Medium
+                               </Badge>
+                             </TableCell>
+                             <TableCell>
+                               <Progress value={0} className="h-2" />
+                             </TableCell>
+                             <TableCell>-</TableCell>
+                             <TableCell>-</TableCell>
+                             <TableCell>
+                               <Button
+                                 variant="ghost"
+                                 size="sm"
+                                 onClick={() => {
+                                   setNewTaskTitle('');
+                                   setIsAddingTask(false);
+                                 }}
+                                 className="h-8 w-8 p-0"
+                               >
+                                 ×
+                               </Button>
+                             </TableCell>
+                           </TableRow>
+                         )}
+
+                         {/* Add Task Button Row (when not actively adding) */}
+                         {!isAddingTask && tasks.length > 0 && (
+                           <TableRow className="hover:bg-muted/20">
+                             <TableCell colSpan={8}>
+                               <Button
+                                 variant="ghost"
+                                 size="sm"
+                                 onClick={() => setIsAddingTask(true)}
+                                 className="w-full justify-start gap-2 text-muted-foreground"
+                               >
+                                 <Plus className="h-4 w-4" />
+                                 Add new task...
+                               </Button>
+                             </TableCell>
+                           </TableRow>
+                         )}
                         {groupTasks.map((task) => {
                           const isExpanded = expandedTasks.has(task.id);
                           const progress = getProgressPercentage(task.status);
