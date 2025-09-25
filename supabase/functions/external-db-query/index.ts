@@ -27,7 +27,7 @@ serve(async (req) => {
   }
 
   try {
-    const { action, query, user_input, match_threshold = 0.7, match_count = 10 } = await req.json();
+    const { action, query, user_input, time_filter, match_threshold = 0.7, match_count = 10 } = await req.json();
     
     const databaseUrl = Deno.env.get('EXTERNAL_DATABASE_URL');
     if (!databaseUrl) {
@@ -37,13 +37,13 @@ serve(async (req) => {
     const client = new Client(databaseUrl);
     await client.connect();
 
-    console.log(`External DB Query - Action: ${action}, Query: ${query?.substring(0, 100)}...`);
+    console.log(`External DB Query - Action: ${action}, Query: ${query?.substring(0, 100)}..., Time Filter: ${time_filter}`);
 
     let result;
 
     switch (action) {
       case 'search_tasks':
-        result = await searchTaskRelatedMessages(client, user_input, match_threshold, match_count);
+        result = await searchTaskRelatedMessages(client, user_input, time_filter, match_threshold, match_count);
         break;
       
       case 'get_recent_context':
@@ -83,30 +83,54 @@ serve(async (req) => {
 
 async function searchTaskRelatedMessages(
   client: Client, 
-  userInput: string, 
-  threshold: number, 
-  limit: number
+  userInput: string,
+  timeFilter?: string,
+  threshold: number = 0.7, 
+  limit: number = 10
 ): Promise<ChatMessage[]> {
-  console.log(`Searching for task-related messages: "${userInput}"`);
+  console.log(`Searching for task-related messages: "${userInput}", time filter: "${timeFilter}"`);
   
+  // Parse time filter into SQL interval
+  let timeInterval = "30 days"; // default
+  if (timeFilter) {
+    const timeFilterLower = timeFilter.toLowerCase();
+    if (timeFilterLower.includes('yesterday')) {
+      timeInterval = "2 days";
+    } else if (timeFilterLower.includes('today')) {
+      timeInterval = "1 day";
+    } else if (timeFilterLower.includes('week') || timeFilterLower.includes('7 days')) {
+      timeInterval = "7 days";
+    } else if (timeFilterLower.includes('month') || timeFilterLower.includes('30 days')) {
+      timeInterval = "30 days";
+    } else if (timeFilterLower.includes('3 days')) {
+      timeInterval = "3 days";
+    } else if (timeFilterLower.match(/(\d+)\s*days?/)) {
+      const days = timeFilterLower.match(/(\d+)\s*days?/)?.[1];
+      timeInterval = `${days} days`;
+    }
+  }
+
   // Search for messages containing task-related keywords
   const taskKeywords = [
     'task', 'todo', 'do', 'need to', 'remind', 'schedule', 'deadline',
     'project', 'work', 'meeting', 'appointment', 'call', 'email',
-    'buy', 'get', 'pick up', 'finish', 'complete', 'done'
+    'buy', 'get', 'pick up', 'finish', 'complete', 'done', 'created',
+    'updated', 'status', 'priority', 'urgent', 'important'
   ];
 
   const keywordPattern = taskKeywords.join('|');
   
-  // Query recent messages that might contain tasks
+  // Query messages with improved time filtering
   const query = `
     SELECT id, content, role, created_at as timestamp, metadata
     FROM chat_messages2 
     WHERE (
       content ILIKE '%' || $1 || '%' 
       OR content ~* $2
+      OR (role = 'user' AND content ILIKE '%task%')
+      OR (role = 'assistant' AND (content ILIKE '%created%' OR content ILIKE '%updated%'))
     )
-    AND created_at >= NOW() - INTERVAL '30 days'
+    AND created_at >= NOW() - INTERVAL '${timeInterval}'
     ORDER BY created_at DESC
     LIMIT $3
   `;
@@ -117,7 +141,7 @@ async function searchTaskRelatedMessages(
     limit
   ]);
 
-  console.log(`Found ${result.rows.length} task-related messages`);
+  console.log(`Found ${result.rows.length} task-related messages from ${timeInterval}`);
   return result.rows;
 }
 

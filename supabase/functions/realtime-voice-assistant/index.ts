@@ -110,6 +110,7 @@ async function handleGetTasks(args: any): Promise<{ success: boolean; message: s
       body: {
         action: 'search_tasks',
         user_input: userInput,
+        time_filter: args.time_filter,
         match_threshold: 0.6,
         match_count: 15
       }
