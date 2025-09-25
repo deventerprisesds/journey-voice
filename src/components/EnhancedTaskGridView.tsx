@@ -81,6 +81,7 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
   const [groupBy, setGroupBy] = useState<GroupByType>('category');
   const [editingCell, setEditingCell] = useState<{ taskId: string; field: string } | null>(null);
   const [editValue, setEditValue] = useState<string>('');
+  const [optimisticTasks, setOptimisticTasks] = useState<Task[]>([]);
 
   // Calculate progress percentage based on status
   const getProgressPercentage = (status: string): number => {
@@ -119,11 +120,14 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
     }
   };
 
+  // Use optimistic tasks if available, otherwise use the provided tasks
+  const currentTasks = optimisticTasks.length > 0 ? optimisticTasks : tasks;
+
   // Group tasks by the selected groupBy field
   const groupedTasks = useMemo(() => {
     const groups: { [key: string]: Task[] } = {};
     
-    tasks.forEach(task => {
+    currentTasks.forEach(task => {
       let groupKey = '';
       switch (groupBy) {
         case 'category':
@@ -180,7 +184,7 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
     });
 
     return groups;
-  }, [tasks, groupBy, sortBy, sortOrder]);
+  }, [currentTasks, groupBy, sortBy, sortOrder]);
 
   const handleSort = (column: string) => {
     if (sortBy === column) {
@@ -219,16 +223,23 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
   const saveEdit = async (taskId: string, field: string) => {
     try {
       const updateData: any = { [field]: editValue };
+      console.log(`Updating task ${taskId} field ${field} to:`, editValue);
+      
+      // Optimistic update - immediately update the UI
+      const updatedTasks = currentTasks.map((task: Task) => 
+        task.id === taskId ? { ...task, ...updateData, updated_at: new Date().toISOString() } : task
+      );
+      setOptimisticTasks(updatedTasks);
       
       if (isDemoMode) {
         // Update localStorage for demo mode
         const demoTasks = localStorage.getItem('kanban-demo-tasks');
         if (demoTasks) {
           const tasks = JSON.parse(demoTasks);
-          const updatedTasks = tasks.map((task: Task) => 
+          const updatedDemoTasks = tasks.map((task: Task) => 
             task.id === taskId ? { ...task, ...updateData } : task
           );
-          localStorage.setItem('kanban-demo-tasks', JSON.stringify(updatedTasks));
+          localStorage.setItem('kanban-demo-tasks', JSON.stringify(updatedDemoTasks));
         }
       } else {
         const { error } = await supabase
@@ -238,6 +249,8 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
 
         if (error) {
           console.error('Error updating task:', error);
+          // Rollback optimistic update
+          setOptimisticTasks([]);
           toast({
             title: "Error",
             description: "Failed to update task",
@@ -247,9 +260,14 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
         }
       }
 
-      if (onTaskUpdate) {
-        onTaskUpdate();
-      }
+      // Clear optimistic updates and refresh data
+      setTimeout(() => {
+        setOptimisticTasks([]);
+        if (onTaskUpdate) {
+          console.log('Calling onTaskUpdate to refresh data');
+          onTaskUpdate();
+        }
+      }, 100);
 
       toast({
         title: "Task updated",
@@ -257,6 +275,8 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
       });
     } catch (error) {
       console.error('Error saving edit:', error);
+      // Rollback optimistic update
+      setOptimisticTasks([]);
     } finally {
       setEditingCell(null);
       setEditValue('');
@@ -321,6 +341,11 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
   React.useEffect(() => {
     setExpandedGroups(new Set(Object.keys(groupedTasks)));
   }, [groupedTasks]);
+
+  // Clear optimistic updates when tasks prop changes
+  React.useEffect(() => {
+    setOptimisticTasks([]);
+  }, [tasks]);
 
   // Quick add task functionality
   const [newTaskTitle, setNewTaskTitle] = useState('');
