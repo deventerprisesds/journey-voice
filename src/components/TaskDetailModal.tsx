@@ -22,6 +22,8 @@ interface Task {
   priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
   category: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION';
   due_date?: string;
+  start_time?: string;
+  end_time?: string;
   estimate_minutes?: number;
   blocked_by?: string[];
   board_id: string;
@@ -49,6 +51,8 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
   const { toast } = useToast();
   const [editedTask, setEditedTask] = useState<Partial<Task>>({});
   const [dueDate, setDueDate] = useState<Date | undefined>(undefined);
+  const [startTime, setStartTime] = useState<string>('');
+  const [endTime, setEndTime] = useState<string>('');
   const [estimateHours, setEstimateHours] = useState<string>('');
   const [estimateMinutes, setEstimateMinutes] = useState<string>('');
   const [isSaving, setIsSaving] = useState(false);
@@ -58,6 +62,8 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
     if (task) {
       setEditedTask(task);
       setDueDate(task.due_date ? new Date(task.due_date) : undefined);
+      setStartTime(task.start_time ? task.start_time.substring(11, 16) : ''); // Extract HH:MM from ISO string
+      setEndTime(task.end_time ? task.end_time.substring(11, 16) : ''); // Extract HH:MM from ISO string
       
       if (task.estimate_minutes) {
         const hours = Math.floor(task.estimate_minutes / 60);
@@ -70,6 +76,47 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
       }
     }
   }, [task]);
+
+  // Helper function to calculate duration
+  const calculateDuration = (start: string, end: string): string => {
+    if (!start || !end) return '';
+    
+    const [startHour, startMin] = start.split(':').map(Number);
+    const [endHour, endMin] = end.split(':').map(Number);
+    
+    const startTotalMin = startHour * 60 + startMin;
+    const endTotalMin = endHour * 60 + endMin;
+    
+    let duration = endTotalMin - startTotalMin;
+    if (duration < 0) duration += 24 * 60; // Handle next day
+    
+    const hours = Math.floor(duration / 60);
+    const minutes = duration % 60;
+    
+    if (hours === 0) return `${minutes}m`;
+    if (minutes === 0) return `${hours}h`;
+    return `${hours}h ${minutes}m`;
+  };
+
+  // Calculate and update estimate when times change
+  useEffect(() => {
+    if (startTime && endTime) {
+      const [startHour, startMin] = startTime.split(':').map(Number);
+      const [endHour, endMin] = endTime.split(':').map(Number);
+      
+      const startTotalMin = startHour * 60 + startMin;
+      const endTotalMin = endHour * 60 + endMin;
+      
+      let duration = endTotalMin - startTotalMin;
+      if (duration < 0) duration += 24 * 60; // Handle next day
+      
+      const hours = Math.floor(duration / 60);
+      const minutes = duration % 60;
+      
+      setEstimateHours(hours > 0 ? hours.toString() : '');
+      setEstimateMinutes(minutes > 0 ? minutes.toString() : '');
+    }
+  }, [startTime, endTime]);
 
   const handleSave = async () => {
     if (!task) return;
@@ -84,6 +131,14 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
       const updatedTask = {
         ...editedTask,
         due_date: dueDate ? dueDate.toISOString() : null,
+        start_time: startTime ? (dueDate ? 
+          new Date(dueDate.toDateString() + ' ' + startTime).toISOString() : 
+          new Date('1970-01-01 ' + startTime).toISOString()
+        ) : null,
+        end_time: endTime ? (dueDate ? 
+          new Date(dueDate.toDateString() + ' ' + endTime).toISOString() :
+          new Date('1970-01-01 ' + endTime).toISOString()
+        ) : null,
         estimate_minutes: totalMinutes > 0 ? totalMinutes : null,
       };
 
@@ -280,6 +335,41 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
               </PopoverContent>
             </Popover>
           </div>
+
+          {/* Start & End Time */}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="start-time">Start Time</Label>
+              <Input
+                id="start-time"
+                type="time"
+                value={startTime}
+                onChange={(e) => setStartTime(e.target.value)}
+                className="w-full"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="end-time">End Time</Label>
+              <Input
+                id="end-time"
+                type="time"
+                value={endTime}
+                onChange={(e) => setEndTime(e.target.value)}
+                className="w-full"
+              />
+            </div>
+          </div>
+
+          {/* Calculated Duration */}
+          {startTime && endTime && (
+            <div className="space-y-2">
+              <Label>Calculated Duration</Label>
+              <div className="px-3 py-2 bg-muted rounded-md text-sm">
+                <Clock className="inline h-4 w-4 mr-1" />
+                {calculateDuration(startTime, endTime)}
+              </div>
+            </div>
+          )}
 
           {/* Time Estimate */}
           <div className="space-y-2">

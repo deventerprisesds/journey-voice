@@ -21,6 +21,8 @@ interface Task {
   priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
   category: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION';
   due_date?: string;
+  start_time?: string;
+  end_time?: string;
   estimate_minutes?: number;
   blocked_by?: string[];
   board_id: string;

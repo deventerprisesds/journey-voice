@@ -19,7 +19,8 @@ import {
   Type,
   Sparkles,
   Check,
-  AlertCircle
+  AlertCircle,
+  Clock
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
@@ -34,6 +35,8 @@ interface Task {
   priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
   category: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION';
   due_date?: string;
+  start_time?: string;
+  end_time?: string;
   estimate_minutes?: number;
   board_id: string;
   user_id: string;
@@ -45,6 +48,8 @@ interface ParsedTask {
   priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
   category: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION';
   due_date?: string;
+  start_time?: string;
+  end_time?: string;
   estimate_minutes?: number;
   status: 'BACKLOG' | 'TODO' | 'READY' | 'UP_NEXT' | 'DOING';
 }
@@ -81,11 +86,54 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
     status: 'BACKLOG'
   });
   const [dueDate, setDueDate] = useState<Date | undefined>(undefined);
+  const [startTime, setStartTime] = useState<string>('');
+  const [endTime, setEndTime] = useState<string>('');
   const [estimateHours, setEstimateHours] = useState('');
   const [estimateMinutes, setEstimateMinutes] = useState('');
   
   // Common State
   const [isCreating, setIsCreating] = useState(false);
+
+  // Helper function to calculate duration
+  const calculateDuration = (start: string, end: string): string => {
+    if (!start || !end) return '';
+    
+    const [startHour, startMin] = start.split(':').map(Number);
+    const [endHour, endMin] = end.split(':').map(Number);
+    
+    const startTotalMin = startHour * 60 + startMin;
+    const endTotalMin = endHour * 60 + endMin;
+    
+    let duration = endTotalMin - startTotalMin;
+    if (duration < 0) duration += 24 * 60; // Handle next day
+    
+    const hours = Math.floor(duration / 60);
+    const minutes = duration % 60;
+    
+    if (hours === 0) return `${minutes}m`;
+    if (minutes === 0) return `${hours}h`;
+    return `${hours}h ${minutes}m`;
+  };
+
+  // Calculate and update estimate when times change
+  useEffect(() => {
+    if (startTime && endTime) {
+      const [startHour, startMin] = startTime.split(':').map(Number);
+      const [endHour, endMin] = endTime.split(':').map(Number);
+      
+      const startTotalMin = startHour * 60 + startMin;
+      const endTotalMin = endHour * 60 + endMin;
+      
+      let duration = endTotalMin - startTotalMin;
+      if (duration < 0) duration += 24 * 60; // Handle next day
+      
+      const hours = Math.floor(duration / 60);
+      const minutes = duration % 60;
+      
+      setEstimateHours(hours > 0 ? hours.toString() : '');
+      setEstimateMinutes(minutes > 0 ? minutes.toString() : '');
+    }
+  }, [startTime, endTime]);
 
   const handleAIParseTask = async () => {
     if (!aiInput.trim()) {
@@ -133,21 +181,41 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
   const handleCreateTasks = async (tasksToCreate: ParsedTask[]) => {
     setIsCreating(true);
     try {
+      // Check if this is demo mode (board ID starts with 'demo-')
+      const isDemoMode = boardId.startsWith('demo-');
+      
       const tasksWithMeta = tasksToCreate.map(task => ({
         ...task,
+        id: isDemoMode ? `demo-task-${Date.now()}-${Math.random().toString(36).substr(2, 9)}` : undefined,
         board_id: boardId,
         user_id: userId,
         due_date: task.due_date || null,
+        start_time: task.start_time || null,
+        end_time: task.end_time || null,
         estimate_minutes: task.estimate_minutes || null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
       }));
 
-      const { data: createdTasks, error } = await supabase
-        .from('tasks')
-        .insert(tasksWithMeta)
-        .select();
+      let createdTasks;
+      
+      if (isDemoMode) {
+        // For demo mode, store in localStorage
+        const demoTasks = JSON.parse(localStorage.getItem('demoTasks') || '[]');
+        createdTasks = tasksWithMeta;
+        demoTasks.push(...createdTasks);
+        localStorage.setItem('demoTasks', JSON.stringify(demoTasks));
+      } else {
+        // For real mode, use Supabase
+        const { data, error } = await supabase
+          .from('tasks')
+          .insert(tasksWithMeta)
+          .select();
 
-      if (error) {
-        throw new Error(error.message);
+        if (error) {
+          throw new Error(error.message);
+        }
+        createdTasks = data;
       }
 
       onTasksCreated(createdTasks);
@@ -190,6 +258,14 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
       category: manualTask.category as ParsedTask['category'],
       status: manualTask.status as ParsedTask['status'],
       due_date: dueDate ? dueDate.toISOString() : undefined,
+      start_time: startTime ? (dueDate ? 
+        new Date(dueDate.toDateString() + ' ' + startTime).toISOString() : 
+        new Date('1970-01-01 ' + startTime).toISOString()
+      ) : undefined,
+      end_time: endTime ? (dueDate ? 
+        new Date(dueDate.toDateString() + ' ' + endTime).toISOString() :
+        new Date('1970-01-01 ' + endTime).toISOString()
+      ) : undefined,
       estimate_minutes: totalMinutes > 0 ? totalMinutes : undefined,
     };
 
@@ -468,6 +544,41 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                   </PopoverContent>
                 </Popover>
               </div>
+
+              {/* Start & End Time */}
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="manual-start-time">Start Time</Label>
+                  <Input
+                    id="manual-start-time"
+                    type="time"
+                    value={startTime}
+                    onChange={(e) => setStartTime(e.target.value)}
+                    className="w-full"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="manual-end-time">End Time</Label>
+                  <Input
+                    id="manual-end-time"
+                    type="time"
+                    value={endTime}
+                    onChange={(e) => setEndTime(e.target.value)}
+                    className="w-full"
+                  />
+                </div>
+              </div>
+
+              {/* Calculated Duration */}
+              {startTime && endTime && (
+                <div className="space-y-2">
+                  <Label>Calculated Duration</Label>
+                  <div className="px-3 py-2 bg-muted rounded-md text-sm">
+                    <Clock className="inline h-4 w-4 mr-1" />
+                    {calculateDuration(startTime, endTime)}
+                  </div>
+                </div>
+              )}
 
               <div className="space-y-2">
                 <Label>Time Estimate</Label>
