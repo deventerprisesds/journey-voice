@@ -101,15 +101,10 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger }) => {
         return;
       }
 
-      // If no default board exists, show a message but don't error
+      // If no default board exists, create one
       if (!boardData) {
-        console.log('No default board found for user');
-        toast({
-          title: "No board found",
-          description: "Creating your default board...",
-          variant: "default",
-        });
-        setLoading(false);
+        console.log('No default board found for user, creating one...');
+        await createDefaultBoardAndColumns();
         return;
       }
 
@@ -278,6 +273,68 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger }) => {
 
   const getTasksByStatus = (status: Task['status']) => {
     return tasks.filter(task => task.status === status);
+  };
+
+  const createDefaultBoardAndColumns = async () => {
+    try {
+      // Check if user is authenticated
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        console.log('User not authenticated, cannot create board');
+        setLoading(false);
+        return;
+      }
+
+      console.log('Creating default board for user:', user.id);
+
+      // First, ensure the user has a profile
+      const { data: profileData, error: profileError } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('user_id', user.id)
+        .maybeSingle();
+
+      if (profileError && profileError.code !== 'PGRST116') {
+        console.error('Error checking profile:', profileError);
+        return;
+      }
+
+      // If no profile exists, create one (this will trigger the board creation)
+      if (!profileData) {
+        console.log('Creating profile for user...');
+        const { error: createProfileError } = await supabase
+          .from('profiles')
+          .insert([{
+            user_id: user.id,
+            email: user.email,
+            full_name: user.user_metadata?.full_name || user.email?.split('@')[0] || 'User'
+          }]);
+
+        if (createProfileError) {
+          console.error('Error creating profile:', createProfileError);
+          toast({
+            title: "Error",
+            description: "Failed to create user profile. Please refresh the page.",
+            variant: "destructive",
+          });
+          return;
+        }
+      }
+
+      // Wait a moment for the trigger to complete, then retry fetching
+      setTimeout(() => {
+        fetchBoardData();
+      }, 1000);
+
+    } catch (error) {
+      console.error('Error creating default board:', error);
+      toast({
+        title: "Error",
+        description: "Failed to create default board. Please refresh the page.",
+        variant: "destructive",
+      });
+      setLoading(false);
+    }
   };
 
   const addSampleTask = async () => {

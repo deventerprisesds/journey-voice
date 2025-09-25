@@ -22,7 +22,7 @@ const isDevelopmentMode = () => {
 
 // Create consistent mock user for preview mode
 const createMockUser = (): User => ({
-  id: 'mock-user-demo-123',
+  id: '00000000-0000-0000-0000-000000000001',
   app_metadata: {},
   user_metadata: {
     email: 'demo@example.com',
