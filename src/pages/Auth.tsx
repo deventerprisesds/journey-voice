@@ -25,6 +25,47 @@ const Auth = () => {
     }
   }, [user, navigate]);
 
+  // Check for OAuth errors in URL parameters
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const error = urlParams.get('error');
+    const errorCode = urlParams.get('error_code');
+    const errorDescription = urlParams.get('error_description');
+
+    if (error) {
+      let title = "Authentication Error";
+      let description = errorDescription || "An unknown error occurred during authentication.";
+
+      // Handle specific OAuth errors
+      switch (error) {
+        case 'server_error':
+          if (errorDescription?.includes('callback URL not permitted')) {
+            title = "Configuration Error";
+            description = "This domain is not authorized for OAuth. Please add it to your Supabase Additional Redirect URLs.";
+          }
+          break;
+        case 'invalid_client':
+          title = "OAuth Configuration Error";
+          description = "Google OAuth client configuration mismatch. Check your Google Cloud Console settings.";
+          break;
+        case 'access_denied':
+          title = "Access Denied";
+          description = "You denied access to the application.";
+          break;
+      }
+
+      toast({
+        variant: "destructive",
+        title,
+        description
+      });
+
+      // Clean up URL parameters
+      const newUrl = window.location.pathname;
+      window.history.replaceState({}, document.title, newUrl);
+    }
+  }, [toast]);
+
   const handleEmailSignUp = async () => {
     if (!email || !password) {
       toast({
