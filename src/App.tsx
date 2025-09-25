@@ -8,6 +8,7 @@ import Dashboard from "./pages/Dashboard";
 import Auth from "./pages/Auth";
 import Admin from "./pages/Admin";
 import NotFound from "./pages/NotFound";
+import DemoModeBadge from "./components/DemoModeBadge";
 import { supabase } from "@/integrations/supabase/client";
 import { useEffect } from "react";
 
@@ -54,6 +55,7 @@ const App = () => {
         <Sonner />
         <BrowserRouter>
           <AuthProvider>
+            <DemoModeBadge />
             <Routes>
               <Route path="/" element={<Dashboard />} />
               <Route path="/auth" element={<Auth />} />

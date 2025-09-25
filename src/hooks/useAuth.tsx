@@ -8,18 +8,66 @@ interface AuthContextType {
   loading: boolean;
   signOut: () => Promise<void>;
   isAdmin: boolean;
+  isDemoMode: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+// Check if running in Lovable iframe preview
+const isDevelopmentMode = () => {
+  return window !== window.top || 
+         window.location.hostname.includes('lovableproject.com') ||
+         window.location.hostname === 'localhost';
+};
+
+// Create consistent mock user for preview mode
+const createMockUser = (): User => ({
+  id: 'mock-user-demo-123',
+  app_metadata: {},
+  user_metadata: {
+    email: 'demo@example.com',
+    full_name: 'Demo User'
+  },
+  aud: 'authenticated',
+  confirmation_sent_at: '',
+  email: 'demo@example.com',
+  email_confirmed_at: new Date().toISOString(),
+  confirmed_at: new Date().toISOString(),
+  created_at: new Date().toISOString(),
+  updated_at: new Date().toISOString(),
+  phone: '',
+  role: 'authenticated'
+});
+
+const createMockSession = (mockUser: User): Session => ({
+  access_token: 'mock-token',
+  refresh_token: 'mock-refresh',
+  expires_in: 3600,
+  expires_at: Math.floor(Date.now() / 1000) + 3600,
+  token_type: 'bearer',
+  user: mockUser
+});
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [isDemoMode] = useState(isDevelopmentMode());
 
   useEffect(() => {
-    // Set up auth state listener
+    if (isDemoMode) {
+      // Use mock authentication for preview mode
+      const mockUser = createMockUser();
+      const mockSession = createMockSession(mockUser);
+      setUser(mockUser);
+      setSession(mockSession);
+      setIsAdmin(true); // Demo user has admin access
+      setLoading(false);
+      return;
+    }
+
+    // Set up auth state listener for production
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (event, session) => {
         setSession(session);
@@ -49,7 +97,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
 
     return () => subscription.unsubscribe();
-  }, []);
+  }, [isDemoMode]);
 
   const checkAdminStatus = async (userId: string) => {
     try {
@@ -69,11 +117,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signOut = async () => {
+    if (isDemoMode) {
+      // In demo mode, just clear the mock session
+      setUser(null);
+      setSession(null);
+      setIsAdmin(false);
+      return;
+    }
     await supabase.auth.signOut();
   };
 
   return (
-    <AuthContext.Provider value={{ user, session, loading, signOut, isAdmin }}>
+    <AuthContext.Provider value={{ user, session, loading, signOut, isAdmin, isDemoMode }}>
       {children}
     </AuthContext.Provider>
   );
