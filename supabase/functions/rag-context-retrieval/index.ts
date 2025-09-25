@@ -40,49 +40,69 @@ async function getRelevantContext(
   threadId?: string,
   assistantId?: string
 ) {
-  // Generate embedding for current input
-  const embedding = await generateEmbedding(userInput);
+  console.log(`Getting relevant context from external database for: "${userInput.substring(0, 100)}..."`);
   
-  console.log(`Searching for context for user ${userId}, thread ${threadId}`);
-
-  // Search conversation history
-  const { data: conversationContext, error: convError } = await supabase
-    .rpc('match_conversation_embeddings', {
-      query_embedding: embedding,
-      user_id_param: userId,
-      thread_id_param: threadId || null,
-      match_threshold: 0.7,
-      match_count: 5
+  try {
+    // First try external database for task-related conversations
+    const externalDbResponse = await supabase.functions.invoke('external-db-query', {
+      body: {
+        action: 'search_tasks',
+        user_input: userInput,
+        match_threshold: 0.7,
+        match_count: 10
+      }
     });
 
-  if (convError) {
-    console.error('Error searching conversation context:', convError);
-  }
+    console.log('External DB response:', externalDbResponse);
 
-  // Search assistant knowledge if assistant ID provided
-  let knowledgeContext = [];
-  if (assistantId) {
-    const { data: knowledge, error: knowledgeError } = await supabase
-      .rpc('match_assistant_knowledge', {
+    let conversationContext = [];
+    if (externalDbResponse.data?.success && externalDbResponse.data?.data) {
+      conversationContext = externalDbResponse.data.data.map((msg: any) => ({
+        content: msg.content,
+        message_type: msg.role,
+        message_timestamp: msg.timestamp,
+        metadata: msg.metadata || {},
+        similarity: 0.8 // Default similarity for keyword search
+      }));
+    }
+
+    console.log(`Found ${conversationContext.length} relevant messages from external database`);
+
+    // Fallback to local database if no external results
+    let knowledgeContext: any[] = [];
+    if (conversationContext.length === 0) {
+      console.log('No external results, checking local database...');
+      const embedding = await generateEmbedding(userInput);
+      
+      const { data: localConv } = await supabase.rpc('match_conversation_embeddings', {
         query_embedding: embedding,
         user_id_param: userId,
-        assistant_id_param: assistantId,
+        thread_id_param: threadId || null,
         match_threshold: 0.7,
-        match_count: 3
+        match_count: 5
       });
 
-    if (knowledgeError) {
-      console.error('Error searching knowledge context:', knowledgeError);
-    } else {
-      knowledgeContext = knowledge || [];
+      conversationContext = localConv || [];
+      console.log(`Found ${conversationContext.length} local conversation matches`);
     }
-  }
 
-  return {
-    conversationContext: conversationContext || [],
-    knowledgeContext,
-    embedding
-  };
+    return {
+      conversationContext,
+      knowledgeContext,
+      embedding: null,
+      source: conversationContext.length > 0 && externalDbResponse.data?.success ? 'external' : 'local'
+    };
+
+  } catch (error) {
+    console.error('Error getting relevant context:', error);
+    return {
+      conversationContext: [],
+      knowledgeContext: [],
+      embedding: null,
+      error: error instanceof Error ? error.message : 'Unknown error',
+      source: 'error'
+    };
+  }
 }
 
 function shouldUseAssistantAPI(userInput: string, context: any): boolean {

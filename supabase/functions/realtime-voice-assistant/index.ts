@@ -95,109 +95,166 @@ async function handleUpdateTask(args: any) {
   }
 }
 
-async function handleGetTasks(args: any) {
+async function handleGetTasks(args: any): Promise<{ success: boolean; message: string; tasks?: any[]; assistant_response?: any; source?: string }> {
+  console.log('handleGetTasks called with args:', args);
+  
   try {
-    console.log('Getting tasks:', args);
-    
-    let query = supabase
-      .from('tasks')
-      .select('*')
-      .order('created_at', { ascending: false });
-    
-    if (args.status_filter) {
-      query = query.eq('status', args.status_filter);
-    }
-    
-    const { data, error } = await query.limit(10);
-    
-    if (error) {
-      console.error('Error getting tasks from local database:', error);
-    }
-    
-    // If we have local tasks, return them
-    if (data && data.length > 0) {
-      console.log(`Found ${data.length} tasks in local database`);
-      return { 
-        success: true, 
-        message: `Found ${data.length} tasks`,
-        tasks: data 
+    // Extract user input for external database search
+    const userInput = args.query || args.user_input || 'show me my tasks';
+    const userId = args.user_id;
+
+    console.log(`Searching external database for tasks related to: "${userInput}"`);
+
+    // First, try to get task-related information from external database
+    const externalDbResponse = await supabase.functions.invoke('external-db-query', {
+      body: {
+        action: 'search_tasks',
+        user_input: userInput,
+        match_threshold: 0.6,
+        match_count: 15
+      }
+    });
+
+    console.log('External DB response for tasks:', externalDbResponse);
+
+    // Check if we found relevant task information in external database
+    if (externalDbResponse.data?.success && externalDbResponse.data?.data?.length > 0) {
+      const chatMessages = externalDbResponse.data.data;
+      
+      // Extract task-like information from chat messages
+      const extractedTasks = chatMessages
+        .filter((msg: any) => msg.content && msg.content.toLowerCase().includes('task'))
+        .map((msg: any, index: number) => ({
+          id: `ext_${msg.id || index}`,
+          title: extractTaskTitle(msg.content),
+          description: msg.content.substring(0, 200) + '...',
+          status: 'EXTERNAL',
+          priority: 'MEDIUM',
+          source: 'chat_history',
+          timestamp: msg.timestamp,
+          original_message: msg.content
+        }));
+
+      console.log(`Extracted ${extractedTasks.length} task references from chat history`);
+
+      // Also check local Supabase tasks
+      const { data: localTasks } = await supabase
+        .from('tasks')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(10);
+
+      const allTasks = [
+        ...(localTasks || []).map(task => ({ ...task, source: 'supabase' })),
+        ...extractedTasks
+      ];
+
+      return {
+        success: true,
+        message: `Found ${allTasks.length} tasks (${localTasks?.length || 0} from your boards, ${extractedTasks.length} from chat history)`,
+        tasks: allTasks,
+        source: 'external_database'
       };
     }
-    
-    // Fallback to OpenAI Assistant API when local database is empty or insufficient
-    console.log('Local database empty or insufficient, querying OpenAI Assistant...');
+
+    // Fallback to local Supabase tasks if no external results
+    console.log('No external task results, checking local Supabase...');
+    const { data: tasks, error } = await supabase
+      .from('tasks')
+      .select(`
+        id,
+        title,
+        description,
+        status,
+        priority,
+        due_date,
+        created_at,
+        updated_at,
+        board_id,
+        boards!inner(name)
+      `)
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(20);
+
+    if (tasks && tasks.length > 0) {
+      return {
+        success: true,
+        message: `Found ${tasks.length} tasks from your boards`,
+        tasks: tasks.map(task => ({ ...task, source: 'supabase' })),
+        source: 'supabase'
+      };
+    }
+
+    // Final fallback to Assistant API if no tasks anywhere
+    console.log('No tasks found anywhere, using Assistant API as fallback...');
     
     try {
-      const assistantId = 'asst_BcZBxlx9zH8VIPvfJrhPP3EF';
-      const userId = '00000000-0000-0000-0000-000000000000';
-      // Generate a new thread ID for this assistant query
-      const fallbackThreadId = crypto.randomUUID();
-      
-      // Create a thread record for the assistant query
-      try {
-        await supabase
-          .from('ai_threads')
-          .insert({
-            id: fallbackThreadId,
-            user_id: userId
-          })
-          .select()
-          .single();
-      } catch (error) {
-        console.log('Thread record creation failed (may already exist):', error);
+    const ragResponse = await supabase.functions.invoke('rag-context-retrieval', {
+      body: {
+        userInput: userInput,
+        userId: userId,
+        action: 'get_context'
       }
-      
-      // Create a query for the assistant based on the args
-      let assistantQuery = 'Get my current tasks';
-      if (args.status_filter) {
-        assistantQuery += ` with status ${args.status_filter}`;
-      }
-      if (args.time_filter) {
-        assistantQuery += ` ${args.time_filter}`;
-      }
-      
-      const assistantResponse = await fetch('https://wwxgajrtmslzklnyplah.functions.supabase.co/hybrid-assistant-api', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          userInput: assistantQuery,
-          userId: userId,
-          threadId: fallbackThreadId,
-          assistantId: assistantId,
-          contextualInstructions: 'Please provide a list of current tasks. Format your response as a structured task list.'
-        })
+    });
+
+    let assistantResponse = null;
+    if (ragResponse.data?.useAssistantAPI) {
+      const hybridResponse = await supabase.functions.invoke('hybrid-assistant-api', {
+        body: {
+          message: userInput,
+          instructions: ragResponse.data.contextualInstructions,
+          user_id: userId
+        }
       });
-      
-      if (assistantResponse.ok) {
-        const assistantData = await assistantResponse.json();
-        console.log('OpenAI Assistant response received');
-        
-        return {
-          success: true,
-          message: 'Tasks retrieved from OpenAI Assistant',
-          assistant_response: assistantData.response,
-          source: 'openai_assistant'
-        };
-      } else {
-        console.error('Failed to query OpenAI Assistant:', await assistantResponse.text());
-        return { 
-          success: false, 
-          message: 'Failed to retrieve tasks from both local database and OpenAI Assistant' 
-        };
-      }
+      assistantResponse = hybridResponse.data;
+    }
+
+    return {
+      success: true,
+      message: 'No specific tasks found, but retrieved relevant context',
+      tasks: [],
+      assistant_response: assistantResponse,
+      source: 'assistant_fallback'
+    };
+
     } catch (assistantError) {
-      console.error('Error querying OpenAI Assistant:', assistantError);
-      return { 
-        success: false, 
-        message: 'Failed to retrieve tasks from both local database and OpenAI Assistant' 
+      console.error('Error with assistant fallback:', assistantError);
+      return {
+        success: false,
+        message: `Error retrieving tasks: ${assistantError instanceof Error ? assistantError.message : 'Unknown error'}`,
+        source: 'error'
       };
     }
+
   } catch (error) {
     console.error('Error in handleGetTasks:', error);
-    return { success: false, message: 'Failed to get tasks' };
+    return {
+      success: false,
+      message: `Error retrieving tasks: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      source: 'error'
+    };
   }
+}
+
+// Helper function to extract task titles from chat messages
+function extractTaskTitle(content: string): string {
+  // Simple extraction - look for task-like patterns
+  const taskPatterns = [
+    /(?:task|todo|need to|remind me to|i should)\s*:?\s*([^.!?]+)/i,
+    /^([^.!?]{10,60})/i // First sentence if reasonable length
+  ];
+
+  for (const pattern of taskPatterns) {
+    const match = content.match(pattern);
+    if (match && match[1]) {
+      return match[1].trim().replace(/^(to\s+)?/i, '');
+    }
+  }
+
+  // Fallback to first 50 characters
+  return content.substring(0, 50).trim() + (content.length > 50 ? '...' : '');
 }
 
 serve(async (req) => {
