@@ -11,6 +11,7 @@ import TaskDetailModal from './TaskDetailModal';
 import TaskCreationModal from './TaskCreationModal';
 import TaskFilters from './TaskFilters';
 import ColumnManager from './ColumnManager';
+import { AddColumnModal } from './AddColumnModal';
 import { itineraryEngine } from '@/utils/ItineraryEngine';
 
 import { Task, Board, Column } from '@/types/task';
@@ -666,6 +667,11 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <AddColumnModal 
+            boardId={board.id} 
+            onColumnCreated={fetchBoardColumns}
+            isDemo={isDemoMode}
+          />
           <Button
             variant="outline"
             size="sm"
