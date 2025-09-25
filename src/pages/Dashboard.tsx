@@ -1,8 +1,13 @@
 import React, { useState } from 'react';
 import KanbanBoard from '@/components/KanbanBoard';
 import VoiceInterface from '@/components/VoiceInterface';
+import { useAuth } from '@/contexts/AuthContext';
+import { Button } from '@/components/ui/button';
+import { LogOut, Settings } from 'lucide-react';
+import { Link } from 'react-router-dom';
 
 const Dashboard = () => {
+  const { user, signOut } = useAuth();
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   const handleTaskUpdate = () => {
@@ -20,11 +25,20 @@ const Dashboard = () => {
                 Task Manager
               </h1>
               <p className="text-sm text-muted-foreground">
-                Organize your life, career, ventures, and education
+                Welcome back, {user?.email?.split('@')[0]}
               </p>
             </div>
-            <div className="text-sm text-muted-foreground">
-              Use voice commands to manage your tasks
+            <div className="flex items-center gap-2">
+              <Link to="/admin">
+                <Button variant="ghost" size="sm">
+                  <Settings className="h-4 w-4 mr-2" />
+                  Admin
+                </Button>
+              </Link>
+              <Button variant="ghost" size="sm" onClick={signOut}>
+                <LogOut className="h-4 w-4 mr-2" />
+                Sign Out
+              </Button>
             </div>
           </div>
         </div>
