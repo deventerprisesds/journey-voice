@@ -140,7 +140,7 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
         // For real tasks, update Supabase
         const { error } = await supabase
           .from('tasks')
-          .update(updatedTask)
+          .update(updatedTask as any)
           .eq('id', task.id);
 
         if (error) {

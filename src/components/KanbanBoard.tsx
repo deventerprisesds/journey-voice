@@ -185,7 +185,7 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
         const { error } = await supabase
           .from('tasks')
           .update({ 
-            status: newStatus,
+            status: newStatus as any,
             completed_at: newStatus === 'DONE' ? new Date().toISOString() : null
           })
           .eq('id', taskId);
@@ -575,7 +575,7 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
       {showFilters && (
         <TaskFilters
           tasks={tasks}
-          onFilteredTasks={handleFilteredTasksChange}
+          onFilteredTasksChange={handleFilteredTasksChange}
         />
       )}
 
@@ -664,6 +664,7 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
         onClose={() => setIsCreationModalOpen(false)}
         onTasksCreated={handleTasksCreated}
         boardId={board.id}
+        userId={user?.id || ''}
       />
     </div>
   );
