@@ -1,98 +1,121 @@
-import React, { useState } from 'react';
-import { Navigate } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
-import { useAuth } from '@/contexts/AuthContext';
+import { useAuth } from '@/hooks/useAuth';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Separator } from '@/components/ui/separator';
+import { useToast } from '@/hooks/use-toast';
 import { Loader2 } from 'lucide-react';
-import { toast } from 'sonner';
 
 const Auth = () => {
-  const { user, loading } = useAuth();
-  const [isLoading, setIsLoading] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const { user } = useAuth();
+  const navigate = useNavigate();
+  const { toast } = useToast();
 
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin" />
-      </div>
-    );
-  }
+  useEffect(() => {
+    if (user) {
+      navigate('/');
+    }
+  }, [user, navigate]);
 
-  if (user) {
-    return <Navigate to="/" replace />;
-  }
+  const handleEmailSignUp = async () => {
+    if (!email || !password) {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Please enter both email and password."
+      });
+      return;
+    }
 
-  const signInWithGoogle = async () => {
-    setIsLoading(true);
-    setError('');
+    setLoading(true);
+    const redirectUrl = `${window.location.origin}/`;
     
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo: `${window.location.origin}/`,
-      },
-    });
-
-    if (error) {
-      setError(error.message);
-      toast.error('Failed to sign in with Google');
-    }
-    setIsLoading(false);
-  };
-
-  const signInWithEmail = async () => {
-    setIsLoading(true);
-    setError('');
-
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-
-    if (error) {
-      setError(error.message);
-      toast.error('Failed to sign in');
-    } else {
-      toast.success('Signed in successfully');
-    }
-    setIsLoading(false);
-  };
-
-  const signUpWithEmail = async () => {
-    setIsLoading(true);
-    setError('');
-
     const { error } = await supabase.auth.signUp({
       email,
       password,
       options: {
-        emailRedirectTo: `${window.location.origin}/`,
-      },
+        emailRedirectTo: redirectUrl
+      }
     });
 
     if (error) {
-      setError(error.message);
-      toast.error('Failed to sign up');
+      toast({
+        variant: "destructive",
+        title: "Sign up failed",
+        description: error.message
+      });
     } else {
-      toast.success('Check your email for verification link');
+      toast({
+        title: "Check your email",
+        description: "We've sent you a confirmation link to complete your registration."
+      });
     }
-    setIsLoading(false);
+    setLoading(false);
   };
+
+  const handleEmailSignIn = async () => {
+    if (!email || !password) {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Please enter both email and password."
+      });
+      return;
+    }
+
+    setLoading(true);
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password
+    });
+
+    if (error) {
+      toast({
+        variant: "destructive",
+        title: "Sign in failed",
+        description: error.message
+      });
+    }
+    setLoading(false);
+  };
+
+  const handleGoogleSignIn = async () => {
+    setLoading(true);
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: `${window.location.origin}/`
+      }
+    });
+
+    if (error) {
+      toast({
+        variant: "destructive",
+        title: "Google sign in failed",
+        description: error.message
+      });
+    }
+    setLoading(false);
+  };
+
+  if (user) {
+    return null;
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-primary/5 flex items-center justify-center p-4">
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
           <CardTitle className="text-2xl bg-gradient-to-r from-primary to-productivity bg-clip-text text-transparent">
-            Welcome to Task Manager
+            Task Manager
           </CardTitle>
           <CardDescription>
             Sign in to organize your life, career, ventures, and education
@@ -100,13 +123,13 @@ const Auth = () => {
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
-            <Button
-              onClick={signInWithGoogle}
-              disabled={isLoading}
+            <Button 
+              onClick={handleGoogleSignIn} 
+              disabled={loading} 
               className="w-full"
               variant="outline"
             >
-              {isLoading ? (
+              {loading ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : (
                 <svg className="mr-2 h-4 w-4" viewBox="0 0 24 24">
@@ -133,10 +156,10 @@ const Auth = () => {
 
             <div className="relative">
               <div className="absolute inset-0 flex items-center">
-                <span className="w-full border-t" />
+                <Separator className="w-full" />
               </div>
               <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-background px-2 text-muted-foreground">Or</span>
+                <span className="bg-card px-2 text-muted-foreground">Or continue with</span>
               </div>
             </div>
 
@@ -148,31 +171,29 @@ const Auth = () => {
               
               <TabsContent value="signin" className="space-y-4">
                 <div className="space-y-2">
-                  <Label htmlFor="signin-email">Email</Label>
+                  <Label htmlFor="email">Email</Label>
                   <Input
-                    id="signin-email"
+                    id="email"
                     type="email"
+                    placeholder="Enter your email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    disabled={isLoading}
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="signin-password">Password</Label>
+                  <Label htmlFor="password">Password</Label>
                   <Input
-                    id="signin-password"
+                    id="password"
                     type="password"
+                    placeholder="Enter your password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    disabled={isLoading}
                   />
                 </div>
-                <Button
-                  onClick={signInWithEmail}
-                  disabled={isLoading || !email || !password}
-                  className="w-full"
-                >
-                  {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                <Button onClick={handleEmailSignIn} disabled={loading} className="w-full">
+                  {loading ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : null}
                   Sign In
                 </Button>
               </TabsContent>
@@ -183,9 +204,9 @@ const Auth = () => {
                   <Input
                     id="signup-email"
                     type="email"
+                    placeholder="Enter your email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    disabled={isLoading}
                   />
                 </div>
                 <div className="space-y-2">
@@ -193,27 +214,19 @@ const Auth = () => {
                   <Input
                     id="signup-password"
                     type="password"
+                    placeholder="Create a password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    disabled={isLoading}
                   />
                 </div>
-                <Button
-                  onClick={signUpWithEmail}
-                  disabled={isLoading || !email || !password}
-                  className="w-full"
-                >
-                  {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                <Button onClick={handleEmailSignUp} disabled={loading} className="w-full">
+                  {loading ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : null}
                   Sign Up
                 </Button>
               </TabsContent>
             </Tabs>
-
-            {error && (
-              <Alert variant="destructive">
-                <AlertDescription>{error}</AlertDescription>
-              </Alert>
-            )}
           </div>
         </CardContent>
       </Card>
