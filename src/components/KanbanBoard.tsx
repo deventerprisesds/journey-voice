@@ -581,11 +581,14 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
 
       {/* Kanban Board */}
       <DragDropContext onDragEnd={handleDragEnd}>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4 min-h-96">
+        <div className="flex gap-4 min-h-[600px] overflow-x-auto pb-4">
           {columns.map((column) => {
             const columnTasks = getTasksByStatus(column.status);
             return (
-              <div key={column.id} className="flex flex-col">
+              <div 
+                key={column.id} 
+                className="bg-card rounded-lg border p-4 shadow-sm min-w-[280px] flex-shrink-0"
+              >
                 {/* Column Header */}
                 <ColumnManager
                   column={column}
@@ -625,7 +628,6 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
                               <TaskCard
                                 task={task}
                                 onEdit={handleTaskEdit}
-                                isDragging={snapshot.isDragging}
                               />
                             </div>
                           )}

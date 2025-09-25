@@ -17,20 +17,7 @@ import {
   MoreHorizontal
 } from 'lucide-react';
 import { format } from 'date-fns';
-
-interface Task {
-  id: string;
-  title: string;
-  description?: string;
-  status: 'BLOCKED' | 'CAREER' | 'PROF_EDUCATION' | 'VENTURES' | 'PLANNING' | 'READY' | 'UP_NEXT' | 'DOING' | 'DONE' | 'BACKLOG' | 'TODO';
-  priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
-  category: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION';
-  due_date?: string;
-  estimate_minutes?: number;
-  blocked_by?: string[];
-  created_at: string;
-  updated_at: string;
-}
+import { Task } from '@/types/task';
 
 interface TaskCardProps {
   task: Task;
@@ -40,6 +27,7 @@ interface TaskCardProps {
 
 const statusIcons = {
   BLOCKED: AlertTriangle,
+  LIFE: User,
   CAREER: Briefcase,
   PROF_EDUCATION: BookOpen,
   VENTURES: Rocket,
@@ -54,6 +42,7 @@ const statusIcons = {
 
 const statusColors = {
   BLOCKED: 'bg-red-500 text-white',
+  LIFE: 'bg-pink-500 text-white',
   CAREER: 'bg-blue-500 text-white', 
   PROF_EDUCATION: 'bg-green-500 text-white',
   VENTURES: 'bg-purple-500 text-white',
@@ -122,6 +111,7 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onStatusChange, onEdit }) => 
     
     const statusFlow = {
       BLOCKED: 'PLANNING',
+      LIFE: 'PLANNING',
       CAREER: 'PLANNING', 
       PROF_EDUCATION: 'PLANNING',
       VENTURES: 'PLANNING',

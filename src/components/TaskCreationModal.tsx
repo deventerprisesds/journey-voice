@@ -26,21 +26,7 @@ import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
-
-interface Task {
-  id?: string;
-  title: string;
-  description?: string;
-  status: 'BLOCKED' | 'CAREER' | 'PROF_EDUCATION' | 'VENTURES' | 'PLANNING' | 'READY' | 'UP_NEXT' | 'DOING' | 'DONE' | 'BACKLOG' | 'TODO';
-  priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
-  category: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION';
-  due_date?: string;
-  start_time?: string;
-  end_time?: string;
-  estimate_minutes?: number;
-  board_id: string;
-  user_id: string;
-}
+import { Task } from '@/types/task';
 
 interface ParsedTask {
   title: string;

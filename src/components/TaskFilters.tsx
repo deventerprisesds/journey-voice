@@ -19,23 +19,7 @@ import {
 } from 'lucide-react';
 import { format, startOfDay, endOfDay } from 'date-fns';
 import { cn } from '@/lib/utils';
-
-interface Task {
-  id: string;
-  title: string;
-  description?: string;
-  status: 'BLOCKED' | 'CAREER' | 'PROF_EDUCATION' | 'VENTURES' | 'PLANNING' | 'READY' | 'UP_NEXT' | 'DOING' | 'DONE' | 'BACKLOG' | 'TODO';
-  priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
-  category: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION';
-  due_date?: string;
-  estimate_minutes?: number;
-  blocked_by?: string[];
-  board_id: string;
-  user_id: string;
-  completed_at?: string;
-  created_at: string;
-  updated_at: string;
-}
+import { Task } from '@/types/task';
 
 interface FilterState {
   search: string;

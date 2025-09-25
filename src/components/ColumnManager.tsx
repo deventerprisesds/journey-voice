@@ -22,14 +22,7 @@ import {
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
-
-interface Column {
-  id: string;
-  name: string;
-  board_id: string;
-  position: number;
-  status: 'BLOCKED' | 'CAREER' | 'PROF_EDUCATION' | 'VENTURES' | 'PLANNING' | 'READY' | 'UP_NEXT' | 'DOING' | 'DONE' | 'BACKLOG' | 'TODO';
-}
+import { Column } from '@/types/task';
 
 interface ColumnManagerProps {
   column: Column;
@@ -40,6 +33,7 @@ interface ColumnManagerProps {
 
 const statusColors = {
   BLOCKED: '#ef4444',
+  LIFE: '#ec4899',
   CAREER: '#3b82f6', 
   PROF_EDUCATION: '#8b5cf6',
   VENTURES: '#10b981',
