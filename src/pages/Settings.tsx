@@ -1,6 +1,8 @@
 import React from 'react';
+import { Link } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Button } from '@/components/ui/button';
 import { 
   Settings as SettingsIcon, 
   Bell, 
@@ -8,9 +10,26 @@ import {
   Palette, 
   Shield 
 } from 'lucide-react';
+import { useAuth } from '@/hooks/useAuth';
 import NotificationSettings from '@/components/NotificationSettings';
 
 const Settings: React.FC = () => {
+  const { user } = useAuth();
+
+  // Redirect to auth if not logged in
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-background via-background to-primary/5 flex items-center justify-center">
+        <div className="text-center space-y-4">
+          <h1 className="text-2xl font-bold">Please Sign In</h1>
+          <p className="text-muted-foreground">You need to be logged in to access settings.</p>
+          <Link to="/auth">
+            <Button>Go to Sign In</Button>
+          </Link>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="container mx-auto px-4 py-6 max-w-4xl">
       <div className="flex items-center gap-2 mb-6">
