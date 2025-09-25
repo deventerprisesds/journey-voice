@@ -260,7 +260,15 @@ serve(async (req) => {
 
   console.log(`Test completed: ${report.summary}`);
 
-  return new Response(JSON.stringify(report, null, 2), {
+  // Custom JSON replacer to handle BigInt serialization
+  const bigIntReplacer = (key: string, value: any) => {
+    if (typeof value === 'bigint') {
+      return value.toString();
+    }
+    return value;
+  };
+
+  return new Response(JSON.stringify(report, bigIntReplacer, 2), {
     headers: { ...corsHeaders, 'Content-Type': 'application/json' },
   });
 });
