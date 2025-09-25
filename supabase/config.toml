@@ -6,6 +6,9 @@ verify_jwt = false
 [functions.generate-realtime-token]
 verify_jwt = false
 
+[functions.ai-task-parser]
+verify_jwt = false
+
 [functions.external-db-query]
 verify_jwt = false
 

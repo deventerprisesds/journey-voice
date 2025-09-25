@@ -1,0 +1,527 @@
+import React, { useState, useEffect } from 'react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Calendar } from '@/components/ui/calendar';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Label } from '@/components/ui/label';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Badge } from '@/components/ui/badge';
+import { 
+  CalendarIcon, 
+  Wand2, 
+  Plus, 
+  X, 
+  Loader2, 
+  Mic, 
+  Type,
+  Sparkles,
+  Check,
+  AlertCircle
+} from 'lucide-react';
+import { format } from 'date-fns';
+import { cn } from '@/lib/utils';
+import { useToast } from '@/hooks/use-toast';
+import { supabase } from '@/integrations/supabase/client';
+
+interface Task {
+  id?: string;
+  title: string;
+  description?: string;
+  status: 'BLOCKED' | 'CAREER' | 'PROF_EDUCATION' | 'VENTURES' | 'PLANNING' | 'READY' | 'UP_NEXT' | 'DOING' | 'DONE' | 'BACKLOG' | 'TODO';
+  priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
+  category: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION';
+  due_date?: string;
+  estimate_minutes?: number;
+  board_id: string;
+  user_id: string;
+}
+
+interface ParsedTask {
+  title: string;
+  description?: string;
+  priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
+  category: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION';
+  due_date?: string;
+  estimate_minutes?: number;
+  status: 'BACKLOG' | 'TODO' | 'READY' | 'UP_NEXT' | 'DOING';
+}
+
+interface TaskCreationModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onTasksCreated: (tasks: Task[]) => void;
+  boardId: string;
+  userId: string;
+}
+
+const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
+  isOpen,
+  onClose,
+  onTasksCreated,
+  boardId,
+  userId
+}) => {
+  const { toast } = useToast();
+  const [activeTab, setActiveTab] = useState<'ai' | 'manual'>('ai');
+  
+  // AI Mode State
+  const [aiInput, setAiInput] = useState('');
+  const [isParsingAI, setIsParsingAI] = useState(false);
+  const [parsedTasks, setParsedTasks] = useState<ParsedTask[]>([]);
+  
+  // Manual Mode State  
+  const [manualTask, setManualTask] = useState<Partial<Task>>({
+    title: '',
+    description: '',
+    priority: 'MEDIUM',
+    category: 'LIFE',
+    status: 'BACKLOG'
+  });
+  const [dueDate, setDueDate] = useState<Date | undefined>(undefined);
+  const [estimateHours, setEstimateHours] = useState('');
+  const [estimateMinutes, setEstimateMinutes] = useState('');
+  
+  // Common State
+  const [isCreating, setIsCreating] = useState(false);
+
+  const handleAIParseTask = async () => {
+    if (!aiInput.trim()) {
+      toast({
+        title: "Input Required",
+        description: "Please enter a task description",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsParsingAI(true);
+    try {
+      console.log('Parsing AI input:', aiInput);
+      
+      const { data, error } = await supabase.functions.invoke('ai-task-parser', {
+        body: { text: aiInput, mode: 'multiple' }
+      });
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      if (!data?.tasks || data.tasks.length === 0) {
+        throw new Error('No tasks could be parsed from the input');
+      }
+
+      setParsedTasks(data.tasks);
+      toast({
+        title: "Tasks Parsed Successfully",
+        description: `Found ${data.tasks.length} task${data.tasks.length > 1 ? 's' : ''}`,
+      });
+    } catch (error) {
+      console.error('Error parsing tasks:', error);
+      toast({
+        title: "Parsing Error",
+        description: error instanceof Error ? error.message : 'Failed to parse tasks',
+        variant: "destructive",
+      });
+    } finally {
+      setIsParsingAI(false);
+    }
+  };
+
+  const handleCreateTasks = async (tasksToCreate: ParsedTask[]) => {
+    setIsCreating(true);
+    try {
+      const tasksWithMeta = tasksToCreate.map(task => ({
+        ...task,
+        board_id: boardId,
+        user_id: userId,
+        due_date: task.due_date || null,
+        estimate_minutes: task.estimate_minutes || null,
+      }));
+
+      const { data: createdTasks, error } = await supabase
+        .from('tasks')
+        .insert(tasksWithMeta)
+        .select();
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      onTasksCreated(createdTasks);
+      toast({
+        title: "Tasks Created",
+        description: `Successfully created ${createdTasks.length} task${createdTasks.length > 1 ? 's' : ''}`,
+      });
+      
+      handleClose();
+    } catch (error) {
+      console.error('Error creating tasks:', error);
+      toast({
+        title: "Creation Error",
+        description: error instanceof Error ? error.message : 'Failed to create tasks',
+        variant: "destructive",
+      });
+    } finally {
+      setIsCreating(false);
+    }
+  };
+
+  const handleCreateManualTask = async () => {
+    if (!manualTask.title?.trim()) {
+      toast({
+        title: "Title Required",
+        description: "Please enter a task title",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const hours = parseInt(estimateHours) || 0;
+    const minutes = parseInt(estimateMinutes) || 0;
+    const totalMinutes = hours * 60 + minutes;
+
+    const taskToCreate: ParsedTask = {
+      title: manualTask.title!,
+      description: manualTask.description || undefined,
+      priority: manualTask.priority as ParsedTask['priority'],
+      category: manualTask.category as ParsedTask['category'],
+      status: manualTask.status as ParsedTask['status'],
+      due_date: dueDate ? dueDate.toISOString() : undefined,
+      estimate_minutes: totalMinutes > 0 ? totalMinutes : undefined,
+    };
+
+    await handleCreateTasks([taskToCreate]);
+  };
+
+  const handleClose = () => {
+    // Reset state
+    setActiveTab('ai');
+    setAiInput('');
+    setParsedTasks([]);
+    setManualTask({
+      title: '',
+      description: '',
+      priority: 'MEDIUM',
+      category: 'LIFE',
+      status: 'BACKLOG'
+    });
+    setDueDate(undefined);
+    setEstimateHours('');
+    setEstimateMinutes('');
+    onClose();
+  };
+
+  const removeParsedTask = (index: number) => {
+    setParsedTasks(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const editParsedTask = (index: number, field: keyof ParsedTask, value: any) => {
+    setParsedTasks(prev => prev.map((task, i) => 
+      i === index ? { ...task, [field]: value } : task
+    ));
+  };
+
+  return (
+    <Dialog open={isOpen} onOpenChange={handleClose}>
+      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Plus className="h-5 w-5" />
+            Create New Tasks
+          </DialogTitle>
+        </DialogHeader>
+
+        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as 'ai' | 'manual')}>
+          <TabsList className="grid w-full grid-cols-2">
+            <TabsTrigger value="ai" className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4" />
+              AI Assistant
+            </TabsTrigger>
+            <TabsTrigger value="manual" className="flex items-center gap-2">
+              <Type className="h-4 w-4" />
+              Manual Entry
+            </TabsTrigger>
+          </TabsList>
+
+          {/* AI Mode */}
+          <TabsContent value="ai" className="space-y-6">
+            <div className="space-y-4">
+              <div>
+                <Label htmlFor="ai-input">Describe your tasks</Label>
+                <p className="text-sm text-muted-foreground mb-2">
+                  Tell the AI what you need to do. You can include multiple tasks, priorities, due dates, and time estimates.
+                </p>
+                <Textarea
+                  id="ai-input"
+                  placeholder="e.g., Schedule dentist appointment for next Tuesday, finish project proposal by Friday (urgent, 3 hours), learn React and Vue.js..."
+                  value={aiInput}
+                  onChange={(e) => setAiInput(e.target.value)}
+                  rows={4}
+                  className="resize-none"
+                />
+              </div>
+
+              <div className="flex gap-2">
+                <Button 
+                  onClick={handleAIParseTask}
+                  disabled={isParsingAI || !aiInput.trim()}
+                  className="flex-1"
+                >
+                  {isParsingAI ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Parsing Tasks...
+                    </>
+                  ) : (
+                    <>
+                      <Wand2 className="h-4 w-4 mr-2" />
+                      Parse Tasks with AI
+                    </>
+                  )}
+                </Button>
+              </div>
+            </div>
+
+            {/* Parsed Tasks Preview */}
+            {parsedTasks.length > 0 && (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-lg font-medium">Parsed Tasks ({parsedTasks.length})</h3>
+                  <Button
+                    onClick={() => handleCreateTasks(parsedTasks)}
+                    disabled={isCreating}
+                    className="bg-primary hover:bg-primary/90"
+                  >
+                    {isCreating ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Creating...
+                      </>
+                    ) : (
+                      <>
+                        <Check className="h-4 w-4 mr-2" />
+                        Create All Tasks
+                      </>
+                    )}
+                  </Button>
+                </div>
+
+                <div className="space-y-3 max-h-96 overflow-y-auto">
+                  {parsedTasks.map((task, index) => (
+                    <div key={index} className="border rounded-lg p-4 space-y-2">
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1 space-y-2">
+                          <Input
+                            value={task.title}
+                            onChange={(e) => editParsedTask(index, 'title', e.target.value)}
+                            className="font-medium"
+                          />
+                          {task.description && (
+                            <Textarea
+                              value={task.description}
+                              onChange={(e) => editParsedTask(index, 'description', e.target.value)}
+                              rows={2}
+                              className="text-sm"
+                            />
+                          )}
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => removeParsedTask(index)}
+                          className="ml-2"
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2">
+                        <Badge variant={task.priority === 'URGENT' ? 'destructive' : 'secondary'}>
+                          {task.priority}
+                        </Badge>
+                        <Badge variant="outline">{task.category}</Badge>
+                        <Badge variant="outline">{task.status}</Badge>
+                        {task.due_date && (
+                          <Badge variant="outline" className="text-orange-600">
+                            Due: {format(new Date(task.due_date), 'PPP')}
+                          </Badge>
+                        )}
+                        {task.estimate_minutes && (
+                          <Badge variant="outline" className="text-blue-600">
+                            {Math.floor(task.estimate_minutes / 60)}h {task.estimate_minutes % 60}m
+                          </Badge>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </TabsContent>
+
+          {/* Manual Mode */}
+          <TabsContent value="manual" className="space-y-6">
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="manual-title">Title *</Label>
+                <Input
+                  id="manual-title"
+                  value={manualTask.title || ''}
+                  onChange={(e) => setManualTask({ ...manualTask, title: e.target.value })}
+                  placeholder="Enter task title"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="manual-description">Description</Label>
+                <Textarea
+                  id="manual-description"
+                  value={manualTask.description || ''}
+                  onChange={(e) => setManualTask({ ...manualTask, description: e.target.value })}
+                  placeholder="Enter task description"
+                  rows={3}
+                />
+              </div>
+
+              <div className="grid grid-cols-3 gap-4">
+                <div className="space-y-2">
+                  <Label>Priority</Label>
+                  <Select
+                    value={manualTask.priority}
+                    onValueChange={(value) => setManualTask({ ...manualTask, priority: value as Task['priority'] })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="LOW">Low</SelectItem>
+                      <SelectItem value="MEDIUM">Medium</SelectItem>
+                      <SelectItem value="HIGH">High</SelectItem>
+                      <SelectItem value="URGENT">Urgent</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Category</Label>
+                  <Select
+                    value={manualTask.category}
+                    onValueChange={(value) => setManualTask({ ...manualTask, category: value as Task['category'] })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="LIFE">Life</SelectItem>
+                      <SelectItem value="CAREER">Career</SelectItem>
+                      <SelectItem value="VENTURES">Ventures</SelectItem>
+                      <SelectItem value="EDUCATION">Education</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Status</Label>
+                  <Select
+                    value={manualTask.status}
+                    onValueChange={(value) => setManualTask({ ...manualTask, status: value as Task['status'] })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="BACKLOG">Backlog</SelectItem>
+                      <SelectItem value="TODO">To Do</SelectItem>
+                      <SelectItem value="READY">Ready</SelectItem>
+                      <SelectItem value="UP_NEXT">Up Next</SelectItem>
+                      <SelectItem value="DOING">Doing</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Due Date</Label>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className={cn(
+                        "w-full justify-start text-left font-normal",
+                        !dueDate && "text-muted-foreground"
+                      )}
+                    >
+                      <CalendarIcon className="mr-2 h-4 w-4" />
+                      {dueDate ? format(dueDate, "PPP") : "Pick a date"}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0">
+                    <Calendar
+                      mode="single"
+                      selected={dueDate}
+                      onSelect={setDueDate}
+                      initialFocus
+                    />
+                  </PopoverContent>
+                </Popover>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Time Estimate</Label>
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1">
+                    <Input
+                      type="number"
+                      placeholder="0"
+                      value={estimateHours}
+                      onChange={(e) => setEstimateHours(e.target.value)}
+                      className="w-20"
+                      min="0"
+                    />
+                    <span className="text-sm text-muted-foreground">hours</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <Input
+                      type="number"
+                      placeholder="0"
+                      value={estimateMinutes}
+                      onChange={(e) => setEstimateMinutes(e.target.value)}
+                      className="w-20"
+                      min="0"
+                      max="59"
+                    />
+                    <span className="text-sm text-muted-foreground">minutes</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={handleClose}>
+                Cancel
+              </Button>
+              <Button onClick={handleCreateManualTask} disabled={isCreating || !manualTask.title?.trim()}>
+                {isCreating ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Creating...
+                  </>
+                ) : (
+                  <>
+                    <Plus className="h-4 w-4 mr-2" />
+                    Create Task
+                  </>
+                )}
+              </Button>
+            </div>
+          </TabsContent>
+        </Tabs>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
+export default TaskCreationModal;

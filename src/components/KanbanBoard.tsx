@@ -2,12 +2,15 @@ import React, { useState, useEffect } from 'react';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Plus, MoreHorizontal, Calendar, Clock } from 'lucide-react';
+import { Plus, MoreHorizontal, Calendar, Clock, Filter, Wand2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import TaskCard from './TaskCard';
 import TaskDetailModal from './TaskDetailModal';
+import TaskCreationModal from './TaskCreationModal';
+import TaskFilters from './TaskFilters';
+import ColumnManager from './ColumnManager';
 import { itineraryEngine } from '@/utils/ItineraryEngine';
 
 interface Task {
@@ -89,6 +92,9 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger }) => {
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isGeneratingSchedule, setIsGeneratingSchedule] = useState(false);
+  const [isCreationModalOpen, setIsCreationModalOpen] = useState(false);
+  const [filteredTasks, setFilteredTasks] = useState<Task[]>([]);
+  const [showFilters, setShowFilters] = useState(false);
 
   const fetchBoardData = async () => {
     if (!user) return;
@@ -334,7 +340,27 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger }) => {
   };
 
   const getTasksByStatus = (status: Task['status']) => {
-    return tasks.filter(task => task.status === status);
+    // Use filtered tasks if filters are active, otherwise use all tasks
+    const tasksToFilter = filteredTasks.length > 0 ? filteredTasks : tasks;
+    return tasksToFilter.filter(task => task.status === status);
+  };
+
+  const handleTasksCreated = (newTasks: Task[]) => {
+    setTasks(prev => [...newTasks, ...prev]);
+  };
+
+  const handleFilteredTasksChange = (filtered: Task[]) => {
+    setFilteredTasks(filtered);
+  };
+
+  const handleColumnUpdate = (updatedColumn: Column) => {
+    setColumns(prev => prev.map(col => 
+      col.id === updatedColumn.id ? updatedColumn : col
+    ));
+  };
+
+  const handleColumnArchive = (columnId: string) => {
+    setColumns(prev => prev.filter(col => col.id !== columnId));
   };
 
   const createDefaultBoardAndColumns = async (userId: string) => {
@@ -632,15 +658,26 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger }) => {
         </DragDropContext>
       )}
       {/* Task Detail Modal */}
-      <TaskDetailModal
-        task={selectedTask}
-        isOpen={isModalOpen}
-        onClose={() => {
-          setIsModalOpen(false);
-          setSelectedTask(null);
-        }}
-        onSave={handleTaskSave}
-        allTasks={tasks}
+      {selectedTask && (
+        <TaskDetailModal
+          task={selectedTask}
+          isOpen={isModalOpen}
+          onClose={() => {
+            setIsModalOpen(false);
+            setSelectedTask(null);
+          }}
+          onSave={handleTaskSave}
+          allTasks={tasks}
+        />
+      )}
+
+      {/* Task Creation Modal */}
+      <TaskCreationModal
+        isOpen={isCreationModalOpen}
+        onClose={() => setIsCreationModalOpen(false)}
+        onTasksCreated={handleTasksCreated}
+        boardId={board?.id || ''}
+        userId={user?.id || ''}
       />
     </div>
   );
