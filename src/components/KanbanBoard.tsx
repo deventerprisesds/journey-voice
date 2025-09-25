@@ -571,7 +571,7 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger }) => {
       {/* Kanban Columns with Drag & Drop */}
       {hasAnyTasks && (
         <DragDropContext onDragEnd={handleDragEnd}>
-          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-9 gap-4 overflow-x-auto">
+          <div className="flex gap-4 overflow-x-auto pb-4">
             {columns.map((column) => {
               const columnTasks = getTasksByStatus(column.status);
               
