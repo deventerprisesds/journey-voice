@@ -73,7 +73,7 @@ const categoryColors = {
 
 const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUpdate }) => {
   const { toast } = useToast();
-  const { isDemoMode } = useAuth();
+  const { isDemoMode, user } = useAuth();
   const [sortBy, setSortBy] = useState<string>('created_at');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [expandedTasks, setExpandedTasks] = useState<Set<string>>(new Set());
@@ -330,13 +330,22 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
     if (!newTaskTitle.trim()) return;
 
     try {
+      if (!isDemoMode && !user?.id) {
+        toast({
+          title: "Error",
+          description: "You must be logged in to create tasks",
+          variant: "destructive",
+        });
+        return;
+      }
+
       const newTask = {
         id: crypto.randomUUID(),
         title: newTaskTitle.trim(),
         status: 'BACKLOG' as const,
         priority: 'MEDIUM' as const,
         category: groupBy === 'category' && tasks.length > 0 ? tasks[0].category : 'LIFE' as const,
-        user_id: isDemoMode ? 'demo-user' : '',
+        user_id: isDemoMode ? '00000000-0000-0000-0000-000000000001' : user!.id,
         board_id: isDemoMode ? 'demo-board' : '',
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -352,23 +361,51 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
         const { data: boards } = await supabase
           .from('boards')
           .select('id')
+          .eq('user_id', user!.id)
           .eq('is_default', true)
           .limit(1);
 
+        let boardId = '';
         if (boards && boards.length > 0) {
-          const { error } = await supabase
-            .from('tasks')
-            .insert([{ ...newTask, board_id: boards[0].id }]);
+          boardId = boards[0].id;
+        } else {
+          // Create a default board if none exists
+          const { data: newBoard, error: boardError } = await supabase
+            .from('boards')
+            .insert([{
+              name: 'My Board',
+              description: 'Default board',
+              user_id: user!.id,
+              is_default: true,
+              position: 0
+            }])
+            .select('id')
+            .single();
 
-          if (error) {
-            console.error('Error creating task:', error);
+          if (boardError || !newBoard) {
+            console.error('Error creating board:', boardError);
             toast({
               title: "Error",
-              description: "Failed to create task",
+              description: "Failed to create default board",
               variant: "destructive",
             });
             return;
           }
+          boardId = newBoard.id;
+        }
+
+        const { error } = await supabase
+          .from('tasks')
+          .insert([{ ...newTask, board_id: boardId }]);
+
+        if (error) {
+          console.error('Error creating task:', error);
+          toast({
+            title: "Error",
+            description: "Failed to create task",
+            variant: "destructive",
+          });
+          return;
         }
       }
 
