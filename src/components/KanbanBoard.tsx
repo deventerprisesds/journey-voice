@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Plus, MoreHorizontal, Calendar, Clock, Filter, Wand2 } from 'lucide-react';
+import { Plus, MoreHorizontal, Calendar, Clock, Filter, Wand2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
@@ -65,6 +65,10 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
   const [isCreationModalOpen, setIsCreationModalOpen] = useState(false);
   const [filteredTasks, setFilteredTasks] = useState<Task[]>([]);
   const [showFilters, setShowFilters] = useState(false);
+  const [quickAddColumnId, setQuickAddColumnId] = useState<string | null>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
 
   const fetchBoardColumns = async () => {
     if (!user) return;
@@ -216,7 +220,7 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
   };
 
   const handleDragEnd = async (result: DropResult) => {
-    const { destination, source, draggableId } = result;
+    const { destination, source, draggableId, type } = result;
 
     // If dropped outside or in same position, do nothing
     if (!destination || 
@@ -224,11 +228,44 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
       return;
     }
 
-    // Find the column that matches the destination
+    // Handle column reordering
+    if (type === 'column') {
+      const newColumns = Array.from(columns);
+      const [reorderedColumn] = newColumns.splice(source.index, 1);
+      newColumns.splice(destination.index, 0, reorderedColumn);
+      
+      // Update positions
+      const updatedColumns = newColumns.map((col, index) => ({
+        ...col,
+        position: index
+      }));
+      
+      setColumns(updatedColumns);
+      
+      // Save to database/localStorage
+      if (isDemoMode) {
+        localStorage.setItem('kanban-demo-columns', JSON.stringify(updatedColumns));
+      } else {
+        // Update positions in database
+        for (const col of updatedColumns) {
+          await supabase
+            .from('columns')
+            .update({ position: col.position })
+            .eq('id', col.id);
+        }
+      }
+      
+      toast({
+        title: "Column reordered",
+        description: "Column order has been updated",
+      });
+      return;
+    }
+
+    // Handle task reordering (existing logic)
     const targetColumn = columns.find(col => col.id === destination.droppableId);
     if (!targetColumn) return;
 
-    // Update task status based on column
     await handleStatusChange(draggableId, targetColumn.status);
   };
 
@@ -327,6 +364,99 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
   const handleColumnArchive = (columnId: string) => {
     setColumns(prev => prev.filter(col => col.id !== columnId));
   };
+
+  const handleQuickAddTask = async (columnId: string, title: string) => {
+    if (!board || !title.trim()) return;
+
+    const column = columns.find(col => col.id === columnId);
+    if (!column) return;
+
+    const quickTask = {
+      title: title.trim(),
+      description: '',
+      status: column.status,
+      priority: 'MEDIUM' as const,
+      category: 'LIFE' as const,
+      board_id: board.id,
+      user_id: board.user_id,
+    };
+
+    if (isDemoMode) {
+      const demoTask = {
+        ...quickTask,
+        id: `demo-task-${Date.now()}`,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+
+      const currentTasks = JSON.parse(localStorage.getItem('kanban-demo-tasks') || '[]');
+      currentTasks.unshift(demoTask);
+      localStorage.setItem('kanban-demo-tasks', JSON.stringify(currentTasks));
+    } else {
+      try {
+        const { error } = await supabase
+          .from('tasks')
+          .insert(quickTask as any);
+
+        if (error) {
+          console.error('Error creating quick task:', error);
+          toast({
+            title: "Error",
+            description: "Failed to create task",
+            variant: "destructive",
+          });
+          return;
+        }
+      } catch (error) {
+        console.error('Error creating quick task:', error);
+        return;
+      }
+    }
+
+    // Notify parent to reload tasks
+    if (onTaskUpdate) {
+      onTaskUpdate();
+    }
+
+    toast({
+      title: "Task created",
+      description: `"${title}" added to ${column.name}`,
+    });
+  };
+
+  const scrollLeft = () => {
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollBy({ left: -280, behavior: 'smooth' });
+    }
+  };
+
+  const scrollRight = () => {
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollBy({ left: 280, behavior: 'smooth' });
+    }
+  };
+
+  const updateScrollButtons = () => {
+    if (scrollContainerRef.current) {
+      const { scrollLeft, scrollWidth, clientWidth } = scrollContainerRef.current;
+      setCanScrollLeft(scrollLeft > 0);
+      setCanScrollRight(scrollLeft < scrollWidth - clientWidth - 1);
+    }
+  };
+
+  useEffect(() => {
+    const scrollContainer = scrollContainerRef.current;
+    if (scrollContainer) {
+      updateScrollButtons();
+      scrollContainer.addEventListener('scroll', updateScrollButtons);
+      window.addEventListener('resize', updateScrollButtons);
+      
+      return () => {
+        scrollContainer.removeEventListener('scroll', updateScrollButtons);
+        window.removeEventListener('resize', updateScrollButtons);
+      };
+    }
+  }, [columns]);
 
   const createDefaultBoardAndColumns = async (userId: string) => {
     console.log('Creating default board and columns for user:', userId);
@@ -580,76 +710,122 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
       )}
 
       {/* Kanban Board */}
-      <DragDropContext onDragEnd={handleDragEnd}>
-        <div className="flex gap-4 min-h-[600px] overflow-x-auto pb-4">
-          {columns.map((column) => {
-            const columnTasks = getTasksByStatus(column.status);
-            return (
-              <div 
-                key={column.id} 
-                className="bg-card rounded-lg border p-4 shadow-sm min-w-[280px] flex-shrink-0"
-              >
-                {/* Column Header */}
-                <ColumnManager
-                  column={column}
-                  taskCount={columnTasks.length}
-                  onColumnUpdate={handleColumnUpdate}
-                  onColumnArchive={handleColumnArchive}
-                />
+      <div className="relative">
+        {/* Navigation Controls */}
+        <div className="absolute left-0 top-1/2 -translate-y-1/2 z-10">
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={scrollLeft}
+            disabled={!canScrollLeft}
+            className="h-10 w-10 bg-background/80 backdrop-blur-sm shadow-lg border-2"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
+        </div>
+        
+        <div className="absolute right-0 top-1/2 -translate-y-1/2 z-10">
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={scrollRight}
+            disabled={!canScrollRight}
+            className="h-10 w-10 bg-background/80 backdrop-blur-sm shadow-lg border-2"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+        </div>
 
-                {/* Tasks Container */}
-                <Droppable droppableId={column.id}>
-                  {(provided, snapshot) => (
-                    <div
-                      ref={provided.innerRef}
-                      {...provided.droppableProps}
-                      className={`
-                        flex-1 space-y-2 p-2 rounded-lg border-2 border-dashed transition-colors min-h-32
-                        ${snapshot.isDraggingOver 
-                          ? 'border-primary bg-primary/5' 
-                          : 'border-muted-foreground/20 bg-muted/10'
-                        }
-                        ${statusColors[column.status as keyof typeof statusColors]}
-                      `}
-                    >
-                      {columnTasks.map((task, index) => (
-                        <Draggable
-                          key={task.id}
-                          draggableId={task.id}
-                          index={index}
+        <DragDropContext onDragEnd={handleDragEnd}>
+          <Droppable droppableId="board" direction="horizontal" type="column">
+            {(provided) => (
+              <div
+                ref={scrollContainerRef}
+                {...provided.droppableProps}
+                className="flex gap-4 min-h-[600px] overflow-x-auto pb-4 px-12 scroll-smooth"
+                style={{ scrollbarWidth: 'thin' }}
+              >
+                {columns.map((column, index) => {
+                  const columnTasks = getTasksByStatus(column.status);
+                  return (
+                    <Draggable key={column.id} draggableId={column.id} index={index}>
+                      {(provided, snapshot) => (
+                        <div
+                          ref={provided.innerRef}
+                          {...provided.draggableProps}
+                          className={`bg-card rounded-lg border p-4 shadow-sm min-w-[280px] flex-shrink-0 ${
+                            snapshot.isDragging ? 'rotate-1 scale-105 shadow-xl' : ''
+                          }`}
                         >
-                          {(provided, snapshot) => (
-                            <div
-                              ref={provided.innerRef}
-                              {...provided.draggableProps}
-                              {...provided.dragHandleProps}
-                              className={snapshot.isDragging ? 'rotate-2 scale-105' : ''}
-                            >
-                              <TaskCard
-                                task={task}
-                                onEdit={handleTaskEdit}
-                              />
-                            </div>
-                          )}
-                        </Draggable>
-                      ))}
-                      {provided.placeholder}
-                      
-                      {/* Empty State */}
-                      {columnTasks.length === 0 && (
-                        <div className="text-center py-8 text-muted-foreground">
-                          <Clock className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                          <p className="text-sm">No tasks</p>
+                          {/* Column Header */}
+                          <ColumnManager
+                            column={column}
+                            taskCount={columnTasks.length}
+                            onColumnUpdate={handleColumnUpdate}
+                            onColumnArchive={handleColumnArchive}
+                            onQuickAddTask={handleQuickAddTask}
+                            dragHandleProps={provided.dragHandleProps}
+                          />
+
+                          {/* Tasks Container */}
+                          <Droppable droppableId={column.id} type="task">
+                            {(provided, snapshot) => (
+                              <div
+                                ref={provided.innerRef}
+                                {...provided.droppableProps}
+                                className={`
+                                  flex-1 space-y-2 p-2 rounded-lg border-2 border-dashed transition-colors min-h-32 mt-2
+                                  ${snapshot.isDraggingOver 
+                                    ? 'border-primary bg-primary/5' 
+                                    : 'border-muted-foreground/20 bg-muted/10'
+                                  }
+                                  ${statusColors[column.status as keyof typeof statusColors]}
+                                `}
+                              >
+                                {columnTasks.map((task, index) => (
+                                  <Draggable
+                                    key={task.id}
+                                    draggableId={task.id}
+                                    index={index}
+                                  >
+                                    {(provided, snapshot) => (
+                                      <div
+                                        ref={provided.innerRef}
+                                        {...provided.draggableProps}
+                                        {...provided.dragHandleProps}
+                                        className={snapshot.isDragging ? 'rotate-2 scale-105' : ''}
+                                      >
+                                        <TaskCard
+                                          task={task}
+                                          onEdit={handleTaskEdit}
+                                        />
+                                      </div>
+                                    )}
+                                  </Draggable>
+                                ))}
+                                {provided.placeholder}
+                                
+                                {/* Empty State */}
+                                {columnTasks.length === 0 && (
+                                  <div className="text-center py-8 text-muted-foreground">
+                                    <Clock className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                                    <p className="text-sm">No tasks</p>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </Droppable>
                         </div>
                       )}
-                    </div>
-                  )}
-                </Droppable>
+                    </Draggable>
+                  );
+                })}
+                {provided.placeholder}
               </div>
-            );
-          })}
-        </div>
-      </DragDropContext>
+            )}
+          </Droppable>
+        </DragDropContext>
+      </div>
 
       {/* Modals */}
       <TaskDetailModal

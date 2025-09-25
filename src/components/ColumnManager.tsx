@@ -29,6 +29,8 @@ interface ColumnManagerProps {
   taskCount: number;
   onColumnUpdate: (updatedColumn: Column) => void;
   onColumnArchive?: (columnId: string) => void;
+  onQuickAddTask?: (columnId: string, title: string) => void;
+  dragHandleProps?: any;
 }
 
 const statusColors = {
@@ -50,12 +52,16 @@ const ColumnManager: React.FC<ColumnManagerProps> = ({
   column, 
   taskCount, 
   onColumnUpdate,
-  onColumnArchive 
+  onColumnArchive,
+  onQuickAddTask,
+  dragHandleProps
 }) => {
   const { toast } = useToast();
   const [isEditing, setIsEditing] = useState(false);
   const [newName, setNewName] = useState(column.name);
   const [selectedColor, setSelectedColor] = useState(statusColors[column.status as keyof typeof statusColors] || '#6b7280');
+  const [isQuickAdding, setIsQuickAdding] = useState(false);
+  const [quickTaskTitle, setQuickTaskTitle] = useState('');
 
   const handleRename = async () => {
     if (!newName.trim()) {
@@ -138,11 +144,23 @@ const ColumnManager: React.FC<ColumnManagerProps> = ({
     { color: '#6b7280', name: 'Gray' },
   ];
 
+  const handleQuickAdd = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!quickTaskTitle.trim() || !onQuickAddTask) return;
+    
+    await onQuickAddTask(column.id, quickTaskTitle);
+    setQuickTaskTitle('');
+    setIsQuickAdding(false);
+  };
+
   return (
-    <div className="flex items-center gap-2">
-      {/* Column Header with Task Count */}
-      <div className="flex items-center gap-2 flex-1">
-        <GripVertical className="h-4 w-4 text-muted-foreground cursor-move" />
+    <div className="space-y-2">
+      <div className="flex items-center gap-2">
+        {/* Column Header with Task Count */}
+        <div className="flex items-center gap-2 flex-1">
+          <div {...dragHandleProps}>
+            <GripVertical className="h-4 w-4 text-muted-foreground cursor-move hover:text-foreground transition-colors" />
+          </div>
         
         {isEditing ? (
           <div className="flex items-center gap-2 flex-1">
@@ -194,16 +212,27 @@ const ColumnManager: React.FC<ColumnManagerProps> = ({
             </Badge>
           </>
         )}
-      </div>
+        </div>
 
-      {/* Column Actions Menu */}
-      {!isEditing && (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
-              <MoreHorizontal className="h-4 w-4" />
-            </Button>
-          </DropdownMenuTrigger>
+        {/* Quick Add Task Button */}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-8 w-8 p-0 hover:bg-primary/10"
+          onClick={() => setIsQuickAdding(true)}
+          title="Quick add task"
+        >
+          <Plus className="h-4 w-4" />
+        </Button>
+
+        {/* Column Actions Menu */}
+        {!isEditing && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-48">
             <DropdownMenuItem onClick={() => setIsEditing(true)}>
               <Edit2 className="h-4 w-4 mr-2" />
@@ -264,6 +293,48 @@ const ColumnManager: React.FC<ColumnManagerProps> = ({
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        )}
+      </div>
+
+      {/* Quick Add Task Form */}
+      {isQuickAdding && (
+        <form onSubmit={handleQuickAdd} className="space-y-2">
+          <Input
+            placeholder="Task title..."
+            value={quickTaskTitle}
+            onChange={(e) => setQuickTaskTitle(e.target.value)}
+            className="h-8 text-sm"
+            autoFocus
+            onBlur={() => {
+              if (!quickTaskTitle.trim()) {
+                setIsQuickAdding(false);
+              }
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                setQuickTaskTitle('');
+                setIsQuickAdding(false);
+              }
+            }}
+          />
+          <div className="flex gap-1">
+            <Button type="submit" size="sm" className="h-7 px-2 text-xs">
+              Add
+            </Button>
+            <Button 
+              type="button"
+              variant="ghost" 
+              size="sm" 
+              className="h-7 px-2 text-xs"
+              onClick={() => {
+                setQuickTaskTitle('');
+                setIsQuickAdding(false);
+              }}
+            >
+              Cancel
+            </Button>
+          </div>
+        </form>
       )}
     </div>
   );
