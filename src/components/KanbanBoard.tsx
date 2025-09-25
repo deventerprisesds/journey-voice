@@ -554,6 +554,23 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger }) => {
         </div>
         <div className="flex items-center gap-2">
           <Button 
+            onClick={() => setShowFilters(!showFilters)}
+            variant="outline"
+            size="sm"
+            className={showFilters ? "bg-primary text-primary-foreground" : ""}
+          >
+            <Filter className="h-4 w-4 mr-2" />
+            Filters
+          </Button>
+          <Button 
+            onClick={() => setIsCreationModalOpen(true)}
+            size="sm"
+            className="bg-primary hover:bg-primary/90"
+          >
+            <Wand2 className="h-4 w-4 mr-2" />
+            AI Create
+          </Button>
+          <Button 
             onClick={generateDailySchedule}
             disabled={isGeneratingSchedule}
             size="sm"
@@ -567,6 +584,16 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger }) => {
           </Button>
         </div>
       </div>
+
+      {/* Filters Panel */}
+      {showFilters && (
+        <div className="mb-4">
+          <TaskFilters
+            tasks={tasks}
+            onFilteredTasksChange={(filteredTasks) => setFilteredTasks(filteredTasks)}
+          />
+        </div>
+      )}
 
       {/* Empty State */}
       {!hasAnyTasks && (
@@ -604,12 +631,48 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger }) => {
               return (
                 <Card key={column.id} className={`${statusColors[column.status]} border-t-4 min-w-[280px]`}>
                   <CardHeader className="pb-3">
-                    <CardTitle className="text-sm font-medium flex items-center justify-between">
-                      <span>{column.name}</span>
-                      <span className="text-xs bg-background/50 px-2 py-1 rounded-full">
-                        {columnTasks.length}
-                      </span>
-                    </CardTitle>
+                    <div className="flex items-center justify-between">
+                      <CardTitle className="text-sm font-medium flex items-center gap-2">
+                        <span>{column.name}</span>
+                        <span className="text-xs bg-background/50 px-2 py-1 rounded-full">
+                          {columnTasks.length}
+                        </span>
+                      </CardTitle>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          onClick={() => {
+                            setIsCreationModalOpen(true);
+                            // Set initial status when modal opens
+                            setTimeout(() => {
+                              const modal = document.querySelector('[role="dialog"]');
+                              if (modal) {
+                                const statusSelect = modal.querySelector('select[value]');
+                                if (statusSelect) {
+                                  (statusSelect as HTMLSelectElement).value = column.status;
+                                }
+                              }
+                            }, 100);
+                          }}
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 w-6 p-0 hover:bg-background/80"
+                        >
+                          <Plus className="h-3 w-3" />
+                        </Button>
+                        <ColumnManager 
+                          column={column}
+                          taskCount={columnTasks.length}
+                          onColumnUpdate={(updatedColumn) => {
+                            setColumns(prev => prev.map(col => 
+                              col.id === updatedColumn.id ? updatedColumn : col
+                            ));
+                          }}
+                          onColumnArchive={(columnId) => {
+                            setColumns(prev => prev.filter(col => col.id !== columnId));
+                          }}
+                        />
+                      </div>
+                    </div>
                   </CardHeader>
                   <CardContent>
                     <Droppable droppableId={column.id}>

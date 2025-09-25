@@ -28,7 +28,7 @@ interface Column {
   name: string;
   board_id: string;
   position: number;
-  status: string;
+  status: 'BLOCKED' | 'CAREER' | 'PROF_EDUCATION' | 'VENTURES' | 'PLANNING' | 'READY' | 'UP_NEXT' | 'DOING' | 'DONE' | 'BACKLOG' | 'TODO';
 }
 
 interface ColumnManagerProps {

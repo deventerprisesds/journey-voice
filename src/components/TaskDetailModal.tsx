@@ -87,19 +87,34 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
         estimate_minutes: totalMinutes > 0 ? totalMinutes : null,
       };
 
-      const { error } = await supabase
-        .from('tasks')
-        .update(updatedTask)
-        .eq('id', task.id);
+      // Check if this is a demo task (ID starts with 'demo-')
+      const isDemoTask = task.id.startsWith('demo-');
+      
+      if (isDemoTask) {
+        // For demo tasks, update localStorage instead of Supabase
+        const demoTasks = JSON.parse(localStorage.getItem('demoTasks') || '[]');
+        const taskIndex = demoTasks.findIndex((t: Task) => t.id === task.id);
+        
+        if (taskIndex !== -1) {
+          demoTasks[taskIndex] = { ...task, ...updatedTask };
+          localStorage.setItem('demoTasks', JSON.stringify(demoTasks));
+        }
+      } else {
+        // For real tasks, update Supabase
+        const { error } = await supabase
+          .from('tasks')
+          .update(updatedTask)
+          .eq('id', task.id);
 
-      if (error) {
-        console.error('Error updating task:', error);
-        toast({
-          title: "Error",
-          description: "Failed to update task",
-          variant: "destructive",
-        });
-        return;
+        if (error) {
+          console.error('Error updating task:', error);
+          toast({
+            title: "Error",
+            description: "Failed to update task",
+            variant: "destructive",
+          });
+          return;
+        }
       }
 
       onSave({ ...task, ...updatedTask } as Task);

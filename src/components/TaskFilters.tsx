@@ -28,7 +28,13 @@ interface Task {
   priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
   category: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION';
   due_date?: string;
+  estimate_minutes?: number;
+  blocked_by?: string[];
+  board_id: string;
+  user_id: string;
+  completed_at?: string;
   created_at: string;
+  updated_at: string;
 }
 
 interface FilterState {
