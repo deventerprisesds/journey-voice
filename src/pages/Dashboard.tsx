@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import KanbanBoard from '@/components/KanbanBoard';
 import GanttChart from '@/components/GanttChart';
-import TaskGridView from '@/components/TaskGridView';
+import TaskGridView from '@/components/EnhancedTaskGridView';
 import ViewSwitcher, { ViewType } from '@/components/ViewSwitcher';
 import VoiceInterface from '@/components/VoiceInterface';
 import { Button } from '@/components/ui/button';
@@ -152,8 +152,8 @@ const Dashboard = () => {
           <>
             {currentView === 'kanban' && (
               <KanbanBoard 
-                refreshTrigger={refreshTrigger}
-                onTasksLoaded={handleTasksLoaded}
+                tasks={tasks}
+                onTaskUpdate={handleTaskUpdate}
                 onTaskEdit={handleTaskEdit}
               />
             )}
@@ -161,25 +161,8 @@ const Dashboard = () => {
               <TaskGridView 
                 tasks={tasks}
                 onTaskEdit={handleTaskEdit}
+                onTaskUpdate={handleTaskUpdate}
               />
-            )}
-            {currentView === 'gantt' && (
-              <GanttChart 
-                tasks={tasks}
-                onTaskEdit={handleTaskEdit}
-              />
-            )}
-            {currentView === 'timeline' && (
-              <div className="text-center py-12">
-                <h3 className="text-lg font-medium mb-2">Timeline View</h3>
-                <p className="text-muted-foreground">Timeline view coming soon...</p>
-              </div>
-            )}
-            {currentView === 'list' && (
-              <div className="text-center py-12">
-                <h3 className="text-lg font-medium mb-2">List View</h3>
-                <p className="text-muted-foreground">List view coming soon...</p>
-              </div>
             )}
           </>
         )}

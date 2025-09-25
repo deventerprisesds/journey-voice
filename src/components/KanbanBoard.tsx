@@ -13,51 +13,17 @@ import TaskFilters from './TaskFilters';
 import ColumnManager from './ColumnManager';
 import { itineraryEngine } from '@/utils/ItineraryEngine';
 
-interface Task {
-  id: string;
-  title: string;
-  description?: string;
-  status: 'BLOCKED' | 'CAREER' | 'PROF_EDUCATION' | 'VENTURES' | 'PLANNING' | 'READY' | 'UP_NEXT' | 'DOING' | 'DONE' | 'BACKLOG' | 'TODO';
-  priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
-  category: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION';
-  due_date?: string;
-  start_time?: string;
-  end_time?: string;
-  estimate_minutes?: number;
-  blocked_by?: string[];
-  board_id: string;
-  user_id: string;
-  completed_at?: string;
-  created_at: string;
-  updated_at: string;
-}
-
-interface Board {
-  id: string;
-  name: string;
-  description?: string;
-  color: string;
-  user_id: string;
-  position: number;
-  is_default: boolean;
-}
-
-interface Column {
-  id: string;
-  name: string;
-  board_id: string;
-  position: number;
-  status: 'BLOCKED' | 'CAREER' | 'PROF_EDUCATION' | 'VENTURES' | 'PLANNING' | 'READY' | 'UP_NEXT' | 'DOING' | 'DONE' | 'BACKLOG' | 'TODO';
-}
+import { Task, Board, Column } from '@/types/task';
 
 interface KanbanBoardProps {
-  refreshTrigger?: number;
-  onTasksLoaded?: (tasks: Task[]) => void;
+  tasks: Task[];
+  onTaskUpdate?: () => void;
   onTaskEdit?: (task: Task) => void;
 }
 
 const statusLabels = {
   BLOCKED: 'Blocked',
+  LIFE: 'Life',
   CAREER: 'Career',
   PROF_EDUCATION: 'Prof. Education',
   VENTURES: 'Ventures',
@@ -73,6 +39,7 @@ const statusLabels = {
 
 const statusColors = {
   BLOCKED: 'border-red-500 bg-red-50',
+  LIFE: 'border-pink-500 bg-pink-50',
   CAREER: 'border-blue-500 bg-blue-50',
   PROF_EDUCATION: 'border-purple-500 bg-purple-50',
   VENTURES: 'border-green-500 bg-green-50',
@@ -86,13 +53,12 @@ const statusColors = {
   TODO: 'border-blue-500 bg-blue-50',
 };
 
-const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger, onTasksLoaded, onTaskEdit }) => {
+const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEdit }) => {
   const { toast } = useToast();
   const { user, isDemoMode } = useAuth();
   const [loading, setLoading] = useState(true);
   const [board, setBoard] = useState<Board | null>(null);
   const [columns, setColumns] = useState<Column[]>([]);
-  const [tasks, setTasks] = useState<Task[]>([]);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isGeneratingSchedule, setIsGeneratingSchedule] = useState(false);
@@ -100,38 +66,29 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger, onTasksLoaded
   const [filteredTasks, setFilteredTasks] = useState<Task[]>([]);
   const [showFilters, setShowFilters] = useState(false);
 
-  const fetchBoardData = async () => {
+  const fetchBoardColumns = async () => {
     if (!user) return;
     
     setLoading(true);
-    console.log('Fetching board data for user:', user.id);
+    console.log('Fetching board columns for user:', user.id);
     
     // Handle demo mode - use localStorage
     if (isDemoMode) {
       try {
         const demoBoard = localStorage.getItem('kanban-demo-board');
         const demoColumns = localStorage.getItem('kanban-demo-columns');
-        const demoTasks = localStorage.getItem('kanban-demo-tasks');
 
         if (demoBoard && demoColumns) {
           const parsedBoard = JSON.parse(demoBoard);
           const parsedColumns = JSON.parse(demoColumns) as Column[];
-          const parsedTasks = JSON.parse(demoTasks || '[]') as Task[];
           
           setBoard(parsedBoard);
           setColumns(parsedColumns);
-          setTasks(parsedTasks);
-          
-          // Notify parent component about loaded tasks
-          if (onTasksLoaded && parsedTasks) {
-            onTasksLoaded(parsedTasks);
-          }
         } else {
           // Create demo data
           const result = await createDefaultBoardAndColumns(user.id);
           setBoard(result.board);
           setColumns(result.columns as Column[]);
-          setTasks([]);
         }
       } catch (error) {
         console.error('Error loading demo data:', error);
@@ -139,7 +96,6 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger, onTasksLoaded
         const result = await createDefaultBoardAndColumns(user.id);
         setBoard(result.board);
         setColumns(result.columns as Column[]);
-        setTasks([]);
       } finally {
         setLoading(false);
       }
@@ -167,7 +123,6 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger, onTasksLoaded
         const result = await createDefaultBoardAndColumns(user.id);
         setBoard(result.board);
         setColumns(result.columns as Column[]);
-        setTasks([]);
         return;
       }
 
@@ -192,41 +147,18 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger, onTasksLoaded
         const result = await createDefaultBoardAndColumns(user.id);
         setBoard(result.board);
         setColumns(result.columns as Column[]);
-        setTasks([]);
         return;
       }
 
       setColumns(columnsData as Column[]);
-
-      // Fetch tasks for this board
-      const { data: tasksData, error: tasksError } = await supabase
-        .from('tasks')
-        .select('*')
-        .eq('board_id', boardData.id)
-        .eq('user_id', user.id)
-        .order('created_at');
-
-      if (tasksError) {
-        console.error('Error fetching tasks:', tasksError);
-        throw tasksError;
-      }
-
-      console.log('Tasks data:', tasksData);
-      setTasks((tasksData || []) as Task[]);
-      
-      // Notify parent component about loaded tasks
-      if (onTasksLoaded && tasksData) {
-        onTasksLoaded(tasksData as Task[]);
-      }
       
     } catch (error) {
-      console.error('Error in fetchBoardData:', error);
+      console.error('Error in fetchBoardColumns:', error);
       // In case of any error, try to create default board
       try {
         const result = await createDefaultBoardAndColumns(user.id);
         setBoard(result.board);
         setColumns(result.columns as Column[]);
-        setTasks([]);
       } catch (createError) {
         console.error('Error creating default board:', createError);
       }
@@ -237,32 +169,42 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger, onTasksLoaded
 
   const handleStatusChange = async (taskId: string, newStatus: Task['status']) => {
     try {
-      const { error } = await supabase
-        .from('tasks')
-        .update({ 
-          status: newStatus,
-          completed_at: newStatus === 'DONE' ? new Date().toISOString() : null
-        })
-        .eq('id', taskId);
+      if (isDemoMode) {
+        // Update localStorage for demo mode
+        const demoTasks = localStorage.getItem('kanban-demo-tasks');
+        if (demoTasks) {
+          const tasks = JSON.parse(demoTasks);
+          const updatedTasks = tasks.map((task: Task) => 
+            task.id === taskId 
+              ? { ...task, status: newStatus, completed_at: newStatus === 'DONE' ? new Date().toISOString() : task.completed_at }
+              : task
+          );
+          localStorage.setItem('kanban-demo-tasks', JSON.stringify(updatedTasks));
+        }
+      } else {
+        const { error } = await supabase
+          .from('tasks')
+          .update({ 
+            status: newStatus,
+            completed_at: newStatus === 'DONE' ? new Date().toISOString() : null
+          })
+          .eq('id', taskId);
 
-      if (error) {
-        console.error('Error updating task status:', error);
-        toast({
-          title: "Error",
-          description: "Failed to update task status",
-          variant: "destructive",
-        });
-        return;
+        if (error) {
+          console.error('Error updating task status:', error);
+          toast({
+            title: "Error",
+            description: "Failed to update task status",
+            variant: "destructive",
+          });
+          return;
+        }
       }
 
-      // Update local state
-      setTasks(prevTasks => 
-        prevTasks.map(task => 
-          task.id === taskId 
-            ? { ...task, status: newStatus, completed_at: newStatus === 'DONE' ? new Date().toISOString() : task.completed_at }
-            : task
-        )
-      );
+      // Notify parent to reload tasks
+      if (onTaskUpdate) {
+        onTaskUpdate();
+      }
 
       toast({
         title: "Task updated",
@@ -299,11 +241,10 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger, onTasksLoaded
   };
 
   const handleTaskSave = (updatedTask: Task) => {
-    setTasks(prevTasks => 
-      prevTasks.map(task => 
-        task.id === updatedTask.id ? updatedTask : task
-      )
-    );
+    // Notify parent to reload tasks
+    if (onTaskUpdate) {
+      onTaskUpdate();
+    }
     setIsModalOpen(false);
     setSelectedTask(null);
   };
@@ -367,7 +308,10 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger, onTasksLoaded
   };
 
   const handleTasksCreated = (newTasks: Task[]) => {
-    setTasks(prev => [...newTasks, ...prev]);
+    // Notify parent to reload tasks
+    if (onTaskUpdate) {
+      onTaskUpdate();
+    }
   };
 
   const handleFilteredTasksChange = (filtered: Task[]) => {
@@ -403,14 +347,15 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger, onTasksLoaded
 
       const demoColumns = [
         { id: 'demo-col-1', name: 'Blocked', status: 'BLOCKED' as const, position: 0, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
-        { id: 'demo-col-2', name: 'Career', status: 'CAREER' as const, position: 1, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
-        { id: 'demo-col-3', name: 'Prof. Education', status: 'PROF_EDUCATION' as const, position: 2, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
-        { id: 'demo-col-4', name: 'Ventures', status: 'VENTURES' as const, position: 3, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
-        { id: 'demo-col-5', name: 'Planning', status: 'PLANNING' as const, position: 4, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
-        { id: 'demo-col-6', name: 'Ready', status: 'READY' as const, position: 5, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
-        { id: 'demo-col-7', name: 'Up Next', status: 'UP_NEXT' as const, position: 6, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
-        { id: 'demo-col-8', name: 'Doing', status: 'DOING' as const, position: 7, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
-        { id: 'demo-col-9', name: 'Done', status: 'DONE' as const, position: 8, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+        { id: 'demo-col-2', name: 'Life', status: 'LIFE' as const, position: 1, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+        { id: 'demo-col-3', name: 'Career', status: 'CAREER' as const, position: 2, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+        { id: 'demo-col-4', name: 'Prof. Education', status: 'PROF_EDUCATION' as const, position: 3, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+        { id: 'demo-col-5', name: 'Ventures', status: 'VENTURES' as const, position: 4, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+        { id: 'demo-col-6', name: 'Planning', status: 'PLANNING' as const, position: 5, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+        { id: 'demo-col-7', name: 'Ready', status: 'READY' as const, position: 6, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+        { id: 'demo-col-8', name: 'Up Next', status: 'UP_NEXT' as const, position: 7, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+        { id: 'demo-col-9', name: 'Doing', status: 'DOING' as const, position: 8, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+        { id: 'demo-col-10', name: 'Done', status: 'DONE' as const, position: 9, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
       ];
 
       // Save to localStorage
@@ -442,17 +387,18 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger, onTasksLoaded
 
       console.log('Board created successfully:', boardData);
 
-      // Create default columns with new 9-column structure
+      // Create default columns with new 10-column structure including LIFE
       const defaultColumns = [
         { name: 'Blocked', status: 'BLOCKED' as const, position: 0 },
-        { name: 'Career', status: 'CAREER' as const, position: 1 },
-        { name: 'Prof. Education', status: 'PROF_EDUCATION' as const, position: 2 },
-        { name: 'Ventures', status: 'VENTURES' as const, position: 3 },
-        { name: 'Planning', status: 'PLANNING' as const, position: 4 },
-        { name: 'Ready', status: 'READY' as const, position: 5 },
-        { name: 'Up Next', status: 'UP_NEXT' as const, position: 6 },
-        { name: 'Doing', status: 'DOING' as const, position: 7 },
-        { name: 'Done', status: 'DONE' as const, position: 8 }
+        { name: 'Life', status: 'LIFE' as const, position: 1 },
+        { name: 'Career', status: 'CAREER' as const, position: 2 },
+        { name: 'Prof. Education', status: 'PROF_EDUCATION' as const, position: 3 },
+        { name: 'Ventures', status: 'VENTURES' as const, position: 4 },
+        { name: 'Planning', status: 'PLANNING' as const, position: 5 },
+        { name: 'Ready', status: 'READY' as const, position: 6 },
+        { name: 'Up Next', status: 'UP_NEXT' as const, position: 7 },
+        { name: 'Doing', status: 'DOING' as const, position: 8 },
+        { name: 'Done', status: 'DONE' as const, position: 9 }
       ];
 
       const { data: columnsData, error: columnsError } = await supabase
@@ -503,13 +449,15 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger, onTasksLoaded
         updated_at: new Date().toISOString()
       };
 
-      // Update local state
-      setTasks(prev => [demoTask, ...prev]);
-
       // Save to localStorage
       const currentTasks = JSON.parse(localStorage.getItem('kanban-demo-tasks') || '[]');
       currentTasks.unshift(demoTask);
       localStorage.setItem('kanban-demo-tasks', JSON.stringify(currentTasks));
+
+      // Notify parent to reload tasks
+      if (onTaskUpdate) {
+        onTaskUpdate();
+      }
 
       toast({
         title: "Sample task added",
@@ -530,7 +478,11 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger, onTasksLoaded
         return;
       }
 
-      setTasks(prev => [data, ...prev]);
+      // Notify parent to reload tasks
+      if (onTaskUpdate) {
+        onTaskUpdate();
+      }
+      
       toast({
         title: "Sample task added",
         description: "Try using the voice assistant to create more tasks!",
@@ -541,227 +493,175 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ refreshTrigger, onTasksLoaded
   };
 
   useEffect(() => {
-    fetchBoardData();
-  }, [refreshTrigger]);
+    fetchBoardColumns();
+  }, [user, isDemoMode]);
 
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-96">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
+          <p className="text-muted-foreground">Loading board...</p>
+        </div>
       </div>
     );
   }
 
-  if (!board) {
+  if (!board || columns.length === 0) {
     return (
-      <div className="text-center py-12">
-        <p className="text-muted-foreground mb-4">No board found. Creating your default board...</p>
-        <Button onClick={fetchBoardData}>Retry</Button>
+      <div className="flex items-center justify-center min-h-96">
+        <div className="text-center space-y-4">
+          <h3 className="text-lg font-medium">No Board Found</h3>
+          <p className="text-muted-foreground">
+            Unable to load your task board. Please try refreshing the page.
+          </p>
+          <Button onClick={() => window.location.reload()}>
+            Refresh Page
+          </Button>
+        </div>
       </div>
     );
   }
-
-  const hasAnyTasks = tasks.length > 0;
 
   return (
     <div className="space-y-6">
       {/* Board Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">{board.name}</h1>
-          {board.description && (
-            <p className="text-muted-foreground mt-1">{board.description}</p>
-          )}
+          <h2 className="text-2xl font-bold tracking-tight text-foreground">
+            {board.name}
+          </h2>
+          <p className="text-muted-foreground">
+            {board.description}
+          </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button 
-            onClick={() => setShowFilters(!showFilters)}
+          <Button
             variant="outline"
             size="sm"
-            className={showFilters ? "bg-primary text-primary-foreground" : ""}
+            onClick={() => setShowFilters(!showFilters)}
           >
             <Filter className="h-4 w-4 mr-2" />
             Filters
           </Button>
-          <Button 
-            onClick={() => setIsCreationModalOpen(true)}
+          <Button
+            variant="outline"
             size="sm"
-            className="bg-primary hover:bg-primary/90"
+            onClick={() => setIsCreationModalOpen(true)}
           >
             <Wand2 className="h-4 w-4 mr-2" />
             AI Create
           </Button>
-          <Button 
+          <Button
+            variant="outline"
+            size="sm"
             onClick={generateDailySchedule}
             disabled={isGeneratingSchedule}
-            size="sm"
-            className="bg-productivity hover:bg-productivity/90 text-white"
           >
             <Calendar className="h-4 w-4 mr-2" />
-            {isGeneratingSchedule ? 'Generating...' : 'Schedule Tasks'}
+            {isGeneratingSchedule ? 'Generating...' : 'Schedule'}
           </Button>
-          <Button variant="outline" size="sm">
-            <MoreHorizontal className="h-4 w-4" />
+          <Button
+            size="sm"
+            onClick={addSampleTask}
+          >
+            <Plus className="h-4 w-4 mr-2" />
+            Add Sample
           </Button>
         </div>
       </div>
 
-      {/* Filters Panel */}
+      {/* Filters */}
       {showFilters && (
-        <div className="mb-4">
-          <TaskFilters
-            tasks={tasks}
-            onFilteredTasksChange={(filteredTasks) => setFilteredTasks(filteredTasks)}
-          />
-        </div>
-      )}
-
-      {/* Empty State */}
-      {!hasAnyTasks && (
-        <Card className="p-8 text-center border-dashed">
-          <div className="space-y-4">
-            <div className="mx-auto w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
-              <Plus className="h-6 w-6 text-primary" />
-            </div>
-            <div>
-              <h3 className="font-semibold text-lg mb-2">Ready to get productive?</h3>
-              <p className="text-muted-foreground mb-4">
-                Start by creating your first task. Try using the voice assistant below!
-              </p>
-              <div className="space-y-2 text-sm text-muted-foreground">
-                <p><strong>Voice prompts to try:</strong></p>
-                <p>"Add a task to review quarterly goals"</p>
-                <p>"Create a high priority task to finish the presentation"</p>
-                <p>"Add a task for EMBA homework due next week"</p>
-              </div>
-            </div>
-            <Button onClick={addSampleTask} variant="outline">
-              Add Sample Task
-            </Button>
-          </div>
-        </Card>
-      )}
-
-      {/* Kanban Columns with Drag & Drop */}
-      {hasAnyTasks && (
-        <DragDropContext onDragEnd={handleDragEnd}>
-          <div className="flex gap-4 overflow-x-auto pb-4">
-            {columns.map((column) => {
-              const columnTasks = getTasksByStatus(column.status);
-              
-              return (
-                <Card key={column.id} className={`${statusColors[column.status]} border-t-4 min-w-[280px]`}>
-                  <CardHeader className="pb-3">
-                    <div className="flex items-center justify-between">
-                      <CardTitle className="text-sm font-medium flex items-center gap-2">
-                        <span>{column.name}</span>
-                        <span className="text-xs bg-background/50 px-2 py-1 rounded-full">
-                          {columnTasks.length}
-                        </span>
-                      </CardTitle>
-                      <div className="flex items-center gap-1">
-                        <Button
-                          onClick={() => {
-                            setIsCreationModalOpen(true);
-                            // Set initial status when modal opens
-                            setTimeout(() => {
-                              const modal = document.querySelector('[role="dialog"]');
-                              if (modal) {
-                                const statusSelect = modal.querySelector('select[value]');
-                                if (statusSelect) {
-                                  (statusSelect as HTMLSelectElement).value = column.status;
-                                }
-                              }
-                            }, 100);
-                          }}
-                          variant="ghost"
-                          size="sm"
-                          className="h-6 w-6 p-0 hover:bg-background/80"
-                        >
-                          <Plus className="h-3 w-3" />
-                        </Button>
-                        <ColumnManager 
-                          column={column}
-                          taskCount={columnTasks.length}
-                          onColumnUpdate={(updatedColumn) => {
-                            setColumns(prev => prev.map(col => 
-                              col.id === updatedColumn.id ? updatedColumn : col
-                            ));
-                          }}
-                          onColumnArchive={(columnId) => {
-                            setColumns(prev => prev.filter(col => col.id !== columnId));
-                          }}
-                        />
-                      </div>
-                    </div>
-                  </CardHeader>
-                  <CardContent>
-                    <Droppable droppableId={column.id}>
-                      {(provided, snapshot) => (
-                        <div
-                          ref={provided.innerRef}
-                          {...provided.droppableProps}
-                          className={`space-y-3 min-h-[200px] transition-colors ${
-                            snapshot.isDraggingOver ? 'bg-muted/50 rounded-lg' : ''
-                          }`}
-                        >
-                          {columnTasks.map((task, index) => (
-                            <Draggable key={task.id} draggableId={task.id} index={index}>
-                              {(provided, snapshot) => (
-                                <div
-                                  ref={provided.innerRef}
-                                  {...provided.draggableProps}
-                                  {...provided.dragHandleProps}
-                                  className={`transition-transform ${
-                                    snapshot.isDragging ? 'rotate-2 scale-105' : ''
-                                  }`}
-                                >
-                                  <TaskCard
-                                    task={task}
-                                    onStatusChange={handleStatusChange}
-                                    onEdit={handleTaskEdit}
-                                  />
-                                </div>
-                              )}
-                            </Draggable>
-                          ))}
-                          {provided.placeholder}
-                          {columnTasks.length === 0 && (
-                            <div className="text-center py-8 text-muted-foreground text-xs">
-                              Drop tasks here or no tasks in {column.name.toLowerCase()}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </Droppable>
-                  </CardContent>
-                </Card>
-              );
-            })}
-          </div>
-        </DragDropContext>
-      )}
-      {/* Task Detail Modal */}
-      {selectedTask && (
-        <TaskDetailModal
-          task={selectedTask}
-          isOpen={isModalOpen}
-          onClose={() => {
-            setIsModalOpen(false);
-            setSelectedTask(null);
-          }}
-          onSave={handleTaskSave}
-          allTasks={tasks}
+        <TaskFilters
+          tasks={tasks}
+          onFilteredTasks={handleFilteredTasksChange}
         />
       )}
 
-      {/* Task Creation Modal */}
+      {/* Kanban Board */}
+      <DragDropContext onDragEnd={handleDragEnd}>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4 min-h-96">
+          {columns.map((column) => {
+            const columnTasks = getTasksByStatus(column.status);
+            return (
+              <div key={column.id} className="flex flex-col">
+                {/* Column Header */}
+                <ColumnManager
+                  column={column}
+                  taskCount={columnTasks.length}
+                  onColumnUpdate={handleColumnUpdate}
+                  onColumnArchive={handleColumnArchive}
+                />
+
+                {/* Tasks Container */}
+                <Droppable droppableId={column.id}>
+                  {(provided, snapshot) => (
+                    <div
+                      ref={provided.innerRef}
+                      {...provided.droppableProps}
+                      className={`
+                        flex-1 space-y-2 p-2 rounded-lg border-2 border-dashed transition-colors min-h-32
+                        ${snapshot.isDraggingOver 
+                          ? 'border-primary bg-primary/5' 
+                          : 'border-muted-foreground/20 bg-muted/10'
+                        }
+                        ${statusColors[column.status as keyof typeof statusColors]}
+                      `}
+                    >
+                      {columnTasks.map((task, index) => (
+                        <Draggable
+                          key={task.id}
+                          draggableId={task.id}
+                          index={index}
+                        >
+                          {(provided, snapshot) => (
+                            <div
+                              ref={provided.innerRef}
+                              {...provided.draggableProps}
+                              {...provided.dragHandleProps}
+                              className={snapshot.isDragging ? 'rotate-2 scale-105' : ''}
+                            >
+                              <TaskCard
+                                task={task}
+                                onEdit={handleTaskEdit}
+                                isDragging={snapshot.isDragging}
+                              />
+                            </div>
+                          )}
+                        </Draggable>
+                      ))}
+                      {provided.placeholder}
+                      
+                      {/* Empty State */}
+                      {columnTasks.length === 0 && (
+                        <div className="text-center py-8 text-muted-foreground">
+                          <Clock className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                          <p className="text-sm">No tasks</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </Droppable>
+              </div>
+            );
+          })}
+        </div>
+      </DragDropContext>
+
+      {/* Modals */}
+      <TaskDetailModal
+        task={selectedTask}
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        onSave={handleTaskSave}
+      />
+
       <TaskCreationModal
         isOpen={isCreationModalOpen}
         onClose={() => setIsCreationModalOpen(false)}
         onTasksCreated={handleTasksCreated}
-        boardId={board?.id || ''}
-        userId={user?.id || ''}
+        boardId={board.id}
       />
     </div>
   );
