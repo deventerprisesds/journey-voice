@@ -1,23 +1,69 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import KanbanBoard from '@/components/KanbanBoard';
 import GanttChart from '@/components/GanttChart';
+import TaskGridView from '@/components/TaskGridView';
 import ViewSwitcher, { ViewType } from '@/components/ViewSwitcher';
 import VoiceInterface from '@/components/VoiceInterface';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { LogOut, Settings, Crown, User } from 'lucide-react';
+import { supabase } from '@/integrations/supabase/client';
 
 const Dashboard = () => {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [currentView, setCurrentView] = useState<ViewType>('kanban');
   const [tasks, setTasks] = useState<any[]>([]);
   const [selectedTask, setSelectedTask] = useState<any>(null);
-  const { user, signOut, isAdmin } = useAuth();
+  const [loading, setLoading] = useState(true);
+  const { user, signOut, isAdmin, isDemoMode } = useAuth();
+
+  // Load tasks once at Dashboard level
+  useEffect(() => {
+    loadTasks();
+  }, [user, isDemoMode]);
+
+  const loadTasks = async () => {
+    if (!user) return;
+    
+    setLoading(true);
+    try {
+      if (isDemoMode) {
+        // Load from localStorage for demo mode
+        const demoTasks = localStorage.getItem('kanban-demo-tasks');
+        if (demoTasks) {
+          const parsedTasks = JSON.parse(demoTasks);
+          setTasks(parsedTasks);
+        } else {
+          setTasks([]);
+        }
+      } else {
+        // Load from Supabase for real mode
+        const { data, error } = await supabase
+          .from('tasks')
+          .select('*')
+          .eq('user_id', user.id)
+          .order('created_at');
+
+        if (error) {
+          console.error('Error loading tasks:', error);
+          setTasks([]);
+        } else {
+          setTasks(data || []);
+        }
+      }
+    } catch (error) {
+      console.error('Error in loadTasks:', error);
+      setTasks([]);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleTaskUpdate = () => {
     setRefreshTrigger(prev => prev + 1);
+    loadTasks(); // Reload tasks when updated
   };
 
   const handleTaskEdit = (task: any) => {
@@ -95,30 +141,47 @@ const Dashboard = () => {
 
       {/* Main Content */}
       <main className="container mx-auto px-4 py-8">
-        {currentView === 'kanban' && (
-          <KanbanBoard 
-            refreshTrigger={refreshTrigger}
-            onTasksLoaded={handleTasksLoaded}
-            onTaskEdit={handleTaskEdit}
-          />
-        )}
-        {currentView === 'gantt' && (
-          <GanttChart 
-            tasks={tasks}
-            onTaskEdit={handleTaskEdit}
-          />
-        )}
-        {currentView === 'timeline' && (
-          <div className="text-center py-12">
-            <h3 className="text-lg font-medium mb-2">Timeline View</h3>
-            <p className="text-muted-foreground">Timeline view coming soon...</p>
+        {loading ? (
+          <div className="flex items-center justify-center py-12">
+            <div className="text-center">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
+              <p className="text-muted-foreground">Loading tasks...</p>
+            </div>
           </div>
-        )}
-        {currentView === 'list' && (
-          <div className="text-center py-12">
-            <h3 className="text-lg font-medium mb-2">List View</h3>
-            <p className="text-muted-foreground">List view coming soon...</p>
-          </div>
+        ) : (
+          <>
+            {currentView === 'kanban' && (
+              <KanbanBoard 
+                refreshTrigger={refreshTrigger}
+                onTasksLoaded={handleTasksLoaded}
+                onTaskEdit={handleTaskEdit}
+              />
+            )}
+            {currentView === 'grid' && (
+              <TaskGridView 
+                tasks={tasks}
+                onTaskEdit={handleTaskEdit}
+              />
+            )}
+            {currentView === 'gantt' && (
+              <GanttChart 
+                tasks={tasks}
+                onTaskEdit={handleTaskEdit}
+              />
+            )}
+            {currentView === 'timeline' && (
+              <div className="text-center py-12">
+                <h3 className="text-lg font-medium mb-2">Timeline View</h3>
+                <p className="text-muted-foreground">Timeline view coming soon...</p>
+              </div>
+            )}
+            {currentView === 'list' && (
+              <div className="text-center py-12">
+                <h3 className="text-lg font-medium mb-2">List View</h3>
+                <p className="text-muted-foreground">List view coming soon...</p>
+              </div>
+            )}
+          </>
         )}
       </main>
 

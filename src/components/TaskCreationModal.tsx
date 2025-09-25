@@ -201,10 +201,10 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
       
       if (isDemoMode) {
         // For demo mode, store in localStorage
-        const demoTasks = JSON.parse(localStorage.getItem('demoTasks') || '[]');
+        const demoTasks = JSON.parse(localStorage.getItem('kanban-demo-tasks') || '[]');
         createdTasks = tasksWithMeta;
         demoTasks.push(...createdTasks);
-        localStorage.setItem('demoTasks', JSON.stringify(demoTasks));
+        localStorage.setItem('kanban-demo-tasks', JSON.stringify(demoTasks));
       } else {
         // For real mode, use Supabase
         const { data, error } = await supabase

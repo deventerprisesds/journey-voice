@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-export type ViewType = 'kanban' | 'gantt' | 'timeline' | 'list';
+export type ViewType = 'kanban' | 'grid' | 'gantt' | 'timeline' | 'list';
 
 interface ViewSwitcherProps {
   currentView: ViewType;
@@ -23,6 +23,12 @@ const viewOptions = [
     label: 'Board',
     icon: LayoutGrid,
     description: 'Kanban-style task board'
+  },
+  {
+    value: 'grid' as ViewType,
+    label: 'Grid',
+    icon: List,
+    description: 'Structured table view'
   },
   {
     value: 'gantt' as ViewType,
