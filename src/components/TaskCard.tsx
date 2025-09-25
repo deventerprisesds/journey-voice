@@ -39,17 +39,31 @@ interface TaskCardProps {
 }
 
 const statusIcons = {
-  BACKLOG: Circle,
-  TODO: Circle,
+  BLOCKED: AlertTriangle,
+  CAREER: Briefcase,
+  PROF_EDUCATION: BookOpen,
+  VENTURES: Rocket,
+  PLANNING: Calendar,
+  READY: Circle,
+  UP_NEXT: Play,
   DOING: Play,
   DONE: CheckCircle2,
+  BACKLOG: Circle,
+  TODO: Circle,
 };
 
 const statusColors = {
-  BACKLOG: 'bg-status-backlog text-muted-foreground',
-  TODO: 'bg-status-todo text-white',
-  DOING: 'bg-status-doing text-white',
-  DONE: 'bg-status-done text-white',
+  BLOCKED: 'bg-red-500 text-white',
+  CAREER: 'bg-blue-500 text-white', 
+  PROF_EDUCATION: 'bg-green-500 text-white',
+  VENTURES: 'bg-purple-500 text-white',
+  PLANNING: 'bg-yellow-500 text-white',
+  READY: 'bg-cyan-500 text-white',
+  UP_NEXT: 'bg-orange-500 text-white',
+  DOING: 'bg-indigo-500 text-white',
+  DONE: 'bg-emerald-500 text-white',
+  BACKLOG: 'bg-gray-500 text-white',
+  TODO: 'bg-slate-500 text-white',
 };
 
 const priorityColors = {
@@ -107,10 +121,17 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onStatusChange, onEdit }) => 
     if (!onStatusChange) return;
     
     const statusFlow = {
-      BACKLOG: 'TODO',
-      TODO: 'DOING',
+      BLOCKED: 'PLANNING',
+      CAREER: 'PLANNING', 
+      PROF_EDUCATION: 'PLANNING',
+      VENTURES: 'PLANNING',
+      PLANNING: 'READY',
+      READY: 'UP_NEXT',
+      UP_NEXT: 'DOING',
       DOING: 'DONE',
-      DONE: 'TODO',
+      DONE: 'BLOCKED',
+      BACKLOG: 'READY',
+      TODO: 'DOING',
     } as const;
     
     onStatusChange(task.id, statusFlow[task.status] as Task['status']);
