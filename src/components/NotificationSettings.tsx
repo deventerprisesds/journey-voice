@@ -189,7 +189,7 @@ const NotificationSettings: React.FC = () => {
             quiet_hours_start: formatTime(prefs.quiet_hours_start),
             quiet_hours_end: formatTime(prefs.quiet_hours_end),
             timezone: prefs.timezone,
-            channels: prefs.channels.filter(c => c !== 'SLACK') // Exclude SLACK from database
+            channels: prefs.channels // Include all channels including SLACK
           }], {
             onConflict: 'user_id'
           });

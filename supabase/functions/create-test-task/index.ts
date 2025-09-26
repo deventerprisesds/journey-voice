@@ -123,7 +123,7 @@ serve(async (req) => {
         user_id: userId,
         priority: 'MEDIUM',
         category: 'LIFE',
-        status: 'TODO',
+        status: 'BACKLOG',
         due_date: dueDate.toISOString(),
         estimate_minutes: 15
       })

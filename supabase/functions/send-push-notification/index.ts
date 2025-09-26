@@ -29,36 +29,25 @@ serve(async (req) => {
   try {
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-      {
-        global: {
-          headers: { Authorization: req.headers.get('Authorization')! },
-        },
-      }
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
-    // Get the user from the request
-    const {
-      data: { user },
-      error: userError,
-    } = await supabaseClient.auth.getUser();
+    const payload: NotificationPayload = await req.json();
+    console.log('Sending notification to all channels:', payload);
 
-    if (userError || !user) {
-      console.error('Authentication error:', userError);
+    // Require userId in payload since we're running without user auth
+    if (!payload.userId) {
+      console.error('Missing userId in payload');
       return new Response(
-        JSON.stringify({ error: 'Unauthorized' }),
+        JSON.stringify({ error: 'userId is required in payload' }),
         {
-          status: 401,
+          status: 400,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         }
       );
     }
 
-    const payload: NotificationPayload = await req.json();
-    console.log('Sending notification to all channels:', payload);
-
-    // Determine target user (use provided userId or current user)
-    const targetUserId = payload.userId || user.id;
+    const targetUserId = payload.userId;
 
     // Get user's notification preferences
     const { data: prefs, error: prefsError } = await supabaseClient
