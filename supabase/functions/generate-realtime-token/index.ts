@@ -122,8 +122,34 @@ Always confirm actions you take and provide helpful feedback about task manageme
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('OpenAI API error:', errorText);
-      throw new Error(`OpenAI API error: ${response.status} ${errorText}`);
+      console.error('OpenAI API error:', response.status, errorText);
+
+      // Parse OpenAI error details
+      let errorDetails = { type: 'unknown', message: errorText };
+      try {
+        const errorJson = JSON.parse(errorText);
+        if (errorJson.error) {
+          errorDetails = {
+            type: errorJson.error.type || 'unknown',
+            code: errorJson.error.code || null,
+            message: errorJson.error.message || errorText,
+            param: errorJson.error.param || null
+          };
+        }
+      } catch (parseError) {
+        console.warn('Could not parse OpenAI error response:', parseError);
+      }
+
+      // Return structured error for client handling
+      return new Response(JSON.stringify({ 
+        error: 'openai_api_error',
+        details: errorDetails,
+        status: response.status,
+        timestamp: new Date().toISOString()
+      }), {
+        status: response.status,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
     const data = await response.json();

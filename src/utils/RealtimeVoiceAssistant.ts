@@ -205,8 +205,45 @@ export class RealtimeVoiceAssistant {
       // Get ephemeral token from our Supabase Edge Function
       const { data, error } = await supabase.functions.invoke('generate-realtime-token');
       
-      if (error || !data?.client_secret?.value) {
+      if (error || !data) {
+        // Handle structured errors from edge function
+        if (data?.error === 'openai_api_error') {
+          const details = data.details;
+          let errorMessage = 'OpenAI API Error';
+          let errorType = 'api_error';
+
+          switch (details?.type) {
+            case 'insufficient_quota':
+              errorMessage = 'OpenAI quota exceeded. Please check your billing settings.';
+              errorType = 'quota_exceeded';
+              break;
+            case 'invalid_api_key':
+              errorMessage = 'Invalid OpenAI API key. Please check your configuration.';
+              errorType = 'invalid_key';
+              break;
+            case 'rate_limit_exceeded':
+              errorMessage = 'OpenAI rate limit exceeded. Please try again later.';
+              errorType = 'rate_limit';
+              break;
+            case 'model_not_found':
+              errorMessage = 'Model not available. Please contact support.';
+              errorType = 'model_error';
+              break;
+            default:
+              errorMessage = details?.message || 'Failed to connect to OpenAI API';
+          }
+
+          const enhancedError = new Error(errorMessage);
+          (enhancedError as any).type = errorType;
+          (enhancedError as any).details = details;
+          throw enhancedError;
+        }
+        
         throw new Error(error?.message || 'Failed to get ephemeral token');
+      }
+
+      if (!data?.client_secret?.value) {
+        throw new Error('Invalid token response from server');
       }
 
       const EPHEMERAL_KEY = data.client_secret.value;
@@ -280,7 +317,22 @@ export class RealtimeVoiceAssistant {
       });
 
       if (!sdpResponse.ok) {
-        throw new Error(`WebRTC connection failed: ${sdpResponse.status}`);
+        const errorText = await sdpResponse.text();
+        console.error('WebRTC SDP negotiation failed:', sdpResponse.status, errorText);
+        
+        let errorMessage = `WebRTC connection failed (${sdpResponse.status})`;
+        if (sdpResponse.status === 401) {
+          errorMessage = 'Authentication failed. Token may be invalid or expired.';
+        } else if (sdpResponse.status === 429) {
+          errorMessage = 'Rate limit exceeded. Please try again later.';
+        } else if (sdpResponse.status >= 500) {
+          errorMessage = 'OpenAI service unavailable. Please try again later.';
+        }
+        
+        const connectionError = new Error(errorMessage);
+        (connectionError as any).type = 'webrtc_error';
+        (connectionError as any).status = sdpResponse.status;
+        throw connectionError;
       }
 
       const answer = {

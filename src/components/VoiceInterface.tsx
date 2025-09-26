@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
-import { useToast } from '@/components/ui/use-toast';
+import { useToast } from '@/hooks/use-toast';
 import { RealtimeVoiceAssistant } from '@/utils/RealtimeVoiceAssistant';
 import { Mic, MicOff, Volume2 } from 'lucide-react';
+import ConnectionStatus from '@/components/ConnectionStatus';
 
 interface VoiceInterfaceProps {
   onTaskUpdate?: () => void;
@@ -16,6 +17,8 @@ const VoiceInterface: React.FC<VoiceInterfaceProps> = ({ onTaskUpdate }) => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingStatus, setProcessingStatus] = useState<string>('');
   const [messages, setMessages] = useState<any[]>([]);
+  const [connectionError, setConnectionError] = useState<{ type?: string; message: string } | null>(null);
+  const [retryAttempts, setRetryAttempts] = useState(0);
   const assistantRef = useRef<RealtimeVoiceAssistant | null>(null);
 
   const handleMessage = (message: any) => {
@@ -87,7 +90,10 @@ const VoiceInterface: React.FC<VoiceInterfaceProps> = ({ onTaskUpdate }) => {
 
   const handleConnectionChange = (connected: boolean) => {
     setIsConnected(connected);
-    if (!connected) {
+    if (connected) {
+      setConnectionError(null);
+      setRetryAttempts(0);
+    } else {
       setIsListening(false);
       setIsSpeaking(false);
     }
@@ -119,20 +125,51 @@ const VoiceInterface: React.FC<VoiceInterfaceProps> = ({ onTaskUpdate }) => {
         } catch (error) {
           console.error('Error connecting to voice assistant:', error);
           
-          // Check if it's a quota error
-          if (error instanceof Error && error.message.includes('insufficient_quota')) {
-            toast({
-              title: "OpenAI Quota Exceeded",
-              description: "Your OpenAI API quota has been exceeded. Please check your OpenAI billing settings.",
-              variant: "destructive",
-            });
-          } else {
-            toast({
-              title: "Connection Error",
-              description: error instanceof Error ? error.message : 'Failed to connect to voice assistant',
-              variant: "destructive",
-            });
+          // Handle different error types with specific guidance
+          const errorType = (error as any)?.type;
+          const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+          
+          // Set connection error state for status component
+          setConnectionError({
+            type: errorType,
+            message: errorMessage
+          });
+          
+          let title = "Connection Error";
+          let description = errorMessage;
+          
+          switch (errorType) {
+            case 'quota_exceeded':
+              title = "OpenAI Quota Exceeded";
+              description = "Your OpenAI API quota has been exceeded. Check your billing settings at platform.openai.com and ensure you have sufficient credits.";
+              break;
+            case 'invalid_key':
+              title = "Invalid API Key";
+              description = "Your OpenAI API key is invalid or has been revoked. Please update your API key in the project settings.";
+              break;
+            case 'rate_limit':
+              title = "Rate Limit Exceeded";
+              description = "Too many requests to OpenAI. Please wait a moment and try again.";
+              setRetryAttempts(prev => prev + 1);
+              break;
+            case 'webrtc_error':
+              title = "Connection Failed";
+              description = `Failed to establish voice connection: ${errorMessage}`;
+              break;
+            case 'model_error':
+              title = "Model Unavailable";
+              description = "The voice model is currently unavailable. Please contact support if this persists.";
+              break;
+            default:
+              title = "Connection Error";
+              description = `Failed to connect: ${errorMessage}`;
           }
+
+          toast({
+            title,
+            description,
+            variant: "destructive",
+          });
         }
   };
 
@@ -158,6 +195,25 @@ const VoiceInterface: React.FC<VoiceInterfaceProps> = ({ onTaskUpdate }) => {
   const disconnectAssistant = () => {
     assistantRef.current?.disconnect();
     assistantRef.current = null;
+    setConnectionError(null);
+  };
+
+  const testConnection = async () => {
+    if (assistantRef.current && isConnected) {
+      try {
+        await assistantRef.current.sendTextMessage("Test connection");
+        toast({
+          title: "Connection Test",
+          description: "Voice assistant is responding normally",
+        });
+      } catch (error) {
+        toast({
+          title: "Connection Test Failed",
+          description: error instanceof Error ? error.message : 'Test failed',
+          variant: "destructive",
+        });
+      }
+    }
   };
 
   useEffect(() => {
@@ -169,6 +225,20 @@ const VoiceInterface: React.FC<VoiceInterfaceProps> = ({ onTaskUpdate }) => {
   return (
     <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50">
       <div className="flex flex-col items-center gap-4">
+        
+        {/* Connection Status */}
+        <div className="w-full max-w-md">
+          <ConnectionStatus
+            status={
+              connectionError ? 'error' : 
+              isConnected ? 'connected' : 
+              'disconnected'
+            }
+            error={connectionError}
+            onRetry={connectToAssistant}
+            onTestConnection={isConnected ? testConnection : undefined}
+          />
+        </div>
         {/* Status indicator */}
         <div className="text-center">
           {isProcessing && (
