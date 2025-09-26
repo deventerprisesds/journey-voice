@@ -28,22 +28,22 @@ const VoiceAssistantButton: React.FC = () => {
     const getButtonState = () => {
       if (!isConnected) {
         return {
-          className: "bg-muted hover:bg-muted/80 text-muted-foreground",
+          className: "bg-gradient-to-r from-muted to-muted hover:from-muted/80 hover:to-muted/80 text-muted-foreground shadow-lg hover:shadow-xl",
           icon: <Mic className="w-5 h-5" />,
         };
       } else if (isListening) {
         return {
-          className: "bg-destructive hover:bg-destructive/90 text-white animate-pulse-voice",
+          className: "bg-destructive hover:bg-destructive/90 text-white animate-pulse-voice shadow-lg hover:shadow-xl",
           icon: <MicOff className="w-5 h-5" />,
         };
       } else if (isProcessing) {
         return {
-          className: "bg-focus hover:bg-focus/90 text-white",
+          className: "bg-gradient-to-r from-focus to-focus-light hover:from-focus-dark hover:to-focus text-white shadow-lg hover:shadow-xl",
           icon: <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />,
         };
       } else {
         return {
-          className: "bg-primary hover:bg-primary/90 text-white shadow-glow",
+          className: "bg-gradient-to-r from-focus to-focus-light hover:from-focus-dark hover:to-focus text-white shadow-lg hover:shadow-xl",
           icon: <Mic className="w-5 h-5" />,
         };
       }
@@ -54,8 +54,8 @@ const VoiceAssistantButton: React.FC = () => {
     return (
       <Button
         onClick={handleClick}
-        size="icon"
-        className={`w-10 h-10 rounded-full transition-all duration-300 ${buttonState.className}`}
+        size="lg"
+        className={`rounded-full transition-all duration-300 ${buttonState.className}`}
         disabled={isProcessing}
       >
         {buttonState.icon}
@@ -65,8 +65,8 @@ const VoiceAssistantButton: React.FC = () => {
     console.error('VoiceAssistantButton error:', error);
     return (
       <Button
-        size="icon"
-        className="w-10 h-10 rounded-full bg-muted hover:bg-muted/80 text-muted-foreground"
+        size="lg"
+        className="rounded-full bg-gradient-to-r from-muted to-muted hover:from-muted/80 hover:to-muted/80 text-muted-foreground shadow-lg hover:shadow-xl transition-all duration-300"
         onClick={() => console.log('Voice assistant context error')}
       >
         <Mic className="w-5 h-5" />
