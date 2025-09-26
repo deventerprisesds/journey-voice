@@ -582,25 +582,53 @@ export class RealtimeVoiceAssistant {
       // UI status: creating task
       this.onMessage?.({ type: 'client.processing', status: 'Creating task...' });
 
-      // First try to find an existing default board
+      const userId = (await supabase.auth.getUser()).data.user?.id;
+      if (!userId) {
+        throw new Error('User not authenticated');
+      }
+
+      console.log('Looking for user boards...');
+
+      // First try to find user's default board
       let { data: defaultBoard, error } = await supabase
         .from('boards')
-        .select('id')
+        .select('id, name')
+        .eq('user_id', userId)
         .eq('is_default', true)
         .maybeSingle();
 
       if (error) {
+        console.error('Error finding default board:', error);
         throw new Error(`Database error: ${error.message}`);
       }
 
-      // If no default board exists, create one
+      // If no default board, find any user board
       if (!defaultBoard) {
-        console.log('No default board found, creating one...');
+        console.log('No default board found, looking for any user board...');
         
-        const userId = (await supabase.auth.getUser()).data.user?.id;
-        if (!userId) {
-          throw new Error('User not authenticated');
+        const { data: anyBoard, error: anyBoardError } = await supabase
+          .from('boards')
+          .select('id, name')
+          .eq('user_id', userId)
+          .limit(1)
+          .maybeSingle();
+
+        if (anyBoardError) {
+          console.error('Error finding any board:', anyBoardError);
+          throw new Error(`Database error: ${anyBoardError.message}`);
         }
+
+        if (anyBoard) {
+          console.log('Found existing board:', anyBoard.name);
+          defaultBoard = anyBoard;
+        }
+      } else {
+        console.log('Found default board:', defaultBoard.name);
+      }
+
+      // Only create a new board if user has no boards at all
+      if (!defaultBoard) {
+        console.log('No boards found for user, creating new default board...');
         
         const { data: newBoard, error: createError } = await supabase
           .from('boards')
@@ -610,15 +638,16 @@ export class RealtimeVoiceAssistant {
             is_default: true,
             user_id: userId
           })
-          .select('id')
+          .select('id, name')
           .single();
 
         if (createError) {
+          console.error('Failed to create board:', createError);
           throw new Error(`Failed to create default board: ${createError.message}`);
         }
 
         defaultBoard = newBoard;
-        console.log('Created default board:', defaultBoard);
+        console.log('Created default board:', defaultBoard.name);
 
         // Create default columns for the new board
         const defaultColumns = [
@@ -639,7 +668,6 @@ export class RealtimeVoiceAssistant {
 
         if (columnsError) {
           console.warn('Failed to create default columns:', columnsError);
-          // Don't throw error, board creation is more important than columns
         } else {
           console.log('Created default columns for board');
         }
