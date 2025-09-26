@@ -178,17 +178,27 @@ serve(async (req) => {
 async function generateTaskReminders(supabaseClient: any, task: any, now: Date) {
   const reminders = [];
   const dueDate = new Date(task.due_date);
+  
+  // Calculate time until due to determine appropriate reminder timing
+  const timeUntilDue = dueDate.getTime() - now.getTime();
+  const minutesUntilDue = Math.floor(timeUntilDue / (1000 * 60));
 
-  // 15 minutes before due date reminder
-  const fifteenMinutesBefore = new Date(dueDate.getTime() - 15 * 60 * 1000);
-  if (fifteenMinutesBefore > now) {
+  // For short-term tasks (< 30 minutes), remind 2 minutes before
+  // For longer tasks, remind 15 minutes before
+  let reminderMinutesBefore = 15;
+  if (minutesUntilDue <= 30) {
+    reminderMinutesBefore = Math.max(2, Math.floor(minutesUntilDue * 0.4)); // 40% of time before, min 2 minutes
+  }
+
+  const reminderTime = new Date(dueDate.getTime() - reminderMinutesBefore * 60 * 1000);
+  if (reminderTime > now) {
     reminders.push({
       user_id: task.user_id,
       task_id: task.id,
-      notification_type: 'due_reminder_15min',
-      title: 'Task Due in 15 Minutes',
-      body: `"${task.title}" is due in 15 minutes`,
-      scheduled_for: fifteenMinutesBefore.toISOString()
+      notification_type: `due_reminder_${reminderMinutesBefore}min`,
+      title: `Task Due in ${reminderMinutesBefore} Minutes`,
+      body: `"${task.title}" is due in ${reminderMinutesBefore} minutes`,
+      scheduled_for: reminderTime.toISOString()
     });
   }
 

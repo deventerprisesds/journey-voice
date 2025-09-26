@@ -806,10 +806,11 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
                                         {...provided.dragHandleProps}
                                         className={snapshot.isDragging ? 'rotate-2 scale-105' : ''}
                                       >
-                                        <TaskCard
-                                          task={task}
-                                          onEdit={handleTaskEdit}
-                                        />
+                                         <TaskCard
+                                           task={task}
+                                           onEdit={handleTaskEdit}
+                                           onStatusChange={handleStatusChange}
+                                         />
                                       </div>
                                     )}
                                   </Draggable>

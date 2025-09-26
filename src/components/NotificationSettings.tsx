@@ -85,20 +85,25 @@ const NotificationSettings: React.FC = () => {
       
       if (savedPrefs) {
         const parsedPrefs = JSON.parse(savedPrefs);
+        // Filter out SLACK from database channels, handle separately
+        const dbChannels = parsedPrefs.channels?.filter((c: string) => c !== 'SLACK') || ['WEB_PUSH', 'IN_APP'];
+        const channels = slackWebhook ? [...dbChannels, 'SLACK'] : dbChannels;
+        
         setPrefs(prev => ({
           ...prev,
           ...parsedPrefs,
-          slack_webhook_url: slackWebhook || parsedPrefs.slack_webhook_url || '',
-          // Ensure SLACK channel is included if webhook exists and was previously enabled
-          channels: parsedPrefs.channels && Array.isArray(parsedPrefs.channels) 
-            ? parsedPrefs.channels 
-            : prev.channels
+          slack_webhook_url: slackWebhook || '',
+          channels
         }));
       } else {
-        // Just load Slack webhook if no other prefs saved
+        // Set default channels, add SLACK if webhook exists
+        const defaultChannels: NotificationChannel[] = ['WEB_PUSH', 'IN_APP'];
+        if (slackWebhook) defaultChannels.push('SLACK');
+        
         setPrefs(prev => ({
           ...prev,
-          slack_webhook_url: slackWebhook || ''
+          slack_webhook_url: slackWebhook || '',
+          channels: defaultChannels
         }));
       }
     } catch (error) {
@@ -131,11 +136,9 @@ const NotificationSettings: React.FC = () => {
       const slackWebhook = localStorage.getItem('slack_webhook_url') || '';
 
       if (prefsResponse.data) {
-        const dbChannels = (prefsResponse.data.channels as NotificationChannel[]) || ['WEB_PUSH', 'IN_APP'];
-        // Add SLACK to channels if webhook exists
-        const channels: NotificationChannel[] = slackWebhook && !dbChannels.includes('SLACK') 
-          ? [...dbChannels, 'SLACK'] 
-          : dbChannels;
+        const dbChannels = (prefsResponse.data.channels as Exclude<NotificationChannel, 'SLACK'>[]) || ['WEB_PUSH', 'IN_APP'];
+        // Add SLACK to channels if webhook exists, but keep it separate from DB
+        const channels: NotificationChannel[] = slackWebhook ? [...dbChannels, 'SLACK'] : dbChannels;
           
         setPrefs({
           due_reminders_enabled: prefsResponse.data.due_reminders_enabled,
@@ -153,9 +156,7 @@ const NotificationSettings: React.FC = () => {
       } else {
         // Set default channels, including SLACK if webhook exists
         const defaultChannels: NotificationChannel[] = ['WEB_PUSH', 'IN_APP'];
-        if (slackWebhook) {
-          defaultChannels.push('SLACK');
-        }
+        if (slackWebhook) defaultChannels.push('SLACK');
         
         // Set default email if no preferences exist yet
         setPrefs(prev => ({ 
@@ -179,8 +180,12 @@ const NotificationSettings: React.FC = () => {
     }
 
     if (!user || isDemoMode) {
-      // For demo mode, just save to localStorage
-      localStorage.setItem('demo-notification-prefs', JSON.stringify(prefs));
+      // For demo mode, save to localStorage but filter out SLACK for consistency
+      const prefsToSave = {
+        ...prefs,
+        channels: prefs.channels.filter(c => c !== 'SLACK')
+      };
+      localStorage.setItem('demo-notification-prefs', JSON.stringify(prefsToSave));
       toast({
         title: "Settings saved",
         description: "Your notification preferences have been updated",
