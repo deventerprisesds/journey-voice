@@ -12,6 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import { LogOut, Settings, Crown, User } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 
+// Force rebuild - removed VoiceInterface references
 const Dashboard = () => {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [currentView, setCurrentView] = useState<ViewType>('kanban');
