@@ -671,31 +671,7 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <div style={{
-            border: '3px solid red', 
-            padding: '8px', 
-            backgroundColor: 'yellow',
-            fontSize: '12px',
-            color: 'black'
-          }}>
-            DEBUG: KanbanBoard Header Rendered
-            <button 
-              style={{
-                width: '40px', 
-                height: '40px', 
-                borderRadius: '50%', 
-                backgroundColor: '#3B82F6',
-                color: 'white',
-                border: 'none',
-                cursor: 'pointer',
-                marginLeft: '8px'
-              }}
-              onClick={() => alert('Simple button works!')}
-            >
-              🎤
-            </button>
-            <VoiceAssistantButton />
-          </div>
+          <VoiceAssistantButton />
           <AddColumnModal
             boardId={board.id} 
             onColumnCreated={fetchBoardColumns}

@@ -4,8 +4,6 @@ import { Mic, MicOff } from 'lucide-react';
 import { useVoiceAssistant } from '@/contexts/VoiceAssistantContext';
 
 const VoiceAssistantButton: React.FC = () => {
-  console.log('VoiceAssistantButton rendering'); // Debug log
-  
   try {
     const {
       isConnected,
@@ -14,8 +12,6 @@ const VoiceAssistantButton: React.FC = () => {
       connectToAssistant,
       toggleListening,
     } = useVoiceAssistant();
-
-    console.log('Voice Assistant State:', { isConnected, isListening, isProcessing }); // Debug log
 
     const handleClick = async () => {
       if (!isConnected) {

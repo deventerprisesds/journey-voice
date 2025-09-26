@@ -21,19 +21,16 @@ const VoiceStatusArea: React.FC = () => {
     <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50">
       <div className="flex flex-col items-center gap-4">
         
-        {/* Connection Status */}
-        <div className="w-full max-w-md">
-          <ConnectionStatus
-            status={
-              connectionError ? 'error' : 
-              isConnected ? 'connected' : 
-              'disconnected'
-            }
-            error={connectionError}
-            onRetry={connectToAssistant}
-            onTestConnection={isConnected ? testConnection : undefined}
-          />
-        </div>
+        {/* Connection Status - only show on error */}
+        {connectionError && (
+          <div className="w-full max-w-md">
+            <ConnectionStatus
+              status="error"
+              error={connectionError}
+              onRetry={connectToAssistant}
+            />
+          </div>
+        )}
 
         {/* Status indicators */}
         <div className="text-center">
