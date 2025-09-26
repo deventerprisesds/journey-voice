@@ -499,8 +499,99 @@ const NotificationSettings: React.FC = () => {
         </CardContent>
       </Card>
 
-      {/* Save Button */}
-      <div className="flex justify-end">
+      {/* Testing Section */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm flex items-center gap-2">
+            <TestTube className="h-4 w-4" />
+            Test Notifications
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-xs text-muted-foreground">
+            Test different notification scenarios to ensure everything is working properly
+          </p>
+          
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={sendTestNotification}
+              disabled={!subscription}
+              className="flex items-center gap-2"
+            >
+              <Bell className="h-3 w-3" />
+              Test Push Notification
+            </Button>
+            
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                toast({
+                  title: "Test In-App Notification",
+                  description: "This is how in-app notifications will appear",
+                });
+              }}
+              className="flex items-center gap-2"
+            >
+              <Volume2 className="h-3 w-3" />
+              Test In-App Alert
+            </Button>
+            
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!prefs.channels.includes('EMAIL') || !prefs.email_address}
+              className="flex items-center gap-2"
+            >
+              <Mail className="h-3 w-3" />
+              Test Email
+            </Button>
+            
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                const now = new Date();
+                const quietStart = prefs.quiet_hours_start;
+                const quietEnd = prefs.quiet_hours_end;
+                const currentTime = now.toTimeString().substring(0, 5);
+                
+                const isInQuietHours = quietStart > quietEnd 
+                  ? currentTime >= quietStart || currentTime <= quietEnd
+                  : currentTime >= quietStart && currentTime <= quietEnd;
+                
+                toast({
+                  title: "Quiet Hours Check",
+                  description: isInQuietHours 
+                    ? "You are currently in quiet hours - notifications are paused"
+                    : "You are outside quiet hours - notifications are active",
+                  variant: isInQuietHours ? "default" : "default"
+                });
+              }}
+              className="flex items-center gap-2"
+            >
+              <Clock className="h-3 w-3" />
+              Test Quiet Hours
+            </Button>
+          </div>
+          
+          {!subscription && (
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+              <p className="text-sm text-amber-800">
+                Push notification testing requires an active subscription. Enable push notifications above to test.
+              </p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Save Settings Button */}
+      <div className="flex justify-between items-center">
+        <div className="text-xs text-muted-foreground">
+          Changes are saved automatically when you click "Save Settings"
+        </div>
         <Button 
           onClick={saveNotificationPrefs}
           disabled={isSaving}

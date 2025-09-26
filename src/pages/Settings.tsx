@@ -1,5 +1,5 @@
 import React from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
@@ -8,13 +8,16 @@ import {
   Bell, 
   User, 
   Palette, 
-  Shield 
+  Shield,
+  ArrowLeft,
+  Home
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import NotificationSettings from '@/components/NotificationSettings';
 
 const Settings: React.FC = () => {
   const { user } = useAuth();
+  const navigate = useNavigate();
 
   // Redirect to auth if not logged in
   if (!user) {
@@ -32,9 +35,30 @@ const Settings: React.FC = () => {
   }
   return (
     <div className="container mx-auto px-4 py-6 max-w-4xl">
-      <div className="flex items-center gap-2 mb-6">
-        <SettingsIcon className="h-6 w-6" />
-        <h1 className="text-2xl font-bold">Settings</h1>
+      {/* Navigation Header */}
+      <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center gap-4">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => navigate('/dashboard')}
+            className="flex items-center gap-2"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Back to Dashboard
+          </Button>
+          <div className="flex items-center gap-2">
+            <SettingsIcon className="h-6 w-6" />
+            <h1 className="text-2xl font-bold">Settings</h1>
+          </div>
+        </div>
+        <Button
+          onClick={() => navigate('/dashboard')}
+          className="flex items-center gap-2"
+        >
+          <Home className="h-4 w-4" />
+          Done
+        </Button>
       </div>
 
       <Tabs defaultValue="notifications" className="w-full">
