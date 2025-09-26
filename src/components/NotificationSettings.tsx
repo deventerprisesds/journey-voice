@@ -88,7 +88,11 @@ const NotificationSettings: React.FC = () => {
         setPrefs(prev => ({
           ...prev,
           ...parsedPrefs,
-          slack_webhook_url: slackWebhook || parsedPrefs.slack_webhook_url || ''
+          slack_webhook_url: slackWebhook || parsedPrefs.slack_webhook_url || '',
+          // Ensure SLACK channel is included if webhook exists and was previously enabled
+          channels: parsedPrefs.channels && Array.isArray(parsedPrefs.channels) 
+            ? parsedPrefs.channels 
+            : prev.channels
         }));
       } else {
         // Just load Slack webhook if no other prefs saved
@@ -124,8 +128,15 @@ const NotificationSettings: React.FC = () => {
       }
 
       const userEmail = profileResponse.data?.email || user?.email || '';
+      const slackWebhook = localStorage.getItem('slack_webhook_url') || '';
 
       if (prefsResponse.data) {
+        const dbChannels = (prefsResponse.data.channels as NotificationChannel[]) || ['WEB_PUSH', 'IN_APP'];
+        // Add SLACK to channels if webhook exists
+        const channels: NotificationChannel[] = slackWebhook && !dbChannels.includes('SLACK') 
+          ? [...dbChannels, 'SLACK'] 
+          : dbChannels;
+          
         setPrefs({
           due_reminders_enabled: prefsResponse.data.due_reminders_enabled,
           overdue_reminders_enabled: prefsResponse.data.overdue_reminders_enabled,
@@ -135,16 +146,23 @@ const NotificationSettings: React.FC = () => {
           quiet_hours_start: prefsResponse.data.quiet_hours_start ? prefsResponse.data.quiet_hours_start.substring(0, 5) : '22:00',
           quiet_hours_end: prefsResponse.data.quiet_hours_end ? prefsResponse.data.quiet_hours_end.substring(0, 5) : '08:00',
           timezone: prefsResponse.data.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
-          channels: (prefsResponse.data.channels as NotificationChannel[]) || ['WEB_PUSH', 'IN_APP'],
+          channels,
           email_address: userEmail,
-          slack_webhook_url: localStorage.getItem('slack_webhook_url') || ''
+          slack_webhook_url: slackWebhook
         });
       } else {
+        // Set default channels, including SLACK if webhook exists
+        const defaultChannels: NotificationChannel[] = ['WEB_PUSH', 'IN_APP'];
+        if (slackWebhook) {
+          defaultChannels.push('SLACK');
+        }
+        
         // Set default email if no preferences exist yet
         setPrefs(prev => ({ 
           ...prev, 
           email_address: userEmail,
-          slack_webhook_url: localStorage.getItem('slack_webhook_url') || ''
+          slack_webhook_url: slackWebhook,
+          channels: defaultChannels
         }));
       }
     } catch (error) {
@@ -189,7 +207,7 @@ const NotificationSettings: React.FC = () => {
             quiet_hours_start: formatTime(prefs.quiet_hours_start),
             quiet_hours_end: formatTime(prefs.quiet_hours_end),
             timezone: prefs.timezone,
-            channels: prefs.channels // Include all channels including SLACK
+            channels: prefs.channels.filter(c => c !== 'SLACK') as ('EMAIL' | 'IN_APP' | 'WEB_PUSH')[] // Database doesn't support SLACK channel
           }], {
             onConflict: 'user_id'
           });
