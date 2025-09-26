@@ -582,7 +582,8 @@ export class RealtimeVoiceAssistant {
       // UI status: creating task
       this.onMessage?.({ type: 'client.processing', status: 'Creating task...' });
 
-      const { data, error } = await supabase
+      // First try to find an existing default board
+      let { data: defaultBoard, error } = await supabase
         .from('boards')
         .select('id')
         .eq('is_default', true)
@@ -592,8 +593,56 @@ export class RealtimeVoiceAssistant {
         throw new Error(`Database error: ${error.message}`);
       }
 
-      if (!data) {
-        throw new Error('Default board not found');
+      // If no default board exists, create one
+      if (!defaultBoard) {
+        console.log('No default board found, creating one...');
+        
+        const userId = (await supabase.auth.getUser()).data.user?.id;
+        if (!userId) {
+          throw new Error('User not authenticated');
+        }
+        
+        const { data: newBoard, error: createError } = await supabase
+          .from('boards')
+          .insert({
+            name: 'My Tasks',
+            description: 'Default task board',
+            is_default: true,
+            user_id: userId
+          })
+          .select('id')
+          .single();
+
+        if (createError) {
+          throw new Error(`Failed to create default board: ${createError.message}`);
+        }
+
+        defaultBoard = newBoard;
+        console.log('Created default board:', defaultBoard);
+
+        // Create default columns for the new board
+        const defaultColumns = [
+          { name: 'Backlog', status: 'BACKLOG' as const, position: 0 },
+          { name: 'To Do', status: 'TODO' as const, position: 1 },
+          { name: 'Doing', status: 'DOING' as const, position: 2 },
+          { name: 'Done', status: 'DONE' as const, position: 3 }
+        ];
+
+        const { error: columnsError } = await supabase
+          .from('columns')
+          .insert(
+            defaultColumns.map(col => ({
+              ...col,
+              board_id: defaultBoard.id
+            }))
+          );
+
+        if (columnsError) {
+          console.warn('Failed to create default columns:', columnsError);
+          // Don't throw error, board creation is more important than columns
+        } else {
+          console.log('Created default columns for board');
+        }
       }
 
       const taskData = {
@@ -602,7 +651,7 @@ export class RealtimeVoiceAssistant {
         priority: args.priority || 'MEDIUM',
         category: args.category || 'LIFE',
         status: 'BACKLOG' as const,
-        board_id: data.id,
+        board_id: defaultBoard.id,
         user_id: (await supabase.auth.getUser()).data.user?.id
       };
 
