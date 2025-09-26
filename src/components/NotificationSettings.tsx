@@ -717,7 +717,6 @@ const NotificationSettings: React.FC = () => {
                   const { data, error } = await supabase.functions.invoke('create-test-task', {
                     body: {
                       userId: user?.id || 'demo-user',
-                      boardId: 'test-board', // Will be handled by the function
                       testType: '5-minute'
                     }
                   });
