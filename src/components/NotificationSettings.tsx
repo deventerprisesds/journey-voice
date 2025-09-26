@@ -23,7 +23,7 @@ import { useNotifications } from '@/hooks/useNotifications';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 
-type NotificationChannel = 'WEB_PUSH' | 'EMAIL' | 'IN_APP';
+type NotificationChannel = 'WEB_PUSH' | 'EMAIL' | 'IN_APP' | 'SLACK';
 
 interface NotificationPrefs {
   due_reminders_enabled: boolean;
@@ -36,6 +36,7 @@ interface NotificationPrefs {
   timezone: string;
   channels: NotificationChannel[];
   email_address?: string;
+  slack_webhook_url?: string;
 }
 
 const NotificationSettings: React.FC = () => {
@@ -63,7 +64,8 @@ const NotificationSettings: React.FC = () => {
     quiet_hours_end: '08:00',
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     channels: ['WEB_PUSH', 'IN_APP'] as NotificationChannel[],
-    email_address: ''
+    email_address: '',
+    slack_webhook_url: ''
   });
 
   const [isSaving, setIsSaving] = useState(false);
@@ -108,11 +110,16 @@ const NotificationSettings: React.FC = () => {
           quiet_hours_end: prefsResponse.data.quiet_hours_end ? prefsResponse.data.quiet_hours_end.substring(0, 5) : '08:00',
           timezone: prefsResponse.data.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
           channels: (prefsResponse.data.channels as NotificationChannel[]) || ['WEB_PUSH', 'IN_APP'],
-          email_address: userEmail
+          email_address: userEmail,
+          slack_webhook_url: localStorage.getItem('slack_webhook_url') || ''
         });
       } else {
         // Set default email if no preferences exist yet
-        setPrefs(prev => ({ ...prev, email_address: userEmail }));
+        setPrefs(prev => ({ 
+          ...prev, 
+          email_address: userEmail,
+          slack_webhook_url: localStorage.getItem('slack_webhook_url') || ''
+        }));
       }
     } catch (error) {
       console.error('Error loading notification preferences:', error);
@@ -120,6 +127,13 @@ const NotificationSettings: React.FC = () => {
   };
 
   const saveNotificationPrefs = async () => {
+    // Always save Slack webhook URL to localStorage for security
+    if (prefs.slack_webhook_url) {
+      localStorage.setItem('slack_webhook_url', prefs.slack_webhook_url);
+    } else {
+      localStorage.removeItem('slack_webhook_url');
+    }
+
     if (!user || isDemoMode) {
       // For demo mode, just save to localStorage
       localStorage.setItem('demo-notification-prefs', JSON.stringify(prefs));
@@ -137,22 +151,22 @@ const NotificationSettings: React.FC = () => {
         return time.length === 5 ? `${time}:00` : time;
       };
 
-      const { error } = await supabase
-        .from('notification_prefs')
-        .upsert([{
-          user_id: user.id,
-          due_reminders_enabled: prefs.due_reminders_enabled,
-          overdue_reminders_enabled: prefs.overdue_reminders_enabled,
-          daily_digest_enabled: prefs.daily_digest_enabled,
-          weekly_digest_enabled: prefs.weekly_digest_enabled,
-          task_created_enabled: prefs.task_created_enabled,
-          quiet_hours_start: formatTime(prefs.quiet_hours_start),
-          quiet_hours_end: formatTime(prefs.quiet_hours_end),
-          timezone: prefs.timezone,
-          channels: prefs.channels
-        }], {
-          onConflict: 'user_id'
-        });
+        const { error } = await supabase
+          .from('notification_prefs')
+          .upsert([{
+            user_id: user.id,
+            due_reminders_enabled: prefs.due_reminders_enabled,
+            overdue_reminders_enabled: prefs.overdue_reminders_enabled,
+            daily_digest_enabled: prefs.daily_digest_enabled,
+            weekly_digest_enabled: prefs.weekly_digest_enabled,
+            task_created_enabled: prefs.task_created_enabled,
+            quiet_hours_start: formatTime(prefs.quiet_hours_start),
+            quiet_hours_end: formatTime(prefs.quiet_hours_end),
+            timezone: prefs.timezone,
+            channels: prefs.channels.filter(c => c !== 'SLACK') // Exclude SLACK from database
+          }], {
+            onConflict: 'user_id'
+          });
 
       if (error) {
         console.error('Error saving notification preferences:', error);
@@ -208,6 +222,48 @@ const NotificationSettings: React.FC = () => {
         return { color: 'bg-red-100 text-red-800', text: 'Blocked' };
       default:
         return { color: 'bg-yellow-100 text-yellow-800', text: 'Not Requested' };
+    }
+  };
+
+  const sendTestSlackNotification = async () => {
+    if (!prefs.slack_webhook_url) {
+      toast({
+        title: "Error",
+        description: "Please enter your Slack webhook URL first",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      const testData = {
+        output: "🧪 Test notification from Journey Voice App",
+        complexOutput: "This is a test message to verify your Slack webhook integration is working correctly. Task management notifications will appear here when enabled.",
+        timestamp: new Date().toISOString(),
+        type: "test_notification",
+        source: "journey-voice-app"
+      };
+
+      await fetch(prefs.slack_webhook_url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        mode: "no-cors",
+        body: JSON.stringify(testData),
+      });
+
+      toast({
+        title: "Test Sent",
+        description: "Test notification sent to Slack. Check your channel to confirm it was received.",
+      });
+    } catch (error) {
+      console.error("Error sending Slack test notification:", error);
+      toast({
+        title: "Error",
+        description: "Failed to send test notification. Please check your webhook URL.",
+        variant: "destructive",
+      });
     }
   };
 
@@ -495,6 +551,38 @@ const NotificationSettings: React.FC = () => {
                 </div>
               )}
             </div>
+
+            <Separator />
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="h-4 w-4 flex items-center justify-center text-xs font-bold text-white bg-gradient-to-r from-green-500 to-blue-500 rounded">S</div>
+                  <Label className="text-sm">Slack Notifications</Label>
+                </div>
+                <Switch
+                  checked={prefs.channels.includes('SLACK')}
+                  onCheckedChange={() => handleToggleChannel('SLACK')}
+                />
+              </div>
+              {prefs.channels.includes('SLACK') && (
+                <div className="ml-6 space-y-2">
+                  <Label className="text-xs text-muted-foreground">Webhook URL</Label>
+                  <Input
+                    type="url"
+                    value={prefs.slack_webhook_url || ''}
+                    onChange={(e) => 
+                      setPrefs(prev => ({ ...prev, slack_webhook_url: e.target.value }))
+                    }
+                    placeholder="https://your-webhook-url.com/webhook"
+                    className="text-sm"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Enter your Slack webhook URL to receive task notifications
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -547,6 +635,17 @@ const NotificationSettings: React.FC = () => {
             >
               <Mail className="h-3 w-3" />
               Test Email
+            </Button>
+            
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={sendTestSlackNotification}
+              disabled={!prefs.channels.includes('SLACK') || !prefs.slack_webhook_url}
+              className="flex items-center gap-2"
+            >
+              <div className="h-3 w-3 flex items-center justify-center text-xs font-bold text-white bg-gradient-to-r from-green-500 to-blue-500 rounded">S</div>
+              Test Slack
             </Button>
             
             <Button
