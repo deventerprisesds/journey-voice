@@ -13,6 +13,7 @@ import TaskFilters from './TaskFilters';
 import ColumnManager from './ColumnManager';
 import { AddColumnModal } from './AddColumnModal';
 import { itineraryEngine } from '@/utils/ItineraryEngine';
+import VoiceAssistantButton from './VoiceAssistantButton';
 
 import { Task, Board, Column } from '@/types/task';
 
@@ -669,7 +670,8 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <AddColumnModal 
+          <VoiceAssistantButton />
+          <AddColumnModal
             boardId={board.id} 
             onColumnCreated={fetchBoardColumns}
             isDemo={isDemoMode}
