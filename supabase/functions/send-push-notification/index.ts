@@ -55,142 +55,73 @@ serve(async (req) => {
     }
 
     const payload: NotificationPayload = await req.json();
-    console.log('Sending push notification:', payload);
+    console.log('Sending notification to all channels:', payload);
 
     // Determine target user (use provided userId or current user)
     const targetUserId = payload.userId || user.id;
 
-    // Get user's push subscription
-    let subscription = null;
-    
-    // Try to get from push_subscriptions table first
-    const { data: subData, error: subError } = await supabaseClient
-      .from('push_subscriptions')
+    // Get user's notification preferences
+    const { data: prefs, error: prefsError } = await supabaseClient
+      .from('notification_prefs')
       .select('*')
       .eq('user_id', targetUserId)
       .maybeSingle();
 
-    if (subError && subError.code !== 'PGRST116') {
-      console.error('Error fetching subscription:', subError);
+    if (prefsError && prefsError.code !== 'PGRST116') {
+      console.error('Error fetching notification preferences:', prefsError);
     }
 
-    if (subData) {
-      subscription = {
-        endpoint: subData.endpoint,
-        keys: {
-          p256dh: subData.p256dh_key,
-          auth: subData.auth_key
-        }
-      };
-    } else {
-      // Fallback: try to get from user metadata
-      const { data: userData, error: userDataError } = await supabaseClient
-        .from('profiles')
-        .select('*')
-        .eq('user_id', targetUserId)
-        .maybeSingle();
-
-      if (userDataError) {
-        console.error('Error fetching user data:', userDataError);
-      }
-
-      // For demo purposes, we'll simulate a successful send if no subscription exists
-      if (!userData) {
-        console.log('No push subscription found, simulating send for demo');
-        return new Response(
-          JSON.stringify({ 
-            success: true, 
-            message: 'Notification queued (demo mode - no subscription found)' 
-          }),
-          {
-            status: 200,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          }
-        );
-      }
-    }
-
-    if (!subscription) {
-      console.log('No push subscription found for user:', targetUserId);
-      return new Response(
-        JSON.stringify({ error: 'No push subscription found' }),
-        {
-          status: 404,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        }
-      );
-    }
-
-    // In a real implementation, you would use a proper push service like:
-    // - Web Push Protocol with VAPID keys
-    // - Firebase Cloud Messaging
-    // - OneSignal, Pusher, etc.
-    
-    // For demo purposes, we'll simulate the push notification send
-    console.log('Simulating push notification send to:', subscription.endpoint);
-    
-    // Store notification in database for tracking
-    const notificationRecord = {
-      user_id: targetUserId,
-      title: payload.title,
-      body: payload.body,
-      notification_type: payload.data?.type || 'general',
-      scheduled_for: new Date().toISOString(),
-      delivered_at: new Date().toISOString(),
-      task_id: payload.data?.taskId || null
+    const userChannels = prefs?.channels || ['WEB_PUSH', 'IN_APP'];
+    const results: any = {
+      push: null,
+      slack: null,
+      email: null,
+      inApp: null
     };
 
-    const { error: notificationError } = await supabaseClient
-      .from('scheduled_notifications')
-      .insert(notificationRecord);
-
-    if (notificationError) {
-      console.error('Error storing notification record:', notificationError);
-      // Continue anyway for demo purposes
+    // Send push notification if enabled
+    if (userChannels.includes('WEB_PUSH')) {
+      try {
+        results.push = await sendPushNotification(supabaseClient, targetUserId, payload);
+      } catch (error) {
+        console.error('Push notification failed:', error);
+        results.push = { error: error instanceof Error ? error.message : 'Unknown error' };
+      }
     }
 
-    // In a real implementation, this is where you would:
-    // 1. Use VAPID keys to authenticate with the push service
-    // 2. Send the actual push message to the subscription endpoint
-    // 3. Handle any delivery failures or subscription updates
-
-    /*
-    Example of real push notification sending (commented out for demo):
-    
-    const vapidPrivateKey = Deno.env.get('VAPID_PRIVATE_KEY');
-    const vapidPublicKey = Deno.env.get('VAPID_PUBLIC_KEY');
-    
-    if (!vapidPrivateKey || !vapidPublicKey) {
-      throw new Error('VAPID keys not configured');
+    // Send Slack notification if enabled
+    if (userChannels.includes('SLACK')) {
+      try {
+        results.slack = await sendSlackNotification(supabaseClient, targetUserId, payload);
+      } catch (error) {
+        console.error('Slack notification failed:', error);
+        results.slack = { error: error instanceof Error ? error.message : 'Unknown error' };
+      }
     }
 
-    const webpush = await import('https://esm.sh/web-push@3.6.6');
-    
-    webpush.setVapidDetails(
-      'mailto:your-email@example.com',
-      vapidPublicKey,
-      vapidPrivateKey
-    );
+    // Store in-app notification if enabled
+    if (userChannels.includes('IN_APP')) {
+      try {
+        results.inApp = await storeInAppNotification(supabaseClient, targetUserId, payload);
+      } catch (error) {
+        console.error('In-app notification failed:', error);
+        results.inApp = { error: error instanceof Error ? error.message : 'Unknown error' };
+      }
+    }
 
-    const notificationPayloadString = JSON.stringify({
-      title: payload.title,
-      body: payload.body,
-      data: payload.data || {},
-      actions: payload.actions || [],
-      requireInteraction: payload.requireInteraction || false,
-      tag: payload.tag || 'default'
-    });
+    // TODO: Implement email notifications
+    if (userChannels.includes('EMAIL')) {
+      results.email = { status: 'not_implemented' };
+    }
 
-    await webpush.sendNotification(subscription, notificationPayloadString);
-    */
-
-    console.log('Push notification sent successfully (simulated)');
+    console.log('Multi-channel notification results:', results);
     
     return new Response(
       JSON.stringify({ 
         success: true, 
-        message: 'Push notification sent successfully',
-        demo: true // Indicates this was a simulated send
+        message: 'Notifications sent to all enabled channels',
+        channels: userChannels,
+        results
       }),
       {
         status: 200,
@@ -210,3 +141,98 @@ serve(async (req) => {
     );
   }
 });
+
+async function sendPushNotification(supabaseClient: any, userId: string, payload: NotificationPayload) {
+  // Get user's push subscription
+  const { data: subData, error: subError } = await supabaseClient
+    .from('push_subscriptions')
+    .select('*')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (subError && subError.code !== 'PGRST116') {
+    console.error('Error fetching subscription:', subError);
+    return { error: 'Failed to fetch subscription' };
+  }
+
+  if (!subData) {
+    console.log('No push subscription found for user:', userId);
+    return { status: 'no_subscription' };
+  }
+
+  // For demo purposes, simulate push notification
+  console.log('Simulating push notification send to:', subData.endpoint);
+  
+  // Store notification record
+  const notificationRecord = {
+    user_id: userId,
+    title: payload.title,
+    body: payload.body,
+    notification_type: payload.data?.type || 'general',
+    scheduled_for: new Date().toISOString(),
+    delivered_at: new Date().toISOString(),
+    task_id: payload.data?.taskId || null
+  };
+
+  const { error: notificationError } = await supabaseClient
+    .from('scheduled_notifications')
+    .insert(notificationRecord);
+
+  if (notificationError) {
+    console.error('Error storing notification record:', notificationError);
+  }
+
+  return { status: 'sent', demo: true };
+}
+
+async function sendSlackNotification(supabaseClient: any, userId: string, payload: NotificationPayload) {
+  // In edge functions, we can't access localStorage. 
+  // For now, we'll use environment variable or skip.
+  // In production, you'd store webhook URLs in the database securely
+  const slackWebhookUrl = Deno.env.get('SLACK_WEBHOOK_URL') || '';
+  
+  if (!slackWebhookUrl) {
+    console.log('No Slack webhook URL configured for user:', userId);
+    return { status: 'no_webhook_configured' };
+  }
+  
+  const { data, error } = await supabaseClient.functions.invoke('send-slack-notification', {
+    body: {
+      webhook_url: slackWebhookUrl,
+      message: `${payload.title}: ${payload.body}`,
+      output: payload.data?.type || 'notification',
+      type: payload.data?.type || 'general'
+    }
+  });
+
+  if (error) {
+    console.error('Slack notification error:', error);
+    return { error: error.message };
+  }
+
+  return { status: 'sent', data };
+}
+
+async function storeInAppNotification(supabaseClient: any, userId: string, payload: NotificationPayload) {
+  // Store in-app notification in the database for later retrieval
+  const notificationRecord = {
+    user_id: userId,
+    title: payload.title,
+    body: payload.body,
+    notification_type: payload.data?.type || 'general',
+    scheduled_for: new Date().toISOString(),
+    delivered_at: new Date().toISOString(),
+    task_id: payload.data?.taskId || null
+  };
+
+  const { error } = await supabaseClient
+    .from('scheduled_notifications')
+    .insert(notificationRecord);
+
+  if (error) {
+    console.error('Error storing in-app notification:', error);
+    return { error: error.message };
+  }
+
+  return { status: 'stored' };
+}

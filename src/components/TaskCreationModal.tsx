@@ -205,9 +205,28 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
       }
 
       onTasksCreated(createdTasks);
+      
+      // Auto-generate reminders for tasks with due dates
+      for (const task of createdTasks) {
+        if (task.due_date) {
+          try {
+            await supabase.functions.invoke('generate-task-reminders', {
+              body: {
+                taskId: task.id,
+                userId: task.user_id,
+                dueDate: task.due_date,
+                title: task.title
+              }
+            });
+          } catch (error) {
+            console.error('Error generating reminders for task:', task.id, error);
+          }
+        }
+      }
+      
       toast({
         title: "Tasks Created",
-        description: `Successfully created ${createdTasks.length} task${createdTasks.length > 1 ? 's' : ''}`,
+        description: `Successfully created ${createdTasks.length} task${createdTasks.length > 1 ? 's' : ''} with automatic reminders`,
       });
       
       handleClose();

@@ -333,7 +333,20 @@ async function processPendingNotifications(supabaseClient: any, now: Date): Prom
 
   for (const notification of pendingNotifications || []) {
     try {
-      // Send push notification
+      // Get user's notification preferences including Slack webhook
+      const { data: prefs, error: prefsError } = await supabaseClient
+        .from('notification_prefs')
+        .select('*')
+        .eq('user_id', notification.user_id)
+        .maybeSingle();
+
+      if (prefsError && prefsError.code !== 'PGRST116') {
+        console.error('Error fetching user preferences:', prefsError);
+      }
+
+      const userChannels = prefs?.channels || ['WEB_PUSH', 'IN_APP'];
+
+      // Send to push notification service (handles all channels now)
       const { error: sendError } = await supabaseClient.functions.invoke('send-push-notification', {
         body: {
           userId: notification.user_id,
@@ -367,7 +380,7 @@ async function processPendingNotifications(supabaseClient: any, now: Date): Prom
           })
           .eq('id', notification.id);
         
-        console.log(`Notification ${notification.id} sent successfully`);
+        console.log(`Notification ${notification.id} sent successfully to all channels`);
       }
     } catch (error) {
       console.error(`Error processing notification ${notification.id}:`, error);

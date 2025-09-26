@@ -73,8 +73,34 @@ const NotificationSettings: React.FC = () => {
   useEffect(() => {
     if (user && !isDemoMode) {
       loadNotificationPrefs();
+    } else if (isDemoMode) {
+      loadDemoNotificationPrefs();
     }
   }, [user, isDemoMode]);
+
+  const loadDemoNotificationPrefs = () => {
+    try {
+      const savedPrefs = localStorage.getItem('demo-notification-prefs');
+      const slackWebhook = localStorage.getItem('slack_webhook_url');
+      
+      if (savedPrefs) {
+        const parsedPrefs = JSON.parse(savedPrefs);
+        setPrefs(prev => ({
+          ...prev,
+          ...parsedPrefs,
+          slack_webhook_url: slackWebhook || parsedPrefs.slack_webhook_url || ''
+        }));
+      } else {
+        // Just load Slack webhook if no other prefs saved
+        setPrefs(prev => ({
+          ...prev,
+          slack_webhook_url: slackWebhook || ''
+        }));
+      }
+    } catch (error) {
+      console.error('Error loading demo notification preferences:', error);
+    }
+  };
 
   const loadNotificationPrefs = async () => {
     try {
@@ -675,6 +701,46 @@ const NotificationSettings: React.FC = () => {
             >
               <Clock className="h-3 w-3" />
               Test Quiet Hours
+            </Button>
+          </div>
+
+          <Separator />
+          
+          <div className="space-y-3">
+            <Label className="text-sm font-medium">Test Complete Workflow</Label>
+            <p className="text-xs text-muted-foreground">
+              Create a test task due in 5 minutes to test the complete notification system
+            </p>
+            <Button
+              onClick={async () => {
+                try {
+                  const { data, error } = await supabase.functions.invoke('create-test-task', {
+                    body: {
+                      userId: user?.id || 'demo-user',
+                      boardId: 'test-board', // Will be handled by the function
+                      testType: '5-minute'
+                    }
+                  });
+
+                  if (error) throw error;
+
+                  toast({
+                    title: "Test Task Created",
+                    description: "A test task has been created with notifications scheduled for 15 minutes before and at due time",
+                  });
+                } catch (error) {
+                  console.error('Error creating test task:', error);
+                  toast({
+                    title: "Error",
+                    description: "Failed to create test task",
+                    variant: "destructive",
+                  });
+                }
+              }}
+              className="w-full"
+            >
+              <TestTube className="h-4 w-4 mr-2" />
+              Create Test Task Due in 5 Minutes
             </Button>
           </div>
           
