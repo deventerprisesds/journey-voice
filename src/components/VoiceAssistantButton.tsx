@@ -24,7 +24,7 @@ const VoiceAssistantButton: React.FC = () => {
     const getButtonState = () => {
       if (!isConnected) {
         return {
-          className: "bg-gradient-to-r from-muted to-muted hover:from-muted/80 hover:to-muted/80 text-muted-foreground shadow-lg hover:shadow-xl",
+          className: "bg-gradient-to-r from-focus to-focus-light hover:from-focus-dark hover:to-focus text-white shadow-lg hover:shadow-xl",
           icon: <Mic className="w-5 h-5" />,
         };
       } else if (isListening) {
