@@ -236,22 +236,24 @@ const NotificationSettings: React.FC = () => {
     }
 
     try {
-      const testData = {
-        output: "🧪 Test notification from Journey Voice App",
-        complexOutput: "This is a test message to verify your Slack webhook integration is working correctly. Task management notifications will appear here when enabled.",
-        timestamp: new Date().toISOString(),
-        type: "test_notification",
-        source: "journey-voice-app"
-      };
-
-      await fetch(prefs.slack_webhook_url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        mode: "no-cors",
-        body: JSON.stringify(testData),
+      const { data, error } = await supabase.functions.invoke('send-slack-notification', {
+        body: {
+          webhook_url: prefs.slack_webhook_url,
+          message: "🧪 Test notification from Journey Voice App - Task management notifications will appear here when enabled.",
+          output: "test",
+          type: "test_notification"
+        }
       });
+
+      if (error) {
+        console.error("Slack notification error:", error);
+        toast({
+          title: "Error",
+          description: `Failed to send test notification: ${error.message}`,
+          variant: "destructive",
+        });
+        return;
+      }
 
       toast({
         title: "Test Sent",

@@ -14,3 +14,6 @@ verify_jwt = false
 
 [functions.test-external-db]
 verify_jwt = false
+
+[functions.send-slack-notification]
+verify_jwt = false
