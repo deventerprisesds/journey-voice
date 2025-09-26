@@ -131,9 +131,7 @@ Always confirm actions you take and provide helpful feedback about task manageme
         if (errorJson.error) {
           errorDetails = {
             type: errorJson.error.type || 'unknown',
-            code: errorJson.error.code || null,
-            message: errorJson.error.message || errorText,
-            param: errorJson.error.param || null
+            message: errorJson.error.message || errorText
           };
         }
       } catch (parseError) {
