@@ -10,7 +10,7 @@ import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 
-type NotificationChannel = 'EMAIL' | 'SMS' | 'SLACK';
+type NotificationChannel = 'EMAIL' | 'SMS' | 'SLACK' | 'PUSH';
 
 interface NotificationPrefs {
   due_reminders_enabled: boolean;
@@ -34,7 +34,7 @@ const NotificationSettings = () => {
     quiet_hours_start: '22:00',
     quiet_hours_end: '08:00',
     timezone: 'UTC',
-    channels: ['EMAIL']
+    channels: ['EMAIL', 'PUSH']
   });
   const [isSaving, setIsSaving] = useState(false);
   const [phone, setPhone] = useState('');
@@ -519,6 +519,18 @@ const NotificationSettings = () => {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Volume2 className="h-4 w-4" />
+                <Label htmlFor="push-channel">Push Notifications</Label>
+              </div>
+              <Switch
+                id="push-channel"
+                checked={prefs.channels.includes('PUSH')}
+                onCheckedChange={() => handleToggleChannel('PUSH')}
+              />
+            </div>
+            
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Mail className="h-4 w-4" />

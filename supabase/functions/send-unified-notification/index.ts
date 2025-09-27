@@ -54,7 +54,7 @@ serve(async (req) => {
       console.error('Error fetching notification preferences:', prefsError);
     }
 
-    const userChannels = prefs?.channels || ['EMAIL'];
+    const userChannels = prefs?.channels || ['EMAIL', 'PUSH'];
     
     // Call unified webhook with all notification data
     try {
@@ -143,6 +143,11 @@ async function callUnifiedWebhook(userId: string, payload: NotificationPayload, 
   const result = await response.json();
   
   // Store notification record for tracking
+  const supabaseClient = createClient(
+    Deno.env.get('SUPABASE_URL') ?? '',
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+  );
+
   const notificationRecord = {
     user_id: userId,
     title: payload.title,
