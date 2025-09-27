@@ -148,12 +148,24 @@ async function callUnifiedWebhook(userId: string, payload: NotificationPayload, 
 
   console.log('Calling unified webhook:', webhookUrl, webhookPayload);
 
-  const response = await fetch(webhookUrl, {
-    method: 'POST',
+  // Convert payload to URL query parameters for GET request
+  const queryParams = new URLSearchParams();
+  queryParams.append('userId', webhookPayload.userId);
+  queryParams.append('title', webhookPayload.title);
+  queryParams.append('body', webhookPayload.body);
+  queryParams.append('channels', JSON.stringify(webhookPayload.channels));
+  queryParams.append('userProfile', JSON.stringify(webhookPayload.userProfile));
+  queryParams.append('taskData', JSON.stringify(webhookPayload.taskData));
+  queryParams.append('slackWebhook', webhookPayload.slackWebhook);
+
+  const fullUrl = `${webhookUrl}?${queryParams.toString()}`;
+  console.log('Calling unified webhook with GET:', fullUrl);
+
+  const response = await fetch(fullUrl, {
+    method: 'GET',
     headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(webhookPayload)
+      'Accept': 'application/json',
+    }
   });
 
   if (!response.ok) {
