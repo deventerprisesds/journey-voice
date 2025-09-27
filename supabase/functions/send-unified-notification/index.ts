@@ -12,6 +12,11 @@ interface NotificationPayload {
   body: string;
   data?: any;
   channels: string[];
+  slackWebhook?: string;
+  userProfile?: {
+    email?: string;
+    phone?: string;
+  };
 }
 
 serve(async (req) => {
@@ -32,15 +37,21 @@ serve(async (req) => {
     const targetUserId = payload.userId;
     console.log('Sending unified notification:', payload);
 
-    // Get user's profile data for webhook
-    const { data: profile, error: profileError } = await supabaseClient
-      .from('profiles')
-      .select('email, phone')
-      .eq('user_id', targetUserId)
-      .maybeSingle();
+    // Use provided user profile if available, otherwise fetch from database
+    let profile = payload.userProfile;
+    if (!profile || (!profile.email && !profile.phone)) {
+      console.log('Fetching user profile from database...');
+      const { data: dbProfile, error: profileError } = await supabaseClient
+        .from('profiles')
+        .select('email, phone')
+        .eq('user_id', targetUserId)
+        .maybeSingle();
 
-    if (profileError) {
-      console.error('Error fetching user profile:', profileError);
+      if (profileError) {
+        console.error('Error fetching user profile:', profileError);
+      }
+      
+      profile = dbProfile || profile || {};
     }
 
     // Get user's notification preferences
@@ -109,8 +120,9 @@ async function callUnifiedWebhook(userId: string, payload: NotificationPayload, 
     return { status: 'no_webhook_configured' };
   }
 
-  // Get Slack webhook URL from localStorage equivalent (environment variable for now)
-  const slackWebhookUrl = Deno.env.get('SLACK_WEBHOOK_URL') || '';
+  // Prefer payload slackWebhook over environment variable
+  const slackWebhookUrl = payload.slackWebhook || Deno.env.get('SLACK_WEBHOOK_URL') || '';
+  console.log('Using Slack webhook URL:', slackWebhookUrl ? 'provided' : 'none');
 
   const webhookPayload = {
     userId,
@@ -144,9 +156,11 @@ async function callUnifiedWebhook(userId: string, payload: NotificationPayload, 
     } catch (error) {
       console.error('Error sending Slack notification:', error);
     }
+  } else if (channels.includes('SLACK') && !slackWebhookUrl) {
+    console.warn('SLACK channel requested but no webhook URL provided');
   }
 
-  console.log('Calling unified webhook:', webhookUrl, webhookPayload);
+  console.log('Calling unified webhook with payload:', webhookPayload);
 
   // Convert payload to URL query parameters for GET request
   const queryParams = new URLSearchParams();

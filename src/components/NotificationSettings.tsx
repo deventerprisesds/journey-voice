@@ -9,6 +9,7 @@ import { Phone, Mail, MessageSquare, Volume2, VolumeX } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { z } from "zod";
 
 type NotificationChannel = 'EMAIL' | 'SMS' | 'SLACK' | 'PUSH';
 
@@ -139,6 +140,27 @@ const NotificationSettings = () => {
     setIsSaving(true);
     
     try {
+      // Validate email and phone if their channels are enabled
+      const validationSchema = z.object({
+        email: prefs.channels.includes('EMAIL') 
+          ? z.string().email("Please enter a valid email address").min(1, "Email is required when Email channel is enabled")
+          : z.string().optional(),
+        phone: prefs.channels.includes('SMS')
+          ? z.string().min(1, "Phone is required when SMS channel is enabled").regex(/^\+?[1-9]\d{1,14}$/, "Please enter a valid phone number with country code")
+          : z.string().optional()
+      });
+
+      const validation = validationSchema.safeParse({ email, phone });
+      if (!validation.success) {
+        const errors = validation.error.errors.map(err => err.message).join(', ');
+        toast({
+          title: "Validation Error",
+          description: errors,
+          variant: "destructive",
+        });
+        return;
+      }
+
       // Save Slack webhook URL to localStorage (not in database for security)
       const slackWebhookUrl = (document.getElementById('slack-webhook-url') as HTMLInputElement)?.value;
       if (slackWebhookUrl) {
@@ -157,26 +179,53 @@ const NotificationSettings = () => {
         return;
       }
 
-      // Save notification preferences
-      const { error: prefsError } = await supabase
-        .from('notification_prefs')
-        .upsert(
-          { user_id: user.id, ...prefs },
-          { onConflict: 'user_id' }
-        );
+      // Normalize quiet hours to HH:MM:00 format
+      const normalizedPrefs = {
+        ...prefs,
+        quiet_hours_start: prefs.quiet_hours_start.length === 5 ? prefs.quiet_hours_start + ':00' : prefs.quiet_hours_start,
+        quiet_hours_end: prefs.quiet_hours_end.length === 5 ? prefs.quiet_hours_end + ':00' : prefs.quiet_hours_end
+      };
 
-      if (prefsError) {
-        throw prefsError;
+      // Try to update notification preferences first, then insert if not exists
+      const { error: updatePrefsError } = await supabase
+        .from('notification_prefs')
+        .update({ ...normalizedPrefs })
+        .eq('user_id', user.id);
+
+      if (updatePrefsError && updatePrefsError.code === 'PGRST116') {
+        // No rows updated, try insert
+        const { error: insertPrefsError } = await supabase
+          .from('notification_prefs')
+          .insert({ user_id: user.id, ...normalizedPrefs });
+        
+        if (insertPrefsError) {
+          console.error('Error inserting notification preferences:', insertPrefsError);
+          throw new Error(`Failed to save notification preferences: ${insertPrefsError.message || insertPrefsError.hint || 'Unknown database error'}`);
+        }
+      } else if (updatePrefsError) {
+        console.error('Error updating notification preferences:', updatePrefsError);
+        throw new Error(`Failed to update notification preferences: ${updatePrefsError.message || updatePrefsError.hint || 'Unknown database error'}`);
       }
 
-      // Save phone number and email to profile
-      const { error: profileError } = await supabase
+      // Try to update profile first, then insert if not exists
+      const { error: updateProfileError } = await supabase
         .from('profiles')
         .update({ phone, email })
         .eq('user_id', user.id);
 
-      if (profileError) {
-        throw profileError;
+      if (updateProfileError && updateProfileError.code === 'PGRST116') {
+        // No rows updated, try insert
+        const { error: insertProfileError } = await supabase
+          .from('profiles')
+          .insert({ user_id: user.id, phone, email });
+        
+        if (insertProfileError) {
+          console.error('Error inserting profile:', insertProfileError);
+          throw new Error(`Failed to save profile: ${insertProfileError.message || insertProfileError.hint || 'Unknown database error'}`);
+        }
+      } else if (updateProfileError) {
+        console.error('Error updating profile:', updateProfileError);
+        throw new Error(`Failed to update profile: ${updateProfileError.message || updateProfileError.hint || 'Unknown database error'}`);
       }
 
       toast({
@@ -188,7 +237,7 @@ const NotificationSettings = () => {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
       toast({
         title: "Error saving settings",
-        description: `There was a problem saving your notification preferences: ${errorMessage}`,
+        description: errorMessage,
         variant: "destructive",
       });
     } finally {
@@ -212,7 +261,8 @@ const NotificationSettings = () => {
           title: '🧪 Test Email Notification',
           body: 'Test email notification - Email notifications will be sent here when enabled.',
           channels: ['EMAIL'],
-          data: { type: 'test_notification' }
+          data: { type: 'test_notification' },
+          userProfile: { email, phone }
         }
       });
       
@@ -238,7 +288,8 @@ const NotificationSettings = () => {
           title: '🧪 Test SMS Notification',
           body: 'Test SMS notification - SMS notifications will be sent here when enabled.',
           channels: ['SMS'],
-          data: { type: 'test_notification' }
+          data: { type: 'test_notification' },
+          userProfile: { email, phone }
         }
       });
       
@@ -258,13 +309,17 @@ const NotificationSettings = () => {
 
   const sendTestSlack = async () => {
     try {
+      const slackWebhookUrl = (document.getElementById('slack-webhook-url') as HTMLInputElement)?.value || localStorage.getItem('slack-webhook-url') || '';
+      
       await supabase.functions.invoke('send-unified-notification', {
         body: {
           userId: user?.id || 'demo-user',
           title: '🧪 Test Slack Notification',
           body: 'Test Slack notification - Slack notifications will be sent here when enabled.',
           channels: ['SLACK'],
-          data: { type: 'test_notification' }
+          data: { type: 'test_notification' },
+          slackWebhook: slackWebhookUrl,
+          userProfile: { email, phone }
         }
       });
 
@@ -285,8 +340,8 @@ const NotificationSettings = () => {
   const sendTestInApp = async () => {
     try {
       toast({
-        title: "In-app notification preview",
-        description: "This is a sample in-app notification shown in your browser.",
+        title: "🧪 In-App Notification Test",
+        description: "This is a sample in-app notification shown locally in your browser. No webhook call is made for in-app notifications.",
       });
     } catch (error) {
       console.error('Error displaying in-app test notification:', error);
