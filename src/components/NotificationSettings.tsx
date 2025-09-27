@@ -40,15 +40,15 @@ const NotificationSettings = () => {
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const { toast } = useToast();
-  const { user } = useAuth();
+  const { user, isDemoMode } = useAuth();
 
   useEffect(() => {
-    if (user) {
-      loadNotificationPrefs();
-    } else {
+    if (isDemoMode) {
       loadDemoNotificationPrefs();
+    } else if (user) {
+      loadNotificationPrefs();
     }
-  }, [user]);
+  }, [isDemoMode, user]);
 
   const loadNotificationPrefs = async () => {
     if (!user?.id) return;
@@ -145,7 +145,7 @@ const NotificationSettings = () => {
         localStorage.setItem('slack-webhook-url', slackWebhookUrl);
       }
 
-      if (!user?.id) {
+      if (isDemoMode || !user?.id) {
         // Demo mode - save to localStorage
         localStorage.setItem('demo-notification-prefs', JSON.stringify(prefs));
         localStorage.setItem('demo-phone', phone);
@@ -160,10 +160,10 @@ const NotificationSettings = () => {
       // Save notification preferences
       const { error: prefsError } = await supabase
         .from('notification_prefs')
-        .upsert({
-          user_id: user.id,
-          ...prefs
-        });
+        .upsert(
+          { user_id: user.id, ...prefs },
+          { onConflict: 'user_id' }
+        );
 
       if (prefsError) {
         throw prefsError;
@@ -284,27 +284,12 @@ const NotificationSettings = () => {
 
   const sendTestInApp = async () => {
     try {
-      await supabase.functions.invoke('send-unified-notification', {
-        body: {
-          userId: user?.id || 'demo-user',
-          title: '🧪 Test In-App Notification',
-          body: 'Test in-app notification - In-app notifications will be sent here when enabled.',
-          channels: ['PUSH'],
-          data: { type: 'test_notification' }
-        }
-      });
-
       toast({
-        title: "Test in-app notification sent",
-        description: "Check your unified webhook for the in-app notification.",
+        title: "In-app notification preview",
+        description: "This is a sample in-app notification shown in your browser.",
       });
     } catch (error) {
-      console.error('Error sending test in-app notification:', error);
-      toast({
-        title: "Error",
-        description: "Failed to send test in-app notification.",
-        variant: "destructive",
-      });
+      console.error('Error displaying in-app test notification:', error);
     }
   };
 
