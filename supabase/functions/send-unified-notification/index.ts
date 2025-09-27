@@ -116,7 +116,7 @@ async function callUnifiedWebhook(userId: string, payload: NotificationPayload, 
     userId,
     title: payload.title,
     body: payload.body,
-    channels,
+    channels: channels.filter(c => c !== 'SLACK'), // Remove SLACK from unified webhook channels
     userProfile: {
       email: profile?.email,
       phone: profile?.phone
@@ -124,6 +124,27 @@ async function callUnifiedWebhook(userId: string, payload: NotificationPayload, 
     taskData: payload.data,
     slackWebhook: slackWebhookUrl
   };
+
+  // Handle Slack separately if it's in the channels and we have a webhook URL
+  if (channels.includes('SLACK') && slackWebhookUrl) {
+    try {
+      console.log('Sending Slack notification to:', slackWebhookUrl);
+      const slackResponse = await fetch(slackWebhookUrl, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+        }
+      });
+      
+      if (!slackResponse.ok) {
+        console.error('Slack webhook failed:', slackResponse.status, await slackResponse.text());
+      } else {
+        console.log('Slack notification sent successfully');
+      }
+    } catch (error) {
+      console.error('Error sending Slack notification:', error);
+    }
+  }
 
   console.log('Calling unified webhook:', webhookUrl, webhookPayload);
 

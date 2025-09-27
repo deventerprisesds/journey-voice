@@ -38,6 +38,7 @@ const NotificationSettings = () => {
   });
   const [isSaving, setIsSaving] = useState(false);
   const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
   const { toast } = useToast();
   const { user } = useAuth();
 
@@ -79,20 +80,23 @@ const NotificationSettings = () => {
         });
       }
 
-      // Load user phone number
+      // Load user phone number and email
       const { data: profileData, error: profileError } = await supabase
         .from('profiles')
-        .select('phone')
+        .select('phone, email')
         .eq('user_id', user.id)
         .maybeSingle();
 
       if (profileError && profileError.code !== 'PGRST116') {
-        console.error('Error loading phone number:', profileError);
+        console.error('Error loading profile data:', profileError);
         return;
       }
 
       if (profileData?.phone) {
         setPhone(profileData.phone);
+      }
+      if (profileData?.email) {
+        setEmail(profileData.email);
       }
     } catch (error) {
       console.error('Error loading notification preferences:', error);
@@ -102,6 +106,7 @@ const NotificationSettings = () => {
   const loadDemoNotificationPrefs = () => {
     const stored = localStorage.getItem('demo-notification-prefs');
     const storedPhone = localStorage.getItem('demo-phone');
+    const storedEmail = localStorage.getItem('demo-email');
     
     if (stored) {
       try {
@@ -125,6 +130,9 @@ const NotificationSettings = () => {
     if (storedPhone) {
       setPhone(storedPhone);
     }
+    if (storedEmail) {
+      setEmail(storedEmail);
+    }
   };
 
   const saveNotificationPrefs = async () => {
@@ -141,6 +149,7 @@ const NotificationSettings = () => {
         // Demo mode - save to localStorage
         localStorage.setItem('demo-notification-prefs', JSON.stringify(prefs));
         localStorage.setItem('demo-phone', phone);
+        localStorage.setItem('demo-email', email);
         toast({
           title: "Settings saved",
           description: "Your notification preferences have been saved locally for this demo.",
@@ -160,14 +169,14 @@ const NotificationSettings = () => {
         throw prefsError;
       }
 
-      // Save phone number to profile
-      const { error: phoneError } = await supabase
+      // Save phone number and email to profile
+      const { error: profileError } = await supabase
         .from('profiles')
-        .update({ phone })
+        .update({ phone, email })
         .eq('user_id', user.id);
 
-      if (phoneError) {
-        throw phoneError;
+      if (profileError) {
+        throw profileError;
       }
 
       toast({
@@ -176,9 +185,10 @@ const NotificationSettings = () => {
       });
     } catch (error) {
       console.error('Error saving notification preferences:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
       toast({
         title: "Error saving settings",
-        description: "There was a problem saving your notification preferences. Please try again.",
+        description: `There was a problem saving your notification preferences: ${errorMessage}`,
         variant: "destructive",
       });
     } finally {
@@ -272,6 +282,32 @@ const NotificationSettings = () => {
     }
   };
 
+  const sendTestInApp = async () => {
+    try {
+      await supabase.functions.invoke('send-unified-notification', {
+        body: {
+          userId: user?.id || 'demo-user',
+          title: '🧪 Test In-App Notification',
+          body: 'Test in-app notification - In-app notifications will be sent here when enabled.',
+          channels: ['PUSH'],
+          data: { type: 'test_notification' }
+        }
+      });
+
+      toast({
+        title: "Test in-app notification sent",
+        description: "Check your unified webhook for the in-app notification.",
+      });
+    } catch (error) {
+      console.error('Error sending test in-app notification:', error);
+      toast({
+        title: "Error",
+        description: "Failed to send test in-app notification.",
+        variant: "destructive",
+      });
+    }
+  };
+
   const testQuietHours = async () => {
     try {
       const now = new Date();
@@ -339,33 +375,6 @@ const NotificationSettings = () => {
 
   return (
     <div className="space-y-6">
-      {/* Phone Number */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Phone className="h-5 w-5" />
-            Phone Number
-          </CardTitle>
-          <CardDescription>
-            Required for SMS notifications
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-2">
-            <Label htmlFor="phone">Phone Number</Label>
-            <Input
-              id="phone"
-              type="tel"
-              placeholder="+1234567890"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-            />
-            <p className="text-sm text-muted-foreground">
-              Include country code (e.g., +1 for US)
-            </p>
-          </div>
-        </CardContent>
-      </Card>
 
       {/* Notification Types */}
       <Card>
@@ -522,7 +531,7 @@ const NotificationSettings = () => {
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Volume2 className="h-4 w-4" />
-                <Label htmlFor="push-channel">Push Notifications</Label>
+                <Label htmlFor="push-channel">In-App Notifications</Label>
               </div>
               <Switch
                 id="push-channel"
@@ -543,6 +552,22 @@ const NotificationSettings = () => {
               />
             </div>
             
+            {prefs.channels.includes('EMAIL') && (
+              <div className="space-y-2 pt-2 border-t">
+                <Label htmlFor="email-address">Email Address</Label>
+                <Input
+                  id="email-address"
+                  type="email"
+                  placeholder="user@example.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                />
+                <p className="text-sm text-muted-foreground">
+                  Email address for receiving notifications
+                </p>
+              </div>
+            )}
+            
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Phone className="h-4 w-4" />
@@ -552,9 +577,24 @@ const NotificationSettings = () => {
                 id="sms-channel"
                 checked={prefs.channels.includes('SMS')}
                 onCheckedChange={() => handleToggleChannel('SMS')}
-                disabled={!phone}
               />
             </div>
+            
+            {prefs.channels.includes('SMS') && (
+              <div className="space-y-2 pt-2 border-t">
+                <Label htmlFor="phone-number">Phone Number</Label>
+                <Input
+                  id="phone-number"
+                  type="tel"
+                  placeholder="+1234567890"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                />
+                <p className="text-sm text-muted-foreground">
+                  Include country code (e.g., +1 for US)
+                </p>
+              </div>
+            )}
             
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -567,28 +607,22 @@ const NotificationSettings = () => {
                 onCheckedChange={() => handleToggleChannel('SLACK')}
               />
             </div>
+            
+            {prefs.channels.includes('SLACK') && (
+              <div className="space-y-2 pt-2 border-t">
+                <Label htmlFor="slack-webhook-url">Slack Webhook URL</Label>
+                <Input
+                  id="slack-webhook-url"
+                  type="url"
+                  placeholder="https://hooks.slack.com/services/..."
+                  defaultValue={localStorage.getItem('slack-webhook-url') || ''}
+                />
+                <p className="text-sm text-muted-foreground">
+                  Get this from your Slack app's "Incoming Webhooks" settings
+                </p>
+              </div>
+            )}
           </div>
-          
-          {!phone && prefs.channels.includes('SMS') && (
-            <div className="text-sm text-yellow-600 bg-yellow-50 p-2 rounded">
-              Please add your phone number above to enable SMS notifications.
-            </div>
-          )}
-          
-          {prefs.channels.includes('SLACK') && (
-            <div className="space-y-2 pt-2 border-t">
-              <Label htmlFor="slack-webhook-url">Slack Webhook URL</Label>
-              <Input
-                id="slack-webhook-url"
-                type="url"
-                placeholder="https://hooks.slack.com/services/..."
-                defaultValue={localStorage.getItem('slack-webhook-url') || ''}
-              />
-              <p className="text-sm text-muted-foreground">
-                Get this from your Slack app's "Incoming Webhooks" settings
-              </p>
-            </div>
-          )}
         </CardContent>
       </Card>
 
@@ -603,7 +637,17 @@ const NotificationSettings = () => {
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <Button
+              onClick={sendTestInApp}
+              disabled={!prefs.channels.includes('PUSH')}
+              variant="outline"
+              className="w-full"
+            >
+              Test In-App
+            </Button>
+            
+            <Button
               onClick={sendTestEmail}
+              disabled={!prefs.channels.includes('EMAIL')}
               variant="outline"
               className="w-full"
             >
