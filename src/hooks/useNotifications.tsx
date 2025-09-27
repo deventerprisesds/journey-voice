@@ -244,15 +244,13 @@ export const useNotifications = () => {
     }
 
     try {
-      const { error } = await supabase.functions.invoke('send-push-notification', {
+      const { error } = await supabase.functions.invoke('send-unified-notification', {
         body: {
           userId: user.id,
-          title: 'Test Notification',
-          body: 'This is a test notification from your task manager!',
-          data: {
-            type: 'test',
-            timestamp: new Date().toISOString()
-          }
+          title: '🧪 Test Notification',
+          body: 'This is a test notification from your task management app.',
+          channels: ['EMAIL'],
+          data: { type: 'test' }
         }
       });
 
@@ -262,7 +260,7 @@ export const useNotifications = () => {
 
       toast({
         title: "Test notification sent",
-        description: "Check if you received the push notification",
+        description: "Check your unified webhook for the test notification.",
       });
     } catch (error) {
       console.error('Error sending test notification:', error);

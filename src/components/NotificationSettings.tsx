@@ -1,241 +1,184 @@
-import React, { useState, useEffect } from 'react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Switch } from '@/components/ui/switch';
-import { Label } from '@/components/ui/label';
-import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
-import { Separator } from '@/components/ui/separator';
-import { 
-  Bell, 
-  BellOff, 
-  Clock, 
-  Calendar,
-  Mail,
-  Smartphone,
-  Volume2,
-  VolumeX,
-  Settings,
-  TestTube
-} from 'lucide-react';
-import { useToast } from '@/hooks/use-toast';
-import { useNotifications } from '@/hooks/useNotifications';
-import { supabase } from '@/integrations/supabase/client';
-import { useAuth } from '@/hooks/useAuth';
+import React, { useState, useEffect } from "react";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Separator } from "@/components/ui/separator";
+import { Phone, Mail, MessageSquare, Volume2, VolumeX } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/hooks/useAuth";
 
-type NotificationChannel = 'WEB_PUSH' | 'EMAIL' | 'IN_APP' | 'SLACK';
+type NotificationChannel = 'EMAIL' | 'SMS' | 'SLACK';
 
 interface NotificationPrefs {
   due_reminders_enabled: boolean;
   overdue_reminders_enabled: boolean;
+  task_created_enabled: boolean;
   daily_digest_enabled: boolean;
   weekly_digest_enabled: boolean;
-  task_created_enabled: boolean;
   quiet_hours_start: string;
   quiet_hours_end: string;
   timezone: string;
   channels: NotificationChannel[];
-  email_address?: string;
-  slack_webhook_url?: string;
 }
 
-const NotificationSettings: React.FC = () => {
-  const { toast } = useToast();
-  const { user } = useAuth();
-  const isDemoMode = !user; // Simple demo mode detection
-  const {
-    isSupported,
-    permission,
-    subscription,
-    isLoading,
-    requestPermission,
-    subscribe,
-    unsubscribe,
-    sendTestNotification
-  } = useNotifications();
-
+const NotificationSettings = () => {
   const [prefs, setPrefs] = useState<NotificationPrefs>({
     due_reminders_enabled: true,
     overdue_reminders_enabled: true,
+    task_created_enabled: true,
     daily_digest_enabled: false,
     weekly_digest_enabled: false,
-    task_created_enabled: true,
     quiet_hours_start: '22:00',
     quiet_hours_end: '08:00',
-    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    channels: ['WEB_PUSH', 'IN_APP'] as NotificationChannel[],
-    email_address: '',
-    slack_webhook_url: ''
+    timezone: 'UTC',
+    channels: ['EMAIL']
   });
-
   const [isSaving, setIsSaving] = useState(false);
+  const [phone, setPhone] = useState('');
+  const { toast } = useToast();
+  const { user } = useAuth();
 
   useEffect(() => {
-    if (user && !isDemoMode) {
+    if (user) {
       loadNotificationPrefs();
-    } else if (isDemoMode) {
+    } else {
       loadDemoNotificationPrefs();
     }
-  }, [user, isDemoMode]);
-
-  const loadDemoNotificationPrefs = () => {
-    try {
-      const savedPrefs = localStorage.getItem('demo-notification-prefs');
-      const slackWebhook = localStorage.getItem('slack_webhook_url');
-      
-      if (savedPrefs) {
-        const parsedPrefs = JSON.parse(savedPrefs);
-        // Filter out SLACK from database channels, handle separately
-        const dbChannels = parsedPrefs.channels?.filter((c: string) => c !== 'SLACK') || ['WEB_PUSH', 'IN_APP'];
-        const channels = slackWebhook ? [...dbChannels, 'SLACK'] : dbChannels;
-        
-        setPrefs(prev => ({
-          ...prev,
-          ...parsedPrefs,
-          slack_webhook_url: slackWebhook || '',
-          channels
-        }));
-      } else {
-        // Set default channels, add SLACK if webhook exists
-        const defaultChannels: NotificationChannel[] = ['WEB_PUSH', 'IN_APP'];
-        if (slackWebhook) defaultChannels.push('SLACK');
-        
-        setPrefs(prev => ({
-          ...prev,
-          slack_webhook_url: slackWebhook || '',
-          channels: defaultChannels
-        }));
-      }
-    } catch (error) {
-      console.error('Error loading demo notification preferences:', error);
-    }
-  };
+  }, [user]);
 
   const loadNotificationPrefs = async () => {
-    try {
-      // Load both notification prefs and user profile
-      const [prefsResponse, profileResponse] = await Promise.all([
-        supabase
-          .from('notification_prefs')
-          .select('*')
-          .eq('user_id', user?.id)
-          .maybeSingle(),
-        supabase
-          .from('profiles')
-          .select('email')
-          .eq('user_id', user?.id)
-          .maybeSingle()
-      ]);
+    if (!user?.id) return;
 
-      if (prefsResponse.error && prefsResponse.error.code !== 'PGRST116') {
-        console.error('Error loading notification preferences:', prefsResponse.error);
+    try {
+      // Load notification preferences
+      const { data: prefsData, error: prefsError } = await supabase
+        .from('notification_prefs')
+        .select('*')
+        .eq('user_id', user.id)
+        .maybeSingle();
+
+      if (prefsError && prefsError.code !== 'PGRST116') {
+        console.error('Error loading notification preferences:', prefsError);
         return;
       }
 
-      const userEmail = profileResponse.data?.email || user?.email || '';
-      const slackWebhook = localStorage.getItem('slack_webhook_url') || '';
-
-      if (prefsResponse.data) {
-        const dbChannels = (prefsResponse.data.channels as Exclude<NotificationChannel, 'SLACK'>[]) || ['WEB_PUSH', 'IN_APP'];
-        // Add SLACK to channels if webhook exists, but keep it separate from DB
-        const channels: NotificationChannel[] = slackWebhook ? [...dbChannels, 'SLACK'] : dbChannels;
-          
+      if (prefsData) {
         setPrefs({
-          due_reminders_enabled: prefsResponse.data.due_reminders_enabled,
-          overdue_reminders_enabled: prefsResponse.data.overdue_reminders_enabled,
-          daily_digest_enabled: prefsResponse.data.daily_digest_enabled,
-          weekly_digest_enabled: prefsResponse.data.weekly_digest_enabled,
-          task_created_enabled: prefsResponse.data.task_created_enabled ?? true,
-          quiet_hours_start: prefsResponse.data.quiet_hours_start ? prefsResponse.data.quiet_hours_start.substring(0, 5) : '22:00',
-          quiet_hours_end: prefsResponse.data.quiet_hours_end ? prefsResponse.data.quiet_hours_end.substring(0, 5) : '08:00',
-          timezone: prefsResponse.data.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
-          channels,
-          email_address: userEmail,
-          slack_webhook_url: slackWebhook
+          due_reminders_enabled: prefsData.due_reminders_enabled ?? true,
+          overdue_reminders_enabled: prefsData.overdue_reminders_enabled ?? true,
+          task_created_enabled: prefsData.task_created_enabled ?? true,
+          daily_digest_enabled: prefsData.daily_digest_enabled ?? false,
+          weekly_digest_enabled: prefsData.weekly_digest_enabled ?? false,
+          quiet_hours_start: prefsData.quiet_hours_start ?? '22:00',
+          quiet_hours_end: prefsData.quiet_hours_end ?? '08:00',
+          timezone: prefsData.timezone ?? 'UTC',
+          channels: prefsData.channels ?? ['EMAIL']
         });
-      } else {
-        // Set default channels, including SLACK if webhook exists
-        const defaultChannels: NotificationChannel[] = ['WEB_PUSH', 'IN_APP'];
-        if (slackWebhook) defaultChannels.push('SLACK');
-        
-        // Set default email if no preferences exist yet
-        setPrefs(prev => ({ 
-          ...prev, 
-          email_address: userEmail,
-          slack_webhook_url: slackWebhook,
-          channels: defaultChannels
-        }));
+      }
+
+      // Load user phone number
+      const { data: profileData, error: profileError } = await supabase
+        .from('profiles')
+        .select('phone')
+        .eq('user_id', user.id)
+        .maybeSingle();
+
+      if (profileError && profileError.code !== 'PGRST116') {
+        console.error('Error loading phone number:', profileError);
+        return;
+      }
+
+      if (profileData?.phone) {
+        setPhone(profileData.phone);
       }
     } catch (error) {
       console.error('Error loading notification preferences:', error);
     }
   };
 
+  const loadDemoNotificationPrefs = () => {
+    const stored = localStorage.getItem('demo-notification-prefs');
+    const storedPhone = localStorage.getItem('demo-phone');
+    
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        setPrefs({
+          due_reminders_enabled: parsed.due_reminders_enabled ?? true,
+          overdue_reminders_enabled: parsed.overdue_reminders_enabled ?? true,
+          task_created_enabled: parsed.task_created_enabled ?? true,
+          daily_digest_enabled: parsed.daily_digest_enabled ?? false,
+          weekly_digest_enabled: parsed.weekly_digest_enabled ?? false,
+          quiet_hours_start: parsed.quiet_hours_start ?? '22:00',
+          quiet_hours_end: parsed.quiet_hours_end ?? '08:00',
+          timezone: parsed.timezone ?? 'UTC',
+          channels: parsed.channels ?? ['EMAIL']
+        });
+      } catch (error) {
+        console.error('Error parsing stored demo preferences:', error);
+      }
+    }
+    
+    if (storedPhone) {
+      setPhone(storedPhone);
+    }
+  };
+
   const saveNotificationPrefs = async () => {
-    // Always save Slack webhook URL to localStorage for security
-    if (prefs.slack_webhook_url) {
-      localStorage.setItem('slack_webhook_url', prefs.slack_webhook_url);
-    } else {
-      localStorage.removeItem('slack_webhook_url');
-    }
-
-    if (!user || isDemoMode) {
-      // For demo mode, save to localStorage but filter out SLACK for consistency
-      const prefsToSave = {
-        ...prefs,
-        channels: prefs.channels.filter(c => c !== 'SLACK')
-      };
-      localStorage.setItem('demo-notification-prefs', JSON.stringify(prefsToSave));
-      toast({
-        title: "Settings saved",
-        description: "Your notification preferences have been updated",
-      });
-      return;
-    }
-
     setIsSaving(true);
+    
     try {
-      // Ensure time format is HH:MM:SS for database
-      const formatTime = (time: string) => {
-        return time.length === 5 ? `${time}:00` : time;
-      };
+      // Save Slack webhook URL to localStorage (not in database for security)
+      const slackWebhookUrl = (document.getElementById('slack-webhook-url') as HTMLInputElement)?.value;
+      if (slackWebhookUrl) {
+        localStorage.setItem('slack-webhook-url', slackWebhookUrl);
+      }
 
-        const { error } = await supabase
-          .from('notification_prefs')
-          .upsert([{
-            user_id: user.id,
-            due_reminders_enabled: prefs.due_reminders_enabled,
-            overdue_reminders_enabled: prefs.overdue_reminders_enabled,
-            daily_digest_enabled: prefs.daily_digest_enabled,
-            weekly_digest_enabled: prefs.weekly_digest_enabled,
-            task_created_enabled: prefs.task_created_enabled,
-            quiet_hours_start: formatTime(prefs.quiet_hours_start),
-            quiet_hours_end: formatTime(prefs.quiet_hours_end),
-            timezone: prefs.timezone,
-            channels: prefs.channels.filter(c => c !== 'SLACK') as ('EMAIL' | 'IN_APP' | 'WEB_PUSH')[] // Database doesn't support SLACK channel
-          }], {
-            onConflict: 'user_id'
-          });
-
-      if (error) {
-        console.error('Error saving notification preferences:', error);
+      if (!user?.id) {
+        // Demo mode - save to localStorage
+        localStorage.setItem('demo-notification-prefs', JSON.stringify(prefs));
+        localStorage.setItem('demo-phone', phone);
         toast({
-          title: "Error",
-          description: `Failed to save notification preferences: ${error.message}`,
-          variant: "destructive",
+          title: "Settings saved",
+          description: "Your notification preferences have been saved locally for this demo.",
         });
         return;
       }
 
+      // Save notification preferences
+      const { error: prefsError } = await supabase
+        .from('notification_prefs')
+        .upsert({
+          user_id: user.id,
+          ...prefs
+        });
+
+      if (prefsError) {
+        throw prefsError;
+      }
+
+      // Save phone number to profile
+      const { error: phoneError } = await supabase
+        .from('profiles')
+        .update({ phone })
+        .eq('user_id', user.id);
+
+      if (phoneError) {
+        throw phoneError;
+      }
+
       toast({
         title: "Settings saved",
-        description: "Your notification preferences have been updated",
+        description: "Your notification preferences have been updated.",
       });
     } catch (error) {
       console.error('Error saving notification preferences:', error);
       toast({
-        title: "Error",
-        description: "Failed to save notification preferences",
+        title: "Error saving settings",
+        description: "There was a problem saving your notification preferences. Please try again.",
         variant: "destructive",
       });
     } finally {
@@ -243,188 +186,207 @@ const NotificationSettings: React.FC = () => {
     }
   };
 
-  const handlePermissionRequest = async () => {
-    const granted = await requestPermission();
-    if (granted) {
-      await subscribe();
-    }
-  };
-
   const handleToggleChannel = (channel: NotificationChannel) => {
-    setPrefs(prev => ({
-      ...prev,
-      channels: prev.channels.includes(channel)
-        ? prev.channels.filter(c => c !== channel)
-        : [...prev.channels, channel]
-    }));
-  };
-
-  const getPermissionStatus = () => {
-    if (!isSupported) {
-      return { color: 'bg-gray-100 text-gray-800', text: 'Not Supported' };
-    }
+    const newChannels = prefs.channels.includes(channel)
+      ? prefs.channels.filter(c => c !== channel)
+      : [...prefs.channels, channel];
     
-    switch (permission) {
-      case 'granted':
-        return { color: 'bg-green-100 text-green-800', text: 'Enabled' };
-      case 'denied':
-        return { color: 'bg-red-100 text-red-800', text: 'Blocked' };
-      default:
-        return { color: 'bg-yellow-100 text-yellow-800', text: 'Not Requested' };
-    }
+    setPrefs({ ...prefs, channels: newChannels });
   };
 
-  const sendTestSlackNotification = async () => {
-    if (!prefs.slack_webhook_url) {
+  const sendTestEmail = async () => {
+    try {
+      await supabase.functions.invoke('send-unified-notification', {
+        body: {
+          userId: user?.id || 'demo-user',
+          title: '🧪 Test Email Notification',
+          body: 'Test email notification - Email notifications will be sent here when enabled.',
+          channels: ['EMAIL'],
+          data: { type: 'test_notification' }
+        }
+      });
+      
+      toast({
+        title: "Test email sent",
+        description: "Check your unified webhook for the email notification.",
+      });
+    } catch (error) {
+      console.error('Error sending test email:', error);
       toast({
         title: "Error",
-        description: "Please enter your Slack webhook URL first",
+        description: "Failed to send test email notification.",
         variant: "destructive",
       });
-      return;
     }
+  };
 
+  const sendTestSMS = async () => {
     try {
-      const { data, error } = await supabase.functions.invoke('send-slack-notification', {
+      await supabase.functions.invoke('send-unified-notification', {
         body: {
-          webhook_url: prefs.slack_webhook_url,
-          message: "🧪 Test notification from Journey Voice App - Task management notifications will appear here when enabled.",
-          output: "test",
-          type: "test_notification"
+          userId: user?.id || 'demo-user',
+          title: '🧪 Test SMS Notification',
+          body: 'Test SMS notification - SMS notifications will be sent here when enabled.',
+          channels: ['SMS'],
+          data: { type: 'test_notification' }
+        }
+      });
+      
+      toast({
+        title: "Test SMS sent",
+        description: "Check your unified webhook for the SMS notification.",
+      });
+    } catch (error) {
+      console.error('Error sending test SMS:', error);
+      toast({
+        title: "Error",
+        description: "Failed to send test SMS notification.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const sendTestSlack = async () => {
+    try {
+      await supabase.functions.invoke('send-unified-notification', {
+        body: {
+          userId: user?.id || 'demo-user',
+          title: '🧪 Test Slack Notification',
+          body: 'Test Slack notification - Slack notifications will be sent here when enabled.',
+          channels: ['SLACK'],
+          data: { type: 'test_notification' }
+        }
+      });
+
+      toast({
+        title: "Test Slack notification sent",
+        description: "Check your unified webhook for the Slack notification.",
+      });
+    } catch (error) {
+      console.error('Error sending test Slack notification:', error);
+      toast({
+        title: "Error",
+        description: "Failed to send test Slack notification.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const testQuietHours = async () => {
+    try {
+      const now = new Date();
+      const quietStart = new Date();
+      const quietEnd = new Date();
+      
+      const [startHour, startMin] = prefs.quiet_hours_start.split(':').map(Number);
+      const [endHour, endMin] = prefs.quiet_hours_end.split(':').map(Number);
+      
+      quietStart.setHours(startHour, startMin, 0, 0);
+      quietEnd.setHours(endHour, endMin, 0, 0);
+      
+      // Handle overnight quiet hours
+      if (quietEnd < quietStart) {
+        if (now.getHours() < 12) {
+          quietStart.setDate(quietStart.getDate() - 1);
+        } else {
+          quietEnd.setDate(quietEnd.getDate() + 1);
+        }
+      }
+      
+      const isQuietTime = now >= quietStart && now <= quietEnd;
+      
+      toast({
+        title: isQuietTime ? "🤫 Quiet hours active" : "🔔 Outside quiet hours",
+        description: isQuietTime 
+          ? "Notifications would be suppressed right now due to quiet hours settings."
+          : "Notifications would be delivered normally right now.",
+      });
+    } catch (error) {
+      console.error('Error testing quiet hours:', error);
+      toast({
+        title: "Error",
+        description: "Failed to test quiet hours settings.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const createTestTaskWithNotifications = async () => {
+    try {
+      const { data, error } = await supabase.functions.invoke('create-test-task', {
+        body: {
+          userId: user?.id || 'demo-user'
         }
       });
 
       if (error) {
-        console.error("Slack notification error:", error);
-        toast({
-          title: "Error",
-          description: `Failed to send test notification: ${error.message}`,
-          variant: "destructive",
-        });
-        return;
+        throw error;
       }
 
       toast({
-        title: "Test Sent",
-        description: "Test notification sent to Slack. Check your channel to confirm it was received.",
+        title: "Test task created",
+        description: "A test task has been created and due reminders scheduled. You should receive notifications via your unified webhook when the task becomes due.",
       });
     } catch (error) {
-      console.error("Error sending Slack test notification:", error);
+      console.error('Error creating test task:', error);
       toast({
         title: "Error",
-        description: "Failed to send test notification. Please check your webhook URL.",
+        description: "Failed to create test task. Please try again.",
         variant: "destructive",
       });
     }
   };
 
-  const permissionStatus = getPermissionStatus();
-
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-2">
-        <Bell className="h-5 w-5" />
-        <h2 className="text-lg font-semibold">Notification Settings</h2>
-      </div>
-
-      {/* Push Notification Status */}
+      {/* Phone Number */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm flex items-center gap-2">
-            <Smartphone className="h-4 w-4" />
-            Push Notifications
+          <CardTitle className="flex items-center gap-2">
+            <Phone className="h-5 w-5" />
+            Phone Number
           </CardTitle>
+          <CardDescription>
+            Required for SMS notifications
+          </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span className="text-sm">Status:</span>
-              <Badge className={permissionStatus.color}>
-                {permissionStatus.text}
-              </Badge>
-              {subscription && (
-                <Badge className="bg-blue-100 text-blue-800">
-                  Subscribed
-                </Badge>
-              )}
-            </div>
-            
-            <div className="flex gap-2">
-              {permission !== 'granted' && (
-                <Button 
-                  onClick={handlePermissionRequest}
-                  disabled={!isSupported || isLoading}
-                  size="sm"
-                >
-                  {isLoading ? 'Loading...' : 'Enable Notifications'}
-                </Button>
-              )}
-              
-              {permission === 'granted' && !subscription && (
-                <Button 
-                  onClick={subscribe}
-                  disabled={isLoading}
-                  size="sm"
-                >
-                  {isLoading ? 'Subscribing...' : 'Subscribe'}
-                </Button>
-              )}
-              
-              {subscription && (
-                <>
-                  <Button 
-                    onClick={sendTestNotification}
-                    variant="outline"
-                    size="sm"
-                    className="flex items-center gap-1"
-                  >
-                    <TestTube className="h-3 w-3" />
-                    Test
-                  </Button>
-                  <Button 
-                    onClick={unsubscribe}
-                    variant="outline"
-                    size="sm"
-                    disabled={isLoading}
-                  >
-                    {isLoading ? 'Unsubscribing...' : 'Unsubscribe'}
-                  </Button>
-                </>
-              )}
-            </div>
+        <CardContent>
+          <div className="space-y-2">
+            <Label htmlFor="phone">Phone Number</Label>
+            <Input
+              id="phone"
+              type="tel"
+              placeholder="+1234567890"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+            />
+            <p className="text-sm text-muted-foreground">
+              Include country code (e.g., +1 for US)
+            </p>
           </div>
-
-          {!isSupported && (
-            <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-              <p className="text-sm text-yellow-800">
-                Push notifications are not supported in this browser. 
-                Try using Chrome, Firefox, or Safari for the best experience.
-              </p>
-            </div>
-          )}
         </CardContent>
       </Card>
 
       {/* Notification Types */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm flex items-center gap-2">
-            <Bell className="h-4 w-4" />
-            Notification Types
-          </CardTitle>
+          <CardTitle>Notification Types</CardTitle>
+          <CardDescription>
+            Choose which events trigger notifications
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex items-center justify-between">
             <div>
               <Label className="text-sm font-medium">Due Date Reminders</Label>
               <p className="text-xs text-muted-foreground">
-                Get notified when tasks are due soon
+                Get notified when tasks are approaching their due date
               </p>
             </div>
             <Switch
               checked={prefs.due_reminders_enabled}
               onCheckedChange={(checked) => 
-                setPrefs(prev => ({ ...prev, due_reminders_enabled: checked }))
+                setPrefs({ ...prefs, due_reminders_enabled: checked })
               }
             />
           </div>
@@ -439,7 +401,22 @@ const NotificationSettings: React.FC = () => {
             <Switch
               checked={prefs.overdue_reminders_enabled}
               onCheckedChange={(checked) => 
-                setPrefs(prev => ({ ...prev, overdue_reminders_enabled: checked }))
+                setPrefs({ ...prefs, overdue_reminders_enabled: checked })
+              }
+            />
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div>
+              <Label className="text-sm font-medium">Task Created</Label>
+              <p className="text-xs text-muted-foreground">
+                Get notified when new tasks are added
+              </p>
+            </div>
+            <Switch
+              checked={prefs.task_created_enabled}
+              onCheckedChange={(checked) => 
+                setPrefs({ ...prefs, task_created_enabled: checked })
               }
             />
           </div>
@@ -456,7 +433,7 @@ const NotificationSettings: React.FC = () => {
             <Switch
               checked={prefs.daily_digest_enabled}
               onCheckedChange={(checked) => 
-                setPrefs(prev => ({ ...prev, daily_digest_enabled: checked }))
+                setPrefs({ ...prefs, daily_digest_enabled: checked })
               }
             />
           </div>
@@ -471,24 +448,7 @@ const NotificationSettings: React.FC = () => {
             <Switch
               checked={prefs.weekly_digest_enabled}
               onCheckedChange={(checked) => 
-                setPrefs(prev => ({ ...prev, weekly_digest_enabled: checked }))
-              }
-            />
-          </div>
-
-          <Separator />
-
-          <div className="flex items-center justify-between">
-            <div>
-              <Label className="text-sm font-medium">Task Created</Label>
-              <p className="text-xs text-muted-foreground">
-                Get notified when new tasks are added
-              </p>
-            </div>
-            <Switch
-              checked={prefs.task_created_enabled}
-              onCheckedChange={(checked) => 
-                setPrefs(prev => ({ ...prev, task_created_enabled: checked }))
+                setPrefs({ ...prefs, weekly_digest_enabled: checked })
               }
             />
           </div>
@@ -498,295 +458,187 @@ const NotificationSettings: React.FC = () => {
       {/* Quiet Hours */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm flex items-center gap-2">
-            <VolumeX className="h-4 w-4" />
+          <CardTitle className="flex items-center gap-2">
+            <Volume2 className="h-5 w-5" />
             Quiet Hours
           </CardTitle>
+          <CardDescription>
+            Set times when you don't want to receive notifications
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <p className="text-xs text-muted-foreground">
-            No notifications will be sent during these hours
-          </p>
-          
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label className="text-sm">Start Time</Label>
+              <Label htmlFor="quiet-start">Start Time</Label>
               <Input
+                id="quiet-start"
                 type="time"
                 value={prefs.quiet_hours_start}
                 onChange={(e) => 
-                  setPrefs(prev => ({ ...prev, quiet_hours_start: e.target.value }))
+                  setPrefs({ ...prefs, quiet_hours_start: e.target.value })
                 }
               />
             </div>
-            
             <div className="space-y-2">
-              <Label className="text-sm">End Time</Label>
+              <Label htmlFor="quiet-end">End Time</Label>
               <Input
+                id="quiet-end"
                 type="time"
                 value={prefs.quiet_hours_end}
                 onChange={(e) => 
-                  setPrefs(prev => ({ ...prev, quiet_hours_end: e.target.value }))
+                  setPrefs({ ...prefs, quiet_hours_end: e.target.value })
                 }
               />
             </div>
           </div>
-
-          <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
-            <div className="flex items-center gap-2">
-              <Clock className="h-4 w-4 text-blue-600" />
-              <span className="text-sm text-blue-800">
-                Quiet hours: {prefs.quiet_hours_start} - {prefs.quiet_hours_end}
-              </span>
-            </div>
+          
+          <div className="space-y-2">
+            <Label htmlFor="timezone">Timezone</Label>
+            <Input
+              id="timezone"
+              value={prefs.timezone}
+              onChange={(e) => 
+                setPrefs({ ...prefs, timezone: e.target.value })
+              }
+              placeholder="UTC"
+            />
           </div>
         </CardContent>
       </Card>
 
-      {/* Notification Channels */}
+      {/* Delivery Channels */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm flex items-center gap-2">
-            <Settings className="h-4 w-4" />
+          <CardTitle className="flex items-center gap-2">
+            <MessageSquare className="h-5 w-5" />
             Delivery Channels
           </CardTitle>
+          <CardDescription>
+            Choose how you want to receive notifications via your unified webhook
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Smartphone className="h-4 w-4" />
-                <Label className="text-sm">Push Notifications</Label>
+                <Mail className="h-4 w-4" />
+                <Label htmlFor="email-channel">Email</Label>
               </div>
               <Switch
-                checked={prefs.channels.includes('WEB_PUSH')}
-                onCheckedChange={() => handleToggleChannel('WEB_PUSH')}
-                disabled={!subscription}
+                id="email-channel"
+                checked={prefs.channels.includes('EMAIL')}
+                onCheckedChange={() => handleToggleChannel('EMAIL')}
               />
             </div>
-
+            
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Bell className="h-4 w-4" />
-                <Label className="text-sm">In-App Notifications</Label>
+                <Phone className="h-4 w-4" />
+                <Label htmlFor="sms-channel">SMS</Label>
               </div>
               <Switch
-                checked={prefs.channels.includes('IN_APP')}
-                onCheckedChange={() => handleToggleChannel('IN_APP')}
+                id="sms-channel"
+                checked={prefs.channels.includes('SMS')}
+                onCheckedChange={() => handleToggleChannel('SMS')}
+                disabled={!phone}
               />
             </div>
-
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Mail className="h-4 w-4" />
-                  <Label className="text-sm">Email Notifications</Label>
-                </div>
-                <Switch
-                  checked={prefs.channels.includes('EMAIL')}
-                  onCheckedChange={() => handleToggleChannel('EMAIL')}
-                />
+            
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <MessageSquare className="h-4 w-4" />
+                <Label htmlFor="slack-channel">Slack</Label>
               </div>
-              {prefs.channels.includes('EMAIL') && (
-                <div className="ml-6 space-y-2">
-                  <Label className="text-xs text-muted-foreground">Email Address</Label>
-                  <Input
-                    type="email"
-                    value={prefs.email_address || ''}
-                    onChange={(e) => 
-                      setPrefs(prev => ({ ...prev, email_address: e.target.value }))
-                    }
-                    placeholder="Enter email address for notifications"
-                    className="text-sm"
-                  />
-                </div>
-              )}
-            </div>
-
-            <Separator />
-
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="h-4 w-4 flex items-center justify-center text-xs font-bold text-white bg-gradient-to-r from-green-500 to-blue-500 rounded">S</div>
-                  <Label className="text-sm">Slack Notifications</Label>
-                </div>
-                <Switch
-                  checked={prefs.channels.includes('SLACK')}
-                  onCheckedChange={() => handleToggleChannel('SLACK')}
-                />
-              </div>
-              {prefs.channels.includes('SLACK') && (
-                <div className="ml-6 space-y-2">
-                  <Label className="text-xs text-muted-foreground">Webhook URL</Label>
-                  <Input
-                    type="url"
-                    value={prefs.slack_webhook_url || ''}
-                    onChange={(e) => 
-                      setPrefs(prev => ({ ...prev, slack_webhook_url: e.target.value }))
-                    }
-                    placeholder="https://your-webhook-url.com/webhook"
-                    className="text-sm"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Enter your Slack webhook URL to receive task notifications
-                  </p>
-                </div>
-              )}
+              <Switch
+                id="slack-channel"
+                checked={prefs.channels.includes('SLACK')}
+                onCheckedChange={() => handleToggleChannel('SLACK')}
+              />
             </div>
           </div>
-        </CardContent>
-      </Card>
-
-      {/* Testing Section */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm flex items-center gap-2">
-            <TestTube className="h-4 w-4" />
-            Test Notifications
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-xs text-muted-foreground">
-            Test different notification scenarios to ensure everything is working properly
-          </p>
           
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={sendTestNotification}
-              disabled={!subscription}
-              className="flex items-center gap-2"
-            >
-              <Bell className="h-3 w-3" />
-              Test Push Notification
-            </Button>
-            
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                toast({
-                  title: "Test In-App Notification",
-                  description: "This is how in-app notifications will appear",
-                });
-              }}
-              className="flex items-center gap-2"
-            >
-              <Volume2 className="h-3 w-3" />
-              Test In-App Alert
-            </Button>
-            
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={!prefs.channels.includes('EMAIL') || !prefs.email_address}
-              className="flex items-center gap-2"
-            >
-              <Mail className="h-3 w-3" />
-              Test Email
-            </Button>
-            
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={sendTestSlackNotification}
-              disabled={!prefs.channels.includes('SLACK') || !prefs.slack_webhook_url}
-              className="flex items-center gap-2"
-            >
-              <div className="h-3 w-3 flex items-center justify-center text-xs font-bold text-white bg-gradient-to-r from-green-500 to-blue-500 rounded">S</div>
-              Test Slack
-            </Button>
-            
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                const now = new Date();
-                const quietStart = prefs.quiet_hours_start;
-                const quietEnd = prefs.quiet_hours_end;
-                const currentTime = now.toTimeString().substring(0, 5);
-                
-                const isInQuietHours = quietStart > quietEnd 
-                  ? currentTime >= quietStart || currentTime <= quietEnd
-                  : currentTime >= quietStart && currentTime <= quietEnd;
-                
-                toast({
-                  title: "Quiet Hours Check",
-                  description: isInQuietHours 
-                    ? "You are currently in quiet hours - notifications are paused"
-                    : "You are outside quiet hours - notifications are active",
-                  variant: isInQuietHours ? "default" : "default"
-                });
-              }}
-              className="flex items-center gap-2"
-            >
-              <Clock className="h-3 w-3" />
-              Test Quiet Hours
-            </Button>
-          </div>
-
-          <Separator />
+          {!phone && prefs.channels.includes('SMS') && (
+            <div className="text-sm text-yellow-600 bg-yellow-50 p-2 rounded">
+              Please add your phone number above to enable SMS notifications.
+            </div>
+          )}
           
-          <div className="space-y-3">
-            <Label className="text-sm font-medium">Test Complete Workflow</Label>
-            <p className="text-xs text-muted-foreground">
-              Create a test task due in 5 minutes to test the complete notification system
-            </p>
-            <Button
-              onClick={async () => {
-                try {
-                  const { data, error } = await supabase.functions.invoke('create-test-task', {
-                    body: {
-                      userId: user?.id || 'demo-user',
-                      testType: '5-minute'
-                    }
-                  });
-
-                  if (error) throw error;
-
-                  toast({
-                    title: "Test Task Created",
-                    description: "A test task has been created with notifications scheduled for 15 minutes before and at due time",
-                  });
-                } catch (error) {
-                  console.error('Error creating test task:', error);
-                  toast({
-                    title: "Error",
-                    description: "Failed to create test task",
-                    variant: "destructive",
-                  });
-                }
-              }}
-              className="w-full"
-            >
-              <TestTube className="h-4 w-4 mr-2" />
-              Create Test Task Due in 5 Minutes
-            </Button>
-          </div>
-          
-          {!subscription && (
-            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
-              <p className="text-sm text-amber-800">
-                Push notification testing requires an active subscription. Enable push notifications above to test.
+          {prefs.channels.includes('SLACK') && (
+            <div className="space-y-2 pt-2 border-t">
+              <Label htmlFor="slack-webhook-url">Slack Webhook URL</Label>
+              <Input
+                id="slack-webhook-url"
+                type="url"
+                placeholder="https://hooks.slack.com/services/..."
+                defaultValue={localStorage.getItem('slack-webhook-url') || ''}
+              />
+              <p className="text-sm text-muted-foreground">
+                Get this from your Slack app's "Incoming Webhooks" settings
               </p>
             </div>
           )}
         </CardContent>
       </Card>
 
-      {/* Save Settings Button */}
-      <div className="flex justify-between items-center">
-        <div className="text-xs text-muted-foreground">
-          Changes are saved automatically when you click "Save Settings"
-        </div>
-        <Button 
-          onClick={saveNotificationPrefs}
-          disabled={isSaving}
-          className="flex items-center gap-2"
-        >
-          {isSaving ? 'Saving...' : 'Save Settings'}
+      {/* Test Notifications */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Test Notifications</CardTitle>
+          <CardDescription>
+            Send test notifications to verify your unified webhook setup
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <Button
+              onClick={sendTestEmail}
+              variant="outline"
+              className="w-full"
+            >
+              Test Email
+            </Button>
+            
+            <Button
+              onClick={sendTestSMS}
+              disabled={!prefs.channels.includes('SMS') || !phone}
+              variant="outline"
+              className="w-full"
+            >
+              Test SMS
+            </Button>
+            
+            <Button
+              onClick={sendTestSlack}
+              disabled={!prefs.channels.includes('SLACK')}
+              variant="outline"
+              className="w-full"
+            >
+              Test Slack
+            </Button>
+            
+            <Button
+              onClick={testQuietHours}
+              variant="outline"
+              className="w-full"
+            >
+              Test Quiet Hours
+            </Button>
+            
+            <Button
+              onClick={createTestTaskWithNotifications}
+              variant="outline"
+              className="w-full col-span-1 md:col-span-2"
+            >
+              Create Test Task
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Save Settings */}
+      <div className="flex justify-end">
+        <Button onClick={saveNotificationPrefs} disabled={isSaving}>
+          {isSaving ? "Saving..." : "Save Settings"}
         </Button>
       </div>
     </div>

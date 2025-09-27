@@ -473,6 +473,7 @@ export type Database = {
           email: string | null
           full_name: string | null
           id: string
+          phone: string | null
           updated_at: string
           user_id: string
         }
@@ -482,6 +483,7 @@ export type Database = {
           email?: string | null
           full_name?: string | null
           id?: string
+          phone?: string | null
           updated_at?: string
           user_id: string
         }
@@ -491,6 +493,7 @@ export type Database = {
           email?: string | null
           full_name?: string | null
           id?: string
+          phone?: string | null
           updated_at?: string
           user_id?: string
         }
@@ -887,7 +890,7 @@ export type Database = {
     }
     Enums: {
       app_role: "admin" | "user"
-      notification_channel: "WEB_PUSH" | "EMAIL" | "IN_APP"
+      notification_channel: "EMAIL" | "SMS" | "SLACK"
       task_category: "LIFE" | "CAREER" | "VENTURES" | "EDUCATION"
       task_priority: "LOW" | "MEDIUM" | "HIGH" | "URGENT"
       task_source: "CHAT" | "EMBA_SHEET" | "MIT_SHEET" | "MANUAL"
@@ -1032,7 +1035,7 @@ export const Constants = {
   public: {
     Enums: {
       app_role: ["admin", "user"],
-      notification_channel: ["WEB_PUSH", "EMAIL", "IN_APP"],
+      notification_channel: ["EMAIL", "SMS", "SLACK"],
       task_category: ["LIFE", "CAREER", "VENTURES", "EDUCATION"],
       task_priority: ["LOW", "MEDIUM", "HIGH", "URGENT"],
       task_source: ["CHAT", "EMBA_SHEET", "MIT_SHEET", "MANUAL"],
