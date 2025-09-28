@@ -277,7 +277,6 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
     }
   };
 
-
   const generateDailySchedule = async () => {
     if (tasks.length === 0) {
       toast({
@@ -849,7 +848,7 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
         isOpen={isCreationModalOpen}
         onClose={() => setIsCreationModalOpen(false)}
         onTasksCreated={handleTasksCreated}
-        boardId={board.id}
+        boardId={board?.id || ''}
         userId={user?.id || ''}
       />
     </div>
