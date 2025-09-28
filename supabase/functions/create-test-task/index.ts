@@ -239,13 +239,23 @@ async function sendImmediateTestNotification(supabaseClient: any, task: any, use
       .eq('user_id', userId)
       .single();
 
+    // Get user's notification preferences to use their configured channels
+    const { data: notificationPrefs } = await supabaseClient
+      .from('notification_prefs')
+      .select('channels')
+      .eq('user_id', userId)
+      .single();
+
+    // Use user's configured channels or default to EMAIL and SLACK
+    const channels = notificationPrefs?.channels || ['EMAIL', 'SLACK'];
+
     // Send immediate notification via unified webhook
     const { data, error } = await supabaseClient.functions.invoke('send-unified-notification', {
       body: {
         userId: userId,
         title: 'Test Task Created',
         body: `Test task "${task.title}" has been created and will be due at ${new Date(task.due_date).toLocaleString()}`,
-        channels: ['EMAIL', 'SLACK'],
+        channels: channels,
         userProfile: profile || { email: 'test@example.com' },
         data: {
           type: 'test_task_created',
