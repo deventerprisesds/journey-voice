@@ -253,6 +253,14 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
     (editedTask.blocked_by || []).includes(t.id)
   );
 
+  // Move useMemo BEFORE the conditional return to follow Rules of Hooks
+  const taskMap = useMemo(() => {
+    return allTasks.reduce((map, t) => {
+      map[t.id] = t;
+      return map;
+    }, {} as Record<string, Task>);
+  }, [allTasks]);
+
   if (!task) return null;
 
   const validateDependencies = (newDependencies: string[]): boolean => {
@@ -297,13 +305,6 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
       });
     }
   };
-
-  const taskMap = useMemo(() => {
-    return allTasks.reduce((map, t) => {
-      map[t.id] = t;
-      return map;
-    }, {} as Record<string, Task>);
-  }, [allTasks]);
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
