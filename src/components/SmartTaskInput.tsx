@@ -1,18 +1,27 @@
 import React, { useState } from 'react';
-import { Send, Loader2, Calendar, Brain } from 'lucide-react';
+import { Send, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Card, CardContent } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { supabase } from '@/integrations/supabase/client';
 import { itineraryEngine } from '@/utils/ItineraryEngine';
 import { useToast } from '@/hooks/use-toast';
 import { Task } from '@/types/task';
+import EditableTaskSuggestion from './EditableTaskSuggestion';
 
 interface SmartTaskInputProps {
   tasks: Task[];
   targetDate?: Date;
   onTaskScheduled?: (task: any, slot: any) => void;
+}
+
+interface TaskSuggestion {
+  title: string;
+  description?: string;
+  priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
+  category: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION';
+  estimate_minutes: number;
+  scheduledStart: string;
+  aiReasoning: string;
 }
 
 const SmartTaskInput: React.FC<SmartTaskInputProps> = ({
@@ -23,6 +32,7 @@ const SmartTaskInput: React.FC<SmartTaskInputProps> = ({
   const [input, setInput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [lastSuggestion, setLastSuggestion] = useState<any>(null);
+  const [busySlots, setBusySlots] = useState<Array<{start: string; end: string; title: string; type: string}>>([]);
   const { toast } = useToast();
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -31,19 +41,34 @@ const SmartTaskInput: React.FC<SmartTaskInputProps> = ({
 
     setIsProcessing(true);
     try {
-      // Use the smart calendar scheduler
+      // Use the smart calendar scheduler with real calendar integration
       const result = await itineraryEngine.findOptimalTimeSlot(
         input,
         targetDate,
         tasks
       );
 
-      setLastSuggestion(result);
+      // Transform the result to match our TaskSuggestion interface
+      const taskSuggestion: TaskSuggestion = {
+        title: result.parsedTask?.title || input,
+        description: result.parsedTask?.description,
+        priority: result.parsedTask?.priority || 'MEDIUM',
+        category: result.parsedTask?.category || 'LIFE',
+        estimate_minutes: result.parsedTask?.estimatedDuration || 60,
+        scheduledStart: result.scheduledSlot?.startTime || new Date().toISOString(),
+        aiReasoning: result.aiReasoning || 'AI suggested this time slot based on your calendar availability.'
+      };
+
+      setLastSuggestion({
+        ...result,
+        taskSuggestion
+      });
+      setBusySlots(result.busySlots || []);
       setInput('');
       
       toast({
         title: "Task Analyzed",
-        description: "AI has found the optimal time slot for your task.",
+        description: "AI has found the optimal time slot for your task. Review and edit if needed.",
       });
 
     } catch (error) {
@@ -58,9 +83,7 @@ const SmartTaskInput: React.FC<SmartTaskInputProps> = ({
     }
   };
 
-  const handleAcceptSuggestion = async () => {
-    if (!lastSuggestion) return;
-
+  const handleAcceptSuggestion = async (editedSuggestion: TaskSuggestion) => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('User not authenticated');
@@ -77,17 +100,23 @@ const SmartTaskInput: React.FC<SmartTaskInputProps> = ({
         throw new Error('No default board found');
       }
 
-      // Create the task
+      // Calculate end time based on duration
+      const startTime = new Date(editedSuggestion.scheduledStart);
+      const endTime = new Date(startTime.getTime() + editedSuggestion.estimate_minutes * 60000);
+
+      // Create the task with edited details
       const { data: newTask, error } = await supabase
         .from('tasks')
         .insert({
-          title: lastSuggestion.parsedTask.title,
-          description: lastSuggestion.parsedTask.description,
-          priority: lastSuggestion.parsedTask.priority,
-          category: lastSuggestion.parsedTask.category,
-          due_date: lastSuggestion.scheduledSlot.scheduledStart,
-          estimate_minutes: lastSuggestion.parsedTask.estimate_minutes,
-          status: lastSuggestion.parsedTask.status || 'TODO',
+          title: editedSuggestion.title,
+          description: editedSuggestion.description,
+          priority: editedSuggestion.priority,
+          category: editedSuggestion.category,
+          start_time: startTime.toISOString(),
+          end_time: endTime.toISOString(),
+          estimate_minutes: editedSuggestion.estimate_minutes,
+          is_scheduled: true,
+          status: 'TODO',
           user_id: user.id,
           board_id: boards[0].id
         })
@@ -103,22 +132,26 @@ const SmartTaskInput: React.FC<SmartTaskInputProps> = ({
             userId: user.id,
             taskId: newTask.id,
             title: 'Smart Task Scheduled',
-            body: `Task "${lastSuggestion.parsedTask.title}" has been scheduled`,
+            body: `Task "${editedSuggestion.title}" has been scheduled`,
             type: 'task_scheduled',
             data: {
-              scheduledSlot: lastSuggestion.scheduledSlot
+              scheduledSlot: {
+                startTime: startTime.toISOString(),
+                endTime: endTime.toISOString(),
+                reasoning: editedSuggestion.aiReasoning
+              }
             }
           }
         });
 
-        // Generate reminders if there's a due date
-        if (lastSuggestion.scheduledSlot.scheduledStart) {
+        // Generate reminders if there's a start time
+        if (startTime) {
           await supabase.functions.invoke('generate-task-reminders', {
             body: {
               taskId: newTask.id,
               userId: user.id,
-              title: lastSuggestion.parsedTask.title,
-              dueDate: lastSuggestion.scheduledSlot.scheduledStart
+              title: editedSuggestion.title,
+              dueDate: startTime.toISOString()
             }
           });
         }
@@ -126,12 +159,17 @@ const SmartTaskInput: React.FC<SmartTaskInputProps> = ({
         console.warn('Failed to send notifications:', notificationError);
       }
 
-      onTaskScheduled?.(newTask, lastSuggestion.scheduledSlot);
+      onTaskScheduled?.(newTask, {
+        startTime: startTime.toISOString(),
+        endTime: endTime.toISOString(),
+        reasoning: editedSuggestion.aiReasoning
+      });
       setLastSuggestion(null);
+      setBusySlots([]);
 
       toast({
         title: "Task Scheduled",
-        description: `Task scheduled for ${new Date(lastSuggestion.scheduledSlot.scheduledStart).toLocaleString()}`,
+        description: `Task scheduled for ${startTime.toLocaleString()}`,
       });
 
     } catch (error) {
@@ -163,63 +201,16 @@ const SmartTaskInput: React.FC<SmartTaskInputProps> = ({
         </Button>
       </form>
 
-      {lastSuggestion && (
-        <Card className="border-primary/20 bg-primary/5">
-          <CardContent className="pt-4">
-            <div className="space-y-3">
-              <div className="flex items-center gap-2">
-                <Brain className="h-5 w-5 text-primary" />
-                <h4 className="font-semibold">AI Scheduling Suggestion</h4>
-              </div>
-              
-              <div className="space-y-2">
-                <div>
-                  <h5 className="font-medium">{lastSuggestion.parsedTask.title}</h5>
-                  {lastSuggestion.parsedTask.description && (
-                    <p className="text-sm text-muted-foreground">
-                      {lastSuggestion.parsedTask.description}
-                    </p>
-                  )}
-                </div>
-                
-                <div className="flex items-center gap-2 flex-wrap">
-                  <Badge className="flex items-center gap-1">
-                    <Calendar className="h-3 w-3" />
-                    {new Date(lastSuggestion.scheduledSlot.scheduledStart).toLocaleString()}
-                  </Badge>
-                  <Badge variant="outline">
-                    {lastSuggestion.parsedTask.priority}
-                  </Badge>
-                  <Badge variant="outline">
-                    {lastSuggestion.parsedTask.category}
-                  </Badge>
-                  {lastSuggestion.parsedTask.estimate_minutes && (
-                    <Badge variant="outline">
-                      {lastSuggestion.parsedTask.estimate_minutes}m
-                    </Badge>
-                  )}
-                </div>
-                
-                <p className="text-sm text-muted-foreground">
-                  <strong>AI Reasoning:</strong> {lastSuggestion.aiReasoning}
-                </p>
-                
-                <div className="flex gap-2">
-                  <Button onClick={handleAcceptSuggestion} size="sm">
-                    Schedule Task
-                  </Button>
-                  <Button 
-                    onClick={() => setLastSuggestion(null)} 
-                    variant="outline" 
-                    size="sm"
-                  >
-                    Dismiss
-                  </Button>
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+      {lastSuggestion && lastSuggestion.taskSuggestion && (
+        <EditableTaskSuggestion
+          suggestion={lastSuggestion.taskSuggestion}
+          onAccept={handleAcceptSuggestion}
+          onDismiss={() => {
+            setLastSuggestion(null);
+            setBusySlots([]);
+          }}
+          busySlots={busySlots}
+        />
       )}
     </div>
   );

@@ -247,7 +247,7 @@ export class ItineraryEngine {
   }
 
   /**
-   * Smart task placement using AI scheduling
+   * Smart task placement using AI scheduling with real calendar integration
    */
   async findOptimalTimeSlot(
     taskText: string,
@@ -255,25 +255,116 @@ export class ItineraryEngine {
     existingTasks: Task[] = []
   ): Promise<{
     parsedTask: any;
-    scheduledSlot: ScheduledTask;
+    scheduledSlot: any;
     aiReasoning: string;
+    busySlots: Array<{start: string; end: string; title: string; type: string}>;
   }> {
     try {
-      const response = await supabase.functions.invoke('smart-calendar-scheduler', {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('User not authenticated');
+
+      // Get real calendar availability
+      const startDate = targetDate || new Date();
+      const endDate = new Date(startDate.getTime() + 7 * 24 * 60 * 60 * 1000); // 7 days ahead
+      
+      const { data: calendarConnections } = await supabase
+        .from('calendar_connections')
+        .select('*')
+        .eq('user_id', user.id)
+        .eq('is_active', true);
+
+      let busySlots: any[] = [];
+      
+      // Get external calendar busy slots
+      if (calendarConnections && calendarConnections.length > 0) {
+        for (const connection of calendarConnections) {
+          try {
+            const { data: availability } = await supabase.functions.invoke(
+              'calendar-integration-manager',
+              {
+                body: {
+                  action: 'get_availability',
+                  connection_id: connection.id,
+                  start_date: startDate.toISOString(),
+                  end_date: endDate.toISOString()
+                }
+              }
+            );
+            
+            if (availability?.busy_slots) {
+              busySlots.push(...availability.busy_slots);
+            }
+          } catch (error) {
+            console.warn('Failed to get availability from calendar connection:', connection.id, error);
+          }
+        }
+      }
+
+      // Get existing scheduled tasks as busy slots
+      const scheduledTasks = existingTasks
+        .filter(task => task.is_scheduled && task.start_time && task.end_time)
+        .map(task => ({
+          start: task.start_time,
+          end: task.end_time,
+          title: task.title,
+          type: 'task'
+        }));
+      
+      busySlots.push(...scheduledTasks);
+
+      const { data, error } = await supabase.functions.invoke('smart-calendar-scheduler', {
         body: {
           taskText,
-          targetDate: targetDate?.toISOString(),
+          targetDate: targetDate?.toISOString() || new Date().toISOString(),
           existingTasks,
-          workingMinutes: 420
+          workingMinutes: 420, // 7 hours default
+          busySlots,
+          scheduling_context: this.extractSchedulingContext(taskText)
         }
       });
 
-      if (response.error) throw response.error;
-      return response.data;
+      if (error) {
+        console.error('Smart scheduler error:', error);
+        throw error;
+      }
+
+      return {
+        ...data,
+        busySlots // Include busy slots for UI visualization
+      };
     } catch (error) {
-      console.error('Error finding optimal time slot:', error);
+      console.error('Failed to find optimal time slot:', error);
       throw error;
     }
+  }
+
+  private extractSchedulingContext(taskText: string): string[] {
+    const context: string[] = [];
+    const lowerText = taskText.toLowerCase();
+    
+    if (lowerText.includes('bank') || lowerText.includes('office hours')) {
+      context.push('business_hours');
+    }
+    if (lowerText.includes('commute') || lowerText.includes('way to')) {
+      context.push('commute_time');
+    }
+    if (lowerText.includes('read') || lowerText.includes('study')) {
+      context.push('quiet_time');
+    }
+    if (lowerText.includes('gym') || lowerText.includes('exercise')) {
+      context.push('morning_evening');
+    }
+    if (lowerText.includes('flexible') || lowerText.includes('anytime')) {
+      context.push('flexible_hours');
+    }
+    if (lowerText.includes('weekday') || lowerText.includes('monday to friday')) {
+      context.push('weekdays_only');
+    }
+    if (lowerText.includes('weekend') || lowerText.includes('saturday') || lowerText.includes('sunday')) {
+      context.push('weekend_ok');
+    }
+    
+    return context;
   }
 
   /**
