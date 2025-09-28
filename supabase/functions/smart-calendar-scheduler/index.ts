@@ -214,7 +214,7 @@ serve(async (req) => {
           },
           {
             role: 'user',
-            content: `Task: ${parsedTask.task.title}
+            content: `Task: ${taskText}
 Scheduled time: ${optimalSlot.scheduledStart}
 Workload balance: ${JSON.stringify(workloadBalance)}
 Existing tasks today: ${existingTasks.filter((t: Task) => isSameDay(new Date(t.due_date || ''), optimalSlot.scheduledStart)).length}`

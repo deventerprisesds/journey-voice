@@ -126,16 +126,21 @@ export async function scheduleNewTask(task: Partial<Task> & { board_id: string; 
         }
       });
 
-      // Generate reminders if there's a due date
-      if (savedTask.due_date) {
+      // Generate reminders for tasks with due dates OR scheduled times
+      if (savedTask.due_date || savedTask.start_time) {
         await supabase.functions.invoke('generate-task-reminders', {
           body: {
             taskId: savedTask.id,
             userId: savedTask.user_id,
             title: savedTask.title,
-            dueDate: savedTask.due_date
+            dueDate: savedTask.due_date,
+            startTime: savedTask.start_time,
+            reminderMinutes: 15 // Default Slack reminder 15 minutes before scheduled time
           }
         });
+
+        // Process notifications immediately
+        await supabase.functions.invoke('notification-delivery');
       }
     } catch (notificationError) {
       console.warn('Failed to send notifications:', notificationError);

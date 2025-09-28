@@ -38,12 +38,13 @@ const Calendar: React.FC = () => {
         // Create default board if none exists
         const { data: newBoard, error: createError } = await supabase
           .from('boards')
-          .insert({
+          .insert([{
             name: 'Personal Tasks',
             description: 'Your main task board',
+            user_id: user?.id || '',
             is_default: true,
             position: 0
-          })
+          }])
           .select('id')
           .single();
 

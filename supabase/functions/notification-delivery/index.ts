@@ -99,7 +99,7 @@ serve(async (req) => {
           .from('scheduled_notifications')
           .update({ 
             failed_at: new Date().toISOString(),
-            failure_reason: error.message || 'Unknown error'
+            failure_reason: error instanceof Error ? error.message : String(error) || 'Unknown error'
           })
           .eq('id', notification.id);
 
