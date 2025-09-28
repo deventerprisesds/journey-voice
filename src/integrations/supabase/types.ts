@@ -376,6 +376,13 @@ export type Database = {
             referencedRelation: "calendar_connections"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "external_calendar_events_connection_id_fkey"
+            columns: ["connection_id"]
+            isOneToOne: false
+            referencedRelation: "calendar_connections_secure"
+            referencedColumns: ["id"]
+          },
         ]
       }
       extracted_content: {
@@ -567,6 +574,36 @@ export type Database = {
           updated_at?: string
           user_id?: string
           weekly_digest_enabled?: boolean | null
+        }
+        Relationships: []
+      }
+      oauth_token_audit: {
+        Row: {
+          action_type: string
+          connection_id: string
+          created_at: string
+          id: string
+          ip_address: unknown | null
+          user_agent: string | null
+          user_id: string
+        }
+        Insert: {
+          action_type: string
+          connection_id: string
+          created_at?: string
+          id?: string
+          ip_address?: unknown | null
+          user_agent?: string | null
+          user_id: string
+        }
+        Update: {
+          action_type?: string
+          connection_id?: string
+          created_at?: string
+          id?: string
+          ip_address?: unknown | null
+          user_agent?: string | null
+          user_id?: string
         }
         Relationships: []
       }
@@ -894,12 +931,64 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      calendar_connections_secure: {
+        Row: {
+          access_token: string | null
+          created_at: string | null
+          expires_at: string | null
+          id: string | null
+          is_active: boolean | null
+          provider: string | null
+          provider_account_email: string | null
+          provider_account_id: string | null
+          refresh_token: string | null
+          scope: string | null
+          updated_at: string | null
+          user_id: string | null
+        }
+        Insert: {
+          access_token?: never
+          created_at?: string | null
+          expires_at?: string | null
+          id?: string | null
+          is_active?: boolean | null
+          provider?: string | null
+          provider_account_email?: string | null
+          provider_account_id?: string | null
+          refresh_token?: never
+          scope?: string | null
+          updated_at?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          access_token?: never
+          created_at?: string | null
+          expires_at?: string | null
+          id?: string | null
+          is_active?: boolean | null
+          provider?: string | null
+          provider_account_email?: string | null
+          provider_account_id?: string | null
+          refresh_token?: never
+          scope?: string | null
+          updated_at?: string | null
+          user_id?: string | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
       binary_quantize: {
         Args: { "": string } | { "": unknown }
         Returns: unknown
+      }
+      decrypt_token: {
+        Args: { encrypted_token: string }
+        Returns: string
+      }
+      encrypt_token: {
+        Args: { token_value: string }
+        Returns: string
       }
       get_current_user_role: {
         Args: Record<PropertyKey, never>
@@ -957,6 +1046,18 @@ export type Database = {
         Args: { "": unknown }
         Returns: unknown
       }
+      insert_calendar_connection: {
+        Args: {
+          _access_token: string
+          _expires_at?: string
+          _provider: string
+          _provider_account_email: string
+          _provider_account_id: string
+          _refresh_token?: string
+          _scope?: string
+        }
+        Returns: string
+      }
       ivfflat_bit_support: {
         Args: { "": unknown }
         Returns: unknown
@@ -976,6 +1077,15 @@ export type Database = {
       l2_normalize: {
         Args: { "": string } | { "": unknown } | { "": unknown }
         Returns: string
+      }
+      log_oauth_token_access: {
+        Args: {
+          _action_type: string
+          _connection_id: string
+          _ip_address?: unknown
+          _user_agent?: string
+        }
+        Returns: undefined
       }
       log_profile_access: {
         Args: {
@@ -1019,6 +1129,10 @@ export type Database = {
           similarity: number
         }[]
       }
+      revoke_calendar_connection: {
+        Args: { _connection_id: string }
+        Returns: boolean
+      }
       sparsevec_out: {
         Args: { "": unknown }
         Returns: unknown
@@ -1030,6 +1144,15 @@ export type Database = {
       sparsevec_typmod_in: {
         Args: { "": unknown[] }
         Returns: number
+      }
+      update_calendar_connection_tokens: {
+        Args: {
+          _access_token: string
+          _connection_id: string
+          _expires_at?: string
+          _refresh_token?: string
+        }
+        Returns: boolean
       }
       vector_avg: {
         Args: { "": number[] }
