@@ -47,9 +47,6 @@ serve(async (req) => {
       .maybeSingle();
 
     const userChannels = prefs?.channels || ['EMAIL'];
-    const slackWebhook = localStorage?.getItem('slackWebhook') || 
-                        (typeof window !== 'undefined' ? window.localStorage?.getItem('slackWebhook') : null) ||
-                        'https://edsdevn8n.app.n8n.cloud/webhook/91c642ca-0125-4109-9279-ae71993cbc72';
 
     // Send via unified notification service 
     try {

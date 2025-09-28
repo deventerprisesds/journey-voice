@@ -206,8 +206,25 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
 
       onTasksCreated(createdTasks);
       
-      // Auto-generate reminders for tasks with due dates
+      // Send immediate task creation notifications to enabled channels
       for (const task of createdTasks) {
+        try {
+          await supabase.functions.invoke('send-push-notification', {
+            body: {
+              userId: task.user_id,
+              title: 'New Task Created',
+              body: `"${task.title}" has been added to your tasks`,
+              data: {
+                type: 'task_created',
+                taskId: task.id
+              }
+            }
+          });
+        } catch (error) {
+          console.error('Error sending task creation notification:', task.id, error);
+        }
+        
+        // Auto-generate reminders for tasks with due dates
         if (task.due_date) {
           try {
             await supabase.functions.invoke('generate-task-reminders', {
