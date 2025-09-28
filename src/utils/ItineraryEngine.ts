@@ -30,6 +30,12 @@ export class ItineraryEngine {
     breakMinutes: 60 // 1 hour break
   };
 
+  private workloadBalance = {
+    projectToTaskRatio: 0.6, // 60% ongoing projects, 25% one-off tasks, 15% buffer
+    oneOffTaskRatio: 0.25,
+    bufferRatio: 0.15
+  };
+
   /**
    * Generate a smart schedule for tasks based on priorities, dependencies, and due dates
    */
@@ -238,6 +244,104 @@ export class ItineraryEngine {
       console.error('Error saving schedule as itinerary:', error);
       throw error;
     }
+  }
+
+  /**
+   * Smart task placement using AI scheduling
+   */
+  async findOptimalTimeSlot(
+    taskText: string,
+    targetDate?: Date,
+    existingTasks: Task[] = []
+  ): Promise<{
+    parsedTask: any;
+    scheduledSlot: ScheduledTask;
+    aiReasoning: string;
+  }> {
+    try {
+      const response = await supabase.functions.invoke('smart-calendar-scheduler', {
+        body: {
+          taskText,
+          targetDate: targetDate?.toISOString(),
+          existingTasks,
+          workingMinutes: 420
+        }
+      });
+
+      if (response.error) throw response.error;
+      return response.data;
+    } catch (error) {
+      console.error('Error finding optimal time slot:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Analyze current workload balance
+   */
+  analyzeWorkloadBalance(tasks: Task[], date: Date = new Date()): {
+    ongoingProjectTime: number;
+    oneOffTaskTime: number;
+    bufferTime: number;
+    isBalanced: boolean;
+    recommendations: string[];
+  } {
+    const dayTasks = tasks.filter(task => {
+      if (!task.due_date) return false;
+      const taskDate = new Date(task.due_date);
+      return taskDate.toDateString() === date.toDateString();
+    });
+
+    // Categorize tasks by duration (project vs one-off)
+    const projectTasks = dayTasks.filter(task => 
+      task.estimate_minutes && task.estimate_minutes > 120 // >2 hours = project work
+    );
+    
+    const oneOffTasks = dayTasks.filter(task => 
+      !task.estimate_minutes || task.estimate_minutes <= 120
+    );
+
+    const ongoingProjectTime = projectTasks.reduce((sum, task) => 
+      sum + (task.estimate_minutes || 0), 0
+    );
+    
+    const oneOffTaskTime = oneOffTasks.reduce((sum, task) => 
+      sum + (task.estimate_minutes || 60), 0
+    );
+
+    const totalScheduledTime = ongoingProjectTime + oneOffTaskTime;
+    const bufferTime = Math.max(0, 420 - totalScheduledTime); // 7 hours working day
+
+    const recommendations: string[] = [];
+    
+    // Check balance ratios
+    const projectRatio = ongoingProjectTime / 420;
+    const oneOffRatio = oneOffTaskTime / 420;
+    
+    if (projectRatio > this.workloadBalance.projectToTaskRatio + 0.1) {
+      recommendations.push('Consider breaking large project tasks into smaller chunks');
+    }
+    
+    if (oneOffRatio > this.workloadBalance.oneOffTaskRatio + 0.1) {
+      recommendations.push('Too many small tasks scheduled - try batching similar activities');
+    }
+    
+    if (bufferTime < 420 * this.workloadBalance.bufferRatio) {
+      recommendations.push('Schedule is too packed - consider moving some tasks to another day');
+    }
+
+    const isBalanced = 
+      projectRatio <= this.workloadBalance.projectToTaskRatio + 0.1 &&
+      oneOffRatio <= this.workloadBalance.oneOffTaskRatio + 0.1 &&
+      bufferTime >= 420 * this.workloadBalance.bufferRatio;
+
+    return {
+      ongoingProjectTime,
+      oneOffTaskTime,
+      bufferTime,
+      isBalanced,
+      recommendations
+    };
   }
 
   /**

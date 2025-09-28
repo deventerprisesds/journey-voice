@@ -83,11 +83,12 @@ const Calendar: React.FC = () => {
         </div>
       </div>
 
-      <CalendarModule
-        tasks={tasks}
-        onTaskEdit={handleTaskEdit}
-        onCreateTask={handleCreateTask}
-      />
+          <CalendarModule
+            tasks={tasks}
+            onTaskEdit={handleTaskEdit}
+            onCreateTask={handleCreateTask}
+            onTaskScheduled={loadTasks}
+          />
 
       {/* Task Detail Modal */}
       <TaskDetailModal

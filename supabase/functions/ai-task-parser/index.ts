@@ -25,7 +25,7 @@ serve(async (req) => {
 
     console.log('Parsing task input:', text);
 
-    const systemPrompt = `You are an AI task parser that converts natural language into structured task data. 
+    const systemPrompt = `You are an AI task parser that converts natural language into structured task data with smart calendar awareness.
 
 Parse the user's input and extract task information. Return a JSON object with the following structure:
 {
@@ -37,9 +37,18 @@ Parse the user's input and extract task information. Return a JSON object with t
       "category": "LIFE" | "CAREER" | "VENTURES" | "EDUCATION",
       "due_date": "ISO date string or null",
       "estimate_minutes": "number or null",
-      "status": "BACKLOG" | "TODO" | "READY" | "UP_NEXT" | "DOING"
+      "status": "BACKLOG" | "TODO" | "READY" | "UP_NEXT" | "DOING",
+      "is_project_task": "boolean - true if part of ongoing project",
+      "is_one_off": "boolean - true if standalone task",
+      "time_preference": "morning|afternoon|evening|any",
+      "can_split": "boolean - can be broken into smaller chunks"
     }
-  ]
+  ],
+  "calendar_intent": {
+    "wants_scheduling": "boolean - user wants it added to calendar",
+    "specific_time_requested": "ISO datetime string or null",
+    "flexible_timing": "boolean - user is flexible about when"
+  }
 }
 
 Guidelines:

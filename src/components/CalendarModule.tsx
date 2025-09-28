@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, eachDayOfInterval, addDays, isSameDay, isSameMonth, isToday, startOfDay, endOfDay } from 'date-fns';
-import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Clock, Plus } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Clock, Plus, Brain } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -8,11 +8,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import { Task } from '@/types/task';
+import SmartTaskInput from './SmartTaskInput';
 
 interface CalendarModuleProps {
   tasks: Task[];
   onTaskEdit?: (task: Task) => void;
   onCreateTask?: (date: Date) => void;
+  onTaskScheduled?: () => void;
 }
 
 type ViewType = 'day' | 'week' | 'month';
@@ -21,6 +23,7 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
   tasks,
   onTaskEdit,
   onCreateTask,
+  onTaskScheduled,
 }) => {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [view, setView] = useState<ViewType>('month');
@@ -306,9 +309,28 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
   };
 
   return (
-    <Card className="w-full">
-      <CardHeader>
-        <div className="flex items-center justify-between">
+    <div className="space-y-6">
+      {/* Smart Task Input */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Brain className="h-5 w-5" />
+            AI-Powered Task Scheduling
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <SmartTaskInput
+            tasks={tasks}
+            targetDate={currentDate}
+            onTaskScheduled={() => onTaskScheduled?.()}
+          />
+        </CardContent>
+      </Card>
+
+      {/* Calendar View */}
+      <Card className="w-full">
+        <CardHeader>
+          <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
             <CardTitle className="flex items-center gap-2">
               <CalendarIcon className="h-5 w-5" />
@@ -366,6 +388,7 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
         </Tabs>
       </CardContent>
     </Card>
+    </div>
   );
 };
 
