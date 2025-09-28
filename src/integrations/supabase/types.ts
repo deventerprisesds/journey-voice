@@ -570,6 +570,36 @@ export type Database = {
         }
         Relationships: []
       }
+      profile_access_log: {
+        Row: {
+          access_type: string
+          accessed_user_id: string
+          accessor_user_id: string
+          id: string
+          ip_address: unknown | null
+          timestamp: string | null
+          user_agent: string | null
+        }
+        Insert: {
+          access_type: string
+          accessed_user_id: string
+          accessor_user_id: string
+          id?: string
+          ip_address?: unknown | null
+          timestamp?: string | null
+          user_agent?: string | null
+        }
+        Update: {
+          access_type?: string
+          accessed_user_id?: string
+          accessor_user_id?: string
+          id?: string
+          ip_address?: unknown | null
+          timestamp?: string | null
+          user_agent?: string | null
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           avatar_url: string | null
@@ -875,6 +905,19 @@ export type Database = {
         Args: Record<PropertyKey, never>
         Returns: Database["public"]["Enums"]["app_role"]
       }
+      get_masked_profiles: {
+        Args: Record<PropertyKey, never>
+        Returns: {
+          avatar_url: string
+          created_at: string
+          full_name: string
+          id: string
+          masked_email: string
+          masked_phone: string
+          updated_at: string
+          user_id: string
+        }[]
+      }
       halfvec_avg: {
         Args: { "": number[] }
         Returns: unknown
@@ -933,6 +976,15 @@ export type Database = {
       l2_normalize: {
         Args: { "": string } | { "": unknown } | { "": unknown }
         Returns: string
+      }
+      log_profile_access: {
+        Args: {
+          _access_type: string
+          _accessed_user_id: string
+          _ip_address?: unknown
+          _user_agent?: string
+        }
+        Returns: undefined
       }
       match_assistant_knowledge: {
         Args: {
