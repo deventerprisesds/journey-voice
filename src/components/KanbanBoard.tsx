@@ -278,6 +278,16 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
   };
 
   const handleTaskSchedule = async (task: Task) => {
+    // Skip scheduling in demo mode
+    if (isDemoMode) {
+      toast({
+        title: "Demo Mode",
+        description: "Task scheduling is not available in demo mode. Please sign in to use this feature.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     try {
       const { scheduleNewTask } = await import('@/utils/taskScheduling');
       
