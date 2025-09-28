@@ -9,7 +9,7 @@ import { VoiceAssistantProvider } from '@/contexts/VoiceAssistantContext';
 import VoiceStatusArea from '@/components/VoiceStatusArea';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { LogOut, Settings, Crown, User } from 'lucide-react';
+import { LogOut, Settings, Crown, User, Calendar } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 
 // Force rebuild - removed VoiceInterface references
@@ -124,6 +124,12 @@ const Dashboard = () => {
                   )}
                 </div>
                 <div className="flex items-center gap-2">
+                  <Link to="/calendar">
+                    <Button variant="outline" size="sm">
+                      <Calendar className="h-4 w-4 mr-2" />
+                      Calendar
+                    </Button>
+                  </Link>
                   <Link to="/settings">
                     <Button variant="outline" size="sm">
                       <Settings className="h-4 w-4 mr-2" />

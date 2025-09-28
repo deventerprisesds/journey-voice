@@ -150,6 +150,41 @@ async function callUnifiedWebhook(payload: UnifiedWebhookPayload) {
 
   console.log('Calling unified webhook with payload:', payload);
 
+  // Generate AI-powered calendar events for calendar channels
+  let dynamicOutlookEvent, dynamicGoogleEvent;
+  
+  if (payload.channels.includes('OUTLOOK_EVENT') || payload.channels.includes('GOOGLE_EVENT')) {
+    const taskData = payload.taskData;
+    const currentTime = new Date();
+    
+    // Create intelligent event details based on task data
+    const eventTitle = taskData?.taskTitle || payload.title || 'Task Event';
+    const eventDescription = taskData?.taskDescription || payload.body || 'AI-generated calendar event from task scheduling';
+    const startTime = taskData?.startTime ? new Date(taskData.startTime) : new Date(currentTime.getTime() + 60 * 60 * 1000); // 1 hour from now if no time specified
+    const duration = taskData?.estimateMinutes || 60; // default 1 hour
+    const endTime = new Date(startTime.getTime() + duration * 60 * 1000);
+    
+    if (payload.channels.includes('OUTLOOK_EVENT')) {
+      dynamicOutlookEvent = {
+        title: eventTitle,
+        startTime: startTime.toISOString(),
+        endTime: endTime.toISOString(),
+        description: eventDescription,
+        reminder: '15' // 15 minutes before
+      };
+    }
+    
+    if (payload.channels.includes('GOOGLE_EVENT')) {
+      dynamicGoogleEvent = {
+        title: eventTitle,
+        startTime: startTime.toISOString(),
+        endTime: endTime.toISOString(),
+        description: eventDescription,
+        reminder: '15' // 15 minutes before
+      };
+    }
+  }
+
   const queryParams = new URLSearchParams({
     userId: payload.userId,
     ...(payload.title && { title: payload.title }),
@@ -157,8 +192,8 @@ async function callUnifiedWebhook(payload: UnifiedWebhookPayload) {
     channels: JSON.stringify(payload.channels),
     userProfile: JSON.stringify(payload.userProfile),
     taskData: JSON.stringify(payload.taskData),
-    ...(payload.outlookEvent && { outlookEvent: JSON.stringify(payload.outlookEvent) }),
-    ...(payload.googleEvent && { googleEvent: JSON.stringify(payload.googleEvent) })
+    ...(dynamicOutlookEvent && { outlookEvent: JSON.stringify(dynamicOutlookEvent) }),
+    ...(dynamicGoogleEvent && { googleEvent: JSON.stringify(dynamicGoogleEvent) })
   });
 
   if (payload.slackWebhook) {

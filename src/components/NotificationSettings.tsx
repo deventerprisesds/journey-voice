@@ -24,19 +24,6 @@ interface NotificationPrefs {
   quiet_hours_end: string;
   timezone: string;
   channels: NotificationChannel[];
-  // Calendar event settings
-  outlookEvent: {
-    title: string;
-    startTime: string;
-    endTime: string;
-    reminder: string; // minutes before
-  };
-  googleEvent: {
-    title: string;
-    startTime: string;
-    endTime: string;
-    reminder: string; // minutes before
-  };
 }
 
 const NotificationSettings = () => {
@@ -49,19 +36,7 @@ const NotificationSettings = () => {
     quiet_hours_start: '22:00',
     quiet_hours_end: '08:00',
     timezone: 'UTC',
-    channels: ['EMAIL'],
-    outlookEvent: {
-      title: '',
-      startTime: '',
-      endTime: '',
-      reminder: '15'
-    },
-    googleEvent: {
-      title: '',
-      startTime: '',
-      endTime: '',
-      reminder: '15'
-    }
+    channels: ['EMAIL']
   });
   const [isSaving, setIsSaving] = useState(false);
   const [phone, setPhone] = useState('');
@@ -105,19 +80,7 @@ const NotificationSettings = () => {
           timezone: prefsData.timezone ?? 'UTC',
           channels: (prefsData.channels ?? ['EMAIL']).map((ch: string) => 
             ch === 'SMS' ? 'OUTLOOK_EVENT' : ch as NotificationChannel
-          ),
-          outlookEvent: {
-            title: '',
-            startTime: '',
-            endTime: '',
-            reminder: '15'
-          },
-          googleEvent: {
-            title: '',
-            startTime: '',
-            endTime: '',
-            reminder: '15'
-          }
+          )
         });
       }
 
@@ -161,19 +124,7 @@ const NotificationSettings = () => {
           quiet_hours_start: parsed.quiet_hours_start ?? '22:00',
           quiet_hours_end: parsed.quiet_hours_end ?? '08:00',
           timezone: parsed.timezone ?? 'UTC',
-          channels: parsed.channels ?? ['EMAIL'],
-          outlookEvent: parsed.outlookEvent ?? {
-            title: '',
-            startTime: '',
-            endTime: '',
-            reminder: '15'
-          },
-          googleEvent: parsed.googleEvent ?? {
-            title: '',
-            startTime: '',
-            endTime: '',
-            reminder: '15'
-          }
+          channels: parsed.channels ?? ['EMAIL']
         });
       } catch (error) {
         console.error('Error parsing stored demo preferences:', error);
@@ -202,29 +153,6 @@ const NotificationSettings = () => {
         return;
       }
 
-      // Validate Outlook event fields if enabled
-      if (prefs.channels.includes('OUTLOOK_EVENT')) {
-        if (!prefs.outlookEvent?.title || !prefs.outlookEvent?.startTime || !prefs.outlookEvent?.endTime) {
-          toast({
-            title: "Validation Error",
-            description: "Please fill in all Outlook event fields (title, start time, end time).",
-            variant: "destructive",
-          });
-          return;
-        }
-      }
-
-      // Validate Google event fields if enabled
-      if (prefs.channels.includes('GOOGLE_EVENT')) {
-        if (!prefs.googleEvent?.title || !prefs.googleEvent?.startTime || !prefs.googleEvent?.endTime) {
-          toast({
-            title: "Validation Error",
-            description: "Please fill in all Google event fields (title, start time, end time).",
-            variant: "destructive",
-          });
-          return;
-        }
-      }
 
       // Save Slack webhook URL to localStorage (not in database for security)
       const slackWebhookUrl = (document.getElementById('slack-webhook-url') as HTMLInputElement)?.value;
@@ -354,24 +282,20 @@ const NotificationSettings = () => {
   };
 
   const sendTestOutlookEvent = async () => {
-    if (!prefs.outlookEvent?.title || !prefs.outlookEvent?.startTime || !prefs.outlookEvent?.endTime) {
-      toast({
-        title: "Error",
-        description: "Please fill in all Outlook event fields first",
-        variant: "destructive",
-      });
-      return;
-    }
-
     try {
       console.log('Testing Outlook event notification...');
       const { data, error } = await supabase.functions.invoke('send-unified-notification', {
         body: {
           userId: user?.id,
           channels: ['OUTLOOK_EVENT'],
-          outlookEvent: prefs.outlookEvent,
           userProfile: { email },
-          data: { type: 'test_notification' }
+          data: { 
+            type: 'test_notification',
+            taskTitle: 'Test Calendar Event',
+            taskDescription: 'This is a test calendar event created by AI',
+            startTime: new Date(Date.now() + 60 * 60 * 1000).toISOString(), // 1 hour from now
+            estimateMinutes: 60
+          }
         }
       });
 
@@ -379,7 +303,7 @@ const NotificationSettings = () => {
 
       toast({
         title: "Test Outlook Event Sent",
-        description: "Check your calendar for the test Outlook event.",
+        description: "AI-generated calendar event sent to your integration.",
       });
     } catch (error: any) {
       console.error('Error sending test Outlook event:', error);
@@ -392,24 +316,20 @@ const NotificationSettings = () => {
   };
 
   const sendTestGoogleEvent = async () => {
-    if (!prefs.googleEvent?.title || !prefs.googleEvent?.startTime || !prefs.googleEvent?.endTime) {
-      toast({
-        title: "Error",
-        description: "Please fill in all Google event fields first",
-        variant: "destructive",
-      });
-      return;
-    }
-
     try {
       console.log('Testing Google event notification...');
       const { data, error } = await supabase.functions.invoke('send-unified-notification', {
         body: {
           userId: user?.id,
           channels: ['GOOGLE_EVENT'],
-          googleEvent: prefs.googleEvent,
           userProfile: { email },
-          data: { type: 'test_notification' }
+          data: { 
+            type: 'test_notification',
+            taskTitle: 'Test Calendar Event',
+            taskDescription: 'This is a test calendar event created by AI',
+            startTime: new Date(Date.now() + 60 * 60 * 1000).toISOString(), // 1 hour from now
+            estimateMinutes: 60
+          }
         }
       });
 
@@ -417,7 +337,7 @@ const NotificationSettings = () => {
 
       toast({
         title: "Test Google Event Sent",
-        description: "Check your calendar for the test Google event.",
+        description: "AI-generated calendar event sent to your integration.",
       });
     } catch (error: any) {
       console.error('Error sending test Google event:', error);
@@ -742,58 +662,10 @@ const NotificationSettings = () => {
             </div>
             
             {prefs.channels.includes('OUTLOOK_EVENT') && (
-              <div className="space-y-4 mt-4">
-                <div className="space-y-2">
-                  <Label htmlFor="outlook-title">Event Title</Label>
-                  <Input
-                    id="outlook-title"
-                    placeholder="Meeting or task title"
-                    value={prefs.outlookEvent?.title || ''}
-                    onChange={(e) => setPrefs(prev => ({
-                      ...prev,
-                      outlookEvent: { ...prev.outlookEvent!, title: e.target.value }
-                    }))}
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="outlook-start">Start Time</Label>
-                    <Input
-                      id="outlook-start"
-                      type="datetime-local"
-                      value={prefs.outlookEvent?.startTime || ''}
-                      onChange={(e) => setPrefs(prev => ({
-                        ...prev,
-                        outlookEvent: { ...prev.outlookEvent!, startTime: e.target.value }
-                      }))}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="outlook-end">End Time</Label>
-                    <Input
-                      id="outlook-end"
-                      type="datetime-local"
-                      value={prefs.outlookEvent?.endTime || ''}
-                      onChange={(e) => setPrefs(prev => ({
-                        ...prev,
-                        outlookEvent: { ...prev.outlookEvent!, endTime: e.target.value }
-                      }))}
-                    />
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="outlook-reminder">Reminder (minutes before)</Label>
-                  <Input
-                    id="outlook-reminder"
-                    type="number"
-                    placeholder="15"
-                    value={prefs.outlookEvent?.reminder || '15'}
-                    onChange={(e) => setPrefs(prev => ({
-                      ...prev,
-                      outlookEvent: { ...prev.outlookEvent!, reminder: e.target.value }
-                    }))}
-                  />
-                </div>
+              <div className="space-y-2 mt-4">
+                <p className="text-sm text-muted-foreground">
+                  Calendar events will be automatically generated by AI based on your tasks. No manual configuration needed.
+                </p>
               </div>
             )}
           </div>
@@ -814,58 +686,10 @@ const NotificationSettings = () => {
             </div>
             
             {prefs.channels.includes('GOOGLE_EVENT') && (
-              <div className="space-y-4 mt-4">
-                <div className="space-y-2">
-                  <Label htmlFor="google-title">Event Title</Label>
-                  <Input
-                    id="google-title"
-                    placeholder="Meeting or task title"
-                    value={prefs.googleEvent?.title || ''}
-                    onChange={(e) => setPrefs(prev => ({
-                      ...prev,
-                      googleEvent: { ...prev.googleEvent!, title: e.target.value }
-                    }))}
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="google-start">Start Time</Label>
-                    <Input
-                      id="google-start"
-                      type="datetime-local"
-                      value={prefs.googleEvent?.startTime || ''}
-                      onChange={(e) => setPrefs(prev => ({
-                        ...prev,
-                        googleEvent: { ...prev.googleEvent!, startTime: e.target.value }
-                      }))}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="google-end">End Time</Label>
-                    <Input
-                      id="google-end"
-                      type="datetime-local"
-                      value={prefs.googleEvent?.endTime || ''}
-                      onChange={(e) => setPrefs(prev => ({
-                        ...prev,
-                        googleEvent: { ...prev.googleEvent!, endTime: e.target.value }
-                      }))}
-                    />
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="google-reminder">Reminder (minutes before)</Label>
-                  <Input
-                    id="google-reminder"
-                    type="number"
-                    placeholder="15"
-                    value={prefs.googleEvent?.reminder || '15'}
-                    onChange={(e) => setPrefs(prev => ({
-                      ...prev,
-                      googleEvent: { ...prev.googleEvent!, reminder: e.target.value }
-                    }))}
-                  />
-                </div>
+              <div className="space-y-2 mt-4">
+                <p className="text-sm text-muted-foreground">
+                  Calendar events will be automatically generated by AI based on your tasks. No manual configuration needed.
+                </p>
               </div>
             )}
           </div>
@@ -927,7 +751,7 @@ const NotificationSettings = () => {
               onClick={sendTestOutlookEvent}
               variant="outline" 
               className="w-full"
-              disabled={!prefs.channels.includes('OUTLOOK_EVENT') || !prefs.outlookEvent?.title}
+              disabled={!prefs.channels.includes('OUTLOOK_EVENT')}
             >
               <Calendar className="h-4 w-4 mr-2" />
               Test Outlook Event
@@ -937,7 +761,7 @@ const NotificationSettings = () => {
               onClick={sendTestGoogleEvent}
               variant="outline" 
               className="w-full"
-              disabled={!prefs.channels.includes('GOOGLE_EVENT') || !prefs.googleEvent?.title}
+              disabled={!prefs.channels.includes('GOOGLE_EVENT')}
             >
               <Calendar className="h-4 w-4 mr-2" />
               Test Google Event
