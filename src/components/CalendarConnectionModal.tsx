@@ -43,26 +43,15 @@ export function CalendarConnectionModal({ isOpen, onClose, onConnectionSuccess }
       // Simulate OAuth flow
       await new Promise(resolve => setTimeout(resolve, 2000));
       
-      // Mock successful connection
-      const mockConnection = {
-        provider: provider.id,
-        provider_account_id: 'mock_account_id',
-        provider_account_email: 'user@example.com',
-        access_token: 'mock_access_token',
-        refresh_token: 'mock_refresh_token',
-        expires_at: new Date(Date.now() + 3600000).toISOString(), // 1 hour
-        scope: 'calendar.read calendar.events'
-      };
-
-      // Use secure function to insert encrypted calendar connection
+      // Use the secure function to insert encrypted calendar connection
       const { data, error } = await supabase.rpc('insert_calendar_connection', {
-        _provider: mockConnection.provider,
-        _provider_account_id: mockConnection.provider_account_id,
-        _provider_account_email: mockConnection.provider_account_email,
-        _access_token: mockConnection.access_token,
-        _refresh_token: mockConnection.refresh_token,
-        _scope: mockConnection.scope,
-        _expires_at: mockConnection.expires_at
+        _provider: provider.id,
+        _provider_account_id: 'mock_account_id',
+        _provider_account_email: 'user@example.com',
+        _access_token: 'mock_access_token',
+        _refresh_token: 'mock_refresh_token',
+        _expires_at: new Date(Date.now() + 3600000).toISOString(), // 1 hour
+        _scope: 'calendar.read calendar.events'
       });
 
       if (error) throw error;
