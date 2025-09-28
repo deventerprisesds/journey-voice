@@ -9,6 +9,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import { Task, ExternalCalendarEvent } from '@/types/task';
 import SmartTaskInput from './SmartTaskInput';
+import TimeSlotGrid from './TimeSlotGrid';
 import { getCalendarAvailability, syncExternalCalendars } from '@/utils/taskScheduling';
 import { useAutoScheduling } from '@/hooks/useAutoScheduling';
 import { toast } from 'sonner';
@@ -19,6 +20,10 @@ interface CalendarModuleProps {
   onTaskEdit?: (task: Task) => void;
   onCreateTask?: (date: Date) => void;
   onTaskScheduled?: () => void;
+}
+
+interface TimeSlotClickHandler {
+  (date: Date, hour?: number): void;
 }
 
 type ViewType = 'day' | 'week' | 'month';
@@ -174,9 +179,21 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
     });
   };
 
-  // Day View Component
+  const handleTimeSlotClick: TimeSlotClickHandler = (date: Date, hour?: number) => {
+    if (hour !== undefined) {
+      // Create a new task at the specific time slot
+      const taskDate = new Date(date);
+      taskDate.setHours(hour, 0, 0, 0);
+      onCreateTask?.(taskDate);
+    } else {
+      onCreateTask?.(date);
+    }
+  };
+
+  // Day View Component with Time Slots
   const DayView = () => {
     const dayTasks = getTasksForDate(currentDate);
+    const dayEvents = getEventsForDate(currentDate);
     
     return (
       <div className="space-y-4">
@@ -195,58 +212,20 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
         </div>
         
         <ScrollArea className="h-[600px]">
-          <div className="space-y-2">
-            {dayTasks.length === 0 ? (
-              <Card>
-                <CardContent className="pt-6">
-                  <p className="text-center text-muted-foreground">
-                    No tasks scheduled for this day
-                  </p>
-                </CardContent>
-              </Card>
-            ) : (
-              dayTasks.map(task => (
-                <Card
-                  key={task.id}
-                  className="cursor-pointer hover:bg-muted/50 transition-colors"
-                  onClick={() => onTaskEdit?.(task)}
-                >
-                  <CardContent className="pt-4">
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
-                        <h4 className="font-medium">{task.title}</h4>
-                        {task.description && (
-                          <p className="text-sm text-muted-foreground mt-1">
-                            {task.description}
-                          </p>
-                        )}
-                        <div className="flex items-center gap-2 mt-2">
-                          <Badge className={priorityColors[task.priority]}>
-                            {task.priority}
-                          </Badge>
-                          <Badge className={statusColors[task.status]}>
-                            {task.status}
-                          </Badge>
-                          {task.estimate_minutes && (
-                            <Badge variant="outline" className="flex items-center gap-1">
-                              <Clock className="h-3 w-3" />
-                              {task.estimate_minutes}m
-                            </Badge>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))
-            )}
-          </div>
+          <TimeSlotGrid
+            dates={[currentDate]}
+            tasks={tasks}
+            externalEvents={externalEvents}
+            onTimeSlotClick={handleTimeSlotClick}
+            onTaskClick={onTaskEdit}
+            className="border rounded-lg"
+          />
         </ScrollArea>
       </div>
     );
   };
 
-  // Week View Component
+  // Week View Component with Time Slots
   const WeekView = () => {
     const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 });
     const weekEnd = endOfWeek(currentDate, { weekStartsOn: 1 });
@@ -258,60 +237,16 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
           {format(weekStart, 'MMM d')} - {format(weekEnd, 'MMM d, yyyy')}
         </h3>
         
-        <div className="grid grid-cols-7 gap-2">
-          {weekDays.map(day => {
-            const dayTasks = getTasksForDate(day);
-            const isCurrentDay = isToday(day);
-            
-            return (
-              <Card key={day.toISOString()} className={cn(
-                "min-h-[200px]",
-                isCurrentDay && "ring-2 ring-primary"
-              )}>
-                <CardHeader className="pb-2">
-                  <div className="flex items-center justify-between">
-                    <CardTitle className="text-sm">
-                      {format(day, 'EEE d')}
-                    </CardTitle>
-                    <Button
-                      onClick={() => onCreateTask?.(day)}
-                      size="sm"
-                      variant="ghost"
-                      className="h-6 w-6 p-0"
-                    >
-                      <Plus className="h-3 w-3" />
-                    </Button>
-                  </div>
-                </CardHeader>
-                <CardContent className="pt-0">
-                  <ScrollArea className="h-[140px]">
-                    <div className="space-y-1">
-                      {dayTasks.slice(0, 3).map(task => (
-                        <div
-                          key={task.id}
-                          className="p-1 rounded text-xs cursor-pointer hover:bg-muted/50"
-                          onClick={() => onTaskEdit?.(task)}
-                        >
-                          <div className={cn(
-                            "px-2 py-1 rounded text-white text-xs truncate",
-                            priorityColors[task.priority]
-                          )}>
-                            {task.title}
-                          </div>
-                        </div>
-                      ))}
-                      {dayTasks.length > 3 && (
-                        <p className="text-xs text-muted-foreground px-1">
-                          +{dayTasks.length - 3} more
-                        </p>
-                      )}
-                    </div>
-                  </ScrollArea>
-                </CardContent>
-              </Card>
-            );
-          })}
-        </div>
+        <ScrollArea className="h-[600px]">
+          <TimeSlotGrid
+            dates={weekDays}
+            tasks={tasks}
+            externalEvents={externalEvents}
+            onTimeSlotClick={handleTimeSlotClick}
+            onTaskClick={onTaskEdit}
+            className="border rounded-lg"
+          />
+        </ScrollArea>
       </div>
     );
   };
