@@ -410,6 +410,21 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
           });
           return;
         }
+
+        // Send notifications for the newly created task
+        try {
+          await supabase.functions.invoke('send-push-notification', {
+            body: {
+              userId: board.user_id,
+              taskId: '', // Will be set by the function
+              title: 'New Task Created',
+              body: `Task "${title}" has been created`,
+              type: 'task_created'
+            }
+          });
+        } catch (notificationError) {
+          console.warn('Failed to send notifications:', notificationError);
+        }
       } catch (error) {
         console.error('Error creating quick task:', error);
         return;

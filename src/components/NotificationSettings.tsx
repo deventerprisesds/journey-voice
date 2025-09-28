@@ -12,7 +12,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { z } from "zod";
 
 type NotificationChannel = 'EMAIL' | 'SLACK' | 'PUSH' | 'OUTLOOK_EVENT' | 'GOOGLE_EVENT';
-type DatabaseChannel = 'EMAIL' | 'SMS' | 'SLACK' | 'PUSH';
+type DatabaseChannel = NotificationChannel;
 
 interface NotificationPrefs {
   due_reminders_enabled: boolean;
@@ -78,9 +78,7 @@ const NotificationSettings = () => {
           quiet_hours_start: prefsData.quiet_hours_start ?? '22:00',
           quiet_hours_end: prefsData.quiet_hours_end ?? '08:00',
           timezone: prefsData.timezone ?? 'UTC',
-          channels: (prefsData.channels ?? ['EMAIL']).map((ch: string) => 
-            ch === 'SMS' ? 'OUTLOOK_EVENT' : ch as NotificationChannel
-          )
+          channels: (prefsData.channels ?? ['EMAIL']) as NotificationChannel[]
         });
       }
 
@@ -179,12 +177,10 @@ const NotificationSettings = () => {
         quiet_hours_end: prefs.quiet_hours_end.length === 5 ? prefs.quiet_hours_end + ':00' : prefs.quiet_hours_end
       };
 
-      // Convert channels back to database format
+      // Use channels directly as they now match the database format
       const dbPrefs = {
         ...normalizedPrefs,
-        channels: normalizedPrefs.channels.map(ch => 
-          ch === 'OUTLOOK_EVENT' || ch === 'GOOGLE_EVENT' ? 'SMS' : ch
-        ) as DatabaseChannel[]
+        channels: normalizedPrefs.channels as DatabaseChannel[]
       };
 
       // Try to update notification preferences first, then insert if not exists

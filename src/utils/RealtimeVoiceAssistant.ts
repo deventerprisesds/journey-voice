@@ -695,6 +695,33 @@ export class RealtimeVoiceAssistant {
 
       if (taskError) throw taskError;
 
+      // Send notifications for the newly created task
+      try {
+        await supabase.functions.invoke('send-push-notification', {
+          body: {
+            userId: taskData.user_id,
+            taskId: task.id,
+            title: 'Voice Task Created',
+            body: `Task "${task.title}" created via voice assistant`,
+            type: 'task_created'
+          }
+        });
+
+        // Generate reminders if there's a due date
+        if (args.due_date) {
+          await supabase.functions.invoke('generate-task-reminders', {
+            body: {
+              taskId: task.id,
+              userId: taskData.user_id,
+              title: task.title,
+              dueDate: args.due_date
+            }
+          });
+        }
+      } catch (notificationError) {
+        console.warn('Failed to send notifications:', notificationError);
+      }
+
       this.onMessage?.({ type: 'client.done', status: 'Task created' });
       return { success: true, task };
     } catch (error) {

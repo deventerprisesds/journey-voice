@@ -96,6 +96,36 @@ const SmartTaskInput: React.FC<SmartTaskInputProps> = ({
 
       if (error) throw error;
 
+      // Send notifications for the newly created task
+      try {
+        await supabase.functions.invoke('send-push-notification', {
+          body: {
+            userId: user.id,
+            taskId: newTask.id,
+            title: 'Smart Task Scheduled',
+            body: `Task "${lastSuggestion.parsedTask.title}" has been scheduled`,
+            type: 'task_scheduled',
+            data: {
+              scheduledSlot: lastSuggestion.scheduledSlot
+            }
+          }
+        });
+
+        // Generate reminders if there's a due date
+        if (lastSuggestion.scheduledSlot.scheduledStart) {
+          await supabase.functions.invoke('generate-task-reminders', {
+            body: {
+              taskId: newTask.id,
+              userId: user.id,
+              title: lastSuggestion.parsedTask.title,
+              dueDate: lastSuggestion.scheduledSlot.scheduledStart
+            }
+          });
+        }
+      } catch (notificationError) {
+        console.warn('Failed to send notifications:', notificationError);
+      }
+
       onTaskScheduled?.(newTask, lastSuggestion.scheduledSlot);
       setLastSuggestion(null);
 

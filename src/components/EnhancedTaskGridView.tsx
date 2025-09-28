@@ -432,6 +432,21 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
           });
           return;
         }
+
+        // Send notifications for the newly created task
+        try {
+          await supabase.functions.invoke('send-push-notification', {
+            body: {
+              userId: user!.id,
+              taskId: '', // Will be set by the function
+              title: 'New Task Created',
+              body: `Task "${newTaskTitle}" has been created`,
+              type: 'task_created'
+            }
+          });
+        } catch (notificationError) {
+          console.warn('Failed to send notifications:', notificationError);
+        }
       }
 
       setNewTaskTitle('');

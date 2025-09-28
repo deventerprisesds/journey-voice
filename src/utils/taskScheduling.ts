@@ -101,6 +101,40 @@ export async function scheduleNewTask(task: Partial<Task> & { board_id: string; 
       return { success: false, error: saveError.message };
     }
 
+    // Send notifications for the scheduled task
+    try {
+      await supabase.functions.invoke('send-push-notification', {
+        body: {
+          userId: savedTask.user_id,
+          taskId: savedTask.id,
+          title: 'Task Scheduled',
+          body: `Task "${savedTask.title}" has been scheduled for ${new Date(scheduleResult.scheduledSlot.startTime).toLocaleString()}`,
+          type: 'task_scheduled',
+          data: {
+            scheduledSlot: {
+              startTime: scheduleResult.scheduledSlot.startTime,
+              endTime: scheduleResult.scheduledSlot.endTime,
+              reasoning: scheduleResult.aiReasoning
+            }
+          }
+        }
+      });
+
+      // Generate reminders if there's a due date
+      if (savedTask.due_date) {
+        await supabase.functions.invoke('generate-task-reminders', {
+          body: {
+            taskId: savedTask.id,
+            userId: savedTask.user_id,
+            title: savedTask.title,
+            dueDate: savedTask.due_date
+          }
+        });
+      }
+    } catch (notificationError) {
+      console.warn('Failed to send notifications:', notificationError);
+    }
+
     // Optionally create event in external calendars
     if (calendarConnections && calendarConnections.length > 0) {
       for (const connection of calendarConnections) {
