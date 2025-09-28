@@ -89,10 +89,15 @@ export async function scheduleNewTask(task: Partial<Task> & { board_id: string; 
       category: task.category || 'LIFE'
     };
 
-    // Save the scheduled task
+    // Save the scheduled task (update existing task instead of inserting)
     const { data: savedTask, error: saveError } = await supabase
       .from('tasks')
-      .insert([updatedTask])
+      .update({
+        start_time: scheduleResult.scheduledSlot.startTime,
+        end_time: scheduleResult.scheduledSlot.endTime,
+        is_scheduled: true
+      })
+      .eq('id', task.id)
       .select()
       .single();
 
