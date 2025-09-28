@@ -25,30 +25,45 @@ serve(async (req) => {
 
     console.log('Parsing task input:', text);
 
-    const systemPrompt = `You are an AI task parser that converts natural language into structured task data with smart calendar awareness.
+    const systemPrompt = `You are an intelligent task parser that converts natural language into structured task data with smart context awareness.
 
-Parse the user's input and extract task information. Return a JSON object with the following structure:
+Parse the user's input into one or more tasks. Each task should have:
+- title: Clear, actionable task title
+- description: Optional detailed description with context clues for scheduling
+- priority: LOW, MEDIUM, HIGH, or URGENT
+- category: LIFE, CAREER, VENTURES, or EDUCATION
+- due_date: ISO date string if mentioned (e.g., "2024-01-15T00:00:00.000Z")
+- start_time: ISO datetime if specific time mentioned
+- end_time: ISO datetime if specific time mentioned or can be calculated
+- estimate_minutes: Estimated duration in minutes
+- status: BACKLOG, TODO, READY, UP_NEXT, DOING
+- scheduling_context: Array of context clues for intelligent scheduling
+
+CONTEXT-AWARE PARSING:
+- Bank/financial tasks: Include "business_hours" and "weekdays_only" in scheduling_context
+- Shopping/errands: Include "flexible_hours" and "prefer_morning_evening" in scheduling_context
+- Work commute tasks: Include "commute_time" and "weekdays_only" in scheduling_context
+- Reading/learning: Include "quiet_time" and "evening_preferred" in scheduling_context
+- Exercise/gym: Include "morning_evening" and "avoid_meals" in scheduling_context
+- Appointments: Include "specific_time" and "business_hours" in scheduling_context
+- Personal tasks: Include "flexible" and "weekend_ok" in scheduling_context
+
+Return JSON in this exact format:
 {
   "tasks": [
     {
-      "title": "clear, actionable title",
-      "description": "detailed description if available",
-      "priority": "LOW" | "MEDIUM" | "HIGH" | "URGENT",
-      "category": "LIFE" | "CAREER" | "VENTURES" | "EDUCATION",
-      "due_date": "ISO date string or null",
-      "estimate_minutes": "number or null",
-      "status": "BACKLOG" | "TODO" | "READY" | "UP_NEXT" | "DOING",
-      "is_project_task": "boolean - true if part of ongoing project",
-      "is_one_off": "boolean - true if standalone task",
-      "time_preference": "morning|afternoon|evening|any",
-      "can_split": "boolean - can be broken into smaller chunks"
+      "title": "string",
+      "description": "string or null",
+      "priority": "LOW|MEDIUM|HIGH|URGENT",
+      "category": "LIFE|CAREER|VENTURES|EDUCATION", 
+      "due_date": "ISO string or null",
+      "start_time": "ISO string or null",
+      "end_time": "ISO string or null",
+      "estimate_minutes": number or null,
+      "status": "BACKLOG|TODO|READY|UP_NEXT|DOING",
+      "scheduling_context": ["array of context clues"]
     }
-  ],
-  "calendar_intent": {
-    "wants_scheduling": "boolean - user wants it added to calendar",
-    "specific_time_requested": "ISO datetime string or null",
-    "flexible_timing": "boolean - user is flexible about when"
-  }
+  ]
 }
 
 Guidelines:

@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils';
 import { Task, ExternalCalendarEvent } from '@/types/task';
 import SmartTaskInput from './SmartTaskInput';
 import { getCalendarAvailability, syncExternalCalendars } from '@/utils/taskScheduling';
+import { useAutoScheduling } from '@/hooks/useAutoScheduling';
 import { toast } from 'sonner';
 import { CalendarConnectionModal } from './CalendarConnectionModal';
 
@@ -34,6 +35,7 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
   const [busySlots, setBusySlots] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [showConnectionModal, setShowConnectionModal] = useState(false);
+  const { autoScheduleTask } = useAutoScheduling();
 
   const timeSlots = Array.from({ length: 17 }, (_, i) => i + 6); // 6 AM to 11 PM
 
@@ -95,6 +97,20 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleTaskScheduled = async (task: any, slot: any) => {
+    console.log('Task scheduled:', task, slot);
+    
+    // If the task wasn't auto-scheduled, try to schedule it now
+    if (!task.is_scheduled && (!task.start_time || !task.end_time)) {
+      const scheduledTask = await autoScheduleTask(task);
+      if (scheduledTask && onTaskScheduled) {
+        onTaskScheduled();
+      }
+    }
+    
+    loadCalendarData();
   };
 
   // Priority colors

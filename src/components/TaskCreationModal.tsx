@@ -204,6 +204,34 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
         createdTasks = data;
       }
 
+      // Auto-schedule tasks with date/time information or context clues
+      const tasksToSchedule = createdTasks.filter(task => 
+        (!task.start_time && !task.end_time) && // Not already scheduled
+        (task.due_date || task.scheduling_context) // Has date or context for scheduling
+      );
+
+      for (const task of tasksToSchedule) {
+        if (!isDemoMode) {
+          try {
+            const { scheduleNewTask } = await import('@/utils/taskScheduling');
+            const scheduleResult = await scheduleNewTask({
+              ...task,
+              scheduling_context: task.scheduling_context
+            });
+            
+            if (scheduleResult.success && scheduleResult.scheduledTask) {
+              // Update the task in createdTasks with scheduled times
+              const taskIndex = createdTasks.findIndex(t => t.id === task.id);
+              if (taskIndex !== -1) {
+                createdTasks[taskIndex] = scheduleResult.scheduledTask;
+              }
+            }
+          } catch (error) {
+            console.warn('Failed to auto-schedule task:', task.id, error);
+          }
+        }
+      }
+
       onTasksCreated(createdTasks);
       
       // Send immediate task creation notifications to enabled channels

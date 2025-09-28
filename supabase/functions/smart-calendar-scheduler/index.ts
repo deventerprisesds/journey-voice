@@ -15,6 +15,8 @@ interface Task {
   priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
   category: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION';
   due_date?: string;
+  start_time?: string;
+  end_time?: string;
   estimate_minutes?: number;
   blocked_by?: string[];
   board_id: string;
@@ -22,6 +24,18 @@ interface Task {
   completed_at?: string;
   created_at: string;
   updated_at: string;
+  is_scheduled?: boolean;
+  scheduling_context?: string[];
+}
+
+interface BusinessRules {
+  bankTasks: { hours: [number, number], days: number[] };
+  errands: { hours: [number, number][], days: number[] };
+  commuteTasks: { hours: [number, number][], days: number[] };
+  personalTasks: { hours: [number, number], days: number[] };
+  workTasks: { hours: [number, number], days: number[] };
+  readingTasks: { hours: [number, number], days: number[] };
+  exerciseTasks: { hours: [number, number][], days: number[] };
 }
 
 interface ScheduledTask {
@@ -38,13 +52,23 @@ interface WorkloadBalance {
   bufferTime: number;
 }
 
+const businessRules: BusinessRules = {
+  bankTasks: { hours: [9, 17], days: [1, 2, 3, 4, 5] }, // 9 AM - 5 PM, Mon-Fri
+  errands: { hours: [[7, 9], [17, 19]], days: [1, 2, 3, 4, 5] }, // Morning/evening, weekdays
+  commuteTasks: { hours: [[7.5, 8.5], [17.5, 18.5]], days: [1, 2, 3, 4, 5] }, // Commute times
+  personalTasks: { hours: [19, 22], days: [0, 1, 2, 3, 4, 5, 6] }, // Evening, any day
+  workTasks: { hours: [9, 17], days: [1, 2, 3, 4, 5] }, // Business hours, weekdays
+  readingTasks: { hours: [19, 22], days: [0, 1, 2, 3, 4, 5, 6] }, // Evening, any day
+  exerciseTasks: { hours: [[6, 8], [18, 20]], days: [1, 2, 3, 4, 5, 6] } // Morning/evening, not Sunday
+};
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const { taskText, targetDate, existingTasks = [], workingMinutes = 420 } = await req.json();
+    const { taskText, targetDate, existingTasks = [], workingMinutes = 420, busySlots = [], scheduling_context = [] } = await req.json();
     
     if (!taskText) {
       throw new Error('Task text is required');
@@ -56,8 +80,29 @@ serve(async (req) => {
     }
 
     console.log('Smart scheduling task:', taskText);
+    console.log('Scheduling context:', scheduling_context);
 
-    // Step 1: Parse the task using AI
+    // Determine task type from context or content
+    let taskType = 'personal';
+    
+    if (scheduling_context && Array.isArray(scheduling_context)) {
+      if (scheduling_context.includes('business_hours')) taskType = 'bank';
+      if (scheduling_context.includes('commute_time')) taskType = 'commute';
+      if (scheduling_context.includes('quiet_time')) taskType = 'reading';
+      if (scheduling_context.includes('morning_evening')) taskType = 'exercise';
+      if (scheduling_context.includes('flexible_hours')) taskType = 'errands';
+    } else {
+      // Fallback to text analysis
+      const lowerText = taskText.toLowerCase();
+      if (lowerText.includes('bank') || lowerText.includes('financial')) taskType = 'bank';
+      else if (lowerText.includes('store') || lowerText.includes('shop') || lowerText.includes('grocery')) taskType = 'errands';
+      else if (lowerText.includes('work') && (lowerText.includes('commute') || lowerText.includes('way to'))) taskType = 'commute';
+      else if (lowerText.includes('read') || lowerText.includes('study') || lowerText.includes('learn')) taskType = 'reading';
+      else if (lowerText.includes('gym') || lowerText.includes('exercise') || lowerText.includes('workout')) taskType = 'exercise';
+      else if (lowerText.includes('meeting') || lowerText.includes('appointment')) taskType = 'work';
+    }
+
+    // Step 1: Parse the task using AI with enhanced context
     const parseResponse = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -69,28 +114,24 @@ serve(async (req) => {
         messages: [
           {
             role: 'system',
-            content: `You are a smart calendar AI that parses tasks and determines optimal scheduling. Parse the task and return JSON with:
-{
-  "task": {
-    "title": "clear title",
-    "description": "description",
-    "priority": "LOW|MEDIUM|HIGH|URGENT",
-    "category": "LIFE|CAREER|VENTURES|EDUCATION",
-    "estimate_minutes": number,
-    "is_project_task": boolean,
-    "is_one_off": boolean
-  },
-  "scheduling_preference": {
-    "specific_time": "ISO date string or null",
-    "time_of_day_preference": "morning|afternoon|evening|any",
-    "urgency_level": 1-5,
-    "can_split": boolean
-  }
-}`
+            content: `Analyze this task for intelligent scheduling. Consider:
+            - Task type: ${taskType}
+            - Current context: ${scheduling_context ? scheduling_context.join(', ') : 'none'}
+            
+            Determine:
+            - estimatedDuration: minutes (default 60 if unclear)
+            - timePreference: morning (6-12), afternoon (12-17), evening (17-22), business_hours (9-17), flexible
+            - dayPreference: weekdays (Mon-Fri), weekends (Sat-Sun), any
+            - urgencyLevel: 1-5 (5 being most urgent)
+            
+            Return JSON: {"estimatedDuration": number, "timePreference": "string", "dayPreference": "string", "urgencyLevel": number}`
           },
-          { role: 'user', content: taskText }
+          {
+            role: 'user',
+            content: taskText
+          }
         ],
-        temperature: 0.1,
+        temperature: 0.3,
       }),
     });
 
@@ -100,13 +141,15 @@ serve(async (req) => {
     // Step 2: Analyze workload balance
     const workloadBalance = analyzeWorkloadBalance(existingTasks);
     
-    // Step 3: Find optimal time slot
-    const optimalSlot = findOptimalTimeSlot(
+    // Step 3: Find optimal time slot using enhanced business logic
+    const optimalSlot = findOptimalTimeSlotWithBusinessRules(
+      taskType,
       parsedTask,
       new Date(targetDate || new Date()),
       existingTasks,
-      workloadBalance,
-      workingMinutes
+      busySlots,
+      workingMinutes,
+      businessRules
     );
 
     // Step 4: Generate AI reasoning
@@ -139,8 +182,12 @@ Existing tasks today: ${existingTasks.filter((t: Task) => isSameDay(new Date(t.d
     const aiReasoning = reasoningData.choices[0].message.content;
 
     return new Response(JSON.stringify({
-      parsedTask: parsedTask.task,
-      scheduledSlot: optimalSlot,
+      parsedTask,
+      scheduledSlot: {
+        startTime: optimalSlot.scheduledStart.toISOString(),
+        endTime: optimalSlot.scheduledEnd.toISOString(),
+        duration: parsedTask.estimatedDuration || 60
+      },
       workloadBalance,
       aiReasoning,
       success: true
@@ -193,54 +240,83 @@ function analyzeWorkloadBalance(tasks: Task[]): WorkloadBalance {
   };
 }
 
-function findOptimalTimeSlot(
+function findOptimalTimeSlotWithBusinessRules(
+  taskType: string,
   parsedTask: any,
   targetDate: Date,
   existingTasks: Task[],
-  workloadBalance: WorkloadBalance,
-  workingMinutes: number
+  busySlots: any[],
+  workingMinutes: number,
+  rules: BusinessRules
 ): ScheduledTask {
-  const task = parsedTask.task;
-  const preference = parsedTask.scheduling_preference;
+  const duration = parsedTask.estimatedDuration || 60;
+  let startHour = 14; // Default afternoon
+  let allowedDays = [0, 1, 2, 3, 4, 5, 6]; // All days
   
-  // If specific time requested, try to honor it
-  if (preference.specific_time) {
-    const requestedTime = new Date(preference.specific_time);
-    return {
-      task: task as Task,
-      scheduledStart: requestedTime,
-      scheduledEnd: new Date(requestedTime.getTime() + (task.estimate_minutes || 60) * 60000),
-      canStart: true,
-      blockedByTasks: []
-    };
+  // Apply business rules based on task type
+  switch (taskType) {
+    case 'bank':
+      startHour = rules.bankTasks.hours[0];
+      allowedDays = rules.bankTasks.days;
+      break;
+    case 'errands':
+      // Choose morning or evening based on existing schedule
+      const morningSlots = existingTasks.filter(t => {
+        if (!t.start_time) return false;
+        const hour = new Date(t.start_time).getHours();
+        return hour >= 7 && hour <= 9;
+      }).length;
+      const eveningSlots = existingTasks.filter(t => {
+        if (!t.start_time) return false;
+        const hour = new Date(t.start_time).getHours();
+        return hour >= 17 && hour <= 19;
+      }).length;
+      startHour = morningSlots <= eveningSlots ? 7 : 17;
+      allowedDays = rules.errands.days;
+      break;
+    case 'commute':
+      // Default to morning commute
+      startHour = rules.commuteTasks.hours[0][0];
+      allowedDays = rules.commuteTasks.days;
+      break;
+    case 'reading':
+      startHour = rules.readingTasks.hours[0];
+      allowedDays = rules.readingTasks.days;
+      break;
+    case 'exercise':
+      // Choose morning or evening based on preference
+      const exerciseHours = rules.exerciseTasks.hours;
+      startHour = exerciseHours[0][0]; // Default to morning
+      allowedDays = rules.exerciseTasks.days;
+      break;
+    case 'work':
+      startHour = rules.workTasks.hours[0];
+      allowedDays = rules.workTasks.days;
+      break;
+    default:
+      startHour = rules.personalTasks.hours[0];
+      allowedDays = rules.personalTasks.days;
   }
-
-  // Find next available slot based on workload balance and preferences
-  let startTime = new Date(targetDate);
   
-  // Apply time preference
-  if (preference.time_of_day_preference === 'morning') {
-    startTime.setHours(9, 0, 0, 0);
-  } else if (preference.time_of_day_preference === 'afternoon') {
-    startTime.setHours(13, 0, 0, 0);
-  } else if (preference.time_of_day_preference === 'evening') {
-    startTime.setHours(16, 0, 0, 0);
-  } else {
-    // Smart placement based on workload balance
-    if (task.is_project_task && workloadBalance.ongoingProjects < 300) { // <5 hours
-      startTime.setHours(9, 0, 0, 0); // Morning for deep work
-    } else if (task.is_one_off && workloadBalance.oneOffTasks < 120) { // <2 hours
-      startTime.setHours(14, 0, 0, 0); // Afternoon for quick tasks
-    } else {
-      // Find next available slot
-      startTime = findNextAvailableSlot(targetDate, existingTasks, task.estimate_minutes || 60);
+  // Check if target date is allowed
+  const dayOfWeek = targetDate.getDay();
+  if (!allowedDays.includes(dayOfWeek)) {
+    // Find next allowed day
+    let nextDate = new Date(targetDate);
+    let attempts = 0;
+    while (!allowedDays.includes(nextDate.getDay()) && attempts < 7) {
+      nextDate.setDate(nextDate.getDate() + 1);
+      attempts++;
     }
+    targetDate = nextDate;
   }
-
-  const endTime = new Date(startTime.getTime() + (task.estimate_minutes || 60) * 60000);
-
+  
+  // Find available slot within business rules
+  const startTime = findNextAvailableSlot(targetDate, existingTasks, duration, startHour);
+  const endTime = new Date(startTime.getTime() + duration * 60000);
+  
   return {
-    task: task as Task,
+    task: {} as Task,
     scheduledStart: startTime,
     scheduledEnd: endTime,
     canStart: true,
@@ -248,13 +324,13 @@ function findOptimalTimeSlot(
   };
 }
 
-function findNextAvailableSlot(date: Date, existingTasks: Task[], durationMinutes: number): Date {
+function findNextAvailableSlot(date: Date, existingTasks: Task[], durationMinutes: number, preferredStartHour = 9): Date {
   const dayTasks = existingTasks
     .filter(task => task.due_date && isSameDay(new Date(task.due_date), date))
     .sort((a, b) => new Date(a.due_date!).getTime() - new Date(b.due_date!).getTime());
 
   let currentTime = new Date(date);
-  currentTime.setHours(9, 0, 0, 0); // Start at 9 AM
+  currentTime.setHours(preferredStartHour, 0, 0, 0); // Start at preferred hour
 
   for (const task of dayTasks) {
     const taskStart = new Date(task.due_date!);
