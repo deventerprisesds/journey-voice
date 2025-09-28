@@ -76,36 +76,56 @@ const Calendar: React.FC = () => {
     );
   }
 
+  const handleNavigation = () => {
+    try {
+      console.log('Navigating back to dashboard...');
+      navigate('/');
+      toast.success('Returning to dashboard');
+    } catch (error) {
+      console.error('Navigation error:', error);
+      // Fallback navigation
+      window.location.href = '/';
+    }
+  };
+
   return (
-    <div className="container mx-auto p-6 space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => navigate('/')}
-            className="flex items-center gap-2"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            Back to Dashboard
-          </Button>
-          <div>
-            <h1 className="text-3xl font-bold">Calendar</h1>
-            <p className="text-muted-foreground">
-              View and manage your tasks in calendar format
-            </p>
+    <div className="min-h-screen bg-background">
+      {/* Fixed Navigation Header */}
+      <div className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+        <div className="container mx-auto p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <Button
+                variant="default"
+                size="sm"
+                onClick={handleNavigation}
+                className="flex items-center gap-2 bg-primary text-primary-foreground hover:bg-primary/90"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                Back to Dashboard
+              </Button>
+              <div>
+                <h1 className="text-2xl font-bold">Calendar</h1>
+                <p className="text-sm text-muted-foreground">
+                  View and manage your tasks in calendar format
+                </p>
+              </div>
+            </div>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={handleNavigation}
+              className="flex items-center gap-2"
+            >
+              <Home className="h-4 w-4" />
+              Dashboard
+            </Button>
           </div>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => navigate('/')}
-          className="flex items-center gap-2"
-        >
-          <Home className="h-4 w-4" />
-          Dashboard
-        </Button>
       </div>
+
+      {/* Main Content */}
+      <div className="container mx-auto p-6 space-y-6">
 
           <CalendarModule
             tasks={tasks}
@@ -134,6 +154,7 @@ const Calendar: React.FC = () => {
         boardId="default"
         userId={user?.id || ""}
       />
+      </div>
     </div>
   );
 };
