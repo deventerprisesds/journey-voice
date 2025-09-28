@@ -5,10 +5,14 @@ import { Task } from '@/types/task';
 import CalendarModule from '@/components/CalendarModule';
 import TaskCreationModal from '@/components/TaskCreationModal';
 import TaskDetailModal from '@/components/TaskDetailModal';
+import { Button } from '@/components/ui/button';
+import { ArrowLeft, Home } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 
 const Calendar: React.FC = () => {
   const { user, isDemoMode } = useAuth();
+  const navigate = useNavigate();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
@@ -75,12 +79,32 @@ const Calendar: React.FC = () => {
   return (
     <div className="container mx-auto p-6 space-y-6">
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold">Calendar</h1>
-          <p className="text-muted-foreground">
-            View and manage your tasks in calendar format
-          </p>
+        <div className="flex items-center gap-4">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => navigate('/')}
+            className="flex items-center gap-2"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Back to Dashboard
+          </Button>
+          <div>
+            <h1 className="text-3xl font-bold">Calendar</h1>
+            <p className="text-muted-foreground">
+              View and manage your tasks in calendar format
+            </p>
+          </div>
         </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => navigate('/')}
+          className="flex items-center gap-2"
+        >
+          <Home className="h-4 w-4" />
+          Dashboard
+        </Button>
       </div>
 
           <CalendarModule

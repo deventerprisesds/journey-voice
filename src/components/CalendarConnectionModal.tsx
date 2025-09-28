@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Calendar, Check, Loader2, AlertCircle } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
+import { CalendarOAuthManager } from './CalendarOAuthManager';
 
 interface CalendarConnectionModalProps {
   isOpen: boolean;
@@ -15,6 +16,24 @@ interface CalendarConnectionModalProps {
 export function CalendarConnectionModal({ isOpen, onClose, onConnectionSuccess }: CalendarConnectionModalProps) {
   const [isConnecting, setIsConnecting] = useState(false);
   const [connectedProviders, setConnectedProviders] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (isOpen) {
+      loadConnectedProviders();
+    }
+  }, [isOpen]);
+
+  const loadConnectedProviders = async () => {
+    try {
+      const { data, error } = await supabase.rpc('get_calendar_connections_secure');
+      if (error) throw error;
+      
+      const providers = data?.map((conn: any) => conn.provider) || [];
+      setConnectedProviders(providers);
+    } catch (error) {
+      console.error('Failed to load connected providers:', error);
+    }
+  };
 
   const providers = [
     {
@@ -33,39 +52,13 @@ export function CalendarConnectionModal({ isOpen, onClose, onConnectionSuccess }
     }
   ];
 
-  const handleConnect = async (provider: any) => {
-    setIsConnecting(true);
-    try {
-      // In a real implementation, this would redirect to OAuth flow
-      // For now, we'll simulate the connection
-      toast.info(`Connecting to ${provider.name}...`);
-      
-      // Simulate OAuth flow
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      // Use the secure function to insert encrypted calendar connection
-      const { data, error } = await supabase.rpc('insert_calendar_connection', {
-        _provider: provider.id,
-        _provider_account_id: 'mock_account_id',
-        _provider_account_email: 'user@example.com',
-        _access_token: 'mock_access_token',
-        _refresh_token: 'mock_refresh_token',
-        _expires_at: new Date(Date.now() + 3600000).toISOString(), // 1 hour
-        _scope: 'calendar.read calendar.events'
-      });
+  const handleConnectionSuccess = () => {
+    loadConnectedProviders();
+    onConnectionSuccess();
+  };
 
-      if (error) throw error;
-
-      setConnectedProviders(prev => [...prev, provider.id]);
-      toast.success(`Successfully connected to ${provider.name}`);
-      onConnectionSuccess();
-      
-    } catch (error) {
-      console.error('Failed to connect calendar:', error);
-      toast.error(`Failed to connect to ${provider.name}`);
-    } finally {
-      setIsConnecting(false);
-    }
+  const handleConnectionError = (error: string) => {
+    toast.error(error);
   };
 
   return (
@@ -112,33 +105,29 @@ export function CalendarConnectionModal({ isOpen, onClose, onConnectionSuccess }
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="pt-0">
-                  <Button 
-                    onClick={() => handleConnect(provider)}
-                    disabled={isConnecting || connectedProviders.includes(provider.id)}
-                    className="w-full"
-                    variant={connectedProviders.includes(provider.id) ? "secondary" : "default"}
-                  >
-                    {isConnecting ? (
-                      <>
-                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        Connecting...
-                      </>
-                    ) : connectedProviders.includes(provider.id) ? (
-                      <>
-                        <Check className="h-4 w-4 mr-2" />
-                        Connected
-                      </>
-                    ) : (
-                      `Connect ${provider.name}`
-                    )}
-                  </Button>
+                  {connectedProviders.includes(provider.id) ? (
+                    <Button 
+                      disabled
+                      className="w-full"
+                      variant="secondary"
+                    >
+                      <Check className="h-4 w-4 mr-2" />
+                      Connected
+                    </Button>
+                  ) : (
+                    <CalendarOAuthManager
+                      provider={provider.id as 'google' | 'outlook'}
+                      onSuccess={handleConnectionSuccess}
+                      onError={handleConnectionError}
+                    />
+                  )}
                 </CardContent>
               </Card>
             ))}
           </div>
 
           <div className="text-sm text-muted-foreground text-center pt-2">
-            <p>Note: This is a demo implementation. In production, this would use real OAuth flows.</p>
+            <p>Note: OAuth integration is implemented for demo purposes. In production, you would need to configure OAuth apps with Google and Microsoft.</p>
           </div>
         </div>
       </DialogContent>

@@ -854,15 +854,15 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
                 {columns.map((column, index) => {
                   const columnTasks = getTasksByStatus(column.status);
                   return (
-                    <Draggable key={column.id} draggableId={column.id} index={index}>
-                      {(provided, snapshot) => (
-                        <div
-                          ref={provided.innerRef}
-                          {...provided.draggableProps}
-                          className={`bg-card rounded-lg border p-4 shadow-sm min-w-[280px] flex-shrink-0 ${
-                            snapshot.isDragging ? 'rotate-1 scale-105 shadow-xl' : ''
-                          }`}
-                        >
+                     <Draggable key={column.id} draggableId={column.id} index={index}>
+                       {(provided, snapshot) => (
+                         <div
+                           {...provided.draggableProps}
+                           ref={provided.innerRef}
+                           className={`bg-card rounded-lg border p-4 shadow-sm min-w-[280px] flex-shrink-0 ${
+                             snapshot.isDragging ? 'rotate-1 scale-105 shadow-xl' : ''
+                           }`}
+                         >
                           {/* Column Header */}
                           <ColumnManager
                             column={column}
@@ -875,11 +875,11 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
 
                           {/* Tasks Container */}
                           <Droppable droppableId={column.id} type="task">
-                            {(provided, snapshot) => (
-                              <div
-                                ref={provided.innerRef}
-                                {...provided.droppableProps}
-                                className={`
+                             {(provided, snapshot) => (
+                               <div
+                                 {...provided.droppableProps}
+                                 ref={provided.innerRef}
+                                 className={`
                                   flex-1 space-y-2 p-2 rounded-lg border-2 border-dashed transition-colors min-h-32 mt-2
                                   ${snapshot.isDraggingOver 
                                     ? 'border-primary bg-primary/5' 
@@ -894,13 +894,13 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
                                     draggableId={task.id}
                                     index={index}
                                   >
-                                    {(provided, snapshot) => (
-                                      <div
-                                        ref={provided.innerRef}
-                                        {...provided.draggableProps}
-                                        {...provided.dragHandleProps}
-                                        className={snapshot.isDragging ? 'rotate-2 scale-105' : ''}
-                                      >
+                                     {(provided, snapshot) => (
+                                       <div
+                                         {...provided.draggableProps}
+                                         {...provided.dragHandleProps}
+                                         ref={provided.innerRef}
+                                         className={snapshot.isDragging ? 'rotate-2 scale-105' : ''}
+                                       >
                                          <TaskCard
                                            task={task}
                                            onEdit={handleTaskEdit}
