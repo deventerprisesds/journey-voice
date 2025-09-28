@@ -45,20 +45,25 @@ export function CalendarConnectionModal({ isOpen, onClose, onConnectionSuccess }
       
       // Mock successful connection
       const mockConnection = {
-        user_id: (await supabase.auth.getUser()).data.user?.id,
         provider: provider.id,
         provider_account_id: 'mock_account_id',
         provider_account_email: 'user@example.com',
         access_token: 'mock_access_token',
         refresh_token: 'mock_refresh_token',
         expires_at: new Date(Date.now() + 3600000).toISOString(), // 1 hour
-        scope: 'calendar.read calendar.events',
-        is_active: true
+        scope: 'calendar.read calendar.events'
       };
 
-      const { error } = await supabase
-        .from('calendar_connections')
-        .insert(mockConnection);
+      // Use secure function to insert encrypted calendar connection
+      const { data, error } = await supabase.rpc('insert_calendar_connection', {
+        _provider: mockConnection.provider,
+        _provider_account_id: mockConnection.provider_account_id,
+        _provider_account_email: mockConnection.provider_account_email,
+        _access_token: mockConnection.access_token,
+        _refresh_token: mockConnection.refresh_token,
+        _scope: mockConnection.scope,
+        _expires_at: mockConnection.expires_at
+      });
 
       if (error) throw error;
 

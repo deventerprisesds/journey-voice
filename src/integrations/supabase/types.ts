@@ -990,6 +990,14 @@ export type Database = {
         Args: { token_value: string }
         Returns: string
       }
+      get_calendar_connection_tokens: {
+        Args: { _connection_id: string }
+        Returns: {
+          access_token: string
+          expires_at: string
+          refresh_token: string
+        }[]
+      }
       get_current_user_role: {
         Args: Record<PropertyKey, never>
         Returns: Database["public"]["Enums"]["app_role"]
