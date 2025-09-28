@@ -10,7 +10,9 @@ interface TaskReminderRequest {
   taskId: string;
   userId: string;
   dueDate?: string;
+  startTime?: string;
   title: string;
+  reminderMinutes?: number; // Default 15 minutes for scheduled tasks
 }
 
 serve(async (req) => {
@@ -25,11 +27,21 @@ serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
-    const { taskId, userId, dueDate, title }: TaskReminderRequest = await req.json();
+    const { taskId, userId, dueDate, startTime, title, reminderMinutes = 15 }: TaskReminderRequest = await req.json();
 
     if (!taskId || !userId || !title) {
       return new Response(
         JSON.stringify({ error: 'taskId, userId, and title are required' }),
+        { 
+          status: 400, 
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+        }
+      );
+    }
+
+    if (!dueDate && !startTime) {
+      return new Response(
+        JSON.stringify({ error: 'Either dueDate or startTime must be provided' }),
         { 
           status: 400, 
           headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
@@ -79,6 +91,36 @@ serve(async (req) => {
           title: 'Task Due Tomorrow',
           body: `"${title}" is due tomorrow`,
           scheduled_for: oneDayBefore.toISOString()
+        });
+      }
+    }
+
+    // Generate reminders if task has a scheduled start time
+    if (startTime) {
+      const taskStartTime = new Date(startTime);
+      
+      // Custom minutes before start time reminder (default 15 minutes)
+      const reminderTime = new Date(taskStartTime.getTime() - reminderMinutes * 60 * 1000);
+      if (reminderTime > now) {
+        reminders.push({
+          user_id: userId,
+          task_id: taskId,
+          notification_type: 'scheduled_reminder',
+          title: `Task Starting in ${reminderMinutes} Minutes`,
+          body: `"${title}" is scheduled to start in ${reminderMinutes} minutes`,
+          scheduled_for: reminderTime.toISOString()
+        });
+      }
+
+      // At start time reminder
+      if (taskStartTime > now) {
+        reminders.push({
+          user_id: userId,
+          task_id: taskId,
+          notification_type: 'scheduled_start_now',
+          title: 'Task Starting Now',
+          body: `"${title}" is scheduled to start now`,
+          scheduled_for: taskStartTime.toISOString()
         });
       }
     }

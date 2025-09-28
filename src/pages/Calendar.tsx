@@ -18,6 +18,45 @@ const Calendar: React.FC = () => {
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
+  const [defaultBoardId, setDefaultBoardId] = useState<string>('');
+
+  // Load default board ID
+  const loadDefaultBoard = async () => {
+    if (isDemoMode) {
+      setDefaultBoardId('demo-board-default');
+      return;
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from('boards')
+        .select('id')
+        .eq('is_default', true)
+        .single();
+
+      if (error) {
+        // Create default board if none exists
+        const { data: newBoard, error: createError } = await supabase
+          .from('boards')
+          .insert({
+            name: 'Personal Tasks',
+            description: 'Your main task board',
+            is_default: true,
+            position: 0
+          })
+          .select('id')
+          .single();
+
+        if (createError) throw createError;
+        setDefaultBoardId(newBoard.id);
+      } else {
+        setDefaultBoardId(data.id);
+      }
+    } catch (error) {
+      console.error('Error loading default board:', error);
+      toast.error('Failed to load board');
+    }
+  };
 
   // Load tasks
   const loadTasks = async () => {
@@ -45,6 +84,7 @@ const Calendar: React.FC = () => {
   };
 
   useEffect(() => {
+    loadDefaultBoard();
     loadTasks();
   }, [isDemoMode]);
 
@@ -151,7 +191,7 @@ const Calendar: React.FC = () => {
           setSelectedDate(null);
         }}
         onTasksCreated={() => handleTaskCreate()}
-        boardId="default"
+        boardId={defaultBoardId}
         userId={user?.id || ""}
       />
       </div>
