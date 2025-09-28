@@ -471,22 +471,131 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                         </Button>
                       </div>
 
-                      <div className="flex flex-wrap gap-2">
-                        <Badge variant={task.priority === 'URGENT' ? 'destructive' : 'secondary'}>
-                          {task.priority}
-                        </Badge>
-                        <Badge variant="outline">{task.category}</Badge>
-                        <Badge variant="outline">{task.status}</Badge>
-                        {task.due_date && (
-                          <Badge variant="outline" className="text-orange-600">
-                            Due: {format(new Date(task.due_date), 'PPP')}
-                          </Badge>
-                        )}
-                        {task.estimate_minutes && (
-                          <Badge variant="outline" className="text-blue-600">
-                            {Math.floor(task.estimate_minutes / 60)}h {task.estimate_minutes % 60}m
-                          </Badge>
-                        )}
+                      {/* Editable Task Properties */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-4">
+                        {/* Priority */}
+                        <div className="space-y-2">
+                          <Label className="text-xs font-medium">Priority</Label>
+                          <Select
+                            value={task.priority}
+                            onValueChange={(value) => editParsedTask(index, 'priority', value)}
+                          >
+                            <SelectTrigger className="h-8 text-xs">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="LOW">Low</SelectItem>
+                              <SelectItem value="MEDIUM">Medium</SelectItem>
+                              <SelectItem value="HIGH">High</SelectItem>
+                              <SelectItem value="URGENT">Urgent</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+
+                        {/* Category */}
+                        <div className="space-y-2">
+                          <Label className="text-xs font-medium">Category</Label>
+                          <Select
+                            value={task.category}
+                            onValueChange={(value) => editParsedTask(index, 'category', value)}
+                          >
+                            <SelectTrigger className="h-8 text-xs">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="LIFE">Life</SelectItem>
+                              <SelectItem value="CAREER">Career</SelectItem>
+                              <SelectItem value="VENTURES">Ventures</SelectItem>
+                              <SelectItem value="EDUCATION">Education</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+
+                        {/* Status */}
+                        <div className="space-y-2">
+                          <Label className="text-xs font-medium">Status</Label>
+                          <Select
+                            value={task.status}
+                            onValueChange={(value) => editParsedTask(index, 'status', value)}
+                          >
+                            <SelectTrigger className="h-8 text-xs">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="BACKLOG">Backlog</SelectItem>
+                              <SelectItem value="TODO">To Do</SelectItem>
+                              <SelectItem value="READY">Ready</SelectItem>
+                              <SelectItem value="UP_NEXT">Up Next</SelectItem>
+                              <SelectItem value="DOING">Doing</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+
+                        {/* Due Date */}
+                        <div className="space-y-2">
+                          <Label className="text-xs font-medium">Due Date</Label>
+                          <Popover>
+                            <PopoverTrigger asChild>
+                              <Button
+                                variant="outline"
+                                className={cn(
+                                  "h-8 justify-start text-left font-normal text-xs",
+                                  !task.due_date && "text-muted-foreground"
+                                )}
+                              >
+                                <CalendarIcon className="mr-1 h-3 w-3" />
+                                {task.due_date ? format(new Date(task.due_date), "MMM d") : "Set date"}
+                              </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-auto p-0">
+                              <Calendar
+                                mode="single"
+                                selected={task.due_date ? new Date(task.due_date) : undefined}
+                                onSelect={(date) => editParsedTask(index, 'due_date', date?.toISOString())}
+                                initialFocus
+                                className={cn("p-3 pointer-events-auto")}
+                              />
+                            </PopoverContent>
+                          </Popover>
+                        </div>
+
+                        {/* Time Estimate */}
+                        <div className="space-y-2 col-span-2">
+                          <Label className="text-xs font-medium">Time Estimate</Label>
+                          <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-1">
+                              <Input
+                                type="number"
+                                placeholder="0"
+                                value={task.estimate_minutes ? Math.floor(task.estimate_minutes / 60) : ''}
+                                onChange={(e) => {
+                                  const hours = parseInt(e.target.value) || 0;
+                                  const minutes = task.estimate_minutes ? task.estimate_minutes % 60 : 0;
+                                  editParsedTask(index, 'estimate_minutes', hours * 60 + minutes);
+                                }}
+                                className="w-16 h-8 text-xs"
+                                min="0"
+                              />
+                              <span className="text-xs text-muted-foreground">h</span>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <Input
+                                type="number"
+                                placeholder="0"
+                                value={task.estimate_minutes ? task.estimate_minutes % 60 : ''}
+                                onChange={(e) => {
+                                  const minutes = parseInt(e.target.value) || 0;
+                                  const hours = task.estimate_minutes ? Math.floor(task.estimate_minutes / 60) : 0;
+                                  editParsedTask(index, 'estimate_minutes', hours * 60 + minutes);
+                                }}
+                                className="w-16 h-8 text-xs"
+                                min="0"
+                                max="59"
+                              />
+                              <span className="text-xs text-muted-foreground">m</span>
+                            </div>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   ))}
