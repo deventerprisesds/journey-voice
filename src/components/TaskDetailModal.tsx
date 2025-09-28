@@ -104,6 +104,55 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
     }
   }, [startTime, endTime]);
 
+  const handleDelete = async () => {
+    if (!task) return;
+
+    setIsSaving(true);
+    try {
+      // Check if this is a demo task (ID starts with 'demo-')
+      const isDemoTask = task.id.startsWith('demo-');
+      
+      if (isDemoTask) {
+        // For demo tasks, remove from localStorage instead of Supabase
+        const demoTasks = JSON.parse(localStorage.getItem('demoTasks') || '[]');
+        const filteredTasks = demoTasks.filter((t: Task) => t.id !== task.id);
+        localStorage.setItem('demoTasks', JSON.stringify(filteredTasks));
+      } else {
+        // For real tasks, delete from Supabase
+        const { error } = await supabase
+          .from('tasks')
+          .delete()
+          .eq('id', task.id);
+
+        if (error) {
+          console.error('Error deleting task:', error);
+          toast({
+            title: "Error",
+            description: "Failed to delete task",
+            variant: "destructive",
+          });
+          return;
+        }
+      }
+
+      toast({
+        title: "Task deleted",
+        description: "Task has been permanently removed",
+      });
+      onSave({ ...task, deleted: true } as any); // Trigger parent update
+      onClose();
+    } catch (error) {
+      console.error('Error deleting task:', error);
+      toast({
+        title: "Error",
+        description: "Failed to delete task",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const handleSave = async () => {
     if (!task) return;
 
@@ -510,13 +559,18 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
           </div>
 
           {/* Action Buttons */}
-          <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={onClose}>
-              Cancel
+          <div className="flex justify-between">
+            <Button variant="destructive" onClick={handleDelete} disabled={isSaving}>
+              {isSaving ? 'Deleting...' : 'Delete Task'}
             </Button>
-            <Button onClick={handleSave} disabled={isSaving}>
-              {isSaving ? 'Saving...' : 'Save Changes'}
-            </Button>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button onClick={handleSave} disabled={isSaving}>
+                {isSaving ? 'Saving...' : 'Save Changes'}
+              </Button>
+            </div>
           </div>
           </TabsContent>
 
@@ -591,13 +645,18 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
           </TabsContent>
             </Tabs>
 
-            <div className="flex justify-end gap-2 mt-6">
-              <Button variant="outline" onClick={onClose} disabled={isSaving}>
-                Cancel
+            <div className="flex justify-between mt-6">
+              <Button variant="destructive" onClick={handleDelete} disabled={isSaving}>
+                {isSaving ? 'Deleting...' : 'Delete Task'}
               </Button>
-              <Button onClick={handleSave} disabled={isSaving}>
-                {isSaving ? 'Saving...' : 'Save Changes'}
-              </Button>
+              <div className="flex gap-2">
+                <Button variant="outline" onClick={onClose} disabled={isSaving}>
+                  Cancel
+                </Button>
+                <Button onClick={handleSave} disabled={isSaving}>
+                  {isSaving ? 'Saving...' : 'Save Changes'}
+                </Button>
+              </div>
             </div>
           </>
         )}

@@ -36,7 +36,10 @@ serve(async (req) => {
   }
 
   try {
-    console.log('Starting notification scheduler...');
+    const requestBody = req.method === 'POST' ? await req.json() : {};
+    const { immediate = false } = requestBody;
+    
+    console.log('Starting notification scheduler...', { immediate });
 
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',

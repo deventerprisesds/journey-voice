@@ -218,6 +218,11 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                 title: task.title
               }
             });
+            
+            // Process pending notifications immediately
+            await supabase.functions.invoke('notification-scheduler', {
+              body: { immediate: true }
+            });
           } catch (error) {
             console.error('Error generating reminders for task:', task.id, error);
           }
