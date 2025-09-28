@@ -1155,7 +1155,13 @@ export type Database = {
     }
     Enums: {
       app_role: "admin" | "user"
-      notification_channel: "EMAIL" | "SMS" | "SLACK" | "PUSH"
+      notification_channel:
+        | "EMAIL"
+        | "SMS"
+        | "SLACK"
+        | "PUSH"
+        | "OUTLOOK_EVENT"
+        | "GOOGLE_EVENT"
       task_category: "LIFE" | "CAREER" | "VENTURES" | "EDUCATION"
       task_priority: "LOW" | "MEDIUM" | "HIGH" | "URGENT"
       task_source: "CHAT" | "EMBA_SHEET" | "MIT_SHEET" | "MANUAL"
@@ -1300,7 +1306,14 @@ export const Constants = {
   public: {
     Enums: {
       app_role: ["admin", "user"],
-      notification_channel: ["EMAIL", "SMS", "SLACK", "PUSH"],
+      notification_channel: [
+        "EMAIL",
+        "SMS",
+        "SLACK",
+        "PUSH",
+        "OUTLOOK_EVENT",
+        "GOOGLE_EVENT",
+      ],
       task_category: ["LIFE", "CAREER", "VENTURES", "EDUCATION"],
       task_priority: ["LOW", "MEDIUM", "HIGH", "URGENT"],
       task_source: ["CHAT", "EMBA_SHEET", "MIT_SHEET", "MANUAL"],
