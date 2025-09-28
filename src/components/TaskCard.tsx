@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -14,15 +14,29 @@ import {
   Briefcase,
   Rocket,
   Calendar,
-  MoreHorizontal
+  MoreHorizontal,
+  CalendarPlus,
+  Trash2
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { Task } from '@/types/task';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 
 interface TaskCardProps {
   task: Task;
   onStatusChange?: (taskId: string, newStatus: Task['status']) => void;
   onEdit?: (task: Task) => void;
+  onSchedule?: (task: Task) => void;
+  onDelete?: (taskId: string) => void;
 }
 
 const statusIcons = {
@@ -100,7 +114,11 @@ const formatDate = (dateString?: string): string | null => {
   }
 };
 
-const TaskCard: React.FC<TaskCardProps> = ({ task, onStatusChange, onEdit }) => {
+const TaskCard: React.FC<TaskCardProps> = ({ task, onStatusChange, onEdit, onSchedule, onDelete }) => {
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [isScheduling, setIsScheduling] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  
   const StatusIcon = statusIcons[task.status];
   const CategoryIcon = categoryIcons[task.category];
   const isBlocked = task.blocked_by && task.blocked_by.length > 0;
@@ -134,6 +152,29 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onStatusChange, onEdit }) => 
     onStatusChange(task.id, statusFlow[task.status] as Task['status']);
   };
 
+  const handleScheduleTask = async () => {
+    if (!onSchedule || isScheduling) return;
+    
+    setIsScheduling(true);
+    try {
+      await onSchedule(task);
+    } finally {
+      setIsScheduling(false);
+    }
+  };
+
+  const handleDeleteTask = async () => {
+    if (!onDelete || isDeleting) return;
+    
+    setIsDeleting(true);
+    try {
+      await onDelete(task.id);
+      setShowDeleteDialog(false);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   return (
     <Card 
       className={`group relative transition-all duration-200 hover:shadow-elevated border-l-4 cursor-pointer ${priorityColors[task.priority]} ${isBlocked ? 'opacity-75' : ''}`}
@@ -154,14 +195,47 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onStatusChange, onEdit }) => 
               {task.title}
             </h3>
           </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="opacity-0 group-hover:opacity-100 transition-opacity h-6 w-6 p-1"
-            onClick={() => onEdit?.(task)}
-          >
-            <MoreHorizontal className="h-3 w-3" />
-          </Button>
+          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            {onSchedule && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 w-6 p-1 hover:bg-primary/10"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleScheduleTask();
+                }}
+                disabled={isScheduling}
+                title="Schedule this task"
+              >
+                <CalendarPlus className={`h-3 w-3 ${isScheduling ? 'animate-spin' : ''}`} />
+              </Button>
+            )}
+            {onDelete && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 w-6 p-1 hover:bg-destructive/10 hover:text-destructive"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowDeleteDialog(true);
+                }}
+                disabled={isDeleting}
+                title="Delete this task"
+              >
+                <Trash2 className="h-3 w-3" />
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 w-6 p-1"
+              onClick={() => onEdit?.(task)}
+              title="Edit task details"
+            >
+              <MoreHorizontal className="h-3 w-3" />
+            </Button>
+          </div>
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
@@ -207,6 +281,28 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onStatusChange, onEdit }) => 
           )}
         </div>
       </CardContent>
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Task</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete "{task.title}"? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteTask}
+              disabled={isDeleting}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {isDeleting ? 'Deleting...' : 'Delete'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   );
 };

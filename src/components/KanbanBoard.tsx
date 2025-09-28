@@ -277,6 +277,88 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
     }
   };
 
+  const handleTaskSchedule = async (task: Task) => {
+    try {
+      const { scheduleNewTask } = await import('@/utils/taskScheduling');
+      
+      setIsGeneratingSchedule(true);
+      const result = await scheduleNewTask({
+        ...task,
+        board_id: board?.id || '',
+        user_id: user?.id || ''
+      });
+
+      if (result.success && result.scheduledTask) {
+        toast({
+          title: "Task scheduled!",
+          description: `"${task.title}" has been scheduled`,
+        });
+        
+        // Reload tasks to show the updated schedule
+        if (onTaskUpdate) {
+          onTaskUpdate();
+        }
+      } else {
+        toast({
+          title: "Scheduling failed",
+          description: result.error || "Could not find a suitable time slot",
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      console.error('Error scheduling task:', error);
+      toast({
+        title: "Error",
+        description: "Failed to schedule task",
+        variant: "destructive",
+      });
+    } finally {
+      setIsGeneratingSchedule(false);
+    }
+  };
+
+  const handleTaskDelete = async (taskId: string) => {
+    try {
+      if (isDemoMode) {
+        // Handle demo mode deletion
+        const demoTasks = localStorage.getItem('kanban-demo-tasks');
+        if (demoTasks) {
+          const tasks = JSON.parse(demoTasks);
+          const updatedTasks = tasks.filter((task: Task) => task.id !== taskId);
+          localStorage.setItem('kanban-demo-tasks', JSON.stringify(updatedTasks));
+        }
+      } else {
+        // Handle production deletion
+        const { error } = await supabase
+          .from('tasks')
+          .delete()
+          .eq('id', taskId)
+          .eq('user_id', user?.id);
+
+        if (error) {
+          throw error;
+        }
+      }
+
+      // Reload tasks
+      if (onTaskUpdate) {
+        onTaskUpdate();
+      }
+
+      toast({
+        title: "Task deleted",
+        description: "Task has been successfully deleted",
+      });
+    } catch (error) {
+      console.error('Error deleting task:', error);
+      toast({
+        title: "Error",
+        description: "Failed to delete task",
+        variant: "destructive",
+      });
+    }
+  };
+
   const generateDailySchedule = async () => {
     if (tasks.length === 0) {
       toast({
@@ -813,6 +895,8 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
                                            task={task}
                                            onEdit={handleTaskEdit}
                                            onStatusChange={handleStatusChange}
+                                           onSchedule={handleTaskSchedule}
+                                           onDelete={handleTaskDelete}
                                          />
                                       </div>
                                     )}
