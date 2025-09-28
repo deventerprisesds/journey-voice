@@ -7,7 +7,7 @@ import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import TaskCard from './TaskCard';
-import TaskDetailModal from './TaskDetailModal';
+
 import TaskCreationModal from './TaskCreationModal';
 import TaskFilters from './TaskFilters';
 import ColumnManager from './ColumnManager';
@@ -62,8 +62,6 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
   const [loading, setLoading] = useState(true);
   const [board, setBoard] = useState<Board | null>(null);
   const [columns, setColumns] = useState<Column[]>([]);
-  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
-  const [isModalOpen, setIsModalOpen] = useState(false);
   const [isGeneratingSchedule, setIsGeneratingSchedule] = useState(false);
   const [isCreationModalOpen, setIsCreationModalOpen] = useState(false);
   const [filteredTasks, setFilteredTasks] = useState<Task[]>([]);
@@ -273,21 +271,12 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
   };
 
   const handleTaskEdit = (task: Task) => {
+    console.log('KanbanBoard - handleTaskEdit called with task:', task?.id);
     if (onTaskEdit) {
       onTaskEdit(task);
     }
-    setSelectedTask(task);
-    setIsModalOpen(true);
   };
 
-  const handleTaskSave = (updatedTask: Task) => {
-    // Notify parent to reload tasks
-    if (onTaskUpdate) {
-      onTaskUpdate();
-    }
-    setIsModalOpen(false);
-    setSelectedTask(null);
-  };
 
   const generateDailySchedule = async () => {
     if (tasks.length === 0) {
@@ -855,13 +844,6 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
       </div>
 
       {/* Modals */}
-      <TaskDetailModal
-        task={selectedTask}
-        isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
-        onSave={handleTaskSave}
-        allTasks={filteredTasks.length > 0 ? filteredTasks : tasks}
-      />
 
       <TaskCreationModal
         isOpen={isCreationModalOpen}

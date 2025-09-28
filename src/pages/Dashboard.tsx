@@ -4,6 +4,7 @@ import { useAuth } from '@/hooks/useAuth';
 import KanbanBoard from '@/components/KanbanBoard';
 import GanttChart from '@/components/GanttChart';
 import TaskGridView from '@/components/EnhancedTaskGridView';
+import TaskDetailModal from '@/components/TaskDetailModal';
 import ViewSwitcher, { ViewType } from '@/components/ViewSwitcher';
 import { VoiceAssistantProvider } from '@/contexts/VoiceAssistantContext';
 import VoiceStatusArea from '@/components/VoiceStatusArea';
@@ -18,6 +19,7 @@ const Dashboard = () => {
   const [currentView, setCurrentView] = useState<ViewType>('kanban');
   const [tasks, setTasks] = useState<any[]>([]);
   const [selectedTask, setSelectedTask] = useState<any>(null);
+  const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const { user, signOut, isAdmin, isDemoMode } = useAuth();
 
@@ -69,7 +71,22 @@ const Dashboard = () => {
   };
 
   const handleTaskEdit = (task: any) => {
+    console.log('Dashboard - handleTaskEdit called with task:', task?.id);
     setSelectedTask(task);
+    setIsTaskModalOpen(true);
+  };
+
+  const handleTaskModalClose = () => {
+    console.log('Dashboard - closing task modal');
+    setIsTaskModalOpen(false);
+    setSelectedTask(null);
+  };
+
+  const handleTaskSave = (updatedTask: any) => {
+    console.log('Dashboard - task saved:', updatedTask?.id);
+    handleTaskUpdate();
+    setIsTaskModalOpen(false);
+    setSelectedTask(null);
   };
 
   const handleTasksLoaded = (loadedTasks: any[]) => {
@@ -185,6 +202,17 @@ const Dashboard = () => {
 
         {/* Voice Status Area */}
         <VoiceStatusArea />
+
+        {/* Task Detail Modal - Centralized at Dashboard level */}
+        {selectedTask && (
+          <TaskDetailModal
+            task={selectedTask}
+            isOpen={isTaskModalOpen}
+            onClose={handleTaskModalClose}
+            onSave={handleTaskSave}
+            allTasks={tasks}
+          />
+        )}
 
         {/* Background Elements */}
         <div className="fixed inset-0 -z-10 overflow-hidden pointer-events-none">

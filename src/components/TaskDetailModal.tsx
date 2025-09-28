@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -34,6 +34,12 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
   onSave,
   allTasks = []
 }) => {
+  console.log('TaskDetailModal render:', { 
+    taskId: task?.id, 
+    isOpen, 
+    taskTitle: task?.title 
+  });
+  
   const { toast } = useToast();
   const [editedTask, setEditedTask] = useState<Partial<Task>>({});
   const [dueDate, setDueDate] = useState<Date | undefined>(undefined);
@@ -45,6 +51,7 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
 
   // Initialize form when task changes
   useEffect(() => {
+    console.log('TaskDetailModal useEffect - task changed:', task?.id);
     if (task) {
       setEditedTask(task);
       setDueDate(task.due_date ? new Date(task.due_date) : undefined);
@@ -114,9 +121,9 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
       
       if (isDemoTask) {
         // For demo tasks, remove from localStorage instead of Supabase
-        const demoTasks = JSON.parse(localStorage.getItem('demoTasks') || '[]');
+        const demoTasks = JSON.parse(localStorage.getItem('kanban-demo-tasks') || '[]');
         const filteredTasks = demoTasks.filter((t: Task) => t.id !== task.id);
-        localStorage.setItem('demoTasks', JSON.stringify(filteredTasks));
+        localStorage.setItem('kanban-demo-tasks', JSON.stringify(filteredTasks));
       } else {
         // For real tasks, delete from Supabase
         const { error } = await supabase
@@ -182,12 +189,12 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
       
       if (isDemoTask) {
         // For demo tasks, update localStorage instead of Supabase
-        const demoTasks = JSON.parse(localStorage.getItem('demoTasks') || '[]');
+        const demoTasks = JSON.parse(localStorage.getItem('kanban-demo-tasks') || '[]');
         const taskIndex = demoTasks.findIndex((t: Task) => t.id === task.id);
         
         if (taskIndex !== -1) {
           demoTasks[taskIndex] = { ...task, ...updatedTask };
-          localStorage.setItem('demoTasks', JSON.stringify(demoTasks));
+          localStorage.setItem('kanban-demo-tasks', JSON.stringify(demoTasks));
         }
       } else {
         // For real tasks, update Supabase
@@ -306,11 +313,39 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
     }
   };
 
+  // Error boundary fallback
+  if (!task && isOpen) {
+    console.error('TaskDetailModal: Task is null but modal is open');
+    return (
+      <Dialog open={isOpen} onOpenChange={onClose}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Error</DialogTitle>
+            <DialogDescription>
+              Unable to load task details. Please try again.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2 mt-6">
+            <Button variant="outline" onClick={onClose}>
+              Close
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
+  // Don't render anything if modal is closed
+  if (!isOpen) return null;
+
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Edit Task</DialogTitle>
+          <DialogDescription>
+            Make changes to your task details, dependencies, and time tracking.
+          </DialogDescription>
         </DialogHeader>
 
         {!task ? (
@@ -372,7 +407,7 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
             <div className="space-y-2">
               <Label>Status</Label>
               <Select
-                value={editedTask.status}
+                value={editedTask.status || ''}
                 onValueChange={(value) => setEditedTask({ ...editedTask, status: value as Task['status'] })}
               >
                 <SelectTrigger>
@@ -390,7 +425,7 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
             <div className="space-y-2">
               <Label>Priority</Label>
               <Select
-                value={editedTask.priority}
+                value={editedTask.priority || ''}
                 onValueChange={(value) => setEditedTask({ ...editedTask, priority: value as Task['priority'] })}
               >
                 <SelectTrigger>
@@ -408,7 +443,7 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
             <div className="space-y-2">
               <Label>Category</Label>
               <Select
-                value={editedTask.category}
+                value={editedTask.category || ''}
                 onValueChange={(value) => setEditedTask({ ...editedTask, category: value as Task['category'] })}
               >
                 <SelectTrigger>
