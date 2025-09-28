@@ -40,43 +40,33 @@ const SmartTaskInput: React.FC<SmartTaskInputProps> = ({
     if (!input.trim() || isProcessing) return;
 
     setIsProcessing(true);
+    setLastSuggestion(null);
+
     try {
-      // Use the smart calendar scheduler with real calendar integration
-      const result = await itineraryEngine.findOptimalTimeSlot(
+      const suggestion = await itineraryEngine.findOptimalTimeSlot(
         input,
         targetDate,
-        tasks
+        tasks || []
       );
-
-      // Transform the result to match our TaskSuggestion interface
-      const taskSuggestion: TaskSuggestion = {
-        title: result.parsedTask?.title || input,
-        description: result.parsedTask?.description,
-        priority: result.parsedTask?.priority || 'MEDIUM',
-        category: result.parsedTask?.category || 'LIFE',
-        estimate_minutes: result.parsedTask?.estimatedDuration || 60,
-        scheduledStart: result.scheduledSlot?.startTime || new Date().toISOString(),
-        aiReasoning: result.aiReasoning || 'AI suggested this time slot based on your calendar availability.'
-      };
-
-      setLastSuggestion({
-        ...result,
-        taskSuggestion
-      });
-      setBusySlots(result.busySlots || []);
-      setInput('');
       
-      toast({
-        title: "Task Analyzed",
-        description: "AI has found the optimal time slot for your task. Review and edit if needed.",
-      });
-
+      if (suggestion) {
+        setLastSuggestion(suggestion);
+        setBusySlots(suggestion.busySlots || []);
+        setInput('');
+        
+        toast({
+          title: "Task Analyzed",
+          description: "AI has found the optimal time slot for your task. Review and edit if needed.",
+        });
+      } else {
+        throw new Error('No scheduling suggestion received');
+      }
     } catch (error) {
-      console.error('Error processing smart task input:', error);
+      console.error('Failed to get task suggestion:', error);
       toast({
-        title: "Error",
-        description: "Failed to process task. Please try again.",
-        variant: "destructive",
+        title: "Scheduling Error",
+        description: "Failed to get AI scheduling suggestion. Please try again.",
+        variant: "destructive"
       });
     } finally {
       setIsProcessing(false);

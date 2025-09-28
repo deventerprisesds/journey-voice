@@ -153,14 +153,16 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
   // Get tasks for a specific date
   const getTasksForDate = (date: Date) => {
     return tasks.filter(task => {
-      if (task.start_time && task.end_time) {
-        // Scheduled tasks - check if they're on this date
-        return isSameDay(parseISO(task.start_time), date);
+      // Include tasks with start_time or due_date on this date
+      if (task.start_time) {
+        const taskDate = new Date(task.start_time);
+        return isSameDay(taskDate, date);
       }
-      // Non-scheduled tasks - check due date
-      if (!task.due_date) return false;
-      const taskDate = new Date(task.due_date);
-      return isSameDay(taskDate, date);
+      if (task.due_date) {
+        const dueDate = new Date(task.due_date);
+        return isSameDay(dueDate, date);
+      }
+      return false;
     });
   };
 
@@ -220,6 +222,20 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
             onTaskClick={onTaskEdit}
             className="border rounded-lg"
           />
+          {/* Show unscheduled tasks for this date */}
+          <div className="mt-4">
+            {getTasksForDate(currentDate).filter(task => !task.start_time).map(task => (
+              <div key={task.id} className="p-2 mb-2 bg-muted/50 rounded border-l-4 border-warning">
+                <div className="flex items-center justify-between">
+                  <span className="font-medium">{task.title}</span>
+                  <span className="text-xs text-muted-foreground">Needs scheduling</span>
+                </div>
+                {task.description && (
+                  <p className="text-sm text-muted-foreground mt-1">{task.description}</p>
+                )}
+              </div>
+            ))}
+          </div>
         </ScrollArea>
       </div>
     );
@@ -309,24 +325,28 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
                   </div>
                   
                   <div className="space-y-1">
-                    {dayTasks.slice(0, 2).map(task => (
+                    {dayTasks.slice(0, 3).map(task => (
                       <div
                         key={task.id}
                         className={cn(
                           "px-1 py-0.5 rounded text-xs truncate cursor-pointer",
-                          priorityColors[task.priority]
+                          task.start_time 
+                            ? (priorityColors[task.priority] || 'bg-muted')
+                            : 'bg-warning/20 border border-warning/50'
                         )}
                         onClick={(e) => {
                           e.stopPropagation();
                           onTaskEdit?.(task);
                         }}
+                        title={`${task.title}${!task.start_time ? ' (Needs scheduling)' : ''}`}
                       >
+                        {!task.start_time && '⏰ '}
                         {task.title}
                       </div>
                     ))}
-                    {dayTasks.length > 2 && (
+                    {dayTasks.length > 3 && (
                       <p className="text-xs text-muted-foreground">
-                        +{dayTasks.length - 2}
+                        +{dayTasks.length - 3} more
                       </p>
                     )}
                   </div>

@@ -319,7 +319,7 @@ export class ItineraryEngine {
           existingTasks,
           workingMinutes: 420, // 7 hours default
           busySlots,
-          scheduling_context: this.extractSchedulingContext(taskText)
+          scheduling_context: this.extractSchedulingContext(taskText, existingTasks[0]?.category)
         }
       });
 
@@ -338,30 +338,43 @@ export class ItineraryEngine {
     }
   }
 
-  private extractSchedulingContext(taskText: string): string[] {
+  extractSchedulingContext(taskText: string, category?: string): string[] {
     const context: string[] = [];
     const lowerText = taskText.toLowerCase();
     
-    if (lowerText.includes('bank') || lowerText.includes('office hours')) {
+    // Category-based context
+    if (category === 'VENTURES' || lowerText.includes('business') || lowerText.includes('venture') || 
+        lowerText.includes('startup') || lowerText.includes('investment') || lowerText.includes('pitch')) {
       context.push('business_hours');
-    }
-    if (lowerText.includes('commute') || lowerText.includes('way to')) {
-      context.push('commute_time');
-    }
-    if (lowerText.includes('read') || lowerText.includes('study')) {
-      context.push('quiet_time');
-    }
-    if (lowerText.includes('gym') || lowerText.includes('exercise')) {
-      context.push('morning_evening');
-    }
-    if (lowerText.includes('flexible') || lowerText.includes('anytime')) {
-      context.push('flexible_hours');
-    }
-    if (lowerText.includes('weekday') || lowerText.includes('monday to friday')) {
       context.push('weekdays_only');
     }
+    
+    // Business hours context
+    if (lowerText.includes('bank') || lowerText.includes('office') || lowerText.includes('appointment') ||
+        lowerText.includes('meeting') || lowerText.includes('call')) {
+      context.push('business_hours');
+    }
+    
+    // Weekend context
     if (lowerText.includes('weekend') || lowerText.includes('saturday') || lowerText.includes('sunday')) {
-      context.push('weekend_ok');
+      context.push('weekend_preferred');
+    }
+    
+    // Weekday context
+    if (lowerText.includes('weekday') || lowerText.includes('monday') || lowerText.includes('tuesday') || 
+        lowerText.includes('wednesday') || lowerText.includes('thursday') || lowerText.includes('friday')) {
+      context.push('weekdays_only');
+    }
+    
+    // Time-specific context
+    if (lowerText.includes('morning') || lowerText.includes('am')) {
+      context.push('morning_preferred');
+    }
+    if (lowerText.includes('afternoon') || lowerText.includes('pm')) {
+      context.push('afternoon_preferred');
+    }
+    if (lowerText.includes('evening') || lowerText.includes('night')) {
+      context.push('evening_preferred');
     }
     
     return context;

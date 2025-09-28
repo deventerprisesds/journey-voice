@@ -86,7 +86,7 @@ serve(async (req) => {
     let taskType = 'personal';
     
     if (scheduling_context && Array.isArray(scheduling_context)) {
-      if (scheduling_context.includes('business_hours')) taskType = 'bank';
+      if (scheduling_context.includes('business_hours') || scheduling_context.includes('weekdays_only')) taskType = 'bank';
       if (scheduling_context.includes('commute_time')) taskType = 'commute';
       if (scheduling_context.includes('quiet_time')) taskType = 'reading';
       if (scheduling_context.includes('morning_evening')) taskType = 'exercise';
@@ -95,6 +95,7 @@ serve(async (req) => {
       // Fallback to text analysis
       const lowerText = taskText.toLowerCase();
       if (lowerText.includes('bank') || lowerText.includes('financial')) taskType = 'bank';
+      else if (lowerText.includes('business') || lowerText.includes('venture') || lowerText.includes('investment')) taskType = 'work';
       else if (lowerText.includes('store') || lowerText.includes('shop') || lowerText.includes('grocery')) taskType = 'errands';
       else if (lowerText.includes('work') && (lowerText.includes('commute') || lowerText.includes('way to'))) taskType = 'commute';
       else if (lowerText.includes('read') || lowerText.includes('study') || lowerText.includes('learn')) taskType = 'reading';
@@ -102,41 +103,86 @@ serve(async (req) => {
       else if (lowerText.includes('meeting') || lowerText.includes('appointment')) taskType = 'work';
     }
 
-    // Step 1: Parse the task using AI with enhanced context
-    const parseResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${OPENAI_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        messages: [
-          {
-            role: 'system',
-            content: `Analyze this task for intelligent scheduling. Consider:
-            - Task type: ${taskType}
-            - Current context: ${scheduling_context ? scheduling_context.join(', ') : 'none'}
-            
-            Determine:
-            - estimatedDuration: minutes (default 60 if unclear)
-            - timePreference: morning (6-12), afternoon (12-17), evening (17-22), business_hours (9-17), flexible
-            - dayPreference: weekdays (Mon-Fri), weekends (Sat-Sun), any
-            - urgencyLevel: 1-5 (5 being most urgent)
-            
-            Return JSON: {"estimatedDuration": number, "timePreference": "string", "dayPreference": "string", "urgencyLevel": number}`
-          },
-          {
-            role: 'user',
-            content: taskText
-          }
-        ],
-        temperature: 0.3,
-      }),
-    });
+    // Step 1: Parse the task using AI with enhanced context  
+    let parsedTask;
+    try {
+      console.log('Parsing task with AI:', taskText, 'Type:', taskType);
+      
+      const parseResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${OPENAI_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          messages: [
+            {
+              role: 'system',
+              content: `Analyze this task for intelligent scheduling. Consider:
+              - Task type: ${taskType}
+              - Current context: ${scheduling_context ? scheduling_context.join(', ') : 'none'}
+              
+              Return ONLY a JSON object with these exact fields:
+              {"estimatedDuration": number, "timePreference": "string", "dayPreference": "string", "urgencyLevel": number}
+              
+              Guidelines:
+              - estimatedDuration: minutes (default 60 if unclear)
+              - timePreference: morning, afternoon, evening, business_hours, or flexible
+              - dayPreference: weekdays, weekends, or any
+              - urgencyLevel: 1-5 (5 being most urgent)`
+            },
+            {
+              role: 'user',
+              content: `Task: "${taskText}"\nContext: ${scheduling_context?.join(', ') || 'general task'}\nCategory: ${taskType || 'general'}`
+            }
+          ],
+          temperature: 0.3,
+        }),
+      });
 
-    const parseData = await parseResponse.json();
-    const parsedTask = JSON.parse(parseData.choices[0].message.content);
+      if (!parseResponse.ok) {
+        throw new Error(`OpenAI API error: ${parseResponse.status}`);
+      }
+
+      const parseData = await parseResponse.json();
+      const aiContent = parseData.choices[0]?.message?.content?.trim();
+      
+      if (!aiContent) {
+        throw new Error('Empty AI response');
+      }
+
+      // Try to extract JSON from the response
+      let jsonStr = aiContent;
+      const jsonMatch = aiContent.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        jsonStr = jsonMatch[0];
+      }
+
+      parsedTask = JSON.parse(jsonStr);
+      
+      // Validate and set defaults
+      parsedTask = {
+        estimatedDuration: typeof parsedTask.estimatedDuration === 'number' ? parsedTask.estimatedDuration : 60,
+        timePreference: ['morning', 'afternoon', 'evening', 'business_hours', 'flexible'].includes(parsedTask.timePreference) ? parsedTask.timePreference : 'flexible',
+        dayPreference: ['weekdays', 'weekends', 'any'].includes(parsedTask.dayPreference) ? parsedTask.dayPreference : 'any',
+        urgencyLevel: typeof parsedTask.urgencyLevel === 'number' ? Math.max(1, Math.min(5, parsedTask.urgencyLevel)) : 3
+      };
+      
+      console.log('Parsed task details:', parsedTask);
+
+    } catch (e) {
+      console.error('Failed to parse AI response:', e);
+      // Fallback values based on task type and context
+      const duration = taskType === 'bank' ? 30 : taskType === 'errands' ? 45 : 60;
+      parsedTask = {
+        estimatedDuration: duration,
+        timePreference: taskType === 'bank' ? 'business_hours' : 'flexible',
+        dayPreference: taskType === 'bank' ? 'weekdays' : 'any',
+        urgencyLevel: 3
+      };
+      console.log('Using fallback task details:', parsedTask);
+    }
 
     // Step 2: Analyze workload balance
     const workloadBalance = analyzeWorkloadBalance(existingTasks);
