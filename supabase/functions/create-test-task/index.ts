@@ -146,12 +146,16 @@ serve(async (req) => {
     // Generate automatic reminders
     await generateTaskReminders(supabaseClient, task, now);
 
+    // Send immediate test notification via webhook
+    await sendImmediateTestNotification(supabaseClient, task, userId);
+
     return new Response(
       JSON.stringify({ 
         success: true, 
         task,
         message: `Test task created successfully. Due at ${dueDate.toLocaleString()}`,
-        remindersScheduled: true
+        remindersScheduled: true,
+        immediateNotificationSent: true
       }),
       { 
         status: 200, 
@@ -223,5 +227,44 @@ async function generateTaskReminders(supabaseClient: any, task: any, now: Date) 
     } else {
       console.log(`Scheduled ${reminders.length} reminders for task ${task.id}`);
     }
+  }
+}
+
+async function sendImmediateTestNotification(supabaseClient: any, task: any, userId: string) {
+  try {
+    // Get user profile for notification
+    const { data: profile } = await supabaseClient
+      .from('profiles')
+      .select('email, full_name')
+      .eq('user_id', userId)
+      .single();
+
+    // Send immediate notification via unified webhook
+    const { data, error } = await supabaseClient.functions.invoke('send-unified-notification', {
+      body: {
+        userId: userId,
+        title: 'Test Task Created',
+        body: `Test task "${task.title}" has been created and will be due at ${new Date(task.due_date).toLocaleString()}`,
+        channels: ['EMAIL', 'SLACK'],
+        userProfile: profile || { email: 'test@example.com' },
+        data: {
+          type: 'test_task_created',
+          taskId: task.id,
+          taskTitle: task.title,
+          taskDescription: task.description,
+          dueDate: task.due_date,
+          priority: task.priority,
+          category: task.category
+        }
+      }
+    });
+
+    if (error) {
+      console.error('Error sending immediate test notification:', error);
+    } else {
+      console.log('Immediate test notification sent successfully:', data);
+    }
+  } catch (error) {
+    console.error('Error in sendImmediateTestNotification:', error);
   }
 }
