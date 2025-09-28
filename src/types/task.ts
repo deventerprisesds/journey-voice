@@ -15,6 +15,40 @@ export interface Task {
   completed_at?: string;
   created_at: string;
   updated_at: string;
+  external_event_id?: string;
+  is_scheduled?: boolean;
+}
+
+export interface CalendarConnection {
+  id: string;
+  user_id: string;
+  provider: 'google' | 'outlook' | 'office365';
+  provider_account_id: string;
+  provider_account_email: string;
+  access_token: string;
+  refresh_token?: string;
+  expires_at?: string;
+  scope?: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ExternalCalendarEvent {
+  id: string;
+  user_id: string;
+  connection_id: string;
+  external_event_id: string;
+  title: string;
+  description?: string;
+  start_time: string;
+  end_time: string;
+  is_all_day: boolean;
+  location?: string;
+  calendar_id: string;
+  last_synced_at: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Board {

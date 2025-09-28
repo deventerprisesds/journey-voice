@@ -1,14 +1,17 @@
-import React, { useState, useMemo } from 'react';
-import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, eachDayOfInterval, addDays, isSameDay, isSameMonth, isToday, startOfDay, endOfDay } from 'date-fns';
-import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Clock, Plus, Brain } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, eachDayOfInterval, addDays, isSameDay, isSameMonth, isToday, startOfDay, endOfDay, parseISO } from 'date-fns';
+import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Clock, Plus, Brain, RefreshCw } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
-import { Task } from '@/types/task';
+import { Task, ExternalCalendarEvent } from '@/types/task';
 import SmartTaskInput from './SmartTaskInput';
+import { getCalendarAvailability, syncExternalCalendars } from '@/utils/taskScheduling';
+import { toast } from 'sonner';
+import { CalendarConnectionModal } from './CalendarConnectionModal';
 
 interface CalendarModuleProps {
   tasks: Task[];
@@ -27,6 +30,72 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
 }) => {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [view, setView] = useState<ViewType>('month');
+  const [externalEvents, setExternalEvents] = useState<ExternalCalendarEvent[]>([]);
+  const [busySlots, setBusySlots] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [showConnectionModal, setShowConnectionModal] = useState(false);
+
+  const timeSlots = Array.from({ length: 17 }, (_, i) => i + 6); // 6 AM to 11 PM
+
+  useEffect(() => {
+    loadCalendarData();
+  }, [currentDate, view]);
+
+  const loadCalendarData = async () => {
+    setIsLoading(true);
+    try {
+      const startDate = view === 'month' 
+        ? startOfMonth(currentDate).toISOString()
+        : view === 'week'
+        ? startOfWeek(currentDate).toISOString()
+        : new Date(currentDate.getFullYear(), currentDate.getMonth(), currentDate.getDate()).toISOString();
+      
+      const endDate = view === 'month'
+        ? endOfMonth(currentDate).toISOString()
+        : view === 'week'
+        ? endOfWeek(currentDate).toISOString()
+        : new Date(currentDate.getFullYear(), currentDate.getMonth(), currentDate.getDate() + 1).toISOString();
+
+      const { busySlots: availability } = await getCalendarAvailability(startDate, endDate);
+      setBusySlots(availability);
+      
+      const externalEventsData = availability.filter(slot => slot.type === 'external');
+      // Convert to proper ExternalCalendarEvent format if needed
+      const properExternalEvents = externalEventsData.map((event, index) => ({
+        id: 'temp-' + index,
+        user_id: '',
+        connection_id: '',
+        external_event_id: 'temp-' + index,
+        title: event.title,
+        description: '',
+        start_time: event.start,
+        end_time: event.end,
+        is_all_day: false,
+        location: '',
+        calendar_id: '',
+        last_synced_at: new Date().toISOString(),
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      }));
+      setExternalEvents(properExternalEvents);
+    } catch (error) {
+      console.error('Failed to load calendar data:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleSyncCalendars = async () => {
+    setIsLoading(true);
+    try {
+      await syncExternalCalendars();
+      await loadCalendarData();
+    } catch (error) {
+      toast.error('Failed to sync calendars');
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   // Priority colors
   const priorityColors = {
@@ -63,10 +132,21 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
   // Get tasks for a specific date
   const getTasksForDate = (date: Date) => {
     return tasks.filter(task => {
+      if (task.start_time && task.end_time) {
+        // Scheduled tasks - check if they're on this date
+        return isSameDay(parseISO(task.start_time), date);
+      }
+      // Non-scheduled tasks - check due date
       if (!task.due_date) return false;
       const taskDate = new Date(task.due_date);
       return isSameDay(taskDate, date);
     });
+  };
+
+  const getEventsForDate = (date: Date) => {
+    return externalEvents.filter(event => 
+      isSameDay(parseISO(event.start_time), date)
+    );
   };
 
   // Get tasks for date range
@@ -350,6 +430,25 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
             <Button
               variant="outline"
               size="sm"
+              onClick={() => setShowConnectionModal(true)}
+            >
+              <CalendarIcon className="h-4 w-4 mr-1" />
+              Connect Calendar
+            </Button>
+            
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleSyncCalendars}
+              disabled={isLoading}
+            >
+              <RefreshCw className={cn("h-4 w-4 mr-1", isLoading && "animate-spin")} />
+              Sync
+            </Button>
+            
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => navigateDate('prev')}
             >
               <ChevronLeft className="h-4 w-4" />
@@ -388,6 +487,15 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
         </Tabs>
       </CardContent>
     </Card>
+
+    <CalendarConnectionModal
+      isOpen={showConnectionModal}
+      onClose={() => setShowConnectionModal(false)}
+      onConnectionSuccess={() => {
+        setShowConnectionModal(false);
+        loadCalendarData();
+      }}
+    />
     </div>
   );
 };

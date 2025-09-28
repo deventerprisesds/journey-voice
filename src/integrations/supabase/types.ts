@@ -107,6 +107,51 @@ export type Database = {
         }
         Relationships: []
       }
+      calendar_connections: {
+        Row: {
+          access_token: string
+          created_at: string
+          expires_at: string | null
+          id: string
+          is_active: boolean
+          provider: string
+          provider_account_email: string
+          provider_account_id: string
+          refresh_token: string | null
+          scope: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          access_token: string
+          created_at?: string
+          expires_at?: string | null
+          id?: string
+          is_active?: boolean
+          provider: string
+          provider_account_email: string
+          provider_account_id: string
+          refresh_token?: string | null
+          scope?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          access_token?: string
+          created_at?: string
+          expires_at?: string | null
+          id?: string
+          is_active?: boolean
+          provider?: string
+          provider_account_email?: string
+          provider_account_id?: string
+          refresh_token?: string | null
+          scope?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       columns: {
         Row: {
           board_id: string
@@ -270,6 +315,65 @@ export type Database = {
             columns: ["notification_id"]
             isOneToOne: false
             referencedRelation: "scheduled_notifications"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      external_calendar_events: {
+        Row: {
+          calendar_id: string
+          connection_id: string
+          created_at: string
+          description: string | null
+          end_time: string
+          external_event_id: string
+          id: string
+          is_all_day: boolean
+          last_synced_at: string
+          location: string | null
+          start_time: string
+          title: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          calendar_id: string
+          connection_id: string
+          created_at?: string
+          description?: string | null
+          end_time: string
+          external_event_id: string
+          id?: string
+          is_all_day?: boolean
+          last_synced_at?: string
+          location?: string | null
+          start_time: string
+          title: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          calendar_id?: string
+          connection_id?: string
+          created_at?: string
+          description?: string | null
+          end_time?: string
+          external_event_id?: string
+          id?: string
+          is_all_day?: boolean
+          last_synced_at?: string
+          location?: string | null
+          start_time?: string
+          title?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "external_calendar_events_connection_id_fkey"
+            columns: ["connection_id"]
+            isOneToOne: false
+            referencedRelation: "calendar_connections"
             referencedColumns: ["id"]
           },
         ]
@@ -665,10 +769,14 @@ export type Database = {
           created_at: string
           description: string | null
           due_date: string | null
+          end_time: string | null
           estimate_minutes: number | null
+          external_event_id: string | null
           id: string
+          is_scheduled: boolean
           priority: Database["public"]["Enums"]["task_priority"]
           source_id: string | null
+          start_time: string | null
           status: Database["public"]["Enums"]["task_status"]
           title: string
           updated_at: string
@@ -682,10 +790,14 @@ export type Database = {
           created_at?: string
           description?: string | null
           due_date?: string | null
+          end_time?: string | null
           estimate_minutes?: number | null
+          external_event_id?: string | null
           id?: string
+          is_scheduled?: boolean
           priority?: Database["public"]["Enums"]["task_priority"]
           source_id?: string | null
+          start_time?: string | null
           status?: Database["public"]["Enums"]["task_status"]
           title: string
           updated_at?: string
@@ -699,10 +811,14 @@ export type Database = {
           created_at?: string
           description?: string | null
           due_date?: string | null
+          end_time?: string | null
           estimate_minutes?: number | null
+          external_event_id?: string | null
           id?: string
+          is_scheduled?: boolean
           priority?: Database["public"]["Enums"]["task_priority"]
           source_id?: string | null
+          start_time?: string | null
           status?: Database["public"]["Enums"]["task_status"]
           title?: string
           updated_at?: string
