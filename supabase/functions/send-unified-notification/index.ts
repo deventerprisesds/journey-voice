@@ -8,14 +8,26 @@ const corsHeaders = {
 
 interface NotificationPayload {
   userId: string;
-  title: string;
-  body: string;
-  data?: any;
+  title?: string;
+  body?: string;
   channels: string[];
+  data?: any;
   slackWebhook?: string;
   userProfile?: {
     email?: string;
     phone?: string;
+  };
+  outlookEvent?: {
+    title: string;
+    startTime: string;
+    endTime: string;
+    reminder: string;
+  };
+  googleEvent?: {
+    title: string;
+    startTime: string;
+    endTime: string;
+    reminder: string;
   };
 }
 
@@ -31,20 +43,36 @@ serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
-    const payload: NotificationPayload = await req.json();
-    console.log('Sending notification to all channels:', payload);
+    const { 
+      userId, 
+      title, 
+      body, 
+      channels, 
+      data = {}, 
+      slackWebhook,
+      userProfile,
+      outlookEvent,
+      googleEvent
+    }: NotificationPayload = await req.json();
 
-    const targetUserId = payload.userId;
-    console.log('Sending unified notification:', payload);
+    console.log('Sending unified notification:', {
+      userId,
+      title,
+      body,
+      channels,
+      data,
+      ...(outlookEvent && { outlookEvent }),
+      ...(googleEvent && { googleEvent })
+    });
 
     // Use provided user profile if available, otherwise fetch from database
-    let profile = payload.userProfile;
+    let profile = userProfile;
     if (!profile || (!profile.email && !profile.phone)) {
       console.log('Fetching user profile from database...');
       const { data: dbProfile, error: profileError } = await supabaseClient
         .from('profiles')
         .select('email, phone')
-        .eq('user_id', targetUserId)
+        .eq('user_id', userId)
         .maybeSingle();
 
       if (profileError) {
@@ -54,53 +82,31 @@ serve(async (req) => {
       profile = dbProfile || profile || {};
     }
 
-    // Get user's notification preferences
-    const { data: prefs, error: prefsError } = await supabaseClient
-      .from('notification_prefs')
-      .select('channels')
-      .eq('user_id', targetUserId)
-      .maybeSingle();
+    await callUnifiedWebhook({
+      userId,
+      title,
+      body,
+      channels,
+      userProfile: userProfile || profile,
+      taskData: data,
+      slackWebhook: slackWebhook || Deno.env.get('SLACK_WEBHOOK_URL') || '',
+      outlookEvent,
+      googleEvent
+    });
 
-    if (prefsError && prefsError.code !== 'PGRST116') {
-      console.error('Error fetching notification preferences:', prefsError);
-    }
-
-    const userChannels = prefs?.channels || ['EMAIL', 'PUSH'];
-    
-    // Call unified webhook with all notification data
-    try {
-      const result = await callUnifiedWebhook(targetUserId, payload, userChannels, profile);
-      
-      console.log('Unified webhook result:', result);
-      
-      return new Response(
-        JSON.stringify({ 
-          success: true, 
-          message: 'Notification sent to unified webhook',
-          channels: userChannels,
-          result
-        }),
-        {
-          status: 200,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        }
-      );
-    } catch (error) {
-      console.error('Unified webhook failed:', error);
-      return new Response(
-        JSON.stringify({ 
-          error: 'Failed to send notification', 
-          details: error instanceof Error ? error.message : 'Unknown error' 
-        }),
-        {
-          status: 500,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        }
-      );
-    }
+    return new Response(
+      JSON.stringify({ 
+        success: true, 
+        message: 'Notification sent to unified webhook'
+      }),
+      {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      }
+    );
 
   } catch (error) {
-    console.error('Error in send-push-notification function:', error);
+    console.error('Error in send-unified-notification function:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     return new Response(
       JSON.stringify({ error: 'Internal server error', details: errorMessage }),
@@ -112,7 +118,29 @@ serve(async (req) => {
   }
 });
 
-async function callUnifiedWebhook(userId: string, payload: NotificationPayload, channels: string[], profile: any) {
+interface UnifiedWebhookPayload {
+  userId: string;
+  title?: string;
+  body?: string;
+  channels: string[];
+  userProfile: any;
+  taskData: any;
+  slackWebhook?: string;
+  outlookEvent?: {
+    title: string;
+    startTime: string;
+    endTime: string;
+    reminder: string;
+  };
+  googleEvent?: {
+    title: string;
+    startTime: string;
+    endTime: string;
+    reminder: string;
+  };
+}
+
+async function callUnifiedWebhook(payload: UnifiedWebhookPayload) {
   const webhookUrl = Deno.env.get('UNIFIED_WEBHOOK_URL');
   
   if (!webhookUrl) {
@@ -120,57 +148,22 @@ async function callUnifiedWebhook(userId: string, payload: NotificationPayload, 
     return { status: 'no_webhook_configured' };
   }
 
-  // Prefer payload slackWebhook over environment variable
-  const slackWebhookUrl = payload.slackWebhook || Deno.env.get('SLACK_WEBHOOK_URL') || '';
-  console.log('Using Slack webhook URL:', slackWebhookUrl ? 'provided' : 'none');
+  console.log('Calling unified webhook with payload:', payload);
 
-  const webhookPayload = {
-    userId,
-    title: payload.title,
-    body: payload.body,
-    channels: channels.filter(c => c !== 'SLACK'), // Remove SLACK from unified webhook channels
-    userProfile: {
-      email: profile?.email,
-      phone: profile?.phone
-    },
-    taskData: payload.data,
-    slackWebhook: slackWebhookUrl
-  };
+  const queryParams = new URLSearchParams({
+    userId: payload.userId,
+    ...(payload.title && { title: payload.title }),
+    ...(payload.body && { body: payload.body }),
+    channels: JSON.stringify(payload.channels),
+    userProfile: JSON.stringify(payload.userProfile),
+    taskData: JSON.stringify(payload.taskData),
+    ...(payload.outlookEvent && { outlookEvent: JSON.stringify(payload.outlookEvent) }),
+    ...(payload.googleEvent && { googleEvent: JSON.stringify(payload.googleEvent) })
+  });
 
-  // Handle Slack separately if it's in the channels and we have a webhook URL
-  if (channels.includes('SLACK') && slackWebhookUrl) {
-    try {
-      console.log('Sending Slack notification to:', slackWebhookUrl);
-      const slackResponse = await fetch(slackWebhookUrl, {
-        method: 'GET',
-        headers: {
-          'Accept': 'application/json',
-        }
-      });
-      
-      if (!slackResponse.ok) {
-        console.error('Slack webhook failed:', slackResponse.status, await slackResponse.text());
-      } else {
-        console.log('Slack notification sent successfully');
-      }
-    } catch (error) {
-      console.error('Error sending Slack notification:', error);
-    }
-  } else if (channels.includes('SLACK') && !slackWebhookUrl) {
-    console.warn('SLACK channel requested but no webhook URL provided');
+  if (payload.slackWebhook) {
+    queryParams.append('slackWebhook', payload.slackWebhook);
   }
-
-  console.log('Calling unified webhook with payload:', webhookPayload);
-
-  // Convert payload to URL query parameters for GET request
-  const queryParams = new URLSearchParams();
-  queryParams.append('userId', webhookPayload.userId);
-  queryParams.append('title', webhookPayload.title);
-  queryParams.append('body', webhookPayload.body);
-  queryParams.append('channels', JSON.stringify(webhookPayload.channels));
-  queryParams.append('userProfile', JSON.stringify(webhookPayload.userProfile));
-  queryParams.append('taskData', JSON.stringify(webhookPayload.taskData));
-  queryParams.append('slackWebhook', webhookPayload.slackWebhook);
 
   const fullUrl = `${webhookUrl}?${queryParams.toString()}`;
   console.log('Calling unified webhook with GET:', fullUrl);
@@ -188,6 +181,7 @@ async function callUnifiedWebhook(userId: string, payload: NotificationPayload, 
   }
 
   const result = await response.json();
+  console.log('Unified webhook result:', result);
   
   // Store notification record for tracking
   const supabaseClient = createClient(
@@ -196,13 +190,13 @@ async function callUnifiedWebhook(userId: string, payload: NotificationPayload, 
   );
 
   const notificationRecord = {
-    user_id: userId,
-    title: payload.title,
-    body: payload.body,
-    notification_type: payload.data?.type || 'general',
+    user_id: payload.userId,
+    title: payload.title || 'Event Notification',
+    body: payload.body || JSON.stringify(payload.outlookEvent || payload.googleEvent || {}),
+    notification_type: payload.taskData?.type || 'general',
     scheduled_for: new Date().toISOString(),
     delivered_at: new Date().toISOString(),
-    task_id: payload.data?.taskId || null
+    task_id: payload.taskData?.taskId || null
   };
 
   // Don't fail the whole request if notification storage fails

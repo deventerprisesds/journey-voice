@@ -5,13 +5,14 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
-import { Phone, Mail, MessageSquare, Volume2, VolumeX } from "lucide-react";
+import { Calendar, Mail, MessageSquare, Volume2, VolumeX } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { z } from "zod";
 
-type NotificationChannel = 'EMAIL' | 'SMS' | 'SLACK' | 'PUSH';
+type NotificationChannel = 'EMAIL' | 'SLACK' | 'PUSH' | 'OUTLOOK_EVENT' | 'GOOGLE_EVENT';
+type DatabaseChannel = 'EMAIL' | 'SMS' | 'SLACK' | 'PUSH';
 
 interface NotificationPrefs {
   due_reminders_enabled: boolean;
@@ -23,6 +24,19 @@ interface NotificationPrefs {
   quiet_hours_end: string;
   timezone: string;
   channels: NotificationChannel[];
+  // Calendar event settings
+  outlookEvent: {
+    title: string;
+    startTime: string;
+    endTime: string;
+    reminder: string; // minutes before
+  };
+  googleEvent: {
+    title: string;
+    startTime: string;
+    endTime: string;
+    reminder: string; // minutes before
+  };
 }
 
 const NotificationSettings = () => {
@@ -35,7 +49,19 @@ const NotificationSettings = () => {
     quiet_hours_start: '22:00',
     quiet_hours_end: '08:00',
     timezone: 'UTC',
-    channels: ['EMAIL', 'PUSH']
+    channels: ['EMAIL'],
+    outlookEvent: {
+      title: '',
+      startTime: '',
+      endTime: '',
+      reminder: '15'
+    },
+    googleEvent: {
+      title: '',
+      startTime: '',
+      endTime: '',
+      reminder: '15'
+    }
   });
   const [isSaving, setIsSaving] = useState(false);
   const [phone, setPhone] = useState('');
@@ -77,7 +103,21 @@ const NotificationSettings = () => {
           quiet_hours_start: prefsData.quiet_hours_start ?? '22:00',
           quiet_hours_end: prefsData.quiet_hours_end ?? '08:00',
           timezone: prefsData.timezone ?? 'UTC',
-          channels: prefsData.channels ?? ['EMAIL']
+          channels: (prefsData.channels ?? ['EMAIL']).map((ch: string) => 
+            ch === 'SMS' ? 'OUTLOOK_EVENT' : ch as NotificationChannel
+          ),
+          outlookEvent: {
+            title: '',
+            startTime: '',
+            endTime: '',
+            reminder: '15'
+          },
+          googleEvent: {
+            title: '',
+            startTime: '',
+            endTime: '',
+            reminder: '15'
+          }
         });
       }
 
@@ -121,7 +161,19 @@ const NotificationSettings = () => {
           quiet_hours_start: parsed.quiet_hours_start ?? '22:00',
           quiet_hours_end: parsed.quiet_hours_end ?? '08:00',
           timezone: parsed.timezone ?? 'UTC',
-          channels: parsed.channels ?? ['EMAIL']
+          channels: parsed.channels ?? ['EMAIL'],
+          outlookEvent: parsed.outlookEvent ?? {
+            title: '',
+            startTime: '',
+            endTime: '',
+            reminder: '15'
+          },
+          googleEvent: parsed.googleEvent ?? {
+            title: '',
+            startTime: '',
+            endTime: '',
+            reminder: '15'
+          }
         });
       } catch (error) {
         console.error('Error parsing stored demo preferences:', error);
@@ -140,25 +192,38 @@ const NotificationSettings = () => {
     setIsSaving(true);
     
     try {
-      // Validate email and phone if their channels are enabled
-      const validationSchema = z.object({
-        email: prefs.channels.includes('EMAIL') 
-          ? z.string().email("Please enter a valid email address").min(1, "Email is required when Email channel is enabled")
-          : z.string().optional(),
-        phone: prefs.channels.includes('SMS')
-          ? z.string().min(1, "Phone is required when SMS channel is enabled").regex(/^\+?[1-9]\d{1,14}$/, "Please enter a valid phone number with country code")
-          : z.string().optional()
-      });
-
-      const validation = validationSchema.safeParse({ email, phone });
-      if (!validation.success) {
-        const errors = validation.error.errors.map(err => err.message).join(', ');
+      // Validate email if EMAIL channel is enabled
+      if (prefs.channels.includes('EMAIL') && (!email || !z.string().email().safeParse(email).success)) {
         toast({
           title: "Validation Error",
-          description: errors,
+          description: "Please enter a valid email address for email notifications.",
           variant: "destructive",
         });
         return;
+      }
+
+      // Validate Outlook event fields if enabled
+      if (prefs.channels.includes('OUTLOOK_EVENT')) {
+        if (!prefs.outlookEvent?.title || !prefs.outlookEvent?.startTime || !prefs.outlookEvent?.endTime) {
+          toast({
+            title: "Validation Error",
+            description: "Please fill in all Outlook event fields (title, start time, end time).",
+            variant: "destructive",
+          });
+          return;
+        }
+      }
+
+      // Validate Google event fields if enabled
+      if (prefs.channels.includes('GOOGLE_EVENT')) {
+        if (!prefs.googleEvent?.title || !prefs.googleEvent?.startTime || !prefs.googleEvent?.endTime) {
+          toast({
+            title: "Validation Error",
+            description: "Please fill in all Google event fields (title, start time, end time).",
+            variant: "destructive",
+          });
+          return;
+        }
       }
 
       // Save Slack webhook URL to localStorage (not in database for security)
@@ -186,17 +251,25 @@ const NotificationSettings = () => {
         quiet_hours_end: prefs.quiet_hours_end.length === 5 ? prefs.quiet_hours_end + ':00' : prefs.quiet_hours_end
       };
 
+      // Convert channels back to database format
+      const dbPrefs = {
+        ...normalizedPrefs,
+        channels: normalizedPrefs.channels.map(ch => 
+          ch === 'OUTLOOK_EVENT' || ch === 'GOOGLE_EVENT' ? 'SMS' : ch
+        ) as DatabaseChannel[]
+      };
+
       // Try to update notification preferences first, then insert if not exists
       const { error: updatePrefsError } = await supabase
         .from('notification_prefs')
-        .update({ ...normalizedPrefs })
+        .update(dbPrefs)
         .eq('user_id', user.id);
 
       if (updatePrefsError && updatePrefsError.code === 'PGRST116') {
         // No rows updated, try insert
         const { error: insertPrefsError } = await supabase
           .from('notification_prefs')
-          .insert({ user_id: user.id, ...normalizedPrefs });
+          .insert({ user_id: user.id, ...dbPrefs });
         
         if (insertPrefsError) {
           console.error('Error inserting notification preferences:', insertPrefsError);
@@ -280,28 +353,77 @@ const NotificationSettings = () => {
     }
   };
 
-  const sendTestSMS = async () => {
-    try {
-      await supabase.functions.invoke('send-unified-notification', {
-        body: {
-          userId: user?.id || 'demo-user',
-          title: '🧪 Test SMS Notification',
-          body: 'Test SMS notification - SMS notifications will be sent here when enabled.',
-          channels: ['SMS'],
-          data: { type: 'test_notification' },
-          userProfile: { email, phone }
-        }
-      });
-      
-      toast({
-        title: "Test SMS sent",
-        description: "Check your unified webhook for the SMS notification.",
-      });
-    } catch (error) {
-      console.error('Error sending test SMS:', error);
+  const sendTestOutlookEvent = async () => {
+    if (!prefs.outlookEvent?.title || !prefs.outlookEvent?.startTime || !prefs.outlookEvent?.endTime) {
       toast({
         title: "Error",
-        description: "Failed to send test SMS notification.",
+        description: "Please fill in all Outlook event fields first",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      console.log('Testing Outlook event notification...');
+      const { data, error } = await supabase.functions.invoke('send-unified-notification', {
+        body: {
+          userId: user?.id,
+          channels: ['OUTLOOK_EVENT'],
+          outlookEvent: prefs.outlookEvent,
+          userProfile: { email },
+          data: { type: 'test_notification' }
+        }
+      });
+
+      if (error) throw error;
+
+      toast({
+        title: "Test Outlook Event Sent",
+        description: "Check your calendar for the test Outlook event.",
+      });
+    } catch (error: any) {
+      console.error('Error sending test Outlook event:', error);
+      toast({
+        title: "Test Failed", 
+        description: error.message || "Failed to send test Outlook event",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const sendTestGoogleEvent = async () => {
+    if (!prefs.googleEvent?.title || !prefs.googleEvent?.startTime || !prefs.googleEvent?.endTime) {
+      toast({
+        title: "Error",
+        description: "Please fill in all Google event fields first",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      console.log('Testing Google event notification...');
+      const { data, error } = await supabase.functions.invoke('send-unified-notification', {
+        body: {
+          userId: user?.id,
+          channels: ['GOOGLE_EVENT'],
+          googleEvent: prefs.googleEvent,
+          userProfile: { email },
+          data: { type: 'test_notification' }
+        }
+      });
+
+      if (error) throw error;
+
+      toast({
+        title: "Test Google Event Sent",
+        description: "Check your calendar for the test Google event.",
+      });
+    } catch (error: any) {
+      console.error('Error sending test Google event:', error);
+      toast({
+        title: "Test Failed", 
+        description: error.message || "Failed to send test Google event",
         variant: "destructive",
       });
     }
@@ -491,7 +613,7 @@ const NotificationSettings = () => {
             <div>
               <Label className="text-sm font-medium">Weekly Digest</Label>
               <p className="text-xs text-muted-foreground">
-                Weekly summary and productivity insights
+                Weekly overview of completed tasks and upcoming deadlines
               </p>
             </div>
             <Switch
@@ -507,12 +629,9 @@ const NotificationSettings = () => {
       {/* Quiet Hours */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Volume2 className="h-5 w-5" />
-            Quiet Hours
-          </CardTitle>
+          <CardTitle>Quiet Hours</CardTitle>
           <CardDescription>
-            Set times when you don't want to receive notifications
+            Set hours when notifications should be muted
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -545,111 +664,229 @@ const NotificationSettings = () => {
             <Label htmlFor="timezone">Timezone</Label>
             <Input
               id="timezone"
+              placeholder="UTC"
               value={prefs.timezone}
               onChange={(e) => 
                 setPrefs({ ...prefs, timezone: e.target.value })
               }
-              placeholder="UTC"
             />
           </div>
+
+          <Button 
+            onClick={testQuietHours}
+            variant="outline" 
+            className="w-full"
+          >
+            {prefs.quiet_hours_start <= new Date().toTimeString().slice(0, 5) && 
+             new Date().toTimeString().slice(0, 5) <= prefs.quiet_hours_end ? (
+              <VolumeX className="h-4 w-4 mr-2" />
+            ) : (
+              <Volume2 className="h-4 w-4 mr-2" />
+            )}
+            Test Quiet Hours
+          </Button>
         </CardContent>
       </Card>
 
       {/* Delivery Channels */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <MessageSquare className="h-5 w-5" />
-            Delivery Channels
-          </CardTitle>
+          <CardTitle>Delivery Channels</CardTitle>
           <CardDescription>
-            Choose how you want to receive notifications via your unified webhook
+            Choose how you want to receive notifications
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="space-y-3">
+        <CardContent className="space-y-6">
+          <div className="space-y-4">
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Volume2 className="h-4 w-4" />
-                <Label htmlFor="push-channel">In-App Notifications</Label>
+              <div className="flex items-center gap-3">
+                <Mail className="h-5 w-5 text-primary" />
+                <div>
+                  <h4 className="font-medium">Email</h4>
+                  <p className="text-sm text-muted-foreground">Send notifications via email</p>
+                </div>
               </div>
               <Switch
-                id="push-channel"
-                checked={prefs.channels.includes('PUSH')}
-                onCheckedChange={() => handleToggleChannel('PUSH')}
-              />
-            </div>
-            
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Mail className="h-4 w-4" />
-                <Label htmlFor="email-channel">Email</Label>
-              </div>
-              <Switch
-                id="email-channel"
                 checked={prefs.channels.includes('EMAIL')}
-                onCheckedChange={() => handleToggleChannel('EMAIL')}
+                onCheckedChange={(checked) => handleToggleChannel('EMAIL')}
               />
             </div>
             
             {prefs.channels.includes('EMAIL') && (
-              <div className="space-y-2 pt-2 border-t">
-                <Label htmlFor="email-address">Email Address</Label>
+              <div className="space-y-2 mt-4">
+                <Label htmlFor="email">Email Address</Label>
                 <Input
-                  id="email-address"
+                  id="email"
                   type="email"
-                  placeholder="user@example.com"
+                  placeholder="your@email.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                 />
-                <p className="text-sm text-muted-foreground">
-                  Email address for receiving notifications
-                </p>
               </div>
             )}
-            
+          </div>
+
+          <div className="space-y-4">
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Phone className="h-4 w-4" />
-                <Label htmlFor="sms-channel">SMS</Label>
+              <div className="flex items-center gap-3">
+                <Calendar className="h-5 w-5 text-primary" />
+                <div>
+                  <h4 className="font-medium">Outlook Calendar</h4>
+                  <p className="text-sm text-muted-foreground">Create calendar events in Outlook</p>
+                </div>
               </div>
               <Switch
-                id="sms-channel"
-                checked={prefs.channels.includes('SMS')}
-                onCheckedChange={() => handleToggleChannel('SMS')}
+                checked={prefs.channels.includes('OUTLOOK_EVENT')}
+                onCheckedChange={(checked) => handleToggleChannel('OUTLOOK_EVENT')}
               />
             </div>
             
-            {prefs.channels.includes('SMS') && (
-              <div className="space-y-2 pt-2 border-t">
-                <Label htmlFor="phone-number">Phone Number</Label>
-                <Input
-                  id="phone-number"
-                  type="tel"
-                  placeholder="+1234567890"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                />
-                <p className="text-sm text-muted-foreground">
-                  Include country code (e.g., +1 for US)
-                </p>
+            {prefs.channels.includes('OUTLOOK_EVENT') && (
+              <div className="space-y-4 mt-4">
+                <div className="space-y-2">
+                  <Label htmlFor="outlook-title">Event Title</Label>
+                  <Input
+                    id="outlook-title"
+                    placeholder="Meeting or task title"
+                    value={prefs.outlookEvent?.title || ''}
+                    onChange={(e) => setPrefs(prev => ({
+                      ...prev,
+                      outlookEvent: { ...prev.outlookEvent!, title: e.target.value }
+                    }))}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="outlook-start">Start Time</Label>
+                    <Input
+                      id="outlook-start"
+                      type="datetime-local"
+                      value={prefs.outlookEvent?.startTime || ''}
+                      onChange={(e) => setPrefs(prev => ({
+                        ...prev,
+                        outlookEvent: { ...prev.outlookEvent!, startTime: e.target.value }
+                      }))}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="outlook-end">End Time</Label>
+                    <Input
+                      id="outlook-end"
+                      type="datetime-local"
+                      value={prefs.outlookEvent?.endTime || ''}
+                      onChange={(e) => setPrefs(prev => ({
+                        ...prev,
+                        outlookEvent: { ...prev.outlookEvent!, endTime: e.target.value }
+                      }))}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="outlook-reminder">Reminder (minutes before)</Label>
+                  <Input
+                    id="outlook-reminder"
+                    type="number"
+                    placeholder="15"
+                    value={prefs.outlookEvent?.reminder || '15'}
+                    onChange={(e) => setPrefs(prev => ({
+                      ...prev,
+                      outlookEvent: { ...prev.outlookEvent!, reminder: e.target.value }
+                    }))}
+                  />
+                </div>
               </div>
             )}
-            
+          </div>
+
+          <div className="space-y-4">
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <MessageSquare className="h-4 w-4" />
-                <Label htmlFor="slack-channel">Slack</Label>
+              <div className="flex items-center gap-3">
+                <Calendar className="h-5 w-5 text-primary" />
+                <div>
+                  <h4 className="font-medium">Google Calendar</h4>
+                  <p className="text-sm text-muted-foreground">Create calendar events in Google Calendar</p>
+                </div>
               </div>
               <Switch
-                id="slack-channel"
+                checked={prefs.channels.includes('GOOGLE_EVENT')}
+                onCheckedChange={(checked) => handleToggleChannel('GOOGLE_EVENT')}
+              />
+            </div>
+            
+            {prefs.channels.includes('GOOGLE_EVENT') && (
+              <div className="space-y-4 mt-4">
+                <div className="space-y-2">
+                  <Label htmlFor="google-title">Event Title</Label>
+                  <Input
+                    id="google-title"
+                    placeholder="Meeting or task title"
+                    value={prefs.googleEvent?.title || ''}
+                    onChange={(e) => setPrefs(prev => ({
+                      ...prev,
+                      googleEvent: { ...prev.googleEvent!, title: e.target.value }
+                    }))}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="google-start">Start Time</Label>
+                    <Input
+                      id="google-start"
+                      type="datetime-local"
+                      value={prefs.googleEvent?.startTime || ''}
+                      onChange={(e) => setPrefs(prev => ({
+                        ...prev,
+                        googleEvent: { ...prev.googleEvent!, startTime: e.target.value }
+                      }))}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="google-end">End Time</Label>
+                    <Input
+                      id="google-end"
+                      type="datetime-local"
+                      value={prefs.googleEvent?.endTime || ''}
+                      onChange={(e) => setPrefs(prev => ({
+                        ...prev,
+                        googleEvent: { ...prev.googleEvent!, endTime: e.target.value }
+                      }))}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="google-reminder">Reminder (minutes before)</Label>
+                  <Input
+                    id="google-reminder"
+                    type="number"
+                    placeholder="15"
+                    value={prefs.googleEvent?.reminder || '15'}
+                    onChange={(e) => setPrefs(prev => ({
+                      ...prev,
+                      googleEvent: { ...prev.googleEvent!, reminder: e.target.value }
+                    }))}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <MessageSquare className="h-5 w-5 text-primary" />
+                <div>
+                  <h4 className="font-medium">Slack</h4>
+                  <p className="text-sm text-muted-foreground">Send notifications to a Slack channel</p>
+                </div>
+              </div>
+              <Switch
                 checked={prefs.channels.includes('SLACK')}
-                onCheckedChange={() => handleToggleChannel('SLACK')}
+                onCheckedChange={(checked) => handleToggleChannel('SLACK')}
               />
             </div>
             
             {prefs.channels.includes('SLACK') && (
-              <div className="space-y-2 pt-2 border-t">
+              <div className="space-y-2 mt-4">
                 <Label htmlFor="slack-webhook-url">Slack Webhook URL</Label>
                 <Input
                   id="slack-webhook-url"
@@ -657,8 +894,8 @@ const NotificationSettings = () => {
                   placeholder="https://hooks.slack.com/services/..."
                   defaultValue={localStorage.getItem('slack-webhook-url') || ''}
                 />
-                <p className="text-sm text-muted-foreground">
-                  Get this from your Slack app's "Incoming Webhooks" settings
+                <p className="text-xs text-muted-foreground">
+                  This webhook URL is stored locally in your browser for security.
                 </p>
               </div>
             )}
@@ -671,69 +908,80 @@ const NotificationSettings = () => {
         <CardHeader>
           <CardTitle>Test Notifications</CardTitle>
           <CardDescription>
-            Send test notifications to verify your unified webhook setup
+            Send test notifications to verify your settings are working
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <Button
-              onClick={sendTestInApp}
-              disabled={!prefs.channels.includes('PUSH')}
-              variant="outline"
-              className="w-full"
-            >
-              Test In-App
-            </Button>
-            
-            <Button
+          <div className="grid grid-cols-2 gap-4">
+            <Button 
               onClick={sendTestEmail}
-              disabled={!prefs.channels.includes('EMAIL')}
-              variant="outline"
+              variant="outline" 
               className="w-full"
+              disabled={!prefs.channels.includes('EMAIL') || !email}
             >
+              <Mail className="h-4 w-4 mr-2" />
               Test Email
             </Button>
-            
-            <Button
-              onClick={sendTestSMS}
-              disabled={!prefs.channels.includes('SMS') || !phone}
-              variant="outline"
+
+            <Button 
+              onClick={sendTestOutlookEvent}
+              variant="outline" 
               className="w-full"
+              disabled={!prefs.channels.includes('OUTLOOK_EVENT') || !prefs.outlookEvent?.title}
             >
-              Test SMS
+              <Calendar className="h-4 w-4 mr-2" />
+              Test Outlook Event
             </Button>
             
-            <Button
-              onClick={sendTestSlack}
-              disabled={!prefs.channels.includes('SLACK')}
-              variant="outline"
+            <Button 
+              onClick={sendTestGoogleEvent}
+              variant="outline" 
               className="w-full"
+              disabled={!prefs.channels.includes('GOOGLE_EVENT') || !prefs.googleEvent?.title}
             >
+              <Calendar className="h-4 w-4 mr-2" />
+              Test Google Event
+            </Button>
+
+            <Button 
+              onClick={sendTestSlack}
+              variant="outline" 
+              className="w-full"
+              disabled={!prefs.channels.includes('SLACK')}
+            >
+              <MessageSquare className="h-4 w-4 mr-2" />
               Test Slack
             </Button>
-            
-            <Button
-              onClick={testQuietHours}
-              variant="outline"
+
+            <Button 
+              onClick={sendTestInApp}
+              variant="outline" 
+              className="w-full"
+              disabled={!prefs.channels.includes('PUSH')}
+            >
+              <Volume2 className="h-4 w-4 mr-2" />
+              Test In-App
+            </Button>
+
+            <Button 
+              onClick={createTestTaskWithNotifications}
+              variant="outline" 
               className="w-full"
             >
-              Test Quiet Hours
-            </Button>
-            
-            <Button
-              onClick={createTestTaskWithNotifications}
-              variant="outline"
-              className="w-full col-span-1 md:col-span-2"
-            >
+              <Calendar className="h-4 w-4 mr-2" />
               Create Test Task
             </Button>
           </div>
         </CardContent>
       </Card>
 
-      {/* Save Settings */}
+      {/* Save Button */}
       <div className="flex justify-end">
-        <Button onClick={saveNotificationPrefs} disabled={isSaving}>
+        <Button 
+          onClick={saveNotificationPrefs}
+          disabled={isSaving}
+          className="min-w-[120px]"
+        >
           {isSaving ? "Saving..." : "Save Settings"}
         </Button>
       </div>
