@@ -144,9 +144,13 @@ async function callUnifiedWebhook(payload: UnifiedWebhookPayload) {
   const webhookUrl = Deno.env.get('UNIFIED_WEBHOOK_URL');
   
   if (!webhookUrl) {
-    console.log('No unified webhook URL configured');
-    return { status: 'no_webhook_configured' };
+    console.error('UNIFIED_WEBHOOK_URL environment variable is not configured!');
+    console.log('Available environment variables:', Object.keys(Deno.env.toObject()).join(', '));
+    console.log('Notification will be processed as in-app only');
+    return { status: 'no_webhook_configured', error: 'UNIFIED_WEBHOOK_URL not configured' };
   }
+
+  console.log('Using webhook URL:', webhookUrl.substring(0, 50) + '...');
 
   console.log('Calling unified webhook with payload:', payload);
 

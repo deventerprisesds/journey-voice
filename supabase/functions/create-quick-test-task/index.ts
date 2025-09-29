@@ -125,35 +125,24 @@ serve(async (req) => {
 
     console.log('Quick test task created:', task);
 
-    // Create reminders directly in the database
-    const reminderTime = new Date(startTime.getTime() - 60 * 1000); // 1 minute before
-    const reminders = [
-      {
-        user_id: userId,
-        task_id: task.id,
-        notification_type: 'scheduled_reminder',
-        title: 'Task Starting in 1 Minute',
-        body: `"${taskTitle}" is scheduled to start in 1 minute`,
-        scheduled_for: reminderTime.toISOString()
-      },
-      {
-        user_id: userId,
-        task_id: task.id,
-        notification_type: 'scheduled_start_now',
-        title: 'Task Starting Now',
-        body: `"${taskTitle}" is starting now`,
-        scheduled_for: startTime.toISOString()
-      }
-    ];
+    // Note: Reminders are automatically created by the database trigger 'schedule_task_reminders()'
+    // when a task with start_time/due_date is inserted. No need to create them manually.
 
-    const { error: remindersError } = await supabaseClient
+    // Get the reminders that were just created by the trigger
+    const { data: createdReminders, error: remindersFetchError } = await supabaseClient
       .from('scheduled_notifications')
-      .insert(reminders);
+      .select('id, notification_type, scheduled_for')
+      .eq('task_id', task.id)
+      .order('scheduled_for');
 
-    if (remindersError) {
-      console.error('Error creating task reminders:', remindersError);
+    const reminderCount = createdReminders?.length || 0;
+    if (remindersFetchError) {
+      console.error('Error fetching created reminders:', remindersFetchError);
     } else {
-      console.log(`Created ${reminders.length} reminders for task`);
+      console.log(`Task trigger created ${reminderCount} reminders for task`);
+      createdReminders?.forEach(reminder => {
+        console.log(`  - ${reminder.notification_type} at ${new Date(reminder.scheduled_for).toLocaleString()}`);
+      });
     }
 
     return new Response(
@@ -161,7 +150,11 @@ serve(async (req) => {
         success: true, 
         task,
         message: `Quick test task created! It will start at ${startTime.toLocaleString()}`,
-        remindersCreated: reminders.length
+        remindersCreated: reminderCount,
+        reminders: createdReminders?.map(r => ({
+          type: r.notification_type,
+          scheduledFor: r.scheduled_for
+        })) || []
       }),
       { 
         status: 200, 

@@ -123,15 +123,16 @@ const CronJobTesting: React.FC = () => {
           variant: "destructive",
         });
       } else {
+        const reminderCount = data.remindersCreated || 0;
         const reminderTimes = data.reminders?.map((r: any) => {
           const time = new Date(r.scheduledFor).toLocaleTimeString();
           return `${r.type} at ${time}`;
-        }).join(', ') || 'none';
+        }).join(', ') || `${reminderCount} reminders`;
         
         addLog('quicktest', 'success', `Task created! Reminders: ${reminderTimes}`);
         toast({
           title: "Quick Test Task Created",
-          description: `Task starts in 5 minutes. Reminders scheduled: ${reminderTimes}`,
+          description: `Task starts in 5 minutes. ${reminderCount} reminders scheduled: ${reminderTimes}`,
         });
       }
     } catch (error: any) {
