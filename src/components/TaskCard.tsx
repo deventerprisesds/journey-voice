@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { 
   Clock, 
   MapPin, 
@@ -138,6 +139,18 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onStatusChange, onEdit, onSch
     onStatusChange(task.id, statusFlow[task.status] as Task['status']);
   };
 
+  const handleCheckboxToggle = () => {
+    if (!onStatusChange) return;
+    
+    // Toggle between current status and DONE
+    if (task.status === 'DONE') {
+      // When unchecking, return to previous status or default to TODO
+      onStatusChange(task.id, 'TODO');
+    } else {
+      onStatusChange(task.id, 'DONE');
+    }
+  };
+
   const handleScheduleTask = async () => {
     if (!onSchedule || isScheduling) return;
     
@@ -173,15 +186,21 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onStatusChange, onEdit, onSch
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between gap-2">
           <div className="flex items-center gap-2 flex-1 min-w-0">
+            <Checkbox
+              checked={task.status === 'DONE'}
+              onCheckedChange={handleCheckboxToggle}
+              className="mt-0.5"
+            />
             <Button
               variant="ghost"
               size="sm"
               className={`p-1 h-6 w-6 rounded-full ${statusColors[task.status]}`}
               onClick={handleStatusToggle}
+              title="Advanced status management"
             >
               <StatusIcon className="h-3 w-3" />
             </Button>
-            <h3 className="font-medium text-sm leading-tight truncate flex-1">
+            <h3 className={`font-medium text-sm leading-tight truncate flex-1 ${task.status === 'DONE' ? 'line-through text-muted-foreground' : ''}`}>
               {task.title}
             </h3>
           </div>

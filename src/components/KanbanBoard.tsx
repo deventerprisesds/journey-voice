@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Plus, MoreHorizontal, Calendar, Clock, Filter, Wand2, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Plus, MoreHorizontal, Calendar, Clock, Filter, Wand2, ChevronLeft, ChevronRight, Eye, EyeOff } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
@@ -70,6 +70,10 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
+  const [showCompletedTasks, setShowCompletedTasks] = useState(() => {
+    const stored = localStorage.getItem('kanban-show-completed');
+    return stored ? JSON.parse(stored) : false;
+  });
 
   const fetchBoardColumns = async () => {
     if (!user) return;
@@ -424,7 +428,20 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
   const getTasksByStatus = (status: Task['status']) => {
     // Use filtered tasks if filters are active, otherwise use all tasks
     const tasksToFilter = filteredTasks.length > 0 ? filteredTasks : tasks;
-    return tasksToFilter.filter(task => task.status === status);
+    let filtered = tasksToFilter.filter(task => task.status === status);
+    
+    // Hide completed tasks if toggle is off
+    if (!showCompletedTasks) {
+      filtered = filtered.filter(task => task.status !== 'DONE');
+    }
+    
+    return filtered;
+  };
+
+  const toggleShowCompletedTasks = () => {
+    const newValue = !showCompletedTasks;
+    setShowCompletedTasks(newValue);
+    localStorage.setItem('kanban-show-completed', JSON.stringify(newValue));
   };
 
   const handleTasksCreated = (newTasks: Task[]) => {
@@ -767,6 +784,18 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
         </div>
         <div className="flex items-center gap-2">
           <VoiceAssistantButton />
+          <Button
+            variant={showCompletedTasks ? "default" : "outline"}
+            size="sm"
+            onClick={toggleShowCompletedTasks}
+            title={showCompletedTasks ? "Hide completed tasks" : "Show completed tasks"}
+          >
+            {showCompletedTasks ? (
+              <><Eye className="h-4 w-4 mr-2" />Show Completed</>
+            ) : (
+              <><EyeOff className="h-4 w-4 mr-2" />Hide Completed</>
+            )}
+          </Button>
           <AddColumnModal
             boardId={board.id} 
             onColumnCreated={fetchBoardColumns}
