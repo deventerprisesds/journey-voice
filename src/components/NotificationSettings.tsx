@@ -101,6 +101,12 @@ const NotificationSettings = () => {
       if (profileData?.email) {
         setEmail(profileData.email);
       }
+
+      // Load Slack webhook URL from localStorage for all users (not stored in database for security)
+      const storedSlackWebhook = localStorage.getItem('slack-webhook-url');
+      if (storedSlackWebhook) {
+        setSlackWebhookUrl(storedSlackWebhook);
+      }
     } catch (error) {
       console.error('Error loading notification preferences:', error);
     }

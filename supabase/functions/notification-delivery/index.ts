@@ -116,7 +116,17 @@ serve(async (req) => {
           body += reminderTexts.join('\n• ');
         }
 
-        // Send the batched notification via push notification service
+        // Get user's notification preferences to determine which channels to use
+        const { data: userPrefs, error: prefsError } = await supabaseClient
+          .from('notification_prefs')
+          .select('channels')
+          .eq('user_id', userId)
+          .maybeSingle();
+
+        // Default to push notifications, but also send to configured channels
+        const enabledChannels = userPrefs?.channels || ['PUSH'];
+
+        // Send push notification (existing behavior)
         const { data: pushResult, error: pushError } = await supabaseClient.functions.invoke('send-push-notification', {
           body: {
             userId: userId,
@@ -132,7 +142,34 @@ serve(async (req) => {
         });
 
         if (pushError) {
-          throw new Error(`Push notification failed: ${pushError.message}`);
+          console.error(`Push notification failed: ${pushError.message}`);
+        }
+
+        // Send unified notification for other channels (Slack, Email, etc.)
+        if (enabledChannels.some((channel: string) => ['SLACK', 'EMAIL', 'OUTLOOK_EVENT', 'GOOGLE_EVENT'].includes(channel))) {
+          const { data: unifiedResult, error: unifiedError } = await supabaseClient.functions.invoke('send-unified-notification', {
+            body: {
+              userId: userId,
+              title: title,
+              body: body,
+              channels: enabledChannels.filter((channel: string) => ['SLACK', 'EMAIL', 'OUTLOOK_EVENT', 'GOOGLE_EVENT'].includes(channel)),
+              data: {
+                type: batchNotifications.length === 1 ? batchNotifications[0].notification_type : 'batched_reminders',
+                taskId: batchNotifications.length === 1 ? batchNotifications[0].task_id : null,
+                notificationIds: notificationIds,
+                batchSize: batchNotifications.length
+              }
+            }
+          });
+
+          if (unifiedError) {
+            console.error(`Unified notification failed: ${unifiedError.message}`);
+          }
+        }
+
+        // Continue if at least one notification method succeeded
+        if (pushError && enabledChannels.some((channel: string) => ['SLACK', 'EMAIL', 'OUTLOOK_EVENT', 'GOOGLE_EVENT'].includes(channel))) {
+          throw new Error(`All notification delivery methods failed`);
         }
 
         // Mark all in batch as delivered
