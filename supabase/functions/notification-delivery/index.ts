@@ -22,14 +22,14 @@ serve(async (req) => {
     
     const now = new Date();
     
-    // Get all pending notifications that should be delivered
+    // Get all pending notifications that should be delivered, ordered by user for batching
     const { data: pendingNotifications, error: fetchError } = await supabaseClient
       .from('scheduled_notifications')
       .select('*')
       .is('delivered_at', null)
       .is('failed_at', null)
       .lte('scheduled_for', now.toISOString())
-      .order('scheduled_for', { ascending: true })
+      .order('user_id, scheduled_for', { ascending: true })
       .limit(50); // Process in batches
 
     if (fetchError) {
@@ -50,23 +50,63 @@ serve(async (req) => {
 
     console.log(`Found ${pendingNotifications.length} pending notifications to process`);
     
+    // Group notifications by user and time window (2 minutes)
+    const userBatches = new Map();
+    
+    for (const notification of pendingNotifications) {
+      const batchKey = `${notification.user_id}_${Math.floor(new Date(notification.scheduled_for).getTime() / (2 * 60 * 1000))}`;
+      
+      if (!userBatches.has(batchKey)) {
+        userBatches.set(batchKey, []);
+      }
+      userBatches.get(batchKey).push(notification);
+    }
+
+    console.log(`Grouped into ${userBatches.size} batches`);
+    
     let delivered = 0;
     let failed = 0;
 
-    for (const notification of pendingNotifications) {
+    // Process each batch
+    for (const [batchKey, batchNotifications] of userBatches) {
       try {
-        console.log(`Processing notification ${notification.id} for user ${notification.user_id}`);
+        const userId = batchNotifications[0].user_id;
+        const notificationIds = batchNotifications.map((n: any) => n.id);
         
-        // Send the notification via push notification service
+        console.log(`Processing batch for user ${userId} with ${batchNotifications.length} notifications`);
+        
+        let title, body;
+        
+        if (batchNotifications.length === 1) {
+          // Single notification
+          title = batchNotifications[0].title;
+          body = batchNotifications[0].body;
+        } else {
+          // Multiple notifications - batch them
+          title = `${batchNotifications.length} Reminders`;
+          const reminderTexts = batchNotifications.map((n: any) => {
+            // Simplify the reminder text for batching
+            if (n.notification_type === 'scheduled_reminder') return `${n.title}: ${n.body}`;
+            if (n.notification_type === 'scheduled_start_now') return `"${n.body.match(/"([^"]+)"/)?.[1] || 'Task'}" is starting now`;
+            if (n.notification_type.includes('due_reminder')) return `"${n.body.match(/"([^"]+)"/)?.[1] || 'Task'}" is due`;
+            if (n.notification_type.includes('overdue_reminder')) return `"${n.body.match(/"([^"]+)"/)?.[1] || 'Task'}" is overdue`;
+            return n.body;
+          });
+          body = reminderTexts.join('\n• ');
+          body = '• ' + body; // Add bullet to first item
+        }
+
+        // Send the batched notification via push notification service
         const { data: pushResult, error: pushError } = await supabaseClient.functions.invoke('send-push-notification', {
           body: {
-            userId: notification.user_id,
-            title: notification.title,
-            body: notification.body,
+            userId: userId,
+            title: title,
+            body: body,
             data: {
-              type: notification.notification_type,
-              taskId: notification.task_id,
-              notificationId: notification.id
+              type: batchNotifications.length === 1 ? batchNotifications[0].notification_type : 'batched_reminders',
+              taskId: batchNotifications.length === 1 ? batchNotifications[0].task_id : null,
+              notificationIds: notificationIds,
+              batchSize: batchNotifications.length
             }
           }
         });
@@ -75,39 +115,42 @@ serve(async (req) => {
           throw new Error(`Push notification failed: ${pushError.message}`);
         }
 
-        // Mark as delivered
+        // Mark all in batch as delivered
         const { error: updateError } = await supabaseClient
           .from('scheduled_notifications')
           .update({ 
             delivered_at: new Date().toISOString(),
             failure_reason: null
           })
-          .eq('id', notification.id);
+          .in('id', notificationIds);
 
         if (updateError) {
           console.error('Error updating notification status:', updateError);
+          failed += batchNotifications.length;
         } else {
-          console.log(`Successfully delivered notification ${notification.id}`);
-          delivered++;
+          console.log(`Successfully delivered batch for user ${userId} (${batchNotifications.length} notifications)`);
+          delivered += batchNotifications.length;
         }
 
       } catch (error) {
-        console.error(`Failed to deliver notification ${notification.id}:`, error);
+        console.error(`Failed to deliver batch ${batchKey}:`, error);
         
-        // Mark as failed
+        const notificationIds = batchNotifications.map((n: any) => n.id);
+        
+        // Mark all in batch as failed
         const { error: failError } = await supabaseClient
           .from('scheduled_notifications')
           .update({ 
             failed_at: new Date().toISOString(),
             failure_reason: error instanceof Error ? error.message : String(error) || 'Unknown error'
           })
-          .eq('id', notification.id);
+          .in('id', notificationIds);
 
         if (failError) {
           console.error('Error updating notification failure status:', failError);
         }
         
-        failed++;
+        failed += batchNotifications.length;
       }
     }
 

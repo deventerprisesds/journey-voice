@@ -281,15 +281,15 @@ function generateOverdueReminders(tasks: Task[], userId: string, now: Date): any
     if (dueDate < today) {
       const daysOverdue = Math.floor((today.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24));
       
-      // Send reminder every 3 days for overdue tasks
-      if (daysOverdue % 3 === 0) {
+      // Send reminder every 3 days for overdue tasks, but only once per day to prevent spam
+      if (daysOverdue % 3 === 0 && now.getHours() === 9 && now.getMinutes() < 15) {
         notifications.push({
           user_id: userId,
           task_id: task.id,
           notification_type: 'overdue_reminder',
           title: `Task Overdue (${daysOverdue} days)`,
           body: `"${task.title}" was due ${daysOverdue} day${daysOverdue > 1 ? 's' : ''} ago`,
-          scheduled_for: new Date(now.getTime() + 10 * 60 * 1000).toISOString() // 10 minutes from now
+          scheduled_for: new Date(now.getTime() + 5 * 60 * 1000).toISOString() // 5 minutes from now
         });
       }
     }
