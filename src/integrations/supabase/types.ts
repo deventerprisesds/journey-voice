@@ -376,6 +376,13 @@ export type Database = {
             referencedRelation: "calendar_connections"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "external_calendar_events_connection_id_fkey"
+            columns: ["connection_id"]
+            isOneToOne: false
+            referencedRelation: "calendar_connections_safe"
+            referencedColumns: ["id"]
+          },
         ]
       }
       extracted_content: {
@@ -936,7 +943,45 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      calendar_connections_safe: {
+        Row: {
+          created_at: string | null
+          expires_at: string | null
+          id: string | null
+          is_active: boolean | null
+          provider: string | null
+          provider_account_email: string | null
+          provider_account_id: string | null
+          scope: string | null
+          updated_at: string | null
+          user_id: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          expires_at?: string | null
+          id?: string | null
+          is_active?: boolean | null
+          provider?: string | null
+          provider_account_email?: string | null
+          provider_account_id?: string | null
+          scope?: string | null
+          updated_at?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          expires_at?: string | null
+          id?: string | null
+          is_active?: boolean | null
+          provider?: string | null
+          provider_account_email?: string | null
+          provider_account_id?: string | null
+          scope?: string | null
+          updated_at?: string | null
+          user_id?: string | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
       binary_quantize: {
@@ -977,6 +1022,21 @@ export type Database = {
           access_token: string
           expires_at: string
           refresh_token: string
+        }[]
+      }
+      get_calendar_connections_safe: {
+        Args: Record<PropertyKey, never>
+        Returns: {
+          created_at: string
+          expires_at: string
+          id: string
+          is_active: boolean
+          provider: string
+          provider_account_email: string
+          provider_account_id: string
+          scope: string
+          updated_at: string
+          user_id: string
         }[]
       }
       get_calendar_connections_secure: {
