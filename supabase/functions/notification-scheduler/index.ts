@@ -133,10 +133,10 @@ async function processUserNotifications(
 ): Promise<any[]> {
   const notifications: any[] = [];
   
-  // Check if we're in quiet hours - still generate future reminders but skip immediate processing
+  // Check if we're in quiet hours - still generate future reminders but skip immediate digests
   const inQuietHours = isInQuietHours(now, prefs);
   if (inQuietHours) {
-    console.log(`User ${prefs.user_id} is in quiet hours, will generate future reminders but skip immediate processing`);
+    console.log(`User ${prefs.user_id} is in quiet hours, generating future reminders but skipping immediate digests`);
   }
 
   // Get user's tasks

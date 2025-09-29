@@ -51,6 +51,9 @@ serve(async (req) => {
 
     const now = new Date();
     const reminders = [];
+    
+    console.log('Current time:', now.toISOString());
+    console.log('Processing reminders for task:', { taskId, title, dueDate, startTime });
 
     // Generate reminders if task has a due date
     if (dueDate) {
