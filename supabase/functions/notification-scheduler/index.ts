@@ -149,17 +149,8 @@ async function processUserNotifications(
     return notifications;
   }
 
-  // Process due date reminders
-  if (prefs.due_reminders_enabled) {
-    const dueReminders = generateDueReminders(tasks || [], prefs.user_id, now, prefs);
-    notifications.push(...dueReminders);
-  }
-
-  // Process start time reminders (for scheduled tasks)
-  if (prefs.due_reminders_enabled) {
-    const startTimeReminders = generateStartTimeReminders(tasks || [], prefs.user_id, now);
-    notifications.push(...startTimeReminders);
-  }
+  // NOTE: Due date and start time reminders are now handled by the database trigger
+  // on the tasks table (schedule_task_reminders function) to prevent duplicates
 
   // Process overdue reminders
   if (prefs.overdue_reminders_enabled) {
