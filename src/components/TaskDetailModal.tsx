@@ -222,24 +222,6 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
           });
           return;
         }
-        
-        // Generate reminders for tasks with due dates or start times after update
-        if (updatedTask.due_date || updatedTask.start_time) {
-          try {
-            await supabase.functions.invoke('generate-task-reminders', {
-              body: {
-                taskId: task.id,
-                userId: task.user_id,
-                dueDate: updatedTask.due_date,
-                startTime: updatedTask.start_time,
-                title: updatedTask.title,
-                reminderMinutes: 15
-              }
-            });
-          } catch (error) {
-            console.error('Error generating reminders after task update:', error);
-          }
-        }
       }
 
       onSave({ ...task, ...updatedTask } as Task);

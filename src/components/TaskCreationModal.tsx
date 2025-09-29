@@ -252,24 +252,6 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
         } catch (error) {
           console.error('Error sending task creation notification:', task.id, error);
         }
-        
-        // Auto-generate reminders for tasks with due dates OR scheduled times
-        if (task.due_date || task.start_time) {
-          try {
-            await supabase.functions.invoke('generate-task-reminders', {
-              body: {
-                taskId: task.id,
-                userId: task.user_id,
-                dueDate: task.due_date,
-                startTime: task.start_time,
-                title: task.title,
-                reminderMinutes: 15 // Default Slack reminder 15 minutes before
-              }
-            });
-          } catch (error) {
-            console.error('Error generating reminders for task:', task.id, error);
-          }
-        }
       }
       
       toast({

@@ -143,9 +143,6 @@ serve(async (req) => {
 
     console.log('Test task created:', task);
 
-    // Generate automatic reminders
-    await generateTaskReminders(supabaseClient, task, now);
-
     // Send immediate test notification via webhook
     await sendImmediateTestNotification(supabaseClient, task, userId);
 

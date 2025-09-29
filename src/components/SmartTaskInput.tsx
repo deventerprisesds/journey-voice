@@ -133,18 +133,6 @@ const SmartTaskInput: React.FC<SmartTaskInputProps> = ({
             }
           }
         });
-
-        // Generate reminders if there's a start time
-        if (startTime) {
-          await supabase.functions.invoke('generate-task-reminders', {
-            body: {
-              taskId: newTask.id,
-              userId: user.id,
-              title: editedSuggestion.title,
-              startTime: startTime.toISOString()
-            }
-          });
-        }
       } catch (notificationError) {
         console.warn('Failed to send notifications:', notificationError);
       }

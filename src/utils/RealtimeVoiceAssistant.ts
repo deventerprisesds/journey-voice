@@ -706,18 +706,6 @@ export class RealtimeVoiceAssistant {
             type: 'task_created'
           }
         });
-
-        // Generate reminders if there's a due date
-        if (args.due_date) {
-          await supabase.functions.invoke('generate-task-reminders', {
-            body: {
-              taskId: task.id,
-              userId: taskData.user_id,
-              title: task.title,
-              dueDate: args.due_date
-            }
-          });
-        }
       } catch (notificationError) {
         console.warn('Failed to send notifications:', notificationError);
       }

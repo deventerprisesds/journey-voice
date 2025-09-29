@@ -50,6 +50,12 @@ serve(async (req) => {
 
     console.log(`Claimed ${pendingNotifications.length} notifications for processing`);
     
+    // Log each notification for observability
+    console.log('📋 Claimed notifications:');
+    for (const notif of pendingNotifications) {
+      console.log(`  - ID: ${notif.id}, Type: ${notif.notification_type}, Scheduled: ${notif.scheduled_for}, Title: "${notif.title}"`);
+    }
+    
     // Group notifications by user and check for quiet hours batching
     const userBatches = new Map();
     
@@ -84,7 +90,10 @@ serve(async (req) => {
         const userId = batchNotifications[0].user_id;
         const notificationIds = batchNotifications.map((n: any) => n.id);
         
-        console.log(`Processing batch for user ${userId} with ${batchNotifications.length} notifications`);
+        console.log(`📦 Processing batch for user ${userId} with ${batchNotifications.length} notifications:`);
+        for (const notif of batchNotifications) {
+          console.log(`  - ${notif.notification_type} @ ${notif.scheduled_for}: "${notif.title}"`);
+        }
         
         let title, body;
         
