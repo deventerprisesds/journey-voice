@@ -170,17 +170,59 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
       const minutes = parseInt(estimateMinutes) || 0;
       const totalMinutes = hours * 60 + minutes;
 
+      // Create time strings that preserve the local time exactly as entered
+      let startTimeISO = null;
+      let endTimeISO = null;
+
+      if (startTime) {
+        if (dueDate) {
+          // Use the due date with the exact time entered
+          const year = dueDate.getFullYear();
+          const month = dueDate.getMonth();
+          const day = dueDate.getDate();
+          const [hours, minutes] = startTime.split(':').map(Number);
+          const startDateTime = new Date(year, month, day, hours, minutes);
+          startTimeISO = startDateTime.toISOString();
+        } else {
+          // Use today's date with the exact time entered
+          const today = new Date();
+          const [hours, minutes] = startTime.split(':').map(Number);
+          const startDateTime = new Date(today.getFullYear(), today.getMonth(), today.getDate(), hours, minutes);
+          startTimeISO = startDateTime.toISOString();
+        }
+      }
+
+      if (endTime) {
+        if (dueDate) {
+          // Use the due date with the exact time entered
+          const year = dueDate.getFullYear();
+          const month = dueDate.getMonth();
+          const day = dueDate.getDate();
+          const [hours, minutes] = endTime.split(':').map(Number);
+          const endDateTime = new Date(year, month, day, hours, minutes);
+          endTimeISO = endDateTime.toISOString();
+        } else {
+          // Use today's date with the exact time entered
+          const today = new Date();
+          const [hours, minutes] = endTime.split(':').map(Number);
+          const endDateTime = new Date(today.getFullYear(), today.getMonth(), today.getDate(), hours, minutes);
+          endTimeISO = endDateTime.toISOString();
+        }
+      }
+
+      console.log('Time conversion debug:', {
+        startTimeInput: startTime,
+        endTimeInput: endTime,
+        startTimeISO,
+        endTimeISO,
+        dueDate: dueDate?.toISOString()
+      });
+
       const updatedTask = {
         ...editedTask,
         due_date: dueDate ? dueDate.toISOString() : null,
-        start_time: startTime ? (dueDate ? 
-          new Date(dueDate.toDateString() + ' ' + startTime).toISOString() : 
-          new Date('1970-01-01 ' + startTime).toISOString()
-        ) : null,
-        end_time: endTime ? (dueDate ? 
-          new Date(dueDate.toDateString() + ' ' + endTime).toISOString() :
-          new Date('1970-01-01 ' + endTime).toISOString()
-        ) : null,
+        start_time: startTimeISO,
+        end_time: endTimeISO,
         estimate_minutes: totalMinutes > 0 ? totalMinutes : null,
       };
 
