@@ -27,6 +27,7 @@ import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 import { Task } from '@/types/task';
+import { fromHHMMToISO } from '@/lib/date';
 
 interface ParsedTask {
   title: string;
@@ -315,14 +316,8 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
       category: manualTask.category as ParsedTask['category'],
       status: manualTask.status as ParsedTask['status'],
       due_date: dueDate ? dueDate.toISOString() : undefined,
-      start_time: startTime ? (dueDate ? 
-        new Date(dueDate.toDateString() + ' ' + startTime).toISOString() : 
-        new Date('1970-01-01 ' + startTime).toISOString()
-      ) : undefined,
-      end_time: endTime ? (dueDate ? 
-        new Date(dueDate.toDateString() + ' ' + endTime).toISOString() :
-        new Date('1970-01-01 ' + endTime).toISOString()
-      ) : undefined,
+      start_time: startTime ? fromHHMMToISO(dueDate || new Date(), startTime) : undefined,
+      end_time: endTime ? fromHHMMToISO(dueDate || new Date(), endTime) : undefined,
       estimate_minutes: totalMinutes > 0 ? totalMinutes : undefined,
     };
 

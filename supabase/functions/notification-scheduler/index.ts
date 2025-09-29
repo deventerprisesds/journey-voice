@@ -133,10 +133,10 @@ async function processUserNotifications(
 ): Promise<any[]> {
   const notifications: any[] = [];
   
-  // Check if we're in quiet hours
-  if (isInQuietHours(now, prefs)) {
-    console.log(`User ${prefs.user_id} is in quiet hours, skipping notifications`);
-    return notifications;
+  // Check if we're in quiet hours - still generate future reminders but skip immediate processing
+  const inQuietHours = isInQuietHours(now, prefs);
+  if (inQuietHours) {
+    console.log(`User ${prefs.user_id} is in quiet hours, will generate future reminders but skip immediate processing`);
   }
 
   // Get user's tasks
@@ -169,14 +169,14 @@ async function processUserNotifications(
     notifications.push(...overdueReminders);
   }
 
-  // Process daily digest (check if it's the right time)
-  if (prefs.daily_digest_enabled && shouldSendDailyDigest(now)) {
+  // Process daily digest (check if it's the right time) - only if not in quiet hours
+  if (!inQuietHours && prefs.daily_digest_enabled && shouldSendDailyDigest(now)) {
     const dailyDigest = generateDailyDigest(tasks || [], prefs.user_id, now);
     if (dailyDigest) notifications.push(dailyDigest);
   }
 
-  // Process weekly digest (check if it's the right time)
-  if (prefs.weekly_digest_enabled && shouldSendWeeklyDigest(now)) {
+  // Process weekly digest (check if it's the right time) - only if not in quiet hours
+  if (!inQuietHours && prefs.weekly_digest_enabled && shouldSendWeeklyDigest(now)) {
     const weeklyDigest = generateWeeklyDigest(tasks || [], prefs.user_id, now);
     if (weeklyDigest) notifications.push(weeklyDigest);
   }

@@ -141,8 +141,13 @@ const SmartTaskInput: React.FC<SmartTaskInputProps> = ({
               taskId: newTask.id,
               userId: user.id,
               title: editedSuggestion.title,
-              dueDate: startTime.toISOString()
+              startTime: startTime.toISOString()
             }
+          });
+          
+          // Process pending notifications immediately
+          await supabase.functions.invoke('notification-delivery', {
+            body: { immediate: true }
           });
         }
       } catch (notificationError) {
