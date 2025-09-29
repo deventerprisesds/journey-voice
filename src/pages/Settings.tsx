@@ -16,6 +16,7 @@ import {
 import { useAuth } from '@/hooks/useAuth';
 import NotificationSettings from '@/components/NotificationSettings';
 import CronJobTesting from '@/components/CronJobTesting';
+import UpcomingReminders from '@/components/UpcomingReminders';
 
 const Settings: React.FC = () => {
   const { user } = useAuth();
@@ -88,7 +89,10 @@ const Settings: React.FC = () => {
         </TabsList>
 
         <TabsContent value="notifications" className="mt-6">
-          <NotificationSettings />
+          <div className="space-y-6">
+            <NotificationSettings />
+            <UpcomingReminders />
+          </div>
         </TabsContent>
 
         <TabsContent value="testing" className="mt-6">
