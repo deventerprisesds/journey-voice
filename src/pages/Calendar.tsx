@@ -7,12 +7,13 @@ import TaskCreationModal from '@/components/TaskCreationModal';
 import TaskDetailModal from '@/components/TaskDetailModal';
 import { Button } from '@/components/ui/button';
 import { ArrowLeft, Home } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { toast } from 'sonner';
 
 const Calendar: React.FC = () => {
   const { user, isDemoMode } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
@@ -88,6 +89,28 @@ const Calendar: React.FC = () => {
     loadDefaultBoard();
     loadTasks();
   }, [isDemoMode]);
+
+  // Handle deep linking to specific tasks (same as Dashboard)
+  useEffect(() => {
+    if (!loading && tasks.length > 0) {
+      const urlParams = new URLSearchParams(location.search);
+      const taskId = urlParams.get('task');
+      
+      if (taskId) {
+        const foundTask = tasks.find(t => t.id === taskId);
+        if (foundTask) {
+          console.log('Opening task from deep link in Calendar:', taskId);
+          setSelectedTask(foundTask);
+        } else {
+          console.warn('Task not found for deep link:', taskId);
+          toast.error('Task not found');
+        }
+        
+        // Clear the query parameter
+        navigate(location.pathname, { replace: true });
+      }
+    }
+  }, [loading, tasks, location.search, navigate]);
 
   const handleTaskEdit = (task: Task) => {
     setSelectedTask(task);

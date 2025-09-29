@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import KanbanBoard from '@/components/KanbanBoard';
 import GanttChart from '@/components/GanttChart';
@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { LogOut, Settings, Crown, User, Calendar } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
+import { toast } from 'sonner';
 
 // Force rebuild - removed VoiceInterface references
 const Dashboard = () => {
@@ -22,11 +23,36 @@ const Dashboard = () => {
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const { user, signOut, isAdmin, isDemoMode } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
 
   // Load tasks once at Dashboard level
   useEffect(() => {
     loadTasks();
   }, [user, isDemoMode]);
+
+  // Handle deep linking to specific tasks
+  useEffect(() => {
+    if (!loading && tasks.length > 0) {
+      const urlParams = new URLSearchParams(location.search);
+      const taskId = urlParams.get('task');
+      
+      if (taskId) {
+        const foundTask = tasks.find(t => t.id === taskId);
+        if (foundTask) {
+          console.log('Opening task from deep link:', taskId);
+          setSelectedTask(foundTask);
+          setIsTaskModalOpen(true);
+        } else {
+          console.warn('Task not found for deep link:', taskId);
+          toast.error('Task not found');
+        }
+        
+        // Clear the query parameter
+        navigate(location.pathname, { replace: true });
+      }
+    }
+  }, [loading, tasks, location.search, navigate]);
 
   const loadTasks = async () => {
     if (!user) return;

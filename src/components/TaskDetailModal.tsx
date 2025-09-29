@@ -18,6 +18,7 @@ import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 import { Task } from '@/types/task';
 import { useMemo } from 'react';
+import { toLocalTimeHHMM, fromHHMMToISO } from '@/lib/date';
 
 interface TaskDetailModalProps {
   task: Task | null;
@@ -56,26 +57,9 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
       setEditedTask(task);
       setDueDate(task.due_date ? new Date(task.due_date) : undefined);
       
-      // Convert ISO time back to local time format for display
-      if (task.start_time) {
-        const startDate = new Date(task.start_time);
-        const hours = startDate.getHours().toString().padStart(2, '0');
-        const minutes = startDate.getMinutes().toString().padStart(2, '0');
-        setStartTime(`${hours}:${minutes}`);
-        console.log('Loading start time:', task.start_time, '-> display:', `${hours}:${minutes}`);
-      } else {
-        setStartTime('');
-      }
-      
-      if (task.end_time) {
-        const endDate = new Date(task.end_time);
-        const hours = endDate.getHours().toString().padStart(2, '0');
-        const minutes = endDate.getMinutes().toString().padStart(2, '0');
-        setEndTime(`${hours}:${minutes}`);
-        console.log('Loading end time:', task.end_time, '-> display:', `${hours}:${minutes}`);
-      } else {
-        setEndTime('');
-      }
+      // Use the new date utility for consistent time conversion
+      setStartTime(task.start_time ? toLocalTimeHHMM(task.start_time) : '');
+      setEndTime(task.end_time ? toLocalTimeHHMM(task.end_time) : '');
       
       if (task.estimate_minutes) {
         const hours = Math.floor(task.estimate_minutes / 60);
@@ -189,45 +173,10 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
       const minutes = parseInt(estimateMinutes) || 0;
       const totalMinutes = hours * 60 + minutes;
 
-      // Create time strings that preserve the local time exactly as entered
-      let startTimeISO = null;
-      let endTimeISO = null;
-
-      if (startTime) {
-        if (dueDate) {
-          // Use the due date with the exact time entered
-          const year = dueDate.getFullYear();
-          const month = dueDate.getMonth();
-          const day = dueDate.getDate();
-          const [hours, minutes] = startTime.split(':').map(Number);
-          const startDateTime = new Date(year, month, day, hours, minutes);
-          startTimeISO = startDateTime.toISOString();
-        } else {
-          // Use today's date with the exact time entered
-          const today = new Date();
-          const [hours, minutes] = startTime.split(':').map(Number);
-          const startDateTime = new Date(today.getFullYear(), today.getMonth(), today.getDate(), hours, minutes);
-          startTimeISO = startDateTime.toISOString();
-        }
-      }
-
-      if (endTime) {
-        if (dueDate) {
-          // Use the due date with the exact time entered
-          const year = dueDate.getFullYear();
-          const month = dueDate.getMonth();
-          const day = dueDate.getDate();
-          const [hours, minutes] = endTime.split(':').map(Number);
-          const endDateTime = new Date(year, month, day, hours, minutes);
-          endTimeISO = endDateTime.toISOString();
-        } else {
-          // Use today's date with the exact time entered
-          const today = new Date();
-          const [hours, minutes] = endTime.split(':').map(Number);
-          const endDateTime = new Date(today.getFullYear(), today.getMonth(), today.getDate(), hours, minutes);
-          endTimeISO = endDateTime.toISOString();
-        }
-      }
+      // Use the new date utility for consistent time conversion
+      const baseDate = dueDate || new Date();
+      const startTimeISO = startTime ? fromHHMMToISO(baseDate, startTime) : null;
+      const endTimeISO = endTime ? fromHHMMToISO(baseDate, endTime) : null;
 
       console.log('Time conversion debug:', {
         startTimeInput: startTime,

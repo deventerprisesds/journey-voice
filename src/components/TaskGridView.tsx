@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
+import { formatDateOnly, formatDuration } from '@/lib/date';
 
 interface Task {
   id: string;
@@ -100,14 +101,7 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit }) => {
     return `${hours}h ${mins}m`;
   };
 
-  const formatDate = (dateString?: string): string => {
-    if (!dateString) return '-';
-    try {
-      return format(new Date(dateString), 'MMM dd, yyyy');
-    } catch {
-      return '-';
-    }
-  };
+  // Using utility function for consistent date formatting
 
   const sortedTasks = [...tasks].sort((a, b) => {
     let aValue: any = a[sortBy as keyof Task];
@@ -324,7 +318,7 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit }) => {
                           {task.due_date ? (
                             <>
                               <CalendarIcon className="h-3 w-3 text-muted-foreground" />
-                              {formatDate(task.due_date)}
+                              {formatDateOnly(task.due_date)}
                             </>
                           ) : (
                             <span className="text-muted-foreground">-</span>
@@ -370,14 +364,14 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit }) => {
                               <div>
                                 <span className="font-medium">Created:</span>
                                 <p className="text-muted-foreground">
-                                  {formatDate(task.created_at)}
+                                  {formatDateOnly(task.created_at)}
                                 </p>
                               </div>
                               {task.start_time && (
                                 <div>
                                   <span className="font-medium">Start Time:</span>
                                   <p className="text-muted-foreground">
-                                    {formatDate(task.start_time)}
+                                    {formatDateOnly(task.start_time)}
                                   </p>
                                 </div>
                               )}
@@ -385,7 +379,7 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit }) => {
                                 <div>
                                   <span className="font-medium">Completed:</span>
                                   <p className="text-muted-foreground">
-                                    {formatDate(task.completed_at)}
+                                    {formatDateOnly(task.completed_at)}
                                   </p>
                                 </div>
                               )}

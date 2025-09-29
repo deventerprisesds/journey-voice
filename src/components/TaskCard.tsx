@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { Task } from '@/types/task';
+import { formatDateOnly, formatDuration } from '@/lib/date';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -97,22 +98,7 @@ const categoryColors = {
   EDUCATION: 'bg-category-education/10 text-category-education border-category-education/20',
 };
 
-const formatTime = (minutes?: number): string => {
-  if (!minutes) return '';
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  const mins = minutes % 60;
-  return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
-};
-
-const formatDate = (dateString?: string): string | null => {
-  if (!dateString) return null;
-  try {
-    return format(new Date(dateString), 'MMM d, yyyy');
-  } catch {
-    return null;
-  }
-};
+// Using utility functions for consistent formatting
 
 const TaskCard: React.FC<TaskCardProps> = ({ task, onStatusChange, onEdit, onSchedule, onDelete }) => {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -272,7 +258,7 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onStatusChange, onEdit, onSch
           {task.due_date && (
             <div className={`flex items-center gap-1 text-xs ${isOverdue ? 'text-destructive' : 'text-muted-foreground'}`}>
               <Calendar className="h-3 w-3" />
-              <span>{formatDate(task.due_date)}</span>
+              <span>{formatDateOnly(task.due_date)}</span>
               {isOverdue && <span className="font-medium">(Overdue)</span>}
             </div>
           )}
@@ -280,7 +266,7 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onStatusChange, onEdit, onSch
           {task.estimate_minutes && (
             <div className="flex items-center gap-1 text-xs text-muted-foreground">
               <Clock className="h-3 w-3" />
-              <span>{formatTime(task.estimate_minutes)}</span>
+              <span>{formatDuration(task.estimate_minutes)}</span>
             </div>
           )}
 

@@ -11,6 +11,7 @@ import Settings from "./pages/Settings";
 import Calendar from "./pages/Calendar";
 import NotFound from "./pages/NotFound";
 import DemoModeBadge from "./components/DemoModeBadge";
+import ErrorBoundary from "./components/ErrorBoundary";
 import { supabase } from "@/integrations/supabase/client";
 import { useEffect } from "react";
 
@@ -18,36 +19,45 @@ const queryClient = new QueryClient();
 
 const App = () => {
   useEffect(() => {
-    // Test the external database function
-    const testExternalDb = async () => {
-      try {
-        console.log('Testing external database connection...');
-        const { data, error } = await supabase.functions.invoke('test-external-db');
-        
-        if (error) {
-          console.error('Test function error:', error);
-        } else {
-          console.log('External DB Test Results:', data);
-          console.log(`Overall Status: ${data?.overall_status}`);
-          console.log(`Summary: ${data?.summary}`);
-          
-          // Log individual test results
-          data?.tests?.forEach((test: any) => {
-            console.log(`${test.status === 'PASS' ? '✅' : '❌'} ${test.test}: ${test.message}`);
-            if (test.data) {
-              console.log('  Data:', test.data);
-            }
-            if (test.error) {
-              console.log('  Error:', test.error);
-            }
-          });
-        }
-      } catch (err) {
-        console.error('Failed to test external database:', err);
-      }
-    };
+    // Log production info for debugging
+    console.log('App Environment:', {
+      origin: window.location.origin,
+      supabaseUrl: "https://wwxgajrtmslzklnyplah.supabase.co",
+      isProduction: window.location.origin.includes('journey-voice.lovable.app')
+    });
 
-    testExternalDb();
+    // Only run test-external-db in preview/development
+    if (!window.location.origin.includes('journey-voice.lovable.app')) {
+      const testExternalDb = async () => {
+        try {
+          console.log('Testing external database connection...');
+          const { data, error } = await supabase.functions.invoke('test-external-db');
+          
+          if (error) {
+            console.error('Test function error:', error);
+          } else {
+            console.log('External DB Test Results:', data);
+            console.log(`Overall Status: ${data?.overall_status}`);
+            console.log(`Summary: ${data?.summary}`);
+            
+            // Log individual test results
+            data?.tests?.forEach((test: any) => {
+              console.log(`${test.status === 'PASS' ? '✅' : '❌'} ${test.test}: ${test.message}`);
+              if (test.data) {
+                console.log('  Data:', test.data);
+              }
+              if (test.error) {
+                console.log('  Error:', test.error);
+              }
+            });
+          }
+        } catch (err) {
+          console.error('Failed to test external database:', err);
+        }
+      };
+
+      testExternalDb();
+    }
   }, []);
 
   return (
@@ -58,15 +68,17 @@ const App = () => {
         <BrowserRouter>
           <AuthProvider>
             <DemoModeBadge />
-            <Routes>
-              <Route path="/" element={<Dashboard />} />
-              <Route path="/auth" element={<Auth />} />
-              <Route path="/admin" element={<Admin />} />
-              <Route path="/settings" element={<Settings />} />
-              <Route path="/calendar" element={<Calendar />} />
-              {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
-              <Route path="*" element={<NotFound />} />
-            </Routes>
+            <ErrorBoundary>
+              <Routes>
+                <Route path="/" element={<Dashboard />} />
+                <Route path="/auth" element={<Auth />} />
+                <Route path="/admin" element={<Admin />} />
+                <Route path="/settings" element={<Settings />} />
+                <Route path="/calendar" element={<Calendar />} />
+                {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
+                <Route path="*" element={<NotFound />} />
+              </Routes>
+            </ErrorBoundary>
           </AuthProvider>
         </BrowserRouter>
       </TooltipProvider>
