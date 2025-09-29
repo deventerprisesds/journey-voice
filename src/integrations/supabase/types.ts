@@ -376,13 +376,6 @@ export type Database = {
             referencedRelation: "calendar_connections"
             referencedColumns: ["id"]
           },
-          {
-            foreignKeyName: "external_calendar_events_connection_id_fkey"
-            columns: ["connection_id"]
-            isOneToOne: false
-            referencedRelation: "calendar_connections_safe"
-            referencedColumns: ["id"]
-          },
         ]
       }
       extracted_content: {
@@ -943,45 +936,7 @@ export type Database = {
       }
     }
     Views: {
-      calendar_connections_safe: {
-        Row: {
-          created_at: string | null
-          expires_at: string | null
-          id: string | null
-          is_active: boolean | null
-          provider: string | null
-          provider_account_email: string | null
-          provider_account_id: string | null
-          scope: string | null
-          updated_at: string | null
-          user_id: string | null
-        }
-        Insert: {
-          created_at?: string | null
-          expires_at?: string | null
-          id?: string | null
-          is_active?: boolean | null
-          provider?: string | null
-          provider_account_email?: string | null
-          provider_account_id?: string | null
-          scope?: string | null
-          updated_at?: string | null
-          user_id?: string | null
-        }
-        Update: {
-          created_at?: string | null
-          expires_at?: string | null
-          id?: string | null
-          is_active?: boolean | null
-          provider?: string | null
-          provider_account_email?: string | null
-          provider_account_id?: string | null
-          scope?: string | null
-          updated_at?: string | null
-          user_id?: string | null
-        }
-        Relationships: []
-      }
+      [_ in never]: never
     }
     Functions: {
       binary_quantize: {
