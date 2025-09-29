@@ -35,9 +35,9 @@ serve(async (req) => {
     }
 
     const now = new Date();
-    const startTime = new Date(now.getTime() + 20 * 60 * 1000); // 20 minutes from now (allows 15-min reminder)
-    const endTime = new Date(now.getTime() + 50 * 60 * 1000); // 50 minutes from now (30 min duration)
-    const taskTitle = "🚀 Quick Test Task - Starting in 20 minutes";
+    const startTime = new Date(now.getTime() + 5 * 60 * 1000); // 5 minutes from now (allows 3-min reminder)
+    const endTime = new Date(now.getTime() + 6 * 60 * 1000); // 6 minutes from now (1 min duration)
+    const taskTitle = "🚀 Quick Test Task - Starting in 5 minutes";
 
     console.log('Creating quick test task at:', now.toISOString());
     console.log('Task will start at:', startTime.toISOString());
@@ -107,7 +107,7 @@ serve(async (req) => {
         status: 'BACKLOG',
         start_time: startTime.toISOString(),
         end_time: endTime.toISOString(),
-        estimate_minutes: 30
+        estimate_minutes: 1
       })
       .select()
       .single();
