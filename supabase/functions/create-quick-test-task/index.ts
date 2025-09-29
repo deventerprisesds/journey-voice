@@ -125,50 +125,35 @@ serve(async (req) => {
 
     console.log('Quick test task created:', task);
 
-    // Generate custom reminders with 1 minute before and at start time
-    const { data: reminderData, error: reminderError } = await supabaseClient.functions.invoke('generate-task-reminders', {
-      body: {
-        taskId: task.id,
-        userId: userId,
-        title: task.title,
-        startTime: startTime.toISOString(),
-        reminderMinutes: 1 // 1 minute before instead of 15
+    // Create reminders directly in the database
+    const reminderTime = new Date(startTime.getTime() - 60 * 1000); // 1 minute before
+    const reminders = [
+      {
+        user_id: userId,
+        task_id: task.id,
+        notification_type: 'scheduled_reminder',
+        title: 'Task Starting in 1 Minute',
+        body: `"${taskTitle}" is scheduled to start in 1 minute`,
+        scheduled_for: reminderTime.toISOString()
+      },
+      {
+        user_id: userId,
+        task_id: task.id,
+        notification_type: 'scheduled_start_now',
+        title: 'Task Starting Now',
+        body: `"${taskTitle}" is starting now`,
+        scheduled_for: startTime.toISOString()
       }
-    });
+    ];
 
-    if (reminderError) {
-      console.error('Error generating reminders:', reminderError);
-      return new Response(
-        JSON.stringify({ error: 'Failed to generate reminders', details: reminderError.message }),
-        { 
-          status: 500, 
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
-        }
-      );
-    }
+    const { error: remindersError } = await supabaseClient
+      .from('scheduled_notifications')
+      .insert(reminders);
 
-    console.log('Reminders generated:', reminderData);
-
-    // Immediately run the scheduler to process these new reminders
-    const { data: schedulerData, error: schedulerError } = await supabaseClient.functions.invoke('notification-scheduler', {
-      body: { trigger: 'quick_test', immediate: true }
-    });
-
-    if (schedulerError) {
-      console.error('Error running scheduler:', schedulerError);
+    if (remindersError) {
+      console.error('Error creating task reminders:', remindersError);
     } else {
-      console.log('Scheduler run result:', schedulerData);
-    }
-
-    // Immediately run the delivery to send any ready notifications
-    const { data: deliveryData, error: deliveryError } = await supabaseClient.functions.invoke('notification-delivery', {
-      body: { trigger: 'quick_test' }
-    });
-
-    if (deliveryError) {
-      console.error('Error running delivery:', deliveryError);
-    } else {
-      console.log('Delivery run result:', deliveryData);
+      console.log(`Created ${reminders.length} reminders for task`);
     }
 
     return new Response(
@@ -176,9 +161,7 @@ serve(async (req) => {
         success: true, 
         task,
         message: `Quick test task created! It will start at ${startTime.toLocaleString()}`,
-        reminders: reminderData?.reminders || [],
-        schedulerRun: schedulerData,
-        deliveryRun: deliveryData
+        remindersCreated: reminders.length
       }),
       { 
         status: 200, 

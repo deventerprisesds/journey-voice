@@ -672,6 +672,10 @@ export type Database = {
           failure_reason: string | null
           id: string
           notification_type: string
+          original_scheduled_for: string | null
+          processing_at: string | null
+          processing_instance: string | null
+          queued_during_quiet: boolean | null
           scheduled_for: string
           task_id: string | null
           title: string
@@ -685,6 +689,10 @@ export type Database = {
           failure_reason?: string | null
           id?: string
           notification_type: string
+          original_scheduled_for?: string | null
+          processing_at?: string | null
+          processing_instance?: string | null
+          queued_during_quiet?: boolean | null
           scheduled_for: string
           task_id?: string | null
           title: string
@@ -698,6 +706,10 @@ export type Database = {
           failure_reason?: string | null
           id?: string
           notification_type?: string
+          original_scheduled_for?: string | null
+          processing_at?: string | null
+          processing_instance?: string | null
+          queued_during_quiet?: boolean | null
           scheduled_for?: string
           task_id?: string | null
           title?: string
@@ -930,6 +942,26 @@ export type Database = {
       binary_quantize: {
         Args: { "": string } | { "": unknown }
         Returns: unknown
+      }
+      claim_due_notifications: {
+        Args: { claim_limit?: number; instance_id?: string }
+        Returns: {
+          body: string
+          created_at: string
+          delivered_at: string | null
+          failed_at: string | null
+          failure_reason: string | null
+          id: string
+          notification_type: string
+          original_scheduled_for: string | null
+          processing_at: string | null
+          processing_instance: string | null
+          queued_during_quiet: boolean | null
+          scheduled_for: string
+          task_id: string | null
+          title: string
+          user_id: string
+        }[]
       }
       decrypt_token: {
         Args: { encrypted_token: string }

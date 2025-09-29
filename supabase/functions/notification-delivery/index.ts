@@ -21,16 +21,16 @@ serve(async (req) => {
     console.log('Processing pending notifications...');
     
     const now = new Date();
+    const instanceId = crypto.randomUUID();
     
-    // Get all pending notifications that should be delivered, ordered by user for batching
+    console.log(`Claiming notifications with instance ID: ${instanceId}`);
+    
+    // Claim notifications safely to prevent double processing
     const { data: pendingNotifications, error: fetchError } = await supabaseClient
-      .from('scheduled_notifications')
-      .select('*')
-      .is('delivered_at', null)
-      .is('failed_at', null)
-      .lte('scheduled_for', now.toISOString())
-      .order('user_id, scheduled_for', { ascending: true })
-      .limit(50); // Process in batches
+      .rpc('claim_due_notifications', {
+        claim_limit: 50,
+        instance_id: instanceId
+      });
 
     if (fetchError) {
       console.error('Error fetching pending notifications:', fetchError);
@@ -48,18 +48,29 @@ serve(async (req) => {
       );
     }
 
-    console.log(`Found ${pendingNotifications.length} pending notifications to process`);
+    console.log(`Claimed ${pendingNotifications.length} notifications for processing`);
     
-    // Group notifications by user and time window (2 minutes)
+    // Group notifications by user and check for quiet hours batching
     const userBatches = new Map();
     
     for (const notification of pendingNotifications) {
-      const batchKey = `${notification.user_id}_${Math.floor(new Date(notification.scheduled_for).getTime() / (2 * 60 * 1000))}`;
+      const userId = notification.user_id;
       
-      if (!userBatches.has(batchKey)) {
-        userBatches.set(batchKey, []);
+      // If this is queued during quiet hours, create a daily summary batch
+      if (notification.queued_during_quiet) {
+        const summaryKey = `${userId}_daily_summary`;
+        if (!userBatches.has(summaryKey)) {
+          userBatches.set(summaryKey, []);
+        }
+        userBatches.get(summaryKey).push(notification);
+      } else {
+        // Regular batching by 2-minute time windows
+        const batchKey = `${userId}_${Math.floor(new Date(notification.scheduled_for).getTime() / (2 * 60 * 1000))}`;
+        if (!userBatches.has(batchKey)) {
+          userBatches.set(batchKey, []);
+        }
+        userBatches.get(batchKey).push(notification);
       }
-      userBatches.get(batchKey).push(notification);
     }
 
     console.log(`Grouped into ${userBatches.size} batches`);
@@ -77,13 +88,23 @@ serve(async (req) => {
         
         let title, body;
         
-        if (batchNotifications.length === 1) {
+        // Check if this is a daily summary batch (quiet hours)
+        const isDailySummary = batchKey.includes('daily_summary');
+        
+        if (batchNotifications.length === 1 && !isDailySummary) {
           // Single notification
           title = batchNotifications[0].title;
           body = batchNotifications[0].body;
         } else {
-          // Multiple notifications - batch them
-          title = `${batchNotifications.length} Reminders`;
+          // Multiple notifications or daily summary - batch them
+          if (isDailySummary) {
+            title = 'Daily Summary';
+            body = `You have ${batchNotifications.length} reminders:\n• `;
+          } else {
+            title = `${batchNotifications.length} Reminders`;
+            body = '• ';
+          }
+          
           const reminderTexts = batchNotifications.map((n: any) => {
             // Simplify the reminder text for batching
             if (n.notification_type === 'scheduled_reminder') return `${n.title}: ${n.body}`;
@@ -92,8 +113,7 @@ serve(async (req) => {
             if (n.notification_type.includes('overdue_reminder')) return `"${n.body.match(/"([^"]+)"/)?.[1] || 'Task'}" is overdue`;
             return n.body;
           });
-          body = reminderTexts.join('\n• ');
-          body = '• ' + body; // Add bullet to first item
+          body += reminderTexts.join('\n• ');
         }
 
         // Send the batched notification via push notification service

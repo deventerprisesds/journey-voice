@@ -98,8 +98,6 @@ serve(async (req) => {
 
     console.log(`Scheduled ${notifications.length} notifications`);
 
-    // Process any pending notifications that should be sent now
-    await processPendingNotifications(supabaseClient, now);
 
     return new Response(
       JSON.stringify({ 
@@ -153,7 +151,7 @@ async function processUserNotifications(
 
   // Process due date reminders
   if (prefs.due_reminders_enabled) {
-    const dueReminders = generateDueReminders(tasks || [], prefs.user_id, now);
+    const dueReminders = generateDueReminders(tasks || [], prefs.user_id, now, prefs);
     notifications.push(...dueReminders);
   }
 
@@ -185,19 +183,53 @@ async function processUserNotifications(
 }
 
 function isInQuietHours(now: Date, prefs: NotificationPrefs): boolean {
-  const currentTime = now.toTimeString().substring(0, 5); // HH:MM format
+  const userTz = prefs.timezone || 'UTC';
+  const userTime = new Date(now.toLocaleString("en-US", {timeZone: userTz}));
+  
   const quietStart = prefs.quiet_hours_start;
   const quietEnd = prefs.quiet_hours_end;
-
-  // Handle same-day quiet hours (e.g., 22:00 - 08:00)
-  if (quietStart > quietEnd) {
-    return currentTime >= quietStart || currentTime <= quietEnd;
+  
+  if (!quietStart || !quietEnd) return false;
+  
+  const currentHour = userTime.getHours();
+  const currentMinute = userTime.getMinutes();
+  const currentTime = currentHour * 60 + currentMinute;
+  
+  const [startHour, startMinute] = quietStart.split(':').map(Number);
+  const [endHour, endMinute] = quietEnd.split(':').map(Number);
+  
+  const startTime = startHour * 60 + startMinute;
+  const endTime = endHour * 60 + endMinute;
+  
+  // Handle overnight quiet hours (e.g., 22:00 to 08:00)
+  if (startTime > endTime) {
+    return currentTime >= startTime || currentTime < endTime;
+  } else {
+    return currentTime >= startTime && currentTime < endTime;
   }
-  // Handle within-day quiet hours (e.g., 12:00 - 14:00)
-  return currentTime >= quietStart && currentTime <= quietEnd;
 }
 
-function generateDueReminders(tasks: Task[], userId: string, now: Date): any[] {
+function getQuietHoursEnd(now: Date, preferences: NotificationPrefs): Date {
+  const userTz = preferences.timezone || 'UTC';
+  const quietEnd = preferences.quiet_hours_end;
+  
+  if (!quietEnd) return now;
+  
+  const [endHour, endMinute] = quietEnd.split(':').map(Number);
+  const userTime = new Date(now.toLocaleString("en-US", {timeZone: userTz}));
+  
+  const endTime = new Date(userTime);
+  endTime.setHours(endHour, endMinute, 0, 0);
+  
+  // If end time is before current time, it's tomorrow
+  if (endTime <= userTime) {
+    endTime.setDate(endTime.getDate() + 1);
+  }
+  
+  return endTime;
+}
+
+function generateDueReminders(tasks: Task[], userId: string, now: Date, preferences?: NotificationPrefs): any[] {
   const notifications: any[] = [];
   const tomorrow = new Date(now);
   tomorrow.setDate(tomorrow.getDate() + 1);
@@ -214,13 +246,25 @@ function generateDueReminders(tasks: Task[], userId: string, now: Date): any[] {
 
     // Remind 1 day before due date
     if (dueDate.getTime() === tomorrow.getTime()) {
+      let scheduledFor = new Date(now.getTime() + 8 * 60 * 60 * 1000); // Default 8 AM tomorrow
+      let queuedDuringQuiet = false;
+      let originalScheduledFor = null;
+      
+      if (preferences && isInQuietHours(scheduledFor, preferences)) {
+        originalScheduledFor = scheduledFor.toISOString();
+        scheduledFor = getQuietHoursEnd(scheduledFor, preferences);
+        queuedDuringQuiet = true;
+      }
+      
       notifications.push({
         user_id: userId,
         task_id: task.id,
         notification_type: 'due_reminder',
         title: 'Task Due Tomorrow',
         body: `"${task.title}" is due tomorrow`,
-        scheduled_for: new Date(now.getTime() + 5 * 60 * 1000).toISOString() // 5 minutes from now
+        scheduled_for: scheduledFor.toISOString(),
+        queued_during_quiet: queuedDuringQuiet,
+        original_scheduled_for: originalScheduledFor
       });
     }
 
