@@ -139,6 +139,18 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onStatusChange, onEdit, onSch
     onStatusChange(task.id, statusFlow[task.status] as Task['status']);
   };
 
+  const handleCheckboxChange = (checked: boolean) => {
+    if (!onStatusChange) return;
+    
+    if (checked) {
+      // Mark as done
+      onStatusChange(task.id, 'DONE');
+    } else {
+      // Unmark - go back to previous logical status
+      onStatusChange(task.id, 'DOING');
+    }
+  };
+
   const handleCheckboxToggle = () => {
     if (!onStatusChange) return;
     
@@ -188,7 +200,7 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onStatusChange, onEdit, onSch
           <div className="flex items-center gap-2 flex-1 min-w-0">
             <Checkbox
               checked={task.status === 'DONE'}
-              onCheckedChange={handleCheckboxToggle}
+              onCheckedChange={handleCheckboxChange}
               className="mt-0.5"
             />
             <Button

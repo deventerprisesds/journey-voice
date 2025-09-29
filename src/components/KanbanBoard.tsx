@@ -791,9 +791,9 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
             title={showCompletedTasks ? "Hide completed tasks" : "Show completed tasks"}
           >
             {showCompletedTasks ? (
-              <><Eye className="h-4 w-4 mr-2" />Show Completed</>
+              <><Eye className="h-4 w-4 mr-2" />Hide Completed</>
             ) : (
-              <><EyeOff className="h-4 w-4 mr-2" />Hide Completed</>
+              <><EyeOff className="h-4 w-4 mr-2" />Show Completed</>
             )}
           </Button>
           <AddColumnModal
