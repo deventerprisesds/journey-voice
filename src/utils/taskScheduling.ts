@@ -138,9 +138,6 @@ export async function scheduleNewTask(task: Partial<Task> & { board_id: string; 
             reminderMinutes: 15 // Default Slack reminder 15 minutes before scheduled time
           }
         });
-
-        // Process notifications immediately
-        await supabase.functions.invoke('notification-delivery');
       }
     } catch (notificationError) {
       console.warn('Failed to send notifications:', notificationError);

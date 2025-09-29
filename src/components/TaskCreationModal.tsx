@@ -266,11 +266,6 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                 reminderMinutes: 15 // Default Slack reminder 15 minutes before
               }
             });
-            
-            // Process pending notifications immediately
-            await supabase.functions.invoke('notification-delivery', {
-              body: { immediate: true }
-            });
           } catch (error) {
             console.error('Error generating reminders for task:', task.id, error);
           }

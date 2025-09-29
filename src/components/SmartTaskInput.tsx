@@ -144,11 +144,6 @@ const SmartTaskInput: React.FC<SmartTaskInputProps> = ({
               startTime: startTime.toISOString()
             }
           });
-          
-          // Process pending notifications immediately
-          await supabase.functions.invoke('notification-delivery', {
-            body: { immediate: true }
-          });
         }
       } catch (notificationError) {
         console.warn('Failed to send notifications:', notificationError);

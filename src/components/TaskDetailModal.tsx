@@ -236,11 +236,6 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
                 reminderMinutes: 15
               }
             });
-            
-            // Process pending notifications immediately
-            await supabase.functions.invoke('notification-delivery', {
-              body: { immediate: true }
-            });
           } catch (error) {
             console.error('Error generating reminders after task update:', error);
           }
