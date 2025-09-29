@@ -55,8 +55,27 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
     if (task) {
       setEditedTask(task);
       setDueDate(task.due_date ? new Date(task.due_date) : undefined);
-      setStartTime(task.start_time ? task.start_time.substring(11, 16) : ''); // Extract HH:MM from ISO string
-      setEndTime(task.end_time ? task.end_time.substring(11, 16) : ''); // Extract HH:MM from ISO string
+      
+      // Convert ISO time back to local time format for display
+      if (task.start_time) {
+        const startDate = new Date(task.start_time);
+        const hours = startDate.getHours().toString().padStart(2, '0');
+        const minutes = startDate.getMinutes().toString().padStart(2, '0');
+        setStartTime(`${hours}:${minutes}`);
+        console.log('Loading start time:', task.start_time, '-> display:', `${hours}:${minutes}`);
+      } else {
+        setStartTime('');
+      }
+      
+      if (task.end_time) {
+        const endDate = new Date(task.end_time);
+        const hours = endDate.getHours().toString().padStart(2, '0');
+        const minutes = endDate.getMinutes().toString().padStart(2, '0');
+        setEndTime(`${hours}:${minutes}`);
+        console.log('Loading end time:', task.end_time, '-> display:', `${hours}:${minutes}`);
+      } else {
+        setEndTime('');
+      }
       
       if (task.estimate_minutes) {
         const hours = Math.floor(task.estimate_minutes / 60);
