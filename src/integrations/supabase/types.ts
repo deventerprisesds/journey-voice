@@ -38,6 +38,103 @@ export type Database = {
         }
         Relationships: []
       }
+      assignment_history: {
+        Row: {
+          assignment_id: string
+          changed_at: string
+          changed_fields: string[] | null
+          id: string
+          new_values: Json | null
+          old_values: Json | null
+          user_id: string
+        }
+        Insert: {
+          assignment_id: string
+          changed_at?: string
+          changed_fields?: string[] | null
+          id?: string
+          new_values?: Json | null
+          old_values?: Json | null
+          user_id: string
+        }
+        Update: {
+          assignment_id?: string
+          changed_at?: string
+          changed_fields?: string[] | null
+          id?: string
+          new_values?: Json | null
+          old_values?: Json | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "assignment_history_assignment_id_fkey"
+            columns: ["assignment_id"]
+            isOneToOne: false
+            referencedRelation: "assignments"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      assignments: {
+        Row: {
+          course_id: string | null
+          created_at: string
+          description: string | null
+          due_date: string | null
+          feedback: string | null
+          id: string
+          points: number | null
+          priority: string
+          sheet_row_number: number | null
+          status: string
+          title: string
+          type: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          course_id?: string | null
+          created_at?: string
+          description?: string | null
+          due_date?: string | null
+          feedback?: string | null
+          id?: string
+          points?: number | null
+          priority?: string
+          sheet_row_number?: number | null
+          status?: string
+          title: string
+          type?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          course_id?: string | null
+          created_at?: string
+          description?: string | null
+          due_date?: string | null
+          feedback?: string | null
+          id?: string
+          points?: number | null
+          priority?: string
+          sheet_row_number?: number | null
+          status?: string
+          title?: string
+          type?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "assignments_course_id_fkey"
+            columns: ["course_id"]
+            isOneToOne: false
+            referencedRelation: "courses"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       assistant_knowledge_chunks: {
         Row: {
           assistant_id: string
@@ -110,6 +207,7 @@ export type Database = {
       calendar_connections: {
         Row: {
           access_token: string
+          connected_services: Json | null
           created_at: string
           expires_at: string | null
           id: string
@@ -119,11 +217,14 @@ export type Database = {
           provider_account_id: string
           refresh_token: string | null
           scope: string | null
+          scopes: string[] | null
+          service_type: string | null
           updated_at: string
           user_id: string
         }
         Insert: {
           access_token: string
+          connected_services?: Json | null
           created_at?: string
           expires_at?: string | null
           id?: string
@@ -133,11 +234,14 @@ export type Database = {
           provider_account_id: string
           refresh_token?: string | null
           scope?: string | null
+          scopes?: string[] | null
+          service_type?: string | null
           updated_at?: string
           user_id: string
         }
         Update: {
           access_token?: string
+          connected_services?: Json | null
           created_at?: string
           expires_at?: string | null
           id?: string
@@ -147,6 +251,59 @@ export type Database = {
           provider_account_id?: string
           refresh_token?: string | null
           scope?: string | null
+          scopes?: string[] | null
+          service_type?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      class_schedules: {
+        Row: {
+          course_name: string
+          created_at: string
+          date: string
+          end_time: string
+          id: string
+          instructor: string | null
+          is_online: boolean | null
+          location: string | null
+          sheet_row_number: number | null
+          sheet_source: string
+          start_time: string
+          type: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          course_name: string
+          created_at?: string
+          date: string
+          end_time: string
+          id?: string
+          instructor?: string | null
+          is_online?: boolean | null
+          location?: string | null
+          sheet_row_number?: number | null
+          sheet_source: string
+          start_time: string
+          type?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          course_name?: string
+          created_at?: string
+          date?: string
+          end_time?: string
+          id?: string
+          instructor?: string | null
+          is_online?: boolean | null
+          location?: string | null
+          sheet_row_number?: number | null
+          sheet_source?: string
+          start_time?: string
+          type?: string
           updated_at?: string
           user_id?: string
         }
@@ -277,6 +434,39 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      courses: {
+        Row: {
+          code: string | null
+          color: string | null
+          created_at: string
+          description: string | null
+          id: string
+          name: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          code?: string | null
+          color?: string | null
+          created_at?: string
+          description?: string | null
+          id?: string
+          name: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          code?: string | null
+          color?: string | null
+          created_at?: string
+          description?: string | null
+          id?: string
+          name?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
       }
       delivery_logs: {
         Row: {
@@ -663,6 +853,83 @@ export type Database = {
         }
         Relationships: []
       }
+      project_documents: {
+        Row: {
+          file_name: string
+          file_size: number
+          file_type: string
+          id: string
+          last_used_at: string
+          project_id: string
+          storage_path: string
+          task_id: string | null
+          uploaded_at: string
+          user_id: string
+        }
+        Insert: {
+          file_name: string
+          file_size: number
+          file_type: string
+          id?: string
+          last_used_at?: string
+          project_id: string
+          storage_path: string
+          task_id?: string | null
+          uploaded_at?: string
+          user_id: string
+        }
+        Update: {
+          file_name?: string
+          file_size?: number
+          file_type?: string
+          id?: string
+          last_used_at?: string
+          project_id?: string
+          storage_path?: string
+          task_id?: string | null
+          uploaded_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      schedule_history: {
+        Row: {
+          changed_at: string
+          changed_fields: string[] | null
+          id: string
+          new_values: Json | null
+          old_values: Json | null
+          schedule_id: string
+          user_id: string
+        }
+        Insert: {
+          changed_at?: string
+          changed_fields?: string[] | null
+          id?: string
+          new_values?: Json | null
+          old_values?: Json | null
+          schedule_id: string
+          user_id: string
+        }
+        Update: {
+          changed_at?: string
+          changed_fields?: string[] | null
+          id?: string
+          new_values?: Json | null
+          old_values?: Json | null
+          schedule_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "schedule_history_schedule_id_fkey"
+            columns: ["schedule_id"]
+            isOneToOne: false
+            referencedRelation: "class_schedules"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       scheduled_notifications: {
         Row: {
           body: string
@@ -751,6 +1018,81 @@ export type Database = {
           name?: string
           source_type?: Database["public"]["Enums"]["task_source"]
           updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      sync_config: {
+        Row: {
+          config_data: Json
+          created_at: string
+          id: string
+          is_active: boolean | null
+          last_sync_at: string | null
+          service_type: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          config_data?: Json
+          created_at?: string
+          id?: string
+          is_active?: boolean | null
+          last_sync_at?: string | null
+          service_type: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          config_data?: Json
+          created_at?: string
+          id?: string
+          is_active?: boolean | null
+          last_sync_at?: string | null
+          service_type?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      sync_logs: {
+        Row: {
+          completed_at: string | null
+          error_message: string | null
+          id: string
+          records_added: number | null
+          records_processed: number | null
+          records_updated: number | null
+          service_type: string
+          started_at: string
+          status: string
+          sync_type: string
+          user_id: string
+        }
+        Insert: {
+          completed_at?: string | null
+          error_message?: string | null
+          id?: string
+          records_added?: number | null
+          records_processed?: number | null
+          records_updated?: number | null
+          service_type: string
+          started_at?: string
+          status: string
+          sync_type: string
+          user_id: string
+        }
+        Update: {
+          completed_at?: string | null
+          error_message?: string | null
+          id?: string
+          records_added?: number | null
+          records_processed?: number | null
+          records_updated?: number | null
+          service_type?: string
+          started_at?: string
+          status?: string
+          sync_type?: string
           user_id?: string
         }
         Relationships: []
