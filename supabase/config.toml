@@ -24,6 +24,9 @@ verify_jwt = false
 [functions.create-test-task]
 verify_jwt = false
 
+[functions.create-quick-test-task]
+verify_jwt = false
+
 [functions.generate-task-reminders]
 verify_jwt = false
 

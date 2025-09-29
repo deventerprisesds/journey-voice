@@ -3,13 +3,13 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
-import { Clock, Play, RefreshCw } from 'lucide-react';
+import { Clock, Play, RefreshCw, Zap } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 
 interface CronLog {
   timestamp: string;
-  type: 'scheduler' | 'delivery';
+  type: 'scheduler' | 'delivery' | 'quicktest';
   status: 'success' | 'error';
   message: string;
 }
@@ -17,10 +17,11 @@ interface CronLog {
 const CronJobTesting: React.FC = () => {
   const [isRunningScheduler, setIsRunningScheduler] = useState(false);
   const [isRunningDelivery, setIsRunningDelivery] = useState(false);
+  const [isCreatingQuickTask, setIsCreatingQuickTask] = useState(false);
   const [logs, setLogs] = useState<CronLog[]>([]);
   const { toast } = useToast();
 
-  const addLog = (type: 'scheduler' | 'delivery', status: 'success' | 'error', message: string) => {
+  const addLog = (type: 'scheduler' | 'delivery' | 'quicktest', status: 'success' | 'error', message: string) => {
     const newLog: CronLog = {
       timestamp: new Date().toLocaleTimeString(),
       type,
@@ -96,6 +97,55 @@ const CronJobTesting: React.FC = () => {
     }
   };
 
+  const createQuickTestTask = async () => {
+    setIsCreatingQuickTask(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        addLog('quicktest', 'error', 'User not authenticated');
+        toast({
+          title: "Authentication Required",
+          description: "Please log in to create test tasks",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      const { data, error } = await supabase.functions.invoke('create-quick-test-task', {
+        body: { userId: user.id }
+      });
+
+      if (error) {
+        addLog('quicktest', 'error', `Failed: ${error.message}`);
+        toast({
+          title: "Quick Test Failed",
+          description: error.message,
+          variant: "destructive",
+        });
+      } else {
+        const reminderTimes = data.reminders?.map((r: any) => {
+          const time = new Date(r.scheduledFor).toLocaleTimeString();
+          return `${r.type} at ${time}`;
+        }).join(', ') || 'none';
+        
+        addLog('quicktest', 'success', `Task created! Reminders: ${reminderTimes}`);
+        toast({
+          title: "Quick Test Task Created",
+          description: `Task starts in 5 minutes. Reminders scheduled: ${reminderTimes}`,
+        });
+      }
+    } catch (error: any) {
+      addLog('quicktest', 'error', `Error: ${error.message}`);
+      toast({
+        title: "Quick Test Error",
+        description: error.message,
+        variant: "destructive",
+      });
+    } finally {
+      setIsCreatingQuickTask(false);
+    }
+  };
+
   const testCronSetup = async () => {
     try {
       // Check if cron jobs are scheduled
@@ -141,7 +191,37 @@ const CronJobTesting: React.FC = () => {
           </AlertDescription>
         </Alert>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+          <Button
+            onClick={createQuickTestTask}
+            disabled={isCreatingQuickTask}
+            variant="default"
+            className="w-full"
+          >
+            {isCreatingQuickTask ? (
+              <>
+                <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                Creating Test Task...
+              </>
+            ) : (
+              <>
+                <Zap className="h-4 w-4 mr-2" />
+                Create Quick Test Task (5min)
+              </>
+            )}
+          </Button>
+
+          <Button
+            onClick={testCronSetup}
+            variant="outline"
+            className="w-full"
+          >
+            <Clock className="h-4 w-4 mr-2" />
+            Test Cron Setup
+          </Button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <Button
             onClick={runNotificationScheduler}
             disabled={isRunningScheduler}
@@ -180,14 +260,6 @@ const CronJobTesting: React.FC = () => {
             )}
           </Button>
 
-          <Button
-            onClick={testCronSetup}
-            variant="outline"
-            className="w-full"
-          >
-            <Clock className="h-4 w-4 mr-2" />
-            Test Cron Setup
-          </Button>
         </div>
 
         {logs.length > 0 && (
