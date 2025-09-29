@@ -10,10 +10,12 @@ import {
   Palette, 
   Shield,
   ArrowLeft,
-  Home
+  Home,
+  Wrench
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import NotificationSettings from '@/components/NotificationSettings';
+import CronJobTesting from '@/components/CronJobTesting';
 
 const Settings: React.FC = () => {
   const { user } = useAuth();
@@ -62,10 +64,14 @@ const Settings: React.FC = () => {
       </div>
 
       <Tabs defaultValue="notifications" className="w-full">
-        <TabsList className="grid w-full grid-cols-4">
+        <TabsList className="grid w-full grid-cols-5">
           <TabsTrigger value="notifications" className="flex items-center gap-2">
             <Bell className="h-4 w-4" />
             Notifications
+          </TabsTrigger>
+          <TabsTrigger value="testing" className="flex items-center gap-2">
+            <Wrench className="h-4 w-4" />
+            Testing
           </TabsTrigger>
           <TabsTrigger value="profile" className="flex items-center gap-2">
             <User className="h-4 w-4" />
@@ -83,6 +89,10 @@ const Settings: React.FC = () => {
 
         <TabsContent value="notifications" className="mt-6">
           <NotificationSettings />
+        </TabsContent>
+
+        <TabsContent value="testing" className="mt-6">
+          <CronJobTesting />
         </TabsContent>
 
         <TabsContent value="profile" className="mt-6">

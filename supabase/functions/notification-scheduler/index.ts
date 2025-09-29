@@ -11,6 +11,7 @@ interface Task {
   title: string;
   description?: string;
   due_date?: string;
+  start_time?: string;
   priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
   category: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION';
   status: string;
@@ -156,6 +157,12 @@ async function processUserNotifications(
     notifications.push(...dueReminders);
   }
 
+  // Process start time reminders (for scheduled tasks)
+  if (prefs.due_reminders_enabled) {
+    const startTimeReminders = generateStartTimeReminders(tasks || [], prefs.user_id, now);
+    notifications.push(...startTimeReminders);
+  }
+
   // Process overdue reminders
   if (prefs.overdue_reminders_enabled) {
     const overdueReminders = generateOverdueReminders(tasks || [], prefs.user_id, now);
@@ -226,6 +233,32 @@ function generateDueReminders(tasks: Task[], userId: string, now: Date): any[] {
         title: 'Task Due Today',
         body: `"${task.title}" is due today`,
         scheduled_for: now.toISOString()
+      });
+    }
+  }
+
+  return notifications;
+}
+
+function generateStartTimeReminders(tasks: Task[], userId: string, now: Date): any[] {
+  const notifications: any[] = [];
+  const fifteenMinutesFromNow = new Date(now.getTime() + 15 * 60 * 1000);
+  const oneHourFromNow = new Date(now.getTime() + 60 * 60 * 1000);
+
+  for (const task of tasks) {
+    if (!task.start_time) continue;
+
+    const startTime = new Date(task.start_time);
+    
+    // Remind 15 minutes before start time
+    if (startTime <= oneHourFromNow && startTime > fifteenMinutesFromNow) {
+      notifications.push({
+        user_id: userId,
+        task_id: task.id,
+        notification_type: 'start_time_reminder',
+        title: 'Task Starting Soon',
+        body: `"${task.title}" starts in 15 minutes`,
+        scheduled_for: new Date(startTime.getTime() - 15 * 60 * 1000).toISOString()
       });
     }
   }

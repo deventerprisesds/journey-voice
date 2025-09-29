@@ -41,6 +41,7 @@ const NotificationSettings = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
+  const [slackWebhookUrl, setSlackWebhookUrl] = useState('');
   const { toast } = useToast();
   const { user, isDemoMode } = useAuth();
 
@@ -132,9 +133,14 @@ const NotificationSettings = () => {
     if (storedPhone) {
       setPhone(storedPhone);
     }
-    if (storedEmail) {
-      setEmail(storedEmail);
-    }
+      if (storedEmail) {
+        setEmail(storedEmail);
+      }
+      
+      const storedSlackWebhook = localStorage.getItem('slack-webhook-url');
+      if (storedSlackWebhook) {
+        setSlackWebhookUrl(storedSlackWebhook);
+      }
   };
 
   const saveNotificationPrefs = async () => {
@@ -153,7 +159,6 @@ const NotificationSettings = () => {
 
 
       // Save Slack webhook URL to localStorage (not in database for security)
-      const slackWebhookUrl = (document.getElementById('slack-webhook-url') as HTMLInputElement)?.value;
       if (slackWebhookUrl) {
         localStorage.setItem('slack-webhook-url', slackWebhookUrl);
       }
@@ -347,7 +352,16 @@ const NotificationSettings = () => {
 
   const sendTestSlack = async () => {
     try {
-      const slackWebhookUrl = (document.getElementById('slack-webhook-url') as HTMLInputElement)?.value || localStorage.getItem('slack-webhook-url') || '';
+      console.log('Testing Slack notification with webhook:', slackWebhookUrl ? '***configured***' : 'NOT_SET');
+      
+      if (!slackWebhookUrl) {
+        toast({
+          title: "Slack webhook not configured",
+          description: "Please enter your Slack webhook URL first.",
+          variant: "destructive",
+        });
+        return;
+      }
       
       await supabase.functions.invoke('send-unified-notification', {
         body: {
@@ -712,7 +726,8 @@ const NotificationSettings = () => {
                   id="slack-webhook-url"
                   type="url"
                   placeholder="https://hooks.slack.com/services/..."
-                  defaultValue={localStorage.getItem('slack-webhook-url') || ''}
+                  value={slackWebhookUrl}
+                  onChange={(e) => setSlackWebhookUrl(e.target.value)}
                 />
                 <p className="text-xs text-muted-foreground">
                   This webhook URL is stored locally in your browser for security.

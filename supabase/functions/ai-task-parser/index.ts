@@ -25,7 +25,26 @@ serve(async (req) => {
 
     console.log('Parsing task input:', text);
 
-    const systemPrompt = `You are an intelligent task parser that converts natural language into structured task data with smart context awareness.
+// Get current date for context
+const now = new Date();
+const currentDateString = now.toLocaleDateString('en-US', { 
+  weekday: 'long',
+  year: 'numeric',
+  month: 'long',
+  day: 'numeric'
+});
+const currentTimeString = now.toLocaleTimeString('en-US', { 
+  hour: '2-digit',
+  minute: '2-digit'
+});
+
+const systemPrompt = `You are an intelligent task parser that converts natural language into structured task data with smart context awareness.
+
+CURRENT DATE CONTEXT:
+- Today is: ${currentDateString}
+- Current time: ${currentTimeString}
+
+CRITICAL: Use this current date as your reference for relative dates like "tomorrow", "next Tuesday", "next week", etc.
 
 Parse the user's input into one or more tasks. Each task should have:
 - title: Clear, actionable task title
