@@ -103,8 +103,10 @@ serve(async (req) => {
       else if (lowerText.includes('meeting') || lowerText.includes('appointment')) taskType = 'work';
     }
 
-    // Step 1: Parse the task using AI with enhanced context  
+    // Step 1: Parse the task using AI with enhanced context and intelligent time suggestions
     let parsedTask;
+    let aiSuggestedStartHour = null;
+    
     try {
       console.log('Parsing task with AI:', taskText, 'Type:', taskType);
       
@@ -119,18 +121,29 @@ serve(async (req) => {
           messages: [
             {
               role: 'system',
-              content: `Analyze this task for intelligent scheduling. Consider:
-              - Task type: ${taskType}
-              - Current context: ${scheduling_context ? scheduling_context.join(', ') : 'none'}
+              content: `You are an intelligent scheduling assistant. Analyze this task and suggest optimal timing based on context and social/business norms.
+
+              For context, consider these examples:
+              - "lunch with Brad" → suggest 12:00-13:00 (meal times are social conventions)
+              - "coffee meeting" → suggest 10:00-11:00 or 14:00-15:00 (standard coffee times)
+              - "breakfast with client" → suggest 8:00-9:00
+              - "dinner reservation" → suggest 18:00-20:00
+              - "gym workout" → suggest 6:00-8:00 or 18:00-20:00
+              - "bank appointment" → suggest 9:00-17:00 weekdays only
+              - "grocery shopping" → suggest 7:00-9:00 or 17:00-19:00 weekdays
+              
+              Task type context: ${taskType}
+              Scheduling hints: ${scheduling_context ? scheduling_context.join(', ') : 'none'}
               
               Return ONLY a JSON object with these exact fields:
-              {"estimatedDuration": number, "timePreference": "string", "dayPreference": "string", "urgencyLevel": number}
+              {"estimatedDuration": number, "timePreference": "string", "dayPreference": "string", "urgencyLevel": number, "preferredStartHour": number}
               
               Guidelines:
-              - estimatedDuration: minutes (default 60 if unclear)
-              - timePreference: morning, afternoon, evening, business_hours, or flexible
+              - estimatedDuration: minutes (30 for quick tasks, 60 default, 90+ for meetings)
+              - timePreference: morning, lunch_time, afternoon, evening, business_hours, or flexible
               - dayPreference: weekdays, weekends, or any
-              - urgencyLevel: 1-5 (5 being most urgent)`
+              - urgencyLevel: 1-5 (5 being most urgent)
+              - preferredStartHour: exact hour (0-23) when this activity typically happens (e.g., 12 for lunch, 8 for breakfast, 19 for dinner)`
             },
             {
               role: 'user',
@@ -159,14 +172,20 @@ serve(async (req) => {
         jsonStr = jsonMatch[0];
       }
 
-      parsedTask = JSON.parse(jsonStr);
+      const rawParsedTask = JSON.parse(jsonStr);
+      
+      // Extract AI-suggested start hour before restructuring
+      if (typeof rawParsedTask.preferredStartHour === 'number' && rawParsedTask.preferredStartHour >= 0 && rawParsedTask.preferredStartHour <= 23) {
+        aiSuggestedStartHour = rawParsedTask.preferredStartHour;
+        console.log('AI suggested start hour:', aiSuggestedStartHour);
+      }
       
       // Validate and set defaults
       parsedTask = {
-        estimatedDuration: typeof parsedTask.estimatedDuration === 'number' ? parsedTask.estimatedDuration : 60,
-        timePreference: ['morning', 'afternoon', 'evening', 'business_hours', 'flexible'].includes(parsedTask.timePreference) ? parsedTask.timePreference : 'flexible',
-        dayPreference: ['weekdays', 'weekends', 'any'].includes(parsedTask.dayPreference) ? parsedTask.dayPreference : 'any',
-        urgencyLevel: typeof parsedTask.urgencyLevel === 'number' ? Math.max(1, Math.min(5, parsedTask.urgencyLevel)) : 3
+        estimatedDuration: typeof rawParsedTask.estimatedDuration === 'number' ? rawParsedTask.estimatedDuration : 60,
+        timePreference: ['morning', 'lunch_time', 'afternoon', 'evening', 'business_hours', 'flexible'].includes(rawParsedTask.timePreference) ? rawParsedTask.timePreference : 'flexible',
+        dayPreference: ['weekdays', 'weekends', 'any'].includes(rawParsedTask.dayPreference) ? rawParsedTask.dayPreference : 'any',
+        urgencyLevel: typeof rawParsedTask.urgencyLevel === 'number' ? Math.max(1, Math.min(5, rawParsedTask.urgencyLevel)) : 3
       };
       
       console.log('Parsed task details:', parsedTask);
@@ -187,7 +206,7 @@ serve(async (req) => {
     // Step 2: Analyze workload balance
     const workloadBalance = analyzeWorkloadBalance(existingTasks);
     
-    // Step 3: Find optimal time slot using enhanced business logic
+    // Step 3: Find optimal time slot using AI-enhanced business logic
     const optimalSlot = findOptimalTimeSlotWithBusinessRules(
       taskType,
       parsedTask,
@@ -195,7 +214,8 @@ serve(async (req) => {
       existingTasks,
       busySlots,
       workingMinutes,
-      businessRules
+      businessRules,
+      aiSuggestedStartHour
     );
 
     // Step 4: Generate AI reasoning
@@ -306,14 +326,25 @@ function findOptimalTimeSlotWithBusinessRules(
   existingTasks: Task[],
   busySlots: any[],
   workingMinutes: number,
-  rules: BusinessRules
+  rules: BusinessRules,
+  aiSuggestedStartHour?: number | null
 ): ScheduledTask {
   const duration = parsedTask.estimatedDuration || 60;
   let startHour = 14; // Default afternoon
   let allowedDays = [0, 1, 2, 3, 4, 5, 6]; // All days
   
-  // Apply business rules based on task type
-  switch (taskType) {
+  // Prioritize AI-suggested start hour if available and reasonable
+  if (aiSuggestedStartHour !== null && aiSuggestedStartHour !== undefined) {
+    startHour = aiSuggestedStartHour;
+    console.log('Using AI-suggested start hour:', startHour);
+  } 
+  // Check for special time preferences that override business rules
+  else if (parsedTask.timePreference === 'lunch_time') {
+    startHour = 12; // Default lunch time
+    console.log('Using lunch time preference:', startHour);
+  } else {
+    // Apply business rules based on task type as fallback
+    switch (taskType) {
     case 'bank':
       startHour = rules.bankTasks.hours[0];
       allowedDays = rules.bankTasks.days;
@@ -355,6 +386,7 @@ function findOptimalTimeSlotWithBusinessRules(
     default:
       startHour = rules.personalTasks.hours[0];
       allowedDays = rules.personalTasks.days;
+    }
   }
   
   // Check if target date is allowed
