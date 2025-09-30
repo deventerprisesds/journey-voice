@@ -199,33 +199,46 @@ serve(async (req) => {
     );
 
     // Step 4: Generate AI reasoning
-    const reasoningResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${OPENAI_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        messages: [
-          {
-            role: 'system',
-            content: `Explain why this time slot was chosen for the task. Be concise but informative. Consider workload balance, task type, and scheduling preferences.`
-          },
-          {
-            role: 'user',
-            content: `Task: ${taskText}
+    let aiReasoning = `Task scheduled for ${optimalSlot.scheduledStart.toLocaleTimeString()} based on optimal scheduling algorithm.`;
+    
+    try {
+      const reasoningResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${OPENAI_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          messages: [
+            {
+              role: 'system',
+              content: `Explain why this time slot was chosen for the task. Be concise but informative. Consider workload balance, task type, and scheduling preferences.`
+            },
+            {
+              role: 'user',
+              content: `Task: ${taskText}
 Scheduled time: ${optimalSlot.scheduledStart}
 Workload balance: ${JSON.stringify(workloadBalance)}
 Existing tasks today: ${existingTasks.filter((t: Task) => isSameDay(new Date(t.due_date || ''), optimalSlot.scheduledStart)).length}`
-          }
-        ],
-        temperature: 0.3,
-      }),
-    });
+            }
+          ],
+          temperature: 0.3,
+        }),
+      });
 
-    const reasoningData = await reasoningResponse.json();
-    const aiReasoning = reasoningData.choices[0].message.content;
+      if (reasoningResponse.ok) {
+        const reasoningData = await reasoningResponse.json();
+        if (reasoningData.choices && reasoningData.choices[0] && reasoningData.choices[0].message) {
+          aiReasoning = reasoningData.choices[0].message.content;
+        }
+      } else {
+        console.error('AI reasoning failed:', reasoningResponse.status, await reasoningResponse.text());
+      }
+    } catch (e) {
+      console.error('Failed to generate AI reasoning:', e);
+      // Keep the fallback reasoning
+    }
 
     return new Response(JSON.stringify({
       parsedTask,
