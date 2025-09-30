@@ -15,7 +15,11 @@ interface CalendarConnectionModalProps {
 
 export function CalendarConnectionModal({ isOpen, onClose, onConnectionSuccess }: CalendarConnectionModalProps) {
   const [isConnecting, setIsConnecting] = useState(false);
-  const [connectedProviders, setConnectedProviders] = useState<string[]>([]);
+  const [connectionStatus, setConnectionStatus] = useState<Record<string, { 
+    connected: boolean; 
+    expired: boolean;
+    connectionId?: string;
+  }>>({});
 
   useEffect(() => {
     if (isOpen) {
@@ -28,10 +32,42 @@ export function CalendarConnectionModal({ isOpen, onClose, onConnectionSuccess }
       const { data, error } = await supabase.rpc('get_calendar_connections_secure');
       if (error) throw error;
       
-      const providers = data?.map((conn: any) => conn.provider) || [];
-      setConnectedProviders(providers);
+      const status: Record<string, { connected: boolean; expired: boolean; connectionId?: string }> = {};
+      
+      if (data && Array.isArray(data)) {
+        data.forEach((conn: any) => {
+          const isExpired = conn.expires_at ? new Date(conn.expires_at) < new Date() : false;
+          status[conn.provider] = {
+            connected: true,
+            expired: isExpired,
+            connectionId: conn.id
+          };
+        });
+      }
+      
+      setConnectionStatus(status);
     } catch (error) {
       console.error('Failed to load connected providers:', error);
+      toast.error('Failed to load calendar connections');
+    }
+  };
+
+  const handleDisconnect = async (provider: string) => {
+    const connection = connectionStatus[provider];
+    if (!connection?.connectionId) return;
+
+    try {
+      const { error } = await supabase.rpc('revoke_calendar_connection', {
+        _connection_id: connection.connectionId
+      });
+
+      if (error) throw error;
+
+      toast.success(`${provider === 'google' ? 'Google' : 'Outlook'} Calendar disconnected`);
+      loadConnectedProviders();
+    } catch (error) {
+      console.error('Failed to disconnect:', error);
+      toast.error('Failed to disconnect calendar');
     }
   };
 
@@ -94,8 +130,11 @@ export function CalendarConnectionModal({ isOpen, onClose, onConnectionSuccess }
                     <div>
                       <div className="flex items-center gap-2">
                         {provider.name}
-                        {connectedProviders.includes(provider.id) && (
+                        {connectionStatus[provider.id]?.connected && !connectionStatus[provider.id]?.expired && (
                           <Check className="h-4 w-4 text-green-600" />
+                        )}
+                        {connectionStatus[provider.id]?.expired && (
+                          <AlertCircle className="h-4 w-4 text-yellow-600" />
                         )}
                       </div>
                     </div>
@@ -105,29 +144,64 @@ export function CalendarConnectionModal({ isOpen, onClose, onConnectionSuccess }
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="pt-0">
-                  {connectedProviders.includes(provider.id) ? (
-                    <Button 
-                      disabled
-                      className="w-full"
-                      variant="secondary"
-                    >
-                      <Check className="h-4 w-4 mr-2" />
-                      Connected
-                    </Button>
-                  ) : (
-                    <CalendarOAuthManager
-                      provider={provider.id as 'google' | 'outlook'}
-                      onSuccess={handleConnectionSuccess}
-                      onError={handleConnectionError}
-                    />
-                  )}
+                  {(() => {
+                    const status = connectionStatus[provider.id];
+                    
+                    if (status?.connected && !status.expired) {
+                      // Valid connection
+                      return (
+                        <div className="space-y-2">
+                          <Button 
+                            disabled
+                            className="w-full"
+                            variant="secondary"
+                          >
+                            <Check className="h-4 w-4 mr-2" />
+                            Connected
+                          </Button>
+                          <Button
+                            onClick={() => handleDisconnect(provider.id)}
+                            variant="outline"
+                            size="sm"
+                            className="w-full"
+                          >
+                            Disconnect
+                          </Button>
+                        </div>
+                      );
+                    } else if (status?.connected && status.expired) {
+                      // Expired connection
+                      return (
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-2 px-3 py-2 bg-yellow-50 text-yellow-800 rounded-md text-sm">
+                            <AlertCircle className="h-4 w-4" />
+                            <span>Connection expired - please reconnect</span>
+                          </div>
+                          <CalendarOAuthManager
+                            provider={provider.id as 'google' | 'outlook'}
+                            onSuccess={handleConnectionSuccess}
+                            onError={handleConnectionError}
+                          />
+                        </div>
+                      );
+                    } else {
+                      // Not connected
+                      return (
+                        <CalendarOAuthManager
+                          provider={provider.id as 'google' | 'outlook'}
+                          onSuccess={handleConnectionSuccess}
+                          onError={handleConnectionError}
+                        />
+                      );
+                    }
+                  })()}
                 </CardContent>
               </Card>
             ))}
           </div>
 
           <div className="text-sm text-muted-foreground text-center pt-2">
-            <p>Note: OAuth integration is implemented for demo purposes. In production, you would need to configure OAuth apps with Google and Microsoft.</p>
+            <p>Connect your real Google or Microsoft calendar to enable smart scheduling and conflict detection.</p>
           </div>
         </div>
       </DialogContent>
