@@ -61,8 +61,8 @@ export function useOAuthCallback() {
               sessionStorage.setItem('pending_oauth_exchange', JSON.stringify({
                 code,
                 provider,
-                redirect_uri: `${window.location.origin}${location.pathname}`,
-                return_path: location.pathname
+                redirect_uri: `${window.location.origin}/calendar`,
+                return_path: '/calendar'
               }));
               toast.error('Please sign in to complete calendar connection');
               navigate('/auth', { replace: true });

@@ -14,6 +14,8 @@ import { getCalendarAvailability, syncExternalCalendars } from '@/utils/taskSche
 import { useAutoScheduling } from '@/hooks/useAutoScheduling';
 import { toast } from 'sonner';
 import { CalendarConnectionModal } from './CalendarConnectionModal';
+import { CalendarSelectionPanel } from './CalendarSelectionPanel';
+import { supabase } from '@/integrations/supabase/client';
 
 interface CalendarModuleProps {
   tasks: Task[];
@@ -63,30 +65,33 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
         ? endOfWeek(currentDate).toISOString()
         : new Date(currentDate.getFullYear(), currentDate.getMonth(), currentDate.getDate() + 1).toISOString();
 
+      // Load external events directly from database
+      const { data: dbEvents, error: eventsError } = await supabase
+        .from('external_calendar_events')
+        .select('*')
+        .gte('start_time', startDate)
+        .lte('end_time', endDate);
+
+      if (eventsError) {
+        console.error('Failed to load external events:', eventsError);
+      } else {
+        console.log('Loaded external events:', dbEvents);
+        
+        // Filter based on calendar preferences
+        const preferences = JSON.parse(localStorage.getItem('calendar_preferences') || '{}');
+        const filteredEvents = dbEvents?.filter(event => 
+          preferences[event.calendar_id] !== false
+        ) || [];
+        
+        setExternalEvents(filteredEvents);
+      }
+
+      // Also load busy slots for conflict detection
       const { busySlots: availability } = await getCalendarAvailability(startDate, endDate);
       setBusySlots(availability);
-      
-      const externalEventsData = availability.filter(slot => slot.type === 'external');
-      // Convert to proper ExternalCalendarEvent format if needed
-      const properExternalEvents = externalEventsData.map((event, index) => ({
-        id: 'temp-' + index,
-        user_id: '',
-        connection_id: '',
-        external_event_id: 'temp-' + index,
-        title: event.title,
-        description: '',
-        start_time: event.start,
-        end_time: event.end,
-        is_all_day: false,
-        location: '',
-        calendar_id: '',
-        last_synced_at: new Date().toISOString(),
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      }));
-      setExternalEvents(properExternalEvents);
     } catch (error) {
       console.error('Failed to load calendar data:', error);
+      toast.error('Failed to load calendar data');
     } finally {
       setIsLoading(false);
     }
@@ -464,9 +469,11 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
       onClose={() => setShowConnectionModal(false)}
       onConnectionSuccess={() => {
         setShowConnectionModal(false);
-        loadCalendarData();
+        handleSyncCalendars();
       }}
     />
+
+    <CalendarSelectionPanel onSelectionChange={loadCalendarData} />
     </div>
   );
 };

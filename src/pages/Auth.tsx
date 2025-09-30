@@ -52,7 +52,7 @@ const Auth = () => {
                 title: "Calendar connection failed",
                 description: error.message || 'Failed to complete calendar connection'
               });
-              navigate(return_path || '/');
+              navigate('/calendar');
               return;
             }
             
@@ -61,8 +61,8 @@ const Auth = () => {
               description: `Connected to ${provider === 'google' ? 'Google' : 'Outlook'} Calendar`
             });
             
-            // Navigate back to the original path
-            navigate(return_path || '/');
+            // Navigate back to calendar page
+            navigate('/calendar');
           });
         } catch (err) {
           console.error('Failed to parse pending OAuth exchange:', err);

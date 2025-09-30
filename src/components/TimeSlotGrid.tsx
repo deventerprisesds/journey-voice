@@ -4,7 +4,7 @@ import { cn } from '@/lib/utils';
 import { Task, ExternalCalendarEvent } from '@/types/task';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Plus, Clock } from 'lucide-react';
+import { Plus, Clock, Calendar } from 'lucide-react';
 
 interface TimeSlotGridProps {
   dates: Date[];
@@ -138,13 +138,23 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
                   {slotEvents.map((event, eventIndex) => (
                     <div
                       key={`event-${eventIndex}`}
-                      className="absolute left-0 right-0 bg-blue-100 border border-blue-300 rounded px-1 py-0.5 text-xs z-10"
+                      className="absolute left-0 right-0 bg-purple-100 border-l-4 border-purple-500 rounded px-2 py-1 text-xs z-10 shadow-sm"
                       style={{ top: 2, height: 'calc(100% - 4px)' }}
+                      title={`External Event: ${event.title}`}
                     >
-                      <div className="truncate font-medium text-blue-900">{event.title}</div>
-                      <div className="text-blue-700 text-xs">
+                      <div className="flex items-center gap-1 mb-0.5">
+                        <Calendar className="h-3 w-3 text-purple-600" />
+                        <span className="truncate font-medium text-purple-900">{event.title}</span>
+                      </div>
+                      <div className="text-purple-700 text-xs flex items-center gap-1">
+                        <Clock className="h-2 w-2" />
                         {format(parseISO(event.start_time), 'h:mm a')} - {format(parseISO(event.end_time), 'h:mm a')}
                       </div>
+                      {event.location && (
+                        <div className="text-purple-600 text-xs truncate mt-0.5">
+                          📍 {event.location}
+                        </div>
+                      )}
                     </div>
                   ))}
                   
