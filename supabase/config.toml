@@ -1,5 +1,11 @@
 project_id = "wwxgajrtmslzklnyplah"
 
+[functions.calendar-token-manager]
+verify_jwt = true
+
+[functions.calendar-integration-manager]
+verify_jwt = true
+
 [functions.realtime-voice-assistant]
 verify_jwt = false
 

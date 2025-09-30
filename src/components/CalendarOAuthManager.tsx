@@ -32,6 +32,8 @@ export function CalendarOAuthManager({ provider, onSuccess, onError }: CalendarO
 
   const initiateGoogleOAuth = async () => {
     try {
+      toast.info('Redirecting to Google...');
+      
       // Get Google OAuth credentials from Supabase secrets
       const { data, error } = await supabase.functions.invoke('calendar-token-manager', {
         body: {
@@ -41,9 +43,13 @@ export function CalendarOAuthManager({ provider, onSuccess, onError }: CalendarO
         }
       });
 
-      if (error) throw error;
+      if (error) {
+        console.error('OAuth URL generation error:', error);
+        throw error;
+      }
 
       if (data?.auth_url) {
+        console.log('Redirecting to Google OAuth consent screen');
         // Redirect to Google OAuth consent screen
         window.location.href = data.auth_url;
       } else {
@@ -51,6 +57,7 @@ export function CalendarOAuthManager({ provider, onSuccess, onError }: CalendarO
       }
     } catch (error) {
       console.error('Google OAuth initiation failed:', error);
+      toast.error('Failed to connect to Google Calendar. Please try again.');
       onError('Failed to connect to Google Calendar. Please try again.');
       setIsConnecting(false);
     }
@@ -58,6 +65,8 @@ export function CalendarOAuthManager({ provider, onSuccess, onError }: CalendarO
 
   const initiateOutlookOAuth = async () => {
     try {
+      toast.info('Redirecting to Microsoft...');
+      
       // Get Microsoft OAuth credentials from Supabase secrets
       const { data, error } = await supabase.functions.invoke('calendar-token-manager', {
         body: {
@@ -67,9 +76,13 @@ export function CalendarOAuthManager({ provider, onSuccess, onError }: CalendarO
         }
       });
 
-      if (error) throw error;
+      if (error) {
+        console.error('OAuth URL generation error:', error);
+        throw error;
+      }
 
       if (data?.auth_url) {
+        console.log('Redirecting to Microsoft OAuth consent screen');
         // Redirect to Microsoft OAuth consent screen
         window.location.href = data.auth_url;
       } else {
@@ -77,6 +90,7 @@ export function CalendarOAuthManager({ provider, onSuccess, onError }: CalendarO
       }
     } catch (error) {
       console.error('Outlook OAuth initiation failed:', error);
+      toast.error('Failed to connect to Outlook Calendar. Please try again.');
       onError('Failed to connect to Outlook Calendar. Please try again.');
       setIsConnecting(false);
     }

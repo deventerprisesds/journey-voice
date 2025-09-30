@@ -62,16 +62,18 @@ serve(async (req) => {
 });
 
 async function syncCalendarEvents(supabaseClient: any, connectionId: string, startDate: string, endDate: string) {
-  // Get calendar connection
-  const { data: connection, error: connectionError } = await supabaseClient
-    .from('calendar_connections')
-    .select('*')
-    .eq('id', connectionId)
-    .single();
+  // Get calendar connection tokens securely
+  const { data: tokenData, error: tokenError } = await supabaseClient
+    .rpc('get_calendar_connection_tokens', {
+      _connection_id: connectionId
+    });
 
-  if (connectionError || !connection) {
-    throw new Error('Calendar connection not found');
+  if (tokenError || !tokenData || tokenData.length === 0) {
+    console.error('Failed to get connection tokens:', tokenError);
+    throw new Error('Calendar connection not found or access denied');
   }
+  
+  const connection = tokenData[0];
 
   const events = await fetchExternalCalendarEvents(connection, startDate, endDate);
   
@@ -137,16 +139,18 @@ async function getCalendarAvailability(supabaseClient: any, connectionId: string
 async function createCalendarEvent(supabaseClient: any, connectionId: string, req: Request) {
   const { task } = await req.json();
   
-  // Get calendar connection
-  const { data: connection, error: connectionError } = await supabaseClient
-    .from('calendar_connections')
-    .select('*')
-    .eq('id', connectionId)
-    .single();
+  // Get calendar connection tokens securely
+  const { data: tokenData, error: tokenError } = await supabaseClient
+    .rpc('get_calendar_connection_tokens', {
+      _connection_id: connectionId
+    });
 
-  if (connectionError || !connection) {
-    throw new Error('Calendar connection not found');
+  if (tokenError || !tokenData || tokenData.length === 0) {
+    console.error('Failed to get connection tokens:', tokenError);
+    throw new Error('Calendar connection not found or access denied');
   }
+  
+  const connection = tokenData[0];
 
   // Create event in external calendar
   const externalEventId = await createExternalCalendarEvent(connection, task);
