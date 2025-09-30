@@ -31,78 +31,57 @@ export function CalendarOAuthManager({ provider, onSuccess, onError }: CalendarO
   };
 
   const initiateGoogleOAuth = async () => {
-    const clientId = 'your-google-client-id'; // This should come from environment/secrets
-    const redirectUri = `${window.location.origin}/auth/google/callback`;
-    const scope = 'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events';
-    
-    const params = new URLSearchParams({
-      client_id: clientId,
-      redirect_uri: redirectUri,
-      scope: scope,
-      response_type: 'code',
-      access_type: 'offline',
-      prompt: 'consent'
-    });
-
-    const url = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
-    
-    // For now, we'll show a notification that real OAuth would be implemented
-    toast.info('Real Google OAuth would redirect here. This is a demo implementation.');
-    setIsConnecting(false);
-    
-    // Simulate successful connection for demo
-    setTimeout(() => {
-      simulateConnection('google');
-    }, 1000);
-  };
-
-  const initiateOutlookOAuth = async () => {
-    const clientId = 'your-outlook-client-id'; // This should come from environment/secrets
-    const redirectUri = `${window.location.origin}/auth/outlook/callback`;
-    const scope = 'https://graph.microsoft.com/calendars.read https://graph.microsoft.com/calendars.readwrite';
-    
-    const params = new URLSearchParams({
-      client_id: clientId,
-      redirect_uri: redirectUri,
-      scope: scope,
-      response_type: 'code',
-      access_type: 'offline'
-    });
-
-    const url = `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?${params.toString()}`;
-    
-    // For now, we'll show a notification that real OAuth would be implemented
-    toast.info('Real Outlook OAuth would redirect here. This is a demo implementation.');
-    setIsConnecting(false);
-    
-    // Simulate successful connection for demo
-    setTimeout(() => {
-      simulateConnection('outlook');
-    }, 1000);
-  };
-
-  const simulateConnection = async (providerName: string) => {
     try {
-      // Simulate storing the connection
-      const { data, error } = await supabase.rpc('insert_calendar_connection', {
-        _provider: providerName,
-        _provider_account_id: `demo_${providerName}_account_${Date.now()}`,
-        _provider_account_email: `demo@${providerName}.com`,
-        _access_token: `demo_access_token_${Date.now()}`,
-        _refresh_token: `demo_refresh_token_${Date.now()}`,
-        _expires_at: new Date(Date.now() + 3600000).toISOString(),
-        _scope: 'calendar.read calendar.events'
+      // Get Google OAuth credentials from Supabase secrets
+      const { data, error } = await supabase.functions.invoke('calendar-token-manager', {
+        body: {
+          action: 'get_oauth_url',
+          provider: 'google',
+          redirect_uri: `${window.location.origin}/settings`
+        }
       });
 
       if (error) throw error;
 
-      toast.success(`Successfully connected to ${providerName} Calendar (Demo)`);
-      onSuccess();
+      if (data?.auth_url) {
+        // Redirect to Google OAuth consent screen
+        window.location.href = data.auth_url;
+      } else {
+        throw new Error('No authorization URL received');
+      }
     } catch (error) {
-      console.error('Failed to simulate connection:', error);
-      onError(`Failed to connect to ${providerName}`);
+      console.error('Google OAuth initiation failed:', error);
+      onError('Failed to connect to Google Calendar. Please try again.');
+      setIsConnecting(false);
     }
   };
+
+  const initiateOutlookOAuth = async () => {
+    try {
+      // Get Microsoft OAuth credentials from Supabase secrets
+      const { data, error } = await supabase.functions.invoke('calendar-token-manager', {
+        body: {
+          action: 'get_oauth_url',
+          provider: 'outlook',
+          redirect_uri: `${window.location.origin}/settings`
+        }
+      });
+
+      if (error) throw error;
+
+      if (data?.auth_url) {
+        // Redirect to Microsoft OAuth consent screen
+        window.location.href = data.auth_url;
+      } else {
+        throw new Error('No authorization URL received');
+      }
+    } catch (error) {
+      console.error('Outlook OAuth initiation failed:', error);
+      onError('Failed to connect to Outlook Calendar. Please try again.');
+      setIsConnecting(false);
+    }
+  };
+
 
   return (
     <Button 

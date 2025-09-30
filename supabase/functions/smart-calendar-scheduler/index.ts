@@ -80,7 +80,7 @@ serve(async (req) => {
     console.log('Smart scheduling task:', taskText);
     console.log('Scheduling context:', scheduling_context);
 
-    // Step 1: Use AI Assistant to intelligently determine category, time slot, and scheduling
+    // Step 1: Use AI Assistant with robust JSON parsing
     let parsedTask;
     let aiSuggestedStartHour = null;
     let suggestedCategory = 'LIFE';
@@ -88,35 +88,33 @@ serve(async (req) => {
     try {
       console.log('Calling AI Assistant for intelligent scheduling:', taskText);
       
-      const assistantInstructions = `You are an intelligent task scheduler. Analyze the task and determine:
-1. **Category/Swim Lane** based on these rules:
-   - CAREER: Anything related to career, job, earning money, planning to earn money, being employed (work hours: 9am-5pm weekdays)
-   - EDUCATION: Studies, courses, training, learning (after 6pm)
-   - VENTURES: Entrepreneurial ventures, own businesses (e.g., Compass), not being full-time CTO/VP at another company (flexible: day or night)
-   - LIFE: Personal tasks, family matters, shopping (cologne, weights, etc.) (after work hours)
-   - Special: Gym should be 7-8am, 1pm, or 5pm
+      const assistantInstructions = `You are an intelligent task scheduler. 
 
-2. **Time Slot** using common sense:
-   - "breakfast" = morning (8-9am)
-   - "lunch" = midday (12-1pm)
-   - "dinner" = evening (6-8pm)
-   - "bank" = banking hours (9am-5pm weekdays)
-   - "school" = business hours (9am-3pm weekdays)
-   - "coffee meeting" = 10-11am or 2-3pm
-   - "gym" = 7-8am, 1pm, or 5pm
+CRITICAL: Your response must be ONLY a valid JSON object. No markdown, no code blocks, no extra text.
 
-3. If unclear about category or time, put in BACKLOG and don't assign specific time.
-
-Current date context: ${targetDate || new Date().toISOString()}
-Existing calendar: ${JSON.stringify(existingTasks.slice(0, 5).map(t => ({ title: t.title, start: t.start_time, category: t.category })))}
-
-Return ONLY valid JSON with this exact structure:
+Analyze the task and return this exact JSON structure:
 {
   "category": "CAREER|EDUCATION|VENTURES|LIFE|BACKLOG",
   "preferredStartHour": number (0-23, or null if BACKLOG),
   "estimatedDuration": number (minutes),
   "reasoning": "brief explanation"
-}`;
+}
+
+Category rules:
+- CAREER: Job, earning money, employment (9am-5pm weekdays)
+- EDUCATION: Studies, courses, training (after 6pm)
+- VENTURES: Entrepreneurial ventures, own businesses (flexible)
+- LIFE: Personal tasks, family, shopping (after work hours)
+- BACKLOG: If unclear about category or time
+
+Time slot rules:
+- "breakfast" = 8-9am
+- "lunch" = 12-1pm
+- "dinner" = 6-8pm
+- "bank" = 9am-5pm weekdays
+- "gym" = 7-8am, 1pm, or 5pm
+
+Current context: ${targetDate || new Date().toISOString()}`;
 
       // Call hybrid assistant API
       const assistantResponse = await fetch(`${supabaseUrl}/functions/v1/hybrid-assistant-api`, {
@@ -126,7 +124,7 @@ Return ONLY valid JSON with this exact structure:
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          userInput: `Task to schedule: "${taskText}"\n\nPlease analyze this task and provide scheduling recommendations.`,
+          userInput: `Task to schedule: "${taskText}"\n\nAnalyze this task and provide scheduling recommendations as JSON only.`,
           userId: userId,
           threadId: threadId || 'smart-scheduler-' + Date.now(),
           assistantId: 'asst_BcZBxlx9zH8VIPvfJrhPP3EF',
@@ -139,41 +137,74 @@ Return ONLY valid JSON with this exact structure:
       }
 
       const assistantData = await assistantResponse.json();
-      console.log('Assistant response:', assistantData);
+      console.log('Raw assistant response:', JSON.stringify(assistantData));
 
       if (assistantData.success && assistantData.response) {
-        // Try to extract JSON from the response
-        let jsonStr = assistantData.response;
-        const jsonMatch = assistantData.response.match(/\{[\s\S]*\}/);
+        // Robust JSON extraction
+        let jsonStr = assistantData.response.trim();
+        
+        // Remove markdown code blocks
+        jsonStr = jsonStr.replace(/```json\s*/g, '').replace(/```\s*/g, '');
+        
+        // Extract JSON object using regex
+        const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
           jsonStr = jsonMatch[0];
         }
-
-        const assistantParsed = JSON.parse(jsonStr);
         
-        // Extract category
-        if (['CAREER', 'EDUCATION', 'VENTURES', 'LIFE', 'BACKLOG'].includes(assistantParsed.category)) {
-          suggestedCategory = assistantParsed.category;
+        console.log('Cleaned JSON string:', jsonStr);
+        
+        try {
+          const assistantParsed = JSON.parse(jsonStr);
+          
+          // Validate and extract category
+          if (['CAREER', 'EDUCATION', 'VENTURES', 'LIFE', 'BACKLOG'].includes(assistantParsed.category)) {
+            suggestedCategory = assistantParsed.category;
+          }
+          
+          // Extract preferred start hour
+          if (typeof assistantParsed.preferredStartHour === 'number' && 
+              assistantParsed.preferredStartHour >= 0 && 
+              assistantParsed.preferredStartHour <= 23) {
+            aiSuggestedStartHour = assistantParsed.preferredStartHour;
+          }
+          
+          // Set parsed task details
+          parsedTask = {
+            estimatedDuration: typeof assistantParsed.estimatedDuration === 'number' ? 
+              Math.max(15, Math.min(480, assistantParsed.estimatedDuration)) : 60,
+            timePreference: aiSuggestedStartHour !== null ? 'specific' : 'flexible',
+            dayPreference: 'any',
+            urgencyLevel: 3,
+            reasoning: assistantParsed.reasoning || 'AI-determined scheduling'
+          };
+          
+          console.log('Successfully parsed AI suggestion:', { suggestedCategory, aiSuggestedStartHour, parsedTask });
+        } catch (parseError) {
+          console.error('JSON parse error:', parseError);
+          console.error('Failed JSON string:', jsonStr);
+          
+          // Try pattern matching as fallback
+          const categoryMatch = assistantData.response.match(/"category"\s*:\s*"(CAREER|EDUCATION|VENTURES|LIFE|BACKLOG)"/);
+          const durationMatch = assistantData.response.match(/"estimatedDuration"\s*:\s*(\d+)/);
+          const hourMatch = assistantData.response.match(/"preferredStartHour"\s*:\s*(\d+|null)/);
+          
+          if (categoryMatch) suggestedCategory = categoryMatch[1];
+          
+          parsedTask = {
+            estimatedDuration: durationMatch ? parseInt(durationMatch[1]) : 60,
+            timePreference: 'flexible',
+            dayPreference: 'any',
+            urgencyLevel: 3,
+            reasoning: 'Partial AI parsing with fallback'
+          };
+          
+          if (hourMatch && hourMatch[1] !== 'null') {
+            aiSuggestedStartHour = parseInt(hourMatch[1]);
+          }
+          
+          console.log('Used pattern matching fallback:', { suggestedCategory, aiSuggestedStartHour, parsedTask });
         }
-        
-        // Extract preferred start hour
-        if (typeof assistantParsed.preferredStartHour === 'number' && 
-            assistantParsed.preferredStartHour >= 0 && 
-            assistantParsed.preferredStartHour <= 23) {
-          aiSuggestedStartHour = assistantParsed.preferredStartHour;
-          console.log('AI Assistant suggested start hour:', aiSuggestedStartHour);
-        }
-        
-        // Set parsed task details
-        parsedTask = {
-          estimatedDuration: typeof assistantParsed.estimatedDuration === 'number' ? assistantParsed.estimatedDuration : 60,
-          timePreference: aiSuggestedStartHour !== null ? 'specific' : 'flexible',
-          dayPreference: 'any',
-          urgencyLevel: 3,
-          reasoning: assistantParsed.reasoning || 'AI-determined scheduling'
-        };
-        
-        console.log('AI Assistant parsed task:', { suggestedCategory, aiSuggestedStartHour, parsedTask });
       } else {
         throw new Error('No valid response from assistant');
       }
@@ -188,7 +219,7 @@ Return ONLY valid JSON with this exact structure:
         urgencyLevel: 3,
         reasoning: 'Fallback scheduling due to AI error'
       };
-      console.log('Using fallback task details:', parsedTask);
+      console.log('Using complete fallback task details:', parsedTask);
     }
 
     // Step 2: Analyze workload balance

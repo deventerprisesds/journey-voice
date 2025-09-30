@@ -17,8 +17,12 @@ import { useAuth } from '@/hooks/useAuth';
 import NotificationSettings from '@/components/NotificationSettings';
 import CronJobTesting from '@/components/CronJobTesting';
 import UpcomingReminders from '@/components/UpcomingReminders';
+import { useOAuthCallback } from '@/hooks/useOAuthCallback';
 
 const Settings: React.FC = () => {
+  // Handle OAuth callback from Google/Outlook
+  useOAuthCallback();
+  
   const { user } = useAuth();
   const navigate = useNavigate();
 
