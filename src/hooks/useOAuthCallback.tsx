@@ -34,6 +34,45 @@ export function useOAuthCallback() {
         try {
           toast.info('Completing calendar connection...');
           
+          // Wait for a valid session before exchanging the code
+          const { data: sessionData } = await supabase.auth.getSession();
+          
+          if (!sessionData.session) {
+            console.warn('No session found, waiting for auth state change...');
+            
+            // Wait up to 5 seconds for session to be restored
+            const sessionPromise = new Promise<boolean>((resolve) => {
+              const timeout = setTimeout(() => resolve(false), 5000);
+              
+              const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+                if (session) {
+                  clearTimeout(timeout);
+                  subscription.unsubscribe();
+                  resolve(true);
+                }
+              });
+            });
+            
+            const hasSession = await sessionPromise;
+            
+            if (!hasSession) {
+              // No session after waiting - store OAuth params and redirect to sign in
+              console.error('No session available after timeout');
+              sessionStorage.setItem('pending_oauth_exchange', JSON.stringify({
+                code,
+                provider,
+                redirect_uri: `${window.location.origin}${location.pathname}`,
+                return_path: location.pathname
+              }));
+              toast.error('Please sign in to complete calendar connection');
+              navigate('/auth', { replace: true });
+              return;
+            }
+          }
+
+          // Add small debounce to ensure session is fully restored
+          await new Promise(resolve => setTimeout(resolve, 100));
+          
           const { data, error: exchangeError } = await supabase.functions.invoke('calendar-token-manager', {
             body: {
               action: 'exchange_code',
@@ -43,7 +82,17 @@ export function useOAuthCallback() {
             }
           });
 
-          if (exchangeError) throw exchangeError;
+          if (exchangeError) {
+            console.error('Token exchange error:', exchangeError);
+            
+            // Check for specific authentication error
+            if (exchangeError.message?.includes('User authentication required')) {
+              toast.error('Could not verify your sign-in. Please sign in and try again.');
+            } else {
+              toast.error(`Failed to connect calendar: ${exchangeError.message || 'Unknown error'}`);
+            }
+            throw exchangeError;
+          }
 
           toast.success(`Successfully connected to ${provider === 'google' ? 'Google' : 'Outlook'} Calendar`);
           
@@ -65,7 +114,6 @@ export function useOAuthCallback() {
           navigate(location.pathname, { replace: true });
         } catch (error) {
           console.error('Failed to complete OAuth flow:', error);
-          toast.error('Failed to complete calendar connection. Please try again.');
           navigate(location.pathname, { replace: true });
         }
       }

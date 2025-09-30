@@ -21,9 +21,59 @@ const Auth = () => {
 
   useEffect(() => {
     if (user) {
-      navigate('/');
+      // Check if there's a pending OAuth exchange
+      const pendingExchange = sessionStorage.getItem('pending_oauth_exchange');
+      
+      if (pendingExchange) {
+        try {
+          const { code, provider, redirect_uri, return_path } = JSON.parse(pendingExchange);
+          
+          // Clear the pending exchange
+          sessionStorage.removeItem('pending_oauth_exchange');
+          
+          // Complete the OAuth exchange
+          toast({
+            title: "Resuming calendar connection...",
+            description: "Completing your calendar setup."
+          });
+          
+          supabase.functions.invoke('calendar-token-manager', {
+            body: {
+              action: 'exchange_code',
+              provider,
+              code,
+              redirect_uri
+            }
+          }).then(({ data, error }) => {
+            if (error) {
+              console.error('Resumed OAuth exchange failed:', error);
+              toast({
+                variant: "destructive",
+                title: "Calendar connection failed",
+                description: error.message || 'Failed to complete calendar connection'
+              });
+              navigate(return_path || '/');
+              return;
+            }
+            
+            toast({
+              title: "Success!",
+              description: `Connected to ${provider === 'google' ? 'Google' : 'Outlook'} Calendar`
+            });
+            
+            // Navigate back to the original path
+            navigate(return_path || '/');
+          });
+        } catch (err) {
+          console.error('Failed to parse pending OAuth exchange:', err);
+          sessionStorage.removeItem('pending_oauth_exchange');
+          navigate('/');
+        }
+      } else {
+        navigate('/');
+      }
     }
-  }, [user, navigate]);
+  }, [user, navigate, toast]);
 
   // Check for OAuth errors in URL parameters
   useEffect(() => {
