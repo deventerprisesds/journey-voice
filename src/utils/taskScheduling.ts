@@ -65,7 +65,9 @@ export async function scheduleNewTask(task: Partial<Task> & { board_id: string; 
           existingTasks: existingTasks || [],
           workingMinutes: 480, // 8 hours default
           busySlots,
-          scheduling_context: task.scheduling_context || []
+          scheduling_context: task.scheduling_context || [],
+          userId: task.user_id,
+          threadId: `scheduler-${task.user_id}-${Date.now()}`
         }
       }
     );
@@ -75,7 +77,7 @@ export async function scheduleNewTask(task: Partial<Task> & { board_id: string; 
       return { success: false, error: error.message };
     }
 
-    // Update task with scheduled times
+    // Update task with scheduled times and AI-suggested category
     const updatedTask: any = {
       ...task,
       start_time: scheduleResult.scheduledSlot.startTime,
@@ -87,7 +89,7 @@ export async function scheduleNewTask(task: Partial<Task> & { board_id: string; 
       user_id: task.user_id,
       status: task.status || 'TODO',
       priority: task.priority || 'MEDIUM',
-      category: task.category || 'LIFE'
+      category: scheduleResult.suggestedCategory || task.category || 'LIFE'
     };
 
     // Save the scheduled task (update existing task instead of inserting)
@@ -96,7 +98,8 @@ export async function scheduleNewTask(task: Partial<Task> & { board_id: string; 
       .update({
         start_time: scheduleResult.scheduledSlot.startTime,
         end_time: scheduleResult.scheduledSlot.endTime,
-        is_scheduled: true
+        is_scheduled: true,
+        category: scheduleResult.suggestedCategory || task.category || 'LIFE'
       })
       .eq('id', task.id)
       .select()

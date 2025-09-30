@@ -7,6 +7,9 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+
 interface Task {
   id: string;
   title: string;
@@ -68,137 +71,122 @@ serve(async (req) => {
   }
 
   try {
-    const { taskText, targetDate, existingTasks = [], workingMinutes = 420, busySlots = [], scheduling_context = [] } = await req.json();
+    const { taskText, targetDate, existingTasks = [], workingMinutes = 420, busySlots = [], scheduling_context = [], userId, threadId } = await req.json();
     
     if (!taskText) {
       throw new Error('Task text is required');
     }
 
-    const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
-    if (!OPENAI_API_KEY) {
-      throw new Error('OpenAI API key not configured');
-    }
-
     console.log('Smart scheduling task:', taskText);
     console.log('Scheduling context:', scheduling_context);
 
-    // Determine task type from context or content
-    let taskType = 'personal';
-    
-    if (scheduling_context && Array.isArray(scheduling_context)) {
-      if (scheduling_context.includes('business_hours') || scheduling_context.includes('weekdays_only')) taskType = 'bank';
-      if (scheduling_context.includes('commute_time')) taskType = 'commute';
-      if (scheduling_context.includes('quiet_time')) taskType = 'reading';
-      if (scheduling_context.includes('morning_evening')) taskType = 'exercise';
-      if (scheduling_context.includes('flexible_hours')) taskType = 'errands';
-    } else {
-      // Fallback to text analysis
-      const lowerText = taskText.toLowerCase();
-      if (lowerText.includes('bank') || lowerText.includes('financial')) taskType = 'bank';
-      else if (lowerText.includes('business') || lowerText.includes('venture') || lowerText.includes('investment')) taskType = 'work';
-      else if (lowerText.includes('store') || lowerText.includes('shop') || lowerText.includes('grocery')) taskType = 'errands';
-      else if (lowerText.includes('work') && (lowerText.includes('commute') || lowerText.includes('way to'))) taskType = 'commute';
-      else if (lowerText.includes('read') || lowerText.includes('study') || lowerText.includes('learn')) taskType = 'reading';
-      else if (lowerText.includes('gym') || lowerText.includes('exercise') || lowerText.includes('workout')) taskType = 'exercise';
-      else if (lowerText.includes('meeting') || lowerText.includes('appointment')) taskType = 'work';
-    }
-
-    // Step 1: Parse the task using AI with enhanced context and intelligent time suggestions
+    // Step 1: Use AI Assistant to intelligently determine category, time slot, and scheduling
     let parsedTask;
     let aiSuggestedStartHour = null;
+    let suggestedCategory = 'LIFE';
     
     try {
-      console.log('Parsing task with AI:', taskText, 'Type:', taskType);
+      console.log('Calling AI Assistant for intelligent scheduling:', taskText);
       
-      const parseResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+      const assistantInstructions = `You are an intelligent task scheduler. Analyze the task and determine:
+1. **Category/Swim Lane** based on these rules:
+   - CAREER: Anything related to career, job, earning money, planning to earn money, being employed (work hours: 9am-5pm weekdays)
+   - EDUCATION: Studies, courses, training, learning (after 6pm)
+   - VENTURES: Entrepreneurial ventures, own businesses (e.g., Compass), not being full-time CTO/VP at another company (flexible: day or night)
+   - LIFE: Personal tasks, family matters, shopping (cologne, weights, etc.) (after work hours)
+   - Special: Gym should be 7-8am, 1pm, or 5pm
+
+2. **Time Slot** using common sense:
+   - "breakfast" = morning (8-9am)
+   - "lunch" = midday (12-1pm)
+   - "dinner" = evening (6-8pm)
+   - "bank" = banking hours (9am-5pm weekdays)
+   - "school" = business hours (9am-3pm weekdays)
+   - "coffee meeting" = 10-11am or 2-3pm
+   - "gym" = 7-8am, 1pm, or 5pm
+
+3. If unclear about category or time, put in BACKLOG and don't assign specific time.
+
+Current date context: ${targetDate || new Date().toISOString()}
+Existing calendar: ${JSON.stringify(existingTasks.slice(0, 5).map(t => ({ title: t.title, start: t.start_time, category: t.category })))}
+
+Return ONLY valid JSON with this exact structure:
+{
+  "category": "CAREER|EDUCATION|VENTURES|LIFE|BACKLOG",
+  "preferredStartHour": number (0-23, or null if BACKLOG),
+  "estimatedDuration": number (minutes),
+  "reasoning": "brief explanation"
+}`;
+
+      // Call hybrid assistant API
+      const assistantResponse = await fetch(`${supabaseUrl}/functions/v1/hybrid-assistant-api`, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${OPENAI_API_KEY}`,
+          'Authorization': `Bearer ${supabaseServiceKey}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: 'gpt-4o-mini',
-          messages: [
-            {
-              role: 'system',
-              content: `You are an intelligent scheduling assistant. Analyze this task and suggest optimal timing based on context and social/business norms.
-
-              For context, consider these examples:
-              - "lunch with Brad" → suggest 12:00-13:00 (meal times are social conventions)
-              - "coffee meeting" → suggest 10:00-11:00 or 14:00-15:00 (standard coffee times)
-              - "breakfast with client" → suggest 8:00-9:00
-              - "dinner reservation" → suggest 18:00-20:00
-              - "gym workout" → suggest 6:00-8:00 or 18:00-20:00
-              - "bank appointment" → suggest 9:00-17:00 weekdays only
-              - "grocery shopping" → suggest 7:00-9:00 or 17:00-19:00 weekdays
-              
-              Task type context: ${taskType}
-              Scheduling hints: ${scheduling_context ? scheduling_context.join(', ') : 'none'}
-              
-              Return ONLY a JSON object with these exact fields:
-              {"estimatedDuration": number, "timePreference": "string", "dayPreference": "string", "urgencyLevel": number, "preferredStartHour": number}
-              
-              Guidelines:
-              - estimatedDuration: minutes (30 for quick tasks, 60 default, 90+ for meetings)
-              - timePreference: morning, lunch_time, afternoon, evening, business_hours, or flexible
-              - dayPreference: weekdays, weekends, or any
-              - urgencyLevel: 1-5 (5 being most urgent)
-              - preferredStartHour: exact hour (0-23) when this activity typically happens (e.g., 12 for lunch, 8 for breakfast, 19 for dinner)`
-            },
-            {
-              role: 'user',
-              content: `Task: "${taskText}"\nContext: ${scheduling_context?.join(', ') || 'general task'}\nCategory: ${taskType || 'general'}`
-            }
-          ],
-          temperature: 0.3,
-        }),
+          userInput: `Task to schedule: "${taskText}"\n\nPlease analyze this task and provide scheduling recommendations.`,
+          userId: userId,
+          threadId: threadId || 'smart-scheduler-' + Date.now(),
+          assistantId: 'asst_BcZBxlx9zH8VIPvfJrhPP3EF',
+          contextualInstructions: assistantInstructions
+        })
       });
 
-      if (!parseResponse.ok) {
-        throw new Error(`OpenAI API error: ${parseResponse.status}`);
+      if (!assistantResponse.ok) {
+        throw new Error(`Assistant API error: ${assistantResponse.status}`);
       }
 
-      const parseData = await parseResponse.json();
-      const aiContent = parseData.choices[0]?.message?.content?.trim();
-      
-      if (!aiContent) {
-        throw new Error('Empty AI response');
-      }
+      const assistantData = await assistantResponse.json();
+      console.log('Assistant response:', assistantData);
 
-      // Try to extract JSON from the response
-      let jsonStr = aiContent;
-      const jsonMatch = aiContent.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        jsonStr = jsonMatch[0];
-      }
+      if (assistantData.success && assistantData.response) {
+        // Try to extract JSON from the response
+        let jsonStr = assistantData.response;
+        const jsonMatch = assistantData.response.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          jsonStr = jsonMatch[0];
+        }
 
-      const rawParsedTask = JSON.parse(jsonStr);
-      
-      // Extract AI-suggested start hour before restructuring
-      if (typeof rawParsedTask.preferredStartHour === 'number' && rawParsedTask.preferredStartHour >= 0 && rawParsedTask.preferredStartHour <= 23) {
-        aiSuggestedStartHour = rawParsedTask.preferredStartHour;
-        console.log('AI suggested start hour:', aiSuggestedStartHour);
+        const assistantParsed = JSON.parse(jsonStr);
+        
+        // Extract category
+        if (['CAREER', 'EDUCATION', 'VENTURES', 'LIFE', 'BACKLOG'].includes(assistantParsed.category)) {
+          suggestedCategory = assistantParsed.category;
+        }
+        
+        // Extract preferred start hour
+        if (typeof assistantParsed.preferredStartHour === 'number' && 
+            assistantParsed.preferredStartHour >= 0 && 
+            assistantParsed.preferredStartHour <= 23) {
+          aiSuggestedStartHour = assistantParsed.preferredStartHour;
+          console.log('AI Assistant suggested start hour:', aiSuggestedStartHour);
+        }
+        
+        // Set parsed task details
+        parsedTask = {
+          estimatedDuration: typeof assistantParsed.estimatedDuration === 'number' ? assistantParsed.estimatedDuration : 60,
+          timePreference: aiSuggestedStartHour !== null ? 'specific' : 'flexible',
+          dayPreference: 'any',
+          urgencyLevel: 3,
+          reasoning: assistantParsed.reasoning || 'AI-determined scheduling'
+        };
+        
+        console.log('AI Assistant parsed task:', { suggestedCategory, aiSuggestedStartHour, parsedTask });
+      } else {
+        throw new Error('No valid response from assistant');
       }
-      
-      // Validate and set defaults
-      parsedTask = {
-        estimatedDuration: typeof rawParsedTask.estimatedDuration === 'number' ? rawParsedTask.estimatedDuration : 60,
-        timePreference: ['morning', 'lunch_time', 'afternoon', 'evening', 'business_hours', 'flexible'].includes(rawParsedTask.timePreference) ? rawParsedTask.timePreference : 'flexible',
-        dayPreference: ['weekdays', 'weekends', 'any'].includes(rawParsedTask.dayPreference) ? rawParsedTask.dayPreference : 'any',
-        urgencyLevel: typeof rawParsedTask.urgencyLevel === 'number' ? Math.max(1, Math.min(5, rawParsedTask.urgencyLevel)) : 3
-      };
-      
-      console.log('Parsed task details:', parsedTask);
 
     } catch (e) {
-      console.error('Failed to parse AI response:', e);
-      // Fallback values based on task type and context
-      const duration = taskType === 'bank' ? 30 : taskType === 'errands' ? 45 : 60;
+      console.error('Failed to get AI Assistant response:', e);
+      // Fallback to basic parsing
       parsedTask = {
-        estimatedDuration: duration,
-        timePreference: taskType === 'bank' ? 'business_hours' : 'flexible',
-        dayPreference: taskType === 'bank' ? 'weekdays' : 'any',
-        urgencyLevel: 3
+        estimatedDuration: 60,
+        timePreference: 'flexible',
+        dayPreference: 'any',
+        urgencyLevel: 3,
+        reasoning: 'Fallback scheduling due to AI error'
       };
       console.log('Using fallback task details:', parsedTask);
     }
@@ -208,7 +196,7 @@ serve(async (req) => {
     
     // Step 3: Find optimal time slot using AI-enhanced business logic
     const optimalSlot = findOptimalTimeSlotWithBusinessRules(
-      taskType,
+      suggestedCategory,
       parsedTask,
       new Date(targetDate || new Date()),
       existingTasks,
@@ -218,50 +206,11 @@ serve(async (req) => {
       aiSuggestedStartHour
     );
 
-    // Step 4: Generate AI reasoning
-    let aiReasoning = `Task scheduled for ${optimalSlot.scheduledStart.toLocaleTimeString()} based on optimal scheduling algorithm.`;
-    
-    try {
-      const reasoningResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${OPENAI_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'gpt-4o-mini',
-          messages: [
-            {
-              role: 'system',
-              content: `Explain why this time slot was chosen for the task. Be concise but informative. Consider workload balance, task type, and scheduling preferences.`
-            },
-            {
-              role: 'user',
-              content: `Task: ${taskText}
-Scheduled time: ${optimalSlot.scheduledStart}
-Workload balance: ${JSON.stringify(workloadBalance)}
-Existing tasks today: ${existingTasks.filter((t: Task) => isSameDay(new Date(t.due_date || ''), optimalSlot.scheduledStart)).length}`
-            }
-          ],
-          temperature: 0.3,
-        }),
-      });
-
-      if (reasoningResponse.ok) {
-        const reasoningData = await reasoningResponse.json();
-        if (reasoningData.choices && reasoningData.choices[0] && reasoningData.choices[0].message) {
-          aiReasoning = reasoningData.choices[0].message.content;
-        }
-      } else {
-        console.error('AI reasoning failed:', reasoningResponse.status, await reasoningResponse.text());
-      }
-    } catch (e) {
-      console.error('Failed to generate AI reasoning:', e);
-      // Keep the fallback reasoning
-    }
+    const aiReasoning = parsedTask.reasoning || `Task scheduled for ${optimalSlot.scheduledStart.toLocaleTimeString()} in ${suggestedCategory} category.`;
 
     return new Response(JSON.stringify({
       parsedTask,
+      suggestedCategory,
       scheduledSlot: {
         startTime: optimalSlot.scheduledStart.toISOString(),
         endTime: optimalSlot.scheduledEnd.toISOString(),
@@ -320,7 +269,7 @@ function analyzeWorkloadBalance(tasks: Task[]): WorkloadBalance {
 }
 
 function findOptimalTimeSlotWithBusinessRules(
-  taskType: string,
+  category: string,
   parsedTask: any,
   targetDate: Date,
   existingTasks: Task[],
@@ -333,59 +282,37 @@ function findOptimalTimeSlotWithBusinessRules(
   let startHour = 14; // Default afternoon
   let allowedDays = [0, 1, 2, 3, 4, 5, 6]; // All days
   
-  // Prioritize AI-suggested start hour if available and reasonable
+  // Prioritize AI-suggested start hour if available
   if (aiSuggestedStartHour !== null && aiSuggestedStartHour !== undefined) {
     startHour = aiSuggestedStartHour;
     console.log('Using AI-suggested start hour:', startHour);
-  } 
-  // Check for special time preferences that override business rules
-  else if (parsedTask.timePreference === 'lunch_time') {
-    startHour = 12; // Default lunch time
-    console.log('Using lunch time preference:', startHour);
   } else {
-    // Apply business rules based on task type as fallback
-    switch (taskType) {
-    case 'bank':
-      startHour = rules.bankTasks.hours[0];
-      allowedDays = rules.bankTasks.days;
-      break;
-    case 'errands':
-      // Choose morning or evening based on existing schedule
-      const morningSlots = existingTasks.filter(t => {
-        if (!t.start_time) return false;
-        const hour = new Date(t.start_time).getHours();
-        return hour >= 7 && hour <= 9;
-      }).length;
-      const eveningSlots = existingTasks.filter(t => {
-        if (!t.start_time) return false;
-        const hour = new Date(t.start_time).getHours();
-        return hour >= 17 && hour <= 19;
-      }).length;
-      startHour = morningSlots <= eveningSlots ? 7 : 17;
-      allowedDays = rules.errands.days;
-      break;
-    case 'commute':
-      // Default to morning commute
-      startHour = rules.commuteTasks.hours[0][0];
-      allowedDays = rules.commuteTasks.days;
-      break;
-    case 'reading':
-      startHour = rules.readingTasks.hours[0];
-      allowedDays = rules.readingTasks.days;
-      break;
-    case 'exercise':
-      // Choose morning or evening based on preference
-      const exerciseHours = rules.exerciseTasks.hours;
-      startHour = exerciseHours[0][0]; // Default to morning
-      allowedDays = rules.exerciseTasks.days;
-      break;
-    case 'work':
-      startHour = rules.workTasks.hours[0];
-      allowedDays = rules.workTasks.days;
-      break;
-    default:
-      startHour = rules.personalTasks.hours[0];
-      allowedDays = rules.personalTasks.days;
+    // Apply category-based rules as fallback
+    switch (category) {
+      case 'CAREER':
+        startHour = 9; // Work hours
+        allowedDays = [1, 2, 3, 4, 5]; // Weekdays
+        break;
+      case 'EDUCATION':
+        startHour = 18; // After 6pm
+        allowedDays = [0, 1, 2, 3, 4, 5, 6]; // Any day
+        break;
+      case 'VENTURES':
+        startHour = 14; // Flexible, default afternoon
+        allowedDays = [0, 1, 2, 3, 4, 5, 6]; // Any day
+        break;
+      case 'LIFE':
+        startHour = 18; // After work
+        allowedDays = [0, 1, 2, 3, 4, 5, 6]; // Any day
+        break;
+      case 'BACKLOG':
+        // No specific time, just find next available
+        startHour = 9;
+        allowedDays = [0, 1, 2, 3, 4, 5, 6];
+        break;
+      default:
+        startHour = 14;
+        allowedDays = [0, 1, 2, 3, 4, 5, 6];
     }
   }
   
