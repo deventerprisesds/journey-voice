@@ -108,7 +108,8 @@ const SmartTaskInput: React.FC<SmartTaskInputProps> = ({
           is_scheduled: true,
           status: 'TODO',
           user_id: user.id,
-          board_id: boards[0].id
+          board_id: boards[0].id,
+          reminder_minutes: 15
         })
         .select()
         .single();

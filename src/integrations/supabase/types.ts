@@ -1189,6 +1189,7 @@ export type Database = {
           id: string
           is_scheduled: boolean
           priority: Database["public"]["Enums"]["task_priority"]
+          reminder_minutes: number | null
           source_id: string | null
           start_time: string | null
           status: Database["public"]["Enums"]["task_status"]
@@ -1210,6 +1211,7 @@ export type Database = {
           id?: string
           is_scheduled?: boolean
           priority?: Database["public"]["Enums"]["task_priority"]
+          reminder_minutes?: number | null
           source_id?: string | null
           start_time?: string | null
           status?: Database["public"]["Enums"]["task_status"]
@@ -1231,6 +1233,7 @@ export type Database = {
           id?: string
           is_scheduled?: boolean
           priority?: Database["public"]["Enums"]["task_priority"]
+          reminder_minutes?: number | null
           source_id?: string | null
           start_time?: string | null
           status?: Database["public"]["Enums"]["task_status"]
@@ -1306,11 +1309,11 @@ export type Database = {
         }[]
       }
       decrypt_token: {
-        Args: { encrypted_token: string }
+        Args: { encrypted_token: string; p_user_id: string }
         Returns: string
       }
       encrypt_token: {
-        Args: { token_value: string }
+        Args: { p_user_id: string; token_value: string }
         Returns: string
       }
       get_calendar_connection_tokens: {

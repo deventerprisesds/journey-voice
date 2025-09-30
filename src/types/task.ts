@@ -17,6 +17,7 @@ export interface Task {
   updated_at: string;
   external_event_id?: string;
   is_scheduled?: boolean;
+  reminder_minutes?: number;
 }
 
 export interface CalendarConnection {

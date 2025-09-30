@@ -48,6 +48,9 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
   const [endTime, setEndTime] = useState<string>('');
   const [estimateHours, setEstimateHours] = useState<string>('');
   const [estimateMinutes, setEstimateMinutes] = useState<string>('');
+  const [reminderMinutes, setReminderMinutes] = useState<string>('15');
+  const [customReminderInput, setCustomReminderInput] = useState<string>('');
+  const [showCustomReminder, setShowCustomReminder] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
   // Initialize form when task changes
@@ -69,6 +72,24 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
       } else {
         setEstimateHours('');
         setEstimateMinutes('');
+      }
+      
+      // Set reminder minutes
+      if (task.reminder_minutes !== undefined) {
+        const reminderValue = task.reminder_minutes.toString();
+        const commonValues = ['1', '2', '5', '10', '15', '30', '60'];
+        if (commonValues.includes(reminderValue)) {
+          setReminderMinutes(reminderValue);
+          setShowCustomReminder(false);
+        } else {
+          setReminderMinutes('custom');
+          setCustomReminderInput(reminderValue);
+          setShowCustomReminder(true);
+        }
+      } else {
+        setReminderMinutes('15'); // Default to 15 minutes
+        setShowCustomReminder(false);
+        setCustomReminderInput('');
       }
     }
   }, [task]);
@@ -186,12 +207,18 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
         dueDate: dueDate?.toISOString()
       });
 
+      // Calculate reminder minutes
+      const finalReminderMinutes = showCustomReminder 
+        ? parseInt(customReminderInput) || 15 
+        : parseInt(reminderMinutes) || 15;
+
       const updatedTask = {
         ...editedTask,
         due_date: dueDate ? dueDate.toISOString() : null,
         start_time: startTimeISO,
         end_time: endTimeISO,
         estimate_minutes: totalMinutes > 0 ? totalMinutes : null,
+        reminder_minutes: finalReminderMinutes,
       };
 
       // Check if this is a demo task (ID starts with 'demo-')
@@ -560,6 +587,54 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
                 <span className="text-sm text-muted-foreground">minutes</span>
               </div>
             </div>
+          </div>
+
+          {/* Reminder */}
+          <div className="space-y-2">
+            <Label>Reminder</Label>
+            <p className="text-sm text-muted-foreground">
+              Get notified before your task starts
+            </p>
+            <Select 
+              value={reminderMinutes} 
+              onValueChange={(value) => {
+                setReminderMinutes(value);
+                if (value === 'custom') {
+                  setShowCustomReminder(true);
+                } else {
+                  setShowCustomReminder(false);
+                  setCustomReminderInput('');
+                }
+              }}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="1">1 minute before</SelectItem>
+                <SelectItem value="2">2 minutes before</SelectItem>
+                <SelectItem value="5">5 minutes before</SelectItem>
+                <SelectItem value="10">10 minutes before</SelectItem>
+                <SelectItem value="15">15 minutes before</SelectItem>
+                <SelectItem value="30">30 minutes before</SelectItem>
+                <SelectItem value="60">1 hour before</SelectItem>
+                <SelectItem value="custom">Custom...</SelectItem>
+              </SelectContent>
+            </Select>
+            
+            {showCustomReminder && (
+              <div className="flex items-center gap-2 mt-2">
+                <Input
+                  type="number"
+                  placeholder="15"
+                  value={customReminderInput}
+                  onChange={(e) => setCustomReminderInput(e.target.value)}
+                  className="w-20"
+                  min="1"
+                />
+                <span className="text-sm text-muted-foreground">minutes before</span>
+              </div>
+            )}
           </div>
 
           {/* Dependencies */}
