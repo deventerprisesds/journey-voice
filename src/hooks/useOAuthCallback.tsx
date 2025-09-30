@@ -1,11 +1,12 @@
 import { useEffect } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 
 export function useOAuthCallback() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
+  const location = useLocation();
 
   useEffect(() => {
     const handleOAuthCallback = async () => {
@@ -22,7 +23,7 @@ export function useOAuthCallback() {
       if (error) {
         console.error('OAuth error:', error);
         toast.error(`Calendar connection failed: ${error}`);
-        navigate('/settings', { replace: true });
+        navigate(location.pathname, { replace: true });
         return;
       }
 
@@ -38,7 +39,7 @@ export function useOAuthCallback() {
               action: 'exchange_code',
               provider: provider,
               code: code,
-              redirect_uri: `${window.location.origin}/settings`
+              redirect_uri: `${window.location.origin}${location.pathname}`
             }
           });
 
@@ -60,16 +61,16 @@ export function useOAuthCallback() {
             console.warn('Initial sync failed, will retry later:', syncError);
           }
 
-          // Clean URL and navigate
-          navigate('/settings', { replace: true });
+          // Clean URL and navigate back to current page
+          navigate(location.pathname, { replace: true });
         } catch (error) {
           console.error('Failed to complete OAuth flow:', error);
           toast.error('Failed to complete calendar connection. Please try again.');
-          navigate('/settings', { replace: true });
+          navigate(location.pathname, { replace: true });
         }
       }
     };
 
     handleOAuthCallback();
-  }, [searchParams, navigate]);
+  }, [searchParams, navigate, location.pathname]);
 }

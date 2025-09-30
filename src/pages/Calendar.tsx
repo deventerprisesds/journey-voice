@@ -9,11 +9,13 @@ import { Button } from '@/components/ui/button';
 import { ArrowLeft, Home } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { toast } from 'sonner';
+import { useOAuthCallback } from '@/hooks/useOAuthCallback';
 
 const Calendar: React.FC = () => {
   const { user, isDemoMode } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  useOAuthCallback(); // Handle OAuth callbacks
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);

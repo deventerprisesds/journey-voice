@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
 import { Loader2, Calendar, ExternalLink } from 'lucide-react';
+import { useLocation } from 'react-router-dom';
 
 interface CalendarOAuthManagerProps {
   provider: 'google' | 'outlook';
@@ -13,6 +14,7 @@ interface CalendarOAuthManagerProps {
 export function CalendarOAuthManager({ provider, onSuccess, onError }: CalendarOAuthManagerProps) {
   const [isConnecting, setIsConnecting] = useState(false);
   const [authUrl, setAuthUrl] = useState<string | null>(null);
+  const location = useLocation();
 
   const initiateOAuth = async () => {
     setIsConnecting(true);
@@ -39,7 +41,7 @@ export function CalendarOAuthManager({ provider, onSuccess, onError }: CalendarO
         body: {
           action: 'get_oauth_url',
           provider: 'google',
-          redirect_uri: `${window.location.origin}/settings`
+          redirect_uri: `${window.location.origin}${location.pathname}`
         }
       });
 
@@ -72,7 +74,7 @@ export function CalendarOAuthManager({ provider, onSuccess, onError }: CalendarO
         body: {
           action: 'get_oauth_url',
           provider: 'outlook',
-          redirect_uri: `${window.location.origin}/settings`
+          redirect_uri: `${window.location.origin}${location.pathname}`
         }
       });
 
