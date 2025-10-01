@@ -81,6 +81,13 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
   // Common State
   const [isCreating, setIsCreating] = useState(false);
 
+  // Smart date/time logic: When time is set first, auto-populate date to today
+  useEffect(() => {
+    if (startTime && !dueDate) {
+      setDueDate(new Date());
+    }
+  }, [startTime, dueDate]);
+
   // Helper function to calculate duration
   const calculateDuration = (start: string, end: string): string => {
     if (!start || !end) return '';
@@ -352,7 +359,7 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
           </TabsList>
 
           {/* AI Mode */}
-          <TabsContent value="ai" className="space-y-6">
+          <TabsContent value="ai" className="space-y-6 mt-4">
             <div className="space-y-4">
               <div>
                 <Label htmlFor="ai-input">Describe your tasks</Label>
@@ -577,91 +584,25 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
           </TabsContent>
 
           {/* Manual Mode */}
-          <TabsContent value="manual" className="space-y-6">
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="manual-title">Title *</Label>
-                <Input
-                  id="manual-title"
-                  value={manualTask.title || ''}
-                  onChange={(e) => setManualTask({ ...manualTask, title: e.target.value })}
-                  placeholder="Enter task title"
-                />
-              </div>
+          <TabsContent value="manual" className="space-y-4 mt-4">
+            <div>
+              <Label htmlFor="manual-title">Task Name *</Label>
+              <Input
+                id="manual-title"
+                value={manualTask.title || ''}
+                onChange={(e) => setManualTask({ ...manualTask, title: e.target.value })}
+                placeholder="Enter task name"
+                className="text-base"
+              />
+            </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="manual-description">Description</Label>
-                <Textarea
-                  id="manual-description"
-                  value={manualTask.description || ''}
-                  onChange={(e) => setManualTask({ ...manualTask, description: e.target.value })}
-                  placeholder="Enter task description"
-                  rows={3}
-                />
-              </div>
-
-              <div className="grid grid-cols-3 gap-4">
-                <div className="space-y-2">
-                  <Label>Priority</Label>
-                  <Select
-                    value={manualTask.priority}
-                    onValueChange={(value) => setManualTask({ ...manualTask, priority: value as Task['priority'] })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="LOW">Low</SelectItem>
-                      <SelectItem value="MEDIUM">Medium</SelectItem>
-                      <SelectItem value="HIGH">High</SelectItem>
-                      <SelectItem value="URGENT">Urgent</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-2">
-                  <Label>Category</Label>
-                  <Select
-                    value={manualTask.category}
-                    onValueChange={(value) => setManualTask({ ...manualTask, category: value as Task['category'] })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="LIFE">Life</SelectItem>
-                      <SelectItem value="CAREER">Career</SelectItem>
-                      <SelectItem value="VENTURES">Ventures</SelectItem>
-                      <SelectItem value="EDUCATION">Education</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="space-y-2">
-                  <Label>Status</Label>
-                  <Select
-                    value={manualTask.status}
-                    onValueChange={(value) => setManualTask({ ...manualTask, status: value as Task['status'] })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="BACKLOG">Backlog</SelectItem>
-                      <SelectItem value="TODO">To Do</SelectItem>
-                      <SelectItem value="READY">Ready</SelectItem>
-                      <SelectItem value="UP_NEXT">Up Next</SelectItem>
-                      <SelectItem value="DOING">Doing</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <Label>Due Date</Label>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="manual-due-date">Date</Label>
                 <Popover>
                   <PopoverTrigger asChild>
                     <Button
+                      id="manual-due-date"
                       variant="outline"
                       className={cn(
                         "w-full justify-start text-left font-normal",
@@ -681,69 +622,142 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                     />
                   </PopoverContent>
                 </Popover>
+                {!dueDate && startTime && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Auto-set to today
+                  </p>
+                )}
               </div>
 
-              {/* Start & End Time */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="manual-start-time">Start Time</Label>
-                  <Input
-                    id="manual-start-time"
-                    type="time"
-                    value={startTime}
-                    onChange={(e) => setStartTime(e.target.value)}
-                    className="w-full"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="manual-end-time">End Time</Label>
-                  <Input
-                    id="manual-end-time"
-                    type="time"
-                    value={endTime}
-                    onChange={(e) => setEndTime(e.target.value)}
-                    className="w-full"
-                  />
-                </div>
+              <div>
+                <Label htmlFor="manual-start-time">Start Time</Label>
+                <Input
+                  id="manual-start-time"
+                  type="time"
+                  value={startTime}
+                  onChange={(e) => setStartTime(e.target.value)}
+                />
+                {dueDate && !startTime && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Leave blank for AI scheduling
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div>
+              <Label htmlFor="manual-description">Description</Label>
+              <Textarea
+                id="manual-description"
+                value={manualTask.description || ''}
+                onChange={(e) => setManualTask({ ...manualTask, description: e.target.value })}
+                placeholder="Add details about the task"
+                rows={3}
+              />
+            </div>
+
+            <div className="grid grid-cols-3 gap-4">
+              <div>
+                <Label htmlFor="manual-priority">Priority</Label>
+                <Select
+                  value={manualTask.priority}
+                  onValueChange={(value) => setManualTask({ ...manualTask, priority: value as Task['priority'] })}
+                >
+                  <SelectTrigger id="manual-priority">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="LOW">Low</SelectItem>
+                    <SelectItem value="MEDIUM">Medium</SelectItem>
+                    <SelectItem value="HIGH">High</SelectItem>
+                    <SelectItem value="URGENT">Urgent</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
 
-              {/* Calculated Duration */}
-              {startTime && endTime && (
-                <div className="space-y-2">
-                  <Label>Calculated Duration</Label>
-                  <div className="px-3 py-2 bg-muted rounded-md text-sm">
-                    <Clock className="inline h-4 w-4 mr-1" />
-                    {calculateDuration(startTime, endTime)}
-                  </div>
-                </div>
-              )}
+              <div>
+                <Label htmlFor="manual-category">Category</Label>
+                <Select
+                  value={manualTask.category}
+                  onValueChange={(value) => setManualTask({ ...manualTask, category: value as Task['category'] })}
+                >
+                  <SelectTrigger id="manual-category">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="LIFE">Life</SelectItem>
+                    <SelectItem value="CAREER">Career</SelectItem>
+                    <SelectItem value="VENTURES">Ventures</SelectItem>
+                    <SelectItem value="EDUCATION">Education</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
 
-              <div className="space-y-2">
-                <Label>Time Estimate</Label>
-                <div className="flex items-center gap-2">
-                  <div className="flex items-center gap-1">
-                    <Input
-                      type="number"
-                      placeholder="0"
-                      value={estimateHours}
-                      onChange={(e) => setEstimateHours(e.target.value)}
-                      className="w-20"
-                      min="0"
-                    />
-                    <span className="text-sm text-muted-foreground">hours</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <Input
-                      type="number"
-                      placeholder="0"
-                      value={estimateMinutes}
-                      onChange={(e) => setEstimateMinutes(e.target.value)}
-                      className="w-20"
-                      min="0"
-                      max="59"
-                    />
-                    <span className="text-sm text-muted-foreground">minutes</span>
-                  </div>
+              <div>
+                <Label htmlFor="manual-status">Status</Label>
+                <Select
+                  value={manualTask.status}
+                  onValueChange={(value) => setManualTask({ ...manualTask, status: value as Task['status'] })}
+                >
+                  <SelectTrigger id="manual-status">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="BACKLOG">Backlog</SelectItem>
+                    <SelectItem value="TODO">To Do</SelectItem>
+                    <SelectItem value="DOING">Doing</SelectItem>
+                    <SelectItem value="DONE">Done</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div>
+              <Label htmlFor="manual-end-time">End Time (Optional)</Label>
+              <Input
+                id="manual-end-time"
+                type="time"
+                value={endTime}
+                onChange={(e) => setEndTime(e.target.value)}
+              />
+            </div>
+
+            {/* Calculated Duration */}
+            {startTime && endTime && (
+              <div>
+                <Label>Calculated Duration</Label>
+                <div className="px-3 py-2 bg-muted rounded-md text-sm">
+                  <Clock className="inline h-4 w-4 mr-1" />
+                  {calculateDuration(startTime, endTime)}
+                </div>
+              </div>
+            )}
+
+            <div>
+              <Label>Time Estimate</Label>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1">
+                  <Input
+                    type="number"
+                    placeholder="0"
+                    value={estimateHours}
+                    onChange={(e) => setEstimateHours(e.target.value)}
+                    className="w-20"
+                    min="0"
+                  />
+                  <span className="text-sm text-muted-foreground">hours</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <Input
+                    type="number"
+                    placeholder="0"
+                    value={estimateMinutes}
+                    onChange={(e) => setEstimateMinutes(e.target.value)}
+                    className="w-20"
+                    min="0"
+                    max="59"
+                  />
+                  <span className="text-sm text-muted-foreground">minutes</span>
                 </div>
               </div>
             </div>

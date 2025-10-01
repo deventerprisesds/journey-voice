@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { Progress } from '@/components/ui/progress';
 import { 
   Clock, 
   MapPin, 
@@ -17,10 +19,12 @@ import {
   Calendar,
   MoreHorizontal,
   CalendarPlus,
-  Trash2
+  Trash2,
+  ChevronDown,
+  ListTodo
 } from 'lucide-react';
 import { format } from 'date-fns';
-import { Task } from '@/types/task';
+import { Task, ChecklistItem } from '@/types/task';
 import { formatDateOnly, formatDuration } from '@/lib/date';
 import {
   AlertDialog,
@@ -32,6 +36,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import { supabase } from '@/integrations/supabase/client';
 
 interface TaskCardProps {
   task: Task;
@@ -105,11 +110,64 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onStatusChange, onEdit, onSch
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [isScheduling, setIsScheduling] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>([]);
+  const [isChecklistOpen, setIsChecklistOpen] = useState(false);
+  const [isLoadingChecklist, setIsLoadingChecklist] = useState(false);
+  
+  // Fetch checklist items when card is expanded
+  useEffect(() => {
+    if (isChecklistOpen && !checklistItems.length) {
+      fetchChecklistItems();
+    }
+  }, [isChecklistOpen]);
+
+  const fetchChecklistItems = async () => {
+    setIsLoadingChecklist(true);
+    try {
+      const { data, error } = await supabase
+        .from('task_checklist_items')
+        .select('*')
+        .eq('task_id', task.id)
+        .order('position', { ascending: true });
+
+      if (error) throw error;
+      setChecklistItems(data || []);
+    } catch (error) {
+      console.error('Error fetching checklist items:', error);
+    } finally {
+      setIsLoadingChecklist(false);
+    }
+  };
+
+  const toggleChecklistItem = async (itemId: string, currentStatus: boolean) => {
+    try {
+      const { error } = await supabase
+        .from('task_checklist_items')
+        .update({ is_completed: !currentStatus })
+        .eq('id', itemId);
+
+      if (error) throw error;
+      
+      // Update local state
+      setChecklistItems(prev => 
+        prev.map(item => 
+          item.id === itemId ? { ...item, is_completed: !currentStatus } : item
+        )
+      );
+    } catch (error) {
+      console.error('Error toggling checklist item:', error);
+    }
+  };
   
   const StatusIcon = statusIcons[task.status];
   const CategoryIcon = categoryIcons[task.category];
   const isBlocked = task.blocked_by && task.blocked_by.length > 0;
   const isOverdue = task.due_date && new Date(task.due_date) < new Date() && task.status !== 'DONE';
+  
+  // Calculate checklist progress
+  const completedCount = checklistItems.filter(item => item.is_completed).length;
+  const totalCount = checklistItems.length;
+  const checklistProgress = totalCount > 0 ? (completedCount / totalCount) * 100 : 0;
   
   // Check if blocked tasks are actually preventing progress
   const hasUnresolvedDependencies = isBlocked && task.blocked_by?.some(depId => {
@@ -306,6 +364,52 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onStatusChange, onEdit, onSch
               <CalendarPlus className="h-3 w-3" />
               <span>Scheduled: {task.start_time ? format(new Date(task.start_time), 'MMM d, h:mm a') : 'Auto-scheduled'}</span>
             </div>
+          )}
+
+          {/* Checklist Progress */}
+          {totalCount > 0 && (
+            <Collapsible open={isChecklistOpen} onOpenChange={setIsChecklistOpen}>
+              <div className="mt-2 space-y-2">
+                <CollapsibleTrigger className="flex items-center justify-between w-full group/checklist">
+                  <div className="flex items-center gap-2 text-xs">
+                    <ListTodo className="h-3 w-3 text-muted-foreground" />
+                    <span className="text-muted-foreground">
+                      {completedCount}/{totalCount} tasks
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 flex-1 ml-2">
+                    <Progress value={checklistProgress} className="h-1.5 flex-1" />
+                    <ChevronDown className={`h-3 w-3 text-muted-foreground transition-transform ${isChecklistOpen ? 'rotate-180' : ''}`} />
+                  </div>
+                </CollapsibleTrigger>
+
+                <CollapsibleContent className="space-y-1">
+                  {isLoadingChecklist ? (
+                    <div className="text-xs text-muted-foreground py-2">Loading checklist...</div>
+                  ) : (
+                    checklistItems.map((item) => (
+                      <div
+                        key={item.id}
+                        className="flex items-center gap-2 py-1 text-xs group/item"
+                      >
+                        <Checkbox
+                          checked={item.is_completed}
+                          onCheckedChange={() => toggleChecklistItem(item.id, item.is_completed)}
+                          className="h-3 w-3"
+                        />
+                        <span
+                          className={`flex-1 ${
+                            item.is_completed ? 'line-through text-muted-foreground' : ''
+                          }`}
+                        >
+                          {item.title}
+                        </span>
+                      </div>
+                    ))
+                  )}
+                </CollapsibleContent>
+              </div>
+            </Collapsible>
           )}
         </div>
       </CardContent>

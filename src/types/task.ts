@@ -1,3 +1,13 @@
+export interface ChecklistItem {
+  id: string;
+  task_id: string;
+  title: string;
+  is_completed: boolean;
+  position: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Task {
   id: string;
   title: string;
@@ -18,6 +28,7 @@ export interface Task {
   external_event_id?: string;
   is_scheduled?: boolean;
   reminder_minutes?: number;
+  checklist_items?: ChecklistItem[];
 }
 
 export interface CalendarConnection {

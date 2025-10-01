@@ -9,14 +9,15 @@ import { Badge } from '@/components/ui/badge';
 import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Label } from '@/components/ui/label';
-import { CalendarIcon, X, Plus, Clock, AlertTriangle, Timer, GitBranch } from 'lucide-react';
+import { CalendarIcon, X, Plus, Clock, AlertTriangle, Timer, GitBranch, ListTodo } from 'lucide-react';
 import DependencyTree from './DependencyTree';
 import TimeTracker from './TimeTracker';
+import { ChecklistManager } from './ChecklistManager';
 import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
-import { Task } from '@/types/task';
+import { Task, ChecklistItem } from '@/types/task';
 import { useMemo } from 'react';
 import { toLocalTimeHHMM, fromHHMMToISO } from '@/lib/date';
 
@@ -52,6 +53,31 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
   const [customReminderInput, setCustomReminderInput] = useState<string>('');
   const [showCustomReminder, setShowCustomReminder] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>([]);
+
+  // Fetch checklist items
+  useEffect(() => {
+    if (task?.id) {
+      fetchChecklistItems();
+    }
+  }, [task?.id]);
+
+  const fetchChecklistItems = async () => {
+    if (!task?.id) return;
+    
+    try {
+      const { data, error } = await supabase
+        .from('task_checklist_items')
+        .select('*')
+        .eq('task_id', task.id)
+        .order('position', { ascending: true });
+
+      if (error) throw error;
+      setChecklistItems(data || []);
+    } catch (error) {
+      console.error('Error fetching checklist items:', error);
+    }
+  };
 
   // Initialize form when task changes
   useEffect(() => {
@@ -693,6 +719,22 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
               </Button>
             </div>
           </div>
+          </TabsContent>
+
+          <TabsContent value="checklist" className="space-y-4">
+            <div>
+              <h3 className="text-sm font-medium mb-2">Task Checklist</h3>
+              <p className="text-xs text-muted-foreground mb-4">
+                Break down this task into smaller sub-tasks
+              </p>
+              {task && (
+                <ChecklistManager 
+                  taskId={task.id} 
+                  items={checklistItems}
+                  onUpdate={fetchChecklistItems}
+                />
+              )}
+            </div>
           </TabsContent>
 
           <TabsContent value="dependencies" className="space-y-4">

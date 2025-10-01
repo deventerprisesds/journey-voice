@@ -258,6 +258,36 @@ export type Database = {
         }
         Relationships: []
       }
+      chat_sessions: {
+        Row: {
+          context_data: Json | null
+          created_at: string | null
+          id: string
+          messages: Json | null
+          project_id: string
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          context_data?: Json | null
+          created_at?: string | null
+          id?: string
+          messages?: Json | null
+          project_id: string
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          context_data?: Json | null
+          created_at?: string | null
+          id?: string
+          messages?: Json | null
+          project_id?: string
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       class_schedules: {
         Row: {
           course_name: string
@@ -622,6 +652,69 @@ export type Database = {
         }
         Relationships: []
       }
+      form_field_mappings: {
+        Row: {
+          created_at: string | null
+          field_name: string
+          field_type: string
+          id: string
+          semantic_aliases: string[] | null
+          shared_across_forms: string[] | null
+          updated_at: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          field_name: string
+          field_type: string
+          id?: string
+          semantic_aliases?: string[] | null
+          shared_across_forms?: string[] | null
+          updated_at?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          field_name?: string
+          field_type?: string
+          id?: string
+          semantic_aliases?: string[] | null
+          shared_across_forms?: string[] | null
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
+      form_registry: {
+        Row: {
+          created_at: string | null
+          depends_on_forms: string[] | null
+          field_definitions: Json | null
+          form_id: string
+          form_name: string
+          id: string
+          task_ids: string[] | null
+          updated_at: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          depends_on_forms?: string[] | null
+          field_definitions?: Json | null
+          form_id: string
+          form_name: string
+          id?: string
+          task_ids?: string[] | null
+          updated_at?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          depends_on_forms?: string[] | null
+          field_definitions?: Json | null
+          form_id?: string
+          form_name?: string
+          id?: string
+          task_ids?: string[] | null
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
       itineraries: {
         Row: {
           created_at: string
@@ -820,6 +913,30 @@ export type Database = {
         }
         Relationships: []
       }
+      profile_access_rate_limit: {
+        Row: {
+          access_count: number | null
+          created_at: string
+          id: string
+          user_id: string
+          window_start: string
+        }
+        Insert: {
+          access_count?: number | null
+          created_at?: string
+          id?: string
+          user_id: string
+          window_start?: string
+        }
+        Update: {
+          access_count?: number | null
+          created_at?: string
+          id?: string
+          user_id?: string
+          window_start?: string
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           avatar_url: string | null
@@ -888,6 +1005,75 @@ export type Database = {
           storage_path?: string
           task_id?: string | null
           uploaded_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      project_form_data: {
+        Row: {
+          ai_populated_fields: string[] | null
+          created_at: string | null
+          field_values: Json | null
+          form_id: string
+          id: string
+          overflow_context: Json | null
+          phase_id: string
+          project_id: string
+          task_id: string
+          updated_at: string | null
+          user_id: string
+          version: number | null
+        }
+        Insert: {
+          ai_populated_fields?: string[] | null
+          created_at?: string | null
+          field_values?: Json | null
+          form_id: string
+          id?: string
+          overflow_context?: Json | null
+          phase_id: string
+          project_id: string
+          task_id: string
+          updated_at?: string | null
+          user_id: string
+          version?: number | null
+        }
+        Update: {
+          ai_populated_fields?: string[] | null
+          created_at?: string | null
+          field_values?: Json | null
+          form_id?: string
+          id?: string
+          overflow_context?: Json | null
+          phase_id?: string
+          project_id?: string
+          task_id?: string
+          updated_at?: string | null
+          user_id?: string
+          version?: number | null
+        }
+        Relationships: []
+      }
+      public_profiles: {
+        Row: {
+          avatar_url: string | null
+          created_at: string
+          full_name: string | null
+          id: string
+          user_id: string
+        }
+        Insert: {
+          avatar_url?: string | null
+          created_at?: string
+          full_name?: string | null
+          id?: string
+          user_id: string
+        }
+        Update: {
+          avatar_url?: string | null
+          created_at?: string
+          full_name?: string | null
+          id?: string
           user_id?: string
         }
         Relationships: []
@@ -1097,6 +1283,44 @@ export type Database = {
         }
         Relationships: []
       }
+      task_checklist_items: {
+        Row: {
+          created_at: string
+          id: string
+          is_completed: boolean
+          position: number
+          task_id: string
+          title: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          is_completed?: boolean
+          position?: number
+          task_id: string
+          title: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          is_completed?: boolean
+          position?: number
+          task_id?: string
+          title?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "task_checklist_items_task_id_fkey"
+            columns: ["task_id"]
+            isOneToOne: false
+            referencedRelation: "tasks"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       task_columns: {
         Row: {
           column_id: string
@@ -1288,6 +1512,10 @@ export type Database = {
         Args: { "": string } | { "": unknown }
         Returns: unknown
       }
+      check_profile_access_rate_limit: {
+        Args: { max_requests?: number; window_minutes?: number }
+        Returns: boolean
+      }
       claim_due_notifications: {
         Args: { claim_limit?: number; instance_id?: string }
         Returns: {
@@ -1352,6 +1580,19 @@ export type Database = {
           provider_account_id: string
           refresh_token: string
           scope: string
+          updated_at: string
+          user_id: string
+        }[]
+      }
+      get_current_user_profile: {
+        Args: Record<PropertyKey, never>
+        Returns: {
+          avatar_url: string
+          created_at: string
+          email: string
+          full_name: string
+          id: string
+          phone: string
           updated_at: string
           user_id: string
         }[]
