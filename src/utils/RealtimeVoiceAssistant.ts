@@ -693,7 +693,14 @@ export class RealtimeVoiceAssistant {
         .select()
         .single();
 
-      if (taskError) throw taskError;
+      if (taskError) {
+        console.error('❌ Task insert failed:', taskError);
+        this.onMessage?.({ 
+          type: 'client.error', 
+          message: `Failed to create task: ${taskError.message}` 
+        });
+        throw taskError;
+      }
 
       // Send notifications for the newly created task
       try {
@@ -713,9 +720,16 @@ export class RealtimeVoiceAssistant {
       this.onMessage?.({ type: 'client.done', status: 'Task created' });
       return { success: true, task };
     } catch (error) {
-      console.error('Error creating task:', error);
-      this.onMessage?.({ type: 'client.error', message: error instanceof Error ? error.message : 'Unknown error' });
-      return { error: error instanceof Error ? error.message : 'Unknown error' };
+      console.error('❌ Error creating task:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error creating task';
+      this.onMessage?.({ 
+        type: 'client.error', 
+        message: `Task creation failed: ${errorMessage}` 
+      });
+      return {
+        success: false,
+        error: errorMessage
+      };
     }
   }
 
@@ -751,58 +765,48 @@ export class RealtimeVoiceAssistant {
 
   private async getTasks(args: any) {
     try {
-      // UI status: searching chat history first
-      this.onMessage?.({ type: 'client.processing', status: 'Searching your recent chat history...' });
-
-      const userInput = (args?.query || args?.status_filter || '').toString();
-      console.log('[getTasks] Invoking external-db-query with:', {
-        action: 'search_tasks',
-        user_input: userInput || 'latest task',
-        time_filter: args?.time_filter,
-      });
-
-      const { data: extData, error: extError } = await supabase.functions.invoke('external-db-query', {
-        body: {
-          action: 'search_tasks',
-          user_input: userInput || 'latest task',
-          time_filter: args?.time_filter,
-          match_threshold: 0.6,
-          match_count: 20,
-        },
-      });
-
-      if (extError) {
-        console.error('[getTasks] external-db-query error:', extError);
-      }
-
-      if (extData?.success && Array.isArray(extData.data) && extData.data.length > 0) {
-        console.log(`[getTasks] Found ${extData.data.length} results in external chat history`);
-        this.onMessage?.({ type: 'client.done', status: `Found ${extData.data.length} result(s) in chat history` });
-        return { success: true, results: extData.data };
-      }
-
-      // Fallback: query local tasks table (status filter supported)
-      this.onMessage?.({ type: 'client.processing', status: 'Looking in your task board...' });
-      console.log('[getTasks] Falling back to local tasks table');
+      this.onMessage?.({ type: 'client.processing', status: 'Loading your tasks...' });
+      
+      console.log('🔍 Getting tasks with args:', args);
+      
+      // Query tasks directly from database
       let query = supabase
         .from('tasks')
         .select('*')
         .order('created_at', { ascending: false })
-        .limit(10);
+        .limit(args?.limit || 10);
 
       if (args?.status_filter) {
         query = query.eq('status', args.status_filter);
       }
 
       const { data: tasks, error } = await query;
-      if (error) throw error;
+      
+      if (error) {
+        console.error('❌ Tasks query error:', error);
+        this.onMessage?.({ 
+          type: 'client.error', 
+          message: `Failed to load tasks: ${error.message}` 
+        });
+        throw error;
+      }
 
+      console.log('✅ Got tasks from database:', tasks?.length || 0);
       this.onMessage?.({ type: 'client.done', status: `Loaded ${tasks?.length || 0} task(s)` });
-      return { success: true, tasks };
+      
+      return {
+        success: true,
+        tasks: tasks || []
+      };
     } catch (error) {
-      console.error('Error getting tasks:', error);
-      this.onMessage?.({ type: 'client.error', message: error instanceof Error ? error.message : 'Unknown error' });
-      return { error: error instanceof Error ? error.message : 'Unknown error' };
+      console.error('❌ Error getting tasks:', error);
+      this.onMessage?.({ 
+        type: 'client.error', 
+        message: error instanceof Error ? error.message : 'Unknown error loading tasks'
+      });
+      return {
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
     }
   }
 }
