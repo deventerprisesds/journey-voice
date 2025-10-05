@@ -255,16 +255,23 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
         (task.due_date || task.scheduling_context) // Has date or context for scheduling
       );
 
+      // Accumulator for batch-scheduled tasks
+      const alreadyScheduled: Task[] = [];
+
       for (const task of tasksToSchedule) {
         if (!isDemoMode) {
           try {
             const { scheduleNewTask } = await import('@/utils/taskScheduling');
+            // Pass already scheduled tasks in this batch so scheduler knows about them
             const scheduleResult = await scheduleNewTask({
               ...task,
               scheduling_context: task.scheduling_context
-            });
+            }, alreadyScheduled);
             
             if (scheduleResult.success && scheduleResult.scheduledTask) {
+              // Add to accumulator for next task
+              alreadyScheduled.push(scheduleResult.scheduledTask);
+              
               // Update the task in createdTasks with scheduled times
               const taskIndex = createdTasks.findIndex(t => t.id === task.id);
               if (taskIndex !== -1) {
@@ -283,22 +290,24 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
       
       onTasksCreated(createdTasks);
       
-      // Send immediate task creation notifications to enabled channels
-      for (const task of createdTasks) {
+      // Send ONE batched notification for all tasks (prevent API lock)
+      if (createdTasks.length > 0) {
         try {
+          const taskList = createdTasks.map(t => `• ${t.title}`).join('\n');
           await supabase.functions.invoke('send-push-notification', {
             body: {
-              userId: task.user_id,
-              title: 'New Task Created',
-              body: `"${task.title}" has been added to your tasks`,
+              userId: createdTasks[0].user_id,
+              title: `${createdTasks.length} New Task${createdTasks.length > 1 ? 's' : ''} Created`,
+              body: `Created:\n\n${taskList}`,
               data: {
-                type: 'task_created',
-                taskId: task.id
+                type: 'tasks_created_batch',
+                taskIds: createdTasks.map(t => t.id),
+                count: createdTasks.length
               }
             }
           });
         } catch (error) {
-          console.error('Error sending task creation notification:', task.id, error);
+          console.error('Error sending batch notification:', error);
         }
       }
       

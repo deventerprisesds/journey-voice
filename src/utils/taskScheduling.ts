@@ -13,7 +13,10 @@ export interface SchedulingResult {
   error?: string;
 }
 
-export async function scheduleNewTask(task: Partial<Task> & { board_id: string; user_id: string; scheduling_context?: string[] }): Promise<SchedulingResult> {
+export async function scheduleNewTask(
+  task: Partial<Task> & { board_id: string; user_id: string; scheduling_context?: string[] },
+  batchScheduledTasks: Task[] = []
+): Promise<SchedulingResult> {
   try {
     // Get user's existing tasks for context
     const { data: existingTasks } = await supabase
@@ -55,6 +58,9 @@ export async function scheduleNewTask(task: Partial<Task> & { board_id: string; 
       }
     }
 
+    // Merge existing tasks with batch-scheduled tasks so scheduler sees everything
+    const allTasks = [...(existingTasks || []), ...batchScheduledTasks];
+
     // Use smart calendar scheduler to find optimal time slot with enhanced context
     const { data: scheduleResult, error } = await supabase.functions.invoke(
       'smart-calendar-scheduler',
@@ -62,7 +68,7 @@ export async function scheduleNewTask(task: Partial<Task> & { board_id: string; 
         body: {
           taskText: `${task.title} - ${task.description || ''}`,
           targetDate: task.due_date || new Date().toISOString(),
-          existingTasks: existingTasks || [],
+          existingTasks: allTasks,
           workingMinutes: 480, // 8 hours default
           busySlots,
           scheduling_context: task.scheduling_context || [],

@@ -375,14 +375,29 @@ function findOptimalTimeSlotWithBusinessRules(
 
 function findNextAvailableSlot(date: Date, existingTasks: Task[], durationMinutes: number, preferredStartHour = 9): Date {
   const dayTasks = existingTasks
-    .filter(task => task.due_date && isSameDay(new Date(task.due_date), date))
-    .sort((a, b) => new Date(a.due_date!).getTime() - new Date(b.due_date!).getTime());
+    .filter(task => {
+      // Prioritize start_time if task is scheduled
+      if (task.start_time && isSameDay(new Date(task.start_time), date)) {
+        return true;
+      }
+      // Fallback to due_date
+      if (task.due_date && isSameDay(new Date(task.due_date), date)) {
+        return true;
+      }
+      return false;
+    })
+    .map(task => ({
+      ...task,
+      // Use start_time if available (scheduled tasks), otherwise due_date
+      effective_time: task.start_time || task.due_date
+    }))
+    .sort((a, b) => new Date(a.effective_time!).getTime() - new Date(b.effective_time!).getTime());
 
   let currentTime = new Date(date);
   currentTime.setHours(preferredStartHour, 0, 0, 0); // Start at preferred hour
 
   for (const task of dayTasks) {
-    const taskStart = new Date(task.due_date!);
+    const taskStart = new Date(task.effective_time!);
     const taskEnd = new Date(taskStart.getTime() + (task.estimate_minutes || 60) * 60000);
     
     // Check if there's enough space before this task
