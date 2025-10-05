@@ -2,7 +2,20 @@ import React, { useState, useEffect, useRef } from 'react';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Plus, MoreHorizontal, Calendar, Clock, Filter, Wand2, ChevronLeft, ChevronRight, Eye, EyeOff } from 'lucide-react';
+import { 
+  Plus, 
+  MoreHorizontal, 
+  Calendar, 
+  Clock, 
+  Filter, 
+  Wand2, 
+  ChevronLeft, 
+  ChevronRight, 
+  Eye, 
+  EyeOff,
+  CheckCircle2,
+  Trash2
+} from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
@@ -74,6 +87,8 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
     const stored = localStorage.getItem('kanban-show-completed');
     return stored ? JSON.parse(stored) : false;
   });
+  const [isSelectMode, setIsSelectMode] = useState(false);
+  const [selectedTasks, setSelectedTasks] = useState<Set<string>>(new Set());
 
   const fetchBoardColumns = async () => {
     if (!user) return;
@@ -371,6 +386,71 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
         variant: "destructive",
       });
     }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedTasks.size === 0) return;
+
+    try {
+      const taskIds = Array.from(selectedTasks);
+      
+      if (isDemoMode) {
+        const demoTasks = localStorage.getItem('kanban-demo-tasks');
+        if (demoTasks) {
+          const tasks = JSON.parse(demoTasks);
+          const updatedTasks = tasks.filter((task: Task) => !taskIds.includes(task.id));
+          localStorage.setItem('kanban-demo-tasks', JSON.stringify(updatedTasks));
+        }
+      } else {
+        const { error } = await supabase
+          .from('tasks')
+          .delete()
+          .in('id', taskIds)
+          .eq('user_id', user?.id);
+
+        if (error) throw error;
+      }
+
+      setSelectedTasks(new Set());
+      setIsSelectMode(false);
+
+      if (onTaskUpdate) {
+        onTaskUpdate();
+      }
+
+      toast({
+        title: "Tasks deleted",
+        description: `Successfully deleted ${taskIds.length} task${taskIds.length > 1 ? 's' : ''}`,
+      });
+    } catch (error) {
+      console.error('Error deleting tasks:', error);
+      toast({
+        title: "Error",
+        description: "Failed to delete tasks",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleSelectTask = (taskId: string, selected: boolean) => {
+    setSelectedTasks(prev => {
+      const newSet = new Set(prev);
+      if (selected) {
+        newSet.add(taskId);
+      } else {
+        newSet.delete(taskId);
+      }
+      return newSet;
+    });
+  };
+
+  const handleSelectAll = () => {
+    const allTaskIds = tasks.map(t => t.id);
+    setSelectedTasks(new Set(allTaskIds));
+  };
+
+  const handleDeselectAll = () => {
+    setSelectedTasks(new Set());
   };
 
   const generateDailySchedule = async () => {
@@ -785,6 +865,18 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
         <div className="flex items-center gap-2">
           <VoiceAssistantButton />
           <Button
+            variant={isSelectMode ? "default" : "outline"}
+            size="sm"
+            onClick={() => {
+              setIsSelectMode(!isSelectMode);
+              if (isSelectMode) setSelectedTasks(new Set());
+            }}
+            title="Select multiple tasks for bulk actions"
+          >
+            <CheckCircle2 className="h-4 w-4 mr-2" />
+            {isSelectMode ? 'Cancel' : 'Select'}
+          </Button>
+          <Button
             variant={showCompletedTasks ? "default" : "outline"}
             size="sm"
             onClick={toggleShowCompletedTasks}
@@ -842,6 +934,39 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
           tasks={tasks}
           onFilteredTasksChange={handleFilteredTasksChange}
         />
+      )}
+
+      {/* Bulk Action Bar */}
+      {isSelectMode && selectedTasks.size > 0 && (
+        <div className="bg-primary/10 border border-primary rounded-lg p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <span className="font-medium">{selectedTasks.size} task{selectedTasks.size > 1 ? 's' : ''} selected</span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleSelectAll}
+              >
+                Select All ({tasks.length})
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleDeselectAll}
+              >
+                Deselect All
+              </Button>
+            </div>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={handleBulkDelete}
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              Delete Selected
+            </Button>
+          </div>
+        </div>
       )}
 
       {/* Kanban Board */}
@@ -930,13 +1055,16 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
                                          ref={provided.innerRef}
                                          className={snapshot.isDragging ? 'rotate-2 scale-105' : ''}
                                        >
-                                         <TaskCard
-                                           task={task}
-                                           onEdit={handleTaskEdit}
-                                           onStatusChange={handleStatusChange}
-                                           onSchedule={handleTaskSchedule}
-                                           onDelete={handleTaskDelete}
-                                         />
+                                          <TaskCard
+                                            task={task}
+                                            onEdit={handleTaskEdit}
+                                            onStatusChange={handleStatusChange}
+                                            onSchedule={handleTaskSchedule}
+                                            onDelete={handleTaskDelete}
+                                            isSelectMode={isSelectMode}
+                                            isSelected={selectedTasks.has(task.id)}
+                                            onSelect={handleSelectTask}
+                                          />
                                       </div>
                                     )}
                                   </Draggable>

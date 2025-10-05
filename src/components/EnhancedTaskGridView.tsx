@@ -24,8 +24,11 @@ import {
   ChevronDown,
   Plus,
   FolderOpen,
-  FolderClosed
+  FolderClosed,
+  Trash2,
+  CheckCircle2
 } from 'lucide-react';
+import { Checkbox } from '@/components/ui/checkbox';
 import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
 import { formatDateOnly, formatDuration } from '@/lib/date';
@@ -83,6 +86,8 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
   const [editingCell, setEditingCell] = useState<{ taskId: string; field: string } | null>(null);
   const [editValue, setEditValue] = useState<string>('');
   const [optimisticTasks, setOptimisticTasks] = useState<Task[]>([]);
+  const [isSelectMode, setIsSelectMode] = useState(false);
+  const [selectedTasks, setSelectedTasks] = useState<Set<string>>(new Set());
 
   // Calculate progress percentage based on status
   const getProgressPercentage = (status: string): number => {
@@ -465,6 +470,68 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
     }
   };
 
+  const handleBulkDelete = async () => {
+    if (selectedTasks.size === 0) return;
+
+    try {
+      const taskIds = Array.from(selectedTasks);
+      
+      if (isDemoMode) {
+        const demoTasks = localStorage.getItem('kanban-demo-tasks');
+        if (demoTasks) {
+          const tasks = JSON.parse(demoTasks);
+          const updatedTasks = tasks.filter((task: Task) => !taskIds.includes(task.id));
+          localStorage.setItem('kanban-demo-tasks', JSON.stringify(updatedTasks));
+        }
+      } else {
+        const { error } = await supabase
+          .from('tasks')
+          .delete()
+          .in('id', taskIds)
+          .eq('user_id', user?.id);
+
+        if (error) throw error;
+      }
+
+      setSelectedTasks(new Set());
+      setIsSelectMode(false);
+      onTaskUpdate?.();
+
+      toast({
+        title: "Tasks deleted",
+        description: `Successfully deleted ${taskIds.length} task${taskIds.length > 1 ? 's' : ''}`,
+      });
+    } catch (error) {
+      console.error('Error deleting tasks:', error);
+      toast({
+        title: "Error",
+        description: "Failed to delete tasks",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleSelectTask = (taskId: string, selected: boolean) => {
+    setSelectedTasks(prev => {
+      const newSet = new Set(prev);
+      if (selected) {
+        newSet.add(taskId);
+      } else {
+        newSet.delete(taskId);
+      }
+      return newSet;
+    });
+  };
+
+  const handleSelectAll = () => {
+    const allTaskIds = tasks.map(t => t.id);
+    setSelectedTasks(new Set(allTaskIds));
+  };
+
+  const handleDeselectAll = () => {
+    setSelectedTasks(new Set());
+  };
+
   if (tasks.length === 0 && !isAddingTask) {
     return (
       <Card>
@@ -494,6 +561,17 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            variant={isSelectMode ? "default" : "outline"}
+            size="sm"
+            onClick={() => {
+              setIsSelectMode(!isSelectMode);
+              if (isSelectMode) setSelectedTasks(new Set());
+            }}
+          >
+            <CheckCircle2 className="h-4 w-4 mr-2" />
+            {isSelectMode ? 'Cancel' : 'Select'}
+          </Button>
           <Badge variant="outline" className="px-3 py-1">
             {tasks.length} Total Tasks
           </Badge>
@@ -502,6 +580,39 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
           </Badge>
         </div>
       </div>
+
+      {/* Bulk Action Bar */}
+      {isSelectMode && selectedTasks.size > 0 && (
+        <div className="bg-primary/10 border border-primary rounded-lg p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <span className="font-medium">{selectedTasks.size} task{selectedTasks.size > 1 ? 's' : ''} selected</span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleSelectAll}
+              >
+                Select All ({tasks.length})
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleDeselectAll}
+              >
+                Deselect All
+              </Button>
+            </div>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={handleBulkDelete}
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              Delete Selected
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Controls */}
       <div className="flex items-center gap-4 flex-wrap">
@@ -585,6 +696,7 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
                     <Table>
                        <TableHeader>
                          <TableRow>
+                           {isSelectMode && <TableHead className="w-12"></TableHead>}
                            <TableHead className="w-8"></TableHead>
                            <TableHead 
                              className="cursor-pointer hover:bg-muted/50"
@@ -700,13 +812,21 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
                              </TableCell>
                            </TableRow>
                          )}
-                        {groupTasks.map((task) => {
+                         {groupTasks.map((task) => {
                           const isExpanded = expandedTasks.has(task.id);
                           const progress = getProgressPercentage(task.status);
                           
                           return (
                             <React.Fragment key={task.id}>
                               <TableRow className="hover:bg-muted/50">
+                                {isSelectMode && (
+                                  <TableCell>
+                                    <Checkbox
+                                      checked={selectedTasks.has(task.id)}
+                                      onCheckedChange={(checked) => handleSelectTask(task.id, !!checked)}
+                                    />
+                                  </TableCell>
+                                )}
                                 <TableCell>
                                   <Button
                                     variant="ghost"

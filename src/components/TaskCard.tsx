@@ -44,6 +44,9 @@ interface TaskCardProps {
   onEdit?: (task: Task) => void;
   onSchedule?: (task: Task) => void;
   onDelete?: (taskId: string) => void;
+  isSelectMode?: boolean;
+  isSelected?: boolean;
+  onSelect?: (taskId: string, selected: boolean) => void;
 }
 
 const statusIcons = {
@@ -106,7 +109,7 @@ const categoryColors = {
 
 // Using utility functions for consistent formatting
 
-const TaskCard: React.FC<TaskCardProps> = ({ task, onStatusChange, onEdit, onSchedule, onDelete }) => {
+const TaskCard: React.FC<TaskCardProps> = ({ task, onStatusChange, onEdit, onSchedule, onDelete, isSelectMode, isSelected, onSelect }) => {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [isScheduling, setIsScheduling] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -256,11 +259,19 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onStatusChange, onEdit, onSch
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between gap-2">
           <div className="flex items-center gap-2 flex-1 min-w-0">
-            <Checkbox
-              checked={task.status === 'DONE'}
-              onCheckedChange={handleCheckboxChange}
-              className="mt-0.5"
-            />
+            {isSelectMode ? (
+              <Checkbox
+                checked={isSelected}
+                onCheckedChange={(checked) => onSelect?.(task.id, !!checked)}
+                className="mt-0.5"
+              />
+            ) : (
+              <Checkbox
+                checked={task.status === 'DONE'}
+                onCheckedChange={handleCheckboxChange}
+                className="mt-0.5"
+              />
+            )}
             <Button
               variant="ghost"
               size="sm"
