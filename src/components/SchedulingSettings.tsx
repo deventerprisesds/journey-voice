@@ -4,6 +4,7 @@ import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
 import {
@@ -11,7 +12,7 @@ import {
   saveUserSchedulingConfig,
 } from '@/services/schedulingService';
 import { DEFAULT_SCHEDULING_CONFIG, type SchedulingConfig } from '@/config/schedulingRules';
-import { Clock, Calendar, TrendingUp } from 'lucide-react';
+import { Clock, Calendar, TrendingUp, Tag, Key, Target, Plus, X } from 'lucide-react';
 
 const SchedulingSettings: React.FC = () => {
   const { user } = useAuth();
@@ -371,6 +372,257 @@ const SchedulingSettings: React.FC = () => {
             )}
             % {config.workloadBalance.projectToTaskRatio + config.workloadBalance.oneOffTaskRatio + config.workloadBalance.bufferRatio !== 1 && '(Should total 100%)'}
           </p>
+        </CardContent>
+      </Card>
+
+      {/* Category Mappings */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Tag className="h-5 w-5" />
+            <CardTitle>Category Mappings</CardTitle>
+          </div>
+          <CardDescription>
+            Configure which time window, board lane, and duration each category uses
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {Object.entries(config.categoryMappings).map(([category, mapping]) => (
+            <div key={category} className="space-y-3 p-4 border rounded-lg">
+              <Label className="text-base font-medium">{category}</Label>
+              <div className="grid grid-cols-3 gap-4">
+                <div className="space-y-2">
+                  <Label className="text-sm">Time Window</Label>
+                  <Select
+                    value={mapping.defaultTimeWindow}
+                    onValueChange={(value) =>
+                      setConfig({
+                        ...config,
+                        categoryMappings: {
+                          ...config.categoryMappings,
+                          [category]: {
+                            ...mapping,
+                            defaultTimeWindow: value as keyof SchedulingConfig['timeWindows'],
+                          },
+                        },
+                      })
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="morning">Morning</SelectItem>
+                      <SelectItem value="business_hours">Business Hours</SelectItem>
+                      <SelectItem value="after_work">After Work</SelectItem>
+                      <SelectItem value="evening">Evening</SelectItem>
+                      <SelectItem value="flexible">Flexible</SelectItem>
+                      <SelectItem value="weekends">Weekends</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-sm">Board Lane</Label>
+                  <Input
+                    value={mapping.defaultStatus}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        categoryMappings: {
+                          ...config.categoryMappings,
+                          [category]: {
+                            ...mapping,
+                            defaultStatus: e.target.value,
+                          },
+                        },
+                      })
+                    }
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-sm">Duration (min)</Label>
+                  <Input
+                    type="number"
+                    min="15"
+                    max="480"
+                    value={mapping.estimatedDuration}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        categoryMappings: {
+                          ...config.categoryMappings,
+                          [category]: {
+                            ...mapping,
+                            estimatedDuration: parseInt(e.target.value) || 60,
+                          },
+                        },
+                      })
+                    }
+                  />
+                </div>
+              </div>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+
+      {/* Keyword Rules */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Key className="h-5 w-5" />
+            <CardTitle>Keyword Detection Rules</CardTitle>
+          </div>
+          <CardDescription>
+            Configure keywords that trigger specific time windows and board lanes
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-3">
+            {Object.entries(config.contextRules.keywords).map(([keyword, [timeWindow, status]]) => (
+              <div key={keyword} className="flex items-center gap-3 p-3 border rounded-lg">
+                <Input
+                  value={keyword}
+                  onChange={(e) => {
+                    const newKeywords = { ...config.contextRules.keywords };
+                    delete newKeywords[keyword];
+                    newKeywords[e.target.value] = [timeWindow, status];
+                    setConfig({
+                      ...config,
+                      contextRules: {
+                        ...config.contextRules,
+                        keywords: newKeywords,
+                      },
+                    });
+                  }}
+                  className="flex-1"
+                  placeholder="Keyword"
+                />
+                <Select
+                  value={timeWindow}
+                  onValueChange={(value) =>
+                    setConfig({
+                      ...config,
+                      contextRules: {
+                        ...config.contextRules,
+                        keywords: {
+                          ...config.contextRules.keywords,
+                          [keyword]: [value, status],
+                        },
+                      },
+                    })
+                  }
+                >
+                  <SelectTrigger className="w-[180px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="morning">Morning</SelectItem>
+                    <SelectItem value="business_hours">Business Hours</SelectItem>
+                    <SelectItem value="after_work">After Work</SelectItem>
+                    <SelectItem value="evening">Evening</SelectItem>
+                    <SelectItem value="flexible">Flexible</SelectItem>
+                    <SelectItem value="weekends">Weekends</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Input
+                  value={status}
+                  onChange={(e) =>
+                    setConfig({
+                      ...config,
+                      contextRules: {
+                        ...config.contextRules,
+                        keywords: {
+                          ...config.contextRules.keywords,
+                          [keyword]: [timeWindow, e.target.value],
+                        },
+                      },
+                    })
+                  }
+                  className="w-[140px]"
+                  placeholder="Status"
+                />
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => {
+                    const newKeywords = { ...config.contextRules.keywords };
+                    delete newKeywords[keyword];
+                    setConfig({
+                      ...config,
+                      contextRules: {
+                        ...config.contextRules,
+                        keywords: newKeywords,
+                      },
+                    });
+                  }}
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+            ))}
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setConfig({
+                ...config,
+                contextRules: {
+                  ...config.contextRules,
+                  keywords: {
+                    ...config.contextRules.keywords,
+                    [`new_keyword_${Date.now()}`]: ['flexible', 'LIFE'],
+                  },
+                },
+              });
+            }}
+          >
+            <Plus className="h-4 w-4 mr-2" />
+            Add Keyword
+          </Button>
+        </CardContent>
+      </Card>
+
+      {/* Priority Mappings */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Target className="h-5 w-5" />
+            <CardTitle>Priority Weight Multipliers</CardTitle>
+          </div>
+          <CardDescription>
+            Configure how priority levels affect task scheduling weight
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {Object.entries(config.contextRules.priorityMappings).map(([priority, weight]) => (
+            <div key={priority} className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label className="capitalize">{priority} Priority</Label>
+                <span className="text-sm text-muted-foreground">×{weight}</span>
+              </div>
+              <Input
+                type="number"
+                min="0.1"
+                max="10"
+                step="0.1"
+                value={weight}
+                onChange={(e) =>
+                  setConfig({
+                    ...config,
+                    contextRules: {
+                      ...config.contextRules,
+                      priorityMappings: {
+                        ...config.contextRules.priorityMappings,
+                        [priority]: parseFloat(e.target.value) || 1,
+                      },
+                    },
+                  })
+                }
+              />
+            </div>
+          ))}
         </CardContent>
       </Card>
 

@@ -114,10 +114,12 @@ export async function scheduleNewTask(
     const { data: savedTask, error: saveError } = await supabase
       .from('tasks')
       .update({
-        start_time: scheduleResult.scheduledSlot.startTime,
-        end_time: scheduleResult.scheduledSlot.endTime,
+        start_time: updatedTask.start_time,
+        end_time: updatedTask.end_time,
+        estimate_minutes: updatedTask.estimate_minutes,
         is_scheduled: true,
-        category: scheduleResult.suggestedCategory || task.category || 'LIFE'
+        status: updatedTask.status,
+        category: updatedTask.category
       })
       .eq('id', task.id)
       .select()
