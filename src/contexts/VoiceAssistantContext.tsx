@@ -7,6 +7,7 @@ interface VoiceAssistantContextType {
   isConnected: boolean;
   isListening: boolean;
   isSpeaking: boolean;
+  isSpeechDetected: boolean;
   isProcessing: boolean;
   processingStatus: string;
   connectionError: { type?: string; message: string } | null;
@@ -45,6 +46,7 @@ export const VoiceAssistantProvider: React.FC<VoiceAssistantProviderProps> = ({
   const [isConnected, setIsConnected] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isSpeechDetected, setIsSpeechDetected] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingStatus, setProcessingStatus] = useState<string>('');
   const [messages, setMessages] = useState<any[]>([]);
@@ -55,6 +57,12 @@ export const VoiceAssistantProvider: React.FC<VoiceAssistantProviderProps> = ({
   const handleMessage = (message: any) => {
     console.log('Voice message:', message);
     setMessages(prev => [...prev, message]);
+
+    // Handle speech detection events
+    if (message.type === 'speech.detected') {
+      setIsSpeechDetected(message.detected);
+      return;
+    }
 
     // Client-side status events emitted by RealtimeVoiceAssistant
     if (message.type === 'client.processing') {
@@ -259,6 +267,7 @@ export const VoiceAssistantProvider: React.FC<VoiceAssistantProviderProps> = ({
         isConnected,
         isListening,
         isSpeaking,
+        isSpeechDetected,
         isProcessing,
         processingStatus,
         connectionError,

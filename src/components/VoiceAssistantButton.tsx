@@ -8,6 +8,7 @@ const VoiceAssistantButton: React.FC = () => {
     const {
       isConnected,
       isListening,
+      isSpeechDetected,
       isProcessing,
       connectToAssistant,
       toggleListening,
@@ -22,27 +23,50 @@ const VoiceAssistantButton: React.FC = () => {
     };
 
     const getButtonState = () => {
+      // 🔵 Blue - Disconnected
       if (!isConnected) {
         return {
-          className: "bg-gradient-to-r from-focus to-focus-light hover:from-focus-dark hover:to-focus text-white shadow-lg hover:shadow-xl",
-          icon: <Mic className="w-5 h-5" />,
-        };
-      } else if (isListening) {
-        return {
-          className: "bg-destructive hover:bg-destructive/90 text-white animate-pulse-voice shadow-lg hover:shadow-xl",
-          icon: <MicOff className="w-5 h-5" />,
-        };
-      } else if (isProcessing) {
-        return {
-          className: "bg-gradient-to-r from-focus to-focus-light hover:from-focus-dark hover:to-focus text-white shadow-lg hover:shadow-xl",
-          icon: <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />,
-        };
-      } else {
-        return {
-          className: "bg-gradient-to-r from-focus to-focus-light hover:from-focus-dark hover:to-focus text-white shadow-lg hover:shadow-xl",
-          icon: <Mic className="w-5 h-5" />,
+          className: "bg-blue-500 hover:bg-blue-600 text-white shadow-lg transition-all duration-300",
+          icon: <Mic className="w-6 h-6" />,
         };
       }
+      
+      // 🟢 Green - Actively detecting speech
+      if (isListening && isSpeechDetected) {
+        return {
+          className: "bg-green-500 hover:bg-green-600 text-white animate-pulse shadow-lg transition-all duration-300",
+          icon: <Mic className="w-6 h-6" />,
+        };
+      }
+      
+      // ⚪ White with blue outline - Listening but no speech
+      if (isListening && !isSpeechDetected) {
+        return {
+          className: "bg-white border-2 border-blue-500 text-blue-500 shadow-lg ring-2 ring-blue-300 ring-offset-2 transition-all duration-300",
+          icon: <Mic className="w-6 h-6" />,
+        };
+      }
+      
+      // ⚪ White with blue outline - Connected but not listening
+      if (isConnected && !isListening) {
+        return {
+          className: "bg-white border-2 border-blue-500 text-blue-500 hover:bg-blue-50 shadow-lg transition-all duration-300",
+          icon: <Mic className="w-6 h-6" />,
+        };
+      }
+      
+      // Processing state
+      if (isProcessing) {
+        return {
+          className: "bg-blue-500 text-white shadow-lg transition-all duration-300",
+          icon: <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin" />,
+        };
+      }
+
+      return {
+        className: "bg-blue-500 hover:bg-blue-600 text-white shadow-lg transition-all duration-300",
+        icon: <Mic className="w-6 h-6" />,
+      };
     };
 
     const buttonState = getButtonState();
@@ -51,7 +75,7 @@ const VoiceAssistantButton: React.FC = () => {
       <Button
         onClick={handleClick}
         size="lg"
-        className={`rounded-full transition-all duration-300 ${buttonState.className}`}
+        className={`rounded-full ${buttonState.className}`}
         disabled={isProcessing}
       >
         {buttonState.icon}
@@ -62,10 +86,10 @@ const VoiceAssistantButton: React.FC = () => {
     return (
       <Button
         size="lg"
-        className="rounded-full bg-gradient-to-r from-muted to-muted hover:from-muted/80 hover:to-muted/80 text-muted-foreground shadow-lg hover:shadow-xl transition-all duration-300"
+        className="rounded-full bg-blue-500 hover:bg-blue-600 text-white shadow-lg transition-all duration-300"
         onClick={() => console.log('Voice assistant context error')}
       >
-        <Mic className="w-5 h-5" />
+        <Mic className="w-6 h-6" />
       </Button>
     );
   }

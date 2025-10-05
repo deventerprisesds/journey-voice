@@ -31,6 +31,39 @@ const Dashboard = () => {
     loadTasks();
   }, [user, isDemoMode]);
 
+  // Set up real-time subscription for task changes
+  useEffect(() => {
+    if (!user || isDemoMode) return;
+    
+    console.log('📡 Setting up real-time subscription for tasks');
+    
+    const channel = supabase
+      .channel('task-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'tasks',
+          filter: `user_id=eq.${user.id}`
+        },
+        (payload) => {
+          console.log('✨ New task detected via real-time:', payload.new);
+          
+          toast.success(`Task Created: "${payload.new.title}" has been added`);
+          
+          // Reload tasks immediately
+          loadTasks();
+        }
+      )
+      .subscribe();
+    
+    return () => {
+      console.log('🔌 Cleaning up real-time subscription');
+      supabase.removeChannel(channel);
+    };
+  }, [user, isDemoMode]);
+
   // Handle deep linking to specific tasks
   useEffect(() => {
     if (!loading && tasks.length > 0) {

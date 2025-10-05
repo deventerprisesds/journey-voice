@@ -375,10 +375,20 @@ export class RealtimeVoiceAssistant {
         this.handleFunctionCall(event);
         break;
       case 'input_audio_buffer.speech_started':
+        console.log('🎤 Speech detected!');
         this.onListeningChange(true);
+        this.onMessage({
+          type: 'speech.detected',
+          detected: true
+        });
         break;
       case 'input_audio_buffer.speech_stopped':
+        console.log('🤐 Speech stopped');
         this.onListeningChange(false);
+        this.onMessage({
+          type: 'speech.detected',
+          detected: false
+        });
         break;
       case 'response.created':
         console.log('🎯 AI response started');

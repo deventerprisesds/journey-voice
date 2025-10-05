@@ -59,10 +59,27 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState<'ai' | 'manual'>('ai');
   
-  // AI Mode State
-  const [aiInput, setAiInput] = useState('');
+  // AI Mode State with sessionStorage persistence for mobile
+  const [aiInput, setAiInput] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return sessionStorage.getItem('ai-task-input') || '';
+    }
+    return '';
+  });
   const [isParsingAI, setIsParsingAI] = useState(false);
-  const [parsedTasks, setParsedTasks] = useState<ParsedTask[]>([]);
+  const [parsedTasks, setParsedTasks] = useState<ParsedTask[]>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = sessionStorage.getItem('parsed-tasks');
+      if (saved) {
+        try {
+          return JSON.parse(saved);
+        } catch {
+          return [];
+        }
+      }
+    }
+    return [];
+  });
   
   // Manual Mode State  
   const [manualTask, setManualTask] = useState<Partial<Task>>({
@@ -80,6 +97,22 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
   
   // Common State
   const [isCreating, setIsCreating] = useState(false);
+
+  // Persist AI input to sessionStorage for mobile
+  useEffect(() => {
+    if (aiInput) {
+      sessionStorage.setItem('ai-task-input', aiInput);
+    }
+  }, [aiInput]);
+
+  // Persist parsed tasks to sessionStorage for mobile
+  useEffect(() => {
+    if (parsedTasks.length > 0) {
+      sessionStorage.setItem('parsed-tasks', JSON.stringify(parsedTasks));
+    } else {
+      sessionStorage.removeItem('parsed-tasks');
+    }
+  }, [parsedTasks]);
 
   // Smart date/time logic: When time is set first, auto-populate date to today
   useEffect(() => {
@@ -151,7 +184,10 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
         throw new Error(error.message);
       }
 
+      console.log('✅ Received AI parser response:', data);
+
       if (!data?.tasks || data.tasks.length === 0) {
+        console.error('❌ No tasks in response:', data);
         throw new Error('No tasks could be parsed from the input');
       }
 
@@ -161,10 +197,11 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
         description: `Found ${data.tasks.length} task${data.tasks.length > 1 ? 's' : ''}`,
       });
     } catch (error) {
-      console.error('Error parsing tasks:', error);
+      console.error('❌ Error parsing tasks:', error);
+      const errorMsg = error instanceof Error ? error.message : 'Failed to parse tasks';
       toast({
         title: "Parsing Error",
-        description: error instanceof Error ? error.message : 'Failed to parse tasks',
+        description: `${errorMsg}. Please try again or check your OpenAI API key.`,
         variant: "destructive",
       });
     } finally {
@@ -240,6 +277,10 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
         }
       }
 
+      // Clear sessionStorage after successful creation
+      sessionStorage.removeItem('ai-task-input');
+      sessionStorage.removeItem('parsed-tasks');
+      
       onTasksCreated(createdTasks);
       
       // Send immediate task creation notifications to enabled channels
@@ -309,10 +350,12 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
   };
 
   const handleClose = () => {
-    // Reset state
+    // Reset state and clear sessionStorage
     setActiveTab('ai');
     setAiInput('');
     setParsedTasks([]);
+    sessionStorage.removeItem('ai-task-input');
+    sessionStorage.removeItem('parsed-tasks');
     setManualTask({
       title: '',
       description: '',

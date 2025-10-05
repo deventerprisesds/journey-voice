@@ -14,16 +14,20 @@ serve(async (req) => {
   try {
     const { text, mode = 'single' } = await req.json();
     
+    console.log('📥 Received request:', { text: text?.substring(0, 50), mode });
+    
     if (!text) {
+      console.error('❌ No text input provided');
       throw new Error('Text input is required');
     }
 
     const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
     if (!OPENAI_API_KEY) {
+      console.error('❌ OpenAI API key not configured');
       throw new Error('OpenAI API key not configured');
     }
 
-    console.log('Parsing task input:', text);
+    console.log('✅ Starting task parsing...');
 
 // Get current date for context
 const now = new Date();
@@ -117,29 +121,47 @@ Examples:
     });
 
     if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error?.message || 'Failed to parse tasks');
+      const errorText = await response.text();
+      console.error('❌ OpenAI API error:', response.status, errorText);
+      try {
+        const error = JSON.parse(errorText);
+        throw new Error(error.error?.message || 'Failed to parse tasks');
+      } catch {
+        throw new Error(`OpenAI API error: ${response.status} - ${errorText}`);
+      }
     }
 
     const data = await response.json();
-    const content = data.choices[0].message.content;
+    console.log('✅ Got OpenAI response');
+    
+    const content = data.choices[0]?.message?.content;
+    if (!content) {
+      console.error('❌ No content in OpenAI response:', data);
+      throw new Error('No content received from OpenAI');
+    }
     
     try {
       const parsed = JSON.parse(content);
-      console.log('Successfully parsed tasks:', parsed);
+      console.log('✅ Successfully parsed tasks:', parsed.tasks?.length || 0, 'tasks');
       return new Response(JSON.stringify(parsed), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     } catch (parseError) {
-      console.error('Error parsing AI response:', content);
+      console.error('❌ Error parsing AI response as JSON:', content.substring(0, 200));
       throw new Error('Failed to parse AI response as JSON');
     }
 
   } catch (error) {
-    console.error('Error in ai-task-parser:', error);
+    console.error('❌ Error in ai-task-parser:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+    const errorDetails = error instanceof Error ? error.stack : '';
+    console.error('Error details:', errorDetails);
+    
     return new Response(
-      JSON.stringify({ error: errorMessage }),
+      JSON.stringify({ 
+        error: errorMessage,
+        details: 'Check edge function logs for more information'
+      }),
       {
         status: 500,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
