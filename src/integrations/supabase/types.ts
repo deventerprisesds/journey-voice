@@ -465,6 +465,160 @@ export type Database = {
           },
         ]
       }
+      core_learnings: {
+        Row: {
+          category: string | null
+          content: Json | null
+          course_id: string | null
+          created_at: string
+          description: string | null
+          id: string
+          importance_level: number | null
+          learning_type: Database["public"]["Enums"]["learning_type"]
+          notes: string | null
+          position: number | null
+          source_extraction_id: string | null
+          source_file_name: string | null
+          tags: string[] | null
+          title: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          category?: string | null
+          content?: Json | null
+          course_id?: string | null
+          created_at?: string
+          description?: string | null
+          id?: string
+          importance_level?: number | null
+          learning_type: Database["public"]["Enums"]["learning_type"]
+          notes?: string | null
+          position?: number | null
+          source_extraction_id?: string | null
+          source_file_name?: string | null
+          tags?: string[] | null
+          title: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          category?: string | null
+          content?: Json | null
+          course_id?: string | null
+          created_at?: string
+          description?: string | null
+          id?: string
+          importance_level?: number | null
+          learning_type?: Database["public"]["Enums"]["learning_type"]
+          notes?: string | null
+          position?: number | null
+          source_extraction_id?: string | null
+          source_file_name?: string | null
+          tags?: string[] | null
+          title?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "core_learnings_course_id_fkey"
+            columns: ["course_id"]
+            isOneToOne: false
+            referencedRelation: "courses"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "core_learnings_source_extraction_id_fkey"
+            columns: ["source_extraction_id"]
+            isOneToOne: false
+            referencedRelation: "extracted_content"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      course_materials: {
+        Row: {
+          course_id: string
+          created_at: string
+          description: string | null
+          duration_seconds: number | null
+          file_size: number | null
+          id: string
+          local_storage_path: string | null
+          material_type: string
+          mime_type: string | null
+          module_id: string | null
+          onedrive_file_id: string | null
+          onedrive_path: string | null
+          onedrive_share_link: string | null
+          schedule_session_id: string | null
+          title: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          course_id: string
+          created_at?: string
+          description?: string | null
+          duration_seconds?: number | null
+          file_size?: number | null
+          id?: string
+          local_storage_path?: string | null
+          material_type: string
+          mime_type?: string | null
+          module_id?: string | null
+          onedrive_file_id?: string | null
+          onedrive_path?: string | null
+          onedrive_share_link?: string | null
+          schedule_session_id?: string | null
+          title: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          course_id?: string
+          created_at?: string
+          description?: string | null
+          duration_seconds?: number | null
+          file_size?: number | null
+          id?: string
+          local_storage_path?: string | null
+          material_type?: string
+          mime_type?: string | null
+          module_id?: string | null
+          onedrive_file_id?: string | null
+          onedrive_path?: string | null
+          onedrive_share_link?: string | null
+          schedule_session_id?: string | null
+          title?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "course_materials_course_id_fkey"
+            columns: ["course_id"]
+            isOneToOne: false
+            referencedRelation: "courses"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "course_materials_module_id_fkey"
+            columns: ["module_id"]
+            isOneToOne: false
+            referencedRelation: "modules"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "course_materials_schedule_session_id_fkey"
+            columns: ["schedule_session_id"]
+            isOneToOne: false
+            referencedRelation: "class_schedules"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       courses: {
         Row: {
           code: string | null
@@ -473,6 +627,9 @@ export type Database = {
           description: string | null
           id: string
           name: string
+          onedrive_folder_id: string | null
+          onedrive_folder_name: string | null
+          onedrive_folder_path: string | null
           updated_at: string
           user_id: string
         }
@@ -483,6 +640,9 @@ export type Database = {
           description?: string | null
           id?: string
           name: string
+          onedrive_folder_id?: string | null
+          onedrive_folder_name?: string | null
+          onedrive_folder_path?: string | null
           updated_at?: string
           user_id: string
         }
@@ -493,6 +653,9 @@ export type Database = {
           description?: string | null
           id?: string
           name?: string
+          onedrive_folder_id?: string | null
+          onedrive_folder_name?: string | null
+          onedrive_folder_path?: string | null
           updated_at?: string
           user_id?: string
         }
@@ -600,53 +763,98 @@ export type Database = {
       }
       extracted_content: {
         Row: {
+          career_application_notes: string[] | null
+          case_approach: string | null
+          case_comprehensive_summary: string | null
+          case_facts_statistics: Json | null
+          case_justification: string | null
+          case_outcome: string | null
+          case_players: Json | null
+          case_problem: string | null
           case_studies: string[] | null
           charts_tables: Json | null
+          content_type: string | null
           created_at: string
           digital_products: string[] | null
           extracted_at: string
           file_name: string
           file_path: string
+          formulas: string[] | null
           frameworks: string[] | null
           id: string
+          is_case_analysis: boolean | null
           key_concepts: string[] | null
+          key_definitions: Json | null
           key_terms: string[] | null
+          learning_objectives: string[] | null
+          quick_summary: string | null
           real_world_scenarios: string[] | null
           software_tools: string[] | null
+          study_questions: Json | null
           topic_id: string
           user_id: string
         }
         Insert: {
+          career_application_notes?: string[] | null
+          case_approach?: string | null
+          case_comprehensive_summary?: string | null
+          case_facts_statistics?: Json | null
+          case_justification?: string | null
+          case_outcome?: string | null
+          case_players?: Json | null
+          case_problem?: string | null
           case_studies?: string[] | null
           charts_tables?: Json | null
+          content_type?: string | null
           created_at?: string
           digital_products?: string[] | null
           extracted_at?: string
           file_name: string
           file_path: string
+          formulas?: string[] | null
           frameworks?: string[] | null
           id?: string
+          is_case_analysis?: boolean | null
           key_concepts?: string[] | null
+          key_definitions?: Json | null
           key_terms?: string[] | null
+          learning_objectives?: string[] | null
+          quick_summary?: string | null
           real_world_scenarios?: string[] | null
           software_tools?: string[] | null
+          study_questions?: Json | null
           topic_id: string
           user_id: string
         }
         Update: {
+          career_application_notes?: string[] | null
+          case_approach?: string | null
+          case_comprehensive_summary?: string | null
+          case_facts_statistics?: Json | null
+          case_justification?: string | null
+          case_outcome?: string | null
+          case_players?: Json | null
+          case_problem?: string | null
           case_studies?: string[] | null
           charts_tables?: Json | null
+          content_type?: string | null
           created_at?: string
           digital_products?: string[] | null
           extracted_at?: string
           file_name?: string
           file_path?: string
+          formulas?: string[] | null
           frameworks?: string[] | null
           id?: string
+          is_case_analysis?: boolean | null
           key_concepts?: string[] | null
+          key_definitions?: Json | null
           key_terms?: string[] | null
+          learning_objectives?: string[] | null
+          quick_summary?: string | null
           real_world_scenarios?: string[] | null
           software_tools?: string[] | null
+          study_questions?: Json | null
           topic_id?: string
           user_id?: string
         }
@@ -797,6 +1005,119 @@ export type Database = {
             columns: ["itinerary_id"]
             isOneToOne: false
             referencedRelation: "itineraries"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      lecture_transcripts: {
+        Row: {
+          action_items: Json | null
+          ai_summary: string | null
+          audio_file_path: string
+          course_id: string | null
+          created_at: string
+          duration_seconds: number | null
+          id: string
+          key_points: Json | null
+          questions_asked: Json | null
+          session_id: string
+          transcript_text: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          action_items?: Json | null
+          ai_summary?: string | null
+          audio_file_path: string
+          course_id?: string | null
+          created_at?: string
+          duration_seconds?: number | null
+          id?: string
+          key_points?: Json | null
+          questions_asked?: Json | null
+          session_id: string
+          transcript_text: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          action_items?: Json | null
+          ai_summary?: string | null
+          audio_file_path?: string
+          course_id?: string | null
+          created_at?: string
+          duration_seconds?: number | null
+          id?: string
+          key_points?: Json | null
+          questions_asked?: Json | null
+          session_id?: string
+          transcript_text?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lecture_transcripts_course_id_fkey"
+            columns: ["course_id"]
+            isOneToOne: false
+            referencedRelation: "courses"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lecture_transcripts_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "class_schedules"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      modules: {
+        Row: {
+          course_id: string
+          created_at: string
+          description: string | null
+          end_date: string | null
+          id: string
+          is_prework: boolean | null
+          module_number: number
+          name: string
+          start_date: string | null
+          updated_at: string
+          weekend_number: number | null
+        }
+        Insert: {
+          course_id: string
+          created_at?: string
+          description?: string | null
+          end_date?: string | null
+          id?: string
+          is_prework?: boolean | null
+          module_number: number
+          name: string
+          start_date?: string | null
+          updated_at?: string
+          weekend_number?: number | null
+        }
+        Update: {
+          course_id?: string
+          created_at?: string
+          description?: string | null
+          end_date?: string | null
+          id?: string
+          is_prework?: boolean | null
+          module_number?: number
+          name?: string
+          start_date?: string | null
+          updated_at?: string
+          weekend_number?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "modules_course_id_fkey"
+            columns: ["course_id"]
+            isOneToOne: false
+            referencedRelation: "courses"
             referencedColumns: ["id"]
           },
         ]
@@ -1178,6 +1499,95 @@ export type Database = {
           },
         ]
       }
+      session_qa: {
+        Row: {
+          answer: string
+          context_used: Json | null
+          course_id: string | null
+          created_at: string
+          id: string
+          question: string
+          session_id: string
+          user_id: string
+        }
+        Insert: {
+          answer: string
+          context_used?: Json | null
+          course_id?: string | null
+          created_at?: string
+          id?: string
+          question: string
+          session_id: string
+          user_id: string
+        }
+        Update: {
+          answer?: string
+          context_used?: Json | null
+          course_id?: string | null
+          created_at?: string
+          id?: string
+          question?: string
+          session_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "session_qa_course_id_fkey"
+            columns: ["course_id"]
+            isOneToOne: false
+            referencedRelation: "courses"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "session_qa_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "class_schedules"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      slide_annotations: {
+        Row: {
+          created_at: string
+          id: string
+          material_id: string
+          note_text: string
+          page_number: number
+          slide_number: number | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          material_id: string
+          note_text: string
+          page_number: number
+          slide_number?: number | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          material_id?: string
+          note_text?: string
+          page_number?: number
+          slide_number?: number | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "slide_annotations_material_id_fkey"
+            columns: ["material_id"]
+            isOneToOne: false
+            referencedRelation: "course_materials"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       sources: {
         Row: {
           config: Json | null
@@ -1414,6 +1824,7 @@ export type Database = {
           is_scheduled: boolean
           priority: Database["public"]["Enums"]["task_priority"]
           reminder_minutes: number | null
+          scheduling_context: Json | null
           source_id: string | null
           start_time: string | null
           status: Database["public"]["Enums"]["task_status"]
@@ -1436,6 +1847,7 @@ export type Database = {
           is_scheduled?: boolean
           priority?: Database["public"]["Enums"]["task_priority"]
           reminder_minutes?: number | null
+          scheduling_context?: Json | null
           source_id?: string | null
           start_time?: string | null
           status?: Database["public"]["Enums"]["task_status"]
@@ -1458,6 +1870,7 @@ export type Database = {
           is_scheduled?: boolean
           priority?: Database["public"]["Enums"]["task_priority"]
           reminder_minutes?: number | null
+          scheduling_context?: Json | null
           source_id?: string | null
           start_time?: string | null
           status?: Database["public"]["Enums"]["task_status"]
@@ -1614,6 +2027,38 @@ export type Database = {
           user_id: string
         }[]
       }
+      get_office365_connection_safe: {
+        Args: Record<PropertyKey, never>
+        Returns: {
+          created_at: string
+          expires_at: string
+          id: string
+          is_active: boolean
+          provider: string
+          provider_account_email: string
+          provider_account_id: string
+          scope: string
+          updated_at: string
+          user_id: string
+        }[]
+      }
+      get_office365_connection_secure: {
+        Args: Record<PropertyKey, never>
+        Returns: {
+          access_token: string
+          created_at: string
+          expires_at: string
+          id: string
+          is_active: boolean
+          provider: string
+          provider_account_email: string
+          provider_account_id: string
+          refresh_token: string
+          scope: string
+          updated_at: string
+          user_id: string
+        }[]
+      }
       halfvec_avg: {
         Args: { "": number[] }
         Returns: unknown
@@ -1662,6 +2107,19 @@ export type Database = {
           _provider_account_id: string
           _refresh_token?: string
           _scope?: string
+        }
+        Returns: string
+      }
+      insert_calendar_connection_for_user: {
+        Args: {
+          _access_token: string
+          _expires_at?: string
+          _provider: string
+          _provider_account_email: string
+          _provider_account_id: string
+          _refresh_token?: string
+          _scope?: string
+          _user_id: string
         }
         Returns: string
       }
@@ -1736,7 +2194,15 @@ export type Database = {
           similarity: number
         }[]
       }
+      migrate_oauth_tokens: {
+        Args: Record<PropertyKey, never>
+        Returns: Json
+      }
       revoke_calendar_connection: {
+        Args: { _connection_id: string }
+        Returns: boolean
+      }
+      revoke_office365_connection: {
         Args: { _connection_id: string }
         Returns: boolean
       }
@@ -1753,6 +2219,15 @@ export type Database = {
         Returns: number
       }
       update_calendar_connection_tokens: {
+        Args: {
+          _access_token: string
+          _connection_id: string
+          _expires_at?: string
+          _refresh_token?: string
+        }
+        Returns: boolean
+      }
+      update_office365_connection_tokens: {
         Args: {
           _access_token: string
           _connection_id: string
@@ -1788,6 +2263,15 @@ export type Database = {
     }
     Enums: {
       app_role: "admin" | "user"
+      learning_type:
+        | "key_term"
+        | "definition"
+        | "concept"
+        | "framework"
+        | "formula"
+        | "case_study"
+        | "objective"
+        | "question"
       notification_channel:
         | "EMAIL"
         | "SMS"
@@ -1939,6 +2423,16 @@ export const Constants = {
   public: {
     Enums: {
       app_role: ["admin", "user"],
+      learning_type: [
+        "key_term",
+        "definition",
+        "concept",
+        "framework",
+        "formula",
+        "case_study",
+        "objective",
+        "question",
+      ],
       notification_channel: [
         "EMAIL",
         "SMS",

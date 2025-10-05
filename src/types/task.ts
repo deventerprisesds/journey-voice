@@ -29,6 +29,7 @@ export interface Task {
   is_scheduled?: boolean;
   reminder_minutes?: number;
   checklist_items?: ChecklistItem[];
+  scheduling_context?: any;
 }
 
 export interface CalendarConnection {
