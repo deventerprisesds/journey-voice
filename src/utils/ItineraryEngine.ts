@@ -1,5 +1,12 @@
 import { supabase } from '@/integrations/supabase/client';
 import { Task } from '@/types/task';
+import {
+  loadUserSchedulingConfig,
+  getWorkingHoursConfig,
+  getWorkloadBalanceConfig,
+  extractSchedulingContext,
+  type SchedulingConfig,
+} from '@/services/schedulingService';
 
 interface ScheduledTask {
   task: Task;
@@ -24,17 +31,22 @@ export class ItineraryEngine {
     LOW: 1
   };
 
-  private workingHours = {
-    start: 9, // 9 AM
-    end: 17,  // 5 PM
-    breakMinutes: 60 // 1 hour break
-  };
+  private config: SchedulingConfig | null = null;
 
-  private workloadBalance = {
-    projectToTaskRatio: 0.6, // 60% ongoing projects, 25% one-off tasks, 15% buffer
-    oneOffTaskRatio: 0.25,
-    bufferRatio: 0.15
-  };
+  // Load user config or use defaults
+  private async loadConfig(userId?: string): Promise<void> {
+    if (!this.config && userId) {
+      this.config = await loadUserSchedulingConfig(userId);
+    }
+  }
+
+  private getWorkingHours() {
+    return this.config ? getWorkingHoursConfig(this.config) : getWorkingHoursConfig();
+  }
+
+  private getWorkloadBalance() {
+    return this.config ? getWorkloadBalanceConfig(this.config) : getWorkloadBalanceConfig();
+  }
 
   /**
    * Generate a smart schedule for tasks based on priorities, dependencies, and due dates
@@ -42,9 +54,17 @@ export class ItineraryEngine {
   async generateSchedule(
     startDate: Date, 
     endDate: Date, 
-    tasks: Task[], 
-    dailyWorkingMinutes: number = 420 // 7 hours default
+    tasks: Task[],
+    userId?: string,
+    dailyWorkingMinutes?: number
   ): Promise<ItinerarySchedule[]> {
+    // Load user config
+    await this.loadConfig(userId);
+    
+    // Use config working hours if dailyWorkingMinutes not specified
+    const workingHours = this.getWorkingHours();
+    const effectiveWorkingMinutes = dailyWorkingMinutes || 
+      (workingHours.maxDailyHours * 60);
     // Filter out completed tasks and sort by priority/due date
     const pendingTasks = tasks.filter(task => task.status !== 'DONE');
     const sortedTasks = this.sortTasksByPriority(pendingTasks);
@@ -59,7 +79,7 @@ export class ItineraryEngine {
         currentDate,
         sortedTasks,
         scheduledTaskIds,
-        dailyWorkingMinutes
+        effectiveWorkingMinutes
       );
       
       schedule.push(daySchedule);
@@ -75,16 +95,22 @@ export class ItineraryEngine {
   /**
    * Generate a quick daily schedule for today/tomorrow
    */
-  async generateDailySchedule(tasks: Task[], targetDate?: Date): Promise<ScheduledTask[]> {
+  async generateDailySchedule(tasks: Task[], targetDate?: Date, userId?: string): Promise<ScheduledTask[]> {
+    // Load user config
+    await this.loadConfig(userId);
+    
     const date = targetDate || new Date();
     const pendingTasks = tasks.filter(task => task.status !== 'DONE');
     const sortedTasks = this.sortTasksByPriority(pendingTasks);
+    
+    const workingHours = this.getWorkingHours();
+    const dailyWorkingMinutes = workingHours.maxDailyHours * 60;
     
     const daySchedule = this.scheduleDayTasks(
       date,
       sortedTasks,
       new Set(),
-      420 // 7 hours
+      dailyWorkingMinutes
     );
     
     return daySchedule.tasks;
@@ -102,7 +128,8 @@ export class ItineraryEngine {
     const scheduledTasks: ScheduledTask[] = [];
     let usedMinutes = 0;
     let currentTime = new Date(date);
-    currentTime.setHours(this.workingHours.start, 0, 0, 0);
+    const workingHours = this.getWorkingHours();
+    currentTime.setHours(workingHours.defaultStart, 0, 0, 0);
     
     // Filter tasks that can be scheduled today
     const candidateTasks = tasks.filter(task => {
@@ -418,26 +445,28 @@ export class ItineraryEngine {
 
     const recommendations: string[] = [];
     
+    const workloadBalance = this.getWorkloadBalance();
+    
     // Check balance ratios
     const projectRatio = ongoingProjectTime / 420;
     const oneOffRatio = oneOffTaskTime / 420;
     
-    if (projectRatio > this.workloadBalance.projectToTaskRatio + 0.1) {
+    if (projectRatio > workloadBalance.projectToTaskRatio + 0.1) {
       recommendations.push('Consider breaking large project tasks into smaller chunks');
     }
     
-    if (oneOffRatio > this.workloadBalance.oneOffTaskRatio + 0.1) {
+    if (oneOffRatio > workloadBalance.oneOffTaskRatio + 0.1) {
       recommendations.push('Too many small tasks scheduled - try batching similar activities');
     }
     
-    if (bufferTime < 420 * this.workloadBalance.bufferRatio) {
+    if (bufferTime < 420 * workloadBalance.bufferRatio) {
       recommendations.push('Schedule is too packed - consider moving some tasks to another day');
     }
 
     const isBalanced = 
-      projectRatio <= this.workloadBalance.projectToTaskRatio + 0.1 &&
-      oneOffRatio <= this.workloadBalance.oneOffTaskRatio + 0.1 &&
-      bufferTime >= 420 * this.workloadBalance.bufferRatio;
+      projectRatio <= workloadBalance.projectToTaskRatio + 0.1 &&
+      oneOffRatio <= workloadBalance.oneOffTaskRatio + 0.1 &&
+      bufferTime >= 420 * workloadBalance.bufferRatio;
 
     return {
       ongoingProjectTime,

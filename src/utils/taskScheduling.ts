@@ -1,6 +1,7 @@
 import { supabase } from "@/integrations/supabase/client";
 import { Task } from "@/types/task";
 import { toast } from "sonner";
+import { loadUserSchedulingConfig } from "@/services/schedulingService";
 
 export interface SchedulingResult {
   success: boolean;
@@ -18,6 +19,9 @@ export async function scheduleNewTask(
   batchScheduledTasks: Task[] = []
 ): Promise<SchedulingResult> {
   try {
+    // Load user's scheduling configuration
+    const userConfig = await loadUserSchedulingConfig(task.user_id);
+    
     // Get user's existing tasks for context
     const { data: existingTasks } = await supabase
       .from('tasks')
@@ -69,11 +73,14 @@ export async function scheduleNewTask(
           taskText: `${task.title} - ${task.description || ''}`,
           targetDate: task.due_date || new Date().toISOString(),
           existingTasks: allTasks,
-          workingMinutes: 480, // 8 hours default
+          workingMinutes: userConfig.workingHours.maxDailyHours * 60,
           busySlots,
           scheduling_context: task.scheduling_context || [],
           userId: task.user_id,
-          threadId: `scheduler-${task.user_id}-${Date.now()}`
+          threadId: `scheduler-${task.user_id}-${Date.now()}`,
+          userSchedulingConfig: userConfig, // Pass user's config
+          taskCategory: task.category,
+          taskPriority: task.priority
         }
       }
     );
@@ -83,17 +90,22 @@ export async function scheduleNewTask(
       return { success: false, error: error.message };
     }
 
-    // Update task with scheduled times and AI-suggested category
+    if (!scheduleResult?.success) {
+      return { success: false, error: scheduleResult?.error || 'Scheduling failed' };
+    }
+
+    // Update task with scheduled times and AI-suggested category/status
     const updatedTask: any = {
       ...task,
-      start_time: scheduleResult.scheduledSlot.startTime,
-      end_time: scheduleResult.scheduledSlot.endTime,
+      start_time: scheduleResult.scheduledTask.start_time,
+      end_time: scheduleResult.scheduledTask.end_time,
+      estimate_minutes: scheduleResult.scheduledTask.estimate_minutes,
       is_scheduled: true,
       // Ensure required fields are present
       title: task.title || 'Untitled Task',
       board_id: task.board_id,
       user_id: task.user_id,
-      status: task.status || 'TODO',
+      status: scheduleResult.suggestedStatus || task.status || 'TODO',
       priority: task.priority || 'MEDIUM',
       category: scheduleResult.suggestedCategory || task.category || 'LIFE'
     };

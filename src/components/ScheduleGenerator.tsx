@@ -19,6 +19,8 @@ import { cn } from '@/lib/utils';
 import { Task } from '@/types/task';
 import { itineraryEngine } from '@/utils/ItineraryEngine';
 import { useToast } from '@/hooks/use-toast';
+import { useAuth } from '@/hooks/useAuth';
+import { getWorkingHoursConfig } from '@/services/schedulingService';
 
 interface ScheduleGeneratorProps {
   tasks: Task[];
@@ -38,9 +40,13 @@ const ScheduleGenerator: React.FC<ScheduleGeneratorProps> = ({
   onScheduleGenerated 
 }) => {
   const { toast } = useToast();
+  const { user } = useAuth();
   const [isGenerating, setIsGenerating] = useState(false);
   const [targetDate, setTargetDate] = useState<Date>(new Date());
-  const [workingHours, setWorkingHours] = useState(7);
+  
+  // Use config from service for initial value
+  const defaultWorkingHours = getWorkingHoursConfig();
+  const [workingHours, setWorkingHours] = useState(defaultWorkingHours.maxDailyHours);
   const [generatedSchedule, setGeneratedSchedule] = useState<ScheduledTask[]>([]);
 
   const handleGenerateSchedule = async () => {
@@ -55,7 +61,7 @@ const ScheduleGenerator: React.FC<ScheduleGeneratorProps> = ({
 
     setIsGenerating(true);
     try {
-      const schedule = await itineraryEngine.generateDailySchedule(tasks, targetDate);
+      const schedule = await itineraryEngine.generateDailySchedule(tasks, targetDate, user?.id);
       setGeneratedSchedule(schedule);
       onScheduleGenerated?.(schedule);
       

@@ -2,52 +2,19 @@ import { useCallback } from 'react';
 import { Task } from '@/types/task';
 import { scheduleNewTask } from '@/utils/taskScheduling';
 import { useToast } from '@/hooks/use-toast';
+import { extractSchedulingContext } from '@/services/schedulingService';
 
 export const useAutoScheduling = () => {
   const { toast } = useToast();
 
-  // Helper function to extract scheduling context from task
-  const extractSchedulingContext = (task: Task): string[] => {
-    const context: string[] = [];
-    const text = `${task.title} ${task.description || ''}`.toLowerCase();
-    
-    // Add context based on task category
-    if (task.category === 'CAREER' || task.category === 'VENTURES') {
-      context.push('business_hours');
-      context.push('weekdays_only');
-    }
-    
-    // Business ventures context
-    if (task.category === 'VENTURES' || text.includes('business') || text.includes('venture') || 
-        text.includes('startup') || text.includes('investment') || text.includes('pitch')) {
-      context.push('business_hours');
-      context.push('weekdays_only');
-    }
-    
-    // General business context
-    if (text.includes('meeting') || text.includes('call') || text.includes('bank') || text.includes('office')) {
-      context.push('business_hours');
-    }
-    
-    // Time preferences
-    if (text.includes('morning')) {
-      context.push('morning_preferred');
-    } else if (text.includes('afternoon')) {
-      context.push('afternoon_preferred');
-    } else if (text.includes('evening')) {
-      context.push('evening_preferred');
-    }
-    
-    if (text.includes('urgent') || task.priority === 'HIGH') {
-      context.push('urgent');
-    }
-    
-    return context;
-  };
-
   const autoScheduleTask = useCallback(async (task: Task): Promise<Task | null> => {
     try {
-      const scheduling_context = extractSchedulingContext(task);
+      // Extract scheduling context using centralized service
+      const { context, timeWindow, suggestedStatus, estimatedDuration } = extractSchedulingContext(
+        `${task.title} ${task.description || ''}`,
+        task.category,
+        task.priority
+      );
       
       const result = await scheduleNewTask({
         id: task.id,
@@ -58,8 +25,8 @@ export const useAutoScheduling = () => {
         category: task.category,
         priority: task.priority,
         due_date: task.due_date,
-        estimate_minutes: task.estimate_minutes,
-        scheduling_context
+        estimate_minutes: task.estimate_minutes || estimatedDuration,
+        scheduling_context: [...context, `timeWindow:${timeWindow}`, `status:${suggestedStatus}`]
       });
 
       if (result.success && result.scheduledTask) {
@@ -80,7 +47,7 @@ export const useAutoScheduling = () => {
       });
       return null;
     }
-  }, [toast, extractSchedulingContext]);
+  }, [toast]);
 
   return { autoScheduleTask };
 };
