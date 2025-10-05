@@ -350,12 +350,8 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
   };
 
   const handleClose = () => {
-    // Reset state and clear sessionStorage
-    setActiveTab('ai');
-    setAiInput('');
-    setParsedTasks([]);
-    sessionStorage.removeItem('ai-task-input');
-    sessionStorage.removeItem('parsed-tasks');
+    // Don't clear AI input/parsed tasks - keep them for mobile persistence
+    // Only clear manual mode state
     setManualTask({
       title: '',
       description: '',
@@ -367,6 +363,13 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
     setEstimateHours('');
     setEstimateMinutes('');
     onClose();
+  };
+
+  const handleClearAIResults = () => {
+    setAiInput('');
+    setParsedTasks([]);
+    sessionStorage.removeItem('ai-task-input');
+    sessionStorage.removeItem('parsed-tasks');
   };
 
   const removeParsedTask = (index: number) => {
@@ -445,23 +448,33 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
                   <h3 className="text-lg font-medium">Parsed Tasks ({parsedTasks.length})</h3>
-                  <Button
-                    onClick={() => handleCreateTasks(parsedTasks)}
-                    disabled={isCreating}
-                    className="bg-primary hover:bg-primary/90"
-                  >
-                    {isCreating ? (
-                      <>
-                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        Creating...
-                      </>
-                    ) : (
-                      <>
-                        <Check className="h-4 w-4 mr-2" />
-                        Create All Tasks
-                      </>
-                    )}
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button
+                      onClick={handleClearAIResults}
+                      variant="outline"
+                      size="sm"
+                    >
+                      <X className="h-4 w-4 mr-2" />
+                      Clear
+                    </Button>
+                    <Button
+                      onClick={() => handleCreateTasks(parsedTasks)}
+                      disabled={isCreating}
+                      className="bg-primary hover:bg-primary/90"
+                    >
+                      {isCreating ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          Creating...
+                        </>
+                      ) : (
+                        <>
+                          <Check className="h-4 w-4 mr-2" />
+                          Create All Tasks
+                        </>
+                      )}
+                    </Button>
+                  </div>
                 </div>
 
                 <div className="space-y-3 max-h-96 overflow-y-auto">
