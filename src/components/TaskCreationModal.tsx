@@ -217,7 +217,7 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
       
       const tasksWithMeta = tasksToCreate.map(task => ({
         ...task,
-        id: isDemoMode ? `demo-task-${Date.now()}-${Math.random().toString(36).substr(2, 9)}` : undefined,
+        ...(isDemoMode ? { id: `demo-task-${Date.now()}-${Math.random().toString(36).substr(2, 9)}` } : {}),
         board_id: boardId,
         user_id: userId,
         due_date: task.due_date || null,
