@@ -59,6 +59,7 @@ interface SchedulingConfig {
       estimatedDuration: number;
     };
   };
+  customAIInstructions?: string;
 }
 
 interface BusySlot {
@@ -92,6 +93,7 @@ serve(async (req) => {
 
     console.log('Smart scheduling task:', taskText);
     console.log('User config received:', !!userSchedulingConfig);
+    console.log('Custom AI instructions:', userSchedulingConfig?.customAIInstructions);
 
     // Use user config or fallback to defaults
     const config: SchedulingConfig = userSchedulingConfig || {

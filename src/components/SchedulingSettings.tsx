@@ -12,7 +12,8 @@ import {
   saveUserSchedulingConfig,
 } from '@/services/schedulingService';
 import { DEFAULT_SCHEDULING_CONFIG, type SchedulingConfig } from '@/config/schedulingRules';
-import { Clock, Calendar, TrendingUp, Tag, Key, Target, Plus, X } from 'lucide-react';
+import { Clock, Calendar, TrendingUp, Tag, Key, Target, Plus, X, FileText } from 'lucide-react';
+import { Textarea } from '@/components/ui/textarea';
 
 const SchedulingSettings: React.FC = () => {
   const { user } = useAuth();
@@ -623,6 +624,28 @@ const SchedulingSettings: React.FC = () => {
               />
             </div>
           ))}
+        </CardContent>
+      </Card>
+
+      {/* Custom AI Instructions */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <FileText className="h-5 w-5" />
+            <CardTitle>Custom AI Instructions</CardTitle>
+          </div>
+          <CardDescription>
+            Add free-form instructions that will be sent to the AI scheduler.
+            Example: "Schedule all education assignments after 5pm" or "Never schedule meetings before 10am"
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Textarea
+            value={config.customAIInstructions || ''}
+            onChange={(e) => setConfig({ ...config, customAIInstructions: e.target.value })}
+            placeholder="Enter custom scheduling rules here..."
+            className="min-h-[150px] font-mono text-sm"
+          />
         </CardContent>
       </Card>
 

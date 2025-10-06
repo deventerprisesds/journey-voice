@@ -47,6 +47,7 @@ export interface SchedulingConfig {
       [priority: string]: number; // priority -> weight multiplier
     };
   };
+  customAIInstructions?: string; // Free-form text instructions for AI scheduler
 }
 
 // Default configuration blending all existing rules
@@ -175,6 +176,7 @@ export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
       low: 1,
     },
   },
+  customAIInstructions: '', // Default empty
 };
 
 // Helper function to validate config
