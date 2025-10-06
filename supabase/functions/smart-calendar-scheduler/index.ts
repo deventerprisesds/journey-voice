@@ -87,11 +87,10 @@ serve(async (req) => {
       taskCategory,
       taskPriority,
       estimateMinutes,
-      timezone, // IANA timezone identifier (e.g., 'America/New_York')
-      tzOffsetMinutes = 0 // Browser timezone offset (e.g., 240 for ET = UTC-4)
+      timezone = 'UTC' // IANA timezone identifier (e.g., 'America/New_York')
     } = await req.json();
     
-    console.log('🌍 Scheduling in timezone:', timezone ?? 'UTC', '(offset:', tzOffsetMinutes, 'minutes)');
+    console.log('🌍 Scheduling in timezone:', timezone);
     
     if (!taskText) {
       throw new Error('Task text is required');
@@ -217,8 +216,7 @@ serve(async (req) => {
         estimatedDuration,
         constraints.start,
         constraints.end,
-        preferredTimeMinutes,
-        tzOffsetMinutes
+        preferredTimeMinutes
       );
 
       if (slot) {
@@ -368,18 +366,18 @@ function findBestSlotForDay(
   durationMinutes: number,
   startHour: number,
   endHour: number,
-  preferredTimeMinutes: number | null,
-  tzOffsetMinutes: number
+  preferredTimeMinutes: number | null
 ): BusySlot | null {
-  // Work in local time by adjusting UTC dates
-  const localOffset = -tzOffsetMinutes; // Convert browser offset to UTC adjustment
-  
-  // Create time range for the day in LOCAL time
+  // Use the provided date as-is - it represents the local day in user's timezone
   const dayStart = new Date(date);
   dayStart.setHours(startHour, 0, 0, 0);
   
   const dayEnd = new Date(date);
   dayEnd.setHours(endHour, 0, 0, 0);
+  
+  // Note: JavaScript Date objects are always stored as UTC internally,
+  // but when we use setHours/getHours, they operate in the system's local time.
+  // The frontend passes dates that are already in the user's timezone.
 
   // Find ALL available gaps
   const availableGaps: BusySlot[] = [];

@@ -1,7 +1,7 @@
 import { supabase } from "@/integrations/supabase/client";
 import { Task } from "@/types/task";
 import { toast } from "sonner";
-import { loadUserSchedulingConfig, getUserTimezoneOffset } from "@/services/schedulingService";
+import { loadUserSchedulingConfig } from "@/services/schedulingService";
 
 export interface SchedulingResult {
   success: boolean;
@@ -65,9 +65,6 @@ export async function scheduleNewTask(
     // Merge existing tasks with batch-scheduled tasks so scheduler sees everything
     const allTasks = [...(existingTasks || []), ...batchScheduledTasks];
 
-    // Get timezone offset from user's config
-    const tzOffsetMinutes = getUserTimezoneOffset(userConfig);
-
     // Use smart calendar scheduler to find optimal time slot with enhanced context
     const { data: scheduleResult, error } = await supabase.functions.invoke(
       'smart-calendar-scheduler',
@@ -84,8 +81,7 @@ export async function scheduleNewTask(
           userSchedulingConfig: userConfig, // Pass user's config
           taskCategory: task.category,
           taskPriority: task.priority,
-          timezone: userConfig.timezone,
-          tzOffsetMinutes // Use user's configured timezone offset
+          timezone: userConfig.timezone
         }
       }
     );

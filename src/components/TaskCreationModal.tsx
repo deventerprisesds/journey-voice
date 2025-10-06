@@ -178,16 +178,14 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
       console.log('Parsing AI input:', aiInput);
       
       // Load user's timezone config
-      const { loadUserSchedulingConfig, getUserTimezoneOffset } = await import('@/services/schedulingService');
+      const { loadUserSchedulingConfig } = await import('@/services/schedulingService');
       const userConfig = await loadUserSchedulingConfig(userId);
-      const tzOffsetMinutes = getUserTimezoneOffset(userConfig);
       
       const { data, error } = await supabase.functions.invoke('ai-task-parser', {
         body: { 
           text: aiInput, 
           mode: 'multiple',
-          timezone: userConfig.timezone,
-          tzOffsetMinutes 
+          timezone: userConfig.timezone
         }
       });
 

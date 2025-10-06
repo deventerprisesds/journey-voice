@@ -5,7 +5,7 @@ import {
   type SchedulingConfig,
   type TimeWindow,
 } from "@/config/schedulingRules";
-import { getBrowserTimezone, getTimezoneOffset } from "@/lib/timezone";
+import { getBrowserTimezone } from "@/lib/timezone";
 
 export type { SchedulingConfig, TimeWindow };
 
@@ -131,13 +131,6 @@ export async function saveUserSchedulingConfig(
  */
 export function getUserTimezone(config: SchedulingConfig): string {
   return config.timezone || getBrowserTimezone();
-}
-
-/**
- * Get user's timezone offset in minutes
- */
-export function getUserTimezoneOffset(config: SchedulingConfig): number {
-  return getTimezoneOffset(config.timezone || getBrowserTimezone());
 }
 
 /**

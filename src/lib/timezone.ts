@@ -14,36 +14,7 @@ export function getBrowserTimezone(): string {
   }
 }
 
-/**
- * Convert IANA timezone to current UTC offset in minutes
- * @param timezone IANA timezone identifier (e.g., 'America/New_York')
- * @returns Offset in minutes (positive for west of UTC, negative for east)
- */
-export function getTimezoneOffset(timezone: string): number {
-  try {
-    const now = new Date();
-    
-    // Format the date in the target timezone
-    const tzString = now.toLocaleString('en-US', { 
-      timeZone: timezone,
-      timeZoneName: 'short'
-    });
-    
-    // Get the local time in that timezone
-    const tzDate = new Date(tzString);
-    
-    // Calculate offset in minutes
-    // JavaScript's getTimezoneOffset returns offset from UTC (positive = west)
-    // We want the same convention
-    const offset = (now.getTime() - tzDate.getTime()) / (1000 * 60);
-    
-    return Math.round(offset);
-  } catch (error) {
-    console.error('Error calculating timezone offset:', error);
-    // Default to Eastern Time offset (UTC-5 or UTC-4 depending on DST)
-    return 240; // EST offset
-  }
-}
+// Removed getTimezoneOffset - use IANA timezone directly with Date objects
 
 /**
  * Validate if a string is a valid IANA timezone identifier
@@ -64,16 +35,15 @@ export function isValidTimezone(timezone: string): boolean {
  */
 export function formatTimezoneWithOffset(timezone: string): string {
   try {
-    const offset = getTimezoneOffset(timezone);
-    const hours = Math.abs(Math.floor(offset / 60));
-    const minutes = Math.abs(offset % 60);
-    const sign = offset > 0 ? '-' : '+';
+    const now = new Date();
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      timeZoneName: 'short'
+    });
+    const parts = formatter.formatToParts(now);
+    const timeZoneName = parts.find(part => part.type === 'timeZoneName')?.value || '';
     
-    const offsetStr = minutes > 0 
-      ? `${sign}${hours}:${minutes.toString().padStart(2, '0')}`
-      : `${sign}${hours}`;
-    
-    return `${timezone} (UTC${offsetStr})`;
+    return `${timezone} ${timeZoneName ? `(${timeZoneName})` : ''}`;
   } catch {
     return timezone;
   }
