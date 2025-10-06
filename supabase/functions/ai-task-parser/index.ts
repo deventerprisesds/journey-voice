@@ -1,5 +1,6 @@
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -196,7 +197,53 @@ Examples:
     try {
       const parsed = JSON.parse(content);
       console.log('✅ Successfully parsed tasks:', parsed.tasks?.length || 0, 'tasks');
-      return new Response(JSON.stringify(parsed), {
+
+      // Create Supabase client to call internal scheduler
+      const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
+      const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+      const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
+      // Schedule tasks via central smart scheduler so times come from one place
+      const tasks = Array.isArray(parsed.tasks) ? parsed.tasks : [];
+      const scheduled = await Promise.all(tasks.map(async (t: any) => {
+        try {
+          if (t.start_time || t.end_time) return t; // already explicit
+
+          const { data: schedData, error: schedError } = await supabase.functions.invoke('smart-calendar-scheduler', {
+            body: {
+              taskText: `${t.title}${t.description ? ' - ' + t.description : ''}`,
+              targetDate: null, // prefer dueDate for bounds only
+              dueDate: t.due_date ?? null,
+              existingTasks: [],
+              busySlots: [],
+              scheduling_context: t.scheduling_context ?? [],
+              taskCategory: t.category,
+              taskPriority: t.priority
+            }
+          });
+
+          if (schedError) {
+            console.error('Scheduler error for task', t.title, schedError.message);
+            return t; // fallback: return unscheduled
+          }
+
+          if (schedData?.success && schedData?.scheduledTask) {
+            return {
+              ...t,
+              start_time: schedData.scheduledTask.start_time,
+              end_time: schedData.scheduledTask.end_time,
+              estimate_minutes: t.estimate_minutes ?? schedData.scheduledTask.estimate_minutes
+            };
+          }
+
+          return t;
+        } catch (e) {
+          console.error('Error scheduling task', t?.title, e);
+          return t;
+        }
+      }));
+
+      return new Response(JSON.stringify({ tasks: scheduled }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     } catch (parseError) {

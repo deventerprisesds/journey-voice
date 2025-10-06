@@ -76,6 +76,7 @@ serve(async (req) => {
     const {
       taskText,
       targetDate,
+      dueDate, // optional: ISO string deadline
       existingTasks = [],
       workingMinutes = 420,
       busySlots = [],
@@ -84,7 +85,8 @@ serve(async (req) => {
       threadId,
       userSchedulingConfig, // NEW: User's custom config
       taskCategory,
-      taskPriority
+      taskPriority,
+      estimateMinutes
     } = await req.json();
     
     if (!taskText) {
@@ -141,6 +143,11 @@ serve(async (req) => {
       estimatedDuration = mapping.estimatedDuration;
     }
 
+    // Override with explicit estimate from caller if provided
+    if (typeof estimateMinutes === 'number' && !Number.isNaN(estimateMinutes)) {
+      estimatedDuration = estimateMinutes;
+    }
+
     // Check if context specifies status
     const statusContext = scheduling_context.find((ctx: string) => ctx.startsWith('status:'));
     if (statusContext) {
@@ -154,14 +161,8 @@ serve(async (req) => {
     const constraints = config.timeWindows[timeWindow] || config.timeWindows.flexible;
 
     // Parse target date (or use due date, or today)
-    let searchStartDate = new Date();
-    if (targetDate) {
-      searchStartDate = new Date(targetDate);
-    } else if (dueDate) {
-      // Start searching from today, but don't go past due date
-      searchStartDate = new Date();
-    }
-    
+    let searchStartDate = targetDate ? new Date(targetDate) : new Date();
+
     // Calculate max search date (don't schedule past due date if provided)
     const dueDateObj = dueDate ? new Date(dueDate) : null;
     const maxSearchDays = 7;
