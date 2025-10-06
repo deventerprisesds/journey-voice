@@ -28,6 +28,7 @@ import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 import { Task } from '@/types/task';
 import { fromHHMMToISO } from '@/lib/date';
+import { extractSchedulingContext } from '@/services/schedulingService';
 
 interface ParsedTask {
   title: string;
@@ -262,10 +263,27 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
         if (!isDemoMode) {
           try {
             const { scheduleNewTask } = await import('@/utils/taskScheduling');
+            
+            // Extract scheduling context from title/description using keyword mapping
+            const { context, timeWindow, suggestedStatus, estimatedDuration } = extractSchedulingContext(
+              `${task.title} ${task.description || ''}`,
+              task.category,
+              task.priority
+            );
+            
+            // Merge AI-provided context with keyword-extracted context
+            const fullContext = [
+              ...(task.scheduling_context || []),
+              ...context,
+              `timeWindow:${timeWindow}`,
+              `status:${suggestedStatus}`
+            ];
+            
             // Pass already scheduled tasks in this batch so scheduler knows about them
             const scheduleResult = await scheduleNewTask({
               ...task,
-              scheduling_context: task.scheduling_context
+              estimate_minutes: task.estimate_minutes || estimatedDuration,
+              scheduling_context: fullContext
             }, alreadyScheduled);
             
             if (scheduleResult.success && scheduleResult.scheduledTask) {
