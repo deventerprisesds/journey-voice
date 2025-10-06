@@ -201,6 +201,142 @@ serve(async (req) => {
     
     console.log('🔧 RAW user config:', JSON.stringify(loadedUserConfig, null, 2));
 
+    // ===== AI-ENHANCED TIME WINDOW DETECTION =====
+    const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
+    let aiSuggestion: any = null;
+
+    if (LOVABLE_API_KEY && userId) {
+      try {
+        console.log('🤖 Fetching calendar data for AI enhancement...');
+        const supabase = createClient(supabaseUrl, supabaseServiceKey);
+        
+        // Get scheduled tasks (next 14 days)
+        const futureDate = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+        const { data: scheduledTasks } = await supabase
+          .from('tasks')
+          .select('title, start_time, end_time')
+          .eq('user_id', userId)
+          .eq('is_scheduled', true)
+          .gte('start_time', new Date().toISOString())
+          .lte('start_time', futureDate.toISOString());
+        
+        // Get external calendar events
+        const { data: calendarEvents } = await supabase
+          .from('external_calendar_events')
+          .select('title, start_time, end_time')
+          .eq('user_id', userId)
+          .gte('start_time', new Date().toISOString())
+          .lte('end_time', futureDate.toISOString());
+        
+        const allBusySlots = [
+          ...(scheduledTasks || []),
+          ...(calendarEvents || [])
+        ];
+        
+        console.log(`📅 Loaded ${allBusySlots.length} busy slots for AI context`);
+        
+        // Build AI prompt with calendar context
+        const aiPrompt = `You are a time scheduling expert. Analyze this task and suggest the most appropriate time window and ideal start time.
+
+CURRENT CONTEXT:
+- Current date/time (${timezone}): ${new Date().toLocaleString('en-US', { timeZone: timezone })}
+- User's timezone: ${timezone}
+- Task: "${taskText}"
+- Category: ${taskCategory || 'unknown'}
+- Priority: ${taskPriority || 'MEDIUM'}
+- Estimated duration: ${estimateMinutes || estimatedDuration || 60} minutes
+- Due date: ${dueDate || 'none specified'}
+
+USER'S BUSY TIMES (avoid these):
+${allBusySlots.length > 0 ? allBusySlots.map(slot => {
+  const start = new Date(slot.start_time).toLocaleString('en-US', { timeZone: timezone, dateStyle: 'short', timeStyle: 'short' });
+  const end = new Date(slot.end_time).toLocaleString('en-US', { timeZone: timezone, timeStyle: 'short' });
+  return `- ${slot.title}: ${start} to ${end}`;
+}).join('\n') : 'No conflicts'}
+
+TYPICAL ACTIVITY TIMING PATTERNS:
+Work & Meetings:
+- Standup meetings: 9:00-9:30 AM
+- Team sync/calls: 10:00 AM - 4:00 PM
+- Work focus time: 9:00 AM - 5:00 PM
+
+Meals:
+- Breakfast: 7:00-8:00 AM
+- Brunch: 10:00-11:00 AM
+- Lunch: 12:00-1:00 PM (peak at 12:00 PM, NOT 4pm!)
+- Dinner: 7:00-8:00 PM (NOT 9-10pm - too late!)
+- Coffee meetings: 10:00-11:00 AM or 2:00-3:00 PM
+
+Exercise:
+- Morning workout: 6:30-7:30 AM
+- Gym session: 5:30-6:30 PM (after work)
+
+Errands & Appointments:
+- Bank: 12:00-1:00 PM (lunch break, they close at 5pm) or 5:00-5:30 PM
+- Post office: Similar to banks
+- Grocery shopping: After 5:30 PM or weekends 10:00-11:00 AM
+- Doctor: 9:00-10:00 AM or 12:00-1:00 PM
+
+Social & Personal:
+- Family time: 7:00-9:00 PM
+- Hobbies: Weekends 2:00-4:00 PM or weekday evenings 6:00-8:00 PM
+
+CATEGORY-SPECIFIC DEFAULTS:
+- CAREER: business_hours (9am-5pm weekdays)
+- EDUCATION: after_work (5pm-10pm) or weekends
+- VENTURES: after_work or weekends
+- LIFE: flexible (9am-10pm any day)
+
+INSTRUCTIONS:
+1. Consider typical timing for this activity type
+2. Find the NEXT AVAILABLE slot that matches the pattern
+3. Avoid all listed busy times
+4. If suggested time is past/busy, propose next occurrence
+5. Respect category defaults (e.g., CAREER during business hours)
+
+Return ONLY valid JSON (no markdown):
+{
+  "suggested_time_window": "business_hours|after_work|morning|evening|flexible|weekends",
+  "ideal_hour": 12,
+  "ideal_minute": 0,
+  "reasoning": "brief explanation why this time makes sense",
+  "flexibility": "strict|flexible"
+}`;
+
+        // Call Lovable AI
+        const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${LOVABLE_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'google/gemini-2.5-flash',
+            messages: [
+              { role: 'system', content: 'You are a scheduling assistant. Return only JSON.' },
+              { role: 'user', content: aiPrompt }
+            ],
+            temperature: 0.3,
+          }),
+        });
+
+        if (aiResponse.ok) {
+          const aiData = await aiResponse.json();
+          const content = aiData.choices[0]?.message?.content;
+          
+          // Parse AI suggestion
+          const jsonMatch = content?.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            aiSuggestion = JSON.parse(jsonMatch[0]);
+            console.log('🤖 AI Scheduling Suggestion:', aiSuggestion);
+            console.log(`   Reasoning: ${aiSuggestion.reasoning}`);
+          }
+        }
+      } catch (aiError) {
+        console.warn('⚠️ AI enhancement failed, falling back to rules:', aiError);
+      }
+    }
+
     // Define default config constants
     const DEFAULT_CONFIG: SchedulingConfig = {
       timezone: 'America/New_York',
@@ -273,12 +409,19 @@ serve(async (req) => {
     let estimatedDuration = 60;
     let preferredTimeMinutes: number | null = null;
 
-    // Check if context specifies time window
-    const timeWindowContext = scheduling_context.find((ctx: string) => ctx.startsWith('timeWindow:'));
-    if (timeWindowContext) {
-      timeWindow = timeWindowContext.split(':')[1];
-    } else if (taskCategory && config.categoryMappings[taskCategory]) {
-      // Use category mapping
+    // PRIORITY 1: Use AI suggestion if available
+    if (aiSuggestion) {
+      timeWindow = aiSuggestion.suggested_time_window || timeWindow;
+      preferredTimeMinutes = (aiSuggestion.ideal_hour * 60) + (aiSuggestion.ideal_minute || 0);
+      console.log(`🤖 AI suggests: ${timeWindow} window, preferred time: ${aiSuggestion.ideal_hour}:${(aiSuggestion.ideal_minute || 0).toString().padStart(2, '0')}`);
+    }
+    // PRIORITY 2: Check if context specifies time window
+    else if (scheduling_context.find((ctx: string) => ctx.startsWith('timeWindow:'))) {
+      const timeWindowContext = scheduling_context.find((ctx: string) => ctx.startsWith('timeWindow:'));
+      timeWindow = timeWindowContext!.split(':')[1];
+    } 
+    // PRIORITY 3: Use category mapping
+    else if (taskCategory && config.categoryMappings[taskCategory]) {
       const mapping = config.categoryMappings[taskCategory];
       timeWindow = mapping.defaultTimeWindow;
       suggestedStatus = mapping.defaultStatus;
@@ -290,14 +433,16 @@ serve(async (req) => {
       estimatedDuration = estimateMinutes;
     }
 
-    // Extract suggested time (e.g., "suggested_time:12:0" for noon)
-    const suggestedTimeContext = scheduling_context?.find(c => c.startsWith('suggested_time:'));
-    if (suggestedTimeContext) {
-      const timeParts = suggestedTimeContext.split(':');
-      const suggestedHour = parseInt(timeParts[1]);
-      const suggestedMinute = parseInt(timeParts[2] || '0');
-      preferredTimeMinutes = suggestedHour * 60 + suggestedMinute;
-      console.log(`⏰ Preferred time: ${suggestedHour}:${suggestedMinute.toString().padStart(2, '0')} (${preferredTimeMinutes} minutes from midnight)`);
+    // Extract suggested time (e.g., "suggested_time:12:0" for noon) - only if AI didn't provide one
+    if (preferredTimeMinutes === null) {
+      const suggestedTimeContext = scheduling_context?.find(c => c.startsWith('suggested_time:'));
+      if (suggestedTimeContext) {
+        const timeParts = suggestedTimeContext.split(':');
+        const suggestedHour = parseInt(timeParts[1]);
+        const suggestedMinute = parseInt(timeParts[2] || '0');
+        preferredTimeMinutes = suggestedHour * 60 + suggestedMinute;
+        console.log(`⏰ Preferred time from context: ${suggestedHour}:${suggestedMinute.toString().padStart(2, '0')} (${preferredTimeMinutes} minutes from midnight)`);
+      }
     }
 
     // Check if context specifies status

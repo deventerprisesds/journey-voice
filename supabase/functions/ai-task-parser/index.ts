@@ -59,78 +59,31 @@ CRITICAL: Use this current date as your reference for relative dates like "tomor
 
 Parse the user's input into one or more tasks. Each task should have:
 - title: Clear, actionable task title
-- description: Optional detailed description with context clues for scheduling
-- priority: LOW, MEDIUM, HIGH, or URGENT
-- category: LIFE, CAREER, VENTURES, or EDUCATION
-- due_date: ISO date string ONLY if user specifies deadline (otherwise null)
-- start_time: null (DO NOT SET - scheduler will assign)
-- end_time: null (DO NOT SET - scheduler will assign)
+- description: Optional detailed description
+- priority: LOW, MEDIUM, HIGH, or URGENT (infer from urgency words)
+- category: LIFE, CAREER, VENTURES, or EDUCATION (infer from context)
+- due_date: ISO date string ONLY if user specifies a deadline (null otherwise)
+- start_time: null (DO NOT SET - scheduler handles all timing)
+- end_time: null (DO NOT SET - scheduler handles all timing)
 - estimate_minutes: Estimated duration in minutes
 - status: BACKLOG, TODO, READY, UP_NEXT, DOING
-- scheduling_context: Array of context clues for intelligent scheduling
-
-INTELLIGENT TIME SLOT ASSIGNMENT:
-Determine SPECIFIC start_time and end_time for tasks based on typical timing patterns.
-
-TYPICAL ACTIVITY TIMINGS:
-Work & Meetings:
-- Standup meetings: 9:00-9:30 AM (start of workday)
-- Team sync: 10:00-10:30 AM or 2:00-2:30 PM (mid-morning/afternoon)
-- Meetings: 10:00 AM - 4:00 PM (business hours)
-- Work calls: 9:00 AM - 5:00 PM (business hours)
-
-Meals:
-- Breakfast: 7:00-8:00 AM
-- Brunch: 10:00-11:00 AM
-- Lunch: 12:00-1:00 PM or 12:30-1:30 PM (not at 3pm!)
-- Dinner: 7:00-8:30 PM (NOT 9-10pm - that's too late!)
-- Coffee meetings: 10:00-11:00 AM or 2:00-3:00 PM
-
-Exercise:
-- Morning workout: 6:30-7:30 AM (before work)
-- Gym session: 5:30-6:30 PM (after work)
-- Exercise class: 6:00-7:00 PM
-
-Errands & Appointments:
-- Grocery shopping: 5:30-6:30 PM (AFTER work, NOT during) or weekends 10:00-11:00 AM
-- Bank appointments: 12:00-12:45 PM (lunch break) - banks close at 5pm
-- Doctor appointments: 9:00-10:00 AM or 12:00-1:00 PM (business hours, avoid work conflicts)
-- Post office: 12:15-1:00 PM (lunch break) or after 5:00 PM
-- Shopping/errands: 5:30-6:30 PM (after work hours)
-
-Social & Personal:
-- Family time: 7:00-9:00 PM
-- Social activities: 7:00-9:00 PM
-- Hobbies: Weekends 2:00-4:00 PM or after work 6:00-8:00 PM
+- scheduling_context: Empty array (not used - AI scheduler handles timing intelligence)
 
 DURATION ESTIMATES:
-- Standup/quick sync: 30 minutes
-- Regular meetings: 60 minutes
+- Quick meeting/call: 30 minutes
+- Regular meeting: 60 minutes
 - Meals: 60-90 minutes (lunch 60min, dinner 90min)
-- Quick errands: 30-45 minutes
+- Errands: 30-45 minutes
 - Grocery shopping: 45-60 minutes
 - Appointments: 45-60 minutes
 - Workouts: 60 minutes
 - Social events: 120 minutes
 
-CRITICAL CONSTRAINTS:
-1. DON'T schedule errands/shopping during work hours (9am-5pm weekdays)
-2. DON'T schedule meals at weird times (dinner at 10pm, lunch at 4pm)
-3. DON'T schedule work meetings outside business hours unless specified
-4. Banks/post offices close at 5pm - schedule during lunch or right after 5pm
-5. Respect typical human schedules - dinner at 7pm, not 9pm
-
-CRITICAL INSTRUCTIONS:
-- NEVER set start_time or end_time fields - always return null
-- Add intelligent hints to scheduling_context array instead:
-  - For meals: ["suggested_time:19:0"] for dinner, ["suggested_time:12:0"] for lunch
-  - For standups: ["suggested_time:9:0"]  
-  - For workouts: ["suggested_time:6:30"] or ["suggested_time:17:30"]
-  - For errands: ["after_work", "suggested_time:17:30"]
-- Add time window hints: "business_hours", "evening", "after_work", "morning"
-- Set estimate_minutes based on duration guidance above
-- Only set due_date if user explicitly mentions a deadline
-- The smart scheduler will find the next available slot based on your hints
+CATEGORY INFERENCE:
+- Work/job/career/meeting → CAREER
+- School/course/study/learning → EDUCATION
+- Business/startup/venture → VENTURES
+- Personal/family/life/errands → LIFE
 
 Return JSON in this exact format:
 {
@@ -209,61 +162,79 @@ Examples:
       // Client-side will handle all scheduling with full user context
       const tasks = Array.isArray(parsed.tasks) ? parsed.tasks : [];
 
-      // Generate preview scheduling if context provided
+      // Generate preview scheduling if context provided - SEQUENTIAL to avoid duplicates
       if (userId && boardId) {
-        console.log('🔮 Generating preview scheduling for', tasks.length, 'tasks');
+        console.log('🔮 Generating SEQUENTIAL preview scheduling for', tasks.length, 'tasks');
         
         const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
         const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
         
-        const tasksWithPreview = await Promise.all(
-          tasks.map(async (task, index) => {
-            try {
-              const schedulerResponse = await fetch(`${supabaseUrl}/functions/v1/smart-calendar-scheduler`, {
-                method: 'POST',
-                headers: {
-                  'Authorization': `Bearer ${supabaseKey}`,
-                  'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                  taskText: task.title,
-                  task: {
-                    ...task,
-                    board_id: boardId,
-                    user_id: userId,
-                  },
-                  userId,
-                  existingTasks,
-                  scheduling_context: task.scheduling_context || [],
-                  taskCategory: task.category,
-                  taskPriority: task.priority,
-                  estimateMinutes: task.estimate_minutes,
-                  dueDate: task.due_date,
-                  timezone: timezone || 'UTC',
-                }),
-              });
-              
-              if (schedulerResponse.ok) {
-                const { scheduledTask } = await schedulerResponse.json();
-                console.log(`✅ Preview scheduled task ${index + 1}:`, scheduledTask?.start_time);
-                return {
-                  ...task,
-                  start_time: scheduledTask?.start_time || null,
-                  end_time: scheduledTask?.end_time || null,
-                  isPreview: true, // Mark as preview
-                };
-              } else {
-                const errorText = await schedulerResponse.text();
-                console.warn(`⚠️ Preview scheduling failed for task ${index + 1}:`, errorText);
-              }
-            } catch (error) {
-              console.error(`❌ Preview scheduling error for task ${index + 1}:`, error);
-            }
-            return task;
-          })
-        );
+        // Schedule sequentially to avoid duplicate times
+        const tasksWithPreview = [];
+        const reservedSlots: any[] = [];
         
-        console.log('✅ Preview scheduling complete');
+        for (let i = 0; i < tasks.length; i++) {
+          const task = tasks[i];
+          
+          try {
+            // Build busy slots including previously scheduled preview tasks
+            const allExistingTasks = [...existingTasks, ...reservedSlots];
+            
+            const schedulerResponse = await fetch(`${supabaseUrl}/functions/v1/smart-calendar-scheduler`, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${supabaseKey}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                taskText: task.title,
+                userId,
+                existingTasks: allExistingTasks,
+                scheduling_context: task.scheduling_context || [],
+                taskCategory: task.category,
+                taskPriority: task.priority,
+                estimateMinutes: task.estimate_minutes,
+                dueDate: task.due_date,
+                timezone: timezone || 'UTC',
+              }),
+            });
+            
+            if (schedulerResponse.ok) {
+              const { scheduledTask } = await schedulerResponse.json();
+              
+              if (scheduledTask?.start_time && scheduledTask?.end_time) {
+                console.log(`✅ Task ${i + 1} scheduled: ${scheduledTask.start_time}`);
+                
+                // Add to reserved slots for next iteration
+                reservedSlots.push({
+                  start_time: scheduledTask.start_time,
+                  end_time: scheduledTask.end_time,
+                  title: task.title,
+                  is_scheduled: true,
+                });
+                
+                tasksWithPreview.push({
+                  ...task,
+                  start_time: scheduledTask.start_time,
+                  end_time: scheduledTask.end_time,
+                  isPreview: true,
+                });
+              } else {
+                console.warn(`⚠️ No time assigned for task ${i + 1}`);
+                tasksWithPreview.push(task);
+              }
+            } else {
+              const errorText = await schedulerResponse.text();
+              console.warn(`⚠️ Scheduling failed for task ${i + 1}:`, errorText);
+              tasksWithPreview.push(task);
+            }
+          } catch (error) {
+            console.error(`❌ Error scheduling task ${i + 1}:`, error);
+            tasksWithPreview.push(task);
+          }
+        }
+        
+        console.log('✅ Sequential preview scheduling complete');
         
         return new Response(JSON.stringify({ tasks: tasksWithPreview }), {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
