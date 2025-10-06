@@ -566,15 +566,16 @@ for (let dayOffset = 0; dayOffset < maxSearchDays; dayOffset++) {
         // Score this slot
         let score = 0;
         
-        // STRONG preference for earlier days (exponential penalty)
-        score -= dayOffset * dayOffset * 10;
+        // VERY STRONG preference for earlier days (exponential penalty)
+        // Even with preferred time, sooner is better
+        score -= dayOffset * dayOffset * 30;
         
-        // If preferred time is set, score by proximity
+        // If preferred time is set, score by proximity (but don't let it override day preference)
         if (preferredStartUTC !== null) {
           const timeDiffMinutes = Math.abs((slot.start.getTime() - preferredStartUTC.getTime()) / 60000);
           
-          // STRONG preference for suggested time (exponential penalty for distance)
-          score += Math.max(0, 100 - (timeDiffMinutes / 15) ** 2);
+          // Moderate preference for suggested time (doesn't override day preference)
+          score += Math.max(0, 50 - (timeDiffMinutes / 30) ** 2);
         } else {
           // No suggested time - prefer earlier times in the window
           const slotLocalParts = getZonedDayParts(slot.start, timezone);
@@ -584,9 +585,9 @@ for (let dayOffset = 0; dayOffset < maxSearchDays; dayOffset++) {
         
         // Priority boost for earlier slots (URGENT tasks get best slots)
         const priorityBonus: Record<string, number> = { 
-          URGENT: 20, 
-          HIGH: 10, 
-          MEDIUM: 5, 
+          URGENT: 50, 
+          HIGH: 30, 
+          MEDIUM: 10, 
           LOW: 0 
         };
         score += priorityBonus[taskPriority] || 0;
@@ -778,6 +779,24 @@ function findBestSlotForDay(
     }
   }
 
+  // Helper function to snap a date to nearest :00 or :30
+  const snapToHalfHour = (date: Date): Date => {
+    const snapped = new Date(date);
+    const minutes = snapped.getMinutes();
+    
+    // Round to nearest 0 or 30
+    if (minutes < 15) {
+      snapped.setMinutes(0, 0, 0);
+    } else if (minutes < 45) {
+      snapped.setMinutes(30, 0, 0);
+    } else {
+      snapped.setMinutes(0, 0, 0);
+      snapped.setHours(snapped.getHours() + 1);
+    }
+    
+    return snapped;
+  };
+
   // Find candidate slots within each gap
   const candidateSlots: Array<{ slot: BusySlot; score: number }> = [];
 
@@ -786,31 +805,39 @@ function findBestSlotForDay(
     
     if (gapDurationMinutes < durationMinutes) continue; // Gap too small
 
+    // Snap gap start to next :00 or :30
+    const snappedGapStart = snapToHalfHour(gap.start);
+    
+    // If snapped start is past gap end, skip this gap
+    if (snappedGapStart >= gap.end) continue;
+
     // If we have a preferred time, try to fit the slot at that time
     if (preferredStartUTC !== null) {
-      const preferredEnd = new Date(preferredStartUTC.getTime() + durationMinutes * 60000);
+      // Snap preferred time to nearest :00 or :30
+      const snappedPreferred = snapToHalfHour(preferredStartUTC);
+      const preferredEnd = new Date(snappedPreferred.getTime() + durationMinutes * 60000);
 
-      // Check if preferred slot fits in this gap
-      if (preferredStartUTC >= gap.start && preferredEnd <= gap.end) {
+      // Check if snapped preferred slot fits in this gap
+      if (snappedPreferred >= gap.start && preferredEnd <= gap.end) {
         candidateSlots.push({
-          slot: { start: preferredStartUTC, end: preferredEnd },
+          slot: { start: snappedPreferred, end: preferredEnd },
           score: 1000 // Perfect match gets highest score
         });
         continue; // Found perfect fit, skip other candidates in this gap
       }
 
-      // Otherwise, find closest fit within gap
+      // Otherwise, find closest fit within gap (only at :00 or :30)
       let bestInGap: Date | null = null;
       let bestScore = -Infinity;
 
-      // Try slots at 15-minute intervals
-      for (let offset = 0; offset <= gapDurationMinutes - durationMinutes; offset += 15) {
-        const slotStart = new Date(gap.start.getTime() + offset * 60000);
+      // Try slots at 30-minute intervals (ensuring :00 or :30)
+      for (let offset = 0; offset <= gapDurationMinutes - durationMinutes; offset += 30) {
+        const slotStart = new Date(snappedGapStart.getTime() + offset * 60000);
         const slotEnd = new Date(slotStart.getTime() + durationMinutes * 60000);
         
         if (slotEnd > gap.end) break;
 
-        const timeDiffMs = Math.abs(slotStart.getTime() - preferredStartUTC.getTime());
+        const timeDiffMs = Math.abs(slotStart.getTime() - snappedPreferred.getTime());
         const score = 500 - (timeDiffMs / 60000); // Score decreases with distance from preferred
 
         if (score > bestScore) {
@@ -826,9 +853,9 @@ function findBestSlotForDay(
         });
       }
     } else {
-      // No preferred time - use earliest slot in gap
+      // No preferred time - use earliest :00 or :30 slot in gap
       candidateSlots.push({
-        slot: { start: gap.start, end: new Date(gap.start.getTime() + durationMinutes * 60000) },
+        slot: { start: snappedGapStart, end: new Date(snappedGapStart.getTime() + durationMinutes * 60000) },
         score: 0
       });
     }
