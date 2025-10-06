@@ -153,14 +153,36 @@ serve(async (req) => {
     // Get time window constraints
     const constraints = config.timeWindows[timeWindow] || config.timeWindows.flexible;
 
-    // Parse target date
-    const date = targetDate ? new Date(targetDate) : new Date();
+    // Parse target date (or use due date, or today)
+    let searchStartDate = new Date();
+    if (targetDate) {
+      searchStartDate = new Date(targetDate);
+    } else if (dueDate) {
+      // Start searching from today, but don't go past due date
+      searchStartDate = new Date();
+    }
     
-    // Try to find a slot for up to 7 days
-    let scheduledSlot = null;
-    for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
-      const checkDate = new Date(date);
+    // Calculate max search date (don't schedule past due date if provided)
+    const dueDateObj = dueDate ? new Date(dueDate) : null;
+    const maxSearchDays = 7;
+    
+    // Collect ALL candidate slots across search window
+    const candidateSlots: Array<{
+      slot: BusySlot;
+      dayOffset: number;
+      date: Date;
+      score: number;
+    }> = [];
+    
+    for (let dayOffset = 0; dayOffset < maxSearchDays; dayOffset++) {
+      const checkDate = new Date(searchStartDate);
       checkDate.setDate(checkDate.getDate() + dayOffset);
+      
+      // Don't schedule past due date
+      if (dueDateObj && checkDate > dueDateObj) {
+        console.log(`Skipping ${checkDate.toDateString()} - past due date ${dueDateObj.toDateString()}`);
+        break;
+      }
       
       // Check if day is allowed
       const dayOfWeek = checkDate.getDay();
@@ -182,12 +204,50 @@ serve(async (req) => {
       );
 
       if (slot) {
-        scheduledSlot = slot;
-        console.log('Found available slot:', slot);
-        break;
+        // Score this slot
+        let score = 0;
+        
+        // STRONG preference for earlier days (exponential penalty)
+        score -= dayOffset * dayOffset * 10;
+        
+        // Prefer slots within preferred time window
+        const slotHour = slot.start.getHours();
+        const isInPreferredWindow = 
+          slotHour >= constraints.start && 
+          slotHour < constraints.end;
+        if (isInPreferredWindow) score += 50;
+        
+        // Prefer earlier times within the day
+        score -= slotHour;
+        
+        // Priority boost for earlier slots (URGENT tasks get best slots)
+        const priorityBonus: Record<string, number> = { 
+          URGENT: 20, 
+          HIGH: 10, 
+          MEDIUM: 5, 
+          LOW: 0 
+        };
+        score += priorityBonus[taskPriority] || 0;
+        
+        candidateSlots.push({
+          slot,
+          dayOffset,
+          date: checkDate,
+          score
+        });
+        
+        console.log(`Found slot on ${checkDate.toDateString()} at ${slot.start.toLocaleTimeString()} - score: ${score}`);
       } else {
         console.log(`No slot found on ${checkDate.toDateString()}, trying next day`);
       }
+    }
+    
+    // Sort by score (highest first) and pick best
+    candidateSlots.sort((a, b) => b.score - a.score);
+    const scheduledSlot = candidateSlots.length > 0 ? candidateSlots[0].slot : null;
+    
+    if (scheduledSlot && candidateSlots.length > 0) {
+      console.log(`Selected best slot: ${scheduledSlot.start.toLocaleString()} (score: ${candidateSlots[0].score})`);
     }
 
     if (!scheduledSlot) {

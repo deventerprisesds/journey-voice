@@ -156,10 +156,13 @@ export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
       startup: ['after_work', 'VENTURES'],
       business: ['after_work', 'VENTURES'],
       
-      // Evening keywords
+      // Meal and social keywords
+      lunch: ['business_hours', 'LIFE'],
+      brunch: ['morning', 'LIFE'],
       dinner: ['evening', 'LIFE'],
       family: ['evening', 'LIFE'],
       relax: ['evening', 'LIFE'],
+      social: ['evening', 'LIFE'],
       
       // Weekend keywords
       weekend: ['weekends', 'LIFE'],
