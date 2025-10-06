@@ -365,25 +365,51 @@ Return ONLY valid JSON (no markdown):
     };
 
     // Merge user config with defaults - user values take precedence
-    const config: SchedulingConfig = {
-      timezone: loadedUserConfig?.timezone || DEFAULT_CONFIG.timezone,
-      timeWindows: {
-        ...DEFAULT_CONFIG.timeWindows,
-        ...loadedUserConfig?.timeWindows,
-      },
-      workingHours: {
-        ...DEFAULT_CONFIG.workingHours,
-        ...loadedUserConfig?.workingHours,
-      },
-      workloadBalance: {
-        ...DEFAULT_CONFIG.workloadBalance,
-        ...loadedUserConfig?.workloadBalance,
-      },
-      categoryMappings: {
-        ...DEFAULT_CONFIG.categoryMappings,
-        ...loadedUserConfig?.categoryMappings,
-      },
-    };
+  const config: SchedulingConfig = {
+    timezone: loadedUserConfig?.timezone || DEFAULT_CONFIG.timezone,
+    
+    // Deep merge time windows - use custom values if they exist, otherwise defaults
+    timeWindows: loadedUserConfig?.timeWindows 
+      ? {
+          morning: loadedUserConfig.timeWindows.morning || DEFAULT_CONFIG.timeWindows.morning,
+          business_hours: loadedUserConfig.timeWindows.business_hours || DEFAULT_CONFIG.timeWindows.business_hours,
+          after_work: loadedUserConfig.timeWindows.after_work || DEFAULT_CONFIG.timeWindows.after_work,
+          evening: loadedUserConfig.timeWindows.evening || DEFAULT_CONFIG.timeWindows.evening,
+          flexible: loadedUserConfig.timeWindows.flexible || DEFAULT_CONFIG.timeWindows.flexible,
+          weekends: loadedUserConfig.timeWindows.weekends || DEFAULT_CONFIG.timeWindows.weekends,
+        }
+      : DEFAULT_CONFIG.timeWindows,
+    
+    // Deep merge working hours
+    workingHours: loadedUserConfig?.workingHours 
+      ? {
+          defaultStart: loadedUserConfig.workingHours.defaultStart ?? DEFAULT_CONFIG.workingHours.defaultStart,
+          defaultEnd: loadedUserConfig.workingHours.defaultEnd ?? DEFAULT_CONFIG.workingHours.defaultEnd,
+          breakMinutes: loadedUserConfig.workingHours.breakMinutes ?? DEFAULT_CONFIG.workingHours.breakMinutes,
+          maxDailyHours: loadedUserConfig.workingHours.maxDailyHours ?? DEFAULT_CONFIG.workingHours.maxDailyHours,
+        }
+      : DEFAULT_CONFIG.workingHours,
+    
+    // Deep merge workload balance
+    workloadBalance: loadedUserConfig?.workloadBalance
+      ? {
+          projectToTaskRatio: loadedUserConfig.workloadBalance.projectToTaskRatio ?? DEFAULT_CONFIG.workloadBalance.projectToTaskRatio,
+          oneOffTaskRatio: loadedUserConfig.workloadBalance.oneOffTaskRatio ?? DEFAULT_CONFIG.workloadBalance.oneOffTaskRatio,
+          bufferRatio: loadedUserConfig.workloadBalance.bufferRatio ?? DEFAULT_CONFIG.workloadBalance.bufferRatio,
+        }
+      : DEFAULT_CONFIG.workloadBalance,
+    
+    // Deep merge category mappings
+    categoryMappings: loadedUserConfig?.categoryMappings
+      ? {
+          CAREER: loadedUserConfig.categoryMappings.CAREER || DEFAULT_CONFIG.categoryMappings.CAREER,
+          PROF_EDUCATION: loadedUserConfig.categoryMappings.PROF_EDUCATION || DEFAULT_CONFIG.categoryMappings.PROF_EDUCATION,
+          EDUCATION: loadedUserConfig.categoryMappings.EDUCATION || DEFAULT_CONFIG.categoryMappings.EDUCATION,
+          VENTURES: loadedUserConfig.categoryMappings.VENTURES || DEFAULT_CONFIG.categoryMappings.VENTURES,
+          LIFE: loadedUserConfig.categoryMappings.LIFE || DEFAULT_CONFIG.categoryMappings.LIFE,
+        }
+      : DEFAULT_CONFIG.categoryMappings,
+  };
     
     console.log('🔧 User config loaded:', loadedUserConfig ? 'YES' : 'NO');
     console.log('📋 Time windows being used:', JSON.stringify(config.timeWindows, null, 2));
