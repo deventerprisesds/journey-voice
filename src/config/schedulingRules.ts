@@ -168,9 +168,15 @@ export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
       weekend: ['weekends', 'LIFE'],
       hobby: ['weekends', 'LIFE'],
       
-      // Flexible keywords
-      errands: ['flexible', 'LIFE'],
-      shopping: ['flexible', 'LIFE'],
+      // Errands & appointments - after work or specific times
+      errands: ['after_work', 'LIFE'],
+      shopping: ['after_work', 'LIFE'],
+      grocery: ['after_work', 'LIFE'],
+      groceries: ['after_work', 'LIFE'],
+      bank: ['business_hours', 'LIFE'],
+      post_office: ['business_hours', 'LIFE'],
+      doctor: ['business_hours', 'LIFE'],
+      dentist: ['business_hours', 'LIFE'],
       appointment: ['flexible', 'LIFE'],
     },
     priorityMappings: {

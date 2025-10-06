@@ -62,14 +62,62 @@ Parse the user's input into one or more tasks. Each task should have:
 - status: BACKLOG, TODO, READY, UP_NEXT, DOING
 - scheduling_context: Array of context clues for intelligent scheduling
 
-CONTEXT-AWARE PARSING:
-- Bank/financial tasks: Include "business_hours" and "weekdays_only" in scheduling_context
-- Shopping/errands: Include "flexible_hours" and "prefer_morning_evening" in scheduling_context
-- Work commute tasks: Include "commute_time" and "weekdays_only" in scheduling_context
-- Reading/learning: Include "quiet_time" and "evening_preferred" in scheduling_context
-- Exercise/gym: Include "morning_evening" and "avoid_meals" in scheduling_context
-- Appointments: Include "specific_time" and "business_hours" in scheduling_context
-- Personal tasks: Include "flexible" and "weekend_ok" in scheduling_context
+INTELLIGENT TIME SLOT ASSIGNMENT:
+Determine SPECIFIC start_time and end_time for tasks based on typical timing patterns.
+
+TYPICAL ACTIVITY TIMINGS:
+Work & Meetings:
+- Standup meetings: 9:00-9:30 AM (start of workday)
+- Team sync: 10:00-10:30 AM or 2:00-2:30 PM (mid-morning/afternoon)
+- Meetings: 10:00 AM - 4:00 PM (business hours)
+- Work calls: 9:00 AM - 5:00 PM (business hours)
+
+Meals:
+- Breakfast: 7:00-8:00 AM
+- Brunch: 10:00-11:00 AM
+- Lunch: 12:00-1:00 PM or 12:30-1:30 PM (not at 3pm!)
+- Dinner: 7:00-8:30 PM (NOT 9-10pm - that's too late!)
+- Coffee meetings: 10:00-11:00 AM or 2:00-3:00 PM
+
+Exercise:
+- Morning workout: 6:30-7:30 AM (before work)
+- Gym session: 5:30-6:30 PM (after work)
+- Exercise class: 6:00-7:00 PM
+
+Errands & Appointments:
+- Grocery shopping: 5:30-6:30 PM (AFTER work, NOT during) or weekends 10:00-11:00 AM
+- Bank appointments: 12:00-12:45 PM (lunch break) - banks close at 5pm
+- Doctor appointments: 9:00-10:00 AM or 12:00-1:00 PM (business hours, avoid work conflicts)
+- Post office: 12:15-1:00 PM (lunch break) or after 5:00 PM
+- Shopping/errands: 5:30-6:30 PM (after work hours)
+
+Social & Personal:
+- Family time: 7:00-9:00 PM
+- Social activities: 7:00-9:00 PM
+- Hobbies: Weekends 2:00-4:00 PM or after work 6:00-8:00 PM
+
+DURATION ESTIMATES:
+- Standup/quick sync: 30 minutes
+- Regular meetings: 60 minutes
+- Meals: 60-90 minutes (lunch 60min, dinner 90min)
+- Quick errands: 30-45 minutes
+- Grocery shopping: 45-60 minutes
+- Appointments: 45-60 minutes
+- Workouts: 60 minutes
+- Social events: 120 minutes
+
+CRITICAL CONSTRAINTS:
+1. DON'T schedule errands/shopping during work hours (9am-5pm weekdays)
+2. DON'T schedule meals at weird times (dinner at 10pm, lunch at 4pm)
+3. DON'T schedule work meetings outside business hours unless specified
+4. Banks/post offices close at 5pm - schedule during lunch or right after 5pm
+5. Respect typical human schedules - dinner at 7pm, not 9pm
+
+INSTRUCTIONS:
+- If specific time mentioned ("dinner at 8pm"), use EXACT time
+- If no time mentioned, infer MOST LIKELY specific time from activity type
+- ALWAYS provide start_time and end_time as ISO datetime when you can determine reasonable time
+- Add context like "after_work", "business_hours", "evening" to scheduling_context
 
 Return JSON in this exact format:
 {

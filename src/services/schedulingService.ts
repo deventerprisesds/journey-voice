@@ -70,7 +70,7 @@ export async function saveUserSchedulingConfig(
         user_id: userId,
         config: config as any,
         updated_at: new Date().toISOString(),
-      });
+      }, { onConflict: 'user_id' });
 
     if (error) {
       console.error('Error saving scheduling config:', error);
@@ -122,19 +122,54 @@ export function extractSchedulingContext(
   let suggestedStatus = 'TODO';
   let estimatedDuration = 60;
 
+  // Intelligent time suggestions based on keywords
+  const timeSuggestions: { [key: string]: { hour: number; minute: number; duration: number } } = {
+    standup: { hour: 9, minute: 0, duration: 30 },
+    sync: { hour: 10, minute: 0, duration: 30 },
+    lunch: { hour: 12, minute: 0, duration: 60 },
+    brunch: { hour: 10, minute: 30, duration: 75 },
+    dinner: { hour: 19, minute: 0, duration: 90 },  // 7pm, not 9pm!
+    breakfast: { hour: 7, minute: 30, duration: 30 },
+    gym: { hour: 17, minute: 30, duration: 60 },    // 5:30pm after work
+    workout: { hour: 6, minute: 30, duration: 60 },
+    exercise: { hour: 17, minute: 30, duration: 60 },
+    shopping: { hour: 17, minute: 30, duration: 45 }, // After work
+    grocery: { hour: 17, minute: 30, duration: 60 },
+    groceries: { hour: 17, minute: 30, duration: 60 },
+    bank: { hour: 12, minute: 0, duration: 45 },     // Lunch break
+    doctor: { hour: 9, minute: 0, duration: 60 },
+    dentist: { hour: 9, minute: 0, duration: 60 },
+    coffee: { hour: 10, minute: 0, duration: 45 },
+    meeting: { hour: 10, minute: 0, duration: 60 },
+  };
+
+  // Find matching suggestion first
+  const matchedSuggestion = Object.keys(timeSuggestions).find(key => 
+    text.includes(key)
+  );
+
+  if (matchedSuggestion) {
+    const suggestion = timeSuggestions[matchedSuggestion];
+    context.push(`suggested_time:${suggestion.hour}:${suggestion.minute}`);
+    estimatedDuration = suggestion.duration;
+  }
+
+  // Then check keyword mappings for time windows
   for (const [keyword, [timeWindow, status]] of Object.entries(config.contextRules.keywords)) {
     if (text.includes(keyword)) {
       matchedTimeWindow = timeWindow as keyof SchedulingConfig['timeWindows'];
       suggestedStatus = status;
       context.push(keyword);
       
-      // Estimate duration based on keyword type
-      if (['meeting', 'call', 'interview'].includes(keyword)) {
-        estimatedDuration = 60;
-      } else if (['project', 'study', 'assignment'].includes(keyword)) {
-        estimatedDuration = 120;
-      } else if (['workout', 'exercise'].includes(keyword)) {
-        estimatedDuration = 45;
+      // Use time suggestion duration if available, otherwise estimate
+      if (!matchedSuggestion) {
+        if (['meeting', 'call', 'interview'].includes(keyword)) {
+          estimatedDuration = 60;
+        } else if (['project', 'study', 'assignment'].includes(keyword)) {
+          estimatedDuration = 120;
+        } else if (['workout', 'exercise'].includes(keyword)) {
+          estimatedDuration = 45;
+        }
       }
       break;
     }

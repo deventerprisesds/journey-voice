@@ -210,15 +210,33 @@ serve(async (req) => {
         // STRONG preference for earlier days (exponential penalty)
         score -= dayOffset * dayOffset * 10;
         
-        // Prefer slots within preferred time window
-        const slotHour = slot.start.getHours();
-        const isInPreferredWindow = 
-          slotHour >= constraints.start && 
-          slotHour < constraints.end;
-        if (isInPreferredWindow) score += 50;
-        
-        // Prefer earlier times within the day
-        score -= slotHour;
+        // Extract suggested time from context
+        const suggestedTimeContext = scheduling_context?.find(c => c.startsWith('suggested_time:'));
+        if (suggestedTimeContext) {
+          const timeParts = suggestedTimeContext.split(':');
+          const suggestedHour = parseInt(timeParts[1]);
+          const suggestedMinute = parseInt(timeParts[2] || '0');
+          
+          // Calculate how close this slot is to suggested time
+          const slotHour = slot.start.getHours();
+          const slotMinute = slot.start.getMinutes();
+          const slotTimeInMinutes = slotHour * 60 + slotMinute;
+          const suggestedTimeInMinutes = suggestedHour * 60 + suggestedMinute;
+          const timeDiffMinutes = Math.abs(slotTimeInMinutes - suggestedTimeInMinutes);
+          
+          // STRONG preference for suggested time (exponential penalty for distance)
+          score += Math.max(0, 100 - (timeDiffMinutes / 15) ** 2);
+        } else {
+          // No suggested time - use default time window preferences
+          const slotHour = slot.start.getHours();
+          const isInPreferredWindow = 
+            slotHour >= constraints.start && 
+            slotHour < constraints.end;
+          if (isInPreferredWindow) score += 50;
+          
+          // Prefer earlier times within the day
+          score -= slotHour;
+        }
         
         // Priority boost for earlier slots (URGENT tasks get best slots)
         const priorityBonus: Record<string, number> = { 
