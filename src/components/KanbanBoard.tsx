@@ -191,6 +191,17 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
     }
   };
 
+  // Map board lane status to canonical category for display consistency
+  const statusToCategory = (status: Task['status']): Task['category'] | null => {
+    switch (status) {
+      case 'CAREER': return 'CAREER';
+      case 'PROF_EDUCATION': return 'EDUCATION';
+      case 'VENTURES': return 'VENTURES';
+      case 'LIFE': return 'LIFE';
+      default: return null; // Non-lane statuses (e.g., TODO/DONE) don't force category
+    }
+  };
+
   const handleStatusChange = async (taskId: string, newStatus: Task['status']) => {
     try {
       if (isDemoMode) {
@@ -206,10 +217,12 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
           localStorage.setItem('kanban-demo-tasks', JSON.stringify(updatedTasks));
         }
       } else {
+        const mappedCategory = statusToCategory(newStatus);
         const { error } = await supabase
           .from('tasks')
           .update({ 
             status: newStatus as any,
+            ...(mappedCategory ? { category: mappedCategory as any } : {}),
             completed_at: newStatus === 'DONE' ? new Date().toISOString() : null
           })
           .eq('id', taskId);
@@ -551,12 +564,13 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
     const column = columns.find(col => col.id === columnId);
     if (!column) return;
 
+    const mappedCategory = statusToCategory(column.status) || 'LIFE';
     const quickTask = {
       title: title.trim(),
       description: '',
       status: column.status,
       priority: 'MEDIUM' as const,
-      category: 'LIFE' as const,
+      category: mappedCategory as any,
       board_id: board.id,
       user_id: board.user_id,
     };

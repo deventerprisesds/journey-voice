@@ -104,12 +104,12 @@ export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
       estimatedDuration: 120,
     },
     PROF_EDUCATION: {
-      defaultTimeWindow: 'business_hours',
+      defaultTimeWindow: 'after_work',
       defaultStatus: 'PROF_EDUCATION',
       estimatedDuration: 90,
     },
     EDUCATION: {
-      defaultTimeWindow: 'business_hours',
+      defaultTimeWindow: 'after_work',
       defaultStatus: 'PROF_EDUCATION',
       estimatedDuration: 90,
     },
