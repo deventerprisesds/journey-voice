@@ -239,6 +239,7 @@ Examples:
                   taskPriority: task.priority,
                   estimateMinutes: task.estimate_minutes,
                   dueDate: task.due_date,
+                  timezone: timezone || 'UTC',
                 }),
               });
               

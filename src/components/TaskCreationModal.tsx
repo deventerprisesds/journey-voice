@@ -722,6 +722,11 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                           </div>
                         </div>
                       </div>
+                      {task.start_time && (
+                        <div className="text-xs text-muted-foreground mt-1">
+                          Scheduled preview: {format(new Date(task.start_time), 'PPP p')}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
