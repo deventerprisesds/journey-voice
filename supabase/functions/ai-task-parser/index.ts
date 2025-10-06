@@ -226,6 +226,7 @@ Examples:
                   'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
+                  taskText: task.title,
                   task: {
                     ...task,
                     board_id: boardId,
@@ -233,6 +234,11 @@ Examples:
                   },
                   userId,
                   existingTasks,
+                  scheduling_context: task.scheduling_context || [],
+                  taskCategory: task.category,
+                  taskPriority: task.priority,
+                  estimateMinutes: task.estimate_minutes,
+                  dueDate: task.due_date,
                 }),
               });
               
