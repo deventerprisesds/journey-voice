@@ -114,10 +114,15 @@ CRITICAL CONSTRAINTS:
 5. Respect typical human schedules - dinner at 7pm, not 9pm
 
 INSTRUCTIONS:
-- If specific time mentioned ("dinner at 8pm"), use EXACT time
-- If no time mentioned, infer MOST LIKELY specific time from activity type
-- ALWAYS provide start_time and end_time as ISO datetime when you can determine reasonable time
-- Add context like "after_work", "business_hours", "evening" to scheduling_context
+- DO NOT set start_time or end_time fields directly
+- Instead, add intelligent hints to scheduling_context array:
+  - For meals: ["suggested_time:19:0"] for dinner, ["suggested_time:12:0"] for lunch
+  - For standups: ["suggested_time:9:0"]  
+  - For workouts: ["suggested_time:6:30"] or ["suggested_time:17:30"]
+  - For errands: ["after_work", "suggested_time:17:30"]
+- Add time window hints: "business_hours", "evening", "after_work", "morning"
+- Set estimate_minutes based on duration guidance above
+- The smart scheduler will use these hints to find the best available time slot
 
 Return JSON in this exact format:
 {

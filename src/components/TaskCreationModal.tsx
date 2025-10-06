@@ -250,10 +250,9 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
         createdTasks = data;
       }
 
-      // Auto-schedule tasks with date/time information or context clues
+      // Auto-schedule ALL tasks that don't have explicit times set by user
       const tasksToSchedule = createdTasks.filter(task => 
-        (!task.start_time && !task.end_time) && // Not already scheduled
-        (task.due_date || task.scheduling_context) // Has date or context for scheduling
+        !task.start_time && !task.end_time // Schedule if no times set
       );
 
       // Accumulator for batch-scheduled tasks
