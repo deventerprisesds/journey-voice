@@ -161,9 +161,9 @@ serve(async (req) => {
       workingMinutes = 420,
       busySlots = [],
       scheduling_context = [],
-      userId,
+      userId, // NEW: Required for loading user config
       threadId,
-      userSchedulingConfig, // NEW: User's custom config
+      userSchedulingConfig, // DEPRECATED: Will be loaded from DB if userId provided
       taskCategory,
       taskPriority,
       estimateMinutes,
@@ -177,8 +177,29 @@ serve(async (req) => {
     }
 
     console.log('Smart scheduling task:', taskText);
-    console.log('🔧 RAW user config received:', JSON.stringify(userSchedulingConfig, null, 2));
-    console.log('Custom AI instructions:', userSchedulingConfig?.customAIInstructions);
+    console.log('🔧 User ID received:', userId);
+
+    // Load user config from database if userId provided
+    let loadedUserConfig = userSchedulingConfig;
+    if (userId && !userSchedulingConfig) {
+      try {
+        const supabase = createClient(supabaseUrl, supabaseServiceKey);
+        const { data: configData, error: configError } = await supabase
+          .from('scheduling_config')
+          .select('*')
+          .eq('user_id', userId)
+          .single();
+        
+        if (!configError && configData) {
+          loadedUserConfig = configData.config;
+          console.log('✅ Loaded user config from database');
+        }
+      } catch (error) {
+        console.warn('Failed to load user config, using defaults:', error);
+      }
+    }
+    
+    console.log('🔧 RAW user config:', JSON.stringify(loadedUserConfig, null, 2));
 
     // Define default config constants
     const DEFAULT_CONFIG: SchedulingConfig = {
@@ -209,26 +230,26 @@ serve(async (req) => {
 
     // Merge user config with defaults - user values take precedence
     const config: SchedulingConfig = {
-      timezone: userSchedulingConfig?.timezone || DEFAULT_CONFIG.timezone,
+      timezone: loadedUserConfig?.timezone || DEFAULT_CONFIG.timezone,
       timeWindows: {
         ...DEFAULT_CONFIG.timeWindows,
-        ...userSchedulingConfig?.timeWindows,
+        ...loadedUserConfig?.timeWindows,
       },
       workingHours: {
         ...DEFAULT_CONFIG.workingHours,
-        ...userSchedulingConfig?.workingHours,
+        ...loadedUserConfig?.workingHours,
       },
       workloadBalance: {
         ...DEFAULT_CONFIG.workloadBalance,
-        ...userSchedulingConfig?.workloadBalance,
+        ...loadedUserConfig?.workloadBalance,
       },
       categoryMappings: {
         ...DEFAULT_CONFIG.categoryMappings,
-        ...userSchedulingConfig?.categoryMappings,
+        ...loadedUserConfig?.categoryMappings,
       },
     };
     
-    console.log('🔧 User config received:', userSchedulingConfig ? 'YES' : 'NO');
+    console.log('🔧 User config loaded:', loadedUserConfig ? 'YES' : 'NO');
     console.log('📋 Time windows being used:', JSON.stringify(config.timeWindows, null, 2));
     console.log('🌍 Timezone:', config.timezone);
     
@@ -291,15 +312,17 @@ serve(async (req) => {
     // Get time window constraints
     const constraints = config.timeWindows[timeWindow] || config.timeWindows.flexible;
 
-    // CRITICAL: Start search from targetDate if provided, otherwise from NOW
+    // CRITICAL: Always start from NOW unless targetDate explicitly provided
+    // This ensures we find the "next available slot" from current moment
     // dueDate is a DEADLINE, not a search start date
     let searchStartDate = targetDate ? new Date(targetDate) : new Date();
     
     console.log('🔍 Search parameters:', {
-      targetDate: targetDate || 'undefined (starting from now)',
+      targetDate: targetDate || 'undefined (starting from NOW)',
       dueDate: dueDate || 'undefined (no deadline)',
       searchStartDate: searchStartDate.toISOString(),
-      timezone
+      timezone,
+      willSearchFrom: 'next available slot from current moment'
     });
 
     // Calculate max search date (don't schedule past due date if provided)

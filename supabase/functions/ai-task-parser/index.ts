@@ -199,61 +199,13 @@ Examples:
       const parsed = JSON.parse(content);
       console.log('✅ Successfully parsed tasks:', parsed.tasks?.length || 0, 'tasks');
 
-      // Create Supabase client to call internal scheduler
-      const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
-      const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
-      const supabase = createClient(supabaseUrl, supabaseServiceKey);
-
-      // Schedule tasks via central smart scheduler so times come from one place
+      // Return tasks with AI's scheduling context hints
+      // Client-side will handle all scheduling with full user context
       const tasks = Array.isArray(parsed.tasks) ? parsed.tasks : [];
-      const scheduled = await Promise.all(tasks.map(async (t: any) => {
-        try {
-          // If AI provided explicit times, convert to scheduling hint
-          let contextWithHint = t.scheduling_context ?? [];
-          if (t.start_time) {
-            const startDate = new Date(t.start_time);
-            const hours = startDate.getHours();
-            const minutes = startDate.getMinutes();
-            contextWithHint = [...contextWithHint, `suggested_time:${hours}:${minutes}`];
-            console.log(`Converting explicit time ${t.start_time} to scheduling hint`);
-          }
 
-          const { data: schedData, error: schedError } = await supabase.functions.invoke('smart-calendar-scheduler', {
-            body: {
-              taskText: `${t.title}${t.description ? ' - ' + t.description : ''}`,
-              targetDate: undefined, // Never send - start from now
-              dueDate: t.due_date || undefined, // Only send if user specified
-              existingTasks: [],
-              busySlots: [],
-              scheduling_context: contextWithHint,
-              taskCategory: t.category,
-              taskPriority: t.priority,
-              timezone: timezone ?? 'UTC'
-            }
-          });
-
-          if (schedError) {
-            console.error('Scheduler error for task', t.title, schedError.message);
-            return t; // fallback: return unscheduled
-          }
-
-          if (schedData?.success && schedData?.scheduledTask) {
-            return {
-              ...t,
-              start_time: schedData.scheduledTask.start_time,
-              end_time: schedData.scheduledTask.end_time,
-              estimate_minutes: t.estimate_minutes ?? schedData.scheduledTask.estimate_minutes
-            };
-          }
-
-          return t;
-        } catch (e) {
-          console.error('Error scheduling task', t?.title, e);
-          return t;
-        }
-      }));
-
-      return new Response(JSON.stringify({ tasks: scheduled }), {
+      // Return unscheduled tasks with AI's context hints
+      // Client-side will handle all scheduling with full context
+      return new Response(JSON.stringify({ tasks }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     } catch (parseError) {

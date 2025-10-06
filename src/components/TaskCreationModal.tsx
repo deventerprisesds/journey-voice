@@ -272,19 +272,18 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
           try {
             const { scheduleNewTask } = await import('@/utils/taskScheduling');
             
-            // Extract scheduling context from title/description using keyword mapping
-            const { context, timeWindow, suggestedStatus, estimatedDuration } = extractSchedulingContext(
+            // Extract keyword hints ONLY as fallback context
+            const { context, estimatedDuration } = extractSchedulingContext(
               `${task.title} ${task.description || ''}`,
               task.category,
               task.priority
             );
             
-            // Merge AI-provided context with keyword-extracted context
+            // Merge AI-provided context with keyword hints (NO timeWindow override)
             const fullContext = [
               ...(task.scheduling_context || []),
-              ...context,
-              `timeWindow:${timeWindow}`,
-              `status:${suggestedStatus}`
+              ...context
+              // REMOVED: `timeWindow:${timeWindow}` - Let user settings decide
             ];
             
             // Pass already scheduled tasks in this batch so scheduler knows about them

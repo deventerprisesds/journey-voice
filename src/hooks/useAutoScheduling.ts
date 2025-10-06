@@ -9,8 +9,8 @@ export const useAutoScheduling = () => {
 
   const autoScheduleTask = useCallback(async (task: Task): Promise<Task | null> => {
     try {
-      // Extract scheduling context using centralized service
-      const { context, timeWindow, suggestedStatus, estimatedDuration } = extractSchedulingContext(
+      // Extract keyword hints ONLY as fallback context
+      const { context, estimatedDuration } = extractSchedulingContext(
         `${task.title} ${task.description || ''}`,
         task.category,
         task.priority
@@ -26,7 +26,7 @@ export const useAutoScheduling = () => {
         priority: task.priority,
         due_date: task.due_date,
         estimate_minutes: task.estimate_minutes || estimatedDuration,
-        scheduling_context: [...context, `timeWindow:${timeWindow}`, `status:${suggestedStatus}`]
+        scheduling_context: context // REMOVED timeWindow override
       });
 
       if (result.success && result.scheduledTask) {
