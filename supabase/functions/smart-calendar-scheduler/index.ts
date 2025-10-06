@@ -13,24 +13,35 @@ const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 // ===== Timezone Helpers =====
 
 /**
- * Get timezone offset in minutes for a specific date in the given IANA timezone.
- * Positive = ahead of UTC (e.g., +300 for Asia/Kolkata = UTC+5)
- * Negative = behind UTC (e.g., -240 for America/New_York EDT = UTC-4)
+ * Parse a GMT offset like "GMT-4" or "GMT+05:30" into minutes
  */
-function getTzOffsetMinutesAt(date: Date, tz: string): number {
-  const utcDate = new Date(date.toLocaleString('en-US', { timeZone: 'UTC' }));
-  const tzDate = new Date(date.toLocaleString('en-US', { timeZone: tz }));
-  return (tzDate.getTime() - utcDate.getTime()) / 60000;
+function parseGmtOffsetToMinutes(gmt: string): number {
+  const m = /GMT([+\-])(\d{1,2})(?::(\d{2}))?/.exec(gmt);
+  if (!m) return 0;
+  const sign = m[1] === '-' ? -1 : 1;
+  const hh = parseInt(m[2] || '0', 10);
+  const mm = parseInt(m[3] || '0', 10);
+  return sign * (hh * 60 + mm);
 }
 
 /**
- * Convert a local date/time in the user's timezone to UTC Date object.
- * @param localYear - Year in user's timezone
- * @param localMonth - Month (0-11) in user's timezone  
- * @param localDay - Day in user's timezone
- * @param localHour - Hour in user's timezone
- * @param localMinute - Minute in user's timezone
- * @param tz - IANA timezone
+ * Get timezone offset in minutes for a UTC instant when viewed in a given IANA timezone.
+ */
+function getTzOffsetMinutesAt(utcInstant: Date, tz: string): number {
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    hour12: false,
+    timeZoneName: 'shortOffset',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit'
+  });
+  const parts = fmt.formatToParts(utcInstant);
+  const tzName = parts.find(p => p.type === 'timeZoneName')?.value || 'GMT+0';
+  return parseGmtOffsetToMinutes(tzName);
+}
+
+/**
+ * Convert a local date/time in the user's timezone to the corresponding UTC Date.
  */
 function zonedTimeToUtc(
   localYear: number,
@@ -40,19 +51,22 @@ function zonedTimeToUtc(
   localMinute: number,
   tz: string
 ): Date {
-  const localDateStr = `${localYear}-${String(localMonth + 1).padStart(2, '0')}-${String(localDay).padStart(2, '0')}T${String(localHour).padStart(2, '0')}:${String(localMinute).padStart(2, '0')}:00`;
-  const utcDate = new Date(new Date(localDateStr + 'Z').toLocaleString('en-US', { timeZone: tz }));
-  const offset = getTzOffsetMinutesAt(utcDate, tz);
-  return new Date(utcDate.getTime() - offset * 60000);
+  // Start with a UTC guess of the same wall-clock components
+  const utcGuessMs = Date.UTC(localYear, localMonth, localDay, localHour, localMinute, 0);
+  const utcGuess = new Date(utcGuessMs);
+  // Determine the offset (in minutes) for that instant in the target TZ
+  const offsetMin = getTzOffsetMinutesAt(utcGuess, tz);
+  // Local time = UTC + offset ⇒ UTC = Local - offset
+  return new Date(utcGuessMs - offsetMin * 60000);
 }
 
 /**
- * Get day-of-week (0=Sun, 6=Sat) for a UTC date in the user's timezone
+ * Get day-of-week (0=Sun..6=Sat) for a UTC date in the user's timezone
  */
 function getDayOfWeekInTz(utcDate: Date, tz: string): number {
-  const tzStr = utcDate.toLocaleString('en-US', { timeZone: tz, weekday: 'short' });
-  const dayMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
-  return dayMap[tzStr] ?? 0;
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short' }).format(utcDate);
+  const map: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  return map[parts] ?? 0;
 }
 
 /**
@@ -61,15 +75,11 @@ function getDayOfWeekInTz(utcDate: Date, tz: string): number {
 function getZonedDayParts(utcDate: Date, tz: string): { year: number; month: number; day: number } {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: tz,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit'
+    year: 'numeric', month: '2-digit', day: '2-digit'
   }).formatToParts(utcDate);
-  
-  const year = parseInt(parts.find(p => p.type === 'year')?.value || '0');
-  const month = parseInt(parts.find(p => p.type === 'month')?.value || '1') - 1;
-  const day = parseInt(parts.find(p => p.type === 'day')?.value || '1');
-  
+  const year = parseInt(parts.find(p => p.type === 'year')?.value || '0', 10);
+  const month = parseInt(parts.find(p => p.type === 'month')?.value || '1', 10) - 1;
+  const day = parseInt(parts.find(p => p.type === 'day')?.value || '1', 10);
   return { year, month, day };
 }
 
