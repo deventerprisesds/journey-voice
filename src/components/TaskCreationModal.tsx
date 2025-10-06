@@ -640,6 +640,52 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                             </div>
                           </div>
                         </div>
+
+                        {/* Start Time */}
+                        <div className="space-y-2">
+                          <Label className="text-xs font-medium">Start Time</Label>
+                          <div className="flex items-center gap-1">
+                            <Clock className="h-3 w-3 text-muted-foreground" />
+                            <Input
+                              type="time"
+                              value={task.start_time ? new Date(task.start_time).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }) : ''}
+                              onChange={(e) => {
+                                if (!e.target.value) {
+                                  editParsedTask(index, 'start_time', undefined);
+                                  return;
+                                }
+                                const baseDate = task.due_date ? new Date(task.due_date) : new Date();
+                                const [hours, minutes] = e.target.value.split(':');
+                                baseDate.setHours(parseInt(hours), parseInt(minutes), 0, 0);
+                                editParsedTask(index, 'start_time', baseDate.toISOString());
+                              }}
+                              className="h-8 text-xs"
+                            />
+                          </div>
+                        </div>
+
+                        {/* End Time */}
+                        <div className="space-y-2">
+                          <Label className="text-xs font-medium">End Time</Label>
+                          <div className="flex items-center gap-1">
+                            <Clock className="h-3 w-3 text-muted-foreground" />
+                            <Input
+                              type="time"
+                              value={task.end_time ? new Date(task.end_time).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' }) : ''}
+                              onChange={(e) => {
+                                if (!e.target.value) {
+                                  editParsedTask(index, 'end_time', undefined);
+                                  return;
+                                }
+                                const baseDate = task.due_date ? new Date(task.due_date) : new Date();
+                                const [hours, minutes] = e.target.value.split(':');
+                                baseDate.setHours(parseInt(hours), parseInt(minutes), 0, 0);
+                                editParsedTask(index, 'end_time', baseDate.toISOString());
+                              }}
+                              className="h-8 text-xs"
+                            />
+                          </div>
+                        </div>
                       </div>
                     </div>
                   ))}
