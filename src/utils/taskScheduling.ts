@@ -80,7 +80,8 @@ export async function scheduleNewTask(
           threadId: `scheduler-${task.user_id}-${Date.now()}`,
           userSchedulingConfig: userConfig, // Pass user's config
           taskCategory: task.category,
-          taskPriority: task.priority
+          taskPriority: task.priority,
+          tzOffsetMinutes: new Date().getTimezoneOffset() // Browser timezone offset
         }
       }
     );

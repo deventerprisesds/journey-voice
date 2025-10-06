@@ -218,7 +218,8 @@ Examples:
               busySlots: [],
               scheduling_context: t.scheduling_context ?? [],
               taskCategory: t.category,
-              taskPriority: t.priority
+              taskPriority: t.priority,
+              tzOffsetMinutes: 0 // Edge function runs in UTC, no offset needed
             }
           });
 
