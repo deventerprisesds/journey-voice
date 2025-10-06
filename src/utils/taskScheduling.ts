@@ -78,13 +78,22 @@ export async function scheduleNewTask(
     // Merge existing tasks with batch-scheduled tasks so scheduler sees everything
     const allTasks = [...(existingTasks || []), ...batchScheduledTasks];
 
+    // Log what we're sending to scheduler - targetDate should be undefined for ASAP scheduling
+    console.log('📞 Invoking smart-calendar-scheduler with:', {
+      taskText: `${task.title} - ${task.description || ''}`,
+      dueDate: task.due_date || undefined,
+      targetDate: undefined, // Never send targetDate - let scheduler start from now()
+      scheduling_context: task.scheduling_context,
+    });
+
     // Use smart calendar scheduler to find optimal time slot with enhanced context
     const { data: scheduleResult, error } = await supabase.functions.invoke(
       'smart-calendar-scheduler',
       {
         body: {
           taskText: `${task.title} - ${task.description || ''}`,
-          targetDate: task.due_date,
+          targetDate: undefined, // Let scheduler start from now()
+          dueDate: task.due_date || undefined, // Send due_date as deadline constraint
           existingTasks: allTasks,
           workingMinutes: userConfig.workingHours.maxDailyHours * 60,
           busySlots,

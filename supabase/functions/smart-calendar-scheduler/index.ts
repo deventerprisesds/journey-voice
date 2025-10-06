@@ -200,8 +200,8 @@ serve(async (req) => {
       workloadBalance: { projectToTaskRatio: 0.6, oneOffTaskRatio: 0.3, bufferRatio: 0.1 },
       categoryMappings: {
         CAREER: { defaultTimeWindow: 'business_hours', defaultStatus: 'CAREER', estimatedDuration: 120 },
-        PROF_EDUCATION: { defaultTimeWindow: 'business_hours', defaultStatus: 'PROF_EDUCATION', estimatedDuration: 90 },
-        EDUCATION: { defaultTimeWindow: 'business_hours', defaultStatus: 'PROF_EDUCATION', estimatedDuration: 90 },
+        PROF_EDUCATION: { defaultTimeWindow: 'after_work', defaultStatus: 'PROF_EDUCATION', estimatedDuration: 90 },
+        EDUCATION: { defaultTimeWindow: 'after_work', defaultStatus: 'PROF_EDUCATION', estimatedDuration: 90 },
         VENTURES: { defaultTimeWindow: 'after_work', defaultStatus: 'VENTURES', estimatedDuration: 120 },
         LIFE: { defaultTimeWindow: 'flexible', defaultStatus: 'LIFE', estimatedDuration: 60 },
       },
@@ -291,8 +291,16 @@ serve(async (req) => {
     // Get time window constraints
     const constraints = config.timeWindows[timeWindow] || config.timeWindows.flexible;
 
-    // Parse target date (or use due date, or today)
+    // CRITICAL: Start search from targetDate if provided, otherwise from NOW
+    // dueDate is a DEADLINE, not a search start date
     let searchStartDate = targetDate ? new Date(targetDate) : new Date();
+    
+    console.log('🔍 Search parameters:', {
+      targetDate: targetDate || 'undefined (starting from now)',
+      dueDate: dueDate || 'undefined (no deadline)',
+      searchStartDate: searchStartDate.toISOString(),
+      timezone
+    });
 
     // Calculate max search date (don't schedule past due date if provided)
     const dueDateObj = dueDate ? new Date(dueDate) : null;

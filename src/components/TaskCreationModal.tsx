@@ -230,8 +230,9 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
         board_id: boardId,
         user_id: userId,
         due_date: task.due_date || null,
-        start_time: task.start_time || null,
-        end_time: task.end_time || null,
+        // Force AI-parsed tasks to have null times so scheduler assigns them
+        start_time: null,
+        end_time: null,
         estimate_minutes: task.estimate_minutes || null,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),

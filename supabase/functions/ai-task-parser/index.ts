@@ -56,9 +56,9 @@ Parse the user's input into one or more tasks. Each task should have:
 - description: Optional detailed description with context clues for scheduling
 - priority: LOW, MEDIUM, HIGH, or URGENT
 - category: LIFE, CAREER, VENTURES, or EDUCATION
-- due_date: ISO date string (REQUIRED - if not mentioned, default to 7 days from today: ${new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString()})
-- start_time: ISO datetime if specific time mentioned
-- end_time: ISO datetime if specific time mentioned or can be calculated
+- due_date: ISO date string ONLY if user specifies deadline (otherwise null)
+- start_time: null (DO NOT SET - scheduler will assign)
+- end_time: null (DO NOT SET - scheduler will assign)
 - estimate_minutes: Estimated duration in minutes
 - status: BACKLOG, TODO, READY, UP_NEXT, DOING
 - scheduling_context: Array of context clues for intelligent scheduling
@@ -114,16 +114,17 @@ CRITICAL CONSTRAINTS:
 4. Banks/post offices close at 5pm - schedule during lunch or right after 5pm
 5. Respect typical human schedules - dinner at 7pm, not 9pm
 
-INSTRUCTIONS:
-- DO NOT set start_time or end_time fields directly
-- Instead, add intelligent hints to scheduling_context array:
+CRITICAL INSTRUCTIONS:
+- NEVER set start_time or end_time fields - always return null
+- Add intelligent hints to scheduling_context array instead:
   - For meals: ["suggested_time:19:0"] for dinner, ["suggested_time:12:0"] for lunch
   - For standups: ["suggested_time:9:0"]  
   - For workouts: ["suggested_time:6:30"] or ["suggested_time:17:30"]
   - For errands: ["after_work", "suggested_time:17:30"]
 - Add time window hints: "business_hours", "evening", "after_work", "morning"
 - Set estimate_minutes based on duration guidance above
-- The smart scheduler will use these hints to find the best available time slot
+- Only set due_date if user explicitly mentions a deadline
+- The smart scheduler will find the next available slot based on your hints
 
 Return JSON in this exact format:
 {
@@ -220,8 +221,8 @@ Examples:
           const { data: schedData, error: schedError } = await supabase.functions.invoke('smart-calendar-scheduler', {
             body: {
               taskText: `${t.title}${t.description ? ' - ' + t.description : ''}`,
-              targetDate: null,
-              dueDate: t.due_date ?? null,
+              targetDate: undefined, // Never send - start from now
+              dueDate: t.due_date || undefined, // Only send if user specified
               existingTasks: [],
               busySlots: [],
               scheduling_context: contextWithHint,
