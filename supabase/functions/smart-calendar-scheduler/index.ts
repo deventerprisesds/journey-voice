@@ -176,8 +176,8 @@ serve(async (req) => {
     // Use user config or fallback to defaults
     const config: SchedulingConfig = userSchedulingConfig || {
       timeWindows: {
-        morning: { start: 6, end: 9, days: [1, 2, 3, 4, 5] },
-        business_hours: { start: 9, end: 17, days: [1, 2, 3, 4, 5] },
+        morning: { start: 8, end: 12, days: [1, 2, 3, 4, 5] },
+        business_hours: { start: 9, end: 16, days: [1, 2, 3, 4, 5] },
         after_work: { start: 17, end: 22, days: [1, 2, 3, 4, 5, 6] },
         evening: { start: 19, end: 22, days: [0, 1, 2, 3, 4, 5, 6] },
         flexible: { start: 9, end: 22, days: [0, 1, 2, 3, 4, 5, 6] },
@@ -201,6 +201,8 @@ serve(async (req) => {
         LIFE: { defaultTimeWindow: 'flexible', defaultStatus: 'LIFE', estimatedDuration: 60 },
       },
     };
+    
+    console.log('📋 Config time windows being used:', JSON.stringify(config.timeWindows, null, 2));
 
     // Extract time window and status from scheduling context
     let timeWindow = 'flexible';
