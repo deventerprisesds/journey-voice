@@ -185,7 +185,7 @@ serve(async (req) => {
       try {
         const supabase = createClient(supabaseUrl, supabaseServiceKey);
         const { data: configData, error: configError } = await supabase
-          .from('scheduling_config')
+          .from('user_scheduling_prefs')
           .select('*')
           .eq('user_id', userId)
           .single();
