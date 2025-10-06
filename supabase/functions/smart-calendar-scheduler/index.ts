@@ -170,7 +170,7 @@ serve(async (req) => {
     }
 
     console.log('Smart scheduling task:', taskText);
-    console.log('User config received:', !!userSchedulingConfig);
+    console.log('🔧 RAW user config received:', JSON.stringify(userSchedulingConfig, null, 2));
     console.log('Custom AI instructions:', userSchedulingConfig?.customAIInstructions);
 
     // Define default config constants
@@ -224,6 +224,20 @@ serve(async (req) => {
     console.log('🔧 User config received:', userSchedulingConfig ? 'YES' : 'NO');
     console.log('📋 Time windows being used:', JSON.stringify(config.timeWindows, null, 2));
     console.log('🌍 Timezone:', config.timezone);
+    
+    // 🔍 Log how many tasks we're considering
+    console.log('📊 Tasks to consider for busy slots:', {
+      existingTasksCount: existingTasks?.length || 0,
+      tasksWithTimes: existingTasks?.filter(t => t.start_time && t.end_time).length || 0,
+      busySlotsCount: busySlots?.length || 0
+    });
+    
+    // 🔍 Log how many tasks we're considering
+    console.log('📊 Tasks to consider for busy slots:', {
+      existingTasksCount: existingTasks?.length || 0,
+      tasksWithTimes: existingTasks?.filter(t => t.start_time && t.end_time).length || 0,
+      busySlotsCount: busySlots?.length || 0
+    });
 
     // Extract time window and status from scheduling context
     let timeWindow = 'flexible';
@@ -363,14 +377,25 @@ serve(async (req) => {
         
         const localTimeStr = slot.start.toLocaleString('en-US', { timeZone: timezone });
         
-        candidateSlots.push({
-          slot,
-          dayOffset,
-          date: dayStartUTC,
-          score
+        // 🔍 Check if this slot overlaps with any existing busy slot
+        const slotEnd = addMinutes(slot.start, estimatedDuration);
+        const allBusySlots = getAllBusySlotsForDay(dayStartUTC, existingTasks, busySlots, timezone);
+        const hasOverlap = allBusySlots.some(busy => {
+          return slot.start < busy.end && slotEnd > busy.start;
         });
         
-        console.log(`Found slot on day ${dayOffset} at ${localTimeStr} (${timezone}) - score: ${score}`);
+        if (hasOverlap) {
+          console.log(`⚠️ Slot on day ${dayOffset} at ${localTimeStr} overlaps with existing task, skipping`);
+        } else {
+          candidateSlots.push({
+            slot,
+            dayOffset,
+            date: dayStartUTC,
+            score
+          });
+          
+          console.log(`✅ Found valid slot on day ${dayOffset} at ${localTimeStr} (${timezone}) - score: ${score}`);
+        }
       } else {
         console.log(`No slot found on day ${dayOffset}, trying next day`);
       }
@@ -383,7 +408,14 @@ serve(async (req) => {
     if (scheduledSlot && candidateSlots.length > 0) {
       const localTime = scheduledSlot.start.toLocaleString('en-US', { timeZone: timezone });
       const utcTime = scheduledSlot.start.toISOString();
-      console.log(`✅ Selected best slot: ${localTime} (${timezone}) = ${utcTime} (score: ${candidateSlots[0].score})`);
+      const slotEnd = addMinutes(scheduledSlot.start, estimatedDuration);
+      console.log(`✅ FINAL SELECTED SLOT:`, {
+        start: utcTime,
+        end: slotEnd.toISOString(),
+        localStart: localTime,
+        score: candidateSlots[0].score,
+        duration: estimatedDuration
+      });
     }
 
     if (!scheduledSlot) {
@@ -439,6 +471,12 @@ function getAllBusySlotsForDay(
   externalBusySlots: any[]
 ): BusySlot[] {
   const busySlots: BusySlot[] = [];
+  
+  console.log(`🔍 Checking busy slots for ${dayStartUTC.toISOString().split('T')[0]}:`, {
+    totalTasks: existingTasks.length,
+    tasksWithTimes: existingTasks.filter(t => t.start_time).length,
+    externalSlots: externalBusySlots.length
+  });
 
   // Add existing scheduled tasks that overlap this day
   existingTasks.forEach((task) => {
@@ -450,6 +488,7 @@ function getAllBusySlotsForDay(
       
       // Check for overlap
       if (taskStart < dayEndUTC && taskEnd > dayStartUTC) {
+        console.log(`  ✅ Task "${task.title}" occupies ${taskStart.toISOString()} - ${taskEnd.toISOString()}`);
         busySlots.push({ start: taskStart, end: taskEnd });
       }
     }
@@ -467,7 +506,10 @@ function getAllBusySlotsForDay(
   });
 
   // Sort by start time
-  return busySlots.sort((a, b) => a.start.getTime() - b.start.getTime());
+  const sorted = busySlots.sort((a, b) => a.start.getTime() - b.start.getTime());
+  console.log(`  📋 Total busy slots found: ${sorted.length}`);
+  
+  return sorted;
 }
 
 /**

@@ -56,7 +56,7 @@ Parse the user's input into one or more tasks. Each task should have:
 - description: Optional detailed description with context clues for scheduling
 - priority: LOW, MEDIUM, HIGH, or URGENT
 - category: LIFE, CAREER, VENTURES, or EDUCATION
-- due_date: ISO date string if mentioned (e.g., "2024-01-15T00:00:00.000Z")
+- due_date: ISO date string (REQUIRED - if not mentioned, default to 7 days from today: ${new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString()})
 - start_time: ISO datetime if specific time mentioned
 - end_time: ISO datetime if specific time mentioned or can be calculated
 - estimate_minutes: Estimated duration in minutes

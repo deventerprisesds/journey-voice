@@ -22,6 +22,19 @@ export async function scheduleNewTask(
     // Load user's scheduling configuration
     const userConfig = await loadUserSchedulingConfig(task.user_id);
     
+    // 🔍 Validate and log config before passing to edge function
+    console.log('📋 Loaded user scheduling config:', {
+      hasConfig: !!userConfig,
+      timezone: userConfig?.timezone,
+      hasTimeWindows: !!userConfig?.timeWindows,
+      timeWindowKeys: userConfig?.timeWindows ? Object.keys(userConfig.timeWindows) : [],
+      timeWindowsDetail: userConfig?.timeWindows
+    });
+
+    if (!userConfig || !userConfig.timeWindows || Object.keys(userConfig.timeWindows).length === 0) {
+      console.warn('⚠️ User config incomplete or empty, edge function will use defaults');
+    }
+    
     // Get user's existing tasks for context
     const { data: existingTasks } = await supabase
       .from('tasks')
@@ -71,7 +84,7 @@ export async function scheduleNewTask(
       {
         body: {
           taskText: `${task.title} - ${task.description || ''}`,
-          targetDate: task.due_date || new Date().toISOString(),
+          targetDate: task.due_date || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), // Default to 7 days from now
           existingTasks: allTasks,
           workingMinutes: userConfig.workingHours.maxDailyHours * 60,
           busySlots,
