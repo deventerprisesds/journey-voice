@@ -173,11 +173,12 @@ serve(async (req) => {
     console.log('User config received:', !!userSchedulingConfig);
     console.log('Custom AI instructions:', userSchedulingConfig?.customAIInstructions);
 
-    // Use user config or fallback to defaults
-    const config: SchedulingConfig = userSchedulingConfig || {
+    // Define default config constants
+    const DEFAULT_CONFIG: SchedulingConfig = {
+      timezone: 'America/New_York',
       timeWindows: {
-        morning: { start: 8, end: 12, days: [1, 2, 3, 4, 5] },
-        business_hours: { start: 9, end: 16, days: [1, 2, 3, 4, 5] },
+        morning: { start: 6, end: 9, days: [1, 2, 3, 4, 5] },
+        business_hours: { start: 9, end: 17, days: [1, 2, 3, 4, 5] },
         after_work: { start: 17, end: 22, days: [1, 2, 3, 4, 5, 6] },
         evening: { start: 19, end: 22, days: [0, 1, 2, 3, 4, 5, 6] },
         flexible: { start: 9, end: 22, days: [0, 1, 2, 3, 4, 5, 6] },
@@ -189,20 +190,40 @@ serve(async (req) => {
         breakMinutes: 60,
         maxDailyHours: 7,
       },
-      workloadBalance: {
-        projectToTaskRatio: 0.6,
-        oneOffTaskRatio: 0.3,
-        bufferRatio: 0.1,
-      },
+      workloadBalance: { projectToTaskRatio: 0.6, oneOffTaskRatio: 0.3, bufferRatio: 0.1 },
       categoryMappings: {
         CAREER: { defaultTimeWindow: 'business_hours', defaultStatus: 'CAREER', estimatedDuration: 120 },
+        PROF_EDUCATION: { defaultTimeWindow: 'business_hours', defaultStatus: 'PROF_EDUCATION', estimatedDuration: 90 },
         EDUCATION: { defaultTimeWindow: 'business_hours', defaultStatus: 'PROF_EDUCATION', estimatedDuration: 90 },
         VENTURES: { defaultTimeWindow: 'after_work', defaultStatus: 'VENTURES', estimatedDuration: 120 },
         LIFE: { defaultTimeWindow: 'flexible', defaultStatus: 'LIFE', estimatedDuration: 60 },
       },
     };
+
+    // Merge user config with defaults - user values take precedence
+    const config: SchedulingConfig = {
+      timezone: userSchedulingConfig?.timezone || DEFAULT_CONFIG.timezone,
+      timeWindows: {
+        ...DEFAULT_CONFIG.timeWindows,
+        ...userSchedulingConfig?.timeWindows,
+      },
+      workingHours: {
+        ...DEFAULT_CONFIG.workingHours,
+        ...userSchedulingConfig?.workingHours,
+      },
+      workloadBalance: {
+        ...DEFAULT_CONFIG.workloadBalance,
+        ...userSchedulingConfig?.workloadBalance,
+      },
+      categoryMappings: {
+        ...DEFAULT_CONFIG.categoryMappings,
+        ...userSchedulingConfig?.categoryMappings,
+      },
+    };
     
-    console.log('📋 Config time windows being used:', JSON.stringify(config.timeWindows, null, 2));
+    console.log('🔧 User config received:', userSchedulingConfig ? 'YES' : 'NO');
+    console.log('📋 Time windows being used:', JSON.stringify(config.timeWindows, null, 2));
+    console.log('🌍 Timezone:', config.timezone);
 
     // Extract time window and status from scheduling context
     let timeWindow = 'flexible';
