@@ -83,6 +83,13 @@ function getZonedDayParts(utcDate: Date, tz: string): { year: number; month: num
   return { year, month, day };
 }
 
+/**
+ * Safely add minutes to a Date (returns a new Date)
+ */
+function addMinutes(date: Date, minutes: number): Date {
+  return new Date(date.getTime() + minutes * 60000);
+}
+
 interface Task {
   id: string;
   title: string;
@@ -299,14 +306,13 @@ serve(async (req) => {
       score: number;
     }> = [];
     
-    // Start from current time in user's timezone
-    const nowUtc = new Date();
-    const nowZoned = getZonedDayParts(nowUtc, timezone);
-    
-    for (let dayOffset = 0; dayOffset < maxSearchDays; dayOffset++) {
-      // Calculate the date in user's timezone
-      const checkDateLocal = new Date(nowZoned.year, nowZoned.month, nowZoned.day + dayOffset);
-      const zonedParts = getZonedDayParts(checkDateLocal, timezone);
+// Determine base date in user's timezone from searchStartDate
+const baseParts = getZonedDayParts(searchStartDate, timezone);
+
+for (let dayOffset = 0; dayOffset < maxSearchDays; dayOffset++) {
+  // Calculate the date in user's timezone starting from targetDate (or now)
+  const checkDateLocal = new Date(baseParts.year, baseParts.month, baseParts.day + dayOffset);
+  const zonedParts = getZonedDayParts(checkDateLocal, timezone);
       
       // Build UTC start/end for this day in user's timezone
       const dayStartUTC = zonedTimeToUtc(zonedParts.year, zonedParts.month, zonedParts.day, constraints.start, 0, timezone);
@@ -379,7 +385,7 @@ serve(async (req) => {
         
         // 🔍 Check if this slot overlaps with any existing busy slot
         const slotEnd = addMinutes(slot.start, estimatedDuration);
-        const allBusySlots = getAllBusySlotsForDay(dayStartUTC, existingTasks, busySlots, timezone);
+        const allBusySlots = getAllBusySlotsForDay(dayStartUTC, dayEndUTC, existingTasks, busySlots);
         const hasOverlap = allBusySlots.some(busy => {
           return slot.start < busy.end && slotEnd > busy.start;
         });

@@ -229,7 +229,7 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
         ...(isDemoMode ? { id: `demo-task-${Date.now()}-${Math.random().toString(36).substr(2, 9)}` } : {}),
         board_id: boardId,
         user_id: userId,
-        due_date: task.due_date || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), // Default to 7 days from now
+        due_date: task.due_date || null,
         start_time: task.start_time || null,
         end_time: task.end_time || null,
         estimate_minutes: task.estimate_minutes || null,

@@ -84,7 +84,7 @@ export async function scheduleNewTask(
       {
         body: {
           taskText: `${task.title} - ${task.description || ''}`,
-          targetDate: task.due_date || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), // Default to 7 days from now
+          targetDate: task.due_date,
           existingTasks: allTasks,
           workingMinutes: userConfig.workingHours.maxDailyHours * 60,
           busySlots,
