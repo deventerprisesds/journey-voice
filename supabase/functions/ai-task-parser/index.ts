@@ -13,9 +13,15 @@ serve(async (req) => {
   }
 
   try {
-    const { text, mode = 'single', timezone } = await req.json();
+    const { text, mode = 'single', timezone, userId, boardId, existingTasks = [] } = await req.json();
     
-    console.log('📥 Received request:', { text: text?.substring(0, 50), mode, timezone });
+    console.log('📥 Received request:', { 
+      text: text?.substring(0, 50), 
+      mode, 
+      timezone,
+      hasContext: !!(userId && boardId),
+      existingTasksCount: existingTasks.length
+    });
     
     if (!text) {
       console.error('❌ No text input provided');
@@ -202,6 +208,60 @@ Examples:
       // Return tasks with AI's scheduling context hints
       // Client-side will handle all scheduling with full user context
       const tasks = Array.isArray(parsed.tasks) ? parsed.tasks : [];
+
+      // Generate preview scheduling if context provided
+      if (userId && boardId) {
+        console.log('🔮 Generating preview scheduling for', tasks.length, 'tasks');
+        
+        const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+        const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+        
+        const tasksWithPreview = await Promise.all(
+          tasks.map(async (task, index) => {
+            try {
+              const schedulerResponse = await fetch(`${supabaseUrl}/functions/v1/smart-calendar-scheduler`, {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${supabaseKey}`,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  task: {
+                    ...task,
+                    board_id: boardId,
+                    user_id: userId,
+                  },
+                  userId,
+                  existingTasks,
+                }),
+              });
+              
+              if (schedulerResponse.ok) {
+                const { scheduledTask } = await schedulerResponse.json();
+                console.log(`✅ Preview scheduled task ${index + 1}:`, scheduledTask?.start_time);
+                return {
+                  ...task,
+                  start_time: scheduledTask?.start_time || null,
+                  end_time: scheduledTask?.end_time || null,
+                  isPreview: true, // Mark as preview
+                };
+              } else {
+                const errorText = await schedulerResponse.text();
+                console.warn(`⚠️ Preview scheduling failed for task ${index + 1}:`, errorText);
+              }
+            } catch (error) {
+              console.error(`❌ Preview scheduling error for task ${index + 1}:`, error);
+            }
+            return task;
+          })
+        );
+        
+        console.log('✅ Preview scheduling complete');
+        
+        return new Response(JSON.stringify({ tasks: tasksWithPreview }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
 
       // Return unscheduled tasks with AI's context hints
       // Client-side will handle all scheduling with full context

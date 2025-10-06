@@ -181,11 +181,21 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
       const { loadUserSchedulingConfig } = await import('@/services/schedulingService');
       const userConfig = await loadUserSchedulingConfig(userId);
       
+      // Load existing tasks for preview scheduling context
+      const { data: existingTasks } = await supabase
+        .from('tasks')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('board_id', boardId);
+      
       const { data, error } = await supabase.functions.invoke('ai-task-parser', {
         body: { 
           text: aiInput, 
           mode: 'multiple',
-          timezone: userConfig.timezone
+          timezone: userConfig.timezone,
+          userId,
+          boardId,
+          existingTasks: existingTasks || []
         }
       });
 
