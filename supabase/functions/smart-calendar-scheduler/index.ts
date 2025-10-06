@@ -10,6 +10,69 @@ const corsHeaders = {
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
 const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
+// ===== Timezone Helpers =====
+
+/**
+ * Get timezone offset in minutes for a specific date in the given IANA timezone.
+ * Positive = ahead of UTC (e.g., +300 for Asia/Kolkata = UTC+5)
+ * Negative = behind UTC (e.g., -240 for America/New_York EDT = UTC-4)
+ */
+function getTzOffsetMinutesAt(date: Date, tz: string): number {
+  const utcDate = new Date(date.toLocaleString('en-US', { timeZone: 'UTC' }));
+  const tzDate = new Date(date.toLocaleString('en-US', { timeZone: tz }));
+  return (tzDate.getTime() - utcDate.getTime()) / 60000;
+}
+
+/**
+ * Convert a local date/time in the user's timezone to UTC Date object.
+ * @param localYear - Year in user's timezone
+ * @param localMonth - Month (0-11) in user's timezone  
+ * @param localDay - Day in user's timezone
+ * @param localHour - Hour in user's timezone
+ * @param localMinute - Minute in user's timezone
+ * @param tz - IANA timezone
+ */
+function zonedTimeToUtc(
+  localYear: number,
+  localMonth: number,
+  localDay: number,
+  localHour: number,
+  localMinute: number,
+  tz: string
+): Date {
+  const localDateStr = `${localYear}-${String(localMonth + 1).padStart(2, '0')}-${String(localDay).padStart(2, '0')}T${String(localHour).padStart(2, '0')}:${String(localMinute).padStart(2, '0')}:00`;
+  const utcDate = new Date(new Date(localDateStr + 'Z').toLocaleString('en-US', { timeZone: tz }));
+  const offset = getTzOffsetMinutesAt(utcDate, tz);
+  return new Date(utcDate.getTime() - offset * 60000);
+}
+
+/**
+ * Get day-of-week (0=Sun, 6=Sat) for a UTC date in the user's timezone
+ */
+function getDayOfWeekInTz(utcDate: Date, tz: string): number {
+  const tzStr = utcDate.toLocaleString('en-US', { timeZone: tz, weekday: 'short' });
+  const dayMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  return dayMap[tzStr] ?? 0;
+}
+
+/**
+ * Get year, month, day in the user's timezone from a UTC Date
+ */
+function getZonedDayParts(utcDate: Date, tz: string): { year: number; month: number; day: number } {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(utcDate);
+  
+  const year = parseInt(parts.find(p => p.type === 'year')?.value || '0');
+  const month = parseInt(parts.find(p => p.type === 'month')?.value || '1') - 1;
+  const day = parseInt(parts.find(p => p.type === 'day')?.value || '1');
+  
+  return { year, month, day };
+}
+
 interface Task {
   id: string;
   title: string;
@@ -189,34 +252,51 @@ serve(async (req) => {
       score: number;
     }> = [];
     
+    // Start from current time in user's timezone
+    const nowUtc = new Date();
+    const nowZoned = getZonedDayParts(nowUtc, timezone);
+    
     for (let dayOffset = 0; dayOffset < maxSearchDays; dayOffset++) {
-      const checkDate = new Date(searchStartDate);
-      checkDate.setDate(checkDate.getDate() + dayOffset);
+      // Calculate the date in user's timezone
+      const checkDateLocal = new Date(nowZoned.year, nowZoned.month, nowZoned.day + dayOffset);
+      const zonedParts = getZonedDayParts(checkDateLocal, timezone);
+      
+      // Build UTC start/end for this day in user's timezone
+      const dayStartUTC = zonedTimeToUtc(zonedParts.year, zonedParts.month, zonedParts.day, constraints.start, 0, timezone);
+      const dayEndUTC = zonedTimeToUtc(zonedParts.year, zonedParts.month, zonedParts.day, constraints.end, 0, timezone);
       
       // Don't schedule past due date
-      if (dueDateObj && checkDate > dueDateObj) {
-        console.log(`Skipping ${checkDate.toDateString()} - past due date ${dueDateObj.toDateString()}`);
+      if (dueDateObj && dayStartUTC > dueDateObj) {
+        console.log(`Skipping day ${dayOffset} - past due date`);
         break;
       }
       
-      // Check if day is allowed
-      const dayOfWeek = checkDate.getDay();
+      // Check if day is allowed in user's timezone
+      const dayOfWeek = getDayOfWeekInTz(dayStartUTC, timezone);
       if (!constraints.days.includes(dayOfWeek)) {
         console.log(`Day ${dayOfWeek} not allowed for time window ${timeWindow}, skipping`);
         continue;
       }
 
-      // Get all busy slots for this day
-      const dayBusySlots = getAllBusySlotsForDay(checkDate, existingTasks, busySlots);
+      // Get all busy slots for this day (in UTC)
+      const dayBusySlots = getAllBusySlotsForDay(dayStartUTC, dayEndUTC, existingTasks, busySlots);
       
-      // Find BEST available slot (closest to preferred time if specified)
+      // Build preferred start time in UTC if specified
+      let preferredStartUTC: Date | null = null;
+      if (preferredTimeMinutes !== null) {
+        const prefHour = Math.floor(preferredTimeMinutes / 60);
+        const prefMinute = preferredTimeMinutes % 60;
+        preferredStartUTC = zonedTimeToUtc(zonedParts.year, zonedParts.month, zonedParts.day, prefHour, prefMinute, timezone);
+      }
+      
+      // Find BEST available slot (in UTC)
       const slot = findBestSlotForDay(
-        checkDate,
+        dayStartUTC,
+        dayEndUTC,
         dayBusySlots,
         estimatedDuration,
-        constraints.start,
-        constraints.end,
-        preferredTimeMinutes
+        preferredStartUTC,
+        timezone
       );
 
       if (slot) {
@@ -227,21 +307,15 @@ serve(async (req) => {
         score -= dayOffset * dayOffset * 10;
         
         // If preferred time is set, score by proximity
-        if (preferredTimeMinutes !== null) {
-          const slotTimeMinutes = slot.start.getHours() * 60 + slot.start.getMinutes();
-          const timeDiffMinutes = Math.abs(slotTimeMinutes - preferredTimeMinutes);
+        if (preferredStartUTC !== null) {
+          const timeDiffMinutes = Math.abs((slot.start.getTime() - preferredStartUTC.getTime()) / 60000);
           
           // STRONG preference for suggested time (exponential penalty for distance)
           score += Math.max(0, 100 - (timeDiffMinutes / 15) ** 2);
         } else {
-          // No suggested time - use default time window preferences
-          const slotHour = slot.start.getHours();
-          const isInPreferredWindow = 
-            slotHour >= constraints.start && 
-            slotHour < constraints.end;
-          if (isInPreferredWindow) score += 50;
-          
-          // Prefer earlier times within the day
+          // No suggested time - prefer earlier times in the window
+          const slotLocalParts = getZonedDayParts(slot.start, timezone);
+          const slotHour = parseInt(slot.start.toLocaleTimeString('en-US', { timeZone: timezone, hour: '2-digit', hour12: false }));
           score -= slotHour;
         }
         
@@ -254,16 +328,18 @@ serve(async (req) => {
         };
         score += priorityBonus[taskPriority] || 0;
         
+        const localTimeStr = slot.start.toLocaleString('en-US', { timeZone: timezone });
+        
         candidateSlots.push({
           slot,
           dayOffset,
-          date: checkDate,
+          date: dayStartUTC,
           score
         });
         
-        console.log(`Found slot on ${checkDate.toDateString()} at ${slot.start.toLocaleTimeString()} - score: ${score}`);
+        console.log(`Found slot on day ${dayOffset} at ${localTimeStr} (${timezone}) - score: ${score}`);
       } else {
-        console.log(`No slot found on ${checkDate.toDateString()}, trying next day`);
+        console.log(`No slot found on day ${dayOffset}, trying next day`);
       }
     }
     
@@ -272,7 +348,9 @@ serve(async (req) => {
     const scheduledSlot = candidateSlots.length > 0 ? candidateSlots[0].slot : null;
     
     if (scheduledSlot && candidateSlots.length > 0) {
-      console.log(`Selected best slot: ${scheduledSlot.start.toLocaleString()} (score: ${candidateSlots[0].score})`);
+      const localTime = scheduledSlot.start.toLocaleString('en-US', { timeZone: timezone });
+      const utcTime = scheduledSlot.start.toISOString();
+      console.log(`✅ Selected best slot: ${localTime} (${timezone}) = ${utcTime} (score: ${candidateSlots[0].score})`);
     }
 
     if (!scheduledSlot) {
@@ -319,37 +397,39 @@ serve(async (req) => {
 });
 
 /**
- * Get all busy slots for a specific day
+ * Get all busy slots that overlap with the given day range (in UTC)
  */
 function getAllBusySlotsForDay(
-  date: Date,
+  dayStartUTC: Date,
+  dayEndUTC: Date,
   existingTasks: Task[],
   externalBusySlots: any[]
 ): BusySlot[] {
-  const dateStr = date.toDateString();
   const busySlots: BusySlot[] = [];
 
-  // Add existing scheduled tasks
+  // Add existing scheduled tasks that overlap this day
   existingTasks.forEach((task) => {
     if (task.start_time) {
       const taskStart = new Date(task.start_time);
-      if (taskStart.toDateString() === dateStr) {
-        const taskEnd = task.end_time
-          ? new Date(task.end_time)
-          : new Date(taskStart.getTime() + (task.estimate_minutes || 60) * 60000);
+      const taskEnd = task.end_time
+        ? new Date(task.end_time)
+        : new Date(taskStart.getTime() + (task.estimate_minutes || 60) * 60000);
+      
+      // Check for overlap
+      if (taskStart < dayEndUTC && taskEnd > dayStartUTC) {
         busySlots.push({ start: taskStart, end: taskEnd });
       }
     }
   });
 
-  // Add external calendar busy slots
+  // Add external calendar busy slots that overlap this day
   externalBusySlots.forEach((slot) => {
     const slotStart = new Date(slot.start);
-    if (slotStart.toDateString() === dateStr) {
-      busySlots.push({
-        start: slotStart,
-        end: new Date(slot.end),
-      });
+    const slotEnd = new Date(slot.end);
+    
+    // Check for overlap
+    if (slotStart < dayEndUTC && slotEnd > dayStartUTC) {
+      busySlots.push({ start: slotStart, end: slotEnd });
     }
   });
 
@@ -358,37 +438,27 @@ function getAllBusySlotsForDay(
 }
 
 /**
- * Find the BEST available time slot on a given day, preferring slots near preferredTimeMinutes
+ * Find the BEST available time slot within a UTC day range, preferring slots near preferredStartUTC
  */
 function findBestSlotForDay(
-  date: Date,
+  dayStartUTC: Date,
+  dayEndUTC: Date,
   busySlots: BusySlot[],
   durationMinutes: number,
-  startHour: number,
-  endHour: number,
-  preferredTimeMinutes: number | null
+  preferredStartUTC: Date | null,
+  timezone: string
 ): BusySlot | null {
-  // Use the provided date as-is - it represents the local day in user's timezone
-  const dayStart = new Date(date);
-  dayStart.setHours(startHour, 0, 0, 0);
-  
-  const dayEnd = new Date(date);
-  dayEnd.setHours(endHour, 0, 0, 0);
-  
-  // Note: JavaScript Date objects are always stored as UTC internally,
-  // but when we use setHours/getHours, they operate in the system's local time.
-  // The frontend passes dates that are already in the user's timezone.
 
-  // Find ALL available gaps
+  // Find ALL available gaps (all times in UTC)
   const availableGaps: BusySlot[] = [];
 
   // If no busy slots, entire day is available
   if (busySlots.length === 0) {
-    availableGaps.push({ start: dayStart, end: dayEnd });
+    availableGaps.push({ start: dayStartUTC, end: dayEndUTC });
   } else {
     // Gap before first busy slot
-    if (busySlots[0].start > dayStart) {
-      availableGaps.push({ start: dayStart, end: busySlots[0].start });
+    if (busySlots[0].start > dayStartUTC) {
+      availableGaps.push({ start: dayStartUTC, end: busySlots[0].start });
     }
 
     // Gaps between busy slots
@@ -397,8 +467,8 @@ function findBestSlotForDay(
     }
 
     // Gap after last busy slot
-    if (busySlots[busySlots.length - 1].end < dayEnd) {
-      availableGaps.push({ start: busySlots[busySlots.length - 1].end, end: dayEnd });
+    if (busySlots[busySlots.length - 1].end < dayEndUTC) {
+      availableGaps.push({ start: busySlots[busySlots.length - 1].end, end: dayEndUTC });
     }
   }
 
@@ -410,22 +480,15 @@ function findBestSlotForDay(
     
     if (gapDurationMinutes < durationMinutes) continue; // Gap too small
 
-    // If we have a preferred time, try to fit the slot centered around it
-    if (preferredTimeMinutes !== null) {
-      const preferredStart = new Date(date);
-      const preferredHour = Math.floor(preferredTimeMinutes / 60);
-      const preferredMinute = preferredTimeMinutes % 60;
-      preferredStart.setHours(preferredHour, preferredMinute, 0, 0);
-
-      const preferredEnd = new Date(preferredStart.getTime() + durationMinutes * 60000);
+    // If we have a preferred time, try to fit the slot at that time
+    if (preferredStartUTC !== null) {
+      const preferredEnd = new Date(preferredStartUTC.getTime() + durationMinutes * 60000);
 
       // Check if preferred slot fits in this gap
-      if (preferredStart >= gap.start && preferredEnd <= gap.end) {
-        const slotTimeMinutes = preferredStart.getHours() * 60 + preferredStart.getMinutes();
-        const timeDiff = Math.abs(slotTimeMinutes - preferredTimeMinutes);
+      if (preferredStartUTC >= gap.start && preferredEnd <= gap.end) {
         candidateSlots.push({
-          slot: { start: preferredStart, end: preferredEnd },
-          score: 1000 - timeDiff // Perfect match gets highest score
+          slot: { start: preferredStartUTC, end: preferredEnd },
+          score: 1000 // Perfect match gets highest score
         });
         continue; // Found perfect fit, skip other candidates in this gap
       }
@@ -441,9 +504,8 @@ function findBestSlotForDay(
         
         if (slotEnd > gap.end) break;
 
-        const slotTimeMinutes = slotStart.getHours() * 60 + slotStart.getMinutes();
-        const timeDiff = Math.abs(slotTimeMinutes - preferredTimeMinutes);
-        const score = 500 - timeDiff;
+        const timeDiffMs = Math.abs(slotStart.getTime() - preferredStartUTC.getTime());
+        const score = 500 - (timeDiffMs / 60000); // Score decreases with distance from preferred
 
         if (score > bestScore) {
           bestScore = score;

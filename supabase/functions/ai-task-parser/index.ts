@@ -207,16 +207,24 @@ Examples:
       const tasks = Array.isArray(parsed.tasks) ? parsed.tasks : [];
       const scheduled = await Promise.all(tasks.map(async (t: any) => {
         try {
-          if (t.start_time || t.end_time) return t; // already explicit
+          // If AI provided explicit times, convert to scheduling hint
+          let contextWithHint = t.scheduling_context ?? [];
+          if (t.start_time) {
+            const startDate = new Date(t.start_time);
+            const hours = startDate.getHours();
+            const minutes = startDate.getMinutes();
+            contextWithHint = [...contextWithHint, `suggested_time:${hours}:${minutes}`];
+            console.log(`Converting explicit time ${t.start_time} to scheduling hint`);
+          }
 
           const { data: schedData, error: schedError } = await supabase.functions.invoke('smart-calendar-scheduler', {
             body: {
               taskText: `${t.title}${t.description ? ' - ' + t.description : ''}`,
-              targetDate: null, // prefer dueDate for bounds only
+              targetDate: null,
               dueDate: t.due_date ?? null,
               existingTasks: [],
               busySlots: [],
-              scheduling_context: t.scheduling_context ?? [],
+              scheduling_context: contextWithHint,
               taskCategory: t.category,
               taskPriority: t.priority,
               timezone: timezone ?? 'UTC'
