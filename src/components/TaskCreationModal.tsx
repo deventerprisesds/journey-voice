@@ -610,27 +610,43 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                           </Select>
                         </div>
 
-                        {/* Due Date */}
+                        {/* Start Date */}
                         <div className="space-y-2">
-                          <Label className="text-xs font-medium">Due Date</Label>
+                          <Label className="text-xs font-medium">Start Date</Label>
                           <Popover>
                             <PopoverTrigger asChild>
                               <Button
                                 variant="outline"
                                 className={cn(
                                   "h-8 justify-start text-left font-normal text-xs",
-                                  !task.due_date && "text-muted-foreground"
+                                  !task.start_time && "text-muted-foreground"
                                 )}
                               >
                                 <CalendarIcon className="mr-1 h-3 w-3" />
-                                {task.due_date ? format(new Date(task.due_date), "MMM d") : "Set date"}
+                                {task.start_time ? format(new Date(task.start_time), "MMM d") : "Set date"}
                               </Button>
                             </PopoverTrigger>
                             <PopoverContent className="w-auto p-0">
                               <Calendar
                                 mode="single"
-                                selected={task.due_date ? new Date(task.due_date) : undefined}
-                                onSelect={(date) => editParsedTask(index, 'due_date', date?.toISOString())}
+                                selected={task.start_time ? new Date(task.start_time) : undefined}
+                                onSelect={(date) => {
+                                  if (!date) {
+                                    editParsedTask(index, 'start_time', undefined);
+                                    return;
+                                  }
+                                  // Preserve existing time if present, otherwise use current time
+                                  const existingTime = task.start_time ? new Date(task.start_time) : new Date();
+                                  date.setHours(existingTime.getHours(), existingTime.getMinutes(), 0, 0);
+                                  editParsedTask(index, 'start_time', date.toISOString());
+                                  
+                                  // Also update end_time if it exists
+                                  if (task.end_time) {
+                                    const endTime = new Date(task.end_time);
+                                    date.setHours(endTime.getHours(), endTime.getMinutes(), 0, 0);
+                                    editParsedTask(index, 'end_time', date.toISOString());
+                                  }
+                                }}
                                 initialFocus
                                 className={cn("p-3 pointer-events-auto")}
                               />
@@ -689,7 +705,7 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                                   editParsedTask(index, 'start_time', undefined);
                                   return;
                                 }
-                                const baseDate = task.due_date ? new Date(task.due_date) : new Date();
+                                const baseDate = task.start_time ? new Date(task.start_time) : new Date();
                                 const [hours, minutes] = e.target.value.split(':');
                                 baseDate.setHours(parseInt(hours), parseInt(minutes), 0, 0);
                                 editParsedTask(index, 'start_time', baseDate.toISOString());
@@ -712,7 +728,7 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                                   editParsedTask(index, 'end_time', undefined);
                                   return;
                                 }
-                                const baseDate = task.due_date ? new Date(task.due_date) : new Date();
+                                const baseDate = task.start_time ? new Date(task.start_time) : new Date();
                                 const [hours, minutes] = e.target.value.split(':');
                                 baseDate.setHours(parseInt(hours), parseInt(minutes), 0, 0);
                                 editParsedTask(index, 'end_time', baseDate.toISOString());
