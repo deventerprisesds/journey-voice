@@ -5,6 +5,7 @@ import {
   type SchedulingConfig,
   type TimeWindow,
 } from "@/config/schedulingRules";
+import { getBrowserTimezone, getTimezoneOffset } from "@/lib/timezone";
 
 export type { SchedulingConfig, TimeWindow };
 
@@ -19,10 +20,13 @@ let cachedUserId: string | null = null;
 
 /**
  * Load user's scheduling preferences from database or return defaults
+ * Auto-detects and saves timezone on first use
  */
 export async function loadUserSchedulingConfig(userId?: string): Promise<SchedulingConfig> {
   if (!userId) {
-    return DEFAULT_SCHEDULING_CONFIG;
+    const config = { ...DEFAULT_SCHEDULING_CONFIG };
+    config.timezone = getBrowserTimezone();
+    return config;
   }
 
   // Return cached config if available for this user
@@ -33,26 +37,50 @@ export async function loadUserSchedulingConfig(userId?: string): Promise<Schedul
   try {
     const { data, error } = await supabase
       .from('user_scheduling_prefs')
-      .select('config')
+      .select('config, timezone')
       .eq('user_id', userId)
       .maybeSingle();
 
     if (error) {
       console.warn('Error loading user scheduling config:', error);
-      return DEFAULT_SCHEDULING_CONFIG;
+      const config = { ...DEFAULT_SCHEDULING_CONFIG };
+      config.timezone = getBrowserTimezone();
+      return config;
     }
 
-    if (data?.config) {
-      const userConfig = data.config as Partial<SchedulingConfig>;
-      cachedConfig = mergeSchedulingConfig(userConfig);
+    if (data) {
+      // Merge config from JSONB column
+      const userConfig = (data.config as Partial<SchedulingConfig>) || {};
+      
+      // Use timezone from dedicated column (preferred) or config, or auto-detect
+      const timezone = data.timezone || userConfig.timezone || getBrowserTimezone();
+      
+      // If no timezone was saved, save the auto-detected one
+      if (!data.timezone && !userConfig.timezone) {
+        console.log('🌍 Auto-detected timezone:', timezone, '- saving to database');
+        await saveUserSchedulingConfig(userId, { timezone });
+      }
+      
+      const mergedConfig = mergeSchedulingConfig({ ...userConfig, timezone });
+      cachedConfig = mergedConfig;
       cachedUserId = userId;
-      return cachedConfig;
+      return mergedConfig;
     }
 
-    return DEFAULT_SCHEDULING_CONFIG;
+    // No data found - auto-detect and save timezone
+    const timezone = getBrowserTimezone();
+    console.log('🌍 First-time timezone setup:', timezone);
+    await saveUserSchedulingConfig(userId, { timezone });
+    
+    const config = { ...DEFAULT_SCHEDULING_CONFIG, timezone };
+    cachedConfig = config;
+    cachedUserId = userId;
+    return config;
   } catch (error) {
     console.error('Failed to load scheduling config:', error);
-    return DEFAULT_SCHEDULING_CONFIG;
+    const config = { ...DEFAULT_SCHEDULING_CONFIG };
+    config.timezone = getBrowserTimezone();
+    return config;
   }
 }
 
@@ -64,13 +92,23 @@ export async function saveUserSchedulingConfig(
   config: Partial<SchedulingConfig>
 ): Promise<boolean> {
   try {
+    // Extract timezone to save in dedicated column
+    const { timezone, ...restConfig } = config;
+    
+    const updateData: any = {
+      user_id: userId,
+      config: restConfig as any,
+      updated_at: new Date().toISOString(),
+    };
+    
+    // Add timezone to dedicated column if provided
+    if (timezone) {
+      updateData.timezone = timezone;
+    }
+    
     const { error } = await supabase
       .from('user_scheduling_prefs')
-      .upsert({
-        user_id: userId,
-        config: config as any,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: 'user_id' });
+      .upsert(updateData, { onConflict: 'user_id' });
 
     if (error) {
       console.error('Error saving scheduling config:', error);
@@ -86,6 +124,20 @@ export async function saveUserSchedulingConfig(
     console.error('Failed to save scheduling config:', error);
     return false;
   }
+}
+
+/**
+ * Get user's timezone from their config
+ */
+export function getUserTimezone(config: SchedulingConfig): string {
+  return config.timezone || getBrowserTimezone();
+}
+
+/**
+ * Get user's timezone offset in minutes
+ */
+export function getUserTimezoneOffset(config: SchedulingConfig): number {
+  return getTimezoneOffset(config.timezone || getBrowserTimezone());
 }
 
 /**

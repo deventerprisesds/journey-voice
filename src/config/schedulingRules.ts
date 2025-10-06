@@ -13,6 +13,7 @@ export interface TimeWindow {
 }
 
 export interface SchedulingConfig {
+  timezone: string; // IANA timezone identifier (e.g., 'America/New_York')
   timeWindows: {
     morning: TimeWindow;
     business_hours: TimeWindow;
@@ -52,6 +53,7 @@ export interface SchedulingConfig {
 
 // Default configuration blending all existing rules
 export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
+  timezone: 'America/New_York', // Will be auto-detected on first use
   timeWindows: {
     morning: {
       start: 6,
@@ -207,6 +209,7 @@ export function mergeSchedulingConfig(
   userConfig: Partial<SchedulingConfig>
 ): SchedulingConfig {
   return {
+    timezone: userConfig.timezone ?? DEFAULT_SCHEDULING_CONFIG.timezone,
     timeWindows: { ...DEFAULT_SCHEDULING_CONFIG.timeWindows, ...userConfig.timeWindows },
     workingHours: { ...DEFAULT_SCHEDULING_CONFIG.workingHours, ...userConfig.workingHours },
     workloadBalance: { ...DEFAULT_SCHEDULING_CONFIG.workloadBalance, ...userConfig.workloadBalance },
@@ -215,5 +218,6 @@ export function mergeSchedulingConfig(
       keywords: { ...DEFAULT_SCHEDULING_CONFIG.contextRules.keywords, ...userConfig.contextRules?.keywords },
       priorityMappings: { ...DEFAULT_SCHEDULING_CONFIG.contextRules.priorityMappings, ...userConfig.contextRules?.priorityMappings },
     },
+    customAIInstructions: userConfig.customAIInstructions ?? DEFAULT_SCHEDULING_CONFIG.customAIInstructions,
   };
 }

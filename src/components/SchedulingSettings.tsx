@@ -12,8 +12,9 @@ import {
   saveUserSchedulingConfig,
 } from '@/services/schedulingService';
 import { DEFAULT_SCHEDULING_CONFIG, type SchedulingConfig } from '@/config/schedulingRules';
-import { Clock, Calendar, TrendingUp, Tag, Key, Target, Plus, X, FileText } from 'lucide-react';
+import { Clock, Calendar, TrendingUp, Tag, Key, Target, Plus, X, FileText, Globe } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
+import { TIMEZONE_OPTIONS, getBrowserTimezone, formatTimezoneWithOffset } from '@/lib/timezone';
 
 const SchedulingSettings: React.FC = () => {
   const { user } = useAuth();
@@ -91,6 +92,63 @@ const SchedulingSettings: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {/* Timezone Settings - FIRST */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Globe className="h-5 w-5" />
+            <CardTitle>Timezone</CardTitle>
+          </div>
+          <CardDescription>
+            Your timezone affects all task scheduling and reminders. Times will be displayed in this timezone.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label>Your Timezone</Label>
+            <Select
+              value={config.timezone}
+              onValueChange={(value) => setConfig({ ...config, timezone: value })}
+            >
+              <SelectTrigger>
+                <SelectValue>
+                  {formatTimezoneWithOffset(config.timezone)}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent className="max-h-[300px]">
+                {TIMEZONE_OPTIONS.map((group) => (
+                  <React.Fragment key={group.region}>
+                    <div className="px-2 py-1.5 text-sm font-semibold text-muted-foreground">
+                      {group.region}
+                    </div>
+                    {group.zones.map((zone) => (
+                      <SelectItem key={zone} value={zone}>
+                        {formatTimezoneWithOffset(zone)}
+                      </SelectItem>
+                    ))}
+                  </React.Fragment>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                const detected = getBrowserTimezone();
+                setConfig({ ...config, timezone: detected });
+                toast({
+                  title: 'Timezone Detected',
+                  description: `Set to ${detected}`,
+                });
+              }}
+            >
+              <Globe className="h-4 w-4 mr-2" />
+              Detect Automatically
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Working Hours */}
       <Card>
         <CardHeader>

@@ -13,9 +13,9 @@ serve(async (req) => {
   }
 
   try {
-    const { text, mode = 'single' } = await req.json();
+    const { text, mode = 'single', timezone, tzOffsetMinutes } = await req.json();
     
-    console.log('📥 Received request:', { text: text?.substring(0, 50), mode });
+    console.log('📥 Received request:', { text: text?.substring(0, 50), mode, timezone, tzOffsetMinutes });
     
     if (!text) {
       console.error('❌ No text input provided');
@@ -219,7 +219,8 @@ Examples:
               scheduling_context: t.scheduling_context ?? [],
               taskCategory: t.category,
               taskPriority: t.priority,
-              tzOffsetMinutes: 0 // Edge function runs in UTC, no offset needed
+              timezone: timezone ?? 'UTC',
+              tzOffsetMinutes: tzOffsetMinutes ?? 0
             }
           });
 

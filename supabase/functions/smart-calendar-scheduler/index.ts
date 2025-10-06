@@ -87,10 +87,11 @@ serve(async (req) => {
       taskCategory,
       taskPriority,
       estimateMinutes,
+      timezone, // IANA timezone identifier (e.g., 'America/New_York')
       tzOffsetMinutes = 0 // Browser timezone offset (e.g., 240 for ET = UTC-4)
     } = await req.json();
     
-    console.log('🌍 Timezone offset:', tzOffsetMinutes, 'minutes');
+    console.log('🌍 Scheduling in timezone:', timezone ?? 'UTC', '(offset:', tzOffsetMinutes, 'minutes)');
     
     if (!taskText) {
       throw new Error('Task text is required');
