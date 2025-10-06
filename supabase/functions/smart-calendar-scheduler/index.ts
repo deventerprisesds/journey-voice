@@ -484,15 +484,23 @@ Return ONLY valid JSON (no markdown):
     
 // Determine base date in user's timezone from searchStartDate
 const baseParts = getZonedDayParts(searchStartDate, timezone);
+const now = new Date(); // Current moment for filtering past slots
 
 for (let dayOffset = 0; dayOffset < maxSearchDays; dayOffset++) {
-  // Calculate the date in user's timezone starting from targetDate (or now)
-  const checkDateLocal = new Date(baseParts.year, baseParts.month, baseParts.day + dayOffset);
-  const zonedParts = getZonedDayParts(checkDateLocal, timezone);
+  // Calculate the date in user's timezone
+  const checkYear = baseParts.year;
+  const checkMonth = baseParts.month;
+  const checkDay = baseParts.day + dayOffset;
       
       // Build UTC start/end for this day in user's timezone
-      const dayStartUTC = zonedTimeToUtc(zonedParts.year, zonedParts.month, zonedParts.day, constraints.start, 0, timezone);
-      const dayEndUTC = zonedTimeToUtc(zonedParts.year, zonedParts.month, zonedParts.day, constraints.end, 0, timezone);
+      const dayStartUTC = zonedTimeToUtc(checkYear, checkMonth, checkDay, constraints.start, 0, timezone);
+      const dayEndUTC = zonedTimeToUtc(checkYear, checkMonth, checkDay, constraints.end, 0, timezone);
+      
+      // CRITICAL: Skip if this entire day is in the past
+      if (dayEndUTC <= now) {
+        console.log(`Skipping day ${dayOffset} - entire day is in the past`);
+        continue;
+      }
       
       // Don't schedule past due date
       if (dueDateObj && dayStartUTC > dueDateObj) {
@@ -515,7 +523,7 @@ for (let dayOffset = 0; dayOffset < maxSearchDays; dayOffset++) {
       if (preferredTimeMinutes !== null) {
         const prefHour = Math.floor(preferredTimeMinutes / 60);
         const prefMinute = preferredTimeMinutes % 60;
-        preferredStartUTC = zonedTimeToUtc(zonedParts.year, zonedParts.month, zonedParts.day, prefHour, prefMinute, timezone);
+        preferredStartUTC = zonedTimeToUtc(checkYear, checkMonth, checkDay, prefHour, prefMinute, timezone);
       }
       
       // Find BEST available slot (in UTC)
@@ -706,26 +714,41 @@ function findBestSlotForDay(
   timezone: string
 ): BusySlot | null {
 
+  // CRITICAL: Get current time to filter past slots
+  const now = new Date();
+  
   // Find ALL available gaps (all times in UTC)
   const availableGaps: BusySlot[] = [];
 
-  // If no busy slots, entire day is available
+  // If no busy slots, entire day is available (but filtered for past times)
   if (busySlots.length === 0) {
-    availableGaps.push({ start: dayStartUTC, end: dayEndUTC });
+    const gapStart = dayStartUTC > now ? dayStartUTC : now;
+    if (gapStart < dayEndUTC) {
+      availableGaps.push({ start: gapStart, end: dayEndUTC });
+    }
   } else {
-    // Gap before first busy slot
+    // Gap before first busy slot (filtered for past times)
     if (busySlots[0].start > dayStartUTC) {
-      availableGaps.push({ start: dayStartUTC, end: busySlots[0].start });
+      const gapStart = dayStartUTC > now ? dayStartUTC : now;
+      if (gapStart < busySlots[0].start) {
+        availableGaps.push({ start: gapStart, end: busySlots[0].start });
+      }
     }
 
-    // Gaps between busy slots
+    // Gaps between busy slots (filtered for past times)
     for (let i = 0; i < busySlots.length - 1; i++) {
-      availableGaps.push({ start: busySlots[i].end, end: busySlots[i + 1].start });
+      const gapStart = busySlots[i].end > now ? busySlots[i].end : now;
+      if (gapStart < busySlots[i + 1].start) {
+        availableGaps.push({ start: gapStart, end: busySlots[i + 1].start });
+      }
     }
 
-    // Gap after last busy slot
+    // Gap after last busy slot (filtered for past times)
     if (busySlots[busySlots.length - 1].end < dayEndUTC) {
-      availableGaps.push({ start: busySlots[busySlots.length - 1].end, end: dayEndUTC });
+      const gapStart = busySlots[busySlots.length - 1].end > now ? busySlots[busySlots.length - 1].end : now;
+      if (gapStart < dayEndUTC) {
+        availableGaps.push({ start: gapStart, end: dayEndUTC });
+      }
     }
   }
 
