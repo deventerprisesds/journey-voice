@@ -137,6 +137,7 @@ interface SchedulingConfig {
       defaultTimeWindow: string;
       defaultStatus: string;
       estimatedDuration: number;
+      maxPerDay?: number;
     };
   };
   customAIInstructions?: string;
@@ -527,11 +528,45 @@ Return ONLY valid JSON (no markdown):
 const baseParts = getZonedDayParts(searchStartDate, timezone);
 const now = new Date(); // Current moment for filtering past slots
 
+// Track tasks scheduled per day per category for maxPerDay enforcement
+const tasksPerDayPerCategory = new Map<string, Map<string, number>>();
+
+// Initialize counter from existing scheduled tasks
+for (const task of existingTasks) {
+  if (task.start_time && task.category) {
+    const taskStart = new Date(task.start_time);
+    const taskParts = getZonedDayParts(taskStart, timezone);
+    const dayKey = `${taskParts.year}-${taskParts.month}-${taskParts.day}`;
+    
+    if (!tasksPerDayPerCategory.has(dayKey)) {
+      tasksPerDayPerCategory.set(dayKey, new Map());
+    }
+    const dayMap = tasksPerDayPerCategory.get(dayKey)!;
+    dayMap.set(task.category, (dayMap.get(task.category) || 0) + 1);
+  }
+}
+
 for (let dayOffset = 0; dayOffset < maxSearchDays; dayOffset++) {
   // Calculate the date in user's timezone
   const checkYear = baseParts.year;
   const checkMonth = baseParts.month;
   const checkDay = baseParts.day + dayOffset;
+  const dayKey = `${checkYear}-${checkMonth}-${checkDay}`;
+  
+  // Check maxPerDay limit for this category
+  const categoryConfig = config.categoryMappings[taskCategory];
+  if (categoryConfig?.maxPerDay) {
+    if (!tasksPerDayPerCategory.has(dayKey)) {
+      tasksPerDayPerCategory.set(dayKey, new Map());
+    }
+    const dayMap = tasksPerDayPerCategory.get(dayKey)!;
+    const currentCount = dayMap.get(taskCategory) || 0;
+    
+    if (currentCount >= categoryConfig.maxPerDay) {
+      console.log(`⏭️ Day ${dayKey} already has ${currentCount} ${taskCategory} tasks (max: ${categoryConfig.maxPerDay}), trying next day`);
+      continue;
+    }
+  }
       
       // Build UTC start/end for this day in user's timezone
       const dayStartUTC = zonedTimeToUtc(checkYear, checkMonth, checkDay, constraints.start, 0, timezone);
@@ -625,6 +660,16 @@ for (let dayOffset = 0; dayOffset < maxSearchDays; dayOffset++) {
             date: dayStartUTC,
             score
           });
+          
+          // Update counter for maxPerDay enforcement
+          const categoryConfig = config.categoryMappings[taskCategory];
+          if (categoryConfig?.maxPerDay) {
+            if (!tasksPerDayPerCategory.has(dayKey)) {
+              tasksPerDayPerCategory.set(dayKey, new Map());
+            }
+            const dayMap = tasksPerDayPerCategory.get(dayKey)!;
+            dayMap.set(taskCategory, (dayMap.get(taskCategory) || 0) + 1);
+          }
           
           console.log(`✅ Found valid slot on day ${dayOffset} at ${localTimeStr} (${timezone}) - score: ${score}`);
         }

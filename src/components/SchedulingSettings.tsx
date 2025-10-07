@@ -519,6 +519,28 @@ const SchedulingSettings: React.FC = () => {
                     }
                   />
                 </div>
+                <div className="space-y-2">
+                  <Label className="text-sm">Max Per Day</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    max="10"
+                    placeholder="No limit"
+                    value={mapping.maxPerDay || ''}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        categoryMappings: {
+                          ...config.categoryMappings,
+                          [category]: {
+                            ...mapping,
+                            maxPerDay: e.target.value ? parseInt(e.target.value) : undefined,
+                          },
+                        },
+                      })
+                    }
+                  />
+                </div>
               </div>
             </div>
           ))}

@@ -38,6 +38,7 @@ export interface SchedulingConfig {
       defaultTimeWindow: keyof SchedulingConfig['timeWindows'];
       defaultStatus: string;
       estimatedDuration: number; // minutes
+      maxPerDay?: number; // Optional max tasks per day for this category
     };
   };
   contextRules: {
@@ -107,6 +108,7 @@ export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
       defaultTimeWindow: 'after_work',
       defaultStatus: 'PROF_EDUCATION',
       estimatedDuration: 90,
+      maxPerDay: 2
     },
     EDUCATION: {
       defaultTimeWindow: 'after_work',
