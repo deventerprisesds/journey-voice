@@ -226,6 +226,9 @@ export function mergeSchedulingConfig(
       keywords: { ...DEFAULT_SCHEDULING_CONFIG.contextRules.keywords, ...userConfig.contextRules?.keywords },
       priorityMappings: { ...DEFAULT_SCHEDULING_CONFIG.contextRules.priorityMappings, ...userConfig.contextRules?.priorityMappings },
     },
-    customAIInstructions: userConfig.customAIInstructions ?? DEFAULT_SCHEDULING_CONFIG.customAIInstructions,
+    // Use user instructions if provided and not empty, otherwise use default
+    customAIInstructions: (userConfig.customAIInstructions && userConfig.customAIInstructions.trim() !== '') 
+      ? userConfig.customAIInstructions 
+      : DEFAULT_SCHEDULING_CONFIG.customAIInstructions,
   };
 }
