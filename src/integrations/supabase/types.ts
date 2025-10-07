@@ -78,6 +78,7 @@ export type Database = {
       }
       assignments: {
         Row: {
+          assignment_url: string | null
           course_id: string | null
           created_at: string
           description: string | null
@@ -94,6 +95,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          assignment_url?: string | null
           course_id?: string | null
           created_at?: string
           description?: string | null
@@ -110,6 +112,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          assignment_url?: string | null
           course_id?: string | null
           created_at?: string
           description?: string | null
@@ -137,6 +140,7 @@ export type Database = {
       }
       assignments_mit: {
         Row: {
+          assignment_url: string | null
           course_id: string | null
           created_at: string
           description: string | null
@@ -153,6 +157,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          assignment_url?: string | null
           course_id?: string | null
           created_at?: string
           description?: string | null
@@ -169,6 +174,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          assignment_url?: string | null
           course_id?: string | null
           created_at?: string
           description?: string | null
