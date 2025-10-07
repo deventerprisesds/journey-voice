@@ -113,7 +113,9 @@ serve(async (req) => {
       }
 
       const sheetId = sheetIdMatch[1];
-      const gid = gidMatch ? gidMatch[1] : '0';
+      // Prefer explicit gid from config if provided; otherwise use URL gid or default to 0
+      const configuredGid = config?.config_data?.emba_sheet_gid;
+      const gid = configuredGid ? String(configuredGid) : (gidMatch ? gidMatch[1] : '0');
       console.log('Sheet ID:', sheetId);
       console.log('GID:', gid);
 
@@ -139,8 +141,9 @@ serve(async (req) => {
       const courseIdx = headers.findIndex(h => h.toLowerCase().includes('course'));
       const priorityIdx = headers.findIndex(h => h.toLowerCase().includes('priority'));
       const pointsIdx = headers.findIndex(h => h.toLowerCase().includes('points'));
+      const linkIdx = headers.findIndex(h => h.toLowerCase().includes('link') || h.toLowerCase().includes('url'));
 
-      console.log('Column mappings:', { titleIdx, descIdx, dueDateIdx, courseIdx, priorityIdx, pointsIdx });
+      console.log('Column mappings:', { titleIdx, descIdx, dueDateIdx, courseIdx, priorityIdx, pointsIdx, linkIdx });
       console.log('Total rows to process:', lines.length - 1);
 
       // Get next weekend END (EMBA specific logic) — include Fri-Sun window
@@ -171,9 +174,10 @@ serve(async (req) => {
         const lastOfWeekend = [...firstWeekend].sort((a,b) => new Date(b.end_time).getTime() - new Date(a.end_time).getTime())[0];
         nextWeekendEnd = new Date(lastOfWeekend.end_time);
       } else {
-        nextWeekendEnd = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+        // No upcoming schedule found for this user; do not restrict by weekend window
+        nextWeekendEnd = null;
       }
-      console.log('Next weekend END:', nextWeekendEnd.toISOString());
+      console.log('Next weekend END:', nextWeekendEnd ? nextWeekendEnd.toISOString() : 'NONE (no restriction)');
 
       let processed = 0;
       let added = 0;
@@ -194,6 +198,7 @@ serve(async (req) => {
         const courseName = courseIdx >= 0 ? cols[courseIdx] : '';
         const priority = priorityIdx >= 0 ? cols[priorityIdx]?.toLowerCase() : 'medium';
         const points = pointsIdx >= 0 ? parseInt(cols[pointsIdx]) : null;
+        const assignmentUrl = linkIdx >= 0 ? (cols[linkIdx] || '') : '';
 
         console.log(`--- Row ${i}/${lines.length - 1} ---`);
         console.log('Title:', title);
@@ -210,8 +215,8 @@ serve(async (req) => {
           }
         }
 
-        // Filter: only include assignments due before end of next weekend
-        if (dueDate && new Date(dueDate) > (nextWeekendEnd as Date)) {
+        // Filter: only include assignments due before end of next weekend (if we have one)
+        if (nextWeekendEnd && dueDate && new Date(dueDate) > nextWeekendEnd) {
           console.log('Skipping - due after end of next weekend');
           continue;
         }
@@ -271,6 +276,7 @@ serve(async (req) => {
               course_id: courseId,
               priority: priority as any,
               points,
+              assignment_url: assignmentUrl || null,
               updated_at: new Date().toISOString()
             })
             .eq('id', existing.id);
@@ -289,6 +295,7 @@ serve(async (req) => {
               course_id: courseId,
               priority: priority as any,
               points,
+              assignment_url: assignmentUrl || null,
               sheet_row_number: i,
               type: 'assignment',
               status: 'active'

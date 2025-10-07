@@ -139,8 +139,9 @@ serve(async (req) => {
       const courseIdx = headers.findIndex(h => h.toLowerCase().includes('course'));
       const priorityIdx = headers.findIndex(h => h.toLowerCase().includes('priority'));
       const pointsIdx = headers.findIndex(h => h.toLowerCase().includes('points'));
+      const linkIdx = headers.findIndex(h => h.toLowerCase().includes('link') || h.toLowerCase().includes('url'));
 
-      console.log('Column mappings:', { titleIdx, descIdx, dueDateIdx, courseIdx, priorityIdx, pointsIdx });
+      console.log('Column mappings:', { titleIdx, descIdx, dueDateIdx, courseIdx, priorityIdx, pointsIdx, linkIdx });
       console.log('Total rows to process:', lines.length - 1);
 
       // MIT filter: next 14 days
@@ -166,6 +167,7 @@ serve(async (req) => {
         const courseName = courseIdx >= 0 ? cols[courseIdx] : '';
         const priority = priorityIdx >= 0 ? cols[priorityIdx]?.toLowerCase() : 'medium';
         const points = pointsIdx >= 0 ? parseInt(cols[pointsIdx]) : null;
+        const assignmentUrl = linkIdx >= 0 ? (cols[linkIdx] || '') : '';
 
         console.log(`--- Row ${i}/${lines.length - 1} ---`);
         console.log('Title:', title);
@@ -252,6 +254,7 @@ serve(async (req) => {
               course_id: courseId,
               priority: priority as any,
               points,
+              assignment_url: assignmentUrl || null,
               updated_at: new Date().toISOString()
             })
             .eq('id', existing.id);
@@ -270,6 +273,7 @@ serve(async (req) => {
               course_id: courseId,
               priority: priority as any,
               points,
+              assignment_url: assignmentUrl || null,
               sheet_row_number: i,
               type: 'assignment',
               status: 'active'
