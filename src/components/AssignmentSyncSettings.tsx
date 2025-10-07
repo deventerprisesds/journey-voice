@@ -35,6 +35,9 @@ interface SyncLog {
   error_message?: string;
 }
 
+// Demo user ID for preview mode
+const DEMO_USER_ID = '00000000-0000-0000-0000-000000000001';
+
 export function AssignmentSyncSettings() {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -45,27 +48,29 @@ export function AssignmentSyncSettings() {
   const [embaSheetUrl, setEmbaSheetUrl] = useState('');
   const [mitSheetUrl, setMitSheetUrl] = useState('https://docs.google.com/spreadsheets/d/1P6NyWVhxuuNUu-7dN7KX3GDuVddYWNLOLQ4QCEVcNlc/edit?gid=1544435511#gid=1544435511');
 
+  // Get effective user ID - use demo ID if no auth
+  const effectiveUserId = user?.id || DEMO_USER_ID;
+
   useEffect(() => {
-    if (user) {
-      loadSyncConfigs();
-      loadSyncLogs();
-    }
+    loadSyncConfigs();
+    loadSyncLogs();
   }, [user]);
 
   const loadSyncConfigs = async () => {
-    if (!user) return;
+    console.log('[AssignmentSync] Loading sync configs for user:', effectiveUserId);
 
     const { data, error } = await supabase
       .from('sync_config')
       .select('*')
-      .eq('user_id', user.id)
+      .eq('user_id', effectiveUserId)
       .eq('service_type', 'google_sheets');
 
     if (error) {
-      console.error('Error loading sync configs:', error);
+      console.error('[AssignmentSync] Error loading sync configs:', error);
       return;
     }
 
+    console.log('[AssignmentSync] Loaded configs:', data);
     setSyncConfigs(data as SyncConfig[] || []);
     
     // Populate input fields from existing configs
@@ -81,73 +86,93 @@ export function AssignmentSyncSettings() {
   };
 
   const loadSyncLogs = async () => {
-    if (!user) return;
+    console.log('[AssignmentSync] Loading sync logs for user:', effectiveUserId);
 
     const { data, error } = await supabase
       .from('sync_logs')
       .select('*')
-      .eq('user_id', user.id)
+      .eq('user_id', effectiveUserId)
       .in('service_type', ['google_sheets', 'mit_sheets'])
       .order('started_at', { ascending: false })
       .limit(5);
 
     if (error) {
-      console.error('Error loading sync logs:', error);
+      console.error('[AssignmentSync] Error loading sync logs:', error);
       return;
     }
 
+    console.log('[AssignmentSync] Loaded logs:', data);
     setLastSyncLogs(data as SyncLog[] || []);
   };
 
   const saveSheetUrl = async (sheetType: 'emba' | 'mit', url: string) => {
-    if (!user || !url.trim()) return;
+    if (!url.trim()) return;
+
+    console.log('[AssignmentSync] Saving sheet URL:', { sheetType, url, userId: effectiveUserId });
 
     const existing = syncConfigs.find(c => c.config_data?.sheet_type === sheetType);
 
     try {
       if (existing) {
-        await supabase
+        console.log('[AssignmentSync] Updating existing config:', existing.id);
+        const { error } = await supabase
           .from('sync_config')
           .update({
             config_data: { ...existing.config_data, sheet_url: url, sheet_type: sheetType },
             updated_at: new Date().toISOString()
           })
           .eq('id', existing.id);
+
+        if (error) {
+          console.error('[AssignmentSync] Update error:', error);
+          throw error;
+        }
       } else {
-        await supabase
+        console.log('[AssignmentSync] Creating new config');
+        const { error } = await supabase
           .from('sync_config')
           .insert({
-            user_id: user.id,
+            user_id: effectiveUserId,
             service_type: 'google_sheets',
             config_data: { sheet_type: sheetType, sheet_url: url }
           });
+
+        if (error) {
+          console.error('[AssignmentSync] Insert error:', error);
+          throw error;
+        }
       }
 
       await loadSyncConfigs();
+      console.log('[AssignmentSync] Sheet URL saved successfully');
       toast({
         title: "Sheet URL Saved",
         description: `${sheetType.toUpperCase()} sheet URL has been saved.`
       });
     } catch (error: any) {
+      console.error('[AssignmentSync] Save failed:', error);
       toast({
         title: "Save Failed",
-        description: error.message,
+        description: error.message || 'Unable to save sheet URL. Check console for details.',
         variant: "destructive"
       });
     }
   };
 
   const handleSyncEmba = async () => {
-    if (!user) return;
-
+    console.log('[AssignmentSync] Starting EMBA sync for user:', effectiveUserId);
     setIsSyncingEmba(true);
     try {
       const { data, error } = await supabase.functions.invoke('sync-google-sheets', {
-        body: {}
+        body: { userId: effectiveUserId }
       });
 
-      if (error) throw error;
+      if (error) {
+        console.error('[AssignmentSync] EMBA sync error:', error);
+        throw error;
+      }
 
+      console.log('[AssignmentSync] EMBA sync result:', data);
       toast({
         title: "EMBA Sync Complete",
         description: `Processed: ${data?.processed || 0} | Added: ${data?.added || 0} | Updated: ${data?.updated || 0}`
@@ -156,7 +181,7 @@ export function AssignmentSyncSettings() {
       await loadSyncLogs();
 
       if (data?.assignmentIds && data.assignmentIds.length > 0) {
-        await createTasksFromAssignments(data.assignmentIds, user.id);
+        await createTasksFromAssignments(data.assignmentIds, effectiveUserId);
         toast({
           title: "EMBA Tasks Created",
           description: `${data.assignmentIds.length} assignments converted to tasks.`
@@ -164,7 +189,7 @@ export function AssignmentSyncSettings() {
       }
 
     } catch (error: any) {
-      console.error('EMBA sync error:', error);
+      console.error('[AssignmentSync] EMBA sync failed:', error);
       toast({
         title: "EMBA Sync Failed",
         description: error.message || 'Failed to sync EMBA assignments',
@@ -176,16 +201,19 @@ export function AssignmentSyncSettings() {
   };
 
   const handleSyncMit = async () => {
-    if (!user) return;
-
+    console.log('[AssignmentSync] Starting MIT sync for user:', effectiveUserId);
     setIsSyncingMit(true);
     try {
       const { data, error } = await supabase.functions.invoke('sync-mit-sheets', {
-        body: {}
+        body: { userId: effectiveUserId }
       });
 
-      if (error) throw error;
+      if (error) {
+        console.error('[AssignmentSync] MIT sync error:', error);
+        throw error;
+      }
 
+      console.log('[AssignmentSync] MIT sync result:', data);
       toast({
         title: "MIT Sync Complete",
         description: `Processed: ${data?.processed || 0} | Added: ${data?.added || 0} | Updated: ${data?.updated || 0}`
@@ -194,7 +222,7 @@ export function AssignmentSyncSettings() {
       await loadSyncLogs();
 
       if (data?.assignmentIds && data.assignmentIds.length > 0) {
-        await createTasksFromMitAssignments(data.assignmentIds, user.id);
+        await createTasksFromMitAssignments(data.assignmentIds, effectiveUserId);
         toast({
           title: "MIT Tasks Created",
           description: `${data.assignmentIds.length} assignments converted to tasks.`
@@ -202,7 +230,7 @@ export function AssignmentSyncSettings() {
       }
 
     } catch (error: any) {
-      console.error('MIT sync error:', error);
+      console.error('[AssignmentSync] MIT sync failed:', error);
       toast({
         title: "MIT Sync Failed",
         description: error.message || 'Failed to sync MIT assignments',
