@@ -10,7 +10,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { RefreshCw, CheckCircle2, AlertCircle, FileSpreadsheet } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { formatDistanceToNow } from 'date-fns';
-import { createTasksFromAssignments } from '@/utils/assignmentSync';
+import { createTasksFromAssignments, createTasksFromMitAssignments } from '@/utils/assignmentSync';
 
 interface SyncConfig {
   id: string;
@@ -39,7 +39,8 @@ export function AssignmentSyncSettings() {
   const { user } = useAuth();
   const { toast } = useToast();
   const [syncConfigs, setSyncConfigs] = useState<SyncConfig[]>([]);
-  const [isSyncing, setIsSyncing] = useState(false);
+  const [isSyncingEmba, setIsSyncingEmba] = useState(false);
+  const [isSyncingMit, setIsSyncingMit] = useState(false);
   const [lastSyncLogs, setLastSyncLogs] = useState<SyncLog[]>([]);
   const [embaSheetUrl, setEmbaSheetUrl] = useState('');
   const [mitSheetUrl, setMitSheetUrl] = useState('https://docs.google.com/spreadsheets/d/1P6NyWVhxuuNUu-7dN7KX3GDuVddYWNLOLQ4QCEVcNlc/edit?gid=1544435511#gid=1544435511');
@@ -86,7 +87,7 @@ export function AssignmentSyncSettings() {
       .from('sync_logs')
       .select('*')
       .eq('user_id', user.id)
-      .eq('service_type', 'google_sheets')
+      .in('service_type', ['google_sheets', 'mit_sheets'])
       .order('started_at', { ascending: false })
       .limit(5);
 
@@ -136,12 +137,11 @@ export function AssignmentSyncSettings() {
     }
   };
 
-  const handleSync = async () => {
+  const handleSyncEmba = async () => {
     if (!user) return;
 
-    setIsSyncing(true);
+    setIsSyncingEmba(true);
     try {
-      // Call the existing sync-google-sheets edge function
       const { data, error } = await supabase.functions.invoke('sync-google-sheets', {
         body: {}
       });
@@ -149,31 +149,67 @@ export function AssignmentSyncSettings() {
       if (error) throw error;
 
       toast({
-        title: "Sync Complete",
+        title: "EMBA Sync Complete",
         description: `Processed: ${data?.processed || 0} | Added: ${data?.added || 0} | Updated: ${data?.updated || 0}`
       });
 
-      // Reload logs
       await loadSyncLogs();
 
-      // Convert new assignments to tasks
       if (data?.assignmentIds && data.assignmentIds.length > 0) {
         await createTasksFromAssignments(data.assignmentIds, user.id);
         toast({
-          title: "Tasks Created",
+          title: "EMBA Tasks Created",
           description: `${data.assignmentIds.length} assignments converted to tasks.`
         });
       }
 
     } catch (error: any) {
-      console.error('Sync error:', error);
+      console.error('EMBA sync error:', error);
       toast({
-        title: "Sync Failed",
-        description: error.message || 'Failed to sync assignments',
+        title: "EMBA Sync Failed",
+        description: error.message || 'Failed to sync EMBA assignments',
         variant: "destructive"
       });
     } finally {
-      setIsSyncing(false);
+      setIsSyncingEmba(false);
+    }
+  };
+
+  const handleSyncMit = async () => {
+    if (!user) return;
+
+    setIsSyncingMit(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('sync-mit-sheets', {
+        body: {}
+      });
+
+      if (error) throw error;
+
+      toast({
+        title: "MIT Sync Complete",
+        description: `Processed: ${data?.processed || 0} | Added: ${data?.added || 0} | Updated: ${data?.updated || 0}`
+      });
+
+      await loadSyncLogs();
+
+      if (data?.assignmentIds && data.assignmentIds.length > 0) {
+        await createTasksFromMitAssignments(data.assignmentIds, user.id);
+        toast({
+          title: "MIT Tasks Created",
+          description: `${data.assignmentIds.length} assignments converted to tasks.`
+        });
+      }
+
+    } catch (error: any) {
+      console.error('MIT sync error:', error);
+      toast({
+        title: "MIT Sync Failed",
+        description: error.message || 'Failed to sync MIT assignments',
+        variant: "destructive"
+      });
+    } finally {
+      setIsSyncingMit(false);
     }
   };
 
@@ -246,15 +282,26 @@ export function AssignmentSyncSettings() {
 
         <Separator />
 
-        {/* Sync Button */}
-        <Button 
-          onClick={handleSync}
-          className="w-full"
-          disabled={isSyncing || !hasValidConfig}
-        >
-          <RefreshCw className={cn("h-4 w-4 mr-2", isSyncing && "animate-spin")} />
-          {isSyncing ? 'Syncing...' : 'Sync All Assignments'}
-        </Button>
+        {/* Sync Buttons */}
+        <div className="grid grid-cols-2 gap-3">
+          <Button 
+            onClick={handleSyncEmba}
+            disabled={isSyncingEmba || !embaSheetUrl.trim()}
+            variant="default"
+          >
+            <RefreshCw className={cn("h-4 w-4 mr-2", isSyncingEmba && "animate-spin")} />
+            {isSyncingEmba ? 'Syncing...' : 'Sync EMBA'}
+          </Button>
+
+          <Button 
+            onClick={handleSyncMit}
+            disabled={isSyncingMit || !mitSheetUrl.trim()}
+            variant="secondary"
+          >
+            <RefreshCw className={cn("h-4 w-4 mr-2", isSyncingMit && "animate-spin")} />
+            {isSyncingMit ? 'Syncing...' : 'Sync MIT'}
+          </Button>
+        </div>
 
         {!hasValidConfig && (
           <div className="flex items-start gap-2 p-3 bg-muted rounded-lg text-sm">

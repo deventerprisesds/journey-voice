@@ -135,6 +135,103 @@ export type Database = {
           },
         ]
       }
+      assignments_mit: {
+        Row: {
+          course_id: string | null
+          created_at: string
+          description: string | null
+          due_date: string | null
+          feedback: string | null
+          id: string
+          points: number | null
+          priority: string
+          sheet_row_number: number | null
+          status: string
+          title: string
+          type: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          course_id?: string | null
+          created_at?: string
+          description?: string | null
+          due_date?: string | null
+          feedback?: string | null
+          id?: string
+          points?: number | null
+          priority?: string
+          sheet_row_number?: number | null
+          status?: string
+          title: string
+          type?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          course_id?: string | null
+          created_at?: string
+          description?: string | null
+          due_date?: string | null
+          feedback?: string | null
+          id?: string
+          points?: number | null
+          priority?: string
+          sheet_row_number?: number | null
+          status?: string
+          title?: string
+          type?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "assignments_mit_course_id_fkey"
+            columns: ["course_id"]
+            isOneToOne: false
+            referencedRelation: "courses"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      assignments_mit_history: {
+        Row: {
+          assignment_id: string
+          changed_at: string
+          changed_fields: string[] | null
+          id: string
+          new_values: Json | null
+          old_values: Json | null
+          user_id: string
+        }
+        Insert: {
+          assignment_id: string
+          changed_at?: string
+          changed_fields?: string[] | null
+          id?: string
+          new_values?: Json | null
+          old_values?: Json | null
+          user_id: string
+        }
+        Update: {
+          assignment_id?: string
+          changed_at?: string
+          changed_fields?: string[] | null
+          id?: string
+          new_values?: Json | null
+          old_values?: Json | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "assignments_mit_history_assignment_id_fkey"
+            columns: ["assignment_id"]
+            isOneToOne: false
+            referencedRelation: "assignments_mit"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       assistant_knowledge_chunks: {
         Row: {
           assistant_id: string
