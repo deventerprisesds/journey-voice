@@ -143,18 +143,37 @@ serve(async (req) => {
       console.log('Column mappings:', { titleIdx, descIdx, dueDateIdx, courseIdx, priorityIdx, pointsIdx });
       console.log('Total rows to process:', lines.length - 1);
 
-      // Get course weekend date from class_schedules (EMBA specific logic)
-      console.log('=== FETCHING NEXT WEEKEND DATE ===');
-      const { data: schedules } = await supabaseClient
+      // Get next weekend END (EMBA specific logic) — include Fri-Sun window
+      console.log('=== FETCHING NEXT WEEKEND WINDOW ===');
+      const { data: upcoming } = await supabaseClient
         .from('class_schedules')
-        .select('date')
+        .select('date, end_time')
         .eq('user_id', userId)
         .gte('date', new Date().toISOString())
         .order('date', { ascending: true })
-        .limit(1);
+        .limit(5);
 
-      const nextWeekendDate = schedules?.[0]?.date ? new Date(schedules[0].date) : new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
-      console.log('Next weekend date:', nextWeekendDate.toISOString());
+      let nextWeekendEnd: Date | null = null;
+      if (upcoming && upcoming.length > 0) {
+        // Group consecutive dates within 3 days as a single weekend; take the last day's end_time
+        const groups: Array<typeof upcoming> = [];
+        let grp: typeof upcoming = [];
+        upcoming.forEach((curr, idx) => {
+          if (idx === 0 || Math.abs(new Date(curr.date).getTime() - new Date(upcoming[idx-1].date).getTime()) <= 3 * 24 * 60 * 60 * 1000) {
+            grp.push(curr);
+          } else {
+            groups.push(grp);
+            grp = [curr];
+          }
+        });
+        if (grp.length > 0) groups.push(grp);
+        const firstWeekend = groups[0];
+        const lastOfWeekend = [...firstWeekend].sort((a,b) => new Date(b.end_time).getTime() - new Date(a.end_time).getTime())[0];
+        nextWeekendEnd = new Date(lastOfWeekend.end_time);
+      } else {
+        nextWeekendEnd = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+      }
+      console.log('Next weekend END:', nextWeekendEnd.toISOString());
 
       let processed = 0;
       let added = 0;
@@ -191,9 +210,9 @@ serve(async (req) => {
           }
         }
 
-        // Filter: only include assignments due before next weekend
-        if (dueDate && new Date(dueDate) > nextWeekendDate) {
-          console.log('Skipping - due after next weekend');
+        // Filter: only include assignments due before end of next weekend
+        if (dueDate && new Date(dueDate) > (nextWeekendEnd as Date)) {
+          console.log('Skipping - due after end of next weekend');
           continue;
         }
 
