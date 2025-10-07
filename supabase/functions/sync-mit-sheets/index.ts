@@ -23,17 +23,23 @@ serve(async (req) => {
     );
 
     const { data: { user } } = await supabaseClient.auth.getUser();
-    if (!user) {
-      throw new Error('Unauthorized');
-    }
 
-    console.log('Syncing MIT assignments for user:', user.id);
+    // Support demo/preview mode: allow explicit or fallback user_id
+    let requestBody: any = null;
+    try { requestBody = await req.json(); } catch { /* no body */ }
+    const requestUserId = requestBody?.user_id as string | undefined;
+    const DEMO_USER_ID = '00000000-0000-0000-0000-000000000001';
+    const userId = user?.id ?? requestUserId ?? DEMO_USER_ID;
+
+    if (!user?.id) {
+      console.log('No authenticated user token; falling back to userId:', userId);
+    }
 
     // Get MIT sheet config
     const { data: configs, error: configError } = await supabaseClient
       .from('sync_config')
       .select('*')
-      .eq('user_id', user.id)
+      .eq('user_id', userId)
       .eq('service_type', 'google_sheets');
 
     if (configError) throw configError;
@@ -47,7 +53,7 @@ serve(async (req) => {
     const { data: syncLog, error: logError } = await supabaseClient
       .from('sync_logs')
       .insert({
-        user_id: user.id,
+        user_id: userId,
         service_type: 'mit_sheets',
         sync_type: 'mit_assignments',
         status: 'in_progress',
@@ -136,7 +142,7 @@ serve(async (req) => {
           const { data: existingCourse } = await supabaseClient
             .from('courses')
             .select('id')
-            .eq('user_id', user.id)
+            .eq('user_id', userId)
             .eq('name', mitCourseName)
             .maybeSingle();
 
@@ -146,7 +152,7 @@ serve(async (req) => {
             const { data: newCourse } = await supabaseClient
               .from('courses')
               .insert({
-                user_id: user.id,
+                user_id: userId,
                 name: mitCourseName,
                 color: '#8B5CF6' // Purple for MIT
               })
@@ -161,7 +167,7 @@ serve(async (req) => {
         const { data: existing } = await supabaseClient
           .from('assignments_mit')
           .select('id')
-          .eq('user_id', user.id)
+          .eq('user_id', userId)
           .eq('sheet_row_number', i)
           .maybeSingle();
 
@@ -187,7 +193,7 @@ serve(async (req) => {
           const { data: newAssignment } = await supabaseClient
             .from('assignments_mit')
             .insert({
-              user_id: user.id,
+              user_id: userId,
               title,
               description,
               due_date: dueDate,
