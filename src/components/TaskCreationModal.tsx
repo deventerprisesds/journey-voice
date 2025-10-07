@@ -20,7 +20,8 @@ import {
   Sparkles,
   Check,
   AlertCircle,
-  Clock
+  Clock,
+  FileSpreadsheet
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
@@ -42,6 +43,18 @@ interface ParsedTask {
   status: 'BACKLOG' | 'TODO' | 'READY' | 'UP_NEXT' | 'DOING';
 }
 
+interface Assignment {
+  id: string;
+  title: string;
+  description?: string;
+  due_date?: string;
+  priority: string;
+  course_id?: string;
+  type: string;
+  source: 'emba' | 'mit';
+  course_name?: string;
+}
+
 interface TaskCreationModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -58,7 +71,12 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
   userId
 }) => {
   const { toast } = useToast();
-  const [activeTab, setActiveTab] = useState<'ai' | 'manual'>('ai');
+  const [activeTab, setActiveTab] = useState<'ai' | 'manual' | 'assignments'>('ai');
+  
+  // Assignments Tab State
+  const [assignments, setAssignments] = useState<Assignment[]>([]);
+  const [selectedAssignments, setSelectedAssignments] = useState<Set<string>>(new Set());
+  const [isLoadingAssignments, setIsLoadingAssignments] = useState(false);
   
   // AI Mode State with sessionStorage persistence for mobile
   const [aiInput, setAiInput] = useState(() => {
@@ -98,6 +116,179 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
   
   // Common State
   const [isCreating, setIsCreating] = useState(false);
+
+  // Load assignments when assignments tab becomes active
+  useEffect(() => {
+    if (activeTab === 'assignments' && isOpen) {
+      loadAvailableAssignments();
+    }
+  }, [activeTab, isOpen]);
+
+  const loadAvailableAssignments = async () => {
+    setIsLoadingAssignments(true);
+    try {
+      // Get all tasks to check which assignments are already converted
+      const { data: existingTasks } = await supabase
+        .from('tasks')
+        .select('scheduling_context')
+        .eq('user_id', userId);
+
+      const existingAssignmentIds = new Set<string>();
+      const existingMitAssignmentIds = new Set<string>();
+
+      existingTasks?.forEach(task => {
+        const context = task.scheduling_context;
+        if (Array.isArray(context)) {
+          context.forEach((c) => {
+            if (typeof c === 'string') {
+              if (c.startsWith('assignment_id:')) {
+                existingAssignmentIds.add(c.split(':')[1]);
+              } else if (c.startsWith('mit_assignment_id:')) {
+                existingMitAssignmentIds.add(c.split(':')[1]);
+              }
+            }
+          });
+        }
+      });
+
+      // Fetch EMBA assignments
+      const { data: embaAssignments } = await supabase
+        .from('assignments')
+        .select('*, courses(name)')
+        .eq('user_id', userId)
+        .eq('status', 'active')
+        .order('due_date', { ascending: true });
+
+      // Fetch MIT assignments
+      const { data: mitAssignments } = await supabase
+        .from('assignments_mit')
+        .select('*, courses(name)')
+        .eq('user_id', userId)
+        .eq('status', 'active')
+        .order('due_date', { ascending: true });
+
+      // Filter out already converted assignments and format
+      const availableEmba: Assignment[] = (embaAssignments || [])
+        .filter(a => !existingAssignmentIds.has(a.id))
+        .map(a => ({
+          id: a.id,
+          title: a.title,
+          description: a.description,
+          due_date: a.due_date,
+          priority: a.priority,
+          course_id: a.course_id,
+          type: a.type,
+          source: 'emba' as const,
+          course_name: (a.courses as any)?.name
+        }));
+
+      const availableMit: Assignment[] = (mitAssignments || [])
+        .filter(a => !existingMitAssignmentIds.has(a.id))
+        .map(a => ({
+          id: a.id,
+          title: a.title,
+          description: a.description,
+          due_date: a.due_date,
+          priority: a.priority,
+          course_id: a.course_id,
+          type: a.type,
+          source: 'mit' as const,
+          course_name: (a.courses as any)?.name
+        }));
+
+      setAssignments([...availableEmba, ...availableMit]);
+    } catch (error) {
+      console.error('Error loading assignments:', error);
+      toast({
+        title: "Error Loading Assignments",
+        description: "Failed to load available assignments",
+        variant: "destructive"
+      });
+    } finally {
+      setIsLoadingAssignments(false);
+    }
+  };
+
+  const toggleAssignment = (id: string) => {
+    setSelectedAssignments(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const handleCreateFromAssignments = async () => {
+    if (selectedAssignments.size === 0) {
+      toast({
+        title: "No Assignments Selected",
+        description: "Please select at least one assignment",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    setIsCreating(true);
+    try {
+      const selectedIds = Array.from(selectedAssignments);
+      
+      // Separate EMBA and MIT assignments
+      const embaIds = selectedIds.filter(id => 
+        assignments.find(a => a.id === id)?.source === 'emba'
+      );
+      const mitIds = selectedIds.filter(id => 
+        assignments.find(a => a.id === id)?.source === 'mit'
+      );
+
+      // Import helpers
+      const { createTasksFromAssignments, createTasksFromMitAssignments } = await import('@/utils/assignmentSync');
+
+      // Convert EMBA assignments
+      if (embaIds.length > 0) {
+        await createTasksFromAssignments(embaIds, userId);
+      }
+
+      // Convert MIT assignments
+      if (mitIds.length > 0) {
+        await createTasksFromMitAssignments(mitIds, userId);
+      }
+
+      toast({
+        title: "Tasks Created",
+        description: `Successfully created ${selectedIds.length} task${selectedIds.length > 1 ? 's' : ''} from assignments`
+      });
+
+      // Reload assignments and clear selection
+      setSelectedAssignments(new Set());
+      await loadAvailableAssignments();
+      
+      // Fetch newly created tasks to pass to parent
+      const { data: newTasks } = await supabase
+        .from('tasks')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(selectedIds.length);
+
+      if (newTasks) {
+        onTasksCreated(newTasks);
+      }
+
+      handleClose();
+    } catch (error) {
+      console.error('Error creating tasks from assignments:', error);
+      toast({
+        title: "Creation Error",
+        description: "Failed to create tasks from assignments",
+        variant: "destructive"
+      });
+    } finally {
+      setIsCreating(false);
+    }
+  };
 
   // Persist AI input to sessionStorage for mobile
   useEffect(() => {
@@ -436,8 +627,8 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
           </DialogTitle>
         </DialogHeader>
 
-        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as 'ai' | 'manual')}>
-          <TabsList className="grid w-full grid-cols-2">
+        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as 'ai' | 'manual' | 'assignments')}>
+          <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="ai" className="flex items-center gap-2">
               <Sparkles className="h-4 w-4" />
               AI Assistant
@@ -445,6 +636,10 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
             <TabsTrigger value="manual" className="flex items-center gap-2">
               <Type className="h-4 w-4" />
               Manual Entry
+            </TabsTrigger>
+            <TabsTrigger value="assignments" className="flex items-center gap-2">
+              <FileSpreadsheet className="h-4 w-4" />
+              From Assignments
             </TabsTrigger>
           </TabsList>
 
@@ -947,6 +1142,112 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                 )}
               </Button>
             </div>
+          </TabsContent>
+
+          {/* From Assignments Mode */}
+          <TabsContent value="assignments" className="space-y-4 mt-4">
+            {isLoadingAssignments ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                <span className="ml-2 text-muted-foreground">Loading assignments...</span>
+              </div>
+            ) : assignments.length === 0 ? (
+              <div className="text-center py-8">
+                <FileSpreadsheet className="h-12 w-12 mx-auto text-muted-foreground mb-3" />
+                <p className="text-muted-foreground mb-2">No assignments available</p>
+                <p className="text-sm text-muted-foreground">
+                  Sync your EMBA or MIT assignments from Settings → Assignments
+                </p>
+              </div>
+            ) : (
+              <>
+                <div className="flex items-center justify-between">
+                  <p className="text-sm text-muted-foreground">
+                    Select assignments to convert into tasks
+                  </p>
+                  <Badge variant="secondary">
+                    {selectedAssignments.size} selected
+                  </Badge>
+                </div>
+
+                <div className="space-y-2 max-h-96 overflow-y-auto">
+                  {assignments.map((assignment) => (
+                    <div
+                      key={assignment.id}
+                      className={cn(
+                        "border rounded-lg p-4 cursor-pointer transition-colors",
+                        selectedAssignments.has(assignment.id)
+                          ? "border-primary bg-primary/5"
+                          : "hover:bg-muted/50"
+                      )}
+                      onClick={() => toggleAssignment(assignment.id)}
+                    >
+                      <div className="flex items-start gap-3">
+                        <div className={cn(
+                          "mt-1 h-5 w-5 rounded border-2 flex items-center justify-center shrink-0",
+                          selectedAssignments.has(assignment.id)
+                            ? "border-primary bg-primary"
+                            : "border-muted-foreground"
+                        )}>
+                          {selectedAssignments.has(assignment.id) && (
+                            <Check className="h-3 w-3 text-primary-foreground" />
+                          )}
+                        </div>
+
+                        <div className="flex-1 space-y-1">
+                          <div className="flex items-center gap-2">
+                            <h4 className="font-medium">{assignment.title}</h4>
+                            <Badge variant={assignment.source === 'mit' ? 'secondary' : 'default'} className="text-xs">
+                              {assignment.source.toUpperCase()}
+                            </Badge>
+                          </div>
+
+                          {assignment.description && (
+                            <p className="text-sm text-muted-foreground line-clamp-2">
+                              {assignment.description}
+                            </p>
+                          )}
+
+                          <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                            {assignment.course_name && (
+                              <span>📚 {assignment.course_name}</span>
+                            )}
+                            {assignment.due_date && (
+                              <span>📅 Due {format(new Date(assignment.due_date), 'MMM d, yyyy')}</span>
+                            )}
+                            <Badge variant="outline" className="text-xs">
+                              {assignment.priority}
+                            </Badge>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex justify-end gap-2 pt-4 border-t">
+                  <Button variant="outline" onClick={handleClose}>
+                    Cancel
+                  </Button>
+                  <Button 
+                    onClick={handleCreateFromAssignments} 
+                    disabled={isCreating || selectedAssignments.size === 0}
+                  >
+                    {isCreating ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Creating...
+                      </>
+                    ) : (
+                      <>
+                        <Check className="h-4 w-4 mr-2" />
+                        Create {selectedAssignments.size} Task{selectedAssignments.size !== 1 ? 's' : ''}
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </>
+            )}
           </TabsContent>
         </Tabs>
       </DialogContent>
