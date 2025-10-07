@@ -295,10 +295,12 @@ Social & Personal:
 - Hobbies: Weekends 2:00-4:00 PM or weekday evenings 6:00-8:00 PM
 
 CATEGORY-SPECIFIC DEFAULTS:
-- CAREER: business_hours (9am-5pm weekdays)
-- EDUCATION: after_work (5pm-10pm) or weekends
-- VENTURES: after_work or weekends
-- LIFE: flexible (9am-10pm any day)
+${Object.entries(config.categoryMappings).map(([category, mapping]) => {
+  const windowName = mapping.defaultTimeWindow;
+  const window = config.timeWindows[windowName];
+  const timeDesc = window ? `${window.start}:00-${window.end}:00` : windowName;
+  return `- ${category}: ${windowName} (${timeDesc})`;
+}).join('\n')}
 
 INSTRUCTIONS:
 1. Consider typical timing for this activity type
