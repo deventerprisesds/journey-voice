@@ -693,8 +693,7 @@ const SchedulingSettings: React.FC = () => {
             <CardTitle>Custom AI Instructions</CardTitle>
           </div>
           <CardDescription>
-            Add free-form instructions that will be sent to the AI scheduler.
-            Example: "Schedule all education assignments after 5pm" or "Never schedule meetings before 10am"
+            Customize how the AI scheduler makes decisions. These instructions guide the AI when finding optimal time slots for your tasks. The default prompt explains general scheduling logic, but you can add specific rules like "Schedule all education assignments after 5pm" or "Never schedule meetings before 10am".
           </CardDescription>
         </CardHeader>
         <CardContent>

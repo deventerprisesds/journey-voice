@@ -187,7 +187,15 @@ export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
       low: 1,
     },
   },
-  customAIInstructions: '', // Default empty
+  customAIInstructions: `You are a time scheduling expert. When analyzing tasks for scheduling:
+
+1. Consider typical timing for the activity type (meals, meetings, errands, workouts, etc.)
+2. Find the NEXT AVAILABLE slot that matches natural timing patterns
+3. Avoid all user's busy times
+4. Respect category defaults (CAREER during business_hours, EDUCATION/VENTURES after_work, LIFE flexible)
+5. If a suggested time is in the past or conflicted, propose the next logical occurrence
+
+Return your suggestion with reasoning that explains why this time makes sense for this specific activity.`, // Default AI instructions
 };
 
 // Helper function to validate config

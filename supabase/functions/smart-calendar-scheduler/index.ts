@@ -235,8 +235,21 @@ serve(async (req) => {
         
         console.log(`📅 Loaded ${allBusySlots.length} busy slots for AI context`);
         
+        // Get user's custom AI instructions (will be loaded from config later)
+        const customInstructions = loadedUserConfig?.customAIInstructions || '';
+        
         // Build AI prompt with calendar context
-        const aiPrompt = `You are a time scheduling expert. Analyze this task and suggest the most appropriate time window and ideal start time.
+        const basePrompt = customInstructions || `You are a time scheduling expert. When analyzing tasks for scheduling:
+
+1. Consider typical timing for the activity type (meals, meetings, errands, workouts, etc.)
+2. Find the NEXT AVAILABLE slot that matches natural timing patterns
+3. Avoid all user's busy times
+4. Respect category defaults (CAREER during business_hours, EDUCATION/VENTURES after_work, LIFE flexible)
+5. If a suggested time is in the past or conflicted, propose the next logical occurrence
+
+Return your suggestion with reasoning that explains why this time makes sense for this specific activity.`;
+
+        const aiPrompt = `${basePrompt}
 
 CURRENT CONTEXT:
 - Current date/time (${timezone}): ${new Date().toLocaleString('en-US', { timeZone: timezone })}
