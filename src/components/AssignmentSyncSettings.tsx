@@ -4,10 +4,12 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
-import { RefreshCw, CheckCircle2, AlertCircle, FileSpreadsheet } from 'lucide-react';
+import { RefreshCw, CheckCircle2, AlertCircle, FileSpreadsheet, Bug, ChevronDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { formatDistanceToNow } from 'date-fns';
 import { createTasksFromAssignments, createTasksFromMitAssignments } from '@/utils/assignmentSync';
@@ -39,7 +41,7 @@ interface SyncLog {
 const DEMO_USER_ID = '00000000-0000-0000-0000-000000000001';
 
 export function AssignmentSyncSettings() {
-  const { user } = useAuth();
+  const { user, isDemoMode } = useAuth();
   const { toast } = useToast();
   const [syncConfigs, setSyncConfigs] = useState<SyncConfig[]>([]);
   const [isSyncingEmba, setIsSyncingEmba] = useState(false);
@@ -47,9 +49,16 @@ export function AssignmentSyncSettings() {
   const [lastSyncLogs, setLastSyncLogs] = useState<SyncLog[]>([]);
   const [embaSheetUrl, setEmbaSheetUrl] = useState('');
   const [mitSheetUrl, setMitSheetUrl] = useState('https://docs.google.com/spreadsheets/d/1P6NyWVhxuuNUu-7dN7KX3GDuVddYWNLOLQ4QCEVcNlc/edit?gid=1544435511#gid=1544435511');
+  const [showDebug, setShowDebug] = useState(false);
+  const [debugLogs, setDebugLogs] = useState<string[]>([]);
 
   // Get effective user ID - use demo ID if no auth
   const effectiveUserId = user?.id || DEMO_USER_ID;
+
+  const addDebugLog = (message: string) => {
+    const timestamp = new Date().toLocaleTimeString();
+    setDebugLogs(prev => [`[${timestamp}] ${message}`, ...prev.slice(0, 49)]);
+  };
 
   useEffect(() => {
     loadSyncConfigs();
@@ -57,7 +66,9 @@ export function AssignmentSyncSettings() {
   }, [user]);
 
   const loadSyncConfigs = async () => {
-    console.log('[AssignmentSync] Loading sync configs for user:', effectiveUserId);
+    const logMsg = `Loading sync configs for user: ${effectiveUserId}`;
+    console.log('[AssignmentSync]', logMsg);
+    addDebugLog(logMsg);
 
     const { data, error } = await supabase
       .from('sync_config')
@@ -66,11 +77,15 @@ export function AssignmentSyncSettings() {
       .eq('service_type', 'google_sheets');
 
     if (error) {
-      console.error('[AssignmentSync] Error loading sync configs:', error);
+      const errMsg = `Error loading sync configs: ${JSON.stringify(error)}`;
+      console.error('[AssignmentSync]', errMsg);
+      addDebugLog(errMsg);
       return;
     }
 
-    console.log('[AssignmentSync] Loaded configs:', data);
+    const successMsg = `Loaded ${data?.length || 0} configs`;
+    console.log('[AssignmentSync]', successMsg, data);
+    addDebugLog(successMsg);
     setSyncConfigs(data as SyncConfig[] || []);
     
     // Populate input fields from existing configs
@@ -79,9 +94,11 @@ export function AssignmentSyncSettings() {
     
     if (embaConfig && (embaConfig.config_data as any)?.sheet_url) {
       setEmbaSheetUrl((embaConfig.config_data as any).sheet_url);
+      addDebugLog(`EMBA URL loaded: ${(embaConfig.config_data as any).sheet_url}`);
     }
     if (mitConfig && (mitConfig.config_data as any)?.sheet_url) {
       setMitSheetUrl((mitConfig.config_data as any).sheet_url);
+      addDebugLog(`MIT URL loaded: ${(mitConfig.config_data as any).sheet_url}`);
     }
   };
 
@@ -108,52 +125,60 @@ export function AssignmentSyncSettings() {
   const saveSheetUrl = async (sheetType: 'emba' | 'mit', url: string) => {
     if (!url.trim()) return;
 
-    console.log('[AssignmentSync] Saving sheet URL:', { sheetType, url, userId: effectiveUserId });
+    const logMsg = `Saving ${sheetType.toUpperCase()} sheet URL for user: ${effectiveUserId}`;
+    console.log('[AssignmentSync]', logMsg);
+    addDebugLog(logMsg);
+    addDebugLog(`URL: ${url}`);
 
     const existing = syncConfigs.find(c => c.config_data?.sheet_type === sheetType);
+    addDebugLog(existing ? `Updating existing config: ${existing.id}` : 'Creating new config');
 
     try {
       if (existing) {
-        console.log('[AssignmentSync] Updating existing config:', existing.id);
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from('sync_config')
           .update({
             config_data: { ...existing.config_data, sheet_url: url, sheet_type: sheetType },
             updated_at: new Date().toISOString()
           })
-          .eq('id', existing.id);
+          .eq('id', existing.id)
+          .select();
 
         if (error) {
-          console.error('[AssignmentSync] Update error:', error);
+          addDebugLog(`Update error: ${JSON.stringify(error)}`);
           throw error;
         }
+        addDebugLog(`Updated successfully: ${JSON.stringify(data)}`);
       } else {
-        console.log('[AssignmentSync] Creating new config');
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from('sync_config')
           .insert({
             user_id: effectiveUserId,
             service_type: 'google_sheets',
             config_data: { sheet_type: sheetType, sheet_url: url }
-          });
+          })
+          .select();
 
         if (error) {
-          console.error('[AssignmentSync] Insert error:', error);
+          addDebugLog(`Insert error: ${JSON.stringify(error)}`);
           throw error;
         }
+        addDebugLog(`Inserted successfully: ${JSON.stringify(data)}`);
       }
 
       await loadSyncConfigs();
-      console.log('[AssignmentSync] Sheet URL saved successfully');
+      addDebugLog('Sheet URL saved successfully');
       toast({
         title: "Sheet URL Saved",
         description: `${sheetType.toUpperCase()} sheet URL has been saved.`
       });
     } catch (error: any) {
-      console.error('[AssignmentSync] Save failed:', error);
+      const errMsg = `Save failed: ${JSON.stringify(error)}`;
+      console.error('[AssignmentSync]', errMsg);
+      addDebugLog(errMsg);
       toast({
         title: "Save Failed",
-        description: error.message || 'Unable to save sheet URL. Check console for details.',
+        description: error.message || 'Unable to save sheet URL. Check debug logs for details.',
         variant: "destructive"
       });
     }
@@ -247,15 +272,76 @@ export function AssignmentSyncSettings() {
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center gap-2">
-          <FileSpreadsheet className="h-5 w-5" />
-          <CardTitle>Assignment Import</CardTitle>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <FileSpreadsheet className="h-5 w-5" />
+            <CardTitle>Assignment Import</CardTitle>
+            {isDemoMode && (
+              <Badge variant="secondary" className="text-xs">
+                🎭 Demo Mode
+              </Badge>
+            )}
+          </div>
+          <div className="text-xs text-muted-foreground">
+            User: {effectiveUserId.substring(0, 8)}...
+          </div>
         </div>
         <CardDescription>
           Sync assignments from your EMBA and MIT Google Sheets
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
+        {/* Debug Panel */}
+        <Collapsible open={showDebug} onOpenChange={setShowDebug}>
+          <CollapsibleTrigger asChild>
+            <Button variant="outline" size="sm" className="w-full">
+              <Bug className="h-4 w-4 mr-2" />
+              Debug Info
+              <ChevronDown className={cn("h-4 w-4 ml-auto transition-transform", showDebug && "rotate-180")} />
+            </Button>
+          </CollapsibleTrigger>
+          <CollapsibleContent className="mt-4 space-y-3">
+            <div className="p-4 bg-muted rounded-lg space-y-2">
+              <div className="text-sm space-y-1">
+                <div className="flex justify-between">
+                  <span className="font-medium">Auth Status:</span>
+                  <Badge variant={user ? "default" : "secondary"}>
+                    {user ? '🔐 Authenticated' : '🎭 Demo Mode'}
+                  </Badge>
+                </div>
+                <div className="flex justify-between">
+                  <span className="font-medium">User ID:</span>
+                  <code className="text-xs bg-background px-2 py-1 rounded">{effectiveUserId}</code>
+                </div>
+                <div className="flex justify-between">
+                  <span className="font-medium">Configs Loaded:</span>
+                  <span>{syncConfigs.length}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="font-medium">EMBA URL Set:</span>
+                  <span>{embaSheetUrl ? '✅' : '❌'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="font-medium">MIT URL Set:</span>
+                  <span>{mitSheetUrl ? '✅' : '❌'}</span>
+                </div>
+              </div>
+              <Separator />
+              <div className="space-y-2">
+                <div className="text-sm font-medium">Recent Activity:</div>
+                <div className="max-h-40 overflow-y-auto space-y-1 text-xs font-mono">
+                  {debugLogs.length === 0 ? (
+                    <div className="text-muted-foreground">No activity yet</div>
+                  ) : (
+                    debugLogs.map((log, i) => (
+                      <div key={i} className="text-muted-foreground">{log}</div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
         {/* EMBA Sheet Config */}
         <div className="space-y-3">
           <div className="space-y-2">
