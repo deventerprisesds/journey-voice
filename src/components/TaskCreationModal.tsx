@@ -151,23 +151,68 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
         }
       });
 
-      // Fetch EMBA assignments
+      // Fetch EMBA assignments with weekend date filtering
       const DEMO_EMBA_USER_IDS = [
         '00000000-0000-0000-0000-000000000001',
         'a3378f93-d655-4913-b2fa-ca5b1d8020f1',
       ];
       const isDemo = DEMO_EMBA_USER_IDS.includes(userId);
 
-      let embaQuery = supabase
-        .from('assignments')
-        .select('*, courses(name)');
+      // Get last weekend end time
+      const { data: lastWeekend } = await supabase
+        .from('class_schedules')
+        .select('end_time')
+        .in('user_id', isDemo ? DEMO_EMBA_USER_IDS : [userId])
+        .lt('date', new Date().toISOString())
+        .order('date', { ascending: false })
+        .limit(1)
+        .maybeSingle();
 
-      embaQuery = isDemo
-        ? embaQuery.in('user_id', DEMO_EMBA_USER_IDS)
-        : embaQuery.eq('user_id', userId);
+      // Get next weekend's class dates
+      const { data: nextWeekendDates } = await supabase
+        .from('class_schedules')
+        .select('date, end_time')
+        .in('user_id', isDemo ? DEMO_EMBA_USER_IDS : [userId])
+        .gte('date', new Date().toISOString())
+        .order('date', { ascending: true })
+        .limit(5);
 
-      const { data: embaAssignments } = await embaQuery
-        .order('due_date', { ascending: true });
+      let embaAssignments = null;
+
+      if (nextWeekendDates && nextWeekendDates.length > 0) {
+        // Group dates within 3 days as same weekend, take the last date's end time
+        const weekendGroups: Array<typeof nextWeekendDates> = [];
+        let currentGroup: typeof nextWeekendDates = [];
+        
+        nextWeekendDates.forEach((curr, idx) => {
+          if (idx === 0 || Math.abs(new Date(curr.date).getTime() - new Date(nextWeekendDates[idx-1].date).getTime()) <= 3 * 24 * 60 * 60 * 1000) {
+            currentGroup.push(curr);
+          } else {
+            weekendGroups.push(currentGroup);
+            currentGroup = [curr];
+          }
+        });
+        if (currentGroup.length > 0) weekendGroups.push(currentGroup);
+        
+        const nextWeekendEnd = weekendGroups[0]
+          .sort((a, b) => new Date(b.end_time).getTime() - new Date(a.end_time).getTime())[0];
+
+        let embaQuery = supabase
+          .from('assignments')
+          .select('*, courses(name)')
+          .gte('due_date', lastWeekend?.end_time || new Date().toISOString())
+          .lte('due_date', nextWeekendEnd.end_time)
+          .in('status', ['active', 'pending']);
+
+        embaQuery = isDemo
+          ? embaQuery.in('user_id', DEMO_EMBA_USER_IDS)
+          : embaQuery.eq('user_id', userId);
+
+        const { data } = await embaQuery
+          .order('due_date', { ascending: true });
+        
+        embaAssignments = data;
+      }
 
       // Fetch MIT assignments (exclude office hours)
       const { data: mitAssignments } = await supabase
