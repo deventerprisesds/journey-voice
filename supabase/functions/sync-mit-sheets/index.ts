@@ -182,6 +182,13 @@ serve(async (req) => {
           }
         }
 
+        // Skip office hours
+        if (title.toLowerCase().includes('office hour')) {
+          console.log('⏭️ Skipping office hour:', title);
+          processed++;
+          continue;
+        }
+
         // Filter: only include assignments due within next 14 days
         if (!dueDate || new Date(dueDate) > twoWeeksFromNow || new Date(dueDate) < new Date()) {
           console.log('Skipping - outside date range');

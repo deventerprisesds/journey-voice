@@ -9,24 +9,51 @@ export async function fetchPendingAssignments(
   const assignments: Task[] = [];
 
   try {
-    // Fetch EMBA assignments (through next class)
+    // Fetch EMBA assignments (between last weekend end and next weekend end)
     if (includeEmba) {
-      // Get next class date
-      const { data: nextClass } = await supabase
+      // Get last completed weekend's end time
+      const { data: lastWeekend } = await supabase
         .from('class_schedules')
-        .select('date')
+        .select('end_time')
+        .eq('user_id', userId)
+        .lt('date', new Date().toISOString())
+        .order('date', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      // Get next weekend's class dates
+      const { data: nextWeekendDates } = await supabase
+        .from('class_schedules')
+        .select('date, end_time')
         .eq('user_id', userId)
         .gte('date', new Date().toISOString())
         .order('date', { ascending: true })
-        .limit(1)
-        .single();
+        .limit(5);
 
-      if (nextClass) {
+      if (nextWeekendDates && nextWeekendDates.length > 0) {
+        // Group dates within 3 days as same weekend, take the last date's end time
+        const weekendGroups: Array<typeof nextWeekendDates> = [];
+        let currentGroup: typeof nextWeekendDates = [];
+        
+        nextWeekendDates.forEach((curr, idx) => {
+          if (idx === 0 || Math.abs(new Date(curr.date).getTime() - new Date(nextWeekendDates[idx-1].date).getTime()) <= 3 * 24 * 60 * 60 * 1000) {
+            currentGroup.push(curr);
+          } else {
+            weekendGroups.push(currentGroup);
+            currentGroup = [curr];
+          }
+        });
+        if (currentGroup.length > 0) weekendGroups.push(currentGroup);
+        
+        const nextWeekendEnd = weekendGroups[0]
+          .sort((a, b) => new Date(b.end_time).getTime() - new Date(a.end_time).getTime())[0];
+
         const { data: embaAssignments } = await supabase
           .from('assignments')
           .select('*')
           .eq('user_id', userId)
-          .lte('due_date', nextClass.date)
+          .gte('due_date', lastWeekend?.end_time || new Date().toISOString())
+          .lte('due_date', nextWeekendEnd.end_time)
           .in('status', ['active', 'pending'])
           .order('due_date', { ascending: true });
 
@@ -53,7 +80,7 @@ export async function fetchPendingAssignments(
       }
     }
 
-    // Fetch MIT assignments (next 2 weeks)
+    // Fetch MIT assignments (next 2 weeks, exclude office hours)
     if (includeMit) {
       const twoWeeksFromNow = new Date();
       twoWeeksFromNow.setDate(twoWeeksFromNow.getDate() + 14);
@@ -64,6 +91,7 @@ export async function fetchPendingAssignments(
         .eq('user_id', userId)
         .lte('due_date', twoWeeksFromNow.toISOString())
         .in('status', ['active', 'pending'])
+        .not('title', 'ilike', '%office hour%')
         .order('due_date', { ascending: true });
 
       if (mitAssignments) {
