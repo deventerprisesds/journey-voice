@@ -159,12 +159,13 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
         .eq('status', 'active')
         .order('due_date', { ascending: true });
 
-      // Fetch MIT assignments
+      // Fetch MIT assignments (exclude office hours)
       const { data: mitAssignments } = await supabase
         .from('assignments_mit')
         .select('*, courses(name)')
         .eq('user_id', userId)
         .eq('status', 'active')
+        .not('title', 'ilike', '%office hour%')
         .order('due_date', { ascending: true });
 
       // Filter out already converted assignments and format
