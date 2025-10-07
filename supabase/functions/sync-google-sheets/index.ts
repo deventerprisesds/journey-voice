@@ -61,11 +61,23 @@ serve(async (req) => {
     console.log('Configs found:', configs?.length ?? 0);
     console.log('Full configs:', JSON.stringify(configs, null, 2));
 
-    const embaConfig = configs?.find(c => c.config_data?.sheet_type === 'emba');
-    console.log('EMBA config found:', !!embaConfig);
-    console.log('Sheet URL:', embaConfig?.config_data?.sheet_url ?? 'NONE');
+    const config = configs?.[0];
+    
+    // Try new structure first: config_data.emba_sheet_url
+    let embaSheetUrl = config?.config_data?.emba_sheet_url;
+    let urlSource = 'new (emba_sheet_url)';
+    
+    // Fallback to legacy structure: sheet_type === 'emba'
+    if (!embaSheetUrl) {
+      const legacyConfig = configs?.find(c => c.config_data?.sheet_type === 'emba');
+      embaSheetUrl = legacyConfig?.config_data?.sheet_url;
+      urlSource = 'legacy (sheet_type=emba)';
+    }
 
-    if (!embaConfig || !embaConfig.config_data?.sheet_url) {
+    console.log('EMBA sheet URL:', embaSheetUrl ?? 'NONE');
+    console.log('URL source:', embaSheetUrl ? urlSource : 'N/A');
+
+    if (!embaSheetUrl) {
       throw new Error('EMBA sheet URL not configured');
     }
 
@@ -92,7 +104,7 @@ serve(async (req) => {
     try {
       // Extract sheet ID and gid from URL
       console.log('=== PARSING SHEET URL ===');
-      const sheetUrl = embaConfig.config_data.sheet_url;
+      const sheetUrl = embaSheetUrl;
       const sheetIdMatch = sheetUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
       const gidMatch = sheetUrl.match(/[#&]gid=([0-9]+)/);
       

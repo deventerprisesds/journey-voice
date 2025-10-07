@@ -88,17 +88,28 @@ export function AssignmentSyncSettings() {
     addDebugLog(successMsg);
     setSyncConfigs(data as SyncConfig[] || []);
     
-    // Populate input fields from existing configs
-    const embaConfig = data?.find((c: any) => (c.config_data as any)?.sheet_type === 'emba');
-    const mitConfig = data?.find((c: any) => (c.config_data as any)?.sheet_type === 'mit');
-    
-    if (embaConfig && (embaConfig.config_data as any)?.sheet_url) {
-      setEmbaSheetUrl((embaConfig.config_data as any).sheet_url);
-      addDebugLog(`EMBA URL loaded: ${(embaConfig.config_data as any).sheet_url}`);
-    }
-    if (mitConfig && (mitConfig.config_data as any)?.sheet_url) {
-      setMitSheetUrl((mitConfig.config_data as any).sheet_url);
-      addDebugLog(`MIT URL loaded: ${(mitConfig.config_data as any).sheet_url}`);
+    if (data && data.length > 0) {
+      const config = data[0] as any; // Single row per user
+      
+      // New structure: dedicated fields
+      if (config.config_data?.emba_sheet_url) {
+        setEmbaSheetUrl(config.config_data.emba_sheet_url);
+        addDebugLog(`EMBA URL loaded from new field: ${config.config_data.emba_sheet_url}`);
+      }
+      if (config.config_data?.mit_sheet_url) {
+        setMitSheetUrl(config.config_data.mit_sheet_url);
+        addDebugLog(`MIT URL loaded from new field: ${config.config_data.mit_sheet_url}`);
+      }
+      
+      // Backward compatibility: legacy sheet_type structure
+      if (!config.config_data?.emba_sheet_url && config.config_data?.sheet_type === 'emba' && config.config_data?.sheet_url) {
+        setEmbaSheetUrl(config.config_data.sheet_url);
+        addDebugLog(`EMBA URL loaded from legacy field: ${config.config_data.sheet_url}`);
+      }
+      if (!config.config_data?.mit_sheet_url && config.config_data?.sheet_type === 'mit' && config.config_data?.sheet_url) {
+        setMitSheetUrl(config.config_data.sheet_url);
+        addDebugLog(`MIT URL loaded from legacy field: ${config.config_data.sheet_url}`);
+      }
     }
   };
 
@@ -130,56 +141,100 @@ export function AssignmentSyncSettings() {
     addDebugLog(logMsg);
     addDebugLog(`URL: ${url}`);
 
-    const existing = syncConfigs.find(c => c.config_data?.sheet_type === sheetType);
-    addDebugLog(existing ? `Updating existing config: ${existing.id}` : 'Creating new config');
-
     try {
+      // Get existing google_sheets config (single row per user)
+      const { data: existingConfigs } = await supabase
+        .from('sync_config')
+        .select('*')
+        .eq('user_id', effectiveUserId)
+        .eq('service_type', 'google_sheets');
+
+      const existing = existingConfigs?.[0];
+
       if (existing) {
-        const { data, error } = await supabase
+        addDebugLog(`Updating existing google_sheets config...`);
+        const updatedConfigData = {
+          ...(typeof existing.config_data === 'object' ? existing.config_data : {}),
+          [`${sheetType}_sheet_url`]: url
+        } as any;
+
+        const { error } = await supabase
           .from('sync_config')
           .update({
-            config_data: { ...existing.config_data, sheet_url: url, sheet_type: sheetType },
+            config_data: updatedConfigData,
             updated_at: new Date().toISOString()
           })
-          .eq('id', existing.id)
-          .select();
+          .eq('id', existing.id);
 
         if (error) {
-          addDebugLog(`Update error: ${JSON.stringify(error)}`);
+          addDebugLog(`❌ Update error: ${JSON.stringify(error)}`);
           throw error;
         }
-        addDebugLog(`Updated successfully: ${JSON.stringify(data)}`);
+        addDebugLog(`✅ ${sheetType.toUpperCase()} URL saved to config_data.${sheetType}_sheet_url`);
       } else {
-        const { data, error } = await supabase
+        addDebugLog(`Creating new google_sheets config...`);
+        const { error } = await supabase
           .from('sync_config')
           .insert({
             user_id: effectiveUserId,
             service_type: 'google_sheets',
-            config_data: { sheet_type: sheetType, sheet_url: url }
-          })
-          .select();
+            config_data: {
+              [`${sheetType}_sheet_url`]: url
+            },
+            is_active: true
+          });
 
         if (error) {
-          addDebugLog(`Insert error: ${JSON.stringify(error)}`);
-          throw error;
+          // Handle duplicate key error by updating instead
+          if (error.code === '23505') {
+            addDebugLog(`⚠️ Duplicate detected, retrying with update...`);
+            const { data: retry } = await supabase
+              .from('sync_config')
+              .select('*')
+              .eq('user_id', effectiveUserId)
+              .eq('service_type', 'google_sheets')
+              .single();
+
+            if (retry) {
+              const { error: updateError } = await supabase
+                .from('sync_config')
+                .update({
+                  config_data: {
+                    ...(typeof retry.config_data === 'object' ? retry.config_data : {}),
+                    [`${sheetType}_sheet_url`]: url
+                  } as any,
+                  updated_at: new Date().toISOString()
+                })
+                .eq('id', retry.id);
+
+              if (updateError) throw updateError;
+              addDebugLog(`✅ ${sheetType.toUpperCase()} URL saved via retry update`);
+            }
+          } else {
+            addDebugLog(`❌ Insert error: ${JSON.stringify(error)}`);
+            throw error;
+          }
+        } else {
+          addDebugLog(`✅ ${sheetType.toUpperCase()} config created successfully`);
         }
-        addDebugLog(`Inserted successfully: ${JSON.stringify(data)}`);
       }
 
       await loadSyncConfigs();
-      addDebugLog('Sheet URL saved successfully');
       toast({
-        title: "Sheet URL Saved",
-        description: `${sheetType.toUpperCase()} sheet URL has been saved.`
+        title: "Sheet URL saved",
+        description: `${sheetType.toUpperCase()} sync configuration updated.`,
       });
     } catch (error: any) {
-      const errMsg = `Save failed: ${JSON.stringify(error)}`;
-      console.error('[AssignmentSync]', errMsg);
-      addDebugLog(errMsg);
+      console.error('Error saving sheet URL:', error);
+      const errorMsg = error.code === '23505' 
+        ? 'Duplicate configuration detected. Please refresh and try again.'
+        : error.message || "Failed to save sheet URL";
+      
+      addDebugLog(`❌ Save failed: ${errorMsg}`);
       toast({
-        title: "Save Failed",
-        description: error.message || 'Unable to save sheet URL. Check debug logs for details.',
-        variant: "destructive"
+        variant: "destructive",
+        title: "Error",
+        description: errorMsg,
       });
     }
   };

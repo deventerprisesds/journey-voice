@@ -61,11 +61,23 @@ serve(async (req) => {
     console.log('Configs found:', configs?.length ?? 0);
     console.log('Full configs:', JSON.stringify(configs, null, 2));
 
-    const mitConfig = configs?.find(c => c.config_data?.sheet_type === 'mit');
-    console.log('MIT config found:', !!mitConfig);
-    console.log('Sheet URL:', mitConfig?.config_data?.sheet_url ?? 'NONE');
+    const config = configs?.[0];
+    
+    // Try new structure first: config_data.mit_sheet_url
+    let mitSheetUrl = config?.config_data?.mit_sheet_url;
+    let urlSource = 'new (mit_sheet_url)';
+    
+    // Fallback to legacy structure: sheet_type === 'mit'
+    if (!mitSheetUrl) {
+      const legacyConfig = configs?.find(c => c.config_data?.sheet_type === 'mit');
+      mitSheetUrl = legacyConfig?.config_data?.sheet_url;
+      urlSource = 'legacy (sheet_type=mit)';
+    }
 
-    if (!mitConfig || !mitConfig.config_data?.sheet_url) {
+    console.log('MIT sheet URL:', mitSheetUrl ?? 'NONE');
+    console.log('URL source:', mitSheetUrl ? urlSource : 'N/A');
+
+    if (!mitSheetUrl) {
       throw new Error('MIT sheet URL not configured');
     }
 
@@ -92,7 +104,7 @@ serve(async (req) => {
     try {
       // Extract sheet ID and gid from URL
       console.log('=== PARSING SHEET URL ===');
-      const sheetUrl = mitConfig.config_data.sheet_url;
+      const sheetUrl = mitSheetUrl;
       const sheetIdMatch = sheetUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
       const gidMatch = sheetUrl.match(/[#&]gid=([0-9]+)/);
       
