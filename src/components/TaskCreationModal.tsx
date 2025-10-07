@@ -152,11 +152,21 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
       });
 
       // Fetch EMBA assignments
-      const { data: embaAssignments } = await supabase
+      const DEMO_EMBA_USER_IDS = [
+        '00000000-0000-0000-0000-000000000001',
+        'a3378f93-d655-4913-b2fa-ca5b1d8020f1',
+      ];
+      const isDemo = DEMO_EMBA_USER_IDS.includes(userId);
+
+      let embaQuery = supabase
         .from('assignments')
-        .select('*, courses(name)')
-        .eq('user_id', userId)
-        .eq('status', 'active')
+        .select('*, courses(name)');
+
+      embaQuery = isDemo
+        ? embaQuery.in('user_id', DEMO_EMBA_USER_IDS)
+        : embaQuery.eq('user_id', userId);
+
+      const { data: embaAssignments } = await embaQuery
         .order('due_date', { ascending: true });
 
       // Fetch MIT assignments (exclude office hours)
