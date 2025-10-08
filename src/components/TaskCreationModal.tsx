@@ -158,12 +158,15 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
       ];
       const isDemo = DEMO_EMBA_USER_IDS.includes(userId);
 
+      // Prepare today's date (YYYY-MM-DD) for date-only comparisons
+      const todayStr = format(new Date(), 'yyyy-MM-dd');
+
       // Get last weekend end time
       const { data: lastWeekend } = await supabase
         .from('class_schedules')
         .select('end_time')
         .in('user_id', isDemo ? DEMO_EMBA_USER_IDS : [userId])
-        .lt('date', new Date().toISOString())
+        .lt('date', todayStr)
         .order('date', { ascending: false })
         .limit(1)
         .maybeSingle();
@@ -173,7 +176,7 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
         .from('class_schedules')
         .select('date, end_time')
         .in('user_id', isDemo ? DEMO_EMBA_USER_IDS : [userId])
-        .gte('date', new Date().toISOString())
+        .gte('date', todayStr)
         .order('date', { ascending: true })
         .limit(5);
 
