@@ -23,6 +23,11 @@ serve(async (req) => {
         },
       }
     );
+    // Admin client (uses service role if available) for privileged operations
+    const adminClient = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? Deno.env.get('SUPABASE_ANON_KEY') ?? ''
+    );
 
     const { data: { user } } = await supabaseClient.auth.getUser();
 
@@ -41,7 +46,13 @@ serve(async (req) => {
 
     console.log('Authenticated user:', user?.id ?? 'NONE');
     console.log('Effective userId:', userId);
-    console.log('Demo mode:', !user?.id);
+    const DEMO_MODE = !user?.id || userId === DEMO_USER_ID;
+    const DEV_EMBA_USER_ID = 'a3378f93-d655-4913-b2fa-ca5b1d8020f1';
+    const writeUserId = DEMO_MODE ? DEV_EMBA_USER_ID : userId;
+    const scheduleUserId = DEMO_MODE ? DEV_EMBA_USER_ID : userId;
+    console.log('Demo mode:', DEMO_MODE);
+    console.log('Write User ID:', writeUserId);
+    console.log('Schedule User ID:', scheduleUserId);
 
     // Get EMBA sheet config
     console.log('=== FETCHING SYNC CONFIG ===');
@@ -151,7 +162,7 @@ serve(async (req) => {
       const { data: upcoming } = await supabaseClient
         .from('class_schedules')
         .select('date, end_time')
-        .eq('user_id', userId)
+        .eq('user_id', scheduleUserId)
         .gte('date', new Date().toISOString())
         .order('date', { ascending: true })
         .limit(5);
@@ -227,10 +238,10 @@ serve(async (req) => {
         let courseId = null;
         if (courseName) {
           console.log('Looking up course:', courseName);
-          const { data: existingCourse } = await supabaseClient
+          const { data: existingCourse } = await adminClient
             .from('courses')
             .select('id')
-            .eq('user_id', userId)
+            .eq('user_id', writeUserId)
             .eq('name', courseName)
             .maybeSingle();
 
@@ -239,10 +250,10 @@ serve(async (req) => {
             console.log('Found existing course:', courseId);
           } else {
             console.log('Creating new course');
-            const { data: newCourse } = await supabaseClient
+            const { data: newCourse } = await adminClient
               .from('courses')
               .insert({
-                user_id: userId,
+                user_id: writeUserId,
                 name: courseName,
                 color: '#3B82F6'
               })
@@ -258,16 +269,16 @@ serve(async (req) => {
 
         // Check if assignment exists
         console.log('Checking for existing assignment at row:', i);
-        const { data: existing } = await supabaseClient
+        const { data: existing } = await adminClient
           .from('assignments')
           .select('id')
-          .eq('user_id', userId)
+          .eq('user_id', writeUserId)
           .eq('sheet_row_number', i)
           .maybeSingle();
 
         if (existing) {
           console.log('Updating existing assignment:', existing.id);
-          await supabaseClient
+          await adminClient
             .from('assignments')
             .update({
               title,
@@ -285,10 +296,10 @@ serve(async (req) => {
           assignmentIds.push(existing.id);
         } else {
           console.log('Inserting new assignment');
-          const { data: newAssignment } = await supabaseClient
+          const { data: newAssignment } = await adminClient
             .from('assignments')
             .insert({
-              user_id: userId,
+              user_id: writeUserId,
               title,
               description,
               due_date: dueDate,
