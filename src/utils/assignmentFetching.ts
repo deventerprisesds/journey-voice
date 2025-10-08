@@ -11,12 +11,15 @@ export async function fetchPendingAssignments(
   try {
     // Fetch EMBA assignments (between last weekend end and next weekend end)
     if (includeEmba) {
+      // Prepare today's date (YYYY-MM-DD) for date-only comparisons
+      const todayStr = new Date().toISOString().split('T')[0];
+      
       // Get last completed weekend's end time
       const { data: lastWeekend } = await supabase
         .from('class_schedules')
         .select('end_time')
         .eq('user_id', userId)
-        .lt('date', new Date().toISOString())
+        .lt('date', todayStr)
         .order('date', { ascending: false })
         .limit(1)
         .maybeSingle();
@@ -26,7 +29,7 @@ export async function fetchPendingAssignments(
         .from('class_schedules')
         .select('date, end_time')
         .eq('user_id', userId)
-        .gte('date', new Date().toISOString())
+        .gte('date', todayStr)
         .order('date', { ascending: true })
         .limit(5);
 
@@ -54,7 +57,6 @@ export async function fetchPendingAssignments(
           .eq('user_id', userId)
           .gte('due_date', lastWeekend?.end_time || new Date().toISOString())
           .lte('due_date', nextWeekendEnd.end_time)
-          .in('status', ['active', 'pending'])
           .order('due_date', { ascending: true });
 
         if (embaAssignments) {
@@ -90,7 +92,6 @@ export async function fetchPendingAssignments(
         .select('*')
         .eq('user_id', userId)
         .lte('due_date', twoWeeksFromNow.toISOString())
-        .in('status', ['active', 'pending'])
         .not('title', 'ilike', '%office hour%')
         .order('due_date', { ascending: true });
 

@@ -204,8 +204,7 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
           .from('assignments')
           .select('*, courses(name)')
           .gte('due_date', lastWeekend?.end_time || new Date().toISOString())
-          .lte('due_date', nextWeekendEnd.end_time)
-          .in('status', ['active', 'pending']);
+          .lte('due_date', nextWeekendEnd.end_time);
 
         embaQuery = isDemo
           ? embaQuery.in('user_id', DEMO_EMBA_USER_IDS)
