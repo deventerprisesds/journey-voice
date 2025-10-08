@@ -1,6 +1,12 @@
 import { supabase } from '@/integrations/supabase/client';
 import { Task } from '@/types/task';
 
+// Demo user IDs that share class schedules
+const DEMO_EMBA_USER_IDS = [
+  '00000000-0000-0000-0000-000000000001', // Demo user
+  'a3378f93-d655-4913-b2fa-ca5b1d8020f1'  // dev@enterpriseds.io
+];
+
 export async function fetchPendingAssignments(
   userId: string,
   includeEmba: boolean = true,
@@ -13,23 +19,34 @@ export async function fetchPendingAssignments(
     if (includeEmba) {
       // Prepare today's date (YYYY-MM-DD) for date-only comparisons
       const todayStr = new Date().toISOString().split('T')[0];
+      const isDemo = DEMO_EMBA_USER_IDS.includes(userId);
       
       // Get last completed weekend's end time
-      const { data: lastWeekend } = await supabase
+      let lastWeekendQuery = supabase
         .from('class_schedules')
         .select('end_time')
-        .eq('user_id', userId)
-        .lt('date', todayStr)
+        .lt('date', todayStr);
+      
+      lastWeekendQuery = isDemo
+        ? lastWeekendQuery.in('user_id', DEMO_EMBA_USER_IDS)
+        : lastWeekendQuery.eq('user_id', userId);
+      
+      const { data: lastWeekend } = await lastWeekendQuery
         .order('date', { ascending: false })
         .limit(1)
         .maybeSingle();
 
       // Get next weekend's class dates
-      const { data: nextWeekendDates } = await supabase
+      let nextWeekendQuery = supabase
         .from('class_schedules')
         .select('date, end_time')
-        .eq('user_id', userId)
-        .gte('date', todayStr)
+        .gte('date', todayStr);
+      
+      nextWeekendQuery = isDemo
+        ? nextWeekendQuery.in('user_id', DEMO_EMBA_USER_IDS)
+        : nextWeekendQuery.eq('user_id', userId);
+      
+      const { data: nextWeekendDates } = await nextWeekendQuery
         .order('date', { ascending: true })
         .limit(5);
 
@@ -51,13 +68,17 @@ export async function fetchPendingAssignments(
         const nextWeekendEnd = weekendGroups[0]
           .sort((a, b) => new Date(b.end_time).getTime() - new Date(a.end_time).getTime())[0];
 
-        const { data: embaAssignments } = await supabase
+        let embaQuery = supabase
           .from('assignments')
           .select('*')
-          .eq('user_id', userId)
           .gte('due_date', lastWeekend?.end_time || new Date().toISOString())
-          .lte('due_date', nextWeekendEnd.end_time)
-          .order('due_date', { ascending: true });
+          .lte('due_date', nextWeekendEnd.end_time);
+        
+        embaQuery = isDemo
+          ? embaQuery.in('user_id', DEMO_EMBA_USER_IDS)
+          : embaQuery.eq('user_id', userId);
+        
+        const { data: embaAssignments } = await embaQuery.order('due_date', { ascending: true });
 
         if (embaAssignments) {
           assignments.push(
