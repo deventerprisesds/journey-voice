@@ -53,6 +53,7 @@ interface Assignment {
   type: string;
   source: 'emba' | 'mit';
   course_name?: string;
+  assignment_url?: string;
 }
 
 interface TaskCreationModalProps {
@@ -246,7 +247,8 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
           course_id: a.course_id,
           type: a.type,
           source: 'emba' as const,
-          course_name: (a.courses as any)?.name
+          course_name: (a.courses as any)?.name,
+          assignment_url: a.assignment_url
         }));
 
       const availableMit: Assignment[] = (mitAssignments || [])
@@ -260,10 +262,18 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
           course_id: a.course_id,
           type: a.type,
           source: 'mit' as const,
-          course_name: (a.courses as any)?.name
+          course_name: (a.courses as any)?.name,
+          assignment_url: a.assignment_url
         }));
 
-      setAssignments([...availableEmba, ...availableMit]);
+      // Combine and sort by due date in ascending order
+      const combined = [...availableEmba, ...availableMit].sort((a, b) => {
+        if (!a.due_date) return 1;
+        if (!b.due_date) return -1;
+        return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
+      });
+      
+      setAssignments(combined);
     } catch (error) {
       console.error('Error loading assignments:', error);
       toast({
@@ -286,6 +296,14 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
       }
       return next;
     });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedAssignments.size === assignments.length) {
+      setSelectedAssignments(new Set());
+    } else {
+      setSelectedAssignments(new Set(assignments.map(a => a.id)));
+    }
   };
 
   const handleCreateFromAssignments = async () => {
@@ -1237,6 +1255,29 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                   </Badge>
                 </div>
 
+                {/* Select All Checkbox */}
+                <div 
+                  className="flex items-center gap-3 p-3 border rounded-lg cursor-pointer hover:bg-muted/50"
+                  onClick={toggleSelectAll}
+                >
+                  <div className={cn(
+                    "h-5 w-5 rounded border-2 flex items-center justify-center shrink-0",
+                    selectedAssignments.size === assignments.length
+                      ? "border-primary bg-primary"
+                      : selectedAssignments.size > 0
+                      ? "border-primary bg-primary/20"
+                      : "border-muted-foreground"
+                  )}>
+                    {selectedAssignments.size === assignments.length && (
+                      <Check className="h-3 w-3 text-primary-foreground" />
+                    )}
+                    {selectedAssignments.size > 0 && selectedAssignments.size < assignments.length && (
+                      <div className="h-2 w-2 bg-primary rounded-sm" />
+                    )}
+                  </div>
+                  <span className="font-medium">Select All</span>
+                </div>
+
                 <div className="space-y-2 max-h-96 overflow-y-auto">
                   {assignments.map((assignment) => (
                     <div
@@ -1286,6 +1327,18 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                               {assignment.priority}
                             </Badge>
                           </div>
+
+                          {assignment.assignment_url && (
+                            <a
+                              href={assignment.assignment_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs text-primary hover:underline flex items-center gap-1"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              🔗 View Assignment
+                            </a>
+                          )}
                         </div>
                       </div>
                     </div>
