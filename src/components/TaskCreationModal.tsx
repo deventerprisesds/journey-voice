@@ -214,6 +214,24 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
           .order('due_date', { ascending: true });
         
         embaAssignments = data;
+      } else {
+        // Fallback: if no class schedules are found, show EMBA assignments due in the next 2 weeks
+        const nowIso = new Date().toISOString();
+        const twoWeeks = new Date();
+        twoWeeks.setDate(twoWeeks.getDate() + 14);
+
+        let embaQuery = supabase
+          .from('assignments')
+          .select('*, courses(name)')
+          .gte('due_date', nowIso)
+          .lte('due_date', twoWeeks.toISOString());
+
+        embaQuery = isDemo
+          ? embaQuery.in('user_id', DEMO_EMBA_USER_IDS)
+          : embaQuery.eq('user_id', userId);
+
+        const { data } = await embaQuery.order('due_date', { ascending: true });
+        embaAssignments = data;
       }
 
       // Fetch MIT assignments (exclude office hours)
