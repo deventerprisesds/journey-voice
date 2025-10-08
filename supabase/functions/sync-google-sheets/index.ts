@@ -48,8 +48,8 @@ serve(async (req) => {
     console.log('Effective userId:', userId);
     const DEMO_MODE = !user?.id || userId === DEMO_USER_ID;
     const DEV_EMBA_USER_ID = 'a3378f93-d655-4913-b2fa-ca5b1d8020f1';
-    const writeUserId = DEMO_MODE ? DEV_EMBA_USER_ID : userId;
-    const scheduleUserId = DEMO_MODE ? DEV_EMBA_USER_ID : userId;
+    const writeUserId = DEMO_MODE ? DEMO_USER_ID : userId;
+    const scheduleUserId = DEMO_MODE ? DEMO_USER_ID : userId;
     console.log('Demo mode:', DEMO_MODE);
     console.log('Write User ID:', writeUserId);
     console.log('Schedule User ID:', scheduleUserId);
@@ -89,7 +89,15 @@ serve(async (req) => {
     console.log('URL source:', embaSheetUrl ? urlSource : 'N/A');
 
     if (!embaSheetUrl) {
-      throw new Error('EMBA sheet URL not configured');
+      return new Response(
+        JSON.stringify({ 
+          error: 'EMBA sheet URL not configured. Please add your EMBA sheet URL in Settings first.' 
+        }),
+        { 
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+        }
+      );
     }
 
     // Create sync log entry
@@ -162,7 +170,7 @@ serve(async (req) => {
       const { data: upcoming } = await supabaseClient
         .from('class_schedules')
         .select('date, end_time')
-        .eq('user_id', scheduleUserId)
+        .in('user_id', [scheduleUserId, DEV_EMBA_USER_ID])
         .gte('date', new Date().toISOString())
         .order('date', { ascending: true })
         .limit(5);

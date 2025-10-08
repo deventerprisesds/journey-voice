@@ -23,6 +23,11 @@ serve(async (req) => {
         },
       }
     );
+    // Admin client for bypassing RLS on DB writes
+    const adminClient = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? Deno.env.get('SUPABASE_ANON_KEY') ?? ''
+    );
 
     const { data: { user } } = await supabaseClient.auth.getUser();
 
@@ -78,7 +83,15 @@ serve(async (req) => {
     console.log('URL source:', mitSheetUrl ? urlSource : 'N/A');
 
     if (!mitSheetUrl) {
-      throw new Error('MIT sheet URL not configured');
+      return new Response(
+        JSON.stringify({ 
+          error: 'MIT sheet URL not configured. Please add your MIT sheet URL in Settings first.' 
+        }),
+        { 
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+        }
+      );
     }
 
     // Create sync log entry
@@ -205,7 +218,7 @@ serve(async (req) => {
           const mitCourseName = courseName.startsWith('MIT:') ? courseName : `MIT: ${courseName}`;
           console.log('Looking up course:', mitCourseName);
           
-          const { data: existingCourse } = await supabaseClient
+          const { data: existingCourse } = await adminClient
             .from('courses')
             .select('id')
             .eq('user_id', userId)
@@ -217,7 +230,7 @@ serve(async (req) => {
             console.log('Found existing course:', courseId);
           } else {
             console.log('Creating new course');
-            const { data: newCourse } = await supabaseClient
+            const { data: newCourse } = await adminClient
               .from('courses')
               .insert({
                 user_id: userId,
@@ -236,7 +249,7 @@ serve(async (req) => {
 
         // Check if assignment exists in assignments_mit
         console.log('Checking for existing assignment at row:', i);
-        const { data: existing } = await supabaseClient
+        const { data: existing } = await adminClient
           .from('assignments_mit')
           .select('id')
           .eq('user_id', userId)
@@ -245,7 +258,7 @@ serve(async (req) => {
 
         if (existing) {
           console.log('Updating existing assignment:', existing.id);
-          await supabaseClient
+          await adminClient
             .from('assignments_mit')
             .update({
               title,
@@ -263,7 +276,7 @@ serve(async (req) => {
           assignmentIds.push(existing.id);
         } else {
           console.log('Inserting new assignment');
-          const { data: newAssignment } = await supabaseClient
+          const { data: newAssignment } = await adminClient
             .from('assignments_mit')
             .insert({
               user_id: userId,
