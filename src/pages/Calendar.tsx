@@ -156,8 +156,7 @@ const Calendar: React.FC = () => {
   };
 
   return (
-    <AssignmentSelectionProvider>
-      <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background">
         {/* Fixed Navigation Header */}
         <div className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
           <div className="container mx-auto p-4">
@@ -224,7 +223,6 @@ const Calendar: React.FC = () => {
         />
         </div>
       </div>
-    </AssignmentSelectionProvider>
   );
 };
 
