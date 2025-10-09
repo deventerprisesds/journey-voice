@@ -351,6 +351,7 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
         .limit(selectedIds.length);
 
       if (newTasks && newTasks.length > 0) {
+        console.log('Newly created tasks (post-assignments):', newTasks.map(t => ({ id: t.id, title: t.title, status: t.status, board_id: t.board_id })));
         toast({
           title: "Tasks Created",
           description: `Successfully created ${newTasks.length} task${newTasks.length > 1 ? 's' : ''} from assignments`

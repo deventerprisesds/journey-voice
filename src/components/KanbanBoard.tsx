@@ -518,10 +518,19 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
     }
   };
 
+  // Map a task to a visible column status, even if the task's status doesn't have a matching column
+  const mapTaskStatusForColumns = (task: Task): Task['status'] => {
+    const hasColumnFor = (s: Task['status']) => columns.some(col => col.status === s);
+    if (hasColumnFor(task.status)) return task.status as any;
+    if ((task.category as any) === 'EDUCATION' && hasColumnFor('PROF_EDUCATION' as any)) return 'PROF_EDUCATION' as any;
+    if (hasColumnFor('BACKLOG' as any)) return 'BACKLOG' as any;
+    return (columns[0]?.status as any) || 'BACKLOG';
+  };
+
   const getTasksByStatus = (status: Task['status']) => {
     // Use filtered tasks if filters are active, otherwise use all tasks
     const tasksToFilter = filteredTasks.length > 0 ? filteredTasks : tasks;
-    let filtered = tasksToFilter.filter(task => task.status === status);
+    let filtered = tasksToFilter.filter(task => mapTaskStatusForColumns(task) === status);
     
     // Hide completed tasks if toggle is off
     if (!showCompletedTasks) {
@@ -1014,7 +1023,10 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
           <Droppable droppableId="board" direction="horizontal" type="column">
             {(provided) => (
               <div
-                ref={scrollContainerRef}
+                ref={(el) => {
+                  scrollContainerRef.current = el as HTMLDivElement | null;
+                  provided.innerRef(el);
+                }}
                 {...provided.droppableProps}
                 className="flex gap-4 min-h-[600px] overflow-x-auto pb-4 px-12 scroll-smooth"
                 style={{ scrollbarWidth: 'thin' }}

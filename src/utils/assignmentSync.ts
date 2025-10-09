@@ -64,7 +64,7 @@ export async function createTasksFromAssignments(
         .from('tasks')
         .select('id')
         .eq('user_id', userId)
-        .contains('scheduling_context', { assignment_id: assignment.id })
+        .contains('scheduling_context', [`assignment_id:${assignment.id}`])
         .maybeSingle();
 
       if (existingTask) {
@@ -82,13 +82,13 @@ export async function createTasksFromAssignments(
         board_id: defaultBoard.id,
         user_id: userId,
         status: statusForCategory('EDUCATION'),
-        scheduling_context: {
-          source: 'imported_assignment',
-          assignment_id: assignment.id,
-          ...(assignment.course_id && { course_id: assignment.course_id }),
-          ...(assignment.sheet_row_number && { sheet_row: assignment.sheet_row_number }),
-          ...(assignment.points && { points: assignment.points })
-        }
+        scheduling_context: [
+          'source:imported_assignment',
+          `assignment_id:${assignment.id}`,
+          ...(assignment.course_id ? [`course_id:${assignment.course_id}`] : []),
+          ...(assignment.sheet_row_number ? [`sheet_row:${assignment.sheet_row_number}`] : []),
+          ...(assignment.points ? [`points:${assignment.points}`] : [])
+        ]
       };
 
       // First insert the task
@@ -176,7 +176,7 @@ export async function createTasksFromMitAssignments(
         .from('tasks')
         .select('id')
         .eq('user_id', userId)
-        .contains('scheduling_context', { mit_assignment_id: assignment.id })
+        .contains('scheduling_context', [`mit_assignment_id:${assignment.id}`])
         .maybeSingle();
 
       if (existingTask) {
@@ -194,13 +194,13 @@ export async function createTasksFromMitAssignments(
         board_id: defaultBoard.id,
         user_id: userId,
         status: statusForCategory('EDUCATION'),
-        scheduling_context: {
-          source: 'imported_mit_assignment',
-          mit_assignment_id: assignment.id,
-          ...(assignment.course_id && { course_id: assignment.course_id }),
-          ...(assignment.sheet_row_number && { sheet_row: assignment.sheet_row_number }),
-          ...(assignment.points && { points: assignment.points })
-        }
+        scheduling_context: [
+          'source:imported_mit_assignment',
+          `mit_assignment_id:${assignment.id}`,
+          ...(assignment.course_id ? [`course_id:${assignment.course_id}`] : []),
+          ...(assignment.sheet_row_number ? [`sheet_row:${assignment.sheet_row_number}`] : []),
+          ...(assignment.points ? [`points:${assignment.points}`] : [])
+        ]
       };
 
       // First insert the task
