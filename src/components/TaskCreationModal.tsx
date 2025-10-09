@@ -90,6 +90,13 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
   // Include Selected Assignments Toggle
   const [includeSelectedAssignments, setIncludeSelectedAssignments] = useState(true);
   
+  // Assignment Preview Scheduling State
+  const [isSchedulingAssignments, setIsSchedulingAssignments] = useState(false);
+  const [schedulingDataCache, setSchedulingDataCache] = useState<{
+    existingTasks: any[];
+    userConfig: any;
+  } | null>(null);
+  
   // AI Mode State with sessionStorage persistence for mobile
   const [aiInput, setAiInput] = useState(() => {
     if (typeof window !== 'undefined') {
@@ -779,54 +786,141 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
       return;
     }
 
-    // Fetch full assignment details for selected IDs
+    // Fetch full assignment details for selected IDs and add preview scheduling
     const syncAssignmentTasks = async () => {
       if (selectedAssignmentIds.size === 0) {
         setParsedTasks(prev => prev.filter(task => !task.assignment_id));
         return;
       }
 
-      const selectedIds = Array.from(selectedAssignmentIds);
-      
-      // Fetch EMBA assignments
-      const { data: embaAssignments } = await supabase
-        .from('assignments')
-        .select('*')
-        .in('id', selectedIds)
-        .eq('user_id', userId);
+      setIsSchedulingAssignments(true);
 
-      // Fetch MIT assignments
-      const { data: mitAssignments } = await supabase
-        .from('assignments_mit')
-        .select('*')
-        .in('id', selectedIds)
-        .eq('user_id', userId);
-
-      const allAssignments: Assignment[] = [
-        ...(embaAssignments || []).map(a => ({ ...a, source: 'emba' as const })),
-        ...(mitAssignments || []).map(a => ({ ...a, source: 'mit' as const }))
-      ];
-
-      setParsedTasks(prev => {
-        // Remove assignment tasks that are no longer selected
-        const nonAssignmentTasks = prev.filter(task => !task.assignment_id);
+      try {
+        const selectedIds = Array.from(selectedAssignmentIds);
         
-        // Add/update assignment tasks
-        const assignmentTasks = allAssignments.map(assignment => {
-          // Check if we already have this assignment in parsed tasks
-          const existing = prev.find(t => t.assignment_id === assignment.id);
-          if (existing) {
-            return existing; // Keep existing edits
-          }
-          return convertAssignmentToParsedTask(assignment);
-        });
+        // Fetch EMBA assignments
+        const { data: embaAssignments } = await supabase
+          .from('assignments')
+          .select('*')
+          .in('id', selectedIds)
+          .eq('user_id', userId);
 
-        return [...nonAssignmentTasks, ...assignmentTasks];
-      });
+        // Fetch MIT assignments
+        const { data: mitAssignments } = await supabase
+          .from('assignments_mit')
+          .select('*')
+          .in('id', selectedIds)
+          .eq('user_id', userId);
+
+        const allAssignments: Assignment[] = [
+          ...(embaAssignments || []).map(a => ({ ...a, source: 'emba' as const })),
+          ...(mitAssignments || []).map(a => ({ ...a, source: 'mit' as const }))
+        ];
+
+        // Fetch/cache scheduling data once
+        let existingTasksCache = schedulingDataCache?.existingTasks;
+        let userConfigCache = schedulingDataCache?.userConfig;
+
+        if (!schedulingDataCache) {
+          // Fetch existing tasks for scheduling context
+          const { data: existingTasks } = await supabase
+            .from('tasks')
+            .select('*')
+            .eq('user_id', userId)
+            .eq('board_id', boardId)
+            .order('created_at', { ascending: false });
+
+          existingTasksCache = existingTasks || [];
+          userConfigCache = { timezone: 'America/New_York' }; // Default config
+
+          setSchedulingDataCache({
+            existingTasks: existingTasksCache,
+            userConfig: userConfigCache
+          });
+        }
+
+        // Sequential preview scheduling for each assignment
+        const assignmentTasksWithPreview: ParsedTask[] = [];
+        const reservedSlots: any[] = [];
+
+        for (const assignment of allAssignments) {
+          // Check if we already have this assignment in parsed tasks
+          const existingParsedTask = parsedTasks.find(t => t.assignment_id === assignment.id);
+          if (existingParsedTask) {
+            assignmentTasksWithPreview.push(existingParsedTask); // Keep existing edits
+            continue;
+          }
+
+          const assignmentTask = convertAssignmentToParsedTask(assignment);
+
+          try {
+            // Build busy slots: existing tasks + previously scheduled previews
+            const allExistingTasks = [...existingTasksCache, ...reservedSlots];
+
+            const { data: schedulerData, error: schedulerError } = await supabase.functions.invoke('smart-calendar-scheduler', {
+              body: {
+                taskText: assignmentTask.title,
+                userId,
+                existingTasks: allExistingTasks,
+                scheduling_context: [],
+                taskCategory: assignmentTask.category,
+                taskPriority: assignmentTask.priority,
+                estimateMinutes: assignmentTask.estimate_minutes,
+                dueDate: assignmentTask.due_date,
+                timezone: userConfigCache?.timezone || 'America/New_York',
+              }
+            });
+
+            if (schedulerError) {
+              console.error('Preview scheduling failed for assignment:', assignmentTask.title, schedulerError);
+              assignmentTasksWithPreview.push(assignmentTask); // Add without preview
+              continue;
+            }
+
+            if (schedulerData?.scheduledTask?.start_time && schedulerData?.scheduledTask?.end_time) {
+              // Add preview times
+              assignmentTasksWithPreview.push({
+                ...assignmentTask,
+                start_time: schedulerData.scheduledTask.start_time,
+                end_time: schedulerData.scheduledTask.end_time,
+              });
+
+              // Reserve this slot for next iteration
+              reservedSlots.push({
+                start_time: schedulerData.scheduledTask.start_time,
+                end_time: schedulerData.scheduledTask.end_time,
+                title: assignmentTask.title,
+                is_scheduled: true
+              });
+            } else {
+              // No preview time available
+              assignmentTasksWithPreview.push(assignmentTask);
+            }
+          } catch (error) {
+            console.error('Preview scheduling failed for assignment:', assignmentTask.title, error);
+            assignmentTasksWithPreview.push(assignmentTask); // Add without preview
+          }
+        }
+
+        // Update parsed tasks with preview-scheduled assignments
+        setParsedTasks(prev => {
+          const nonAssignmentTasks = prev.filter(task => !task.assignment_id);
+          return [...nonAssignmentTasks, ...assignmentTasksWithPreview];
+        });
+      } catch (error) {
+        console.error('Failed to sync assignment tasks:', error);
+        toast({
+          title: 'Error',
+          description: 'Failed to load assignments. Please try again.',
+          variant: 'destructive',
+        });
+      } finally {
+        setIsSchedulingAssignments(false);
+      }
     };
 
     syncAssignmentTasks();
-  }, [includeSelectedAssignments, selectedAssignmentIds, userId]);
+  }, [includeSelectedAssignments, selectedAssignmentIds, userId, boardId, schedulingDataCache, parsedTasks, toast]);
 
   return (
     <Dialog open={isOpen} onOpenChange={handleClose}>
@@ -883,12 +977,18 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                       ? `${selectedAssignmentIds.size} assignment${selectedAssignmentIds.size > 1 ? 's' : ''} selected from 'From Assignments' tab`
                       : 'No assignments selected. Go to "From Assignments" tab to select.'}
                   </p>
+                  {isSchedulingAssignments && (
+                    <p className="text-xs text-primary mt-1 flex items-center gap-1">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Scheduling preview times...
+                    </p>
+                  )}
                 </div>
                 <Switch
                   id="include-assignments"
                   checked={includeSelectedAssignments}
                   onCheckedChange={setIncludeSelectedAssignments}
-                  disabled={selectedAssignmentIds.size === 0}
+                  disabled={selectedAssignmentIds.size === 0 || isSchedulingAssignments}
                 />
               </div>
 
