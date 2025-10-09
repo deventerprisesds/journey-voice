@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, eachDayOfInterval, addDays, isSameDay, isSameMonth, isToday, startOfDay, endOfDay, parseISO } from 'date-fns';
-import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Clock, Plus, Brain, RefreshCw, Sparkles, Eye, EyeOff } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Clock, Plus, Brain, RefreshCw, Sparkles, Eye, EyeOff, AlertTriangle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -128,10 +128,20 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
       // Find incomplete scheduled tasks that are in the past or need reorganization
       const tasksToReorganize = tasks.filter(task => {
         if (task.status === 'DONE' || task.completed_at) return false;
-        if (!task.start_time) return false;
         
-        const taskStart = new Date(task.start_time);
-        return taskStart < now; // Past scheduled tasks that weren't completed
+        // Case 1: Scheduled work that's now past
+        if (task.start_time) {
+          const taskStart = new Date(task.start_time);
+          return taskStart < now;
+        }
+        
+        // Case 2: Unscheduled task with past due date (assignments that were never scheduled)
+        if (task.due_date && !task.start_time) {
+          const dueDate = new Date(task.due_date);
+          return dueDate < now;
+        }
+        
+        return false;
       });
 
       if (tasksToReorganize.length === 0) {
@@ -553,25 +563,41 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
                   </div>
                   
                   <div className="space-y-1">
-                    {dayTasks.slice(0, 3).map(task => (
-                      <div
-                        key={task.id}
-                        className={cn(
-                          "px-1 py-0.5 rounded text-xs truncate cursor-pointer",
-                          task.start_time 
-                            ? (priorityColors[task.priority] || 'bg-muted')
-                            : 'bg-warning/20 border border-warning/50'
-                        )}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onTaskEdit?.(task);
-                        }}
-                        title={`${task.title}${!task.start_time ? ' (Needs scheduling)' : ''}`}
-                      >
-                        {!task.start_time && '⏰ '}
-                        {task.title}
-                      </div>
-                    ))}
+                    {dayTasks.slice(0, 3).map(task => {
+                      const isWorkBlock = !!task.start_time;
+                      const isReminder = !task.start_time && task.due_date;
+                      
+                      return (
+                        <div
+                          key={task.id}
+                          className={cn(
+                            "rounded text-xs truncate cursor-pointer",
+                            // Work blocks: solid color with left border
+                            isWorkBlock && "px-1 py-0.5 " + (priorityColors[task.priority] || 'bg-muted'),
+                            // Reminders: distinctive pill style with icon
+                            isReminder && "px-2 py-1 bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-300 flex items-center gap-1.5 shadow-sm"
+                          )}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onTaskEdit?.(task);
+                          }}
+                          title={isReminder ? `Due: ${task.title} (Click to schedule work time)` : task.title}
+                        >
+                          {isReminder && (
+                            <div className="flex-shrink-0 w-4 h-4 rounded-full bg-amber-400 flex items-center justify-center">
+                              <AlertTriangle className="h-2.5 w-2.5 text-white" />
+                            </div>
+                          )}
+                          <span className={cn(
+                            "truncate",
+                            isReminder && "font-medium text-amber-900"
+                          )}>
+                            {isReminder && "DUE: "}
+                            {task.title}
+                          </span>
+                        </div>
+                      );
+                    })}
                     {dayTasks.length > 3 && (
                       <p className="text-xs text-muted-foreground">
                         +{dayTasks.length - 3} more

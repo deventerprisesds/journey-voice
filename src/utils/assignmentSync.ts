@@ -110,11 +110,30 @@ export async function createTasksFromAssignments(
 
       // Then schedule it using the smart calendar scheduler
       try {
+        // Calculate target schedule date: 1 week before due date (or ASAP if due date is close)
+        let targetScheduleDate = new Date();
+        if (assignment.due_date) {
+          const dueDate = new Date(assignment.due_date);
+          const oneWeekBefore = new Date(dueDate.getTime() - 7 * 24 * 60 * 60 * 1000);
+          
+          // If due date is less than 7 days away, schedule ASAP
+          // Otherwise schedule 7 days before
+          targetScheduleDate = oneWeekBefore < new Date() 
+            ? new Date() 
+            : oneWeekBefore;
+        }
+
         const taskToSchedule = {
           ...insertedTask,
           board_id: insertedTask.board_id!,
           user_id: insertedTask.user_id!,
-          scheduling_context: taskData.scheduling_context,
+          scheduling_context: [
+            ...taskData.scheduling_context,
+            `target_schedule_date:${targetScheduleDate.toISOString()}`,
+            `buffer_days:7`,
+            `is_assignment:true`,
+            `assignment_due:${assignment.due_date}`
+          ],
           id: insertedTask.id
         };
         
@@ -222,11 +241,30 @@ export async function createTasksFromMitAssignments(
 
       // Then schedule it using the smart calendar scheduler
       try {
+        // Calculate target schedule date: 1 week before due date (or ASAP if due date is close)
+        let targetScheduleDate = new Date();
+        if (assignment.due_date) {
+          const dueDate = new Date(assignment.due_date);
+          const oneWeekBefore = new Date(dueDate.getTime() - 7 * 24 * 60 * 60 * 1000);
+          
+          // If due date is less than 7 days away, schedule ASAP
+          // Otherwise schedule 7 days before
+          targetScheduleDate = oneWeekBefore < new Date() 
+            ? new Date() 
+            : oneWeekBefore;
+        }
+
         const taskToSchedule = {
           ...insertedTask,
           board_id: insertedTask.board_id!,
           user_id: insertedTask.user_id!,
-          scheduling_context: taskData.scheduling_context,
+          scheduling_context: [
+            ...taskData.scheduling_context,
+            `target_schedule_date:${targetScheduleDate.toISOString()}`,
+            `buffer_days:7`,
+            `is_assignment:true`,
+            `assignment_due:${assignment.due_date}`
+          ],
           id: insertedTask.id
         };
         
