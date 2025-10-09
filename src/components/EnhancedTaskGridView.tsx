@@ -26,7 +26,10 @@ import {
   FolderOpen,
   FolderClosed,
   Trash2,
-  CheckCircle2
+  CheckCircle2,
+  ExternalLink,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { Checkbox } from '@/components/ui/checkbox';
 import { format } from 'date-fns';
@@ -89,6 +92,10 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
   const [optimisticTasks, setOptimisticTasks] = useState<Task[]>([]);
   const [isSelectMode, setIsSelectMode] = useState(false);
   const [selectedTasks, setSelectedTasks] = useState<Set<string>>(new Set());
+  const [showCompletedTasks, setShowCompletedTasks] = useState(() => {
+    const stored = localStorage.getItem('grid-show-completed');
+    return stored ? JSON.parse(stored) : true;
+  });
 
   // Calculate progress percentage based on status
   const getProgressPercentage = (status: string): number => {
@@ -123,11 +130,23 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
   // Use optimistic tasks if available, otherwise use the provided tasks
   const currentTasks = optimisticTasks.length > 0 ? optimisticTasks : tasks;
 
+  // Toggle show/hide completed tasks
+  const toggleShowCompletedTasks = () => {
+    const newValue = !showCompletedTasks;
+    setShowCompletedTasks(newValue);
+    localStorage.setItem('grid-show-completed', JSON.stringify(newValue));
+  };
+
   // Group tasks by the selected groupBy field
   const groupedTasks = useMemo(() => {
+    // Filter out completed tasks if toggle is off
+    const filteredByCompletion = showCompletedTasks 
+      ? currentTasks 
+      : currentTasks.filter(task => task.status !== 'DONE');
+    
     const groups: { [key: string]: Task[] } = {};
     
-    currentTasks.forEach(task => {
+    filteredByCompletion.forEach(task => {
       let groupKey = '';
       switch (groupBy) {
         case 'category':
@@ -184,7 +203,7 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
     });
 
     return groups;
-  }, [currentTasks, groupBy, sortBy, sortOrder]);
+  }, [currentTasks, groupBy, sortBy, sortOrder, showCompletedTasks]);
 
   const handleSort = (column: string) => {
     if (sortBy === column) {
@@ -471,6 +490,40 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
     }
   };
 
+  const handleDeleteTask = async (taskId: string) => {
+    try {
+      if (isDemoMode) {
+        const demoTasks = localStorage.getItem('kanban-demo-tasks');
+        if (demoTasks) {
+          const tasks = JSON.parse(demoTasks);
+          const updatedTasks = tasks.filter((task: Task) => task.id !== taskId);
+          localStorage.setItem('kanban-demo-tasks', JSON.stringify(updatedTasks));
+        }
+      } else {
+        const { error } = await supabase
+          .from('tasks')
+          .delete()
+          .eq('id', taskId)
+          .eq('user_id', user?.id);
+
+        if (error) throw error;
+      }
+
+      onTaskUpdate?.();
+      toast({
+        title: "Task deleted",
+        description: "Task successfully removed",
+      });
+    } catch (error) {
+      console.error('Error deleting task:', error);
+      toast({
+        title: "Error",
+        description: "Failed to delete task",
+        variant: "destructive",
+      });
+    }
+  };
+
   const handleBulkDelete = async () => {
     if (selectedTasks.size === 0) return;
 
@@ -572,6 +625,18 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
           >
             <CheckCircle2 className="h-4 w-4 mr-2" />
             {isSelectMode ? 'Cancel' : 'Select'}
+          </Button>
+          <Button
+            variant={showCompletedTasks ? "default" : "outline"}
+            size="sm"
+            onClick={toggleShowCompletedTasks}
+            title={showCompletedTasks ? "Hide completed tasks" : "Show completed tasks"}
+          >
+            {showCompletedTasks ? (
+              <><Eye className="h-4 w-4 mr-2" />Hide Completed</>
+            ) : (
+              <><EyeOff className="h-4 w-4 mr-2" />Show Completed</>
+            )}
           </Button>
           <Badge variant="outline" className="px-3 py-1">
             {tasks.length} Total Tasks
@@ -745,7 +810,7 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
                               <span className="ml-1">{sortOrder === 'asc' ? '↑' : '↓'}</span>
                             )}
                           </TableHead>
-                          <TableHead className="w-16">Actions</TableHead>
+                          <TableHead className="w-24">Actions</TableHead>
                         </TableRow>
                        </TableHeader>
                        <TableBody>
@@ -843,8 +908,22 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
                                   </Button>
                                 </TableCell>
                                 <TableCell>
-                                  <div className="font-medium">
-                                    {renderEditableCell(task, 'title', task.title)}
+                                  <div className="space-y-1">
+                                    <div className="font-medium">
+                                      {renderEditableCell(task, 'title', task.title)}
+                                    </div>
+                                    {task.assignment_url && (
+                                      <a
+                                        href={task.assignment_url}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        onClick={(e) => e.stopPropagation()}
+                                        className="text-xs text-blue-600 hover:underline flex items-center gap-1"
+                                      >
+                                        <ExternalLink className="h-3 w-3" />
+                                        Assignment
+                                      </a>
+                                    )}
                                   </div>
                                 </TableCell>
                                 <TableCell>
@@ -911,14 +990,26 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
                                   </div>
                                 </TableCell>
                                 <TableCell>
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={() => onTaskEdit?.(task)}
-                                    className="h-8 w-8 p-0"
-                                  >
-                                    <Edit3 className="h-3 w-3" />
-                                  </Button>
+                                  <div className="flex items-center gap-1">
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => onTaskEdit?.(task)}
+                                      className="h-8 w-8 p-0"
+                                      title="Edit task"
+                                    >
+                                      <Edit3 className="h-3 w-3" />
+                                    </Button>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => handleDeleteTask(task.id)}
+                                      className="h-8 w-8 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
+                                      title="Delete task"
+                                    >
+                                      <Trash2 className="h-3 w-3" />
+                                    </Button>
+                                  </div>
                                 </TableCell>
                               </TableRow>
                               

@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Label } from '@/components/ui/label';
-import { CalendarIcon, X, Plus, Clock, AlertTriangle, Timer, GitBranch, ListTodo } from 'lucide-react';
+import { CalendarIcon, X, Plus, Clock, AlertTriangle, Timer, GitBranch, ListTodo, ExternalLink } from 'lucide-react';
 import DependencyTree from './DependencyTree';
 import TimeTracker from './TimeTracker';
 import { ChecklistManager } from './ChecklistManager';
@@ -464,6 +464,22 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
               rows={3}
             />
           </div>
+
+          {/* Assignment Link */}
+          {task.assignment_url && (
+            <div className="space-y-2">
+              <Label>Assignment Link</Label>
+              <a
+                href={task.assignment_url}
+                target="_blank"
+                rel="noreferrer"
+                className="text-sm text-blue-600 hover:text-blue-800 hover:underline flex items-center gap-2"
+              >
+                <ExternalLink className="h-4 w-4" />
+                {task.assignment_url}
+              </a>
+            </div>
+          )}
 
           {/* Status, Priority, Category Row */}
           <div className="grid grid-cols-3 gap-4">

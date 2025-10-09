@@ -680,6 +680,9 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
       });
     } finally {
       setIsCreating(false);
+      // Clear assignment selection to stop the loading label
+      setSelectedAssignmentIds(new Set());
+      setIncludeSelectedAssignments(false);
     }
   };
 

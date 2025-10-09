@@ -30,6 +30,8 @@ export interface Task {
   reminder_minutes?: number;
   checklist_items?: ChecklistItem[];
   scheduling_context?: any;
+  assignment_url?: string;
+  assignment_id?: string;
 }
 
 export interface CalendarConnection {

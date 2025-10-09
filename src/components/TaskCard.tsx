@@ -21,7 +21,8 @@ import {
   CalendarPlus,
   Trash2,
   ChevronDown,
-  ListTodo
+  ListTodo,
+  ExternalLink
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { Task, ChecklistItem } from '@/types/task';
@@ -283,9 +284,23 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onStatusChange, onEdit, onSch
             >
               <StatusIcon className="h-3 w-3" />
             </Button>
-            <h3 className={`font-medium text-sm leading-tight truncate flex-1 ${task.status === 'DONE' ? 'line-through text-muted-foreground' : ''}`}>
-              {task.title}
-            </h3>
+            <div className="flex-1 min-w-0">
+              <h3 className={`font-medium text-sm leading-tight truncate ${task.status === 'DONE' ? 'line-through text-muted-foreground' : ''}`}>
+                {task.title}
+              </h3>
+              {task.assignment_url && (
+                <a
+                  href={task.assignment_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  className="text-xs text-blue-600 hover:text-blue-800 hover:underline flex items-center gap-1 mt-0.5"
+                >
+                  <ExternalLink className="h-3 w-3" />
+                  View Assignment
+                </a>
+              )}
+            </div>
           </div>
           <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
             {onSchedule && (
