@@ -10,6 +10,7 @@ import { useToast } from '@/hooks/use-toast';
 import { Task } from '@/types/task';
 import EditableTaskSuggestion from './EditableTaskSuggestion';
 import { fetchPendingAssignments } from '@/utils/assignmentFetching';
+import { useAssignmentSelection } from '@/contexts/AssignmentSelectionContext';
 
 interface SmartTaskInputProps {
   tasks: Task[];
@@ -37,23 +38,8 @@ const SmartTaskInput: React.FC<SmartTaskInputProps> = ({
   const [lastSuggestion, setLastSuggestion] = useState<any>(null);
   const [busySlots, setBusySlots] = useState<Array<{start: string; end: string; title: string; type: string}>>([]);
   const [includeAssignments, setIncludeAssignments] = useState(false);
-  const [assignmentCount, setAssignmentCount] = useState(0);
   const { toast } = useToast();
-
-  useEffect(() => {
-    if (includeAssignments) {
-      const loadAssignmentCount = async () => {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (user) {
-          const assignments = await fetchPendingAssignments(user.id);
-          setAssignmentCount(assignments.length);
-        }
-      };
-      loadAssignmentCount();
-    } else {
-      setAssignmentCount(0);
-    }
-  }, [includeAssignments]);
+  const { selectedAssignmentIds } = useAssignmentSelection();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -66,11 +52,15 @@ const SmartTaskInput: React.FC<SmartTaskInputProps> = ({
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('User not authenticated');
 
-      // Fetch assignments if toggle is enabled
+      // Fetch selected assignments if toggle is enabled
       let allTasks = tasks || [];
-      if (includeAssignments) {
+      if (includeAssignments && selectedAssignmentIds.size > 0) {
         const assignments = await fetchPendingAssignments(user.id);
-        allTasks = [...allTasks, ...assignments];
+        // Filter to only selected assignments
+        const selectedAssignments = assignments.filter(a => 
+          selectedAssignmentIds.has(a.id)
+        );
+        allTasks = [...allTasks, ...selectedAssignments];
       }
 
       const suggestion = await itineraryEngine.findOptimalTimeSlot(
@@ -194,22 +184,17 @@ const SmartTaskInput: React.FC<SmartTaskInputProps> = ({
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
-        <div className="flex items-center gap-2">
-          <Switch 
-            checked={includeAssignments} 
-            onCheckedChange={setIncludeAssignments}
-            id="include-assignments"
-          />
-          <Label htmlFor="include-assignments" className="cursor-pointer">
-            Include Pending Assignments
-          </Label>
+          <div className="flex items-center gap-2">
+            <Switch 
+              checked={includeAssignments} 
+              onCheckedChange={setIncludeAssignments}
+              id="include-assignments"
+            />
+            <Label htmlFor="include-assignments" className="cursor-pointer">
+              Include Selected Assignments ({selectedAssignmentIds.size})
+            </Label>
+          </div>
         </div>
-        {includeAssignments && assignmentCount > 0 && (
-          <span className="text-sm text-muted-foreground">
-            {assignmentCount} assignment{assignmentCount !== 1 ? 's' : ''} will be included
-          </span>
-        )}
-      </div>
       
       <form onSubmit={handleSubmit} className="flex gap-2">
         <Input

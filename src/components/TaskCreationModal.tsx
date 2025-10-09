@@ -30,6 +30,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { Task } from '@/types/task';
 import { fromHHMMToISO } from '@/lib/date';
 import { extractSchedulingContext } from '@/services/schedulingService';
+import { useAssignmentSelection } from '@/contexts/AssignmentSelectionContext';
 
 interface ParsedTask {
   title: string;
@@ -73,10 +74,10 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
 }) => {
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState<'ai' | 'manual' | 'assignments'>('ai');
+  const { selectedAssignmentIds, setSelectedAssignmentIds, clearSelection } = useAssignmentSelection();
   
   // Assignments Tab State
   const [assignments, setAssignments] = useState<Assignment[]>([]);
-  const [selectedAssignments, setSelectedAssignments] = useState<Set<string>>(new Set());
   const [isLoadingAssignments, setIsLoadingAssignments] = useState(false);
   
   // AI Mode State with sessionStorage persistence for mobile
@@ -287,8 +288,8 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
   };
 
   const toggleAssignment = (id: string) => {
-    setSelectedAssignments(prev => {
-      const next = new Set(prev);
+    setSelectedAssignmentIds(prev => {
+      const next = new Set<string>(prev);
       if (next.has(id)) {
         next.delete(id);
       } else {
@@ -299,15 +300,15 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
   };
 
   const toggleSelectAll = () => {
-    if (selectedAssignments.size === assignments.length) {
-      setSelectedAssignments(new Set());
+    if (selectedAssignmentIds.size === assignments.length) {
+      setSelectedAssignmentIds(new Set<string>());
     } else {
-      setSelectedAssignments(new Set(assignments.map(a => a.id)));
+      setSelectedAssignmentIds(new Set<string>(assignments.map(a => a.id)));
     }
   };
 
   const handleCreateFromAssignments = async () => {
-    if (selectedAssignments.size === 0) {
+    if (selectedAssignmentIds.size === 0) {
       toast({
         title: "No Assignments Selected",
         description: "Please select at least one assignment",
@@ -318,13 +319,13 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
 
     setIsCreating(true);
     try {
-      const selectedIds = Array.from(selectedAssignments);
+      const selectedIds = Array.from(selectedAssignmentIds);
       
       // Separate EMBA and MIT assignments
-      const embaIds = selectedIds.filter(id => 
+      const embaIds = selectedIds.filter((id: string) => 
         assignments.find(a => a.id === id)?.source === 'emba'
       );
-      const mitIds = selectedIds.filter(id => 
+      const mitIds = selectedIds.filter((id: string) => 
         assignments.find(a => a.id === id)?.source === 'mit'
       );
 
@@ -333,23 +334,14 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
 
       // Convert EMBA assignments
       if (embaIds.length > 0) {
-        await createTasksFromAssignments(embaIds, userId);
+        await createTasksFromAssignments(embaIds as string[], userId);
       }
 
       // Convert MIT assignments
       if (mitIds.length > 0) {
-        await createTasksFromMitAssignments(mitIds, userId);
+        await createTasksFromMitAssignments(mitIds as string[], userId);
       }
 
-      toast({
-        title: "Tasks Created",
-        description: `Successfully created ${selectedIds.length} task${selectedIds.length > 1 ? 's' : ''} from assignments`
-      });
-
-      // Reload assignments and clear selection
-      setSelectedAssignments(new Set());
-      await loadAvailableAssignments();
-      
       // Fetch newly created tasks to pass to parent
       const { data: newTasks } = await supabase
         .from('tasks')
@@ -358,16 +350,30 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
         .order('created_at', { ascending: false })
         .limit(selectedIds.length);
 
-      if (newTasks) {
+      if (newTasks && newTasks.length > 0) {
+        toast({
+          title: "Tasks Created",
+          description: `Successfully created ${newTasks.length} task${newTasks.length > 1 ? 's' : ''} from assignments`
+        });
         onTasksCreated(newTasks);
+      } else {
+        toast({
+          title: "Warning",
+          description: "Tasks may have been created but couldn't be fetched. Please refresh the page.",
+          variant: "default"
+        });
       }
 
+      // Reload assignments and clear selection
+      clearSelection();
+      await loadAvailableAssignments();
+
       handleClose();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error creating tasks from assignments:', error);
       toast({
         title: "Creation Error",
-        description: "Failed to create tasks from assignments",
+        description: error?.message || "Failed to create tasks from assignments. Please check priorities are set correctly.",
         variant: "destructive"
       });
     } finally {
@@ -1251,7 +1257,7 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                     Select assignments to convert into tasks
                   </p>
                   <Badge variant="secondary">
-                    {selectedAssignments.size} selected
+                    {selectedAssignmentIds.size} selected
                   </Badge>
                 </div>
 
@@ -1262,16 +1268,16 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                 >
                   <div className={cn(
                     "h-5 w-5 rounded border-2 flex items-center justify-center shrink-0",
-                    selectedAssignments.size === assignments.length
+                    selectedAssignmentIds.size === assignments.length
                       ? "border-primary bg-primary"
-                      : selectedAssignments.size > 0
+                      : selectedAssignmentIds.size > 0
                       ? "border-primary bg-primary/20"
                       : "border-muted-foreground"
                   )}>
-                    {selectedAssignments.size === assignments.length && (
+                    {selectedAssignmentIds.size === assignments.length && (
                       <Check className="h-3 w-3 text-primary-foreground" />
                     )}
-                    {selectedAssignments.size > 0 && selectedAssignments.size < assignments.length && (
+                    {selectedAssignmentIds.size > 0 && selectedAssignmentIds.size < assignments.length && (
                       <div className="h-2 w-2 bg-primary rounded-sm" />
                     )}
                   </div>
@@ -1284,7 +1290,7 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                       key={assignment.id}
                       className={cn(
                         "border rounded-lg p-4 cursor-pointer transition-colors",
-                        selectedAssignments.has(assignment.id)
+                        selectedAssignmentIds.has(assignment.id)
                           ? "border-primary bg-primary/5"
                           : "hover:bg-muted/50"
                       )}
@@ -1293,11 +1299,11 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                       <div className="flex items-start gap-3">
                         <div className={cn(
                           "mt-1 h-5 w-5 rounded border-2 flex items-center justify-center shrink-0",
-                          selectedAssignments.has(assignment.id)
+                          selectedAssignmentIds.has(assignment.id)
                             ? "border-primary bg-primary"
                             : "border-muted-foreground"
                         )}>
-                          {selectedAssignments.has(assignment.id) && (
+                          {selectedAssignmentIds.has(assignment.id) && (
                             <Check className="h-3 w-3 text-primary-foreground" />
                           )}
                         </div>
@@ -1351,7 +1357,7 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                   </Button>
                   <Button 
                     onClick={handleCreateFromAssignments} 
-                    disabled={isCreating || selectedAssignments.size === 0}
+                    disabled={isCreating || selectedAssignmentIds.size === 0}
                   >
                     {isCreating ? (
                       <>
@@ -1361,7 +1367,7 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                     ) : (
                       <>
                         <Check className="h-4 w-4 mr-2" />
-                        Create {selectedAssignments.size} Task{selectedAssignments.size !== 1 ? 's' : ''}
+                        Create {selectedAssignmentIds.size} Task{selectedAssignmentIds.size !== 1 ? 's' : ''}
                       </>
                     )}
                   </Button>

@@ -10,6 +10,7 @@ import { ArrowLeft, Home } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { toast } from 'sonner';
 import { useOAuthCallback } from '@/hooks/useOAuthCallback';
+import { AssignmentSelectionProvider } from '@/contexts/AssignmentSelectionContext';
 
 const Calendar: React.FC = () => {
   const { user, isDemoMode } = useAuth();
@@ -155,73 +156,75 @@ const Calendar: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-background">
-      {/* Fixed Navigation Header */}
-      <div className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="container mx-auto p-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
+    <AssignmentSelectionProvider>
+      <div className="min-h-screen bg-background">
+        {/* Fixed Navigation Header */}
+        <div className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+          <div className="container mx-auto p-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                <Button
+                  variant="default"
+                  size="sm"
+                  onClick={handleNavigation}
+                  className="flex items-center gap-2 bg-primary text-primary-foreground hover:bg-primary/90"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  Back to Dashboard
+                </Button>
+                <div>
+                  <h1 className="text-2xl font-bold">Calendar</h1>
+                  <p className="text-sm text-muted-foreground">
+                    View and manage your tasks in calendar format
+                  </p>
+                </div>
+              </div>
               <Button
-                variant="default"
+                variant="secondary"
                 size="sm"
                 onClick={handleNavigation}
-                className="flex items-center gap-2 bg-primary text-primary-foreground hover:bg-primary/90"
+                className="flex items-center gap-2"
               >
-                <ArrowLeft className="h-4 w-4" />
-                Back to Dashboard
+                <Home className="h-4 w-4" />
+                Dashboard
               </Button>
-              <div>
-                <h1 className="text-2xl font-bold">Calendar</h1>
-                <p className="text-sm text-muted-foreground">
-                  View and manage your tasks in calendar format
-                </p>
-              </div>
             </div>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={handleNavigation}
-              className="flex items-center gap-2"
-            >
-              <Home className="h-4 w-4" />
-              Dashboard
-            </Button>
           </div>
         </div>
+
+        {/* Main Content */}
+        <div className="container mx-auto p-6 space-y-6">
+
+            <CalendarModule
+              tasks={tasks}
+              onTaskEdit={handleTaskEdit}
+              onCreateTask={handleCreateTask}
+              onTaskScheduled={loadTasks}
+            />
+
+        {/* Task Detail Modal */}
+        <TaskDetailModal
+          task={selectedTask}
+          isOpen={!!selectedTask}
+          onClose={() => setSelectedTask(null)}
+          onSave={handleTaskUpdate}
+          allTasks={tasks}
+        />
+
+        {/* Task Creation Modal */}
+        <TaskCreationModal
+          isOpen={isCreateModalOpen}
+          onClose={() => {
+            setIsCreateModalOpen(false);
+            setSelectedDate(null);
+          }}
+          onTasksCreated={() => handleTaskCreate()}
+          boardId={defaultBoardId}
+          userId={user?.id || ""}
+        />
+        </div>
       </div>
-
-      {/* Main Content */}
-      <div className="container mx-auto p-6 space-y-6">
-
-          <CalendarModule
-            tasks={tasks}
-            onTaskEdit={handleTaskEdit}
-            onCreateTask={handleCreateTask}
-            onTaskScheduled={loadTasks}
-          />
-
-      {/* Task Detail Modal */}
-      <TaskDetailModal
-        task={selectedTask}
-        isOpen={!!selectedTask}
-        onClose={() => setSelectedTask(null)}
-        onSave={handleTaskUpdate}
-        allTasks={tasks}
-      />
-
-      {/* Task Creation Modal */}
-      <TaskCreationModal
-        isOpen={isCreateModalOpen}
-        onClose={() => {
-          setIsCreateModalOpen(false);
-          setSelectedDate(null);
-        }}
-        onTasksCreated={() => handleTaskCreate()}
-        boardId={defaultBoardId}
-        userId={user?.id || ""}
-      />
-      </div>
-    </div>
+    </AssignmentSelectionProvider>
   );
 };
 

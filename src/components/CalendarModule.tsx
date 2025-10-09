@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, eachDayOfInterval, addDays, isSameDay, isSameMonth, isToday, startOfDay, endOfDay, parseISO } from 'date-fns';
-import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Clock, Plus, Brain, RefreshCw } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Clock, Plus, Brain, RefreshCw, Sparkles } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -104,6 +104,140 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
       await loadCalendarData();
     } catch (error) {
       toast.error('Failed to sync calendars');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleReOrganize = async () => {
+    setIsLoading(true);
+    try {
+      const now = new Date();
+      
+      // Find incomplete scheduled tasks that are in the past or need reorganization
+      const tasksToReorganize = tasks.filter(task => {
+        if (task.status === 'DONE' || task.completed_at) return false;
+        if (!task.start_time) return false;
+        
+        const taskStart = new Date(task.start_time);
+        return taskStart < now; // Past scheduled tasks that weren't completed
+      });
+
+      if (tasksToReorganize.length === 0) {
+        toast.success('All scheduled tasks are up to date!');
+        setIsLoading(false);
+        return;
+      }
+
+      toast.info(`Re-organizing ${tasksToReorganize.length} task${tasksToReorganize.length > 1 ? 's' : ''}...`);
+
+      // Call scheduler with reschedule action for each task
+      for (const task of tasksToReorganize) {
+        try {
+          const { data, error } = await supabase.functions.invoke('smart-calendar-scheduler', {
+            body: {
+              task: {
+                ...task,
+                start_time: null, // Clear old time to force rescheduling
+                end_time: null,
+                is_scheduled: false
+              },
+              action: 'reschedule',
+              startFromNow: true
+            }
+          });
+
+          if (error) throw error;
+
+          if (data?.scheduledTask) {
+            // Update task in database
+            await supabase
+              .from('tasks')
+              .update({
+                start_time: data.scheduledTask.start_time,
+                end_time: data.scheduledTask.end_time,
+                is_scheduled: true
+              })
+              .eq('id', task.id);
+          }
+        } catch (err) {
+          console.error(`Failed to reschedule task ${task.id}:`, err);
+        }
+      }
+
+      await loadCalendarData();
+      toast.success(`Successfully re-organized ${tasksToReorganize.length} task${tasksToReorganize.length > 1 ? 's' : ''}!`);
+    } catch (error) {
+      console.error('Re-organize error:', error);
+      toast.error('Failed to re-organize tasks');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleFillGaps = async () => {
+    setIsLoading(true);
+    try {
+      // Find unscheduled tasks
+      const unscheduledTasks = tasks.filter(task => 
+        !task.is_scheduled && 
+        !task.start_time && 
+        task.status !== 'DONE' && 
+        !task.completed_at
+      );
+
+      if (unscheduledTasks.length === 0) {
+        toast.success('No unscheduled tasks to fill gaps with!');
+        setIsLoading(false);
+        return;
+      }
+
+      toast.info(`Filling gaps with ${unscheduledTasks.length} unscheduled task${unscheduledTasks.length > 1 ? 's' : ''}...`);
+
+      let filledCount = 0;
+
+      // Call scheduler with fill_gaps action for each unscheduled task
+      for (const task of unscheduledTasks) {
+        try {
+          const { data, error } = await supabase.functions.invoke('smart-calendar-scheduler', {
+            body: {
+              task,
+              action: 'fill_gaps',
+              startFromNow: true,
+              useScoring: true
+            }
+          });
+
+          if (error) throw error;
+
+          if (data?.scheduledTask) {
+            // Update task in database
+            await supabase
+              .from('tasks')
+              .update({
+                start_time: data.scheduledTask.start_time,
+                end_time: data.scheduledTask.end_time,
+                is_scheduled: true
+              })
+              .eq('id', task.id);
+            
+            filledCount++;
+          }
+        } catch (err) {
+          console.error(`Failed to fill gap for task ${task.id}:`, err);
+        }
+      }
+
+      await loadCalendarData();
+      
+      if (filledCount > 0) {
+        toast.success(`Filled gaps with ${filledCount} task${filledCount > 1 ? 's' : ''}!`);
+      } else {
+        toast.info('No suitable gaps found for scheduling tasks');
+      }
+    } catch (error) {
+      console.error('Fill gaps error:', error);
+      toast.error('Failed to fill gaps');
     } finally {
       setIsLoading(false);
     }
@@ -420,6 +554,28 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
             >
               <RefreshCw className={cn("h-4 w-4 mr-1", isLoading && "animate-spin")} />
               Sync
+            </Button>
+
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleReOrganize}
+              disabled={isLoading}
+              title="Re-schedule incomplete tasks starting from now"
+            >
+              <CalendarIcon className="h-4 w-4 mr-1" />
+              Re-Organize
+            </Button>
+
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleFillGaps}
+              disabled={isLoading}
+              title="Fill empty time slots with unscheduled tasks"
+            >
+              <Sparkles className="h-4 w-4 mr-1" />
+              Fill
             </Button>
             
             <Button

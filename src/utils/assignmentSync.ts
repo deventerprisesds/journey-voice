@@ -1,6 +1,25 @@
 import { supabase } from "@/integrations/supabase/client";
 import { scheduleNewTask } from "@/utils/taskScheduling";
 
+// Helper to map assignment priority to task priority enum
+function mapPriority(priority: string | null | undefined): 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT' {
+  if (!priority) return 'MEDIUM';
+  const upper = priority.toUpperCase();
+  if (upper === 'LOW' || upper === 'MEDIUM' || upper === 'HIGH' || upper === 'URGENT') {
+    return upper as 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
+  }
+  return 'MEDIUM';
+}
+
+// Helper to map category to appropriate board lane status
+function statusForCategory(category: string): 'BACKLOG' | 'TODO' | 'LIFE' | 'CAREER' | 'PROF_EDUCATION' | 'VENTURES' {
+  if (category === 'EDUCATION') return 'PROF_EDUCATION';
+  if (category === 'CAREER') return 'CAREER';
+  if (category === 'VENTURES') return 'VENTURES';
+  if (category === 'LIFE') return 'LIFE';
+  return 'BACKLOG';
+}
+
 /**
  * Converts assignments from Google Sheets sync into scheduled tasks
  * Prevents duplicates by checking if tasks already exist for each assignment
@@ -45,7 +64,7 @@ export async function createTasksFromAssignments(
         .from('tasks')
         .select('id')
         .eq('user_id', userId)
-        .filter('scheduling_context', 'cs', `{"assignment_id":"${assignment.id}"}`)
+        .contains('scheduling_context', { assignment_id: assignment.id })
         .maybeSingle();
 
       if (existingTask) {
@@ -53,23 +72,23 @@ export async function createTasksFromAssignments(
         continue;
       }
 
-      // Create new task from assignment
+      // Create new task from assignment with proper enums
       const taskData: any = {
         title: assignment.title,
         description: assignment.description || '',
         category: 'EDUCATION' as const,
-        priority: (assignment.priority || 'MEDIUM') as any,
+        priority: mapPriority(assignment.priority),
         due_date: assignment.due_date,
         board_id: defaultBoard.id,
         user_id: userId,
-        status: 'TODO' as any,
-        scheduling_context: [
-          `source:imported_assignment`,
-          `assignment_id:${assignment.id}`,
-          ...(assignment.course_id ? [`course_id:${assignment.course_id}`] : []),
-          ...(assignment.sheet_row_number ? [`sheet_row:${assignment.sheet_row_number}`] : []),
-          ...(assignment.points ? [`points:${assignment.points}`] : [])
-        ]
+        status: statusForCategory('EDUCATION'),
+        scheduling_context: {
+          source: 'imported_assignment',
+          assignment_id: assignment.id,
+          ...(assignment.course_id && { course_id: assignment.course_id }),
+          ...(assignment.sheet_row_number && { sheet_row: assignment.sheet_row_number }),
+          ...(assignment.points && { points: assignment.points })
+        }
       };
 
       // First insert the task
@@ -82,7 +101,11 @@ export async function createTasksFromAssignments(
 
       if (insertError) {
         console.error(`Failed to create task for assignment ${assignment.id}:`, insertError);
-        continue;
+        throw new Error(`Failed to create task for assignment ${assignment.title}: ${insertError.message}`);
+      }
+
+      if (!insertedTask) {
+        throw new Error(`No task was created for assignment ${assignment.title}`);
       }
 
       // Then schedule it using the smart calendar scheduler
@@ -153,7 +176,7 @@ export async function createTasksFromMitAssignments(
         .from('tasks')
         .select('id')
         .eq('user_id', userId)
-        .filter('scheduling_context', 'cs', `{"mit_assignment_id":"${assignment.id}"}`)
+        .contains('scheduling_context', { mit_assignment_id: assignment.id })
         .maybeSingle();
 
       if (existingTask) {
@@ -161,23 +184,23 @@ export async function createTasksFromMitAssignments(
         continue;
       }
 
-      // Create new task from MIT assignment
+      // Create new task from MIT assignment with proper enums
       const taskData: any = {
         title: assignment.title,
         description: assignment.description || '',
         category: 'EDUCATION' as const,
-        priority: (assignment.priority || 'MEDIUM') as any,
+        priority: mapPriority(assignment.priority),
         due_date: assignment.due_date,
         board_id: defaultBoard.id,
         user_id: userId,
-        status: 'TODO' as any,
-        scheduling_context: [
-          `source:imported_mit_assignment`,
-          `mit_assignment_id:${assignment.id}`,
-          ...(assignment.course_id ? [`course_id:${assignment.course_id}`] : []),
-          ...(assignment.sheet_row_number ? [`sheet_row:${assignment.sheet_row_number}`] : []),
-          ...(assignment.points ? [`points:${assignment.points}`] : [])
-        ]
+        status: statusForCategory('EDUCATION'),
+        scheduling_context: {
+          source: 'imported_mit_assignment',
+          mit_assignment_id: assignment.id,
+          ...(assignment.course_id && { course_id: assignment.course_id }),
+          ...(assignment.sheet_row_number && { sheet_row: assignment.sheet_row_number }),
+          ...(assignment.points && { points: assignment.points })
+        }
       };
 
       // First insert the task
@@ -190,7 +213,11 @@ export async function createTasksFromMitAssignments(
 
       if (insertError) {
         console.error(`Failed to create task for MIT assignment ${assignment.id}:`, insertError);
-        continue;
+        throw new Error(`Failed to create task for MIT assignment ${assignment.title}: ${insertError.message}`);
+      }
+
+      if (!insertedTask) {
+        throw new Error(`No task was created for MIT assignment ${assignment.title}`);
       }
 
       // Then schedule it using the smart calendar scheduler
