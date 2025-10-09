@@ -202,6 +202,82 @@ serve(async (req) => {
     
     console.log('🔧 RAW user config:', JSON.stringify(loadedUserConfig, null, 2));
 
+    // Define default config constants
+    const DEFAULT_CONFIG: SchedulingConfig = {
+      timezone: 'America/New_York',
+      timeWindows: {
+        morning: { start: 6, end: 9, days: [1, 2, 3, 4, 5] },
+        business_hours: { start: 9, end: 17, days: [1, 2, 3, 4, 5] },
+        after_work: { start: 17, end: 22, days: [1, 2, 3, 4, 5, 6] },
+        evening: { start: 19, end: 22, days: [0, 1, 2, 3, 4, 5, 6] },
+        flexible: { start: 9, end: 22, days: [0, 1, 2, 3, 4, 5, 6] },
+        weekends: { start: 10, end: 20, days: [0, 6] },
+      },
+      workingHours: {
+        defaultStart: 9,
+        defaultEnd: 17,
+        breakMinutes: 60,
+        maxDailyHours: 7,
+      },
+      workloadBalance: { projectToTaskRatio: 0.6, oneOffTaskRatio: 0.3, bufferRatio: 0.1 },
+      categoryMappings: {
+        CAREER: { defaultTimeWindow: 'business_hours', defaultStatus: 'CAREER', estimatedDuration: 120 },
+        PROF_EDUCATION: { defaultTimeWindow: 'after_work', defaultStatus: 'PROF_EDUCATION', estimatedDuration: 90 },
+        EDUCATION: { defaultTimeWindow: 'after_work', defaultStatus: 'PROF_EDUCATION', estimatedDuration: 90 },
+        VENTURES: { defaultTimeWindow: 'after_work', defaultStatus: 'VENTURES', estimatedDuration: 120 },
+        LIFE: { defaultTimeWindow: 'flexible', defaultStatus: 'LIFE', estimatedDuration: 60 },
+      },
+    };
+
+    // Merge user config with defaults - user values take precedence
+    const config: SchedulingConfig = {
+      timezone: loadedUserConfig?.timezone || DEFAULT_CONFIG.timezone,
+      
+      // Deep merge time windows - use custom values if they exist, otherwise defaults
+      timeWindows: loadedUserConfig?.timeWindows 
+        ? {
+            morning: loadedUserConfig.timeWindows.morning || DEFAULT_CONFIG.timeWindows.morning,
+            business_hours: loadedUserConfig.timeWindows.business_hours || DEFAULT_CONFIG.timeWindows.business_hours,
+            after_work: loadedUserConfig.timeWindows.after_work || DEFAULT_CONFIG.timeWindows.after_work,
+            evening: loadedUserConfig.timeWindows.evening || DEFAULT_CONFIG.timeWindows.evening,
+            flexible: loadedUserConfig.timeWindows.flexible || DEFAULT_CONFIG.timeWindows.flexible,
+            weekends: loadedUserConfig.timeWindows.weekends || DEFAULT_CONFIG.timeWindows.weekends,
+          }
+        : DEFAULT_CONFIG.timeWindows,
+      
+      // Deep merge working hours
+      workingHours: loadedUserConfig?.workingHours 
+        ? {
+            defaultStart: loadedUserConfig.workingHours.defaultStart ?? DEFAULT_CONFIG.workingHours.defaultStart,
+            defaultEnd: loadedUserConfig.workingHours.defaultEnd ?? DEFAULT_CONFIG.workingHours.defaultEnd,
+            breakMinutes: loadedUserConfig.workingHours.breakMinutes ?? DEFAULT_CONFIG.workingHours.breakMinutes,
+            maxDailyHours: loadedUserConfig.workingHours.maxDailyHours ?? DEFAULT_CONFIG.workingHours.maxDailyHours,
+          }
+        : DEFAULT_CONFIG.workingHours,
+      
+      // Deep merge workload balance
+      workloadBalance: loadedUserConfig?.workloadBalance
+        ? {
+            projectToTaskRatio: loadedUserConfig.workloadBalance.projectToTaskRatio ?? DEFAULT_CONFIG.workloadBalance.projectToTaskRatio,
+            oneOffTaskRatio: loadedUserConfig.workloadBalance.oneOffTaskRatio ?? DEFAULT_CONFIG.workloadBalance.oneOffTaskRatio,
+            bufferRatio: loadedUserConfig.workloadBalance.bufferRatio ?? DEFAULT_CONFIG.workloadBalance.bufferRatio,
+          }
+        : DEFAULT_CONFIG.workloadBalance,
+      
+      // Deep merge category mappings
+      categoryMappings: loadedUserConfig?.categoryMappings
+        ? {
+            CAREER: loadedUserConfig.categoryMappings.CAREER || DEFAULT_CONFIG.categoryMappings.CAREER,
+            PROF_EDUCATION: loadedUserConfig.categoryMappings.PROF_EDUCATION || DEFAULT_CONFIG.categoryMappings.PROF_EDUCATION,
+            EDUCATION: loadedUserConfig.categoryMappings.EDUCATION || DEFAULT_CONFIG.categoryMappings.EDUCATION,
+            VENTURES: loadedUserConfig.categoryMappings.VENTURES || DEFAULT_CONFIG.categoryMappings.VENTURES,
+            LIFE: loadedUserConfig.categoryMappings.LIFE || DEFAULT_CONFIG.categoryMappings.LIFE,
+          }
+        : DEFAULT_CONFIG.categoryMappings,
+    };
+    
+    console.log('🔧 User config loaded:', loadedUserConfig ? 'YES' : 'NO');
+
     // ===== AI-ENHANCED TIME WINDOW DETECTION =====
     const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
     let aiSuggestion: any = null;
@@ -352,82 +428,6 @@ Return ONLY valid JSON (no markdown):
         console.warn('⚠️ AI enhancement failed, falling back to rules:', aiError);
       }
     }
-
-    // Define default config constants
-    const DEFAULT_CONFIG: SchedulingConfig = {
-      timezone: 'America/New_York',
-      timeWindows: {
-        morning: { start: 6, end: 9, days: [1, 2, 3, 4, 5] },
-        business_hours: { start: 9, end: 17, days: [1, 2, 3, 4, 5] },
-        after_work: { start: 17, end: 22, days: [1, 2, 3, 4, 5, 6] },
-        evening: { start: 19, end: 22, days: [0, 1, 2, 3, 4, 5, 6] },
-        flexible: { start: 9, end: 22, days: [0, 1, 2, 3, 4, 5, 6] },
-        weekends: { start: 10, end: 20, days: [0, 6] },
-      },
-      workingHours: {
-        defaultStart: 9,
-        defaultEnd: 17,
-        breakMinutes: 60,
-        maxDailyHours: 7,
-      },
-      workloadBalance: { projectToTaskRatio: 0.6, oneOffTaskRatio: 0.3, bufferRatio: 0.1 },
-      categoryMappings: {
-        CAREER: { defaultTimeWindow: 'business_hours', defaultStatus: 'CAREER', estimatedDuration: 120 },
-        PROF_EDUCATION: { defaultTimeWindow: 'after_work', defaultStatus: 'PROF_EDUCATION', estimatedDuration: 90 },
-        EDUCATION: { defaultTimeWindow: 'after_work', defaultStatus: 'PROF_EDUCATION', estimatedDuration: 90 },
-        VENTURES: { defaultTimeWindow: 'after_work', defaultStatus: 'VENTURES', estimatedDuration: 120 },
-        LIFE: { defaultTimeWindow: 'flexible', defaultStatus: 'LIFE', estimatedDuration: 60 },
-      },
-    };
-
-    // Merge user config with defaults - user values take precedence
-  const config: SchedulingConfig = {
-    timezone: loadedUserConfig?.timezone || DEFAULT_CONFIG.timezone,
-    
-    // Deep merge time windows - use custom values if they exist, otherwise defaults
-    timeWindows: loadedUserConfig?.timeWindows 
-      ? {
-          morning: loadedUserConfig.timeWindows.morning || DEFAULT_CONFIG.timeWindows.morning,
-          business_hours: loadedUserConfig.timeWindows.business_hours || DEFAULT_CONFIG.timeWindows.business_hours,
-          after_work: loadedUserConfig.timeWindows.after_work || DEFAULT_CONFIG.timeWindows.after_work,
-          evening: loadedUserConfig.timeWindows.evening || DEFAULT_CONFIG.timeWindows.evening,
-          flexible: loadedUserConfig.timeWindows.flexible || DEFAULT_CONFIG.timeWindows.flexible,
-          weekends: loadedUserConfig.timeWindows.weekends || DEFAULT_CONFIG.timeWindows.weekends,
-        }
-      : DEFAULT_CONFIG.timeWindows,
-    
-    // Deep merge working hours
-    workingHours: loadedUserConfig?.workingHours 
-      ? {
-          defaultStart: loadedUserConfig.workingHours.defaultStart ?? DEFAULT_CONFIG.workingHours.defaultStart,
-          defaultEnd: loadedUserConfig.workingHours.defaultEnd ?? DEFAULT_CONFIG.workingHours.defaultEnd,
-          breakMinutes: loadedUserConfig.workingHours.breakMinutes ?? DEFAULT_CONFIG.workingHours.breakMinutes,
-          maxDailyHours: loadedUserConfig.workingHours.maxDailyHours ?? DEFAULT_CONFIG.workingHours.maxDailyHours,
-        }
-      : DEFAULT_CONFIG.workingHours,
-    
-    // Deep merge workload balance
-    workloadBalance: loadedUserConfig?.workloadBalance
-      ? {
-          projectToTaskRatio: loadedUserConfig.workloadBalance.projectToTaskRatio ?? DEFAULT_CONFIG.workloadBalance.projectToTaskRatio,
-          oneOffTaskRatio: loadedUserConfig.workloadBalance.oneOffTaskRatio ?? DEFAULT_CONFIG.workloadBalance.oneOffTaskRatio,
-          bufferRatio: loadedUserConfig.workloadBalance.bufferRatio ?? DEFAULT_CONFIG.workloadBalance.bufferRatio,
-        }
-      : DEFAULT_CONFIG.workloadBalance,
-    
-    // Deep merge category mappings
-    categoryMappings: loadedUserConfig?.categoryMappings
-      ? {
-          CAREER: loadedUserConfig.categoryMappings.CAREER || DEFAULT_CONFIG.categoryMappings.CAREER,
-          PROF_EDUCATION: loadedUserConfig.categoryMappings.PROF_EDUCATION || DEFAULT_CONFIG.categoryMappings.PROF_EDUCATION,
-          EDUCATION: loadedUserConfig.categoryMappings.EDUCATION || DEFAULT_CONFIG.categoryMappings.EDUCATION,
-          VENTURES: loadedUserConfig.categoryMappings.VENTURES || DEFAULT_CONFIG.categoryMappings.VENTURES,
-          LIFE: loadedUserConfig.categoryMappings.LIFE || DEFAULT_CONFIG.categoryMappings.LIFE,
-        }
-      : DEFAULT_CONFIG.categoryMappings,
-  };
-    
-    console.log('🔧 User config loaded:', loadedUserConfig ? 'YES' : 'NO');
     console.log('📋 Time windows being used:', JSON.stringify(config.timeWindows, null, 2));
     console.log('🌍 Timezone:', config.timezone);
     

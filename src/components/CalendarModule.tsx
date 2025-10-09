@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, eachDayOfInterval, addDays, isSameDay, isSameMonth, isToday, startOfDay, endOfDay, parseISO } from 'date-fns';
-import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Clock, Plus, Brain, RefreshCw, Sparkles } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Clock, Plus, Brain, RefreshCw, Sparkles, Eye, EyeOff } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -43,6 +43,17 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [showConnectionModal, setShowConnectionModal] = useState(false);
   const { autoScheduleTask } = useAutoScheduling();
+  
+  const [showCompletedTasks, setShowCompletedTasks] = useState(() => {
+    const stored = localStorage.getItem('calendar-show-completed');
+    return stored ? JSON.parse(stored) : true;
+  });
+
+  const toggleShowCompletedTasks = () => {
+    const newValue = !showCompletedTasks;
+    setShowCompletedTasks(newValue);
+    localStorage.setItem('calendar-show-completed', JSON.stringify(newValue));
+  };
 
   const timeSlots = Array.from({ length: 17 }, (_, i) => i + 6); // 6 AM to 11 PM
 
@@ -133,6 +144,9 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
 
       // Call scheduler with correct parameters for each task
       let successCount = 0;
+      let failedCount = 0;
+      const errors: Array<{ task: string; error: string }> = [];
+
       for (const task of tasksToReorganize) {
         try {
           const { data, error } = await supabase.functions.invoke('smart-calendar-scheduler', {
@@ -161,6 +175,8 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
 
           if (error) {
             console.error(`Failed to schedule task ${task.id}:`, error);
+            failedCount++;
+            errors.push({ task: task.title, error: error.message || 'Unknown error' });
             continue;
           }
 
@@ -178,19 +194,27 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
             successCount++;
           } else {
             console.error(`No valid schedule returned for task ${task.id}`);
+            failedCount++;
+            errors.push({ task: task.title, error: 'No valid schedule returned' });
           }
         } catch (err) {
-          console.error(`Failed to reschedule task ${task.id}:`, err);
+          console.error(`Exception scheduling task ${task.id}:`, err);
+          failedCount++;
+          errors.push({ task: task.title, error: err instanceof Error ? err.message : 'Unknown error' });
         }
       }
 
       await loadCalendarData();
       if (onTaskScheduled) onTaskScheduled();
       
-      if (successCount > 0) {
-        toast.success(`Successfully re-organized ${successCount} task${successCount > 1 ? 's' : ''}!`);
+      if (successCount > 0 && failedCount === 0) {
+        toast.success(`✅ Successfully re-organized ${successCount} task${successCount > 1 ? 's' : ''}!`);
+      } else if (successCount > 0 && failedCount > 0) {
+        toast.warning(`Partially complete: ${successCount} succeeded, ${failedCount} failed. Check console for details.`);
+        console.error('Failed tasks:', errors);
       } else {
-        toast.error('No tasks could be rescheduled. Check availability.');
+        toast.error(`Failed to reschedule ${failedCount} task${failedCount > 1 ? 's' : ''}. Check console for details.`);
+        console.error('All tasks failed:', errors);
       }
     } catch (error) {
       console.error('Re-organize error:', error);
@@ -337,7 +361,7 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
 
   // Get tasks for a specific date
   const getTasksForDate = (date: Date) => {
-    return tasks.filter(task => {
+    const dateTasks = tasks.filter(task => {
       // Include tasks with start_time or due_date on this date
       if (task.start_time) {
         const taskDate = new Date(task.start_time);
@@ -349,6 +373,11 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
       }
       return false;
     });
+    
+    // Filter out completed tasks if toggle is off
+    return showCompletedTasks 
+      ? dateTasks 
+      : dateTasks.filter(task => task.status !== 'DONE' && !task.completed_at);
   };
 
   const getEventsForDate = (date: Date) => {
@@ -359,11 +388,16 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
 
   // Get tasks for date range
   const getTasksForRange = (startDate: Date, endDate: Date) => {
-    return tasks.filter(task => {
+    const rangeTasks = tasks.filter(task => {
       if (!task.due_date) return false;
       const taskDate = new Date(task.due_date);
       return taskDate >= startDate && taskDate <= endDate;
     });
+    
+    // Filter out completed tasks if toggle is off
+    return showCompletedTasks 
+      ? rangeTasks 
+      : rangeTasks.filter(task => task.status !== 'DONE' && !task.completed_at);
   };
 
   const handleTimeSlotClick: TimeSlotClickHandler = (date: Date, hour?: number) => {
@@ -622,6 +656,20 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
             >
               <Sparkles className="h-4 w-4 mr-1" />
               Fill
+            </Button>
+
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={toggleShowCompletedTasks}
+              title={showCompletedTasks ? "Hide completed tasks" : "Show completed tasks"}
+              className="h-9 w-9 p-0"
+            >
+              {showCompletedTasks ? (
+                <Eye className="h-4 w-4" />
+              ) : (
+                <EyeOff className="h-4 w-4" />
+              )}
             </Button>
             
             <Button
