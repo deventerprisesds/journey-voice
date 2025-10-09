@@ -711,10 +711,10 @@ for (let dayOffset = 0; dayOffset < maxSearchDays; dayOffset++) {
     return new Response(
       JSON.stringify({
         success: true,
-        scheduledTask: {
-          start_time: scheduledSlot.start.toISOString(),
-          end_time: scheduledSlot.end.toISOString(),
-          estimate_minutes: estimatedDuration,
+        scheduledSlot: {
+          startTime: scheduledSlot.start.toISOString(),
+          endTime: scheduledSlot.end.toISOString(),
+          estimateMinutes: estimatedDuration,
         },
         suggestedCategory: taskCategory,
         suggestedStatus: suggestedStatus,
