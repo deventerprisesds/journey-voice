@@ -174,13 +174,14 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
           });
 
           if (error) {
-            console.error(`Failed to schedule task ${task.id}:`, error);
+            console.error(`❌ Failed to schedule task "${task.title}":`, error);
             failedCount++;
             errors.push({ task: task.title, error: error.message || 'Unknown error' });
             continue;
           }
 
           if (data?.success && data?.scheduledSlot) {
+            console.log(`✅ Rescheduled "${task.title}" to ${data.scheduledSlot.startTime}`);
             // Update task in database with new schedule
             await supabase
               .from('tasks')
@@ -193,12 +194,12 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
             
             successCount++;
           } else {
-            console.error(`No valid schedule returned for task ${task.id}`);
+            console.error(`❌ No valid schedule returned for task "${task.title}". Response:`, data);
             failedCount++;
-            errors.push({ task: task.title, error: 'No valid schedule returned' });
+            errors.push({ task: task.title, error: data?.error || 'No valid schedule returned' });
           }
         } catch (err) {
-          console.error(`Exception scheduling task ${task.id}:`, err);
+          console.error(`❌ Exception scheduling task "${task.title}":`, err);
           failedCount++;
           errors.push({ task: task.title, error: err instanceof Error ? err.message : 'Unknown error' });
         }
