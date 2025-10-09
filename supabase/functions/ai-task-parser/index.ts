@@ -7,6 +7,65 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+// Helper function to extract scheduling hints from task text and user config
+function extractSchedulingHints(
+  taskText: string,
+  category: string,
+  priority: string,
+  userConfig: any
+): { context: string[]; estimatedDuration: number } {
+  const context: string[] = [];
+  let estimatedDuration = 30; // default
+  
+  if (!userConfig) {
+    return { context, estimatedDuration };
+  }
+  
+  const lowerText = taskText.toLowerCase();
+  
+  // Check for keyword matches in contextRules
+  if (userConfig.contextRules?.keywords) {
+    for (const [keyword, [timeWindow, suggestedCategory]] of Object.entries(userConfig.contextRules.keywords)) {
+      if (lowerText.includes(keyword.toLowerCase())) {
+        context.push(`timeWindow:${timeWindow}`);
+        
+        // Extract time hint based on common patterns
+        if (keyword === 'lunch') {
+          context.push('suggested_time:12:0');
+          estimatedDuration = 60;
+        } else if (keyword === 'breakfast') {
+          context.push('suggested_time:8:0');
+          estimatedDuration = 30;
+        } else if (keyword === 'dinner') {
+          context.push('suggested_time:18:30');
+          estimatedDuration = 90;
+        } else if (keyword === 'workout' || keyword === 'exercise') {
+          context.push('suggested_time:6:30');
+          estimatedDuration = 60;
+        } else if (keyword === 'brunch') {
+          context.push('suggested_time:10:30');
+          estimatedDuration = 90;
+        }
+        
+        break; // Use first match
+      }
+    }
+  }
+  
+  // Fallback to category mappings if no keyword match
+  if (context.length === 0 && userConfig.categoryMappings?.[category]) {
+    const categoryConfig = userConfig.categoryMappings[category];
+    if (categoryConfig.defaultTimeWindow) {
+      context.push(`timeWindow:${categoryConfig.defaultTimeWindow}`);
+    }
+    if (categoryConfig.estimatedDuration) {
+      estimatedDuration = categoryConfig.estimatedDuration;
+    }
+  }
+  
+  return { context, estimatedDuration };
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -33,6 +92,11 @@ serve(async (req) => {
       console.error('❌ OpenAI API key not configured');
       throw new Error('OpenAI API key not configured');
     }
+    
+    // Initialize Supabase client for loading user config
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
     console.log('✅ Starting task parsing...');
 
@@ -166,8 +230,15 @@ Examples:
       if (userId && boardId) {
         console.log('🔮 Generating SEQUENTIAL preview scheduling for', tasks.length, 'tasks');
         
-        const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-        const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+        // Load user's scheduling config to extract timing hints
+        const { data: userConfigData } = await supabaseAdmin
+          .from('user_scheduling_config')
+          .select('config')
+          .eq('user_id', userId)
+          .single();
+        
+        const userConfig = userConfigData?.config || null;
+        console.log('📋 Loaded user config for scheduling hints');
         
         // Schedule sequentially to avoid duplicate times
         const tasksWithPreview = [];
@@ -177,23 +248,33 @@ Examples:
           const task = tasks[i];
           
           try {
+            // Extract scheduling context from task using user's rules
+            const schedulingContext = extractSchedulingHints(
+              task.title,
+              task.category,
+              task.priority,
+              userConfig
+            );
+            
+            console.log(`📅 Task ${i + 1} (${task.title}): scheduling hints =`, schedulingContext);
+            
             // Build busy slots including previously scheduled preview tasks
             const allExistingTasks = [...existingTasks, ...reservedSlots];
             
             const schedulerResponse = await fetch(`${supabaseUrl}/functions/v1/smart-calendar-scheduler`, {
               method: 'POST',
               headers: {
-                'Authorization': `Bearer ${supabaseKey}`,
+                'Authorization': `Bearer ${supabaseServiceKey}`,
                 'Content-Type': 'application/json',
               },
               body: JSON.stringify({
                 taskText: task.title,
                 userId,
                 existingTasks: allExistingTasks,
-                scheduling_context: task.scheduling_context || [],
+                scheduling_context: schedulingContext.context,
                 taskCategory: task.category,
                 taskPriority: task.priority,
-                estimateMinutes: task.estimate_minutes,
+                estimateMinutes: schedulingContext.estimatedDuration,
                 dueDate: task.due_date,
                 timezone: timezone || 'UTC',
               }),
