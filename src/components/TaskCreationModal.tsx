@@ -851,6 +851,12 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
         const reservedSlots: any[] = [];
 
         for (const assignment of allAssignments) {
+          // Check if we already have this assignment with scheduled times
+          const existingParsedTask = parsedTasks.find(t => t.assignment_id === assignment.id);
+          if (existingParsedTask?.start_time && existingParsedTask?.end_time) {
+            assignmentTasksWithPreview.push(existingParsedTask); // Keep existing schedule
+            continue;
+          }
 
           const assignmentTask = convertAssignmentToParsedTask(assignment);
 
@@ -1045,6 +1051,21 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                 <div className="flex items-center justify-between">
                   <h3 className="text-lg font-medium">Parsed Tasks ({parsedTasks.length})</h3>
                   <div className="flex gap-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setParsedTasks([]);
+                        setAiInput('');
+                        sessionStorage.removeItem('parsed-tasks');
+                        sessionStorage.removeItem('ai-task-input');
+                        setSelectedAssignmentIds(new Set());
+                        toast({ title: "Cleared all tasks" });
+                      }}
+                    >
+                      <X className="h-4 w-4 mr-1" />
+                      Clear All
+                    </Button>
                     <Button
                       onClick={handleClearAIResults}
                       variant="outline"
