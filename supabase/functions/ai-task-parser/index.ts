@@ -67,7 +67,7 @@ Parse the user's input into one or more tasks. Each task should have:
 - end_time: null (DO NOT SET - scheduler handles all timing)
 - estimate_minutes: Estimated duration in minutes
 - status: BACKLOG, TODO, READY, UP_NEXT, DOING
-- scheduling_context: Empty array (not used - AI scheduler handles timing intelligence)
+- scheduling_context: Empty array (client-side will extract context from title/description)
 
 DURATION ESTIMATES:
 - Quick meeting/call: 30 minutes

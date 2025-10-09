@@ -30,7 +30,7 @@ import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 import { Task } from '@/types/task';
 import { fromHHMMToISO } from '@/lib/date';
-import { extractSchedulingContext } from '@/services/schedulingService';
+import { extractSchedulingContext, loadUserSchedulingConfig } from '@/services/schedulingService';
 import { useAssignmentSelection } from '@/contexts/AssignmentSelectionContext';
 
 interface ParsedTask {
@@ -520,15 +520,24 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
       for (const t of newAITasks) {
         try {
           const allExisting = [ ...(existingTasks || []), ...reservedSlots ];
+          
+          // Extract scheduling context from task using user config
+          const schedulingMeta = extractSchedulingContext(
+            `${t.title} ${t.description || ''}`,
+            t.category,
+            t.priority,
+            userConfig
+          );
+          
           const { data: schedData, error: schedErr } = await supabase.functions.invoke('smart-calendar-scheduler', {
             body: {
               taskText: t.title,
               userId,
               existingTasks: allExisting,
-              scheduling_context: [],
+              scheduling_context: schedulingMeta.context,
               taskCategory: t.category,
               taskPriority: t.priority,
-              estimateMinutes: t.estimate_minutes,
+              estimateMinutes: t.estimate_minutes || schedulingMeta.estimatedDuration,
               dueDate: t.due_date,
               timezone: userConfig?.timezone || 'America/New_York',
             }
@@ -882,7 +891,9 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
             .order('created_at', { ascending: false });
 
           existingTasksCache = existingTasks || [];
-          userConfigCache = { timezone: 'America/New_York' }; // Default config
+          
+          // Load actual user config from database
+          userConfigCache = await loadUserSchedulingConfig(userId);
 
           setSchedulingDataCache({
             existingTasks: existingTasksCache,
