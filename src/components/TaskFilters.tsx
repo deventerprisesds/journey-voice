@@ -67,6 +67,7 @@ const categoryOptions = [
   { value: 'CAREER', label: 'Career', color: 'bg-blue-100 text-blue-700' },
   { value: 'VENTURES', label: 'Ventures', color: 'bg-purple-100 text-purple-700' },
   { value: 'EDUCATION', label: 'Education', color: 'bg-orange-100 text-orange-700' },
+  { value: 'PROF_EDUCATION', label: 'Prof. Education', color: 'bg-purple-100 text-purple-700' },
 ];
 
 const TaskFilters: React.FC<TaskFiltersProps> = ({ 

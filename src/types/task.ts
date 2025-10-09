@@ -14,7 +14,7 @@ export interface Task {
   description?: string;
   status: 'BLOCKED' | 'LIFE' | 'CAREER' | 'PROF_EDUCATION' | 'VENTURES' | 'PLANNING' | 'READY' | 'UP_NEXT' | 'DOING' | 'DONE' | 'BACKLOG' | 'TODO';
   priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
-  category: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION';
+  category: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION' | 'PROF_EDUCATION';
   due_date?: string;
   start_time?: string;
   end_time?: string;

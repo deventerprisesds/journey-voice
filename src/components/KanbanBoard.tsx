@@ -195,7 +195,7 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
   const statusToCategory = (status: Task['status']): Task['category'] | null => {
     switch (status) {
       case 'CAREER': return 'CAREER';
-      case 'PROF_EDUCATION': return 'EDUCATION';
+      case 'PROF_EDUCATION': return 'PROF_EDUCATION';
       case 'VENTURES': return 'VENTURES';
       case 'LIFE': return 'LIFE';
       default: return null; // Non-lane statuses (e.g., TODO/DONE) don't force category

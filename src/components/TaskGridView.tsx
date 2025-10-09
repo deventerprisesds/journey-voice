@@ -33,7 +33,7 @@ interface Task {
   description?: string;
   status: string;
   priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
-  category: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION';
+  category: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION' | 'PROF_EDUCATION';
   due_date?: string;
   start_time?: string;
   end_time?: string;

@@ -98,6 +98,7 @@ const categoryIcons = {
   CAREER: Briefcase,
   VENTURES: Rocket,
   EDUCATION: BookOpen,
+  PROF_EDUCATION: BookOpen,
 };
 
 const categoryColors = {
@@ -105,6 +106,7 @@ const categoryColors = {
   CAREER: 'bg-category-career/10 text-category-career border-category-career/20',
   VENTURES: 'bg-category-ventures/10 text-category-ventures border-category-ventures/20',
   EDUCATION: 'bg-category-education/10 text-category-education border-category-education/20',
+  PROF_EDUCATION: 'bg-category-education/10 text-category-education border-category-education/20',
 };
 
 // Using utility functions for consistent formatting

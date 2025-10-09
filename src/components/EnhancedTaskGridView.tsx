@@ -73,6 +73,7 @@ const categoryColors = {
   CAREER: 'bg-blue-100 text-blue-700 border-blue-300',
   VENTURES: 'bg-green-100 text-green-700 border-green-300',
   EDUCATION: 'bg-purple-100 text-purple-700 border-purple-300',
+  PROF_EDUCATION: 'bg-purple-100 text-purple-700 border-purple-300',
 };
 
 const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUpdate }) => {
@@ -420,7 +421,7 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
 
         const { error } = await supabase
           .from('tasks')
-          .insert([{ ...newTask, board_id: boardId }]);
+          .insert([{ ...newTask, board_id: boardId, category: (newTask.category === 'PROF_EDUCATION' ? 'EDUCATION' : newTask.category) as any }]);
 
         if (error) {
           console.error('Error creating task:', error);

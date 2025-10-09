@@ -22,7 +22,7 @@ interface TaskSuggestion {
   title: string;
   description?: string;
   priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
-  category: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION';
+  category: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION' | 'PROF_EDUCATION';
   estimate_minutes: number;
   scheduledStart: string;
   aiReasoning: string;
@@ -121,7 +121,7 @@ const SmartTaskInput: React.FC<SmartTaskInputProps> = ({
           title: editedSuggestion.title,
           description: editedSuggestion.description,
           priority: editedSuggestion.priority,
-          category: editedSuggestion.category,
+          category: (editedSuggestion.category === 'PROF_EDUCATION' ? 'EDUCATION' : editedSuggestion.category) as any,
           start_time: startTime.toISOString(),
           end_time: endTime.toISOString(),
           estimate_minutes: editedSuggestion.estimate_minutes,

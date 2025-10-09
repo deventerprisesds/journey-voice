@@ -11,7 +11,7 @@ interface TaskSuggestion {
   title: string;
   description?: string;
   priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
-  category: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION';
+  category: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION' | 'PROF_EDUCATION';
   estimate_minutes: number;
   scheduledStart: string;
   aiReasoning: string;
@@ -156,7 +156,7 @@ const EditableTaskSuggestion: React.FC<EditableTaskSuggestionProps> = ({
                     <label className="text-sm font-medium">Category</label>
                     <Select
                       value={editedSuggestion.category}
-                      onValueChange={(value: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION') =>
+                      onValueChange={(value: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION' | 'PROF_EDUCATION') =>
                         setEditedSuggestion({
                           ...editedSuggestion,
                           category: value
@@ -171,6 +171,7 @@ const EditableTaskSuggestion: React.FC<EditableTaskSuggestionProps> = ({
                         <SelectItem value="CAREER">Career</SelectItem>
                         <SelectItem value="VENTURES">Ventures</SelectItem>
                         <SelectItem value="EDUCATION">Education</SelectItem>
+                        <SelectItem value="PROF_EDUCATION">Prof. Education</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>

@@ -37,7 +37,7 @@ interface ParsedTask {
   title: string;
   description?: string;
   priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
-  category: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION';
+  category: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION' | 'PROF_EDUCATION';
   due_date?: string;
   start_time?: string;
   end_time?: string;
@@ -49,6 +49,8 @@ interface ParsedTask {
   sheet_row_number?: number; // Track sheet row for assignment-sourced tasks
   points?: number; // Track points for assignment-sourced tasks
   source?: 'emba' | 'mit'; // Track assignment source
+  isPreview?: boolean; // Track if task has preview scheduling
+  mit_assignment_id?: string; // For MIT-specific tasks
 }
 
 interface Assignment {
@@ -551,7 +553,7 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
           board_id: boardId,
           user_id: userId,
           priority: task.priority,
-          category: task.category,
+          category: (task.category === 'PROF_EDUCATION' ? 'EDUCATION' : task.category) as any,
           status: (task.assignment_id ? 'PROF_EDUCATION' : task.status) as Task['status'], // Force PROF_EDUCATION for assignments
           due_date: task.due_date || null,
           // Force AI-parsed tasks to have null times so scheduler assigns them
@@ -767,14 +769,15 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
       title: assignment.title,
       description: assignment.description || `${assignment.course_name || 'Assignment'} - Due: ${assignment.due_date ? format(new Date(assignment.due_date), 'PPP') : 'No due date'}`,
       priority: mapPriority(assignment.priority),
-      category: 'EDUCATION',
+      category: 'PROF_EDUCATION',
       status: 'PROF_EDUCATION',
       due_date: assignment.due_date,
       estimate_minutes: 60, // Default 1 hour
       assignment_id: assignment.id,
       assignment_url: assignment.assignment_url,
       course_id: assignment.course_id,
-      source: assignment.source
+      source: assignment.source,
+      isPreview: false
     };
   };
 
@@ -967,29 +970,34 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
               </div>
 
               {/* Include Selected Assignments Toggle */}
-              <div className="flex items-center justify-between p-4 border rounded-lg bg-muted/50">
-                <div className="flex-1">
-                  <Label htmlFor="include-assignments" className="text-sm font-medium cursor-pointer">
-                    Include Selected Assignments
-                  </Label>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    {selectedAssignmentIds.size > 0 
-                      ? `${selectedAssignmentIds.size} assignment${selectedAssignmentIds.size > 1 ? 's' : ''} selected from 'From Assignments' tab`
-                      : 'No assignments selected. Go to "From Assignments" tab to select.'}
-                  </p>
+              <div className="flex flex-col gap-3 p-4 border rounded-lg bg-muted/50">
+                <div className="flex items-center justify-between">
+                  <div className="flex-1">
+                    <Label htmlFor="include-assignments" className="text-sm font-medium cursor-pointer">
+                      Include Selected Assignments
+                    </Label>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {selectedAssignmentIds.size > 0 
+                        ? `${selectedAssignmentIds.size} assignment${selectedAssignmentIds.size > 1 ? 's' : ''} selected from 'From Assignments' tab`
+                        : 'No assignments selected. Go to "From Assignments" tab to select.'}
+                    </p>
+                  </div>
+                  <Switch
+                    id="include-assignments"
+                    checked={includeSelectedAssignments}
+                    onCheckedChange={setIncludeSelectedAssignments}
+                    disabled={isSchedulingAssignments}
+                  />
+                </div>
+                <div className="min-h-[20px]">
                   {isSchedulingAssignments && (
-                    <p className="text-xs text-primary mt-1 flex items-center gap-1">
+                    <p className="text-xs text-primary flex items-center gap-1">
                       <Loader2 className="h-3 w-3 animate-spin" />
                       Scheduling preview times...
                     </p>
                   )}
                 </div>
-                <Switch
-                  id="include-assignments"
-                  checked={includeSelectedAssignments}
-                  onCheckedChange={setIncludeSelectedAssignments}
-                  disabled={selectedAssignmentIds.size === 0 || isSchedulingAssignments}
-                />
+              </div>
               </div>
 
               <div className="flex gap-2">
@@ -1068,6 +1076,17 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                               </Badge>
                             )}
                           </div>
+                          {task.assignment_url && (
+                            <a 
+                              href={task.assignment_url} 
+                              target="_blank" 
+                              rel="noreferrer"
+                              className="text-xs text-primary hover:underline inline-flex items-center gap-1"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              Open assignment →
+                            </a>
+                          )}
                           {task.description && (
                             <Textarea
                               value={task.description}
@@ -1125,6 +1144,7 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                               <SelectItem value="CAREER">Career</SelectItem>
                               <SelectItem value="VENTURES">Ventures</SelectItem>
                               <SelectItem value="EDUCATION">Education</SelectItem>
+                              <SelectItem value="PROF_EDUCATION">Prof. Education</SelectItem>
                             </SelectContent>
                           </Select>
                         </div>
@@ -1390,12 +1410,13 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                   <SelectTrigger id="manual-category">
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="LIFE">Life</SelectItem>
-                    <SelectItem value="CAREER">Career</SelectItem>
-                    <SelectItem value="VENTURES">Ventures</SelectItem>
-                    <SelectItem value="EDUCATION">Education</SelectItem>
-                  </SelectContent>
+                        <SelectContent>
+                          <SelectItem value="LIFE">Life</SelectItem>
+                          <SelectItem value="CAREER">Career</SelectItem>
+                          <SelectItem value="VENTURES">Ventures</SelectItem>
+                          <SelectItem value="EDUCATION">Education</SelectItem>
+                          <SelectItem value="PROF_EDUCATION">Prof. Education</SelectItem>
+                        </SelectContent>
                 </Select>
               </div>
 
