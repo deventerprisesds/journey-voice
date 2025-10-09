@@ -670,6 +670,10 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
         description: `Successfully created ${createdTasks.length} task${createdTasks.length > 1 ? 's' : ''} with automatic reminders`,
       });
       
+      // Clear assignment selection BEFORE closing (prevent flash)
+      setSelectedAssignmentIds(new Set());
+      setIncludeSelectedAssignments(false);
+      
       handleClose();
     } catch (error) {
       console.error('Error creating tasks:', error);
@@ -680,9 +684,6 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
       });
     } finally {
       setIsCreating(false);
-      // Clear assignment selection to stop the loading label
-      setSelectedAssignmentIds(new Set());
-      setIncludeSelectedAssignments(false);
     }
   };
 
@@ -860,6 +861,23 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
           const assignmentTask = convertAssignmentToParsedTask(assignment);
 
           try {
+            // Calculate target schedule date: 1 week before due date
+            let targetScheduleDate = new Date();
+            let schedulingContextArray: string[] = [];
+
+            if (assignmentTask.due_date) {
+              const dueDate = new Date(assignmentTask.due_date);
+              const oneWeekBefore = new Date(dueDate.getTime() - 7 * 24 * 60 * 60 * 1000);
+              targetScheduleDate = oneWeekBefore < new Date() ? new Date() : oneWeekBefore;
+              
+              schedulingContextArray = [
+                `target_schedule_date:${targetScheduleDate.toISOString()}`,
+                `buffer_days:7`,
+                `is_assignment:true`,
+                `assignment_due:${assignmentTask.due_date}`
+              ];
+            }
+
             // Build busy slots: existing tasks + previously scheduled previews
             const allExistingTasks = [...existingTasksCache, ...reservedSlots];
 
@@ -868,7 +886,7 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                 taskText: assignmentTask.title,
                 userId,
                 existingTasks: allExistingTasks,
-                scheduling_context: [],
+                scheduling_context: schedulingContextArray,
                 taskCategory: assignmentTask.category,
                 taskPriority: assignmentTask.priority,
                 estimateMinutes: assignmentTask.estimate_minutes,

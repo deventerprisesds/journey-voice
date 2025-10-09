@@ -59,13 +59,29 @@ export async function createTasksFromAssignments(
     }
 
     for (const assignment of assignments) {
-      // Check if task already exists for this assignment
-      const { data: existingTask } = await supabase
+      // Check if task already exists for this assignment (multi-strategy)
+      const { data: existingTasks } = await supabase
         .from('tasks')
-        .select('id')
+        .select('id, scheduling_context, title, due_date')
         .eq('user_id', userId)
-        .contains('scheduling_context', [`assignment_id:${assignment.id}`])
-        .maybeSingle();
+        .eq('board_id', defaultBoard.id);
+
+      // Check if assignment is already converted
+      const existingTask = existingTasks?.find(task => {
+        // Strategy 1: Check scheduling_context array for assignment_id
+        const contextArray = Array.isArray(task.scheduling_context) ? task.scheduling_context : [];
+        const hasAssignmentId = contextArray.some((ctx: any) => 
+          typeof ctx === 'string' && ctx.includes(`assignment_id:${assignment.id}`)
+        );
+        
+        // Strategy 2: Exact title + due_date match with imported flag (fallback)
+        const titleDueDateMatch = 
+          task.title === assignment.title && 
+          task.due_date === assignment.due_date &&
+          contextArray.some((ctx: any) => typeof ctx === 'string' && ctx.includes('source:imported_assignment'));
+        
+        return hasAssignmentId || titleDueDateMatch;
+      });
 
       if (existingTask) {
         console.log(`Task already exists for assignment ${assignment.id}, skipping`);
@@ -190,13 +206,29 @@ export async function createTasksFromMitAssignments(
     }
 
     for (const assignment of assignments) {
-      // Check if task already exists for this MIT assignment
-      const { data: existingTask } = await supabase
+      // Check if task already exists for this MIT assignment (multi-strategy)
+      const { data: existingTasks } = await supabase
         .from('tasks')
-        .select('id')
+        .select('id, scheduling_context, title, due_date')
         .eq('user_id', userId)
-        .contains('scheduling_context', [`mit_assignment_id:${assignment.id}`])
-        .maybeSingle();
+        .eq('board_id', defaultBoard.id);
+
+      // Check if assignment is already converted
+      const existingTask = existingTasks?.find(task => {
+        // Strategy 1: Check scheduling_context array for mit_assignment_id
+        const contextArray = Array.isArray(task.scheduling_context) ? task.scheduling_context : [];
+        const hasAssignmentId = contextArray.some((ctx: any) => 
+          typeof ctx === 'string' && ctx.includes(`mit_assignment_id:${assignment.id}`)
+        );
+        
+        // Strategy 2: Exact title + due_date match with imported flag (fallback)
+        const titleDueDateMatch = 
+          task.title === assignment.title && 
+          task.due_date === assignment.due_date &&
+          contextArray.some((ctx: any) => typeof ctx === 'string' && ctx.includes('source:imported_assignment'));
+        
+        return hasAssignmentId || titleDueDateMatch;
+      });
 
       if (existingTask) {
         console.log(`Task already exists for MIT assignment ${assignment.id}, skipping`);
