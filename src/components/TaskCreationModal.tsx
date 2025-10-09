@@ -9,6 +9,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Label } from '@/components/ui/label';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
+import { Switch } from '@/components/ui/switch';
 import { 
   CalendarIcon, 
   Wand2, 
@@ -42,6 +43,11 @@ interface ParsedTask {
   end_time?: string;
   estimate_minutes?: number;
   status: 'BACKLOG' | 'TODO' | 'READY' | 'UP_NEXT' | 'DOING';
+  assignment_id?: string; // Track if task came from an assignment
+  course_id?: string; // Track course for assignment-sourced tasks
+  sheet_row_number?: number; // Track sheet row for assignment-sourced tasks
+  points?: number; // Track points for assignment-sourced tasks
+  source?: 'emba' | 'mit'; // Track assignment source
 }
 
 interface Assignment {
@@ -79,6 +85,9 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
   // Assignments Tab State
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [isLoadingAssignments, setIsLoadingAssignments] = useState(false);
+  
+  // Include Selected Assignments Toggle
+  const [includeSelectedAssignments, setIncludeSelectedAssignments] = useState(false);
   
   // AI Mode State with sessionStorage persistence for mobile
   const [aiInput, setAiInput] = useState(() => {
@@ -517,19 +526,35 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
       // Check if this is demo mode (board ID starts with 'demo-')
       const isDemoMode = boardId.startsWith('demo-');
       
-      const tasksWithMeta = tasksToCreate.map(task => ({
-        ...task,
-        ...(isDemoMode ? { id: `demo-task-${Date.now()}-${Math.random().toString(36).substr(2, 9)}` } : {}),
-        board_id: boardId,
-        user_id: userId,
-        due_date: task.due_date || null,
-        // Force AI-parsed tasks to have null times so scheduler assigns them
-        start_time: null,
-        end_time: null,
-        estimate_minutes: task.estimate_minutes || null,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      }));
+      const tasksWithMeta = tasksToCreate.map(task => {
+        // Build scheduling_context for assignment-sourced tasks
+        const schedulingContext = task.assignment_id ? [
+          `source:selected_${task.source}_assignment`,
+          `assignment_id:${task.assignment_id}`,
+          ...(task.course_id ? [`course_id:${task.course_id}`] : []),
+          ...(task.sheet_row_number ? [`sheet_row:${task.sheet_row_number}`] : []),
+          ...(task.points ? [`points:${task.points}`] : [])
+        ] : undefined;
+
+        return {
+          title: task.title,
+          description: task.description || null,
+          board_id: boardId,
+          user_id: userId,
+          priority: task.priority,
+          category: task.category,
+          status: (task.assignment_id ? 'PROF_EDUCATION' : task.status) as Task['status'], // Force PROF_EDUCATION for assignments
+          due_date: task.due_date || null,
+          // Force AI-parsed tasks to have null times so scheduler assigns them
+          start_time: null,
+          end_time: null,
+          estimate_minutes: task.estimate_minutes || null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          ...(schedulingContext && { scheduling_context: schedulingContext }),
+          ...(isDemoMode ? { id: `demo-task-${Date.now()}-${Math.random().toString(36).substr(2, 9)}` } : {})
+        };
+      });
 
       let createdTasks;
       
@@ -700,6 +725,16 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
   };
 
   const removeParsedTask = (index: number) => {
+    const task = parsedTasks[index];
+    // Don't allow removing assignment-sourced tasks when toggle is ON
+    if (task.assignment_id && includeSelectedAssignments) {
+      toast({
+        title: "Cannot Remove",
+        description: "Uncheck the assignment in the 'From Assignments' tab to remove it.",
+        variant: "destructive"
+      });
+      return;
+    }
     setParsedTasks(prev => prev.filter((_, i) => i !== index));
   };
 
@@ -708,6 +743,87 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
       i === index ? { ...task, [field]: value } : task
     ));
   };
+
+  // Helper: Convert Assignment to ParsedTask
+  const convertAssignmentToParsedTask = (assignment: Assignment): ParsedTask => {
+    const mapPriority = (p: string): ParsedTask['priority'] => {
+      const normalized = p?.toUpperCase();
+      if (['LOW', 'MEDIUM', 'HIGH', 'URGENT'].includes(normalized)) {
+        return normalized as ParsedTask['priority'];
+      }
+      return 'MEDIUM';
+    };
+
+    return {
+      title: assignment.title,
+      description: assignment.description || `${assignment.course_name || 'Assignment'} - Due: ${assignment.due_date ? format(new Date(assignment.due_date), 'PPP') : 'No due date'}`,
+      priority: mapPriority(assignment.priority),
+      category: 'EDUCATION',
+      status: 'BACKLOG', // Will be set to PROF_EDUCATION during creation
+      due_date: assignment.due_date,
+      estimate_minutes: 60, // Default 1 hour
+      assignment_id: assignment.id,
+      course_id: assignment.course_id,
+      source: assignment.source
+    };
+  };
+
+  // Sync selected assignments with parsed tasks when toggle is ON
+  useEffect(() => {
+    if (!includeSelectedAssignments) {
+      // Remove all assignment-sourced tasks when toggle is OFF
+      setParsedTasks(prev => prev.filter(task => !task.assignment_id));
+      return;
+    }
+
+    // Fetch full assignment details for selected IDs
+    const syncAssignmentTasks = async () => {
+      if (selectedAssignmentIds.size === 0) {
+        setParsedTasks(prev => prev.filter(task => !task.assignment_id));
+        return;
+      }
+
+      const selectedIds = Array.from(selectedAssignmentIds);
+      
+      // Fetch EMBA assignments
+      const { data: embaAssignments } = await supabase
+        .from('assignments')
+        .select('*')
+        .in('id', selectedIds)
+        .eq('user_id', userId);
+
+      // Fetch MIT assignments
+      const { data: mitAssignments } = await supabase
+        .from('assignments_mit')
+        .select('*')
+        .in('id', selectedIds)
+        .eq('user_id', userId);
+
+      const allAssignments: Assignment[] = [
+        ...(embaAssignments || []).map(a => ({ ...a, source: 'emba' as const })),
+        ...(mitAssignments || []).map(a => ({ ...a, source: 'mit' as const }))
+      ];
+
+      setParsedTasks(prev => {
+        // Remove assignment tasks that are no longer selected
+        const nonAssignmentTasks = prev.filter(task => !task.assignment_id);
+        
+        // Add/update assignment tasks
+        const assignmentTasks = allAssignments.map(assignment => {
+          // Check if we already have this assignment in parsed tasks
+          const existing = prev.find(t => t.assignment_id === assignment.id);
+          if (existing) {
+            return existing; // Keep existing edits
+          }
+          return convertAssignmentToParsedTask(assignment);
+        });
+
+        return [...nonAssignmentTasks, ...assignmentTasks];
+      });
+    };
+
+    syncAssignmentTasks();
+  }, [includeSelectedAssignments, selectedAssignmentIds, userId]);
 
   return (
     <Dialog open={isOpen} onOpenChange={handleClose}>
@@ -750,6 +866,26 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                   onChange={(e) => setAiInput(e.target.value)}
                   rows={4}
                   className="resize-none"
+                />
+              </div>
+
+              {/* Include Selected Assignments Toggle */}
+              <div className="flex items-center justify-between p-4 border rounded-lg bg-muted/50">
+                <div className="flex-1">
+                  <Label htmlFor="include-assignments" className="text-sm font-medium cursor-pointer">
+                    Include Selected Assignments
+                  </Label>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {selectedAssignmentIds.size > 0 
+                      ? `${selectedAssignmentIds.size} assignment${selectedAssignmentIds.size > 1 ? 's' : ''} selected from 'From Assignments' tab`
+                      : 'No assignments selected. Go to "From Assignments" tab to select.'}
+                  </p>
+                </div>
+                <Switch
+                  id="include-assignments"
+                  checked={includeSelectedAssignments}
+                  onCheckedChange={setIncludeSelectedAssignments}
+                  disabled={selectedAssignmentIds.size === 0}
                 />
               </div>
 
@@ -810,14 +946,25 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
 
                 <div className="space-y-3 max-h-96 overflow-y-auto">
                   {parsedTasks.map((task, index) => (
-                    <div key={index} className="border rounded-lg p-4 space-y-2">
+                    <div key={index} className={cn(
+                      "border rounded-lg p-4 space-y-2",
+                      task.assignment_id && "border-primary/50 bg-primary/5"
+                    )}>
                       <div className="flex items-start justify-between">
                         <div className="flex-1 space-y-2">
-                          <Input
-                            value={task.title}
-                            onChange={(e) => editParsedTask(index, 'title', e.target.value)}
-                            className="font-medium"
-                          />
+                          <div className="flex items-center gap-2">
+                            <Input
+                              value={task.title}
+                              onChange={(e) => editParsedTask(index, 'title', e.target.value)}
+                              className="font-medium"
+                            />
+                            {task.assignment_id && (
+                              <Badge variant="secondary" className="shrink-0 text-xs">
+                                <FileSpreadsheet className="h-3 w-3 mr-1" />
+                                Assignment
+                              </Badge>
+                            )}
+                          </div>
                           {task.description && (
                             <Textarea
                               value={task.description}
@@ -832,6 +979,8 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                           size="sm"
                           onClick={() => removeParsedTask(index)}
                           className="ml-2"
+                          disabled={task.assignment_id && includeSelectedAssignments}
+                          title={task.assignment_id && includeSelectedAssignments ? "Uncheck assignment to remove" : "Remove task"}
                         >
                           <X className="h-4 w-4" />
                         </Button>
