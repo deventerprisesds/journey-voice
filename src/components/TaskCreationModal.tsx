@@ -42,8 +42,9 @@ interface ParsedTask {
   start_time?: string;
   end_time?: string;
   estimate_minutes?: number;
-  status: 'BACKLOG' | 'TODO' | 'READY' | 'UP_NEXT' | 'DOING';
+  status: 'BACKLOG' | 'TODO' | 'READY' | 'UP_NEXT' | 'DOING' | 'PROF_EDUCATION';
   assignment_id?: string; // Track if task came from an assignment
+  assignment_url?: string; // Track assignment URL for linking
   course_id?: string; // Track course for assignment-sourced tasks
   sheet_row_number?: number; // Track sheet row for assignment-sourced tasks
   points?: number; // Track points for assignment-sourced tasks
@@ -87,7 +88,7 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
   const [isLoadingAssignments, setIsLoadingAssignments] = useState(false);
   
   // Include Selected Assignments Toggle
-  const [includeSelectedAssignments, setIncludeSelectedAssignments] = useState(false);
+  const [includeSelectedAssignments, setIncludeSelectedAssignments] = useState(true);
   
   // AI Mode State with sessionStorage persistence for mobile
   const [aiInput, setAiInput] = useState(() => {
@@ -531,6 +532,7 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
         const schedulingContext = task.assignment_id ? [
           `source:selected_${task.source}_assignment`,
           `assignment_id:${task.assignment_id}`,
+          ...(task.assignment_url ? [`assignment_url:${task.assignment_url}`] : []),
           ...(task.course_id ? [`course_id:${task.course_id}`] : []),
           ...(task.sheet_row_number ? [`sheet_row:${task.sheet_row_number}`] : []),
           ...(task.points ? [`points:${task.points}`] : [])
@@ -759,10 +761,11 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
       description: assignment.description || `${assignment.course_name || 'Assignment'} - Due: ${assignment.due_date ? format(new Date(assignment.due_date), 'PPP') : 'No due date'}`,
       priority: mapPriority(assignment.priority),
       category: 'EDUCATION',
-      status: 'BACKLOG', // Will be set to PROF_EDUCATION during creation
+      status: 'PROF_EDUCATION',
       due_date: assignment.due_date,
       estimate_minutes: 60, // Default 1 hour
       assignment_id: assignment.id,
+      assignment_url: assignment.assignment_url,
       course_id: assignment.course_id,
       source: assignment.source
     };
