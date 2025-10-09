@@ -514,7 +514,7 @@ Return ONLY valid JSON (no markdown):
 
     // Calculate max search date (don't schedule past due date if provided)
     const dueDateObj = dueDate ? new Date(dueDate) : null;
-    const maxSearchDays = 7;
+    const maxSearchDays = 14;
     
     // Collect ALL candidate slots across search window
     const candidateSlots: Array<{
@@ -578,10 +578,15 @@ for (let dayOffset = 0; dayOffset < maxSearchDays; dayOffset++) {
         continue;
       }
       
-      // Don't schedule past due date
-      if (dueDateObj && dayStartUTC > dueDateObj) {
-        console.log(`Skipping day ${dayOffset} - past due date`);
+      // Only enforce due date if it's in the future relative to now
+      const enforceDueDate = !!dueDateObj && dueDateObj.getTime() >= now.getTime();
+      if (enforceDueDate && dayStartUTC > dueDateObj) {
+        console.log(`⏭️ Skipping day ${dayOffset} - beyond future due date ${dueDateObj.toISOString()}`);
         break;
+      }
+      // If due date is already in the past, do NOT restrict search; log it once
+      if (!!dueDateObj && dueDateObj.getTime() < now.getTime() && dayOffset === 0) {
+        console.log(`⚠️ Due date ${dueDateObj.toISOString()} is in the past – ignoring due-date limit and scheduling forward`);
       }
       
       // Check if day is allowed in user's timezone
