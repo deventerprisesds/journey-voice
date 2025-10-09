@@ -512,7 +512,51 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
         throw new Error('No tasks could be parsed from the input');
       }
 
-      setParsedTasks(data.tasks);
+      // Preview-schedule newly parsed AI tasks (non-assignment) and preserve existing assignment tasks
+      const newAITasks: ParsedTask[] = (data.tasks || []).map((t: ParsedTask) => ({ ...t }));
+      const previewedTasks: ParsedTask[] = [];
+      const reservedSlots: any[] = [];
+
+      for (const t of newAITasks) {
+        try {
+          const allExisting = [ ...(existingTasks || []), ...reservedSlots ];
+          const { data: schedData, error: schedErr } = await supabase.functions.invoke('smart-calendar-scheduler', {
+            body: {
+              taskText: t.title,
+              userId,
+              existingTasks: allExisting,
+              scheduling_context: [],
+              taskCategory: t.category,
+              taskPriority: t.priority,
+              estimateMinutes: t.estimate_minutes,
+              dueDate: t.due_date,
+              timezone: userConfig?.timezone || 'America/New_York',
+            }
+          });
+
+          if (schedErr) {
+            previewedTasks.push(t);
+            continue;
+          }
+
+          const startISO = schedData?.scheduledSlot?.startTime || schedData?.scheduledTask?.start_time;
+          const endISO = schedData?.scheduledSlot?.endTime || schedData?.scheduledTask?.end_time;
+
+          if (startISO && endISO) {
+            previewedTasks.push({ ...t, start_time: startISO, end_time: endISO });
+            reservedSlots.push({ start_time: startISO, end_time: endISO, title: t.title, is_scheduled: true });
+          } else {
+            previewedTasks.push(t);
+          }
+        } catch {
+          previewedTasks.push(t);
+        }
+      }
+
+      setParsedTasks(prev => {
+        const preservedAssignments = prev.filter(pt => pt.assignment_id);
+        return [...preservedAssignments, ...previewedTasks];
+      });
       toast({
         title: "Tasks Parsed Successfully",
         description: `Found ${data.tasks.length} task${data.tasks.length > 1 ? 's' : ''}`,
