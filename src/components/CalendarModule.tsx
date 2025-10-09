@@ -363,12 +363,13 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
   // Get tasks for a specific date
   const getTasksForDate = (date: Date) => {
     const dateTasks = tasks.filter(task => {
-      // Include tasks with start_time or due_date on this date
+      // Priority 1: Show on start_time date if scheduled
       if (task.start_time) {
         const taskDate = new Date(task.start_time);
         return isSameDay(taskDate, date);
       }
-      if (task.due_date) {
+      // Priority 2: Show on due_date only if NOT yet scheduled
+      if (task.due_date && !task.start_time) {
         const dueDate = new Date(task.due_date);
         return isSameDay(dueDate, date);
       }
@@ -518,11 +519,18 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
             const isCurrentMonth = isSameMonth(day, currentDate);
             
             return (
-              <Card key={day.toISOString()} className={cn(
-                "min-h-[120px] cursor-pointer hover:bg-muted/50 transition-colors",
-                !isCurrentMonth && "opacity-50",
-                isCurrentDay && "ring-2 ring-primary"
-              )}>
+              <Card 
+                key={day.toISOString()} 
+                className={cn(
+                  "min-h-[120px] cursor-pointer hover:bg-muted/50 transition-colors",
+                  !isCurrentMonth && "opacity-50",
+                  isCurrentDay && "ring-2 ring-primary"
+                )}
+                onClick={() => {
+                  setCurrentDate(day);
+                  setView('day');
+                }}
+              >
                 <CardContent className="p-2">
                   <div className="flex items-center justify-between mb-1">
                     <span className={cn(

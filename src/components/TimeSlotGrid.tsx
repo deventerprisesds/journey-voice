@@ -185,11 +185,6 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
                             {format(parseISO(task.start_time), 'h:mm')} - {format(parseISO(task.end_time), 'h:mm')}
                           </div>
                         )}
-                        {task.estimate_minutes && (
-                          <Badge variant="outline" className="mt-1 h-4 text-xs">
-                            {task.estimate_minutes}m
-                          </Badge>
-                        )}
                       </div>
                     );
                   })}
