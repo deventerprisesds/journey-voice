@@ -998,7 +998,6 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                   )}
                 </div>
               </div>
-              </div>
 
               <div className="flex gap-2">
                 <Button 
