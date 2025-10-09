@@ -131,34 +131,53 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
 
       toast.info(`Re-organizing ${tasksToReorganize.length} task${tasksToReorganize.length > 1 ? 's' : ''}...`);
 
-      // Call scheduler with reschedule action for each task
+      // Call scheduler with correct parameters for each task
+      let successCount = 0;
       for (const task of tasksToReorganize) {
         try {
           const { data, error } = await supabase.functions.invoke('smart-calendar-scheduler', {
             body: {
-              task: {
-                ...task,
-                start_time: null, // Clear old time to force rescheduling
-                end_time: null,
-                is_scheduled: false
-              },
-              action: 'reschedule',
-              startFromNow: true
+              taskText: `${task.title}${task.description ? ' - ' + task.description : ''}`,
+              taskCategory: task.category,
+              taskPriority: task.priority,
+              estimateMinutes: task.estimate_minutes || 60,
+              dueDate: task.due_date,
+              userId: task.user_id,
+              existingTasks: tasks.map(t => ({
+                id: t.id,
+                title: t.title,
+                start_time: t.start_time,
+                end_time: t.end_time,
+                priority: t.priority,
+                category: t.category,
+                status: t.status
+              })),
+              busySlots: busySlots,
+              scheduling_context: task.scheduling_context || [],
+              targetDate: new Date().toISOString(),
+              timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
             }
           });
 
-          if (error) throw error;
+          if (error) {
+            console.error(`Failed to schedule task ${task.id}:`, error);
+            continue;
+          }
 
-          if (data?.scheduledTask) {
-            // Update task in database
+          if (data?.success && data?.scheduledSlot) {
+            // Update task in database with new schedule
             await supabase
               .from('tasks')
               .update({
-                start_time: data.scheduledTask.start_time,
-                end_time: data.scheduledTask.end_time,
+                start_time: data.scheduledSlot.startTime,
+                end_time: data.scheduledSlot.endTime,
                 is_scheduled: true
               })
               .eq('id', task.id);
+            
+            successCount++;
+          } else {
+            console.error(`No valid schedule returned for task ${task.id}`);
           }
         } catch (err) {
           console.error(`Failed to reschedule task ${task.id}:`, err);
@@ -166,7 +185,13 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
       }
 
       await loadCalendarData();
-      toast.success(`Successfully re-organized ${tasksToReorganize.length} task${tasksToReorganize.length > 1 ? 's' : ''}!`);
+      if (onTaskScheduled) onTaskScheduled();
+      
+      if (successCount > 0) {
+        toast.success(`Successfully re-organized ${successCount} task${successCount > 1 ? 's' : ''}!`);
+      } else {
+        toast.error('No tasks could be rescheduled. Check availability.');
+      }
     } catch (error) {
       console.error('Re-organize error:', error);
       toast.error('Failed to re-organize tasks');
@@ -196,32 +221,52 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
 
       let filledCount = 0;
 
-      // Call scheduler with fill_gaps action for each unscheduled task
+      // Call scheduler with correct parameters for each unscheduled task
       for (const task of unscheduledTasks) {
         try {
           const { data, error } = await supabase.functions.invoke('smart-calendar-scheduler', {
             body: {
-              task,
-              action: 'fill_gaps',
-              startFromNow: true,
-              useScoring: true
+              taskText: `${task.title}${task.description ? ' - ' + task.description : ''}`,
+              taskCategory: task.category,
+              taskPriority: task.priority,
+              estimateMinutes: task.estimate_minutes || 60,
+              dueDate: task.due_date,
+              userId: task.user_id,
+              existingTasks: tasks.map(t => ({
+                id: t.id,
+                title: t.title,
+                start_time: t.start_time,
+                end_time: t.end_time,
+                priority: t.priority,
+                category: t.category,
+                status: t.status
+              })),
+              busySlots: busySlots,
+              scheduling_context: task.scheduling_context || [],
+              targetDate: new Date().toISOString(),
+              timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
             }
           });
 
-          if (error) throw error;
+          if (error) {
+            console.error(`Failed to schedule task ${task.id}:`, error);
+            continue;
+          }
 
-          if (data?.scheduledTask) {
-            // Update task in database
+          if (data?.success && data?.scheduledSlot) {
+            // Update task in database with scheduled time
             await supabase
               .from('tasks')
               .update({
-                start_time: data.scheduledTask.start_time,
-                end_time: data.scheduledTask.end_time,
+                start_time: data.scheduledSlot.startTime,
+                end_time: data.scheduledSlot.endTime,
                 is_scheduled: true
               })
               .eq('id', task.id);
             
             filledCount++;
+          } else {
+            console.error(`No valid schedule returned for task ${task.id}`);
           }
         } catch (err) {
           console.error(`Failed to fill gap for task ${task.id}:`, err);
@@ -229,6 +274,7 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
       }
 
       await loadCalendarData();
+      if (onTaskScheduled) onTaskScheduled();
       
       if (filledCount > 0) {
         toast.success(`Filled gaps with ${filledCount} task${filledCount > 1 ? 's' : ''}!`);
