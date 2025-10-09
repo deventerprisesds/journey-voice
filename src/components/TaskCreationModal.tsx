@@ -851,12 +851,6 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
         const reservedSlots: any[] = [];
 
         for (const assignment of allAssignments) {
-          // Check if we already have this assignment in parsed tasks
-          const existingParsedTask = parsedTasks.find(t => t.assignment_id === assignment.id);
-          if (existingParsedTask) {
-            assignmentTasksWithPreview.push(existingParsedTask); // Keep existing edits
-            continue;
-          }
 
           const assignmentTask = convertAssignmentToParsedTask(assignment);
 
@@ -891,6 +885,7 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                 taskPriority: assignmentTask.priority,
                 estimateMinutes: assignmentTask.estimate_minutes,
                 dueDate: assignmentTask.due_date,
+                targetDate: targetScheduleDate.toISOString(),
                 timezone: userConfigCache?.timezone || 'America/New_York',
               }
             });
@@ -901,18 +896,21 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
               continue;
             }
 
-            if (schedulerData?.scheduledTask?.start_time && schedulerData?.scheduledTask?.end_time) {
+            const startISO = schedulerData?.scheduledSlot?.startTime || schedulerData?.scheduledTask?.start_time;
+            const endISO = schedulerData?.scheduledSlot?.endTime || schedulerData?.scheduledTask?.end_time;
+
+            if (startISO && endISO) {
               // Add preview times
               assignmentTasksWithPreview.push({
                 ...assignmentTask,
-                start_time: schedulerData.scheduledTask.start_time,
-                end_time: schedulerData.scheduledTask.end_time,
+                start_time: startISO,
+                end_time: endISO,
               });
 
               // Reserve this slot for next iteration
               reservedSlots.push({
-                start_time: schedulerData.scheduledTask.start_time,
-                end_time: schedulerData.scheduledTask.end_time,
+                start_time: startISO,
+                end_time: endISO,
                 title: assignmentTask.title,
                 is_scheduled: true
               });
@@ -944,7 +942,7 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
     };
 
     syncAssignmentTasks();
-  }, [includeSelectedAssignments, selectedAssignmentIds, userId, boardId, schedulingDataCache, parsedTasks, toast]);
+  }, [includeSelectedAssignments, selectedAssignmentIds, userId, boardId]);
 
   return (
     <Dialog open={isOpen} onOpenChange={handleClose}>
