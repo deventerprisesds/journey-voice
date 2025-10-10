@@ -89,6 +89,11 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
   });
   const [isSelectMode, setIsSelectMode] = useState(false);
   const [selectedTasks, setSelectedTasks] = useState<Set<string>>(new Set());
+  
+  // Drag-to-pan state
+  const [isDragging, setIsDragging] = useState(false);
+  const [startX, setStartX] = useState(0);
+  const [scrollLeftStart, setScrollLeftStart] = useState(0);
 
   const fetchBoardColumns = async () => {
     if (!user) return;
@@ -662,19 +667,49 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
     }
   };
 
+  // Drag-to-pan handlers
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (!scrollContainerRef.current) return;
+    setIsDragging(true);
+    setStartX(e.pageX);
+    setScrollLeftStart(scrollContainerRef.current.scrollLeft);
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!isDragging || !scrollContainerRef.current) return;
+    e.preventDefault();
+    const x = e.pageX;
+    const walk = (startX - x) * 2; // Multiply for faster scrolling
+    scrollContainerRef.current.scrollLeft = scrollLeftStart + walk;
+  };
+
+  const handleMouseUp = () => {
+    setIsDragging(false);
+  };
+
+  const handleMouseLeave = () => {
+    setIsDragging(false);
+  };
+
   useEffect(() => {
     const scrollContainer = scrollContainerRef.current;
     if (scrollContainer) {
+      // Use timeout to ensure DOM is fully rendered
+      const timer = setTimeout(() => {
+        updateScrollButtons();
+      }, 100);
+      
       updateScrollButtons();
       scrollContainer.addEventListener('scroll', updateScrollButtons);
       window.addEventListener('resize', updateScrollButtons);
       
       return () => {
+        clearTimeout(timer);
         scrollContainer.removeEventListener('scroll', updateScrollButtons);
         window.removeEventListener('resize', updateScrollButtons);
       };
     }
-  }, [columns]);
+  }, [columns, tasks]); // Added tasks dependency to update arrows when tasks change
 
   const createDefaultBoardAndColumns = async (userId: string) => {
     console.log('Creating default board and columns for user:', userId);
@@ -995,29 +1030,31 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
       {/* Kanban Board */}
       <div className="relative">
         {/* Navigation Controls */}
-        <div className="absolute left-0 top-1/2 -translate-y-1/2 z-10">
-          <Button
-            variant="outline"
-            size="icon"
-            onClick={scrollLeft}
-            disabled={!canScrollLeft}
-            className="h-10 w-10 bg-background/80 backdrop-blur-sm shadow-lg border-2"
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </Button>
-        </div>
+        {canScrollLeft && (
+          <div className="absolute left-0 top-1/2 -translate-y-1/2 z-50">
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={scrollLeft}
+              className="h-12 w-12 bg-background shadow-xl border-2 hover:bg-background/90 transition-all hover:scale-110"
+            >
+              <ChevronLeft className="h-5 w-5" />
+            </Button>
+          </div>
+        )}
         
-        <div className="absolute right-0 top-1/2 -translate-y-1/2 z-10">
-          <Button
-            variant="outline"
-            size="icon"
-            onClick={scrollRight}
-            disabled={!canScrollRight}
-            className="h-10 w-10 bg-background/80 backdrop-blur-sm shadow-lg border-2"
-          >
-            <ChevronRight className="h-4 w-4" />
-          </Button>
-        </div>
+        {canScrollRight && (
+          <div className="absolute right-0 top-1/2 -translate-y-1/2 z-50">
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={scrollRight}
+              className="h-12 w-12 bg-background shadow-xl border-2 hover:bg-background/90 transition-all hover:scale-110"
+            >
+              <ChevronRight className="h-5 w-5" />
+            </Button>
+          </div>
+        )}
 
         <DragDropContext onDragEnd={handleDragEnd}>
           <Droppable droppableId="board" direction="horizontal" type="column">
@@ -1029,7 +1066,15 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
                 }}
                 {...provided.droppableProps}
                 className="flex gap-4 min-h-[600px] overflow-x-auto pb-4 px-12 scroll-smooth"
-                style={{ scrollbarWidth: 'thin' }}
+                style={{ 
+                  scrollbarWidth: 'thin',
+                  cursor: isDragging ? 'grabbing' : 'grab',
+                  userSelect: isDragging ? 'none' : 'auto'
+                }}
+                onMouseDown={handleMouseDown}
+                onMouseMove={handleMouseMove}
+                onMouseUp={handleMouseUp}
+                onMouseLeave={handleMouseLeave}
               >
                 {columns.map((column, index) => {
                   const columnTasks = getTasksByStatus(column.status);
