@@ -1284,9 +1284,45 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                           </Select>
                         </div>
 
-                        {/* Start Date */}
+                        {/* Due Date */}
                         <div className="space-y-2">
-                          <Label className="text-xs font-medium">Start Date</Label>
+                          <Label className="text-xs font-medium">Due Date</Label>
+                          <Popover>
+                            <PopoverTrigger asChild>
+                              <Button
+                                variant="outline"
+                                className={cn(
+                                  "h-8 justify-start text-left font-normal text-xs",
+                                  !task.due_date && "text-muted-foreground"
+                                )}
+                              >
+                                <AlertCircle className="mr-1 h-3 w-3" />
+                                {task.due_date ? format(new Date(task.due_date), "MMM d, yyyy") : "No deadline"}
+                              </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-auto p-0">
+                              <Calendar
+                                mode="single"
+                                selected={task.due_date ? new Date(task.due_date) : undefined}
+                                onSelect={(date) => {
+                                  if (!date) {
+                                    editParsedTask(index, 'due_date', undefined);
+                                    return;
+                                  }
+                                  // Set to end of day for due dates
+                                  date.setHours(23, 59, 59, 999);
+                                  editParsedTask(index, 'due_date', date.toISOString());
+                                }}
+                                initialFocus
+                                className={cn("p-3 pointer-events-auto")}
+                              />
+                            </PopoverContent>
+                          </Popover>
+                        </div>
+
+                        {/* Scheduled Date */}
+                        <div className="space-y-2">
+                          <Label className="text-xs font-medium">Scheduled Date</Label>
                           <Popover>
                             <PopoverTrigger asChild>
                               <Button
@@ -1412,9 +1448,20 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                           </div>
                         </div>
                       </div>
-                      {task.start_time && (
-                        <div className="text-xs text-muted-foreground mt-1">
-                          Scheduled preview: {format(new Date(task.start_time), 'PPP p')}
+                      {(task.due_date || task.start_time) && (
+                        <div className="text-xs text-muted-foreground mt-2 space-y-1">
+                          {task.due_date && (
+                            <div className="flex items-center gap-1">
+                              <AlertCircle className="h-3 w-3" />
+                              <span>Due: {format(new Date(task.due_date), 'PPP')}</span>
+                            </div>
+                          )}
+                          {task.start_time && (
+                            <div className="flex items-center gap-1">
+                              <Clock className="h-3 w-3" />
+                              <span>Scheduled: {format(new Date(task.start_time), 'PPP p')}</span>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>

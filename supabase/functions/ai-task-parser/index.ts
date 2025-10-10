@@ -121,12 +121,27 @@ Parse the user's input into one or more tasks. Each task should have:
 - description: Optional detailed description
 - priority: LOW, MEDIUM, HIGH, or URGENT (infer from urgency words)
 - category: LIFE, CAREER, VENTURES, or EDUCATION (infer from context)
-- due_date: ISO date string ONLY if user specifies a deadline (null otherwise)
-- start_time: null (DO NOT SET - scheduler handles all timing)
-- end_time: null (DO NOT SET - scheduler handles all timing)
+- due_date: ISO date string for DEADLINE when task must be completed (date only, set to end of day)
+- start_time: ISO timestamp ONLY if user explicitly schedules a specific time to work on task
+- end_time: ISO timestamp ONLY if user specifies when scheduled work should end
 - estimate_minutes: Estimated duration in minutes
 - status: BACKLOG, TODO, READY, UP_NEXT, DOING
 - scheduling_context: Empty array (client-side will extract context from title/description)
+
+DUE DATE vs SCHEDULED TIME (CRITICAL):
+- due_date: The DEADLINE when the task must be completed (date only, no time)
+  Examples: "due Friday", "deadline next Monday", "must finish by Dec 25"
+  Format: ISO date string set to end of day (23:59:59)
+  
+- start_time / end_time: When the task is SCHEDULED to be worked on (specific time slot)
+  Examples: "schedule for 2pm tomorrow", "work on this from 3-5pm Friday"
+  Format: ISO timestamp with specific time
+  Only set if user explicitly mentions scheduling a specific time
+
+DEFAULT BEHAVIOR:
+- "do X by Friday" → set due_date to Friday 11:59 PM, leave start_time/end_time null
+- "schedule meeting at 2pm Friday" → set start_time to Friday 2pm, can also set due_date to Friday
+- "finish report by Monday, work on it tomorrow 9am" → due_date Monday, start_time tomorrow 9am
 
 DURATION ESTIMATES:
 - Quick meeting/call: 30 minutes
