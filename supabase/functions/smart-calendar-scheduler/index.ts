@@ -633,12 +633,13 @@ for (let dayOffset = 0; dayOffset < maxSearchDays; dayOffset++) {
           // MODERATE day penalty (prefer sooner but don't override good time matches)
           score -= dayOffset * 15;
         } else {
-          // No preferred time - use "sooner is better" logic within appropriate window
-          score -= dayOffset * dayOffset * 30;
+          // BATCH MODE: No preferred time - fill same day first, then move to next day
+          // Heavy penalty for day offset to encourage filling today's slots
+          score -= dayOffset * 100;  // Increased from 30 to strongly prefer same day
           
-          // Prefer earlier times in the window
+          // Within same day, prefer earlier slots but with lower weight
           const slotHour = parseInt(slot.start.toLocaleTimeString('en-US', { timeZone: timezone, hour: '2-digit', hour12: false }));
-          score -= slotHour;
+          score -= slotHour * 2;  // Earlier is slightly better within same day
         }
         
         // Priority boost for earlier slots (URGENT tasks get best slots)

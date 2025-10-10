@@ -15,52 +15,47 @@ function extractSchedulingHints(
   userConfig: any
 ): { context: string[]; estimatedDuration: number } {
   const context: string[] = [];
-  let estimatedDuration = 30; // default
-  
-  if (!userConfig) {
-    return { context, estimatedDuration };
-  }
-  
   const lowerText = taskText.toLowerCase();
   
-  // Check for keyword matches in contextRules
-  if (userConfig.contextRules?.keywords) {
-    for (const [keyword, [timeWindow, suggestedCategory]] of Object.entries(userConfig.contextRules.keywords)) {
-      if (lowerText.includes(keyword.toLowerCase())) {
-        context.push(`timeWindow:${timeWindow}`);
-        
-        // Extract time hint based on common patterns
-        if (keyword === 'lunch') {
-          context.push('suggested_time:12:0');
-          estimatedDuration = 60;
-        } else if (keyword === 'breakfast') {
-          context.push('suggested_time:8:0');
-          estimatedDuration = 30;
-        } else if (keyword === 'dinner') {
-          context.push('suggested_time:18:30');
-          estimatedDuration = 90;
-        } else if (keyword === 'workout' || keyword === 'exercise') {
-          context.push('suggested_time:6:30');
-          estimatedDuration = 60;
-        } else if (keyword === 'brunch') {
-          context.push('suggested_time:10:30');
-          estimatedDuration = 90;
-        }
-        
-        break; // Use first match
-      }
+  // Keyword-based time suggestions (search directly in task text)
+  const timeSuggestions: { [key: string]: { hour: number; minute: number; duration: number; window: string } } = {
+    standup: { hour: 9, minute: 0, duration: 30, window: 'morning' },
+    sync: { hour: 10, minute: 0, duration: 30, window: 'morning' },
+    lunch: { hour: 12, minute: 0, duration: 60, window: 'business_hours' },
+    brunch: { hour: 10, minute: 30, duration: 75, window: 'morning' },
+    dinner: { hour: 19, minute: 0, duration: 90, window: 'after_work' },
+    breakfast: { hour: 7, minute: 30, duration: 30, window: 'morning' },
+    gym: { hour: 17, minute: 30, duration: 60, window: 'after_work' },
+    workout: { hour: 6, minute: 30, duration: 60, window: 'morning' },
+    exercise: { hour: 17, minute: 30, duration: 60, window: 'after_work' },
+    shopping: { hour: 17, minute: 30, duration: 45, window: 'after_work' },
+    grocery: { hour: 17, minute: 30, duration: 60, window: 'after_work' },
+    groceries: { hour: 17, minute: 30, duration: 60, window: 'after_work' },
+    bank: { hour: 12, minute: 0, duration: 45, window: 'business_hours' },
+    doctor: { hour: 9, minute: 0, duration: 60, window: 'morning' },
+    dentist: { hour: 9, minute: 0, duration: 60, window: 'morning' },
+    coffee: { hour: 10, minute: 0, duration: 45, window: 'morning' },
+    meeting: { hour: 10, minute: 0, duration: 60, window: 'business_hours' },
+  };
+
+  // Find matching keyword suggestion in task text
+  let estimatedDuration = 30;
+  let foundMatch = false;
+  
+  for (const [keyword, suggestion] of Object.entries(timeSuggestions)) {
+    if (lowerText.includes(keyword)) {
+      context.push(`suggested_time:${suggestion.hour}:${suggestion.minute}`);
+      context.push(`timeWindow:${suggestion.window}`);
+      estimatedDuration = suggestion.duration;
+      foundMatch = true;
+      break;
     }
   }
-  
+
   // Fallback to category mappings if no keyword match
-  if (context.length === 0 && userConfig.categoryMappings?.[category]) {
-    const categoryConfig = userConfig.categoryMappings[category];
-    if (categoryConfig.defaultTimeWindow) {
-      context.push(`timeWindow:${categoryConfig.defaultTimeWindow}`);
-    }
-    if (categoryConfig.estimatedDuration) {
-      estimatedDuration = categoryConfig.estimatedDuration;
-    }
+  if (!foundMatch && userConfig?.categoryMappings?.[category]) {
+    const categoryWindow = userConfig.categoryMappings[category];
+    context.push(`timeWindow:${categoryWindow}`);
   }
   
   return { context, estimatedDuration };
