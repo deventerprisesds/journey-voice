@@ -451,11 +451,23 @@ Return ONLY valid JSON (no markdown):
     let estimatedDuration = 60;
     let preferredTimeMinutes: number | null = null;
 
-    // PRIORITY 1: Use AI suggestion if available
+    // PRIORITY 1: Use AI suggestion if available AND validate against window
     if (aiSuggestion) {
+      const aiHour = aiSuggestion.ideal_hour;
+      const aiMinute = aiSuggestion.ideal_minute || 0;
       timeWindow = aiSuggestion.suggested_time_window || timeWindow;
-      preferredTimeMinutes = (aiSuggestion.ideal_hour * 60) + (aiSuggestion.ideal_minute || 0);
-      console.log(`🤖 AI suggests: ${timeWindow} window, preferred time: ${aiSuggestion.ideal_hour}:${(aiSuggestion.ideal_minute || 0).toString().padStart(2, '0')}`);
+      
+      // Get window constraints to validate AI time
+      const windowConstraints = config.timeWindows[timeWindow] || config.timeWindows.flexible;
+      const aiTimeInWindow = (aiHour >= windowConstraints.start && aiHour < windowConstraints.end);
+      
+      if (aiTimeInWindow) {
+        preferredTimeMinutes = (aiHour * 60) + aiMinute;
+        console.log(`✅ AI time ${aiHour}:${aiMinute.toString().padStart(2, '0')} is within ${timeWindow} window (${windowConstraints.start}:00-${windowConstraints.end}:00) - using as preferred starting point`);
+      } else {
+        console.log(`❌ AI time ${aiHour}:${aiMinute.toString().padStart(2, '0')} is OUTSIDE ${timeWindow} window (${windowConstraints.start}:00-${windowConstraints.end}:00) - ignoring, will find nearest available`);
+        preferredTimeMinutes = null; // Ignore AI time, let scheduler figure it out
+      }
     }
     // PRIORITY 2: Check if context specifies time window
     else if (scheduling_context.find((ctx: string) => ctx.startsWith('timeWindow:'))) {
@@ -619,38 +631,7 @@ for (let dayOffset = 0; dayOffset < maxSearchDays; dayOffset++) {
       );
 
       if (slot) {
-        // Score this slot
-        let score = 0;
-        
-        // NEW SCORING LOGIC: Respect time windows for time-sensitive tasks
-        if (preferredStartUTC !== null) {
-          // For tasks with preferred times (e.g., lunch at 12 PM), prioritize TIME over DAY
-          const timeDiffMinutes = Math.abs((slot.start.getTime() - preferredStartUTC.getTime()) / 60000);
-          
-          // STRONG time match bonus (200 points for exact, degrades with distance)
-          score += Math.max(0, 200 - timeDiffMinutes * 5);
-          
-          // MODERATE day penalty (prefer sooner but don't override good time matches)
-          score -= dayOffset * 15;
-        } else {
-          // BATCH MODE: No preferred time - fill same day first, then move to next day
-          // Heavy penalty for day offset to encourage filling today's slots
-          score -= dayOffset * 100;  // Increased from 30 to strongly prefer same day
-          
-          // Within same day, prefer earlier slots but with lower weight
-          const slotHour = parseInt(slot.start.toLocaleTimeString('en-US', { timeZone: timezone, hour: '2-digit', hour12: false }));
-          score -= slotHour * 2;  // Earlier is slightly better within same day
-        }
-        
-        // Priority boost for earlier slots (URGENT tasks get best slots)
-        const priorityBonus: Record<string, number> = { 
-          URGENT: 50, 
-          HIGH: 30, 
-          MEDIUM: 10, 
-          LOW: 0 
-        };
-        score += priorityBonus[taskPriority] || 0;
-        
+        // 🚀 EARLIEST-DAY-FIRST: Found a slot on this day - use it immediately
         const localTimeStr = slot.start.toLocaleString('en-US', { timeZone: timezone });
         
         // 🔍 Check if this slot overlaps with any existing busy slot
@@ -661,14 +642,9 @@ for (let dayOffset = 0; dayOffset < maxSearchDays; dayOffset++) {
         });
         
         if (hasOverlap) {
-          console.log(`⚠️ Slot on day ${dayOffset} at ${localTimeStr} overlaps with existing task, skipping`);
+          console.log(`⚠️ Slot on day ${dayOffset} at ${localTimeStr} overlaps with existing task, trying next slot`);
         } else {
-          candidateSlots.push({
-            slot,
-            dayOffset,
-            date: dayStartUTC,
-            score
-          });
+          console.log(`✅ FOUND SLOT on Day ${dayOffset} at ${localTimeStr} (${timezone}) - selecting immediately (earliest-day-first)`);
           
           // Update counter for maxPerDay enforcement
           const categoryConfig = config.categoryMappings[taskCategory];
@@ -680,16 +656,42 @@ for (let dayOffset = 0; dayOffset < maxSearchDays; dayOffset++) {
             dayMap.set(taskCategory, (dayMap.get(taskCategory) || 0) + 1);
           }
           
-          console.log(`✅ Found valid slot on day ${dayOffset} at ${localTimeStr} (${timezone}) - score: ${score}`);
+          // Return immediately - don't look at future days
+          const scheduledSlot = slot;
+          const localTime = scheduledSlot.start.toLocaleString('en-US', { timeZone: timezone });
+          const utcTime = scheduledSlot.start.toISOString();
+          console.log(`✅ FINAL SELECTED SLOT:`, {
+            start: utcTime,
+            end: slotEnd.toISOString(),
+            localStart: localTime,
+            dayOffset,
+            duration: estimatedDuration,
+            preferredTimeUsed: preferredTimeMinutes !== null
+          });
+          
+          return new Response(
+            JSON.stringify({
+              success: true,
+              scheduledSlot: {
+                startTime: scheduledSlot.start.toISOString(),
+                endTime: scheduledSlot.end.toISOString(),
+                estimateMinutes: estimatedDuration,
+              },
+              suggestedCategory: taskCategory,
+              suggestedStatus: suggestedStatus,
+              timeWindow: timeWindow,
+              reasoning: `Scheduled in ${timeWindow} time window on ${scheduledSlot.start.toLocaleDateString()} based on category ${taskCategory}`,
+            }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
         }
       } else {
         console.log(`No slot found on day ${dayOffset}, trying next day`);
       }
     }
     
-    // Sort by score (highest first) and pick best
-    candidateSlots.sort((a, b) => b.score - a.score);
-    const scheduledSlot = candidateSlots.length > 0 ? candidateSlots[0].slot : null;
+    // If we get here, no slots found in any day
+    const scheduledSlot = null;
     
     if (scheduledSlot && candidateSlots.length > 0) {
       const localTime = scheduledSlot.start.toLocaleString('en-US', { timeZone: timezone });
@@ -924,33 +926,27 @@ function findBestSlotForDay(
           slot: { start: snappedPreferred, end: preferredEnd },
           score: 1000 // Perfect match gets highest score
         });
-        continue; // Found perfect fit, skip other candidates in this gap
+        // ❌ REMOVED: continue; // Don't skip other candidates - we need to fill nearby slots too
       }
 
-      // Otherwise, find closest fit within gap (only at :00 or :30)
-      let bestInGap: Date | null = null;
-      let bestScore = -Infinity;
-
-      // Try slots at 30-minute intervals (ensuring :00 or :30)
+      // Find other close fits within gap (only at :00 or :30)
       for (let offset = 0; offset <= gapDurationMinutes - durationMinutes; offset += 30) {
         const slotStart = new Date(snappedGapStart.getTime() + offset * 60000);
         const slotEnd = new Date(slotStart.getTime() + durationMinutes * 60000);
         
         if (slotEnd > constrainedGap.end) break;
 
+        // Skip if this is the exact preferred slot we already pushed
+        if (Math.abs(slotStart.getTime() - snappedPreferred.getTime()) < 60000) {
+          continue; // Already added this one
+        }
+
         const timeDiffMs = Math.abs(slotStart.getTime() - snappedPreferred.getTime());
         const score = 500 - (timeDiffMs / 60000); // Score decreases with distance from preferred
 
-        if (score > bestScore) {
-          bestScore = score;
-          bestInGap = slotStart;
-        }
-      }
-
-      if (bestInGap) {
         candidateSlots.push({
-          slot: { start: bestInGap, end: new Date(bestInGap.getTime() + durationMinutes * 60000) },
-          score: bestScore
+          slot: { start: slotStart, end: slotEnd },
+          score: score
         });
       }
     } else {
