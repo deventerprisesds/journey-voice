@@ -188,14 +188,36 @@ CRITICAL RULES:
 4. "Study at MIT" ≠ "Sell to MIT" - different categories!
 
 CATEGORY-TO-STATUS MAPPING (CRITICAL):
-- EDUCATION → status: "PROF_EDUCATION" (for all academic work where you're the student)
-- CAREER → status: "CAREER"
-- VENTURES → status: "VENTURES"
-- LIFE → status: "LIFE"
+BOTH category AND status MUST be set to the same value for consistency.
+These values represent task organization (category) AND workflow column (status).
 
-Special handling:
-- Any task mentioning MIT or EMBA in a learning/studying context → EDUCATION → PROF_EDUCATION
-- Any task mentioning universities/schools in a business/sales context → VENTURES → VENTURES
+CATEGORY DISTINCTION:
+
+PROF_EDUCATION - Formal degree/certification programs with strict schedules:
+- MIT courses, EMBA classes, university degree programs
+- Formal training programs with fixed deadlines
+- Examples: "MIT assignment", "EMBA group project", "MBA midterm", "Complete thesis"
+
+EDUCATION - Self-paced personal learning without strict institutional deadlines:
+- Online courses (Coursera, Udemy, LinkedIn Learning)
+- Certifications, tutorials, workshops
+- Personal study, skill development
+- Examples: "Complete Coursera course", "Learn Python", "Get AWS certified", "Read textbook"
+
+Primary task types:
+- LIFE: Personal activities, health, family, hobbies, self-care
+- CAREER: Job-related work, professional development, meetings
+- VENTURES: Business ideas, entrepreneurship, side projects
+- PROF_EDUCATION: Formal degree programs (MIT, EMBA, universities)
+- EDUCATION: Self-paced learning (Coursera, certifications, personal study)
+
+Examples:
+- "Doctor appointment" → category: "LIFE", status: "LIFE"
+- "Team standup meeting" → category: "CAREER", status: "CAREER"
+- "Complete MIT assignment" → category: "PROF_EDUCATION", status: "PROF_EDUCATION"
+- "EMBA group project" → category: "PROF_EDUCATION", status: "PROF_EDUCATION"
+- "Take Coursera course" → category: "EDUCATION", status: "EDUCATION"
+- "Research startup funding" → category: "VENTURES", status: "VENTURES"
 
 Return JSON in this exact format:
 {
@@ -204,12 +226,12 @@ Return JSON in this exact format:
       "title": "string",
       "description": "string or null",
       "priority": "LOW|MEDIUM|HIGH|URGENT",
-      "category": "LIFE|CAREER|VENTURES|EDUCATION", 
+      "category": "LIFE|CAREER|VENTURES|PROF_EDUCATION|EDUCATION", 
       "due_date": "ISO string or null",
       "start_time": null,
       "end_time": null,
       "estimate_minutes": number or null,
-      "status": "LIFE|CAREER|VENTURES|PROF_EDUCATION (must match category)",
+      "status": "LIFE|CAREER|VENTURES|PROF_EDUCATION|EDUCATION (must match category)",
       "scheduling_context": []
     }
   ]

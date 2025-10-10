@@ -566,6 +566,7 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
                     {dayTasks.slice(0, 3).map(task => {
                       const isWorkBlock = !!task.start_time;
                       const isReminder = !task.start_time && task.due_date;
+                      const isOverdue = task.due_date && new Date(task.due_date) < new Date() && task.status !== 'DONE';
                       
                       return (
                         <div
@@ -574,25 +575,32 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
                             "rounded text-xs truncate cursor-pointer",
                             // Work blocks: solid color with left border
                             isWorkBlock && "px-1 py-0.5 " + (priorityColors[task.priority] || 'bg-muted'),
-                            // Reminders: distinctive pill style with icon
-                            isReminder && "px-2 py-1 bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-300 flex items-center gap-1.5 shadow-sm"
+                            // Overdue reminders: red styling
+                            isOverdue && "px-2 py-1 bg-gradient-to-r from-red-50 to-red-100 border border-red-400 flex items-center gap-1.5 shadow-sm",
+                            // Due soon reminders: amber styling
+                            (isReminder && !isOverdue) && "px-2 py-1 bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-300 flex items-center gap-1.5 shadow-sm"
                           )}
                           onClick={(e) => {
                             e.stopPropagation();
                             onTaskEdit?.(task);
                           }}
-                          title={isReminder ? `Due: ${task.title} (Click to schedule work time)` : task.title}
+                          title={isOverdue ? `OVERDUE: ${task.title}` : isReminder ? `Due: ${task.title} (Click to schedule work time)` : task.title}
                         >
-                          {isReminder && (
-                            <div className="flex-shrink-0 w-4 h-4 rounded-full bg-amber-400 flex items-center justify-center">
+                          {(isReminder || isOverdue) && (
+                            <div className={cn(
+                              "flex-shrink-0 w-4 h-4 rounded-full flex items-center justify-center",
+                              isOverdue ? "bg-red-500" : "bg-amber-400"
+                            )}>
                               <AlertTriangle className="h-2.5 w-2.5 text-white" />
                             </div>
                           )}
                           <span className={cn(
                             "truncate",
-                            isReminder && "font-medium text-amber-900"
+                            (isReminder || isOverdue) && "font-medium",
+                            isOverdue ? "text-red-900" : isReminder && "text-amber-900"
                           )}>
-                            {isReminder && "DUE: "}
+                            {isOverdue && "OVERDUE: "}
+                            {isReminder && !isOverdue && "DUE: "}
                             {task.title}
                           </span>
                         </div>
