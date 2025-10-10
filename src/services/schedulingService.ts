@@ -162,6 +162,24 @@ export function extractSchedulingContext(
     };
   }
 
+  // Fallback: Detect MIT/EMBA in task text and force EDUCATION category
+  const lowerText = text.toLowerCase();
+  if (lowerText.includes('mit') || lowerText.includes('emba')) {
+    // Check if it's in a learning context (not selling)
+    const learningKeywords = ['study', 'assignment', 'exam', 'homework', 'lecture', 'class', 'course', 'module', 'read', 'prepare', 'complete'];
+    const isLearning = learningKeywords.some(keyword => lowerText.includes(keyword));
+    
+    if (isLearning) {
+      console.log('🎓 Detected MIT/EMBA learning task - forcing EDUCATION category');
+      return {
+        timeWindow: 'business_hours',
+        suggestedStatus: 'PROF_EDUCATION',
+        estimatedDuration: 120,
+        context: ['mit-emba-learning'],
+      };
+    }
+  }
+
   // Analyze keywords in task text
   let matchedTimeWindow: keyof SchedulingConfig['timeWindows'] = 'flexible';
   let suggestedStatus = 'TODO';

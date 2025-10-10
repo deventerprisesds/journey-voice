@@ -583,6 +583,23 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
     }
   };
 
+  // Helper to map category to status
+  const mapCategoryToStatus = (category: string): Task['status'] => {
+    switch (category) {
+      case 'LIFE':
+        return 'LIFE';
+      case 'CAREER':
+        return 'CAREER';
+      case 'VENTURES':
+        return 'VENTURES';
+      case 'EDUCATION':
+      case 'PROF_EDUCATION':
+        return 'PROF_EDUCATION';
+      default:
+        return 'BACKLOG';
+    }
+  };
+
   const handleCreateTasks = async (tasksToCreate: ParsedTask[]) => {
     setIsCreating(true);
     try {
@@ -607,7 +624,7 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
           user_id: userId,
           priority: task.priority,
           category: (task.category === 'PROF_EDUCATION' ? 'EDUCATION' : task.category) as any,
-          status: (task.assignment_id ? 'PROF_EDUCATION' : task.status) as Task['status'], // Force PROF_EDUCATION for assignments
+          status: mapCategoryToStatus(task.category) as Task['status'],
           due_date: task.due_date || null,
           // Force AI-parsed tasks to have null times so scheduler assigns them
           start_time: null,

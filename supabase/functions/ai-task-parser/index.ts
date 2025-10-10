@@ -138,11 +138,49 @@ DURATION ESTIMATES:
 - Workouts: 60 minutes
 - Social events: 120 minutes
 
-CATEGORY INFERENCE:
-- Work/job/career/meeting → CAREER
-- School/course/study/learning → EDUCATION
-- Business/startup/venture → VENTURES
-- Personal/family/life/errands → LIFE
+CATEGORY INFERENCE - USE SEMANTIC CONTEXT, NOT JUST KEYWORDS:
+
+EDUCATION (Academic work where YOU are the student/learner):
+- Attending classes at MIT, EMBA, university, school, college
+- Studying, learning, coursework, assignments, exams, homework
+- Academic projects, research papers, thesis work
+- Reading textbooks, course materials
+- Examples: "Study for MIT exam", "Complete EMBA assignment", "Attend university lecture"
+
+VENTURES (Business/entrepreneurial activities):
+- Starting/running a business, startups, ventures
+- Sales, marketing, pitching, finding customers/clients
+- Product development for your business
+- Networking for business opportunities
+- Examples: "Find universities to sell products to", "Pitch to potential clients", "Research market opportunities"
+
+CAREER (Employment/job-related):
+- Work tasks, job responsibilities, meetings with colleagues/boss
+- Professional development within your current role
+- Career advancement activities
+- Examples: "Prepare presentation for client", "Team meeting", "Performance review"
+
+LIFE (Personal/non-work activities):
+- Family, friends, personal errands, household tasks
+- Personal health, fitness, hobbies
+- Social events not related to work/business
+- Examples: "Pick up groceries", "Doctor appointment", "Dinner with friends"
+
+CRITICAL RULES:
+1. If task mentions MIT, EMBA, or university in a LEARNING context → EDUCATION
+2. If task mentions MIT, EMBA, or university in a SELLING/BUSINESS context → VENTURES
+3. Look at the VERB and INTENT, not just the noun
+4. "Study at MIT" ≠ "Sell to MIT" - different categories!
+
+CATEGORY-TO-STATUS MAPPING (CRITICAL):
+- EDUCATION → status: "PROF_EDUCATION" (for all academic work where you're the student)
+- CAREER → status: "CAREER"
+- VENTURES → status: "VENTURES"
+- LIFE → status: "LIFE"
+
+Special handling:
+- Any task mentioning MIT or EMBA in a learning/studying context → EDUCATION → PROF_EDUCATION
+- Any task mentioning universities/schools in a business/sales context → VENTURES → VENTURES
 
 Return JSON in this exact format:
 {
@@ -153,11 +191,11 @@ Return JSON in this exact format:
       "priority": "LOW|MEDIUM|HIGH|URGENT",
       "category": "LIFE|CAREER|VENTURES|EDUCATION", 
       "due_date": "ISO string or null",
-      "start_time": "ISO string or null",
-      "end_time": "ISO string or null",
+      "start_time": null,
+      "end_time": null,
       "estimate_minutes": number or null,
-      "status": "BACKLOG|TODO|READY|UP_NEXT|DOING",
-      "scheduling_context": ["array of context clues"]
+      "status": "LIFE|CAREER|VENTURES|PROF_EDUCATION (must match category)",
+      "scheduling_context": []
     }
   ]
 }
@@ -165,17 +203,20 @@ Return JSON in this exact format:
 Guidelines:
 - Extract multiple tasks if the input contains a list
 - Infer priority from urgency indicators (urgent, asap, high priority, etc.)
-- Infer category from context (work/job=CAREER, school/course=EDUCATION, business=VENTURES, personal=LIFE)
+- Infer category from SEMANTIC CONTEXT: Look at the VERB and INTENT, not just keywords
 - Parse relative dates ("tomorrow", "next week", "in 3 days") into ISO dates
 - Parse time estimates ("2 hours", "30 minutes", "half day") into minutes
-- Default to BACKLOG status unless urgency suggests TODO/READY/UP_NEXT
+- **CRITICAL**: Set status to match category (LIFE→LIFE, CAREER→CAREER, VENTURES→VENTURES, EDUCATION→PROF_EDUCATION)
 - Make titles concise but actionable
 - Add context to descriptions when helpful
 
 Examples:
-- "Schedule dentist appointment for next Tuesday" → title: "Schedule dentist appointment", due_date: next Tuesday's ISO date
-- "Urgent: finish project proposal by Friday, should take 3 hours" → priority: "URGENT", estimate_minutes: 180
-- "Learn React, Vue, and Angular" → 3 separate tasks with EDUCATION category`;
+- "Study for MIT midterm exam" → category: "EDUCATION", status: "PROF_EDUCATION"
+- "Complete EMBA group project" → category: "EDUCATION", status: "PROF_EDUCATION"
+- "Find universities to sell our software to" → category: "VENTURES", status: "VENTURES"
+- "Pitch product to MIT procurement office" → category: "VENTURES", status: "VENTURES"
+- "Pay credit cards" → category: "LIFE", status: "LIFE"
+- "Prepare slides for client meeting" → category: "CAREER", status: "CAREER"`;
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',

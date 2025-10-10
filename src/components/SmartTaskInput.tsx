@@ -28,6 +28,23 @@ interface TaskSuggestion {
   aiReasoning: string;
 }
 
+// Helper to map category to status
+const mapCategoryToStatus = (category: string): Task['status'] => {
+  switch (category) {
+    case 'LIFE':
+      return 'LIFE';
+    case 'CAREER':
+      return 'CAREER';
+    case 'VENTURES':
+      return 'VENTURES';
+    case 'EDUCATION':
+    case 'PROF_EDUCATION':
+      return 'PROF_EDUCATION';
+    default:
+      return 'BACKLOG';
+  }
+};
+
 const SmartTaskInput: React.FC<SmartTaskInputProps> = ({
   tasks,
   targetDate,
@@ -126,7 +143,7 @@ const SmartTaskInput: React.FC<SmartTaskInputProps> = ({
           end_time: endTime.toISOString(),
           estimate_minutes: editedSuggestion.estimate_minutes,
           is_scheduled: true,
-          status: 'TODO',
+          status: mapCategoryToStatus(editedSuggestion.category),
           user_id: user.id,
           board_id: boards[0].id,
           reminder_minutes: 15
