@@ -143,7 +143,8 @@ export function extractSchedulingContext(
   priority?: string,
   config: SchedulingConfig = DEFAULT_SCHEDULING_CONFIG
 ): {
-  timeWindow: keyof SchedulingConfig['timeWindows'];
+  timeWindow: keyof SchedulingConfig['timeWindows']; // First window for backward compatibility
+  allowedTimeWindows: string[]; // All allowed windows
   suggestedStatus: string;
   estimatedDuration: number;
   context: string[];
@@ -155,7 +156,8 @@ export function extractSchedulingContext(
   if (category && config.categoryMappings[category]) {
     const mapping = config.categoryMappings[category];
     return {
-      timeWindow: mapping.defaultTimeWindow,
+      timeWindow: mapping.defaultTimeWindow[0] as keyof SchedulingConfig['timeWindows'], // First for backward compatibility
+      allowedTimeWindows: mapping.defaultTimeWindow,
       suggestedStatus: mapping.defaultStatus,
       estimatedDuration: mapping.estimatedDuration,
       context: [`category:${category}`],
@@ -173,6 +175,7 @@ export function extractSchedulingContext(
       console.log('🎓 Detected MIT/EMBA learning task - forcing EDUCATION category');
       return {
         timeWindow: 'business_hours',
+        allowedTimeWindows: ['business_hours'],
         suggestedStatus: 'PROF_EDUCATION',
         estimatedDuration: 120,
         context: ['mit-emba-learning'],
@@ -246,6 +249,7 @@ export function extractSchedulingContext(
 
   return {
     timeWindow: matchedTimeWindow,
+    allowedTimeWindows: [matchedTimeWindow],
     suggestedStatus,
     estimatedDuration,
     context,
@@ -281,79 +285,89 @@ export function getWorkloadBalanceConfig(
 }
 
 /**
- * Check if a time slot is within allowed time window
+ * Check if a time slot is within allowed time window(s)
+ * Supports both single window (backward compatibility) and array of windows
  */
 export function isTimeSlotAllowed(
   date: Date,
-  timeWindow: keyof SchedulingConfig['timeWindows'],
+  timeWindow: keyof SchedulingConfig['timeWindows'] | string[],
   config: SchedulingConfig = DEFAULT_SCHEDULING_CONFIG
 ): boolean {
-  const constraints = config.timeWindows[timeWindow];
-  const dayOfWeek = date.getDay();
-  const hour = date.getHours();
-
-  return (
-    constraints.days.includes(dayOfWeek) &&
-    hour >= constraints.start &&
-    hour < constraints.end
-  );
+  // Support both single window (backward compatibility) and array
+  const windows = Array.isArray(timeWindow) ? timeWindow : [timeWindow];
+  
+  // Check if date/time falls within ANY of the allowed windows
+  return windows.some(windowName => {
+    const window = config.timeWindows[windowName as keyof SchedulingConfig['timeWindows']];
+    if (!window) return false;
+    
+    const day = date.getDay();
+    const hour = date.getHours();
+    
+    return window.days.includes(day) && hour >= window.start && hour < window.end;
+  });
 }
 
 /**
- * Get available time slots for a given day and time window
+ * Get available time slots for a given day and time window(s)
+ * Supports both single window (backward compatibility) and array of windows
  */
 export function getAvailableTimeSlots(
   date: Date,
-  timeWindow: keyof SchedulingConfig['timeWindows'],
+  timeWindow: keyof SchedulingConfig['timeWindows'] | string[],
   busySlots: { start: Date; end: Date }[],
   config: SchedulingConfig = DEFAULT_SCHEDULING_CONFIG
 ): { start: Date; end: Date }[] {
-  const constraints = config.timeWindows[timeWindow];
-  const dayOfWeek = date.getDay();
-
-  // Check if day is allowed
-  if (!constraints.days.includes(dayOfWeek)) {
-    return [];
-  }
-
-  // Create time slots for the day
-  const dayStart = new Date(date);
-  dayStart.setHours(constraints.start, 0, 0, 0);
-
-  const dayEnd = new Date(date);
-  dayEnd.setHours(constraints.end, 0, 0, 0);
-
-  // Sort busy slots
-  const sortedBusy = busySlots
-    .filter(slot => {
-      const slotDate = new Date(slot.start);
-      return slotDate.toDateString() === date.toDateString();
-    })
-    .sort((a, b) => a.start.getTime() - b.start.getTime());
-
-  // Find gaps
-  const availableSlots: { start: Date; end: Date }[] = [];
-  let currentTime = dayStart;
-
-  for (const busySlot of sortedBusy) {
-    if (busySlot.start > currentTime) {
-      availableSlots.push({
+  const windows = Array.isArray(timeWindow) ? timeWindow : [timeWindow];
+  const allSlots: { start: Date; end: Date }[] = [];
+  
+  // Collect available slots from ALL allowed time windows
+  windows.forEach(windowName => {
+    const window = config.timeWindows[windowName as keyof SchedulingConfig['timeWindows']];
+    if (!window) return;
+    
+    const day = date.getDay();
+    if (!window.days.includes(day)) return;
+    
+    // Create time slots for the day
+    const dayStart = new Date(date);
+    dayStart.setHours(window.start, 0, 0, 0);
+    
+    const dayEnd = new Date(date);
+    dayEnd.setHours(window.end, 0, 0, 0);
+    
+    // Sort busy slots
+    const sortedBusy = busySlots
+      .filter(slot => {
+        const slotDate = new Date(slot.start);
+        return slotDate.toDateString() === date.toDateString();
+      })
+      .sort((a, b) => a.start.getTime() - b.start.getTime());
+    
+    // Find gaps
+    let currentTime = dayStart;
+    
+    for (const busySlot of sortedBusy) {
+      if (busySlot.start > currentTime) {
+        allSlots.push({
+          start: new Date(currentTime),
+          end: new Date(busySlot.start),
+        });
+      }
+      currentTime = busySlot.end > currentTime ? busySlot.end : currentTime;
+    }
+    
+    // Add final slot if time remains
+    if (currentTime < dayEnd) {
+      allSlots.push({
         start: new Date(currentTime),
-        end: new Date(busySlot.start),
+        end: new Date(dayEnd),
       });
     }
-    currentTime = busySlot.end > currentTime ? busySlot.end : currentTime;
-  }
-
-  // Add final slot if time remains
-  if (currentTime < dayEnd) {
-    availableSlots.push({
-      start: new Date(currentTime),
-      end: new Date(dayEnd),
-    });
-  }
-
-  return availableSlots;
+  });
+  
+  // Sort by start time and return
+  return allSlots.sort((a, b) => a.start.getTime() - b.start.getTime());
 }
 
 /**

@@ -35,7 +35,7 @@ export interface SchedulingConfig {
   };
   categoryMappings: {
     [category: string]: {
-      defaultTimeWindow: keyof SchedulingConfig['timeWindows'];
+      defaultTimeWindow: string[]; // Array of allowed time windows
       defaultStatus: string;
       estimatedDuration: number; // minutes
       maxPerDay?: number; // Optional max tasks per day for this category
@@ -100,33 +100,33 @@ export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
   },
   categoryMappings: {
     CAREER: {
-      defaultTimeWindow: 'business_hours',
+      defaultTimeWindow: ['business_hours'],
       defaultStatus: 'CAREER',
       estimatedDuration: 120,
     },
     PROF_EDUCATION: {
-      defaultTimeWindow: 'after_work',
+      defaultTimeWindow: ['after_work', 'weekends'],
       defaultStatus: 'PROF_EDUCATION',
       estimatedDuration: 90,
       maxPerDay: 2
     },
     EDUCATION: {
-      defaultTimeWindow: 'after_work',
-      defaultStatus: 'PROF_EDUCATION',
+      defaultTimeWindow: ['flexible'],
+      defaultStatus: 'EDUCATION',
       estimatedDuration: 90,
     },
     VENTURES: {
-      defaultTimeWindow: 'after_work',
+      defaultTimeWindow: ['after_work', 'weekends'],
       defaultStatus: 'VENTURES',
       estimatedDuration: 120,
     },
     LIFE: {
-      defaultTimeWindow: 'flexible',
+      defaultTimeWindow: ['flexible'],
       defaultStatus: 'LIFE',
       estimatedDuration: 60,
     },
     PERSONAL: {
-      defaultTimeWindow: 'flexible',
+      defaultTimeWindow: ['flexible'],
       defaultStatus: 'LIFE',
       estimatedDuration: 60,
     },
@@ -202,7 +202,7 @@ Return your suggestion with reasoning that explains why this time makes sense fo
 
 // Helper function to validate config
 export function validateSchedulingConfig(config: Partial<SchedulingConfig>): boolean {
-  // Basic validation
+  // Validate workload balance
   if (config.workloadBalance) {
     const { projectToTaskRatio, oneOffTaskRatio, bufferRatio } = config.workloadBalance;
     const sum = projectToTaskRatio + oneOffTaskRatio + bufferRatio;
@@ -211,6 +211,17 @@ export function validateSchedulingConfig(config: Partial<SchedulingConfig>): boo
       return false;
     }
   }
+  
+  // Validate time windows - each category must have at least one
+  if (config.categoryMappings) {
+    for (const [category, mapping] of Object.entries(config.categoryMappings)) {
+      if (!mapping.defaultTimeWindow || mapping.defaultTimeWindow.length === 0) {
+        console.error(`Category ${category} must have at least one time window`);
+        return false;
+      }
+    }
+  }
+  
   return true;
 }
 
@@ -218,12 +229,28 @@ export function validateSchedulingConfig(config: Partial<SchedulingConfig>): boo
 export function mergeSchedulingConfig(
   userConfig: Partial<SchedulingConfig>
 ): SchedulingConfig {
+  // Migrate old single-string time windows to arrays
+  const migratedCategoryMappings = userConfig.categoryMappings 
+    ? Object.entries(userConfig.categoryMappings).reduce((acc, [key, mapping]) => {
+        acc[key] = {
+          ...mapping,
+          defaultTimeWindow: Array.isArray(mapping.defaultTimeWindow)
+            ? mapping.defaultTimeWindow
+            : [mapping.defaultTimeWindow], // Wrap string in array for backward compatibility
+        };
+        return acc;
+      }, {} as SchedulingConfig['categoryMappings'])
+    : undefined;
+
   return {
     timezone: userConfig.timezone ?? DEFAULT_SCHEDULING_CONFIG.timezone,
     timeWindows: { ...DEFAULT_SCHEDULING_CONFIG.timeWindows, ...userConfig.timeWindows },
     workingHours: { ...DEFAULT_SCHEDULING_CONFIG.workingHours, ...userConfig.workingHours },
     workloadBalance: { ...DEFAULT_SCHEDULING_CONFIG.workloadBalance, ...userConfig.workloadBalance },
-    categoryMappings: { ...DEFAULT_SCHEDULING_CONFIG.categoryMappings, ...userConfig.categoryMappings },
+    categoryMappings: { 
+      ...DEFAULT_SCHEDULING_CONFIG.categoryMappings, 
+      ...migratedCategoryMappings 
+    },
     contextRules: {
       keywords: { ...DEFAULT_SCHEDULING_CONFIG.contextRules.keywords, ...userConfig.contextRules?.keywords },
       priorityMappings: { ...DEFAULT_SCHEDULING_CONFIG.contextRules.priorityMappings, ...userConfig.contextRules?.priorityMappings },

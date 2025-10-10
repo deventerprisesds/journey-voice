@@ -196,12 +196,16 @@ CATEGORY DISTINCTION:
 PROF_EDUCATION - Formal degree/certification programs with strict schedules:
 - MIT courses, EMBA classes, university degree programs
 - Formal training programs with fixed deadlines
+- Can be scheduled in BOTH after_work (weekday evenings) AND weekends
+- Prioritize after_work slots on weekdays for consistency
+- Use weekend slots for longer study sessions or overflow
 - Examples: "MIT assignment", "EMBA group project", "MBA midterm", "Complete thesis"
 
 EDUCATION - Self-paced personal learning without strict institutional deadlines:
 - Online courses (Coursera, Udemy, LinkedIn Learning)
 - Certifications, tutorials, workshops
 - Personal study, skill development
+- Flexible scheduling
 - Examples: "Complete Coursera course", "Learn Python", "Get AWS certified", "Read textbook"
 
 Primary task types:

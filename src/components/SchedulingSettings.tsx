@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Checkbox } from '@/components/ui/checkbox';
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
 import {
@@ -451,34 +452,53 @@ const SchedulingSettings: React.FC = () => {
               <Label className="text-base font-medium">{category}</Label>
               <div className="grid grid-cols-3 gap-4">
                 <div className="space-y-2">
-                  <Label className="text-sm">Time Window</Label>
-                  <Select
-                    value={mapping.defaultTimeWindow}
-                    onValueChange={(value) =>
-                      setConfig({
-                        ...config,
-                        categoryMappings: {
-                          ...config.categoryMappings,
-                          [category]: {
-                            ...mapping,
-                            defaultTimeWindow: value as keyof SchedulingConfig['timeWindows'],
-                          },
-                        },
-                      })
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="morning">Morning</SelectItem>
-                      <SelectItem value="business_hours">Business Hours</SelectItem>
-                      <SelectItem value="after_work">After Work</SelectItem>
-                      <SelectItem value="evening">Evening</SelectItem>
-                      <SelectItem value="flexible">Flexible</SelectItem>
-                      <SelectItem value="weekends">Weekends</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <Label className="text-sm">Time Windows (select one or more)</Label>
+                  <div className="space-y-2 pl-2">
+                    {(['morning', 'business_hours', 'after_work', 'evening', 'flexible', 'weekends'] as const).map((window) => (
+                      <div key={window} className="flex items-center space-x-2">
+                        <Checkbox
+                          id={`${category}-${window}`}
+                          checked={mapping.defaultTimeWindow.includes(window)}
+                          onCheckedChange={(checked) => {
+                            const currentWindows = mapping.defaultTimeWindow;
+                            const newWindows = checked
+                              ? [...currentWindows, window]
+                              : currentWindows.filter((w) => w !== window);
+                            
+                            // Prevent removing all windows
+                            if (newWindows.length === 0) {
+                              return;
+                            }
+                            
+                            setConfig({
+                              ...config,
+                              categoryMappings: {
+                                ...config.categoryMappings,
+                                [category]: {
+                                  ...mapping,
+                                  defaultTimeWindow: newWindows,
+                                },
+                              },
+                            });
+                          }}
+                        />
+                        <label
+                          htmlFor={`${category}-${window}`}
+                          className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
+                        >
+                          {window.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}
+                        </label>
+                      </div>
+                    ))}
+                  </div>
+                  {mapping.defaultTimeWindow.length === 0 && (
+                    <p className="text-xs text-destructive mt-1">⚠️ At least one time window must be selected</p>
+                  )}
+                  {mapping.defaultTimeWindow.length > 1 && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      ℹ️ Tasks can be scheduled in any of these time windows
+                    </p>
+                  )}
                 </div>
                 <div className="space-y-2">
                   <Label className="text-sm">Board Lane</Label>
