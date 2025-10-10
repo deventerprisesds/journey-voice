@@ -626,9 +626,10 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
           category: (task.category === 'PROF_EDUCATION' ? 'EDUCATION' : task.category) as any,
           status: mapCategoryToStatus(task.category) as Task['status'],
           due_date: task.due_date || null,
-          // Force AI-parsed tasks to have null times so scheduler assigns them
-          start_time: null,
-          end_time: null,
+          // Preserve AI-parsed times from preview
+          start_time: task.start_time || null,
+          end_time: task.end_time || null,
+          is_scheduled: !!(task.start_time && task.end_time),
           estimate_minutes: task.estimate_minutes || null,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
@@ -658,6 +659,9 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
         createdTasks = data;
       }
 
+      // Log which tasks have times vs. need scheduling
+      console.log(`📋 Created ${createdTasks.length} tasks, ${createdTasks.filter(t => t.start_time).length} with preview times`);
+      
       // Auto-schedule ALL tasks that don't have explicit times set by user
       const tasksToSchedule = createdTasks.filter(task => 
         !task.start_time && !task.end_time // Schedule if no times set

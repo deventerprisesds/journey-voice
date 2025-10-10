@@ -238,9 +238,9 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onStatusChange, onEdit, onSch
     }
   };
 
-  // Check if task should show scheduling indicator
-  const showSchedulingIndicator = task.is_scheduled || (task.start_time && task.end_time);
-  const isAutoScheduled = task.is_scheduled && task.start_time && task.end_time;
+  // Show scheduled time whenever we have both start and end times
+  const showScheduledTime = !!(task.start_time && task.end_time);
+  const isAutoScheduled = task.is_scheduled;
 
   const handleDeleteTask = async () => {
     if (!onDelete || isDeleting) return;
@@ -387,10 +387,10 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onStatusChange, onEdit, onSch
             </div>
           )}
 
-          {isAutoScheduled && (
+          {showScheduledTime && (
             <div className="flex items-center gap-1 text-xs text-primary">
               <CalendarPlus className="h-3 w-3" />
-              <span>Scheduled: {task.start_time ? format(new Date(task.start_time), 'MMM d, h:mm a') : 'Auto-scheduled'}</span>
+              <span>Scheduled: {format(new Date(task.start_time!), 'MMM d, h:mm a')}{isAutoScheduled ? ' (auto)' : ''}</span>
             </div>
           )}
 
