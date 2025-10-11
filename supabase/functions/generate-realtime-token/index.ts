@@ -34,9 +34,9 @@ serve(async (req) => {
         output_audio_format: "pcm16",
         turn_detection: {
           type: "server_vad",
-          threshold: 0.5,
-          prefix_padding_ms: 300,
-          silence_duration_ms: 800
+          threshold: 0.3,
+          prefix_padding_ms: 400,
+          silence_duration_ms: 1200
         },
         tool_choice: "auto",
         tools: [
@@ -66,7 +66,7 @@ serve(async (req) => {
           {
             type: "function",
             name: "create_task",
-            description: "Create a new task with specified details",
+            description: "Create a new task. Use UPPERCASE for priority (LOW, MEDIUM, HIGH, URGENT). For education/school tasks, use category 'EDUCATION'. The system will place tasks in the appropriate board.",
             parameters: {
               type: "object",
               properties: {
@@ -74,10 +74,14 @@ serve(async (req) => {
                 description: { type: "string", description: "Task description" },
                 priority: { 
                   type: "string", 
-                  enum: ["low", "medium", "high", "urgent"],
-                  description: "Task priority level" 
+                  enum: ["LOW", "MEDIUM", "HIGH", "URGENT"],
+                  description: "Task priority level (UPPERCASE)" 
                 },
-                category: { type: "string", description: "Task category or project" }
+                category: { 
+                  type: "string", 
+                  enum: ["LIFE", "CAREER", "VENTURES", "EDUCATION"],
+                  description: "Task category - use EDUCATION for school/MIT/EMBA tasks" 
+                }
               },
               required: ["title"]
             }
@@ -85,7 +89,7 @@ serve(async (req) => {
           {
             type: "function",
             name: "update_task",
-            description: "Update an existing task's properties",
+            description: "Update an existing task's properties. Use UPPERCASE for priority and status.",
             parameters: {
               type: "object",
               properties: {
@@ -95,12 +99,17 @@ serve(async (req) => {
                 status: { 
                   type: "string", 
                   enum: ["BACKLOG", "TODO", "DOING", "DONE"],
-                  description: "New task status" 
+                  description: "New task status (UPPERCASE)" 
                 },
                 priority: { 
                   type: "string", 
-                  enum: ["low", "medium", "high", "urgent"],
-                  description: "New task priority" 
+                  enum: ["LOW", "MEDIUM", "HIGH", "URGENT"],
+                  description: "New task priority (UPPERCASE)" 
+                },
+                category: { 
+                  type: "string", 
+                  enum: ["LIFE", "CAREER", "VENTURES", "EDUCATION"],
+                  description: "New task category" 
                 }
               },
               required: ["task_id"]

@@ -587,6 +587,42 @@ export class RealtimeVoiceAssistant {
   }
 
   // Task management functions
+  // Helper: Normalize priority to database enum
+  private normalizePriority(priority?: string): 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT' {
+    if (!priority) return 'MEDIUM';
+    const p = priority.toUpperCase();
+    if (['LOW', 'MEDIUM', 'HIGH', 'URGENT'].includes(p)) {
+      return p as 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
+    }
+    return 'MEDIUM';
+  }
+
+  // Helper: Normalize category to database enum
+  private normalizeCategory(category?: string): 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION' {
+    if (!category) return 'LIFE';
+    const c = category.toLowerCase().replace(/[_\s-]+/g, '');
+    
+    // Education-related terms
+    if (c.includes('education') || c.includes('professional') || 
+        c.includes('mit') || c.includes('emba') || c.includes('degree') || 
+        c.includes('college') || c.includes('school') || c.includes('class') || 
+        c.includes('coursework') || c.includes('learning') || c.includes('study')) {
+      return 'EDUCATION';
+    }
+    
+    // Career-related terms
+    if (c.includes('career') || c.includes('work') || c.includes('job')) {
+      return 'CAREER';
+    }
+    
+    // Ventures-related terms
+    if (c.includes('venture') || c.includes('startup') || c.includes('business')) {
+      return 'VENTURES';
+    }
+    
+    return 'LIFE';
+  }
+
   private async createTask(args: any) {
     try {
       // UI status: creating task
@@ -594,7 +630,29 @@ export class RealtimeVoiceAssistant {
 
       const userId = (await supabase.auth.getUser()).data.user?.id;
       if (!userId) {
-        throw new Error('User not authenticated');
+        this.onMessage?.({ 
+          type: 'client.error', 
+          message: 'Please log in to create tasks' 
+        });
+        return { 
+          success: false, 
+          error: 'Please log in to create tasks',
+          message: 'You need to be logged in to create tasks'
+        };
+      }
+
+      // Validate title
+      const title = args.title?.trim();
+      if (!title) {
+        this.onMessage?.({ 
+          type: 'client.error', 
+          message: 'Task title is required' 
+        });
+        return { 
+          success: false, 
+          error: 'Task title is required',
+          message: 'Please provide a title for the task'
+        };
       }
 
       console.log('Looking for user boards...');
@@ -683,19 +741,25 @@ export class RealtimeVoiceAssistant {
         }
       }
 
+      // Normalize and prepare task data
+      const normalizedPriority = this.normalizePriority(args.priority);
+      const normalizedCategory = this.normalizeCategory(args.category);
+      
+      console.log('📝 Creating task with normalized values:', {
+        title,
+        priority: `${args.priority} → ${normalizedPriority}`,
+        category: `${args.category} → ${normalizedCategory}`
+      });
+
       const taskData = {
-        title: args.title,
-        description: args.description || null,
-        priority: args.priority || 'MEDIUM',
-        category: args.category || 'LIFE',
+        title,
+        description: args.description?.trim() || null,
+        priority: normalizedPriority,
+        category: normalizedCategory,
         status: 'BACKLOG' as const,
         board_id: defaultBoard.id,
-        user_id: (await supabase.auth.getUser()).data.user?.id
+        user_id: userId
       };
-
-      if (!taskData.user_id) {
-        throw new Error('User not authenticated');
-      }
 
       const { data: task, error: taskError } = await supabase
         .from('tasks')
@@ -705,11 +769,16 @@ export class RealtimeVoiceAssistant {
 
       if (taskError) {
         console.error('❌ Task insert failed:', taskError);
+        const errorMessage = taskError.message || 'Failed to create task';
         this.onMessage?.({ 
           type: 'client.error', 
-          message: `Failed to create task: ${taskError.message}` 
+          message: `Failed to create task: ${errorMessage}` 
         });
-        throw taskError;
+        return {
+          success: false,
+          error: errorMessage,
+          message: `I couldn't create that task. ${errorMessage}`
+        };
       }
 
       // Send notifications for the newly created task
@@ -727,8 +796,14 @@ export class RealtimeVoiceAssistant {
         console.warn('Failed to send notifications:', notificationError);
       }
 
+      console.log('✅ Task created successfully:', task.title);
       this.onMessage?.({ type: 'client.done', status: 'Task created' });
-      return { success: true, task };
+      
+      return { 
+        success: true, 
+        task,
+        message: `Created "${task.title}" in Backlog with ${normalizedPriority} priority`
+      };
     } catch (error) {
       console.error('❌ Error creating task:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error creating task';
@@ -738,7 +813,8 @@ export class RealtimeVoiceAssistant {
       });
       return {
         success: false,
-        error: errorMessage
+        error: errorMessage,
+        message: `I couldn't create that task. ${errorMessage}`
       };
     }
   }
@@ -749,11 +825,13 @@ export class RealtimeVoiceAssistant {
       this.onMessage?.({ type: 'client.processing', status: 'Updating task...' });
 
       const updateData: any = {};
-      if (args.title) updateData.title = args.title;
-      if (args.description !== undefined) updateData.description = args.description;
-      if (args.priority) updateData.priority = args.priority;
-      if (args.status) updateData.status = args.status;
-      if (args.category) updateData.category = args.category;
+      if (args.title) updateData.title = args.title.trim();
+      if (args.description !== undefined) updateData.description = args.description?.trim() || null;
+      if (args.priority) updateData.priority = this.normalizePriority(args.priority);
+      if (args.status) updateData.status = args.status.toUpperCase();
+      if (args.category) updateData.category = this.normalizeCategory(args.category);
+
+      console.log('📝 Updating task with normalized values:', updateData);
 
       const { data, error } = await supabase
         .from('tasks')
@@ -762,14 +840,39 @@ export class RealtimeVoiceAssistant {
         .select()
         .single();
 
-      if (error) throw error;
+      if (error) {
+        console.error('❌ Task update failed:', error);
+        const errorMessage = error.message || 'Failed to update task';
+        this.onMessage?.({ 
+          type: 'client.error', 
+          message: `Failed to update task: ${errorMessage}` 
+        });
+        return { 
+          success: false, 
+          error: errorMessage,
+          message: `I couldn't update that task. ${errorMessage}`
+        };
+      }
 
+      console.log('✅ Task updated successfully');
       this.onMessage?.({ type: 'client.done', status: 'Task updated' });
-      return { success: true, task: data };
+      return { 
+        success: true, 
+        task: data,
+        message: `Updated "${data.title}" successfully`
+      };
     } catch (error) {
-      console.error('Error updating task:', error);
-      this.onMessage?.({ type: 'client.error', message: error instanceof Error ? error.message : 'Unknown error' });
-      return { error: error instanceof Error ? error.message : 'Unknown error' };
+      console.error('❌ Error updating task:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      this.onMessage?.({ 
+        type: 'client.error', 
+        message: errorMessage 
+      });
+      return { 
+        success: false, 
+        error: errorMessage,
+        message: `I couldn't update that task. ${errorMessage}`
+      };
     }
   }
 
