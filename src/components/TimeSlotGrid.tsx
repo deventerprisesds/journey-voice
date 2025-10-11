@@ -10,7 +10,7 @@ interface TimeSlotGridProps {
   dates: Date[];
   tasks: Task[];
   externalEvents?: ExternalCalendarEvent[];
-  onTimeSlotClick?: (date: Date, hour: number) => void;
+  onTimeSlotClick?: (date: Date, hour: number, minute: number) => void;
   onTaskClick?: (task: Task) => void;
   className?: string;
 }
@@ -23,9 +23,19 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
   onTaskClick,
   className
 }) => {
-  const timeSlots = Array.from({ length: 17 }, (_, i) => i + 6); // 6 AM to 11 PM
+  // Generate 15-minute interval time slots from 6 AM to 11 PM
+  const timeSlots: { hour: number; minute: number; label: string }[] = [];
+  for (let hour = 6; hour <= 22; hour++) {
+    for (let minute of [0, 15, 30, 45]) {
+      timeSlots.push({ 
+        hour, 
+        minute, 
+        label: `${hour}:${minute.toString().padStart(2, '0')}` 
+      });
+    }
+  }
 
-  const getTasksForTimeSlot = (date: Date, hour: number) => {
+  const getTasksForTimeSlot = (date: Date, hour: number, minute: number) => {
     return tasks.filter(task => {
       if (!task.start_time || !task.end_time) return false;
       
@@ -35,15 +45,15 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
       if (!isSameDay(taskStart, date)) return false;
       
       const slotStart = new Date(date);
-      slotStart.setHours(hour, 0, 0, 0);
+      slotStart.setHours(hour, minute, 0, 0);
       const slotEnd = new Date(date);
-      slotEnd.setHours(hour + 1, 0, 0, 0);
+      slotEnd.setHours(hour, minute + 15, 0, 0);
       
       return taskStart < slotEnd && taskEnd > slotStart;
     });
   };
 
-  const getEventsForTimeSlot = (date: Date, hour: number) => {
+  const getEventsForTimeSlot = (date: Date, hour: number, minute: number) => {
     return externalEvents.filter(event => {
       const eventStart = parseISO(event.start_time);
       const eventEnd = parseISO(event.end_time);
@@ -51,9 +61,9 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
       if (!isSameDay(eventStart, date)) return false;
       
       const slotStart = new Date(date);
-      slotStart.setHours(hour, 0, 0, 0);
+      slotStart.setHours(hour, minute, 0, 0);
       const slotEnd = new Date(date);
-      slotEnd.setHours(hour + 1, 0, 0, 0);
+      slotEnd.setHours(hour, minute + 15, 0, 0);
       
       return eventStart < slotEnd && eventEnd > slotStart;
     });
@@ -101,25 +111,25 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
 
       {/* Time slots grid */}
       <div className="relative">
-        {timeSlots.map(hour => (
-          <div key={hour} className="grid gap-0 border-b border-border/50" style={{gridTemplateColumns: `80px repeat(${dates.length}, 1fr)`}}>
+        {timeSlots.map(slot => (
+          <div key={`${slot.hour}-${slot.minute}`} className="grid gap-0 border-b border-border/50" style={{gridTemplateColumns: `80px repeat(${dates.length}, 1fr)`}}>
             {/* Time label */}
             <div className="p-2 border-r bg-muted/10 flex items-start justify-end">
               <span className="text-xs text-muted-foreground">
-                {format(new Date().setHours(hour, 0), 'h a')}
+                {slot.label}
               </span>
             </div>
             
             {/* Date columns */}
             {dates.map((date, dateIndex) => {
-              const slotTasks = getTasksForTimeSlot(date, hour);
-              const slotEvents = getEventsForTimeSlot(date, hour);
+              const slotTasks = getTasksForTimeSlot(date, slot.hour, slot.minute);
+              const slotEvents = getEventsForTimeSlot(date, slot.hour, slot.minute);
               
               return (
                 <div
-                  key={`${hour}-${dateIndex}`}
+                  key={`${slot.hour}-${slot.minute}-${dateIndex}`}
                   className="relative border-r h-16 hover:bg-muted/30 transition-colors group cursor-pointer"
-                  onClick={() => onTimeSlotClick?.(date, hour)}
+                  onClick={() => onTimeSlotClick?.(date, slot.hour, slot.minute)}
                 >
                   {/* Add task button */}
                   <Button
@@ -128,7 +138,7 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
                     className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity h-6 w-6 p-0"
                     onClick={(e) => {
                       e.stopPropagation();
-                      onTimeSlotClick?.(date, hour);
+                      onTimeSlotClick?.(date, slot.hour, slot.minute);
                     }}
                   >
                     <Plus className="h-3 w-3" />

@@ -22,6 +22,8 @@ const Calendar: React.FC = () => {
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
+  const [selectedHour, setSelectedHour] = useState<number | null>(null);
+  const [selectedMinute, setSelectedMinute] = useState<number | null>(null);
   const [defaultBoardId, setDefaultBoardId] = useState<string>('');
 
   // Load default board ID
@@ -93,6 +95,16 @@ const Calendar: React.FC = () => {
     loadTasks();
   }, [isDemoMode]);
 
+  // Listen for voice task creation events
+  useEffect(() => {
+    const handleVoiceTaskCreated = () => {
+      console.log('Voice task created, refreshing calendar...');
+      loadTasks();
+    };
+    window.addEventListener('voice-task-created', handleVoiceTaskCreated);
+    return () => window.removeEventListener('voice-task-created', handleVoiceTaskCreated);
+  }, []);
+
   // Handle deep linking to specific tasks (same as Dashboard)
   useEffect(() => {
     if (!loading && tasks.length > 0) {
@@ -119,8 +131,10 @@ const Calendar: React.FC = () => {
     setSelectedTask(task);
   };
 
-  const handleCreateTask = (date: Date) => {
+  const handleCreateTask = (date: Date, hour?: number, minute?: number) => {
     setSelectedDate(date);
+    setSelectedHour(hour ?? null);
+    setSelectedMinute(minute ?? null);
     setIsCreateModalOpen(true);
   };
 
@@ -133,6 +147,8 @@ const Calendar: React.FC = () => {
     loadTasks();
     setIsCreateModalOpen(false);
     setSelectedDate(null);
+    setSelectedHour(null);
+    setSelectedMinute(null);
   };
 
   if (loading) {
@@ -216,10 +232,15 @@ const Calendar: React.FC = () => {
           onClose={() => {
             setIsCreateModalOpen(false);
             setSelectedDate(null);
+            setSelectedHour(null);
+            setSelectedMinute(null);
           }}
           onTasksCreated={() => handleTaskCreate()}
           boardId={defaultBoardId}
           userId={user?.id || ""}
+          initialDate={selectedDate}
+          initialHour={selectedHour}
+          initialMinute={selectedMinute}
         />
         </div>
       </div>

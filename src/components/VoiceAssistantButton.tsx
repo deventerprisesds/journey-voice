@@ -11,14 +11,20 @@ const VoiceAssistantButton: React.FC = () => {
       isSpeechDetected,
       isProcessing,
       connectToAssistant,
+      disconnectAssistant,
       toggleListening,
     } = useVoiceAssistant();
 
     const handleClick = async () => {
       if (!isConnected) {
+        // Not connected → Connect
         await connectToAssistant();
-      } else {
+      } else if (isListening) {
+        // Connected and listening → Stop listening (keep connection)
         await toggleListening();
+      } else {
+        // Connected but not listening → Disconnect
+        disconnectAssistant();
       }
     };
 

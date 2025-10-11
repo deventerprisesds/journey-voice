@@ -72,6 +72,9 @@ interface TaskCreationModalProps {
   onTasksCreated: (tasks: Task[]) => void;
   boardId: string;
   userId: string;
+  initialDate?: Date | null;
+  initialHour?: number | null;
+  initialMinute?: number | null;
 }
 
 const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
@@ -79,7 +82,10 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
   onClose,
   onTasksCreated,
   boardId,
-  userId
+  userId,
+  initialDate,
+  initialHour,
+  initialMinute
 }) => {
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState<'ai' | 'manual' | 'assignments'>('ai');
@@ -129,8 +135,13 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
     category: 'LIFE',
     status: 'BACKLOG'
   });
-  const [dueDate, setDueDate] = useState<Date | undefined>(undefined);
-  const [startTime, setStartTime] = useState<string>('');
+  const [dueDate, setDueDate] = useState<Date | undefined>(initialDate || undefined);
+  const [startTime, setStartTime] = useState<string>(() => {
+    if (initialHour !== null && initialMinute !== null) {
+      return `${initialHour.toString().padStart(2, '0')}:${initialMinute.toString().padStart(2, '0')}`;
+    }
+    return '';
+  });
   const [endTime, setEndTime] = useState<string>('');
   const [estimateHours, setEstimateHours] = useState('');
   const [estimateMinutes, setEstimateMinutes] = useState('');

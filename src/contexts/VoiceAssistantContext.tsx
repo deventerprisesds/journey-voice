@@ -77,6 +77,8 @@ export const VoiceAssistantProvider: React.FC<VoiceAssistantProviderProps> = ({
         setIsProcessing(false);
         setProcessingStatus('');
       }, 1200);
+      // Emit event for calendar refresh
+      window.dispatchEvent(new CustomEvent('voice-task-created'));
       return;
     }
     if (message.type === 'client.error') {
@@ -86,6 +88,13 @@ export const VoiceAssistantProvider: React.FC<VoiceAssistantProviderProps> = ({
         title: 'Assistant Error',
         description: message.message || 'Something went wrong',
         variant: 'destructive',
+      });
+      return;
+    }
+    if (message.type === 'assistant.disconnect') {
+      toast({
+        title: "Voice Assistant",
+        description: message.message || "Disconnecting...",
       });
       return;
     }

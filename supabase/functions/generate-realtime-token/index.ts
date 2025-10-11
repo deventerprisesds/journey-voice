@@ -114,6 +114,20 @@ serve(async (req) => {
               },
               required: ["task_id"]
             }
+          },
+          {
+            type: "function",
+            name: "disconnect",
+            description: "Disconnect the voice assistant when user says goodbye, 'that's all', 'disconnect', 'that will be all', 'thanks that's it', or similar phrases indicating they're done.",
+            parameters: {
+              type: "object",
+              properties: {
+                farewell_message: {
+                  type: "string",
+                  description: "Optional goodbye message to say before disconnecting"
+                }
+              }
+            }
           }
         ],
         instructions: `You are a helpful task management assistant. You can help users create, update, and manage their tasks through voice commands.
@@ -124,8 +138,11 @@ Available functions:
 - get_tasks: Retrieve tasks and chat history with time/keyword filtering
 - create_task: Create new tasks with title, description, priority, and category
 - update_task: Update existing tasks (status, title, description, priority)
+- disconnect: Disconnect when user says goodbye, "that's all", "disconnect", "I'm done", or similar farewell phrases
 
-Always confirm actions you take and provide helpful feedback about task management.`
+Always confirm actions you take and provide helpful feedback about task management.
+
+When the user says goodbye phrases like 'that's all', 'thanks that's it', 'disconnect', 'I'm done', 'goodbye', or similar, call the disconnect function with a friendly farewell message.`
       }),
     });
 

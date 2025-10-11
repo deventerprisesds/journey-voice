@@ -492,12 +492,17 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="BACKLOG">Backlog</SelectItem>
-                  <SelectItem value="TODO">To Do</SelectItem>
-                  <SelectItem value="DOING">In Progress</SelectItem>
-                  <SelectItem value="DONE">Done</SelectItem>
-                </SelectContent>
+                    <SelectContent>
+                      <SelectItem value="BACKLOG">Backlog</SelectItem>
+                      <SelectItem value="TODO">To Do</SelectItem>
+                      <SelectItem value="DOING">In Progress</SelectItem>
+                      <SelectItem value="DONE">Done</SelectItem>
+                      <SelectItem value="LIFE">Life Lane</SelectItem>
+                      <SelectItem value="CAREER">Career Lane</SelectItem>
+                      <SelectItem value="VENTURES">Ventures Lane</SelectItem>
+                      <SelectItem value="EDUCATION">Education Lane</SelectItem>
+                      <SelectItem value="PROF_EDUCATION">Prof Education Lane</SelectItem>
+                    </SelectContent>
               </Select>
             </div>
 

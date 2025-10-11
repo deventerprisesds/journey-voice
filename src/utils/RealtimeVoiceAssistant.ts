@@ -446,6 +446,9 @@ export class RealtimeVoiceAssistant {
         case 'get_tasks':
           result = await this.getTasks(args);
           break;
+        case 'disconnect':
+          result = await this.handleDisconnectTool(args);
+          break;
         default:
           result = { error: `Unknown function: ${functionName}` };
       }
@@ -756,7 +759,7 @@ export class RealtimeVoiceAssistant {
         description: args.description?.trim() || null,
         priority: normalizedPriority,
         category: normalizedCategory,
-        status: 'BACKLOG' as const,
+        status: normalizedCategory, // Use category as status/lane automatically
         board_id: defaultBoard.id,
         user_id: userId
       };
@@ -921,5 +924,16 @@ export class RealtimeVoiceAssistant {
         error: error instanceof Error ? error.message : 'Unknown error'
       };
     }
+  }
+
+  private async handleDisconnectTool(args: any) {
+    console.log('🔴 Disconnect tool called with args:', args);
+    this.onMessage?.({ 
+      type: 'assistant.disconnect', 
+      message: args.farewell_message || "Goodbye!" 
+    });
+    // Give the assistant time to speak the farewell, then disconnect
+    setTimeout(() => this.disconnect(), 2000);
+    return { success: true, message: "Disconnecting..." };
   }
 }
