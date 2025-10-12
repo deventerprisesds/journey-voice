@@ -69,21 +69,21 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
     });
   };
 
-  const getTaskPosition = (task: Task, hour: number) => {
+  const getTaskPosition = (task: Task, slot: { hour: number; minute: number }) => {
     if (!task.start_time || !task.end_time) return { top: 0, height: 60 };
     
     const taskStart = parseISO(task.start_time);
     const taskEnd = parseISO(task.end_time);
     
     const slotStart = new Date(taskStart);
-    slotStart.setHours(hour, 0, 0, 0);
+    slotStart.setHours(slot.hour, slot.minute, 0, 0);
     
-    const startMinutesFromHour = Math.max(0, differenceInMinutes(taskStart, slotStart));
-    const durationMinutes = Math.min(60 - startMinutesFromHour, differenceInMinutes(taskEnd, addMinutes(slotStart, startMinutesFromHour)));
+    const startMinutesFromSlot = Math.max(0, differenceInMinutes(taskStart, slotStart));
+    const durationMinutes = Math.min(15 - startMinutesFromSlot, differenceInMinutes(taskEnd, addMinutes(slotStart, startMinutesFromSlot)));
     
     return {
-      top: (startMinutesFromHour / 60) * 60, // 60px per hour
-      height: Math.max(20, (durationMinutes / 60) * 60)
+      top: (startMinutesFromSlot / 15) * 16, // 16px per 15-minute slot
+      height: Math.max(12, (durationMinutes / 15) * 16)
     };
   };
 
@@ -170,7 +170,7 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
                   
                   {/* Tasks */}
                   {slotTasks.map((task, taskIndex) => {
-                    const position = getTaskPosition(task, hour);
+                    const position = getTaskPosition(task, slot);
                     
                     return (
                       <div
@@ -181,7 +181,7 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
                         )}
                         style={{
                           top: position.top + 2,
-                          height: Math.max(20, position.height - 4)
+                          height: Math.max(12, position.height - 4)
                         }}
                         onClick={(e) => {
                           e.stopPropagation();

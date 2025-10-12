@@ -78,13 +78,16 @@ export type Database = {
       }
       assignments: {
         Row: {
+          academic_semester: string | null
           assignment_url: string | null
+          category: string | null
           course_id: string | null
           created_at: string
           description: string | null
           due_date: string | null
           feedback: string | null
           id: string
+          level_of_effort: string | null
           points: number | null
           priority: string
           sheet_row_number: number | null
@@ -95,13 +98,16 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          academic_semester?: string | null
           assignment_url?: string | null
+          category?: string | null
           course_id?: string | null
           created_at?: string
           description?: string | null
           due_date?: string | null
           feedback?: string | null
           id?: string
+          level_of_effort?: string | null
           points?: number | null
           priority?: string
           sheet_row_number?: number | null
@@ -112,13 +118,16 @@ export type Database = {
           user_id: string
         }
         Update: {
+          academic_semester?: string | null
           assignment_url?: string | null
+          category?: string | null
           course_id?: string | null
           created_at?: string
           description?: string | null
           due_date?: string | null
           feedback?: string | null
           id?: string
+          level_of_effort?: string | null
           points?: number | null
           priority?: string
           sheet_row_number?: number | null
@@ -140,13 +149,16 @@ export type Database = {
       }
       assignments_mit: {
         Row: {
+          academic_semester: string | null
           assignment_url: string | null
+          category: string | null
           course_id: string | null
           created_at: string
           description: string | null
           due_date: string | null
           feedback: string | null
           id: string
+          level_of_effort: string | null
           points: number | null
           priority: string
           sheet_row_number: number | null
@@ -157,13 +169,16 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          academic_semester?: string | null
           assignment_url?: string | null
+          category?: string | null
           course_id?: string | null
           created_at?: string
           description?: string | null
           due_date?: string | null
           feedback?: string | null
           id?: string
+          level_of_effort?: string | null
           points?: number | null
           priority?: string
           sheet_row_number?: number | null
@@ -174,13 +189,16 @@ export type Database = {
           user_id: string
         }
         Update: {
+          academic_semester?: string | null
           assignment_url?: string | null
+          category?: string | null
           course_id?: string | null
           created_at?: string
           description?: string | null
           due_date?: string | null
           feedback?: string | null
           id?: string
+          level_of_effort?: string | null
           points?: number | null
           priority?: string
           sheet_row_number?: number | null

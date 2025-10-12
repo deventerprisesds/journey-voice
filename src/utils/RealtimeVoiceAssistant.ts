@@ -759,14 +759,14 @@ export class RealtimeVoiceAssistant {
         description: args.description?.trim() || null,
         priority: normalizedPriority,
         category: normalizedCategory,
-        status: normalizedCategory, // Use category as status/lane automatically
+        status: normalizedCategory as 'CAREER' | 'LIFE' | 'VENTURES' | 'PROF_EDUCATION', // Use category as status/lane automatically
         board_id: defaultBoard.id,
         user_id: userId
       };
 
       const { data: task, error: taskError } = await supabase
         .from('tasks')
-        .insert(taskData)
+        .insert([taskData])
         .select()
         .single();
 
