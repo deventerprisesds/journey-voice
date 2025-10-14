@@ -57,6 +57,11 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
     localStorage.setItem('calendar-show-completed', JSON.stringify(newValue));
   };
 
+  // Filter tasks based on showCompletedTasks toggle
+  const visibleTasks = showCompletedTasks 
+    ? tasks 
+    : tasks.filter(task => task.status !== 'DONE');
+
   const timeSlots = Array.from({ length: 17 }, (_, i) => i + 6); // 6 AM to 11 PM
 
   useEffect(() => {
@@ -481,7 +486,7 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
         <ScrollArea className="h-[600px]">
           <TimeSlotGrid
             dates={[currentDate]}
-            tasks={tasks}
+            tasks={visibleTasks}
             externalEvents={externalEvents}
             onTimeSlotClick={handleTimeSlotClick}
             onTaskClick={onTaskEdit}
@@ -522,7 +527,7 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
         <ScrollArea className="h-[600px]">
           <TimeSlotGrid
             dates={weekDays}
-            tasks={tasks}
+            tasks={visibleTasks}
             externalEvents={externalEvents}
             onTimeSlotClick={handleTimeSlotClick}
             onTaskClick={onTaskEdit}
