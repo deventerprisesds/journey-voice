@@ -214,12 +214,14 @@ export async function getCalendarAvailability(startDate: string, endDate: string
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return { busySlots: [], tasks: [] };
 
-    // Get user's scheduled tasks
+    // Get user's scheduled tasks (exclude completed tasks)
     const { data: tasks } = await supabase
       .from('tasks')
       .select('*')
       .eq('user_id', user.id)
       .eq('is_scheduled', true)
+      .neq('status', 'DONE')
+      .is('completed_at', null)
       .gte('start_time', startDate)
       .lte('end_time', endDate);
 

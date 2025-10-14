@@ -126,18 +126,21 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
     setIsLoading(true);
     try {
       const now = new Date();
+      const sevenDaysFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
       
-      // Find incomplete scheduled tasks that are in the past or need reorganization
+      // Find incomplete tasks that need reorganization
       const tasksToReorganize = tasks.filter(task => {
         if (task.status === 'DONE' || task.completed_at) return false;
         
-        // Case 1: Scheduled work that's now past
+        // Case 1: Scheduled work in the past
         if (task.start_time) {
           const taskStart = new Date(task.start_time);
-          return taskStart < now;
+          if (taskStart < now) return true;
+          // Case 2: Scheduled work within next 7 days (pull forward if possible)
+          if (taskStart <= sevenDaysFromNow) return true;
         }
         
-        // Case 2: Unscheduled task with past due date (assignments that were never scheduled)
+        // Case 3: Unscheduled task with past due date
         if (task.due_date && !task.start_time) {
           const dueDate = new Date(task.due_date);
           return dueDate < now;
@@ -152,15 +155,44 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
         return;
       }
 
+      // Sort by due_date (asc, nulls last), then priority, then created_at
+      tasksToReorganize.sort((a, b) => {
+        if (a.due_date && !b.due_date) return -1;
+        if (!a.due_date && b.due_date) return 1;
+        if (a.due_date && b.due_date) {
+          const dateDiff = new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
+          if (dateDiff !== 0) return dateDiff;
+        }
+        
+        const priorityOrder = { URGENT: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
+        const priorityDiff = priorityOrder[a.priority] - priorityOrder[b.priority];
+        if (priorityDiff !== 0) return priorityDiff;
+        
+        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      });
+
       toast.info(`Re-organizing ${tasksToReorganize.length} task${tasksToReorganize.length > 1 ? 's' : ''}...`);
 
-      // Call scheduler with correct parameters for each task
       let successCount = 0;
       let failedCount = 0;
       const errors: Array<{ task: string; error: string }> = [];
+      
+      // Create working copy of tasks for sequential scheduling
+      let workingTasks = tasks.map(t => ({
+        id: t.id,
+        title: t.title,
+        start_time: t.start_time,
+        end_time: t.end_time,
+        priority: t.priority,
+        category: t.category,
+        status: t.status
+      }));
 
       for (const task of tasksToReorganize) {
         try {
+          // Build existingTasks excluding the current task (so it doesn't block itself)
+          const existingTasksPayload = workingTasks.filter(t => t.id !== task.id);
+          
           const { data, error } = await supabase.functions.invoke('smart-calendar-scheduler', {
             body: {
               taskText: `${task.title}${task.description ? ' - ' + task.description : ''}`,
@@ -169,18 +201,10 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
               estimateMinutes: task.estimate_minutes || 60,
               dueDate: task.due_date,
               userId: task.user_id,
-              existingTasks: tasks.map(t => ({
-                id: t.id,
-                title: t.title,
-                start_time: t.start_time,
-                end_time: t.end_time,
-                priority: t.priority,
-                category: t.category,
-                status: t.status
-              })),
+              existingTasks: existingTasksPayload,
               busySlots: busySlots,
               scheduling_context: task.scheduling_context || [],
-              targetDate: new Date().toISOString(),
+              targetDate: now.toISOString(),
               timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
             }
           });
@@ -194,6 +218,14 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
 
           if (data?.success && data?.scheduledSlot) {
             console.log(`✅ Rescheduled "${task.title}" to ${data.scheduledSlot.startTime}`);
+            
+            // Update working tasks with new slot
+            const taskIndex = workingTasks.findIndex(t => t.id === task.id);
+            if (taskIndex !== -1) {
+              workingTasks[taskIndex].start_time = data.scheduledSlot.startTime;
+              workingTasks[taskIndex].end_time = data.scheduledSlot.endTime;
+            }
+            
             // Update task in database with new schedule
             await supabase
               .from('tasks')
@@ -688,7 +720,7 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
               size="sm"
               onClick={handleReOrganize}
               disabled={isLoading}
-              title="Re-schedule incomplete tasks starting from now"
+              title="Pull forward and re-optimize tasks scheduled in the next 7 days"
             >
               <CalendarIcon className="h-4 w-4 mr-1" />
               Re-Organize
