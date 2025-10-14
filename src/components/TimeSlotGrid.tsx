@@ -69,13 +69,13 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
     });
   };
 
-  const getTaskPosition = (task: Task, slot: { hour: number; minute: number }) => {
+  const getTaskPosition = (task: Task, slot: { hour: number; minute: number }, date: Date) => {
     if (!task.start_time || !task.end_time) return { top: 0, height: 60 };
     
     const taskStart = parseISO(task.start_time);
     const taskEnd = parseISO(task.end_time);
     
-    const slotStart = new Date(taskStart);
+    const slotStart = new Date(date);
     slotStart.setHours(slot.hour, slot.minute, 0, 0);
     
     const startMinutesFromSlot = Math.max(0, differenceInMinutes(taskStart, slotStart));
@@ -170,7 +170,7 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
                   
                   {/* Tasks */}
                   {slotTasks.map((task, taskIndex) => {
-                    const position = getTaskPosition(task, slot);
+                    const position = getTaskPosition(task, slot, date);
                     
                     return (
                       <div

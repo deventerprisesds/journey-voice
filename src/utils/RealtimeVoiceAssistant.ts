@@ -754,12 +754,20 @@ export class RealtimeVoiceAssistant {
         category: `${args.category} → ${normalizedCategory}`
       });
 
-      const taskData = {
+      const taskData: {
+        title: string;
+        description: string | null;
+        priority: 'HIGH' | 'LOW' | 'MEDIUM' | 'URGENT';
+        category: 'CAREER' | 'EDUCATION' | 'LIFE' | 'VENTURES';
+        status: 'BLOCKED' | 'LIFE' | 'CAREER' | 'PROF_EDUCATION' | 'VENTURES' | 'PLANNING' | 'READY' | 'UP_NEXT' | 'DOING' | 'DONE' | 'BACKLOG' | 'TODO';
+        board_id: string;
+        user_id: string;
+      } = {
         title,
         description: args.description?.trim() || null,
         priority: normalizedPriority,
         category: normalizedCategory,
-        status: normalizedCategory as 'CAREER' | 'LIFE' | 'VENTURES' | 'PROF_EDUCATION', // Use category as status/lane automatically
+        status: normalizedCategory === 'EDUCATION' ? 'PROF_EDUCATION' : normalizedCategory, // Map EDUCATION to PROF_EDUCATION status
         board_id: defaultBoard.id,
         user_id: userId
       };
