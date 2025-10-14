@@ -1293,6 +1293,7 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                               <SelectItem value="READY">Ready</SelectItem>
                               <SelectItem value="UP_NEXT">Up Next</SelectItem>
                               <SelectItem value="DOING">Doing</SelectItem>
+                              <SelectItem value="PROF_EDUCATION">Prof. Education</SelectItem>
                             </SelectContent>
                           </Select>
                         </div>
@@ -1609,6 +1610,7 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                     <SelectItem value="TODO">To Do</SelectItem>
                     <SelectItem value="DOING">Doing</SelectItem>
                     <SelectItem value="DONE">Done</SelectItem>
+                    <SelectItem value="PROF_EDUCATION">Prof. Education</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

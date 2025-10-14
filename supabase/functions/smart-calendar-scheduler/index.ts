@@ -766,9 +766,9 @@ function getAllBusySlotsForDay(
     externalSlots: externalBusySlots.length
   });
 
-  // Add existing scheduled tasks that overlap this day
+  // Add existing scheduled tasks that overlap this day (exclude completed tasks)
   existingTasks.forEach((task) => {
-    if (task.start_time) {
+    if (task.start_time && task.status !== 'DONE') {
       const taskStart = new Date(task.start_time);
       const taskEnd = task.end_time
         ? new Date(task.end_time)

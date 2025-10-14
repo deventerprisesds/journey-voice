@@ -35,11 +35,12 @@ export async function scheduleNewTask(
       console.warn('⚠️ User config incomplete or empty, edge function will use defaults');
     }
     
-    // Get user's existing tasks for context
+    // Get user's existing tasks for context (exclude completed tasks)
     const { data: existingTasks } = await supabase
       .from('tasks')
       .select('*')
-      .eq('user_id', task.user_id);
+      .eq('user_id', task.user_id)
+      .neq('status', 'DONE');
 
     // Get external calendar availability if connected
     const { data: calendarConnections } = await supabase
