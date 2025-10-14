@@ -45,6 +45,7 @@ interface TaskGridViewProps {
   tasks: Task[];
   onTaskEdit?: (task: Task) => void;
   onTaskUpdate?: () => void;
+  onStatusChange?: (taskId: string, newStatus: Task['status']) => void;
 }
 
 type GroupByType = 'category' | 'status' | 'priority' | 'due_date';
@@ -79,7 +80,7 @@ const categoryColors = {
   PROF_EDUCATION: 'bg-purple-100 text-purple-700 border-purple-300',
 };
 
-const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUpdate }) => {
+const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUpdate, onStatusChange }) => {
   const { toast } = useToast();
   const { isDemoMode, user } = useAuth();
   const [sortBy, setSortBy] = useState<string>('created_at');
@@ -232,6 +233,16 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
       newExpanded.add(groupKey);
     }
     setExpandedGroups(newExpanded);
+  };
+
+  const handleCheckboxChange = (taskId: string, checked: boolean) => {
+    if (!onStatusChange) return;
+    
+    if (checked) {
+      onStatusChange(taskId, 'DONE');
+    } else {
+      onStatusChange(taskId, 'TODO');
+    }
   };
 
   const startEditing = (taskId: string, field: string, currentValue: string) => {
@@ -764,6 +775,7 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
                          <TableRow>
                            {isSelectMode && <TableHead className="w-12"></TableHead>}
                            <TableHead className="w-8"></TableHead>
+                           <TableHead className="w-10">Done</TableHead>
                            <TableHead 
                              className="cursor-pointer hover:bg-muted/50"
                              onClick={() => handleSort('title')}
@@ -908,8 +920,19 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
                                   </Button>
                                 </TableCell>
                                 <TableCell>
+                                  {onStatusChange && (
+                                    <Checkbox
+                                      checked={task.status === 'DONE'}
+                                      onCheckedChange={(checked) => handleCheckboxChange(task.id, !!checked)}
+                                    />
+                                  )}
+                                </TableCell>
+                                <TableCell>
                                   <div className="space-y-1">
-                                    <div className="font-medium">
+                                    <div className={cn(
+                                      "font-medium",
+                                      task.status === 'DONE' && "line-through text-muted-foreground"
+                                    )}>
                                       {renderEditableCell(task, 'title', task.title)}
                                     </div>
                                     {task.assignment_url && (

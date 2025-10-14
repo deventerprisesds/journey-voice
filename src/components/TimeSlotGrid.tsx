@@ -4,6 +4,7 @@ import { cn } from '@/lib/utils';
 import { Task, ExternalCalendarEvent } from '@/types/task';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Plus, Clock, Calendar } from 'lucide-react';
 
 interface TimeSlotGridProps {
@@ -12,6 +13,7 @@ interface TimeSlotGridProps {
   externalEvents?: ExternalCalendarEvent[];
   onTimeSlotClick?: (date: Date, hour: number, minute: number) => void;
   onTaskClick?: (task: Task) => void;
+  onStatusChange?: (taskId: string, newStatus: Task['status']) => void;
   className?: string;
 }
 
@@ -21,6 +23,7 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
   externalEvents = [],
   onTimeSlotClick,
   onTaskClick,
+  onStatusChange,
   className
 }) => {
   // Generate 15-minute interval time slots from 6 AM to 11 PM
@@ -67,6 +70,16 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
       
       return eventStart < slotEnd && eventEnd > slotStart;
     });
+  };
+
+  const handleCheckboxChange = (taskId: string, checked: boolean) => {
+    if (!onStatusChange) return;
+    
+    if (checked) {
+      onStatusChange(taskId, 'DONE');
+    } else {
+      onStatusChange(taskId, 'DOING');
+    }
   };
 
   const getTaskPosition = (task: Task, slot: { hour: number; minute: number }, date: Date) => {
@@ -176,25 +189,49 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
                       <div
                         key={`task-${taskIndex}`}
                         className={cn(
-                          "absolute left-0 right-0 rounded px-1 py-0.5 text-xs cursor-pointer hover:opacity-90 transition-opacity z-20",
+                          "absolute left-0 right-0 rounded px-1 py-0.5 text-xs group cursor-pointer hover:opacity-90 transition-opacity z-20",
                           priorityColors[task.priority]
                         )}
                         style={{
                           top: position.top + 2,
-                          height: Math.max(12, position.height - 4)
-                        }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onTaskClick?.(task);
+                          height: Math.max(16, position.height - 4)
                         }}
                       >
-                        <div className="truncate font-medium">{task.title}</div>
-                        {task.start_time && task.end_time && (
-                          <div className="text-xs opacity-90 flex items-center gap-1">
-                            <Clock className="h-2 w-2" />
-                            {format(parseISO(task.start_time), 'h:mm')} - {format(parseISO(task.end_time), 'h:mm')}
+                        {/* Checkbox overlay - visible on hover */}
+                        {onStatusChange && (
+                          <div 
+                            className="absolute left-1 top-1 opacity-0 group-hover:opacity-100 transition-opacity z-30"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <Checkbox
+                              checked={task.status === 'DONE'}
+                              onCheckedChange={(checked) => handleCheckboxChange(task.id, !!checked)}
+                              className="h-3 w-3 bg-white border-2"
+                            />
                           </div>
                         )}
+                        
+                        {/* Task content */}
+                        <div 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onTaskClick?.(task);
+                          }}
+                          className="pl-5"
+                        >
+                          <div className={cn(
+                            "truncate font-medium",
+                            task.status === 'DONE' && "line-through opacity-60"
+                          )}>
+                            {task.title}
+                          </div>
+                          {task.start_time && task.end_time && (
+                            <div className="text-xs opacity-90 flex items-center gap-1">
+                              <Clock className="h-2 w-2" />
+                              {format(parseISO(task.start_time), 'h:mm')} - {format(parseISO(task.end_time), 'h:mm')}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     );
                   })}

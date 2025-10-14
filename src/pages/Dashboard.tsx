@@ -152,6 +152,27 @@ const Dashboard = () => {
     setTasks(loadedTasks);
   };
 
+  const handleStatusChange = async (taskId: string, newStatus: any) => {
+    try {
+      const { error } = await supabase
+        .from('tasks')
+        .update({ 
+          status: newStatus,
+          completed_at: newStatus === 'DONE' ? new Date().toISOString() : null,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', taskId);
+
+      if (error) throw error;
+
+      loadTasks();
+      toast.success(newStatus === 'DONE' ? 'Task completed!' : 'Task status updated');
+    } catch (error) {
+      console.error('Error updating task status:', error);
+      toast.error('Failed to update task status');
+    }
+  };
+
   // Redirect to auth if not logged in
   if (!user) {
     return (
@@ -253,6 +274,7 @@ const Dashboard = () => {
                   tasks={tasks}
                   onTaskEdit={handleTaskEdit}
                   onTaskUpdate={handleTaskUpdate}
+                  onStatusChange={handleStatusChange}
                 />
               )}
             </>

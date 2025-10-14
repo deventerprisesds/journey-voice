@@ -151,6 +151,27 @@ const Calendar: React.FC = () => {
     setSelectedMinute(null);
   };
 
+  const handleStatusChange = async (taskId: string, newStatus: Task['status']) => {
+    try {
+      const { error } = await supabase
+        .from('tasks')
+        .update({ 
+          status: newStatus,
+          completed_at: newStatus === 'DONE' ? new Date().toISOString() : null,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', taskId);
+
+      if (error) throw error;
+
+      loadTasks();
+      toast.success(newStatus === 'DONE' ? 'Task completed!' : 'Task status updated');
+    } catch (error) {
+      console.error('Error updating task status:', error);
+      toast.error('Failed to update task status');
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -215,6 +236,7 @@ const Calendar: React.FC = () => {
               onTaskEdit={handleTaskEdit}
               onCreateTask={handleCreateTask}
               onTaskScheduled={loadTasks}
+              onStatusChange={handleStatusChange}
             />
 
         {/* Task Detail Modal */}

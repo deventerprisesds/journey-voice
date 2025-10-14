@@ -22,6 +22,7 @@ interface CalendarModuleProps {
   onTaskEdit?: (task: Task) => void;
   onCreateTask?: (date: Date) => void;
   onTaskScheduled?: () => void;
+  onStatusChange?: (taskId: string, newStatus: Task['status']) => void;
 }
 
 interface TimeSlotClickHandler {
@@ -35,6 +36,7 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
   onTaskEdit,
   onCreateTask,
   onTaskScheduled,
+  onStatusChange,
 }) => {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [view, setView] = useState<ViewType>('month');
@@ -451,6 +453,7 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
             externalEvents={externalEvents}
             onTimeSlotClick={handleTimeSlotClick}
             onTaskClick={onTaskEdit}
+            onStatusChange={onStatusChange}
             className="border rounded-lg"
           />
           {/* Show unscheduled tasks for this date */}
@@ -491,6 +494,7 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
             externalEvents={externalEvents}
             onTimeSlotClick={handleTimeSlotClick}
             onTaskClick={onTaskEdit}
+            onStatusChange={onStatusChange}
             className="border rounded-lg"
           />
         </ScrollArea>

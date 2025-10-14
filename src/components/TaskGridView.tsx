@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { Input } from '@/components/ui/input';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { 
   Table, 
@@ -46,6 +47,7 @@ interface Task {
 interface TaskGridViewProps {
   tasks: Task[];
   onTaskEdit?: (task: Task) => void;
+  onStatusChange?: (taskId: string, newStatus: Task['status']) => void;
 }
 
 const priorityColors = {
@@ -69,7 +71,7 @@ const statusColors = {
   PLANNING: 'bg-yellow-50 text-yellow-700',
 };
 
-const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit }) => {
+const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onStatusChange }) => {
   const [sortBy, setSortBy] = useState<string>('created_at');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [expandedTasks, setExpandedTasks] = useState<Set<string>>(new Set());
@@ -132,6 +134,16 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit }) => {
     } else {
       setSortBy(column);
       setSortOrder('asc');
+    }
+  };
+
+  const handleCheckboxChange = (taskId: string, checked: boolean) => {
+    if (!onStatusChange) return;
+    
+    if (checked) {
+      onStatusChange(taskId, 'DONE');
+    } else {
+      onStatusChange(taskId, 'TODO');
     }
   };
 
@@ -213,6 +225,7 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit }) => {
             <TableHeader>
               <TableRow>
                 <TableHead className="w-8"></TableHead>
+                <TableHead className="w-10">Done</TableHead>
                 <TableHead 
                   className="cursor-pointer hover:bg-muted/50"
                   onClick={() => handleSort('title')}
@@ -286,7 +299,20 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit }) => {
                         </Button>
                       </TableCell>
                       <TableCell>
-                        <div className="font-medium">{task.title}</div>
+                        {onStatusChange && (
+                          <Checkbox
+                            checked={task.status === 'DONE'}
+                            onCheckedChange={(checked) => handleCheckboxChange(task.id, !!checked)}
+                          />
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <div className={cn(
+                          "font-medium",
+                          task.status === 'DONE' && "line-through text-muted-foreground"
+                        )}>
+                          {task.title}
+                        </div>
                       </TableCell>
                       <TableCell>
                         <Badge 
