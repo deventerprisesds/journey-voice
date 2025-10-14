@@ -269,14 +269,13 @@ const Dashboard = () => {
                   onTaskEdit={handleTaskEdit}
                 />
               )}
-              {currentView === 'grid' && (
-                <TaskGridView 
-                  tasks={tasks}
-                  onTaskEdit={handleTaskEdit}
-                  onTaskUpdate={handleTaskUpdate}
-                  onStatusChange={handleStatusChange}
-                />
-              )}
+            {currentView === 'grid' && (
+              <TaskGridView 
+                tasks={tasks}
+                onTaskEdit={handleTaskEdit}
+                onStatusChange={handleStatusChange}
+              />
+            )}
             </>
           )}
         </main>
