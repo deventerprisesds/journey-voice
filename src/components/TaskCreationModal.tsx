@@ -135,10 +135,12 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
     category: 'LIFE',
     status: 'BACKLOG'
   });
-  const [dueDate, setDueDate] = useState<Date | undefined>(initialDate || undefined);
+  const [dueDate, setDueDate] = useState<Date | undefined>(initialDate ?? undefined);
   const [startTime, setStartTime] = useState<string>(() => {
-    if (initialHour !== null && initialMinute !== null) {
-      return `${initialHour.toString().padStart(2, '0')}:${initialMinute.toString().padStart(2, '0')}`;
+    if (typeof initialHour === 'number' && typeof initialMinute === 'number') {
+      const h = Math.max(0, Math.min(23, initialHour));
+      const m = Math.max(0, Math.min(59, initialMinute));
+      return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
     }
     return '';
   });
