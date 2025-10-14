@@ -47,12 +47,11 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
       
       if (!isSameDay(taskStart, date)) return false;
       
-      const slotStart = new Date(date);
-      slotStart.setHours(hour, minute, 0, 0);
-      const slotEnd = new Date(date);
-      slotEnd.setHours(hour, minute + 15, 0, 0);
+      // Only show task in the slot where it actually starts
+      const taskStartHour = taskStart.getHours();
+      const taskStartMinute = taskStart.getMinutes();
       
-      return taskStart < slotEnd && taskEnd > slotStart;
+      return taskStartHour === hour && Math.floor(taskStartMinute / 15) * 15 === minute;
     });
   };
 
@@ -88,15 +87,12 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
     const taskStart = parseISO(task.start_time);
     const taskEnd = parseISO(task.end_time);
     
-    const slotStart = new Date(date);
-    slotStart.setHours(slot.hour, slot.minute, 0, 0);
-    
-    const startMinutesFromSlot = Math.max(0, differenceInMinutes(taskStart, slotStart));
-    const durationMinutes = Math.min(15 - startMinutesFromSlot, differenceInMinutes(taskEnd, addMinutes(slotStart, startMinutesFromSlot)));
+    const durationMinutes = differenceInMinutes(taskEnd, taskStart);
+    const durationIn15MinSlots = Math.ceil(durationMinutes / 15);
     
     return {
-      top: (startMinutesFromSlot / 15) * 16, // 16px per 15-minute slot
-      height: Math.max(12, (durationMinutes / 15) * 16)
+      top: 2,
+      height: Math.max(48, durationIn15MinSlots * 64 - 4) // 64px per 15-min slot, subtract spacing
     };
   };
 
@@ -189,12 +185,13 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
                       <div
                         key={`task-${taskIndex}`}
                         className={cn(
-                          "absolute left-0 right-0 rounded px-1 py-0.5 text-xs group cursor-pointer hover:opacity-90 transition-opacity z-20",
+                          "absolute left-0 right-0 rounded px-1 py-1 text-xs group cursor-pointer hover:opacity-90 transition-opacity z-20 flex flex-col",
                           priorityColors[task.priority]
                         )}
                         style={{
-                          top: position.top + 2,
-                          height: Math.max(16, position.height - 4)
+                          top: position.top,
+                          height: position.height,
+                          minHeight: '48px'
                         }}
                       >
                         {/* Checkbox overlay - visible on hover */}
@@ -217,10 +214,10 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
                             e.stopPropagation();
                             onTaskClick?.(task);
                           }}
-                          className="pl-5"
+                          className="pl-5 flex-1 overflow-hidden"
                         >
                           <div className={cn(
-                            "truncate font-medium",
+                            "font-medium leading-tight break-words",
                             task.status === 'DONE' && "line-through opacity-60"
                           )}>
                             {task.title}

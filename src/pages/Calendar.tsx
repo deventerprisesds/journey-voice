@@ -152,6 +152,8 @@ const Calendar: React.FC = () => {
   };
 
   const handleStatusChange = async (taskId: string, newStatus: Task['status']) => {
+    const scrollPosition = window.scrollY;
+    
     try {
       const { error } = await supabase
         .from('tasks')
@@ -164,7 +166,13 @@ const Calendar: React.FC = () => {
 
       if (error) throw error;
 
-      loadTasks();
+      await loadTasks();
+      
+      // Restore scroll position after re-render
+      setTimeout(() => {
+        window.scrollTo(0, scrollPosition);
+      }, 0);
+      
       toast.success(newStatus === 'DONE' ? 'Task completed!' : 'Task status updated');
     } catch (error) {
       console.error('Error updating task status:', error);
