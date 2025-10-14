@@ -180,18 +180,31 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
                   {/* Tasks */}
                   {slotTasks.map((task, taskIndex) => {
                     const position = getTaskPosition(task, slot, date);
+                    const totalTasks = slotTasks.length;
+                    const maxVisibleTasks = 4;
+                    
+                    // Calculate horizontal position for side-by-side layout
+                    const taskWidth = totalTasks > 1 ? 100 / Math.min(totalTasks, maxVisibleTasks) : 100;
+                    const leftPosition = totalTasks > 1 ? (taskIndex * taskWidth) : 0;
+                    
+                    // Don't render tasks beyond the max visible limit
+                    if (taskIndex >= maxVisibleTasks) return null;
                     
                     return (
                       <div
                         key={`task-${taskIndex}`}
                         className={cn(
-                          "absolute left-0 right-0 rounded px-1 py-1 text-xs group cursor-pointer hover:opacity-90 transition-opacity z-20 flex flex-col",
-                          priorityColors[task.priority]
+                          "absolute rounded text-xs group cursor-pointer hover:opacity-90 transition-opacity z-20 flex flex-col",
+                          priorityColors[task.priority],
+                          totalTasks > 1 && "border-r border-white/30"
                         )}
                         style={{
                           top: position.top,
                           height: position.height,
-                          minHeight: '48px'
+                          minHeight: '48px',
+                          left: `${leftPosition}%`,
+                          width: `calc(${taskWidth}% - ${totalTasks > 1 ? '1px' : '0px'})`,
+                          padding: totalTasks > 1 ? '2px' : '4px'
                         }}
                       >
                         {/* Checkbox overlay - visible on hover */}
@@ -232,6 +245,13 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
                       </div>
                     );
                   })}
+                  
+                  {/* Show "+N more" indicator if tasks exceed max */}
+                  {slotTasks.length > 4 && (
+                    <div className="absolute bottom-1 right-1 bg-black/50 text-white text-xs px-1 rounded z-30">
+                      +{slotTasks.length - 4} more
+                    </div>
+                  )}
                 </div>
               );
             })}
