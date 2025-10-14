@@ -103,6 +103,107 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
     LOW: 'bg-blue-500 text-white',
   };
 
+  // Layout constants for full-day overlay rendering
+  const DAY_START_HOUR = 6; // 6 AM
+  const DAY_END_HOUR = 22;  // 10 PM
+  const MINUTES_PER_DAY = (DAY_END_HOUR - DAY_START_HOUR) * 60;
+  const PX_PER_MINUTE = 64 / 15; // Matches h-16 per 15-min slot
+
+  // Build laid out items for a given date (side-by-side without overlap)
+  type LaidOutItem = {
+    id: string;
+    title: string;
+    startMin: number;
+    endMin: number;
+    column: number;
+    columnsInGroup: number;
+    raw: Task | ExternalCalendarEvent;
+    type: 'task' | 'event';
+  };
+
+  const clampToDay = (minutesFromMidnight: number) => {
+    const start = DAY_START_HOUR * 60;
+    const end = DAY_END_HOUR * 60;
+    return Math.max(0, Math.min(minutesFromMidnight - start, end - start));
+  };
+
+  function layoutItemsForDate(date: Date) {
+    // Collect tasks for this date
+    const dayTasks = tasks.filter(t => t.start_time && isSameDay(parseISO(t.start_time), date));
+    const dayEvents = externalEvents.filter(e => isSameDay(parseISO(e.start_time), date));
+
+    const items: LaidOutItem[] = [
+      ...dayTasks.map(t => {
+        const s = parseISO(t.start_time!);
+        const e = parseISO(t.end_time!);
+        return {
+          id: t.id,
+          title: t.title,
+          startMin: clampToDay(s.getHours() * 60 + s.getMinutes()),
+          endMin: clampToDay(e.getHours() * 60 + e.getMinutes()),
+          column: 0,
+          columnsInGroup: 1,
+          raw: t,
+          type: 'task' as const,
+        };
+      }),
+      ...dayEvents.map(ev => {
+        const s = parseISO(ev.start_time);
+        const e = parseISO(ev.end_time);
+        return {
+          id: ev.id,
+          title: ev.title,
+          startMin: clampToDay(s.getHours() * 60 + s.getMinutes()),
+          endMin: clampToDay(e.getHours() * 60 + e.getMinutes()),
+          column: 0,
+          columnsInGroup: 1,
+          raw: ev,
+          type: 'event' as const,
+        };
+      })
+    ]
+      // Remove items that sit completely outside the display window
+      .filter(it => it.endMin > 0 && it.startMin < MINUTES_PER_DAY)
+      // Ensure minimum height of 15 minutes
+      .map(it => ({ ...it, endMin: Math.max(it.endMin, it.startMin + 15) }));
+
+    // Sort by start, then by longer duration first
+    items.sort((a, b) => (a.startMin - b.startMin) || ((b.endMin - b.startMin) - (a.endMin - a.startMin)));
+
+    // Sweep-line to assign columns within overlapping groups
+    let active: Array<{ end: number; column: number }> = [];
+    let groupStartIndex = 0;
+    let groupMaxCols = 0;
+
+    const finalizeGroup = (endIndex: number) => {
+      const cols = Math.max(1, groupMaxCols);
+      for (let i = groupStartIndex; i < endIndex; i++) {
+        items[i].columnsInGroup = cols;
+      }
+      groupStartIndex = endIndex;
+      groupMaxCols = 0;
+    };
+
+    for (let i = 0; i < items.length; i++) {
+      const cur = items[i];
+      // Remove non-overlapping actives
+      active = active.filter(a => a.end > cur.startMin);
+      // Find first free column
+      const used = new Set(active.map(a => a.column));
+      let col = 0; while (used.has(col)) col++;
+      cur.column = col;
+      active.push({ end: cur.endMin, column: col });
+      groupMaxCols = Math.max(groupMaxCols, col + 1);
+
+      // If next item starts after all actives end, finalize group
+      const next = items[i + 1];
+      const groupContinues = next && active.some(a => a.end > next.startMin);
+      if (!groupContinues) finalizeGroup(i + 1);
+    }
+
+    return items;
+  }
+
   return (
     <div className={cn("bg-background", className)}>
       {/* Header with dates */}
@@ -118,7 +219,7 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
         ))}
       </div>
 
-      {/* Time slots grid */}
+      {/* Time slots grid (background and click targets) */}
       <div className="relative">
         {timeSlots.map(slot => (
           <div key={`${slot.hour}-${slot.minute}`} className="grid gap-0 border-b border-border/50" style={{gridTemplateColumns: `80px repeat(${dates.length}, 1fr)`}}>
@@ -129,134 +230,117 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
               </span>
             </div>
             
-            {/* Date columns */}
-            {dates.map((date, dateIndex) => {
-              const slotTasks = getTasksForTimeSlot(date, slot.hour, slot.minute);
-              const slotEvents = getEventsForTimeSlot(date, slot.hour, slot.minute);
-              
-              return (
-                <div
-                  key={`${slot.hour}-${slot.minute}-${dateIndex}`}
-                  className="relative border-r h-16 hover:bg-muted/30 transition-colors group cursor-pointer"
-                  onClick={() => onTimeSlotClick?.(date, slot.hour, slot.minute)}
+            {/* Date columns with click and quick-add only (tasks are rendered in overlay) */}
+            {dates.map((date, dateIndex) => (
+              <div
+                key={`${slot.hour}-${slot.minute}-${dateIndex}`}
+                className="relative border-r h-16 hover:bg-muted/30 transition-colors group cursor-pointer"
+                onClick={() => onTimeSlotClick?.(date, slot.hour, slot.minute)}
+              >
+                {/* Add task button */}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity h-6 w-6 p-0"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onTimeSlotClick?.(date, slot.hour, slot.minute);
+                  }}
                 >
-                  {/* Add task button */}
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity h-6 w-6 p-0"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onTimeSlotClick?.(date, slot.hour, slot.minute);
-                    }}
-                  >
-                    <Plus className="h-3 w-3" />
-                  </Button>
-                  
-                  {/* External events */}
-                  {slotEvents.map((event, eventIndex) => (
-                    <div
-                      key={`event-${eventIndex}`}
-                      className="absolute left-0 right-0 bg-purple-100 border-l-4 border-purple-500 rounded px-2 py-1 text-xs z-10 shadow-sm"
-                      style={{ top: 2, height: 'calc(100% - 4px)' }}
-                      title={`External Event: ${event.title}`}
-                    >
-                      <div className="flex items-center gap-1 mb-0.5">
-                        <Calendar className="h-3 w-3 text-purple-600" />
-                        <span className="truncate font-medium text-purple-900">{event.title}</span>
-                      </div>
-                      <div className="text-purple-700 text-xs flex items-center gap-1">
-                        <Clock className="h-2 w-2" />
-                        {format(parseISO(event.start_time), 'h:mm a')} - {format(parseISO(event.end_time), 'h:mm a')}
-                      </div>
-                      {event.location && (
-                        <div className="text-purple-600 text-xs truncate mt-0.5">
-                          📍 {event.location}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                  
-                  {/* Tasks */}
-                  {slotTasks.map((task, taskIndex) => {
-                    const position = getTaskPosition(task, slot, date);
-                    const totalTasks = slotTasks.length;
-                    const maxVisibleTasks = 4;
-                    
-                    // Calculate horizontal position for side-by-side layout
-                    const taskWidth = totalTasks > 1 ? 100 / Math.min(totalTasks, maxVisibleTasks) : 100;
-                    const leftPosition = totalTasks > 1 ? (taskIndex * taskWidth) : 0;
-                    
-                    // Don't render tasks beyond the max visible limit
-                    if (taskIndex >= maxVisibleTasks) return null;
-                    
+                  <Plus className="h-3 w-3" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        ))}
+
+        {/* Overlay: render tasks/events across the full day to avoid overlap issues */}
+        <div
+          className="absolute inset-0 z-30 pointer-events-none"
+          style={{
+            height: `${timeSlots.length * 64}px`,
+            display: 'grid',
+            gridTemplateColumns: `80px repeat(${dates.length}, 1fr)`
+          }}
+        >
+          {/* Empty time column */}
+          <div />
+          {dates.map((date, dateIndex) => {
+            const items = layoutItemsForDate(date);
+            return (
+              <div key={`overlay-${dateIndex}`} className="relative border-r">
+                {items.map((item, idx) => {
+                  const top = item.startMin * PX_PER_MINUTE + 2;
+                  const height = Math.max(48, (item.endMin - item.startMin) * PX_PER_MINUTE - 4);
+                  const width = 100 / item.columnsInGroup;
+                  const left = item.column * width;
+
+                  if (item.type === 'event') {
+                    const ev = item.raw as ExternalCalendarEvent;
                     return (
                       <div
-                        key={`task-${taskIndex}`}
-                        className={cn(
-                          "absolute rounded text-xs group cursor-pointer hover:opacity-90 transition-opacity z-20 flex flex-col",
-                          priorityColors[task.priority],
-                          totalTasks > 1 && "border-r border-white/30"
-                        )}
-                        style={{
-                          top: position.top,
-                          height: position.height,
-                          minHeight: '48px',
-                          left: `${leftPosition}%`,
-                          width: `calc(${taskWidth}% - ${totalTasks > 1 ? '1px' : '0px'})`,
-                          padding: totalTasks > 1 ? '2px' : '4px'
-                        }}
+                        key={`ev-${idx}`}
+                        className="absolute rounded bg-purple-100 border-l-4 border-purple-500 px-2 py-1 text-xs shadow-sm pointer-events-auto"
+                        style={{ top, height, left: `${left}%`, width: `calc(${width}% - 2px)` }}
+                        title={`External Event: ${ev.title}`}
                       >
-                        {/* Checkbox overlay - visible on hover */}
-                        {onStatusChange && (
-                          <div 
-                            className="absolute left-1 top-1 opacity-0 group-hover:opacity-100 transition-opacity z-30"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <Checkbox
-                              checked={task.status === 'DONE'}
-                              onCheckedChange={(checked) => handleCheckboxChange(task.id, !!checked)}
-                              className="h-3 w-3 bg-white border-2"
-                            />
-                          </div>
-                        )}
-                        
-                        {/* Task content */}
-                        <div 
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onTaskClick?.(task);
-                          }}
-                          className="pl-5 flex-1 overflow-hidden"
-                        >
-                          <div className={cn(
-                            "font-medium leading-tight break-words",
-                            task.status === 'DONE' && "line-through opacity-60"
-                          )}>
-                            {task.title}
-                          </div>
-                          {task.start_time && task.end_time && (
-                            <div className="text-xs opacity-90 flex items-center gap-1">
-                              <Clock className="h-2 w-2" />
-                              {format(parseISO(task.start_time), 'h:mm')} - {format(parseISO(task.end_time), 'h:mm')}
-                            </div>
-                          )}
+                        <div className="flex items-center gap-1 mb-0.5">
+                          <Calendar className="h-3 w-3 text-purple-600" />
+                          <span className="truncate font-medium text-purple-900">{ev.title}</span>
+                        </div>
+                        <div className="text-purple-700 text-xs flex items-center gap-1">
+                          <Clock className="h-2 w-2" />
+                          {format(parseISO(ev.start_time), 'h:mm a')} - {format(parseISO(ev.end_time), 'h:mm a')}
                         </div>
                       </div>
                     );
-                  })}
-                  
-                  {/* Show "+N more" indicator if tasks exceed max */}
-                  {slotTasks.length > 4 && (
-                    <div className="absolute bottom-1 right-1 bg-black/50 text-white text-xs px-1 rounded z-30">
-                      +{slotTasks.length - 4} more
+                  }
+
+                  const t = item.raw as Task;
+                  return (
+                    <div
+                      key={`task-${t.id}-${idx}`}
+                      className={cn(
+                        "absolute rounded text-xs group cursor-pointer hover:opacity-90 transition-opacity z-20 flex flex-col pointer-events-auto",
+                        priorityColors[t.priority as keyof typeof priorityColors]
+                      )}
+                      style={{ top, height, left: `${left}%`, width: `calc(${width}% - 2px)`, padding: '4px' }}
+                      onClick={(e) => { e.stopPropagation(); onTaskClick?.(t); }}
+                      title={t.title}
+                    >
+                      {/* Checkbox overlay - visible on hover */}
+                      {onStatusChange && (
+                        <div 
+                          className="absolute left-1 top-1 opacity-0 group-hover:opacity-100 transition-opacity z-30"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <Checkbox
+                            checked={t.status === 'DONE'}
+                            onCheckedChange={(checked) => handleCheckboxChange(t.id, !!checked)}
+                            className="h-3 w-3 bg-white border-2"
+                          />
+                        </div>
+                      )}
+
+                      <div className={cn(
+                        "font-medium leading-tight break-words",
+                        t.status === 'DONE' && "line-through opacity-60"
+                      )}>
+                        {t.title}
+                      </div>
+                      {t.start_time && t.end_time && (
+                        <div className="text-xs opacity-90 flex items-center gap-1">
+                          <Clock className="h-2 w-2" />
+                          {format(parseISO(t.start_time), 'h:mm')} - {format(parseISO(t.end_time), 'h:mm')}
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        ))}
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
