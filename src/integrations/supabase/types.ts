@@ -884,6 +884,9 @@ export type Database = {
       }
       extracted_content: {
         Row: {
+          assignment_guidance: string | null
+          assumptions: Json | null
+          atoms: Json | null
           career_application_notes: string[] | null
           case_approach: string | null
           case_comprehensive_summary: string | null
@@ -894,6 +897,7 @@ export type Database = {
           case_problem: string | null
           case_studies: string[] | null
           charts_tables: Json | null
+          comprehensive_summary: string | null
           content_type: string | null
           created_at: string
           digital_products: string[] | null
@@ -916,6 +920,9 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          assignment_guidance?: string | null
+          assumptions?: Json | null
+          atoms?: Json | null
           career_application_notes?: string[] | null
           case_approach?: string | null
           case_comprehensive_summary?: string | null
@@ -926,6 +933,7 @@ export type Database = {
           case_problem?: string | null
           case_studies?: string[] | null
           charts_tables?: Json | null
+          comprehensive_summary?: string | null
           content_type?: string | null
           created_at?: string
           digital_products?: string[] | null
@@ -948,6 +956,9 @@ export type Database = {
           user_id: string
         }
         Update: {
+          assignment_guidance?: string | null
+          assumptions?: Json | null
+          atoms?: Json | null
           career_application_notes?: string[] | null
           case_approach?: string | null
           case_comprehensive_summary?: string | null
@@ -958,6 +969,7 @@ export type Database = {
           case_problem?: string | null
           case_studies?: string[] | null
           charts_tables?: Json | null
+          comprehensive_summary?: string | null
           content_type?: string | null
           created_at?: string
           digital_products?: string[] | null
@@ -2313,7 +2325,7 @@ export type Database = {
       }
       l2_normalize: {
         Args: { "": string } | { "": unknown } | { "": unknown }
-        Returns: string
+        Returns: unknown
       }
       log_oauth_token_access: {
         Args: {

@@ -299,19 +299,41 @@ serve(async (req) => {
           }
         : DEFAULT_CONFIG.workloadBalance,
       
+      // Helper to normalize category mappings - handle both array and string formats
+      const normalizeCategory = (userMapping: any, defaultMapping: any) => {
+        if (!userMapping) return defaultMapping;
+        
+        const normalized = { ...userMapping };
+        
+        // If defaultTimeWindow is an array, pick the first value as the primary window
+        if (Array.isArray(userMapping.defaultTimeWindow)) {
+          console.log(`📝 Converting array defaultTimeWindow to string: ${userMapping.defaultTimeWindow[0]}`);
+          normalized.defaultTimeWindow = userMapping.defaultTimeWindow[0]; // Use first preference
+        }
+        
+        return normalized;
+      };
+
       // Deep merge category mappings
       categoryMappings: loadedUserConfig?.categoryMappings
         ? {
-            CAREER: loadedUserConfig.categoryMappings.CAREER || DEFAULT_CONFIG.categoryMappings.CAREER,
-            PROF_EDUCATION: loadedUserConfig.categoryMappings.PROF_EDUCATION || DEFAULT_CONFIG.categoryMappings.PROF_EDUCATION,
-            EDUCATION: loadedUserConfig.categoryMappings.EDUCATION || DEFAULT_CONFIG.categoryMappings.EDUCATION,
-            VENTURES: loadedUserConfig.categoryMappings.VENTURES || DEFAULT_CONFIG.categoryMappings.VENTURES,
-            LIFE: loadedUserConfig.categoryMappings.LIFE || DEFAULT_CONFIG.categoryMappings.LIFE,
+            CAREER: normalizeCategory(loadedUserConfig.categoryMappings.CAREER, DEFAULT_CONFIG.categoryMappings.CAREER),
+            PROF_EDUCATION: normalizeCategory(loadedUserConfig.categoryMappings.PROF_EDUCATION, DEFAULT_CONFIG.categoryMappings.PROF_EDUCATION),
+            EDUCATION: normalizeCategory(loadedUserConfig.categoryMappings.EDUCATION, DEFAULT_CONFIG.categoryMappings.EDUCATION),
+            VENTURES: normalizeCategory(loadedUserConfig.categoryMappings.VENTURES, DEFAULT_CONFIG.categoryMappings.VENTURES),
+            LIFE: normalizeCategory(loadedUserConfig.categoryMappings.LIFE, DEFAULT_CONFIG.categoryMappings.LIFE),
           }
         : DEFAULT_CONFIG.categoryMappings,
     };
     
     console.log('🔧 User config loaded:', loadedUserConfig ? 'YES' : 'NO');
+    
+    // Log final merged config for debugging
+    console.log('📊 FINAL CONFIG BEING USED:');
+    console.log('  Timezone:', config.timezone);
+    console.log('  VENTURES timeWindow:', config.categoryMappings.VENTURES?.defaultTimeWindow);
+    console.log('  CAREER timeWindow:', config.categoryMappings.CAREER?.defaultTimeWindow);
+    console.log('  PROF_EDUCATION timeWindow:', config.categoryMappings.PROF_EDUCATION?.defaultTimeWindow);
 
     // ===== AI-ENHANCED TIME WINDOW DETECTION =====
     const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
