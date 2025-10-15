@@ -95,6 +95,60 @@ serve(async (req) => {
           console.log(`  - ${notif.notification_type} @ ${notif.scheduled_for}: "${notif.title}"`);
         }
         
+        // Check if tasks are completed before sending notifications
+        const tasksToCheck = batchNotifications
+          .filter((n: any) => n.task_id)
+          .map((n: any) => n.task_id);
+        
+        if (tasksToCheck.length > 0) {
+          const { data: tasks } = await supabaseClient
+            .from('tasks')
+            .select('id, status, completed_at')
+            .in('id', tasksToCheck);
+          
+          const completedTaskIds = new Set(
+            tasks?.filter(t => t.status === 'DONE' || t.completed_at)
+              .map(t => t.id) || []
+          );
+          
+          // Filter out notifications for completed tasks
+          const validNotifications = batchNotifications.filter((n: any) => {
+            if (n.task_id && completedTaskIds.has(n.task_id)) {
+              console.log(`⏭️ Skipping notification ${n.id} - task ${n.task_id} is completed`);
+              return false;
+            }
+            return true;
+          });
+          
+          // Mark skipped notifications as failed
+          const skippedIds = batchNotifications
+            .filter((n: any) => n.task_id && completedTaskIds.has(n.task_id))
+            .map((n: any) => n.id);
+          
+          if (skippedIds.length > 0) {
+            await supabaseClient
+              .from('scheduled_notifications')
+              .update({
+                failed_at: new Date().toISOString(),
+                failure_reason: 'Task completed'
+              })
+              .in('id', skippedIds);
+            
+            console.log(`❌ Marked ${skippedIds.length} notifications as failed (completed tasks)`);
+            failed += skippedIds.length;
+          }
+          
+          // If all notifications were skipped, continue to next batch
+          if (validNotifications.length === 0) {
+            console.log('All notifications in batch were for completed tasks, skipping');
+            continue;
+          }
+          
+          // Update to only process valid notifications
+          batchNotifications.length = 0;
+          batchNotifications.push(...validNotifications);
+        }
+        
         let title, body;
         
         // Check if this is a daily summary batch (quiet hours)

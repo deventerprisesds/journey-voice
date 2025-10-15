@@ -202,6 +202,41 @@ serve(async (req) => {
     
     console.log('🔧 RAW user config:', JSON.stringify(loadedUserConfig, null, 2));
 
+    // NEW: Validate and warn about config issues
+    if (loadedUserConfig) {
+      console.log('✅ User config exists');
+      
+      // Check categoryMappings structure
+      if (loadedUserConfig.categoryMappings) {
+        console.log('📋 Category mappings found:', Object.keys(loadedUserConfig.categoryMappings));
+        
+        // Validate each category's defaultTimeWindow type
+        Object.entries(loadedUserConfig.categoryMappings).forEach(([category, mapping]: [string, any]) => {
+          if (mapping.defaultTimeWindow) {
+            if (Array.isArray(mapping.defaultTimeWindow)) {
+              console.warn(`⚠️ WARNING: ${category}.defaultTimeWindow is an ARRAY, but scheduler expects a STRING`);
+              console.warn(`   Value: ${JSON.stringify(mapping.defaultTimeWindow)}`);
+              console.warn(`   Will use first value: ${mapping.defaultTimeWindow[0]}`);
+            } else {
+              console.log(`✅ ${category}.defaultTimeWindow: ${mapping.defaultTimeWindow}`);
+            }
+          }
+        });
+      } else {
+        console.warn('⚠️ WARNING: No categoryMappings in user config');
+      }
+      
+      // Check timeWindows
+      if (loadedUserConfig.timeWindows) {
+        console.log('✅ Time windows found:', Object.keys(loadedUserConfig.timeWindows));
+      } else {
+        console.warn('⚠️ WARNING: No timeWindows in user config');
+      }
+    } else {
+      console.warn('⚠️ WARNING: No user config loaded - using ALL DEFAULTS');
+      console.warn('   This means VENTURES will be scheduled after_work (5pm-10pm) by default');
+    }
+
     // Define default config constants
     const DEFAULT_CONFIG: SchedulingConfig = {
       timezone: 'America/New_York',
