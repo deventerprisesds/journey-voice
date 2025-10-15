@@ -264,6 +264,21 @@ serve(async (req) => {
       },
     };
 
+    // Helper to normalize category mappings - handle both array and string formats
+    const normalizeCategory = (userMapping: any, defaultMapping: any) => {
+      if (!userMapping) return defaultMapping;
+      
+      const normalized = { ...userMapping };
+      
+      // If defaultTimeWindow is an array, pick the first value as the primary window
+      if (Array.isArray(userMapping.defaultTimeWindow)) {
+        console.log(`📝 Converting array defaultTimeWindow to string: ${userMapping.defaultTimeWindow[0]}`);
+        normalized.defaultTimeWindow = userMapping.defaultTimeWindow[0]; // Use first preference
+      }
+      
+      return normalized;
+    };
+
     // Merge user config with defaults - user values take precedence
     const config: SchedulingConfig = {
       timezone: loadedUserConfig?.timezone || DEFAULT_CONFIG.timezone,
@@ -298,21 +313,6 @@ serve(async (req) => {
             bufferRatio: loadedUserConfig.workloadBalance.bufferRatio ?? DEFAULT_CONFIG.workloadBalance.bufferRatio,
           }
         : DEFAULT_CONFIG.workloadBalance,
-      
-      // Helper to normalize category mappings - handle both array and string formats
-      const normalizeCategory = (userMapping: any, defaultMapping: any) => {
-        if (!userMapping) return defaultMapping;
-        
-        const normalized = { ...userMapping };
-        
-        // If defaultTimeWindow is an array, pick the first value as the primary window
-        if (Array.isArray(userMapping.defaultTimeWindow)) {
-          console.log(`📝 Converting array defaultTimeWindow to string: ${userMapping.defaultTimeWindow[0]}`);
-          normalized.defaultTimeWindow = userMapping.defaultTimeWindow[0]; // Use first preference
-        }
-        
-        return normalized;
-      };
 
       // Deep merge category mappings
       categoryMappings: loadedUserConfig?.categoryMappings
