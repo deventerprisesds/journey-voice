@@ -117,6 +117,57 @@ serve(async (req) => {
           },
           {
             type: "function",
+            name: "get_today_tasks",
+            description: "Get all tasks for today, including both scheduled and unscheduled tasks. Shows what the user has planned for today.",
+            parameters: {
+              type: "object",
+              properties: {}
+            }
+          },
+          {
+            type: "function",
+            name: "reschedule_task",
+            description: "Move a task to a different date or time. Use this when user says 'move task to tomorrow', 'reschedule for next week', etc.",
+            parameters: {
+              type: "object",
+              properties: {
+                task_id: { type: "string", description: "ID of the task to reschedule" },
+                new_date: { type: "string", description: "New date in YYYY-MM-DD format" },
+                new_start_time: { type: "string", description: "New start time in HH:MM format (24-hour)" },
+                reason: { type: "string", description: "Optional reason for rescheduling" }
+              },
+              required: ["task_id", "new_date"]
+            }
+          },
+          {
+            type: "function",
+            name: "schedule_task",
+            description: "Schedule an unscheduled task to a specific date and time. Automatically finds optimal time slot based on category preferences if time not specified.",
+            parameters: {
+              type: "object",
+              properties: {
+                task_id: { type: "string", description: "ID of the task to schedule" },
+                date: { type: "string", description: "Date to schedule in YYYY-MM-DD format, defaults to today" },
+                start_time: { type: "string", description: "Optional start time in HH:MM format (24-hour)" },
+                duration_minutes: { type: "number", description: "Duration in minutes, defaults to task estimate or 60" }
+              },
+              required: ["task_id"]
+            }
+          },
+          {
+            type: "function",
+            name: "unschedule_task",
+            description: "Remove a task from the calendar schedule. The task will remain in backlog.",
+            parameters: {
+              type: "object",
+              properties: {
+                task_id: { type: "string", description: "ID of the task to unschedule" }
+              },
+              required: ["task_id"]
+            }
+          },
+          {
+            type: "function",
             name: "disconnect",
             description: "Disconnect the voice assistant when user says goodbye, 'that's all', 'disconnect', 'that will be all', 'thanks that's it', or similar phrases indicating they're done.",
             parameters: {
@@ -136,9 +187,17 @@ When users ask about historical information like "tasks from last week" or "what
 
 Available functions:
 - get_tasks: Retrieve tasks and chat history with time/keyword filtering
+- get_today_tasks: Get all tasks scheduled for today
 - create_task: Create new tasks with title, description, priority, and category
 - update_task: Update existing tasks (status, title, description, priority)
+- reschedule_task: Move a task to a different date or time
+- schedule_task: Schedule an unscheduled task (automatically finds optimal time slot)
+- unschedule_task: Remove a task from the calendar
 - disconnect: Disconnect when user says goodbye, "that's all", "disconnect", "I'm done", or similar farewell phrases
+
+When users ask about "today's tasks" or "what's on my schedule today", use get_today_tasks.
+When users want to move tasks around, use reschedule_task with the new date/time.
+When users want to add unscheduled tasks to today, use schedule_task which will automatically find the best time slot.
 
 Always confirm actions you take and provide helpful feedback about task management.
 

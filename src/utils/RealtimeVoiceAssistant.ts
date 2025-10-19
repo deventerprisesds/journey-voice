@@ -446,6 +446,18 @@ export class RealtimeVoiceAssistant {
         case 'get_tasks':
           result = await this.getTasks(args);
           break;
+        case 'get_today_tasks':
+          result = await this.getTodayTasks(args);
+          break;
+        case 'reschedule_task':
+          result = await this.rescheduleTask(args);
+          break;
+        case 'schedule_task':
+          result = await this.scheduleTask(args);
+          break;
+        case 'unschedule_task':
+          result = await this.unscheduleTask(args);
+          break;
         case 'disconnect':
           result = await this.handleDisconnectTool(args);
           break;
@@ -931,6 +943,302 @@ export class RealtimeVoiceAssistant {
       return {
         error: error instanceof Error ? error.message : 'Unknown error'
       };
+    }
+  }
+
+  private async getTodayTasks(args: any) {
+    try {
+      this.onMessage?.({ type: 'client.processing', status: 'Loading today\'s tasks...' });
+      
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+
+      const userId = (await supabase.auth.getUser()).data.user?.id;
+      if (!userId) {
+        return { success: false, error: 'Not authenticated' };
+      }
+
+      // Get scheduled tasks for today
+      const { data: scheduledTasks, error: scheduledError } = await supabase
+        .from('tasks')
+        .select('*')
+        .eq('user_id', userId)
+        .gte('start_time', today.toISOString())
+        .lt('start_time', tomorrow.toISOString())
+        .order('start_time', { ascending: true });
+
+      if (scheduledError) throw scheduledError;
+
+      // Get unscheduled tasks
+      const { data: unscheduledTasks, error: unscheduledError } = await supabase
+        .from('tasks')
+        .select('*')
+        .eq('user_id', userId)
+        .is('start_time', null)
+        .neq('status', 'DONE')
+        .order('priority', { ascending: false })
+        .limit(10);
+
+      if (unscheduledError) throw unscheduledError;
+
+      const totalTasks = (scheduledTasks?.length || 0) + (unscheduledTasks?.length || 0);
+      this.onMessage?.({ type: 'client.done', status: `Found ${totalTasks} task(s) for today` });
+
+      return {
+        success: true,
+        scheduled: scheduledTasks || [],
+        unscheduled: unscheduledTasks || [],
+        date: today.toISOString(),
+        summary: `You have ${scheduledTasks?.length || 0} scheduled tasks and ${unscheduledTasks?.length || 0} unscheduled tasks for today.`
+      };
+    } catch (error) {
+      console.error('❌ Error getting today\'s tasks:', error);
+      this.onMessage?.({ type: 'client.error', message: 'Failed to load today\'s tasks' });
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  }
+
+  private async rescheduleTask(args: any) {
+    try {
+      this.onMessage?.({ type: 'client.processing', status: 'Rescheduling task...' });
+
+      if (!args.task_id) {
+        return { success: false, error: 'Task ID is required' };
+      }
+
+      const userId = (await supabase.auth.getUser()).data.user?.id;
+      if (!userId) {
+        return { success: false, error: 'Not authenticated' };
+      }
+
+      // Parse new date
+      const newDate = new Date(args.new_date);
+      if (isNaN(newDate.getTime())) {
+        return { success: false, error: 'Invalid date format' };
+      }
+
+      // If new_start_time provided, parse it
+      let newStartTime = new Date(newDate);
+      let newEndTime = new Date(newDate);
+      
+      if (args.new_start_time) {
+        const [hours, minutes] = args.new_start_time.split(':').map(Number);
+        newStartTime.setHours(hours, minutes, 0, 0);
+        
+        // Get original task to maintain duration
+        const { data: originalTask } = await supabase
+          .from('tasks')
+          .select('start_time, end_time')
+          .eq('id', args.task_id)
+          .eq('user_id', userId)
+          .single();
+
+        if (originalTask?.start_time && originalTask?.end_time) {
+          const originalDuration = new Date(originalTask.end_time).getTime() - new Date(originalTask.start_time).getTime();
+          newEndTime = new Date(newStartTime.getTime() + originalDuration);
+        } else {
+          // Default 1 hour
+          newEndTime.setHours(hours + 1, minutes, 0, 0);
+        }
+      } else {
+        // Keep same time, just change date
+        const { data: originalTask } = await supabase
+          .from('tasks')
+          .select('start_time, end_time')
+          .eq('id', args.task_id)
+          .eq('user_id', userId)
+          .single();
+
+        if (originalTask?.start_time) {
+          const origStart = new Date(originalTask.start_time);
+          newStartTime.setHours(origStart.getHours(), origStart.getMinutes(), 0, 0);
+          
+          if (originalTask.end_time) {
+            const origEnd = new Date(originalTask.end_time);
+            newEndTime.setHours(origEnd.getHours(), origEnd.getMinutes(), 0, 0);
+          } else {
+            newEndTime.setHours(origStart.getHours() + 1, origStart.getMinutes(), 0, 0);
+          }
+        } else {
+          // Default to 9 AM - 10 AM
+          newStartTime.setHours(9, 0, 0, 0);
+          newEndTime.setHours(10, 0, 0, 0);
+        }
+      }
+
+      const { data, error } = await supabase
+        .from('tasks')
+        .update({
+          start_time: newStartTime.toISOString(),
+          end_time: newEndTime.toISOString(),
+          status: 'TODO'
+        })
+        .eq('id', args.task_id)
+        .eq('user_id', userId)
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      this.onMessage?.({ type: 'client.done', status: 'Task rescheduled successfully' });
+
+      return {
+        success: true,
+        task: data,
+        message: `Task rescheduled to ${newStartTime.toLocaleDateString()} at ${newStartTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+      };
+    } catch (error) {
+      console.error('❌ Error rescheduling task:', error);
+      this.onMessage?.({ type: 'client.error', message: 'Failed to reschedule task' });
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  }
+
+  private async scheduleTask(args: any) {
+    try {
+      this.onMessage?.({ type: 'client.processing', status: 'Scheduling task...' });
+
+      if (!args.task_id) {
+        return { success: false, error: 'Task ID is required' };
+      }
+
+      const userId = (await supabase.auth.getUser()).data.user?.id;
+      if (!userId) {
+        return { success: false, error: 'Not authenticated' };
+      }
+
+      // Get the task to schedule
+      const { data: task, error: taskError } = await supabase
+        .from('tasks')
+        .select('*')
+        .eq('id', args.task_id)
+        .eq('user_id', userId)
+        .single();
+
+      if (taskError) throw taskError;
+      if (!task) return { success: false, error: 'Task not found' };
+
+      // Parse date (default to today)
+      const scheduleDate = args.date ? new Date(args.date) : new Date();
+      scheduleDate.setHours(0, 0, 0, 0);
+
+      let startTime: Date;
+      let endTime: Date;
+
+      if (args.start_time) {
+        // Use specified time
+        const [hours, minutes] = args.start_time.split(':').map(Number);
+        startTime = new Date(scheduleDate);
+        startTime.setHours(hours, minutes, 0, 0);
+      } else {
+        // Call smart scheduler to find optimal time
+        const { data: scheduleResult, error: scheduleError } = await supabase.functions.invoke(
+          'smart-calendar-scheduler',
+          {
+            body: {
+              task_id: args.task_id,
+              user_id: userId,
+              title: task.title,
+              description: task.description,
+              category: task.category,
+              priority: task.priority,
+              due_date: task.due_date,
+              estimate_minutes: args.duration_minutes || task.estimate_minutes || 60
+            }
+          }
+        );
+
+        if (scheduleError) {
+          console.error('Smart scheduler error:', scheduleError);
+          // Fallback to default time if smart scheduler fails
+          startTime = new Date(scheduleDate);
+          startTime.setHours(9, 0, 0, 0);
+        } else if (scheduleResult?.scheduledTask) {
+          // Use the time from smart scheduler
+          return {
+            success: true,
+            task: scheduleResult.scheduledTask,
+            message: `Task scheduled for ${new Date(scheduleResult.scheduledTask.start_time).toLocaleDateString()} at ${new Date(scheduleResult.scheduledTask.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+          };
+        } else {
+          startTime = new Date(scheduleDate);
+          startTime.setHours(9, 0, 0, 0);
+        }
+      }
+
+      // Calculate end time
+      const duration = args.duration_minutes || task.estimate_minutes || 60;
+      endTime = new Date(startTime.getTime() + duration * 60000);
+
+      // Update task
+      const { data: updatedTask, error: updateError } = await supabase
+        .from('tasks')
+        .update({
+          start_time: startTime.toISOString(),
+          end_time: endTime.toISOString(),
+          status: 'TODO'
+        })
+        .eq('id', args.task_id)
+        .eq('user_id', userId)
+        .select()
+        .single();
+
+      if (updateError) throw updateError;
+
+      this.onMessage?.({ type: 'client.done', status: 'Task scheduled successfully' });
+
+      return {
+        success: true,
+        task: updatedTask,
+        message: `Task scheduled for ${startTime.toLocaleDateString()} at ${startTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+      };
+    } catch (error) {
+      console.error('❌ Error scheduling task:', error);
+      this.onMessage?.({ type: 'client.error', message: 'Failed to schedule task' });
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  }
+
+  private async unscheduleTask(args: any) {
+    try {
+      this.onMessage?.({ type: 'client.processing', status: 'Unscheduling task...' });
+
+      if (!args.task_id) {
+        return { success: false, error: 'Task ID is required' };
+      }
+
+      const userId = (await supabase.auth.getUser()).data.user?.id;
+      if (!userId) {
+        return { success: false, error: 'Not authenticated' };
+      }
+
+      const { data, error } = await supabase
+        .from('tasks')
+        .update({
+          start_time: null,
+          end_time: null,
+          status: 'BACKLOG'
+        })
+        .eq('id', args.task_id)
+        .eq('user_id', userId)
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      this.onMessage?.({ type: 'client.done', status: 'Task unscheduled' });
+
+      return {
+        success: true,
+        task: data,
+        message: 'Task has been removed from the schedule and moved to backlog'
+      };
+    } catch (error) {
+      console.error('❌ Error unscheduling task:', error);
+      this.onMessage?.({ type: 'client.error', message: 'Failed to unschedule task' });
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
     }
   }
 
