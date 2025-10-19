@@ -32,6 +32,7 @@ import { Task } from '@/types/task';
 import { fromHHMMToISO } from '@/lib/date';
 import { extractSchedulingContext, loadUserSchedulingConfig } from '@/services/schedulingService';
 import { useAssignmentSelection } from '@/contexts/AssignmentSelectionContext';
+import TimeSlotGrid from '@/components/TimeSlotGrid';
 
 interface ParsedTask {
   title: string;
@@ -1546,6 +1547,36 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                 )}
               </div>
             </div>
+
+            {/* Time Slot Grid - shows when date is selected */}
+            {dueDate && (
+              <div className="border rounded-lg overflow-hidden">
+                <div className="bg-muted/30 px-4 py-2 border-b">
+                  <p className="text-sm font-medium">Click a time slot to schedule</p>
+                </div>
+                <div className="max-h-[400px] overflow-auto">
+                  <TimeSlotGrid
+                    dates={[dueDate]}
+                    tasks={[]}
+                    onTimeSlotClick={(date, hour, minute) => {
+                      // Set start time
+                      const startTimeStr = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
+                      setStartTime(startTimeStr);
+                      
+                      // Auto-suggest end time (1 hour later)
+                      const endHour = hour + 1;
+                      const endTimeStr = `${endHour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
+                      setEndTime(endTimeStr);
+                      
+                      toast({
+                        title: "Time Selected",
+                        description: `Task scheduled from ${startTimeStr} to ${endTimeStr}`,
+                      });
+                    }}
+                  />
+                </div>
+              </div>
+            )}
 
             <div>
               <Label htmlFor="manual-description">Description</Label>
