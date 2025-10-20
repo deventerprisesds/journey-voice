@@ -22,15 +22,16 @@ const VoiceStatusArea: React.FC = () => {
 
   return (
     <div 
-      className={`fixed left-1/2 -translate-x-1/2 ${
-        isMobile ? 'bottom-4 z-[100]' : 'bottom-8 z-50'
+      className={`fixed ${
+        isMobile 
+          ? 'bottom-20 right-4 z-[9999]' 
+          : 'bottom-8 left-1/2 -translate-x-1/2 z-50'
       }`}
       style={isMobile ? { 
-        paddingBottom: 'env(safe-area-inset-bottom)',
-        bottom: 'calc(1rem + env(safe-area-inset-bottom))'
+        bottom: 'calc(5rem + env(safe-area-inset-bottom))'
       } : undefined}
     >
-      <div className="flex flex-col items-center gap-4">
+      <div className={`flex flex-col ${isMobile ? 'items-end' : 'items-center'} gap-4`}>
         
         {/* Connection Status - only show on error */}
         {connectionError && (
