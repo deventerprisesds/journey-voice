@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Mic, Volume2 } from 'lucide-react';
 import { useVoiceAssistant } from '@/contexts/VoiceAssistantContext';
 import ConnectionStatus from '@/components/ConnectionStatus';
+import VoiceAssistantButton from '@/components/VoiceAssistantButton';
 
 const VoiceStatusArea: React.FC = () => {
   const {
@@ -65,6 +66,8 @@ const VoiceStatusArea: React.FC = () => {
           )}
         </div>
 
+        {/* Voice Assistant Button */}
+        <VoiceAssistantButton />
 
         {/* Connected state controls */}
         {isConnected && (
