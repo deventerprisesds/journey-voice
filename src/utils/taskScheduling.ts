@@ -129,7 +129,7 @@ export async function scheduleNewTask(
       title: task.title || 'Untitled Task',
       board_id: task.board_id,
       user_id: task.user_id,
-      status: scheduleResult.suggestedStatus || task.status || 'TODO',
+      status: scheduleResult.suggestedStatus || task.status || 'BACKLOG',
       priority: task.priority || 'MEDIUM',
       category: scheduleResult.suggestedCategory || task.category || 'LIFE'
     };

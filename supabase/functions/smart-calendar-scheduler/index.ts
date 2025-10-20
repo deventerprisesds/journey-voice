@@ -504,7 +504,7 @@ Return ONLY valid JSON (no markdown):
 
     // Extract time window and status from scheduling context
     let timeWindow = 'flexible';
-    let suggestedStatus = 'TODO';
+    let suggestedStatus = null; // Don't suggest status changes - preserve existing status
     let estimatedDuration = 60;
     let preferredTimeMinutes: number | null = null;
 

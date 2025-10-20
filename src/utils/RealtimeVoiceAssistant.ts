@@ -1073,7 +1073,7 @@ export class RealtimeVoiceAssistant {
         .update({
           start_time: newStartTime.toISOString(),
           end_time: newEndTime.toISOString(),
-          status: 'TODO'
+          // Don't change status - preserve task's current lane
         })
         .eq('id', args.task_id)
         .eq('user_id', userId)
@@ -1178,7 +1178,7 @@ export class RealtimeVoiceAssistant {
         .update({
           start_time: startTime.toISOString(),
           end_time: endTime.toISOString(),
-          status: 'TODO'
+          // Don't change status - preserve task's current lane
         })
         .eq('id', args.task_id)
         .eq('user_id', userId)
