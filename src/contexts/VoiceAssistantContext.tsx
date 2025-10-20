@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useState, useRef, useEffect } from 'react';
 import { useToast } from '@/hooks/use-toast';
 import { RealtimeVoiceAssistant } from '@/utils/RealtimeVoiceAssistant';
+import { loadUserSchedulingConfig } from '@/services/schedulingService';
+import { useAuth } from '@/hooks/useAuth';
 
 interface VoiceAssistantContextType {
   // Connection state
@@ -43,6 +45,7 @@ export const VoiceAssistantProvider: React.FC<VoiceAssistantProviderProps> = ({
   onTaskUpdate 
 }) => {
   const { toast } = useToast();
+  const { user } = useAuth();
   const [isConnected, setIsConnected] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
@@ -52,7 +55,19 @@ export const VoiceAssistantProvider: React.FC<VoiceAssistantProviderProps> = ({
   const [messages, setMessages] = useState<any[]>([]);
   const [connectionError, setConnectionError] = useState<{ type?: string; message: string } | null>(null);
   const [retryAttempts, setRetryAttempts] = useState(0);
+  const [autoGreetingTimeout, setAutoGreetingTimeout] = useState(5000); // Default 5 seconds
   const assistantRef = useRef<RealtimeVoiceAssistant | null>(null);
+  const autoGreetingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Load auto-greeting timeout from user settings
+  useEffect(() => {
+    if (user?.id) {
+      loadUserSchedulingConfig(user.id).then(config => {
+        const timeout = (config.auto_greeting_timeout || 5) * 1000; // Convert to milliseconds
+        setAutoGreetingTimeout(timeout);
+      });
+    }
+  }, [user?.id]);
 
   const handleMessage = (message: any) => {
     console.log('Voice message:', message);
@@ -61,6 +76,13 @@ export const VoiceAssistantProvider: React.FC<VoiceAssistantProviderProps> = ({
     // Handle speech detection events
     if (message.type === 'speech.detected') {
       setIsSpeechDetected(message.detected);
+      
+      // Clear auto-greeting timeout when speech is detected
+      if (message.detected && autoGreetingTimeoutRef.current) {
+        clearTimeout(autoGreetingTimeoutRef.current);
+        autoGreetingTimeoutRef.current = null;
+      }
+      
       return;
     }
 
@@ -149,6 +171,22 @@ export const VoiceAssistantProvider: React.FC<VoiceAssistantProviderProps> = ({
 
   const handleListeningChange = (listening: boolean) => {
     setIsListening(listening);
+    
+    // Clear any existing auto-greeting timeout
+    if (autoGreetingTimeoutRef.current) {
+      clearTimeout(autoGreetingTimeoutRef.current);
+      autoGreetingTimeoutRef.current = null;
+    }
+    
+    // Start auto-greeting timeout when listening starts
+    if (listening && !isSpeechDetected) {
+      autoGreetingTimeoutRef.current = setTimeout(() => {
+        if (assistantRef.current && isConnected && isListening && !isSpeechDetected) {
+          console.log('Auto-greeting: No speech detected, sending greeting prompt');
+          assistantRef.current.sendTextMessage("Hello! I'm here to help. What can I do for you today?");
+        }
+      }, autoGreetingTimeout); // Use the configurable timeout
+    }
   };
 
   const handleSpeakingChange = (speaking: boolean) => {
@@ -266,6 +304,9 @@ export const VoiceAssistantProvider: React.FC<VoiceAssistantProviderProps> = ({
 
   useEffect(() => {
     return () => {
+      if (autoGreetingTimeoutRef.current) {
+        clearTimeout(autoGreetingTimeoutRef.current);
+      }
       assistantRef.current?.disconnect();
     };
   }, []);

@@ -2481,6 +2481,7 @@ export type Database = {
       user_scheduling_prefs: {
         Row: {
           assistant_extensions: string | null
+          auto_greeting_timeout: number | null
           config: Json
           core_instructions: string | null
           created_at: string
@@ -2492,6 +2493,7 @@ export type Database = {
         }
         Insert: {
           assistant_extensions?: string | null
+          auto_greeting_timeout?: number | null
           config?: Json
           core_instructions?: string | null
           created_at?: string
@@ -2503,6 +2505,7 @@ export type Database = {
         }
         Update: {
           assistant_extensions?: string | null
+          auto_greeting_timeout?: number | null
           config?: Json
           core_instructions?: string | null
           created_at?: string

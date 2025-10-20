@@ -4,6 +4,8 @@ import { Mic, MicOff } from 'lucide-react';
 import { useVoiceAssistant } from '@/contexts/VoiceAssistantContext';
 
 const VoiceAssistantButton: React.FC = () => {
+  const [isClickDisabled, setIsClickDisabled] = React.useState(false);
+  
   try {
     const {
       isConnected,
@@ -16,15 +18,25 @@ const VoiceAssistantButton: React.FC = () => {
     } = useVoiceAssistant();
 
     const handleClick = async () => {
-      if (!isConnected) {
-        // Not connected → Connect
-        await connectToAssistant();
-      } else if (isListening) {
-        // Connected and listening → Stop listening (keep connection)
-        await toggleListening();
-      } else {
-        // Connected but not listening → Disconnect
-        disconnectAssistant();
+      // Prevent duplicate clicks
+      if (isClickDisabled) return;
+      
+      setIsClickDisabled(true);
+      
+      try {
+        if (!isConnected) {
+          // Not connected → Connect
+          await connectToAssistant();
+        } else if (isListening) {
+          // Connected and listening → Stop listening (keep connection)
+          await toggleListening();
+        } else {
+          // Connected but not listening → Disconnect
+          disconnectAssistant();
+        }
+      } finally {
+        // Re-enable after a short delay
+        setTimeout(() => setIsClickDisabled(false), 1000);
       }
     };
 
@@ -82,7 +94,7 @@ const VoiceAssistantButton: React.FC = () => {
         onClick={handleClick}
         size="lg"
         className={`rounded-full ${buttonState.className}`}
-        disabled={isProcessing}
+        disabled={isProcessing || isClickDisabled}
       >
         {buttonState.icon}
       </Button>

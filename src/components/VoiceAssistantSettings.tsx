@@ -4,6 +4,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
+import { Input } from '@/components/ui/input';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useAuth';
 import { loadUserSchedulingConfig, saveUserSchedulingConfig, type SchedulingConfigWithInstructions } from '@/services/schedulingService';
@@ -41,6 +42,7 @@ const VoiceAssistantSettings: React.FC = () => {
   const [schedulingPhilosophy, setSchedulingPhilosophy] = useState('');
   const [realtimeExtensions, setRealtimeExtensions] = useState('');
   const [assistantExtensions, setAssistantExtensions] = useState('');
+  const [autoGreetingTimeout, setAutoGreetingTimeout] = useState('5');
 
   useEffect(() => {
     if (user?.id) {
@@ -58,6 +60,7 @@ const VoiceAssistantSettings: React.FC = () => {
       setSchedulingPhilosophy(config.customAIInstructions || '');
       setRealtimeExtensions(config.realtime_extensions || '');
       setAssistantExtensions(config.assistant_extensions || '');
+      setAutoGreetingTimeout(config.auto_greeting_timeout?.toString() || '5');
     } catch (error) {
       console.error('Failed to load AI instructions:', error);
       toast({
@@ -80,6 +83,7 @@ const VoiceAssistantSettings: React.FC = () => {
         customAIInstructions: schedulingPhilosophy,
         realtime_extensions: realtimeExtensions,
         assistant_extensions: assistantExtensions,
+        auto_greeting_timeout: parseInt(autoGreetingTimeout) || 5,
       } as any);
 
       if (success) {
@@ -107,6 +111,7 @@ const VoiceAssistantSettings: React.FC = () => {
     setSchedulingPhilosophy('');
     setRealtimeExtensions('');
     setAssistantExtensions('');
+    setAutoGreetingTimeout('5');
     toast({
       title: "Reset",
       description: "All instructions reset to defaults",
@@ -177,18 +182,36 @@ const VoiceAssistantSettings: React.FC = () => {
           </TabsContent>
 
           <TabsContent value="voice" className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="realtime-extensions">Voice-Specific Extensions</Label>
-              <p className="text-sm text-muted-foreground">
-                Additional instructions specific to the realtime voice assistant (WebRTC)
-              </p>
-              <Textarea
-                id="realtime-extensions"
-                value={realtimeExtensions}
-                onChange={(e) => setRealtimeExtensions(e.target.value)}
-                className="min-h-[400px] font-mono text-sm"
-                placeholder="E.g., 'Use casual language when responding to voice commands...'"
-              />
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="auto-greeting-timeout">Auto-Greeting Timeout (seconds)</Label>
+                <p className="text-sm text-muted-foreground">
+                  If no speech is detected within this time after connecting, the assistant will greet you
+                </p>
+                <Input
+                  id="auto-greeting-timeout"
+                  type="number"
+                  min="1"
+                  max="30"
+                  value={autoGreetingTimeout}
+                  onChange={(e) => setAutoGreetingTimeout(e.target.value)}
+                  className="max-w-xs"
+                />
+              </div>
+              
+              <div className="space-y-2">
+                <Label htmlFor="realtime-extensions">Voice-Specific Extensions</Label>
+                <p className="text-sm text-muted-foreground">
+                  Additional instructions specific to the realtime voice assistant (WebRTC)
+                </p>
+                <Textarea
+                  id="realtime-extensions"
+                  value={realtimeExtensions}
+                  onChange={(e) => setRealtimeExtensions(e.target.value)}
+                  className="min-h-[300px] font-mono text-sm"
+                  placeholder="E.g., 'Use casual language when responding to voice commands...'"
+                />
+              </div>
             </div>
           </TabsContent>
 

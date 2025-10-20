@@ -23,6 +23,7 @@ export interface SchedulingConfigWithInstructions extends SchedulingConfig {
   core_instructions?: string;
   realtime_extensions?: string;
   assistant_extensions?: string;
+  auto_greeting_timeout?: number;
 }
 
 /**
@@ -44,7 +45,7 @@ export async function loadUserSchedulingConfig(userId?: string): Promise<Schedul
   try {
     const { data, error } = await supabase
       .from('user_scheduling_prefs')
-      .select('config, timezone, core_instructions, realtime_extensions, assistant_extensions')
+      .select('config, timezone, core_instructions, realtime_extensions, assistant_extensions, auto_greeting_timeout')
       .eq('user_id', userId)
       .maybeSingle();
 
@@ -73,6 +74,7 @@ export async function loadUserSchedulingConfig(userId?: string): Promise<Schedul
         core_instructions: data.core_instructions || undefined,
         realtime_extensions: data.realtime_extensions || undefined,
         assistant_extensions: data.assistant_extensions || undefined,
+        auto_greeting_timeout: data.auto_greeting_timeout || 5,
       };
       cachedConfig = mergedConfig;
       cachedUserId = userId;
@@ -105,7 +107,7 @@ export async function saveUserSchedulingConfig(
 ): Promise<boolean> {
   try {
     // Extract fields to save in dedicated columns
-    const { timezone, core_instructions, realtime_extensions, assistant_extensions, ...restConfig } = config;
+    const { timezone, core_instructions, realtime_extensions, assistant_extensions, auto_greeting_timeout, ...restConfig } = config;
     
     const updateData: any = {
       user_id: userId,
@@ -129,6 +131,10 @@ export async function saveUserSchedulingConfig(
     
     if (assistant_extensions !== undefined) {
       updateData.assistant_extensions = assistant_extensions;
+    }
+    
+    if (auto_greeting_timeout !== undefined) {
+      updateData.auto_greeting_timeout = auto_greeting_timeout;
     }
     
     const { error } = await supabase

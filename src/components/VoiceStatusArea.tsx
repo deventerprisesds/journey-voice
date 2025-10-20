@@ -24,11 +24,11 @@ const VoiceStatusArea: React.FC = () => {
     <div 
       className={`fixed ${
         isMobile 
-          ? 'bottom-20 right-4 z-[9999]' 
+          ? 'top-4 right-4 z-[9999]' 
           : 'bottom-8 left-1/2 -translate-x-1/2 z-50'
       }`}
       style={isMobile ? { 
-        bottom: 'calc(5rem + env(safe-area-inset-bottom))'
+        top: 'calc(1rem + env(safe-area-inset-top))'
       } : undefined}
     >
       <div className={`flex flex-col ${isMobile ? 'items-end' : 'items-center'} gap-4`}>
