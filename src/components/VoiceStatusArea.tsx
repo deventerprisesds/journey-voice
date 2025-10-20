@@ -4,8 +4,10 @@ import { Mic, Volume2 } from 'lucide-react';
 import { useVoiceAssistant } from '@/contexts/VoiceAssistantContext';
 import ConnectionStatus from '@/components/ConnectionStatus';
 import VoiceAssistantButton from '@/components/VoiceAssistantButton';
+import { useIsMobile } from '@/hooks/use-mobile';
 
 const VoiceStatusArea: React.FC = () => {
+  const isMobile = useIsMobile();
   const {
     isConnected,
     isListening,
@@ -19,7 +21,15 @@ const VoiceStatusArea: React.FC = () => {
   } = useVoiceAssistant();
 
   return (
-    <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50">
+    <div 
+      className={`fixed left-1/2 -translate-x-1/2 ${
+        isMobile ? 'bottom-4 z-[100]' : 'bottom-8 z-50'
+      }`}
+      style={isMobile ? { 
+        paddingBottom: 'env(safe-area-inset-bottom)',
+        bottom: 'calc(1rem + env(safe-area-inset-bottom))'
+      } : undefined}
+    >
       <div className="flex flex-col items-center gap-4">
         
         {/* Connection Status - only show on error */}
