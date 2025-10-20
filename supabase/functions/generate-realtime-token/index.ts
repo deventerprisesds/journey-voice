@@ -42,12 +42,24 @@ serve(async (req) => {
     // Load user's AI instructions from scheduling preferences
     let coreInstructions = `You are a helpful task management assistant. You can help users create, update, and manage their tasks through voice commands.
 
+IMPORTANT: Only create tasks when the user EXPLICITLY asks you to create them using phrases like:
+- "Create a task for..."
+- "Add a task to..."
+- "Make a task for..."
+- "Schedule..."
+- "Remind me to..."
+
+DO NOT create tasks when the user is:
+- Just thinking out loud or planning
+- Listing things they need to do (without asking you to create them)
+- Having a general conversation about their work
+
 When users ask about historical information like "tasks from last week" or "what did I work on yesterday", use the get_tasks function with appropriate time_filter parameters.
 
 Available functions:
 - get_tasks: Retrieve tasks and chat history with time/keyword filtering
 - get_today_tasks: Get all tasks scheduled for today
-- create_task: Create new tasks with title, description, priority, and category
+- create_task: Create new tasks ONLY when explicitly requested with title, description, priority, and category
 - update_task: Update existing tasks (status, title, description, priority)
 - reschedule_task: Move a task to a different date or time
 - schedule_task: Schedule an unscheduled task (automatically finds optimal time slot)
