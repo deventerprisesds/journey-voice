@@ -38,6 +38,59 @@ export type Database = {
         }
         Relationships: []
       }
+      assignment_artifacts: {
+        Row: {
+          artifact_type: string
+          assignment_id: string | null
+          content: string | null
+          created_at: string | null
+          id: string
+          metadata: Json | null
+          status: string | null
+          title: string | null
+          updated_at: string | null
+          user_id: string
+          version: number | null
+          workflow_type: string
+        }
+        Insert: {
+          artifact_type: string
+          assignment_id?: string | null
+          content?: string | null
+          created_at?: string | null
+          id?: string
+          metadata?: Json | null
+          status?: string | null
+          title?: string | null
+          updated_at?: string | null
+          user_id: string
+          version?: number | null
+          workflow_type: string
+        }
+        Update: {
+          artifact_type?: string
+          assignment_id?: string | null
+          content?: string | null
+          created_at?: string | null
+          id?: string
+          metadata?: Json | null
+          status?: string | null
+          title?: string | null
+          updated_at?: string | null
+          user_id?: string
+          version?: number | null
+          workflow_type?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "assignment_artifacts_assignment_id_fkey"
+            columns: ["assignment_id"]
+            isOneToOne: false
+            referencedRelation: "assignments"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       assignment_history: {
         Row: {
           assignment_id: string
@@ -69,6 +122,106 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "assignment_history_assignment_id_fkey"
+            columns: ["assignment_id"]
+            isOneToOne: false
+            referencedRelation: "assignments"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      assignment_outlines: {
+        Row: {
+          assignment_id: string | null
+          created_at: string | null
+          id: string
+          outline_structure: Json
+          status: string | null
+          updated_at: string | null
+          user_id: string
+          workflow_type: string
+        }
+        Insert: {
+          assignment_id?: string | null
+          created_at?: string | null
+          id?: string
+          outline_structure: Json
+          status?: string | null
+          updated_at?: string | null
+          user_id: string
+          workflow_type: string
+        }
+        Update: {
+          assignment_id?: string | null
+          created_at?: string | null
+          id?: string
+          outline_structure?: Json
+          status?: string | null
+          updated_at?: string | null
+          user_id?: string
+          workflow_type?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "assignment_outlines_assignment_id_fkey"
+            columns: ["assignment_id"]
+            isOneToOne: false
+            referencedRelation: "assignments"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      assignment_requirements: {
+        Row: {
+          assignment_id: string | null
+          created_at: string | null
+          description: string
+          extracted_at: string | null
+          id: string
+          is_met: boolean | null
+          last_run_id: string | null
+          metadata: Json | null
+          openai_thread_id: string | null
+          requirement_type: string
+          status: string | null
+          user_id: string
+          weight: number | null
+          workflow_type: string
+        }
+        Insert: {
+          assignment_id?: string | null
+          created_at?: string | null
+          description: string
+          extracted_at?: string | null
+          id?: string
+          is_met?: boolean | null
+          last_run_id?: string | null
+          metadata?: Json | null
+          openai_thread_id?: string | null
+          requirement_type: string
+          status?: string | null
+          user_id: string
+          weight?: number | null
+          workflow_type: string
+        }
+        Update: {
+          assignment_id?: string | null
+          created_at?: string | null
+          description?: string
+          extracted_at?: string | null
+          id?: string
+          is_met?: boolean | null
+          last_run_id?: string | null
+          metadata?: Json | null
+          openai_thread_id?: string | null
+          requirement_type?: string
+          status?: string | null
+          user_id?: string
+          weight?: number | null
+          workflow_type?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "assignment_requirements_assignment_id_fkey"
             columns: ["assignment_id"]
             isOneToOne: false
             referencedRelation: "assignments"
@@ -2522,6 +2675,10 @@ export type Database = {
           ai_sync_mode: string
           created_at: string
           deep_extraction_default: boolean
+          discussion_post_reviewer_prompt: string | null
+          discussion_post_writer_prompt: string | null
+          essay_reviewer_prompt: string | null
+          essay_writer_prompt: string | null
           id: string
           updated_at: string
           user_id: string
@@ -2531,6 +2688,10 @@ export type Database = {
           ai_sync_mode?: string
           created_at?: string
           deep_extraction_default?: boolean
+          discussion_post_reviewer_prompt?: string | null
+          discussion_post_writer_prompt?: string | null
+          essay_reviewer_prompt?: string | null
+          essay_writer_prompt?: string | null
           id?: string
           updated_at?: string
           user_id: string
@@ -2540,6 +2701,10 @@ export type Database = {
           ai_sync_mode?: string
           created_at?: string
           deep_extraction_default?: boolean
+          discussion_post_reviewer_prompt?: string | null
+          discussion_post_writer_prompt?: string | null
+          essay_reviewer_prompt?: string | null
+          essay_writer_prompt?: string | null
           id?: string
           updated_at?: string
           user_id?: string
