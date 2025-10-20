@@ -6,7 +6,7 @@ import VoiceStatusArea from '@/components/VoiceStatusArea';
 import DailyScheduleView from '@/components/DailyScheduleView';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { LogOut, Settings, Crown, User, Calendar, LayoutDashboard } from 'lucide-react';
+import { LogOut, Settings, Crown, User, Calendar, LayoutGrid } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
@@ -110,8 +110,8 @@ const DailyPriorities = () => {
               
               <Link to="/">
                 <Button variant="outline" size="sm">
-                  <LayoutDashboard className="w-4 h-4 mr-2" />
-                  Dashboard
+                  <LayoutGrid className="w-4 h-4 mr-2" />
+                  All Tasks
                 </Button>
               </Link>
 

@@ -73,8 +73,8 @@ const App = () => {
               <DemoModeBadge />
               <ErrorBoundary>
                 <Routes>
-                  <Route path="/" element={<DailyPriorities />} />
-                  <Route path="/dashboard" element={<Dashboard />} />
+                  <Route path="/" element={<Dashboard />} />
+                  <Route path="/agenda" element={<DailyPriorities />} />
                   <Route path="/auth" element={<Auth />} />
                   <Route path="/admin" element={<Admin />} />
                   <Route path="/settings" element={<Settings />} />
