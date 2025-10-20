@@ -90,6 +90,7 @@ export type Database = {
           level_of_effort: string | null
           points: number | null
           priority: string
+          program_id: string | null
           sheet_row_number: number | null
           status: string
           title: string
@@ -110,6 +111,7 @@ export type Database = {
           level_of_effort?: string | null
           points?: number | null
           priority?: string
+          program_id?: string | null
           sheet_row_number?: number | null
           status?: string
           title: string
@@ -130,6 +132,7 @@ export type Database = {
           level_of_effort?: string | null
           points?: number | null
           priority?: string
+          program_id?: string | null
           sheet_row_number?: number | null
           status?: string
           title?: string
@@ -143,6 +146,13 @@ export type Database = {
             columns: ["course_id"]
             isOneToOne: false
             referencedRelation: "courses"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "assignments_program_id_fkey"
+            columns: ["program_id"]
+            isOneToOne: false
+            referencedRelation: "programs"
             referencedColumns: ["id"]
           },
         ]
@@ -411,6 +421,7 @@ export type Database = {
       }
       class_schedules: {
         Row: {
+          course_id: string | null
           course_name: string
           created_at: string
           date: string
@@ -419,6 +430,7 @@ export type Database = {
           instructor: string | null
           is_online: boolean | null
           location: string | null
+          program_id: string | null
           sheet_row_number: number | null
           sheet_source: string
           start_time: string
@@ -427,6 +439,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          course_id?: string | null
           course_name: string
           created_at?: string
           date: string
@@ -435,6 +448,7 @@ export type Database = {
           instructor?: string | null
           is_online?: boolean | null
           location?: string | null
+          program_id?: string | null
           sheet_row_number?: number | null
           sheet_source: string
           start_time: string
@@ -443,6 +457,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          course_id?: string | null
           course_name?: string
           created_at?: string
           date?: string
@@ -451,6 +466,7 @@ export type Database = {
           instructor?: string | null
           is_online?: boolean | null
           location?: string | null
+          program_id?: string | null
           sheet_row_number?: number | null
           sheet_source?: string
           start_time?: string
@@ -458,7 +474,22 @@ export type Database = {
           updated_at?: string
           user_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "class_schedules_program_id_fkey"
+            columns: ["program_id"]
+            isOneToOne: false
+            referencedRelation: "programs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fk_class_schedules_course"
+            columns: ["course_id"]
+            isOneToOne: false
+            referencedRelation: "courses"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       columns: {
         Row: {
@@ -673,8 +704,8 @@ export type Database = {
           onedrive_file_id: string | null
           onedrive_path: string | null
           onedrive_share_link: string | null
-          schedule_session_id: string | null
           title: string
+          total_slides: number | null
           updated_at: string
           user_id: string
         }
@@ -692,8 +723,8 @@ export type Database = {
           onedrive_file_id?: string | null
           onedrive_path?: string | null
           onedrive_share_link?: string | null
-          schedule_session_id?: string | null
           title: string
+          total_slides?: number | null
           updated_at?: string
           user_id: string
         }
@@ -711,8 +742,8 @@ export type Database = {
           onedrive_file_id?: string | null
           onedrive_path?: string | null
           onedrive_share_link?: string | null
-          schedule_session_id?: string | null
           title?: string
+          total_slides?: number | null
           updated_at?: string
           user_id?: string
         }
@@ -731,13 +762,6 @@ export type Database = {
             referencedRelation: "modules"
             referencedColumns: ["id"]
           },
-          {
-            foreignKeyName: "course_materials_schedule_session_id_fkey"
-            columns: ["schedule_session_id"]
-            isOneToOne: false
-            referencedRelation: "class_schedules"
-            referencedColumns: ["id"]
-          },
         ]
       }
       courses: {
@@ -751,6 +775,7 @@ export type Database = {
           onedrive_folder_id: string | null
           onedrive_folder_name: string | null
           onedrive_folder_path: string | null
+          program_id: string | null
           updated_at: string
           user_id: string
         }
@@ -764,6 +789,7 @@ export type Database = {
           onedrive_folder_id?: string | null
           onedrive_folder_name?: string | null
           onedrive_folder_path?: string | null
+          program_id?: string | null
           updated_at?: string
           user_id: string
         }
@@ -777,10 +803,72 @@ export type Database = {
           onedrive_folder_id?: string | null
           onedrive_folder_name?: string | null
           onedrive_folder_path?: string | null
+          program_id?: string | null
           updated_at?: string
           user_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "courses_program_id_fkey"
+            columns: ["program_id"]
+            isOneToOne: false
+            referencedRelation: "programs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      data_source_mappings: {
+        Row: {
+          created_at: string | null
+          data_type: string
+          id: string
+          last_synced_at: string | null
+          program_id: string
+          source_identifier: string
+          source_name: string | null
+          source_type: string
+          sync_config: Json | null
+          sync_enabled: boolean | null
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          data_type: string
+          id?: string
+          last_synced_at?: string | null
+          program_id: string
+          source_identifier: string
+          source_name?: string | null
+          source_type: string
+          sync_config?: Json | null
+          sync_enabled?: boolean | null
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          data_type?: string
+          id?: string
+          last_synced_at?: string | null
+          program_id?: string
+          source_identifier?: string
+          source_name?: string | null
+          source_type?: string
+          sync_config?: Json | null
+          sync_enabled?: boolean | null
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "data_source_mappings_program_id_fkey"
+            columns: ["program_id"]
+            isOneToOne: false
+            referencedRelation: "programs"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       delivery_logs: {
         Row: {
@@ -912,6 +1000,8 @@ export type Database = {
           key_definitions: Json | null
           key_terms: string[] | null
           learning_objectives: string[] | null
+          openai_file_id: string | null
+          openai_vector_store_id: string | null
           quick_summary: string | null
           real_world_scenarios: string[] | null
           software_tools: string[] | null
@@ -948,6 +1038,8 @@ export type Database = {
           key_definitions?: Json | null
           key_terms?: string[] | null
           learning_objectives?: string[] | null
+          openai_file_id?: string | null
+          openai_vector_store_id?: string | null
           quick_summary?: string | null
           real_world_scenarios?: string[] | null
           software_tools?: string[] | null
@@ -984,6 +1076,8 @@ export type Database = {
           key_definitions?: Json | null
           key_terms?: string[] | null
           learning_objectives?: string[] | null
+          openai_file_id?: string | null
+          openai_vector_store_id?: string | null
           quick_summary?: string | null
           real_world_scenarios?: string[] | null
           software_tools?: string[] | null
@@ -1205,6 +1299,101 @@ export type Database = {
           },
         ]
       }
+      lecture_transcripts_segments: {
+        Row: {
+          created_at: string
+          end_time: number
+          id: string
+          segment_number: number
+          session_id: string
+          slide_reference: string | null
+          speaker: string | null
+          start_time: number
+          text: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          end_time: number
+          id?: string
+          segment_number: number
+          session_id: string
+          slide_reference?: string | null
+          speaker?: string | null
+          start_time: number
+          text: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          end_time?: number
+          id?: string
+          segment_number?: number
+          session_id?: string
+          slide_reference?: string | null
+          speaker?: string | null
+          start_time?: number
+          text?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      live_insights: {
+        Row: {
+          category: string
+          confidence: number | null
+          content: Json
+          course_id: string | null
+          created_at: string
+          highlight_importance: number | null
+          id: string
+          insight_type: string
+          session_id: string
+          subcategory: string
+          timestamp: string
+          transcript_segment_id: string | null
+          user_id: string
+        }
+        Insert: {
+          category?: string
+          confidence?: number | null
+          content: Json
+          course_id?: string | null
+          created_at?: string
+          highlight_importance?: number | null
+          id?: string
+          insight_type: string
+          session_id: string
+          subcategory?: string
+          timestamp?: string
+          transcript_segment_id?: string | null
+          user_id: string
+        }
+        Update: {
+          category?: string
+          confidence?: number | null
+          content?: Json
+          course_id?: string | null
+          created_at?: string
+          highlight_importance?: number | null
+          id?: string
+          insight_type?: string
+          session_id?: string
+          subcategory?: string
+          timestamp?: string
+          transcript_segment_id?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "live_insights_transcript_segment_id_fkey"
+            columns: ["transcript_segment_id"]
+            isOneToOne: false
+            referencedRelation: "lecture_transcripts_segments"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       modules: {
         Row: {
           course_id: string
@@ -1337,6 +1526,103 @@ export type Database = {
         }
         Relationships: []
       }
+      playback_state: {
+        Row: {
+          is_playing: boolean | null
+          playback_speed: number
+          playback_time: number
+          session_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          is_playing?: boolean | null
+          playback_speed?: number
+          playback_time?: number
+          session_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          is_playing?: boolean | null
+          playback_speed?: number
+          playback_time?: number
+          session_id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      ppt_slide_texts: {
+        Row: {
+          created_at: string
+          id: string
+          material_id: string
+          slide_number: number
+          text: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          material_id: string
+          slide_number: number
+          text: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          material_id?: string
+          slide_number?: number
+          text?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ppt_slide_texts_material_id_fkey"
+            columns: ["material_id"]
+            isOneToOne: false
+            referencedRelation: "course_materials"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ppt_slide_thumbnails: {
+        Row: {
+          created_at: string
+          id: string
+          material_id: string
+          slide_number: number
+          thumbnail_storage_path: string | null
+          thumbnail_url: string | null
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          material_id: string
+          slide_number: number
+          thumbnail_storage_path?: string | null
+          thumbnail_url?: string | null
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          material_id?: string
+          slide_number?: number
+          thumbnail_storage_path?: string | null
+          thumbnail_url?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ppt_slide_thumbnails_material_id_fkey"
+            columns: ["material_id"]
+            isOneToOne: false
+            referencedRelation: "course_materials"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       profile_access_log: {
         Row: {
           access_type: string
@@ -1420,6 +1706,39 @@ export type Database = {
           id?: string
           phone?: string | null
           updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      programs: {
+        Row: {
+          code: string | null
+          created_at: string | null
+          description: string | null
+          id: string
+          is_active: boolean | null
+          name: string
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          code?: string | null
+          created_at?: string | null
+          description?: string | null
+          id?: string
+          is_active?: boolean | null
+          name: string
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          code?: string | null
+          created_at?: string | null
+          description?: string | null
+          id?: string
+          is_active?: boolean | null
+          name?: string
+          updated_at?: string | null
           user_id?: string
         }
         Relationships: []
@@ -1640,6 +1959,89 @@ export type Database = {
           },
         ]
       }
+      session_material_links: {
+        Row: {
+          created_at: string
+          id: string
+          linked_at: string
+          material_id: string
+          schedule_session_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          linked_at?: string
+          material_id: string
+          schedule_session_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          linked_at?: string
+          material_id?: string
+          schedule_session_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "session_material_links_material_id_fkey"
+            columns: ["material_id"]
+            isOneToOne: false
+            referencedRelation: "course_materials"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "session_material_links_schedule_session_id_fkey"
+            columns: ["schedule_session_id"]
+            isOneToOne: false
+            referencedRelation: "class_schedules"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      session_notes: {
+        Row: {
+          content: string
+          id: string
+          linked_segment_id: string | null
+          markdown_formatted: boolean | null
+          session_id: string
+          tags: string[] | null
+          timestamp: string
+          user_id: string
+        }
+        Insert: {
+          content: string
+          id?: string
+          linked_segment_id?: string | null
+          markdown_formatted?: boolean | null
+          session_id: string
+          tags?: string[] | null
+          timestamp?: string
+          user_id: string
+        }
+        Update: {
+          content?: string
+          id?: string
+          linked_segment_id?: string | null
+          markdown_formatted?: boolean | null
+          session_id?: string
+          tags?: string[] | null
+          timestamp?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "session_notes_linked_segment_id_fkey"
+            columns: ["linked_segment_id"]
+            isOneToOne: false
+            referencedRelation: "lecture_transcripts_segments"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       session_qa: {
         Row: {
           answer: string
@@ -1649,6 +2051,7 @@ export type Database = {
           id: string
           question: string
           session_id: string
+          sources: Json | null
           user_id: string
         }
         Insert: {
@@ -1659,6 +2062,7 @@ export type Database = {
           id?: string
           question: string
           session_id: string
+          sources?: Json | null
           user_id: string
         }
         Update: {
@@ -1669,6 +2073,7 @@ export type Database = {
           id?: string
           question?: string
           session_id?: string
+          sources?: Json | null
           user_id?: string
         }
         Relationships: [
@@ -2075,28 +2480,67 @@ export type Database = {
       }
       user_scheduling_prefs: {
         Row: {
+          assistant_extensions: string | null
           config: Json
+          core_instructions: string | null
           created_at: string
           id: string
+          realtime_extensions: string | null
           timezone: string | null
           updated_at: string
           user_id: string
         }
         Insert: {
+          assistant_extensions?: string | null
           config?: Json
+          core_instructions?: string | null
           created_at?: string
           id?: string
+          realtime_extensions?: string | null
           timezone?: string | null
           updated_at?: string
           user_id: string
         }
         Update: {
+          assistant_extensions?: string | null
           config?: Json
+          core_instructions?: string | null
           created_at?: string
           id?: string
+          realtime_extensions?: string | null
           timezone?: string | null
           updated_at?: string
           user_id?: string
+        }
+        Relationships: []
+      }
+      user_settings: {
+        Row: {
+          ai_sync_mode: string
+          created_at: string
+          deep_extraction_default: boolean
+          id: string
+          updated_at: string
+          user_id: string
+          web_search_enabled: boolean | null
+        }
+        Insert: {
+          ai_sync_mode?: string
+          created_at?: string
+          deep_extraction_default?: boolean
+          id?: string
+          updated_at?: string
+          user_id: string
+          web_search_enabled?: boolean | null
+        }
+        Update: {
+          ai_sync_mode?: string
+          created_at?: string
+          deep_extraction_default?: boolean
+          id?: string
+          updated_at?: string
+          user_id?: string
+          web_search_enabled?: boolean | null
         }
         Relationships: []
       }

@@ -23,6 +23,41 @@ async function handleAssistantRequest(
   console.log(`Processing assistant request for user ${userId}, thread ${threadId}`);
 
   try {
+    // Load user's AI instructions from scheduling preferences
+    let additionalInstructions = contextualInstructions || '';
+    
+    try {
+      const { data: prefs } = await supabase
+        .from('user_scheduling_prefs')
+        .select('core_instructions, assistant_extensions, config')
+        .eq('user_id', userId)
+        .maybeSingle();
+
+      if (prefs) {
+        const instructionParts: string[] = [];
+        
+        if (prefs.core_instructions) {
+          instructionParts.push(prefs.core_instructions);
+        }
+        
+        if (prefs.assistant_extensions) {
+          instructionParts.push(prefs.assistant_extensions);
+        }
+        
+        if (prefs.config?.customAIInstructions) {
+          instructionParts.push(`Scheduling Philosophy:\n${prefs.config.customAIInstructions}`);
+        }
+        
+        if (contextualInstructions) {
+          instructionParts.push(contextualInstructions);
+        }
+        
+        additionalInstructions = instructionParts.filter(Boolean).join('\n\n');
+        console.log('Loaded user-specific AI instructions');
+      }
+    } catch (error) {
+      console.warn('Failed to load user instructions, using contextual only:', error);
+    }
     // Get or create OpenAI thread
     let openaiThreadId: string;
     
@@ -84,13 +119,13 @@ async function handleAssistantRequest(
       throw new Error(`Failed to add message: ${await messageResponse.text()}`);
     }
 
-    // Create run with contextual instructions if provided
+    // Create run with combined instructions
     const runPayload: any = {
       assistant_id: assistantId
     };
 
-    if (contextualInstructions) {
-      runPayload.additional_instructions = contextualInstructions;
+    if (additionalInstructions) {
+      runPayload.additional_instructions = additionalInstructions;
     }
 
     const runResponse = await fetch(`https://api.openai.com/v1/threads/${openaiThreadId}/runs`, {

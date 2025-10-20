@@ -12,13 +12,15 @@ import {
   ArrowLeft,
   Home,
   Wrench,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Sparkles
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import NotificationSettings from '@/components/NotificationSettings';
 import CronJobTesting from '@/components/CronJobTesting';
 import UpcomingReminders from '@/components/UpcomingReminders';
 import SchedulingSettings from '@/components/SchedulingSettings';
+import VoiceAssistantSettings from '@/components/VoiceAssistantSettings';
 import { AssignmentSyncSettings } from '@/components/AssignmentSyncSettings';
 import { useOAuthCallback } from '@/hooks/useOAuthCallback';
 
@@ -72,7 +74,7 @@ const Settings: React.FC = () => {
       </div>
 
       <Tabs defaultValue="notifications" className="w-full">
-        <TabsList className="grid w-full grid-cols-7">
+        <TabsList className="grid w-full grid-cols-8">
           <TabsTrigger value="notifications" className="flex items-center gap-2">
             <Bell className="h-4 w-4" />
             Notifications
@@ -80,6 +82,10 @@ const Settings: React.FC = () => {
           <TabsTrigger value="scheduling" className="flex items-center gap-2">
             <SettingsIcon className="h-4 w-4" />
             Scheduling
+          </TabsTrigger>
+          <TabsTrigger value="ai" className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4" />
+            AI Instructions
           </TabsTrigger>
           <TabsTrigger value="assignments" className="flex items-center gap-2">
             <FileSpreadsheet className="h-4 w-4" />
@@ -112,6 +118,10 @@ const Settings: React.FC = () => {
 
         <TabsContent value="scheduling" className="mt-6">
           <SchedulingSettings />
+        </TabsContent>
+
+        <TabsContent value="ai" className="mt-6">
+          <VoiceAssistantSettings />
         </TabsContent>
 
         <TabsContent value="assignments" className="mt-6">

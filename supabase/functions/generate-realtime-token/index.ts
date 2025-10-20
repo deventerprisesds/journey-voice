@@ -14,11 +14,86 @@ serve(async (req) => {
 
   try {
     const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
+    const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
+    const SUPABASE_SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    
     if (!OPENAI_API_KEY) {
       throw new Error('OPENAI_API_KEY is not set');
     }
 
-    console.log('Generating ephemeral token for WebRTC connection');
+    // Get user ID from request
+    const authHeader = req.headers.get('Authorization');
+    let userId: string | null = null;
+    
+    if (authHeader) {
+      try {
+        const token = authHeader.replace('Bearer ', '');
+        const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2');
+        const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+        const { data: { user } } = await supabase.auth.getUser(token);
+        userId = user?.id || null;
+      } catch (error) {
+        console.warn('Failed to get user from token:', error);
+      }
+    }
+
+    console.log('Generating ephemeral token for user:', userId || 'anonymous');
+
+    // Load user's AI instructions from scheduling preferences
+    let coreInstructions = `You are a helpful task management assistant. You can help users create, update, and manage their tasks through voice commands.
+
+When users ask about historical information like "tasks from last week" or "what did I work on yesterday", use the get_tasks function with appropriate time_filter parameters.
+
+Available functions:
+- get_tasks: Retrieve tasks and chat history with time/keyword filtering
+- get_today_tasks: Get all tasks scheduled for today
+- create_task: Create new tasks with title, description, priority, and category
+- update_task: Update existing tasks (status, title, description, priority)
+- reschedule_task: Move a task to a different date or time
+- schedule_task: Schedule an unscheduled task (automatically finds optimal time slot)
+- unschedule_task: Remove a task from the calendar
+- disconnect: Disconnect when user says goodbye, "that's all", "disconnect", "I'm done", or similar farewell phrases
+
+When users ask about "today's tasks" or "what's on my schedule today", use get_today_tasks.
+When users want to move tasks around, use reschedule_task with the new date/time.
+When users want to add unscheduled tasks to today, use schedule_task which will automatically find the best time slot.
+
+Always confirm actions you take and provide helpful feedback about task management.
+
+When the user says goodbye phrases like 'that's all', 'thanks that's it', 'disconnect', 'I'm done', 'goodbye', or similar, call the disconnect function with a friendly farewell message.`;
+
+    let realtimeExtensions = '';
+    let schedulingPhilosophy = '';
+
+    if (userId) {
+      try {
+        const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2');
+        const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+        
+        const { data: prefs } = await supabase
+          .from('user_scheduling_prefs')
+          .select('core_instructions, realtime_extensions, config')
+          .eq('user_id', userId)
+          .maybeSingle();
+
+        if (prefs) {
+          if (prefs.core_instructions) coreInstructions = prefs.core_instructions;
+          if (prefs.realtime_extensions) realtimeExtensions = prefs.realtime_extensions;
+          if (prefs.config?.customAIInstructions) {
+            schedulingPhilosophy = `\n\nScheduling Philosophy:\n${prefs.config.customAIInstructions}`;
+          }
+        }
+      } catch (error) {
+        console.warn('Failed to load user instructions, using defaults:', error);
+      }
+    }
+
+    // Combine instructions
+    const fullInstructions = [
+      coreInstructions,
+      realtimeExtensions,
+      schedulingPhilosophy
+    ].filter(Boolean).join('\n\n');
 
     // Request an ephemeral token from OpenAI
     const response = await fetch("https://api.openai.com/v1/realtime/sessions", {
@@ -181,27 +256,7 @@ serve(async (req) => {
             }
           }
         ],
-        instructions: `You are a helpful task management assistant. You can help users create, update, and manage their tasks through voice commands.
-
-When users ask about historical information like "tasks from last week" or "what did I work on yesterday", use the get_tasks function with appropriate time_filter parameters.
-
-Available functions:
-- get_tasks: Retrieve tasks and chat history with time/keyword filtering
-- get_today_tasks: Get all tasks scheduled for today
-- create_task: Create new tasks with title, description, priority, and category
-- update_task: Update existing tasks (status, title, description, priority)
-- reschedule_task: Move a task to a different date or time
-- schedule_task: Schedule an unscheduled task (automatically finds optimal time slot)
-- unschedule_task: Remove a task from the calendar
-- disconnect: Disconnect when user says goodbye, "that's all", "disconnect", "I'm done", or similar farewell phrases
-
-When users ask about "today's tasks" or "what's on my schedule today", use get_today_tasks.
-When users want to move tasks around, use reschedule_task with the new date/time.
-When users want to add unscheduled tasks to today, use schedule_task which will automatically find the best time slot.
-
-Always confirm actions you take and provide helpful feedback about task management.
-
-When the user says goodbye phrases like 'that's all', 'thanks that's it', 'disconnect', 'I'm done', 'goodbye', or similar, call the disconnect function with a friendly farewell message.`
+        instructions: fullInstructions
       }),
     });
 

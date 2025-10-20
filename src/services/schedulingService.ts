@@ -18,11 +18,18 @@ export type { SchedulingConfig, TimeWindow };
 let cachedConfig: SchedulingConfig | null = null;
 let cachedUserId: string | null = null;
 
+// Extended config with AI instructions
+export interface SchedulingConfigWithInstructions extends SchedulingConfig {
+  core_instructions?: string;
+  realtime_extensions?: string;
+  assistant_extensions?: string;
+}
+
 /**
  * Load user's scheduling preferences from database or return defaults
  * Auto-detects and saves timezone on first use
  */
-export async function loadUserSchedulingConfig(userId?: string): Promise<SchedulingConfig> {
+export async function loadUserSchedulingConfig(userId?: string): Promise<SchedulingConfigWithInstructions> {
   if (!userId) {
     const config = { ...DEFAULT_SCHEDULING_CONFIG };
     config.timezone = getBrowserTimezone();
@@ -37,7 +44,7 @@ export async function loadUserSchedulingConfig(userId?: string): Promise<Schedul
   try {
     const { data, error } = await supabase
       .from('user_scheduling_prefs')
-      .select('config, timezone')
+      .select('config, timezone, core_instructions, realtime_extensions, assistant_extensions')
       .eq('user_id', userId)
       .maybeSingle();
 
@@ -61,7 +68,12 @@ export async function loadUserSchedulingConfig(userId?: string): Promise<Schedul
         await saveUserSchedulingConfig(userId, { timezone });
       }
       
-      const mergedConfig = mergeSchedulingConfig({ ...userConfig, timezone });
+      const mergedConfig: SchedulingConfigWithInstructions = {
+        ...mergeSchedulingConfig({ ...userConfig, timezone }),
+        core_instructions: data.core_instructions || undefined,
+        realtime_extensions: data.realtime_extensions || undefined,
+        assistant_extensions: data.assistant_extensions || undefined,
+      };
       cachedConfig = mergedConfig;
       cachedUserId = userId;
       return mergedConfig;
@@ -89,11 +101,11 @@ export async function loadUserSchedulingConfig(userId?: string): Promise<Schedul
  */
 export async function saveUserSchedulingConfig(
   userId: string,
-  config: Partial<SchedulingConfig>
+  config: Partial<SchedulingConfigWithInstructions>
 ): Promise<boolean> {
   try {
-    // Extract timezone to save in dedicated column
-    const { timezone, ...restConfig } = config;
+    // Extract fields to save in dedicated columns
+    const { timezone, core_instructions, realtime_extensions, assistant_extensions, ...restConfig } = config;
     
     const updateData: any = {
       user_id: userId,
@@ -104,6 +116,19 @@ export async function saveUserSchedulingConfig(
     // Add timezone to dedicated column if provided
     if (timezone) {
       updateData.timezone = timezone;
+    }
+    
+    // Add AI instruction fields if provided
+    if (core_instructions !== undefined) {
+      updateData.core_instructions = core_instructions;
+    }
+    
+    if (realtime_extensions !== undefined) {
+      updateData.realtime_extensions = realtime_extensions;
+    }
+    
+    if (assistant_extensions !== undefined) {
+      updateData.assistant_extensions = assistant_extensions;
     }
     
     const { error } = await supabase
