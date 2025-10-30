@@ -229,6 +229,44 @@ export type Database = {
           },
         ]
       }
+      assignment_user_context: {
+        Row: {
+          assignment_id: string
+          context_file_urls: Json | null
+          created_at: string | null
+          id: string
+          persistent_instructions: string | null
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          assignment_id: string
+          context_file_urls?: Json | null
+          created_at?: string | null
+          id?: string
+          persistent_instructions?: string | null
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          assignment_id?: string
+          context_file_urls?: Json | null
+          created_at?: string | null
+          id?: string
+          persistent_instructions?: string | null
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "assignment_user_context_assignment_id_fkey"
+            columns: ["assignment_id"]
+            isOneToOne: false
+            referencedRelation: "assignments"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       assignments: {
         Row: {
           academic_semester: string | null
@@ -1655,7 +1693,7 @@ export type Database = {
           connection_id: string
           created_at: string
           id: string
-          ip_address: unknown | null
+          ip_address: unknown
           user_agent: string | null
           user_id: string
         }
@@ -1664,7 +1702,7 @@ export type Database = {
           connection_id: string
           created_at?: string
           id?: string
-          ip_address?: unknown | null
+          ip_address?: unknown
           user_agent?: string | null
           user_id: string
         }
@@ -1673,7 +1711,7 @@ export type Database = {
           connection_id?: string
           created_at?: string
           id?: string
-          ip_address?: unknown | null
+          ip_address?: unknown
           user_agent?: string | null
           user_id?: string
         }
@@ -1782,7 +1820,7 @@ export type Database = {
           accessed_user_id: string
           accessor_user_id: string
           id: string
-          ip_address: unknown | null
+          ip_address: unknown
           timestamp: string | null
           user_agent: string | null
         }
@@ -1791,7 +1829,7 @@ export type Database = {
           accessed_user_id: string
           accessor_user_id: string
           id?: string
-          ip_address?: unknown | null
+          ip_address?: unknown
           timestamp?: string | null
           user_agent?: string | null
         }
@@ -1800,7 +1838,7 @@ export type Database = {
           accessed_user_id?: string
           accessor_user_id?: string
           id?: string
-          ip_address?: unknown | null
+          ip_address?: unknown
           timestamp?: string | null
           user_agent?: string | null
         }
@@ -1833,33 +1871,51 @@ export type Database = {
       profiles: {
         Row: {
           avatar_url: string | null
+          company: string | null
           created_at: string
           email: string | null
+          first_name: string | null
           full_name: string | null
           id: string
+          industry: string | null
+          job_title: string | null
+          last_name: string | null
           phone: string | null
           updated_at: string
           user_id: string
+          years_of_experience: number | null
         }
         Insert: {
           avatar_url?: string | null
+          company?: string | null
           created_at?: string
           email?: string | null
+          first_name?: string | null
           full_name?: string | null
           id?: string
+          industry?: string | null
+          job_title?: string | null
+          last_name?: string | null
           phone?: string | null
           updated_at?: string
           user_id: string
+          years_of_experience?: number | null
         }
         Update: {
           avatar_url?: string | null
+          company?: string | null
           created_at?: string
           email?: string | null
+          first_name?: string | null
           full_name?: string | null
           id?: string
+          industry?: string | null
+          job_title?: string | null
+          last_name?: string | null
           phone?: string | null
           updated_at?: string
           user_id?: string
+          years_of_experience?: number | null
         }
         Relationships: []
       }
@@ -2677,9 +2733,12 @@ export type Database = {
           deep_extraction_default: boolean
           discussion_post_reviewer_prompt: string | null
           discussion_post_writer_prompt: string | null
+          enable_requirements_review: boolean | null
           essay_reviewer_prompt: string | null
           essay_writer_prompt: string | null
           id: string
+          outline_generation_prompt: string | null
+          requirements_extraction_prompt: string | null
           updated_at: string
           user_id: string
           web_search_enabled: boolean | null
@@ -2690,9 +2749,12 @@ export type Database = {
           deep_extraction_default?: boolean
           discussion_post_reviewer_prompt?: string | null
           discussion_post_writer_prompt?: string | null
+          enable_requirements_review?: boolean | null
           essay_reviewer_prompt?: string | null
           essay_writer_prompt?: string | null
           id?: string
+          outline_generation_prompt?: string | null
+          requirements_extraction_prompt?: string | null
           updated_at?: string
           user_id: string
           web_search_enabled?: boolean | null
@@ -2703,9 +2765,12 @@ export type Database = {
           deep_extraction_default?: boolean
           discussion_post_reviewer_prompt?: string | null
           discussion_post_writer_prompt?: string | null
+          enable_requirements_review?: boolean | null
           essay_reviewer_prompt?: string | null
           essay_writer_prompt?: string | null
           id?: string
+          outline_generation_prompt?: string | null
+          requirements_extraction_prompt?: string | null
           updated_at?: string
           user_id?: string
           web_search_enabled?: boolean | null
@@ -2717,10 +2782,6 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      binary_quantize: {
-        Args: { "": string } | { "": unknown }
-        Returns: unknown
-      }
       check_profile_access_rate_limit: {
         Args: { max_requests?: number; window_minutes?: number }
         Returns: boolean
@@ -2744,6 +2805,12 @@ export type Database = {
           title: string
           user_id: string
         }[]
+        SetofOptions: {
+          from: "*"
+          to: "scheduled_notifications"
+          isOneToOne: false
+          isSetofReturn: true
+        }
       }
       decrypt_token: {
         Args: { encrypted_token: string; p_user_id: string }
@@ -2762,7 +2829,7 @@ export type Database = {
         }[]
       }
       get_calendar_connections_safe: {
-        Args: Record<PropertyKey, never>
+        Args: never
         Returns: {
           created_at: string
           expires_at: string
@@ -2777,7 +2844,7 @@ export type Database = {
         }[]
       }
       get_calendar_connections_secure: {
-        Args: Record<PropertyKey, never>
+        Args: never
         Returns: {
           access_token: string
           created_at: string
@@ -2794,7 +2861,7 @@ export type Database = {
         }[]
       }
       get_current_user_profile: {
-        Args: Record<PropertyKey, never>
+        Args: never
         Returns: {
           avatar_url: string
           created_at: string
@@ -2807,11 +2874,11 @@ export type Database = {
         }[]
       }
       get_current_user_role: {
-        Args: Record<PropertyKey, never>
+        Args: never
         Returns: Database["public"]["Enums"]["app_role"]
       }
       get_masked_profiles: {
-        Args: Record<PropertyKey, never>
+        Args: never
         Returns: {
           avatar_url: string
           created_at: string
@@ -2824,7 +2891,7 @@ export type Database = {
         }[]
       }
       get_office365_connection_safe: {
-        Args: Record<PropertyKey, never>
+        Args: never
         Returns: {
           created_at: string
           expires_at: string
@@ -2839,7 +2906,7 @@ export type Database = {
         }[]
       }
       get_office365_connection_secure: {
-        Args: Record<PropertyKey, never>
+        Args: never
         Returns: {
           access_token: string
           created_at: string
@@ -2855,44 +2922,12 @@ export type Database = {
           user_id: string
         }[]
       }
-      halfvec_avg: {
-        Args: { "": number[] }
-        Returns: unknown
-      }
-      halfvec_out: {
-        Args: { "": unknown }
-        Returns: unknown
-      }
-      halfvec_send: {
-        Args: { "": unknown }
-        Returns: string
-      }
-      halfvec_typmod_in: {
-        Args: { "": unknown[] }
-        Returns: number
-      }
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"]
           _user_id: string
         }
         Returns: boolean
-      }
-      hnsw_bit_support: {
-        Args: { "": unknown }
-        Returns: unknown
-      }
-      hnsw_halfvec_support: {
-        Args: { "": unknown }
-        Returns: unknown
-      }
-      hnsw_sparsevec_support: {
-        Args: { "": unknown }
-        Returns: unknown
-      }
-      hnswhandler: {
-        Args: { "": unknown }
-        Returns: unknown
       }
       insert_calendar_connection: {
         Args: {
@@ -2918,26 +2953,6 @@ export type Database = {
           _user_id: string
         }
         Returns: string
-      }
-      ivfflat_bit_support: {
-        Args: { "": unknown }
-        Returns: unknown
-      }
-      ivfflat_halfvec_support: {
-        Args: { "": unknown }
-        Returns: unknown
-      }
-      ivfflathandler: {
-        Args: { "": unknown }
-        Returns: unknown
-      }
-      l2_norm: {
-        Args: { "": unknown } | { "": unknown }
-        Returns: number
-      }
-      l2_normalize: {
-        Args: { "": string } | { "": unknown } | { "": unknown }
-        Returns: unknown
       }
       log_oauth_token_access: {
         Args: {
@@ -2990,10 +3005,7 @@ export type Database = {
           similarity: number
         }[]
       }
-      migrate_oauth_tokens: {
-        Args: Record<PropertyKey, never>
-        Returns: Json
-      }
+      migrate_oauth_tokens: { Args: never; Returns: Json }
       revoke_calendar_connection: {
         Args: { _connection_id: string }
         Returns: boolean
@@ -3001,18 +3013,6 @@ export type Database = {
       revoke_office365_connection: {
         Args: { _connection_id: string }
         Returns: boolean
-      }
-      sparsevec_out: {
-        Args: { "": unknown }
-        Returns: unknown
-      }
-      sparsevec_send: {
-        Args: { "": unknown }
-        Returns: string
-      }
-      sparsevec_typmod_in: {
-        Args: { "": unknown[] }
-        Returns: number
       }
       update_calendar_connection_tokens: {
         Args: {
@@ -3031,30 +3031,6 @@ export type Database = {
           _refresh_token?: string
         }
         Returns: boolean
-      }
-      vector_avg: {
-        Args: { "": number[] }
-        Returns: string
-      }
-      vector_dims: {
-        Args: { "": string } | { "": unknown }
-        Returns: number
-      }
-      vector_norm: {
-        Args: { "": string }
-        Returns: number
-      }
-      vector_out: {
-        Args: { "": string }
-        Returns: unknown
-      }
-      vector_send: {
-        Args: { "": string }
-        Returns: string
-      }
-      vector_typmod_in: {
-        Args: { "": unknown[] }
-        Returns: number
       }
     }
     Enums: {
