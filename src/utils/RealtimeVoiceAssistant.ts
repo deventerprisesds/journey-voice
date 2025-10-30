@@ -1178,6 +1178,7 @@ export class RealtimeVoiceAssistant {
         .update({
           start_time: startTime.toISOString(),
           end_time: endTime.toISOString(),
+          is_scheduled: true,
           // Don't change status - preserve task's current lane
         })
         .eq('id', args.task_id)
@@ -1219,6 +1220,7 @@ export class RealtimeVoiceAssistant {
         .update({
           start_time: null,
           end_time: null,
+          is_scheduled: false,
           status: 'BACKLOG'
         })
         .eq('id', args.task_id)
