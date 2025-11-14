@@ -16,7 +16,8 @@ export interface SchedulingResult {
 
 export async function scheduleNewTask(
   task: Partial<Task> & { board_id: string; user_id: string; scheduling_context?: string[] },
-  batchScheduledTasks: Task[] = []
+  batchScheduledTasks: Task[] = [],
+  options?: { targetDate?: string }
 ): Promise<SchedulingResult> {
   try {
     // Load user's scheduling configuration
@@ -93,7 +94,7 @@ export async function scheduleNewTask(
       {
         body: {
           taskText: `${task.title} - ${task.description || ''}`,
-          targetDate: undefined, // Let scheduler start from now()
+          targetDate: options?.targetDate, // Pass through targetDate if provided
           dueDate: task.due_date || undefined, // Send due_date as deadline constraint
           existingTasks: allTasks,
           workingMinutes: userConfig.workingHours.maxDailyHours * 60,

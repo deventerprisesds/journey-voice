@@ -236,6 +236,7 @@ export type Database = {
           created_at: string | null
           id: string
           persistent_instructions: string | null
+          supplemental_context: string | null
           updated_at: string | null
           user_id: string
         }
@@ -245,6 +246,7 @@ export type Database = {
           created_at?: string | null
           id?: string
           persistent_instructions?: string | null
+          supplemental_context?: string | null
           updated_at?: string | null
           user_id: string
         }
@@ -254,6 +256,7 @@ export type Database = {
           created_at?: string | null
           id?: string
           persistent_instructions?: string | null
+          supplemental_context?: string | null
           updated_at?: string | null
           user_id?: string
         }
@@ -579,6 +582,80 @@ export type Database = {
           user_id?: string
         }
         Relationships: []
+      }
+      case_study_analyses: {
+        Row: {
+          assignment_id: string | null
+          case_analysis: string | null
+          case_extraction: string | null
+          case_text: string | null
+          concepts_taught: string | null
+          conceptual_learning: string | null
+          created_at: string | null
+          draft_writeup: string | null
+          extracted_data: string | null
+          id: string
+          missing_extracts: string | null
+          outline: string | null
+          questions: string | null
+          sourced_answers: string | null
+          summaries: string | null
+          supplemental_context: string | null
+          updated_at: string | null
+          user_id: string | null
+          verification_needed: string | null
+        }
+        Insert: {
+          assignment_id?: string | null
+          case_analysis?: string | null
+          case_extraction?: string | null
+          case_text?: string | null
+          concepts_taught?: string | null
+          conceptual_learning?: string | null
+          created_at?: string | null
+          draft_writeup?: string | null
+          extracted_data?: string | null
+          id?: string
+          missing_extracts?: string | null
+          outline?: string | null
+          questions?: string | null
+          sourced_answers?: string | null
+          summaries?: string | null
+          supplemental_context?: string | null
+          updated_at?: string | null
+          user_id?: string | null
+          verification_needed?: string | null
+        }
+        Update: {
+          assignment_id?: string | null
+          case_analysis?: string | null
+          case_extraction?: string | null
+          case_text?: string | null
+          concepts_taught?: string | null
+          conceptual_learning?: string | null
+          created_at?: string | null
+          draft_writeup?: string | null
+          extracted_data?: string | null
+          id?: string
+          missing_extracts?: string | null
+          outline?: string | null
+          questions?: string | null
+          sourced_answers?: string | null
+          summaries?: string | null
+          supplemental_context?: string | null
+          updated_at?: string | null
+          user_id?: string | null
+          verification_needed?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "case_study_analyses_assignment_id_fkey"
+            columns: ["assignment_id"]
+            isOneToOne: false
+            referencedRelation: "assignments"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       chat_sessions: {
         Row: {
@@ -1717,6 +1794,45 @@ export type Database = {
         }
         Relationships: []
       }
+      openai_file_uploads: {
+        Row: {
+          created_at: string
+          file_name: string
+          file_size: number | null
+          id: string
+          openai_file_id: string
+          openai_vector_store_id: string | null
+          source_id: string
+          source_type: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          file_name: string
+          file_size?: number | null
+          id?: string
+          openai_file_id: string
+          openai_vector_store_id?: string | null
+          source_id: string
+          source_type: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          file_name?: string
+          file_size?: number | null
+          id?: string
+          openai_file_id?: string
+          openai_vector_store_id?: string | null
+          source_id?: string
+          source_type?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       playback_state: {
         Row: {
           is_playing: boolean | null
@@ -1880,6 +1996,7 @@ export type Database = {
           industry: string | null
           job_title: string | null
           last_name: string | null
+          openai_vector_store_id: string | null
           phone: string | null
           updated_at: string
           user_id: string
@@ -1896,6 +2013,7 @@ export type Database = {
           industry?: string | null
           job_title?: string | null
           last_name?: string | null
+          openai_vector_store_id?: string | null
           phone?: string | null
           updated_at?: string
           user_id: string
@@ -1912,6 +2030,7 @@ export type Database = {
           industry?: string | null
           job_title?: string | null
           last_name?: string | null
+          openai_vector_store_id?: string | null
           phone?: string | null
           updated_at?: string
           user_id?: string
@@ -2729,51 +2848,72 @@ export type Database = {
       user_settings: {
         Row: {
           ai_sync_mode: string
+          case_study_analysis_prompt: string | null
+          case_study_attached_files: string[] | null
           created_at: string
           deep_extraction_default: boolean
+          demo_mode: boolean | null
           discussion_post_reviewer_prompt: string | null
           discussion_post_writer_prompt: string | null
           enable_requirements_review: boolean | null
           essay_reviewer_prompt: string | null
           essay_writer_prompt: string | null
+          extraction_attached_files: string[] | null
           id: string
+          outline_attached_files: string[] | null
           outline_generation_prompt: string | null
           requirements_extraction_prompt: string | null
+          reviewer_attached_files: string[] | null
           updated_at: string
           user_id: string
           web_search_enabled: boolean | null
+          writer_attached_files: string[] | null
         }
         Insert: {
           ai_sync_mode?: string
+          case_study_analysis_prompt?: string | null
+          case_study_attached_files?: string[] | null
           created_at?: string
           deep_extraction_default?: boolean
+          demo_mode?: boolean | null
           discussion_post_reviewer_prompt?: string | null
           discussion_post_writer_prompt?: string | null
           enable_requirements_review?: boolean | null
           essay_reviewer_prompt?: string | null
           essay_writer_prompt?: string | null
+          extraction_attached_files?: string[] | null
           id?: string
+          outline_attached_files?: string[] | null
           outline_generation_prompt?: string | null
           requirements_extraction_prompt?: string | null
+          reviewer_attached_files?: string[] | null
           updated_at?: string
           user_id: string
           web_search_enabled?: boolean | null
+          writer_attached_files?: string[] | null
         }
         Update: {
           ai_sync_mode?: string
+          case_study_analysis_prompt?: string | null
+          case_study_attached_files?: string[] | null
           created_at?: string
           deep_extraction_default?: boolean
+          demo_mode?: boolean | null
           discussion_post_reviewer_prompt?: string | null
           discussion_post_writer_prompt?: string | null
           enable_requirements_review?: boolean | null
           essay_reviewer_prompt?: string | null
           essay_writer_prompt?: string | null
+          extraction_attached_files?: string[] | null
           id?: string
+          outline_attached_files?: string[] | null
           outline_generation_prompt?: string | null
           requirements_extraction_prompt?: string | null
+          reviewer_attached_files?: string[] | null
           updated_at?: string
           user_id?: string
           web_search_enabled?: boolean | null
+          writer_attached_files?: string[] | null
         }
         Relationships: []
       }
