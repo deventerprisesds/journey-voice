@@ -172,6 +172,7 @@ serve(async (req) => {
     } = await req.json();
     
     console.log('🌍 Scheduling in timezone:', timezone);
+    console.log('📅 Target date:', targetDate || 'not specified (searching forward)');
     
     if (!taskText) {
       throw new Error('Task text is required');
@@ -568,22 +569,33 @@ Return ONLY valid JSON (no markdown):
     // Get time window constraints
     const constraints = config.timeWindows[timeWindow] || config.timeWindows.flexible;
 
-    // CRITICAL: Always start from NOW unless targetDate explicitly provided
-    // This ensures we find the "next available slot" from current moment
-    // dueDate is a DEADLINE, not a search start date
-    let searchStartDate = targetDate ? new Date(targetDate) : new Date();
+    // Determine search start date and search window
+    let searchStartDate: Date;
+    let maxSearchDays = 14;
+
+    if (targetDate) {
+      // Parse targetDate as YYYY-MM-DD and convert to UTC using user's timezone
+      const [year, month, day] = targetDate.split('-').map(Number);
+      searchStartDate = zonedTimeToUtc(year, month - 1, day, 0, 0, timezone);
+      maxSearchDays = 1; // Only search the specified date
+      console.log('🎯 Searching only on target date:', targetDate, 'Starting from:', searchStartDate.toISOString());
+    } else {
+      // No target date, search forward from now
+      searchStartDate = new Date();
+      console.log('🔍 Searching forward from now:', searchStartDate.toISOString());
+    }
     
     console.log('🔍 Search parameters:', {
       targetDate: targetDate || 'undefined (starting from NOW)',
       dueDate: dueDate || 'undefined (no deadline)',
       searchStartDate: searchStartDate.toISOString(),
       timezone,
-      willSearchFrom: 'next available slot from current moment'
+      maxSearchDays,
+      willSearchFrom: targetDate ? `only ${targetDate}` : 'next available slot from current moment'
     });
 
     // Calculate max search date (don't schedule past due date if provided)
     const dueDateObj = dueDate ? new Date(dueDate) : null;
-    const maxSearchDays = 14;
     
     // Collect ALL candidate slots across search window
     const candidateSlots: Array<{

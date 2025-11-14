@@ -1120,80 +1120,142 @@ export class RealtimeVoiceAssistant {
       if (taskError) throw taskError;
       if (!task) return { success: false, error: 'Task not found' };
 
-      // Parse date (default to today)
-      const scheduleDate = args.date ? new Date(args.date) : new Date();
-      scheduleDate.setHours(0, 0, 0, 0);
+      // Load user scheduling preferences to get timezone
+      const { data: prefs } = await supabase
+        .from('user_scheduling_prefs')
+        .select('config')
+        .eq('user_id', userId)
+        .single();
 
-      let startTime: Date;
-      let endTime: Date;
+      const config = prefs?.config as any;
+      const timezone = config?.timezone || 
+        Intl.DateTimeFormat().resolvedOptions().timeZone || 
+        'UTC';
 
-      if (args.start_time) {
-        // Use specified time
-        const [hours, minutes] = args.start_time.split(':').map(Number);
-        startTime = new Date(scheduleDate);
-        startTime.setHours(hours, minutes, 0, 0);
-      } else {
-        // Call smart scheduler to find optimal time
-        const { data: scheduleResult, error: scheduleError } = await supabase.functions.invoke(
-          'smart-calendar-scheduler',
-          {
-            body: {
-              task_id: args.task_id,
-              user_id: userId,
-              title: task.title,
-              description: task.description,
-              category: task.category,
-              priority: task.priority,
-              due_date: task.due_date,
-              estimate_minutes: args.duration_minutes || task.estimate_minutes || 60
-            }
-          }
-        );
+      console.log('User timezone:', timezone);
 
-        if (scheduleError) {
-          console.error('Smart scheduler error:', scheduleError);
-          // Fallback to default time if smart scheduler fails
-          startTime = new Date(scheduleDate);
-          startTime.setHours(9, 0, 0, 0);
-        } else if (scheduleResult?.scheduledTask) {
-          // Use the time from smart scheduler
-          return {
-            success: true,
-            task: scheduleResult.scheduledTask,
-            message: `Task scheduled for ${new Date(scheduleResult.scheduledTask.start_time).toLocaleDateString()} at ${new Date(scheduleResult.scheduledTask.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
-          };
-        } else {
-          startTime = new Date(scheduleDate);
-          startTime.setHours(9, 0, 0, 0);
-        }
+      // Fetch existing tasks for context
+      const { data: existingTasks } = await supabase
+        .from('tasks')
+        .select('*')
+        .eq('user_id', userId)
+        .neq('status', 'DONE')
+        .order('start_time', { ascending: true });
+
+      // Calculate targetDate if user specified a date
+      let targetDate: string | undefined;
+      if (args.date) {
+        const requestedDate = new Date(args.date);
+        // Format as YYYY-MM-DD in local timezone
+        const year = requestedDate.getFullYear();
+        const month = String(requestedDate.getMonth() + 1).padStart(2, '0');
+        const day = String(requestedDate.getDate()).padStart(2, '0');
+        targetDate = `${year}-${month}-${day}`;
+        console.log('Target date specified:', targetDate);
       }
 
-      // Calculate end time
-      const duration = args.duration_minutes || task.estimate_minutes || 60;
-      endTime = new Date(startTime.getTime() + duration * 60000);
+      // Build complete scheduler payload
+      const schedulerPayload = {
+        taskText: `${task.title}${task.description ? ' - ' + task.description : ''}`,
+        existingTasks: existingTasks || [],
+        dueDate: task.due_date || undefined,
+        estimateMinutes: args.duration_minutes || task.estimate_minutes || 60,
+        taskCategory: task.category,
+        taskPriority: task.priority,
+        scheduling_context: [],
+        userId: userId,
+        userSchedulingConfig: config || {},
+        timezone: timezone,
+        targetDate: targetDate
+      };
 
-      // Update task
+      console.log('Calling smart-calendar-scheduler with payload:', schedulerPayload);
+
+      const { data: schedulerResult, error: schedulerError } = await supabase.functions.invoke(
+        'smart-calendar-scheduler',
+        {
+          body: schedulerPayload
+        }
+      );
+
+      if (schedulerError || !schedulerResult?.success) {
+        console.error('Scheduler error:', schedulerError || schedulerResult);
+        
+        // Fallback only if user explicitly requested a specific date
+        if (targetDate && args.date) {
+          console.log('Using fallback scheduling for specified date:', targetDate);
+          const requestedDate = new Date(args.date);
+          const year = requestedDate.getFullYear();
+          const month = requestedDate.getMonth();
+          const day = requestedDate.getDate();
+          
+          // Construct local time to avoid UTC shift
+          const startTime = new Date(year, month, day, 9, 0, 0);
+          const endTime = new Date(year, month, day, 10, 0, 0);
+          
+          const { data: updatedTask, error: updateError } = await supabase
+            .from('tasks')
+            .update({
+              start_time: startTime.toISOString(),
+              end_time: endTime.toISOString(),
+              estimate_minutes: args.duration_minutes || task.estimate_minutes || 60,
+              is_scheduled: true,
+            })
+            .eq('id', args.task_id)
+            .eq('user_id', userId)
+            .select()
+            .single();
+
+          if (updateError) {
+            console.error('Error updating task with fallback:', updateError);
+            throw updateError;
+          }
+
+          this.onMessage?.({ type: 'client.done', status: 'Task scheduled with fallback' });
+
+          return {
+            success: true,
+            task: updatedTask,
+            message: `I've scheduled "${task.title}" for 9:00 AM on ${targetDate}.`
+          };
+        }
+        
+        throw new Error('Scheduler failed and no fallback available');
+      }
+
+      const slot = schedulerResult.slot;
+      console.log('Scheduler returned slot:', slot);
+
       const { data: updatedTask, error: updateError } = await supabase
         .from('tasks')
         .update({
-          start_time: startTime.toISOString(),
-          end_time: endTime.toISOString(),
+          start_time: slot.start_time,
+          end_time: slot.end_time,
+          estimate_minutes: slot.duration_minutes,
           is_scheduled: true,
-          // Don't change status - preserve task's current lane
         })
         .eq('id', args.task_id)
         .eq('user_id', userId)
         .select()
         .single();
 
-      if (updateError) throw updateError;
+      if (updateError) {
+        console.error('Error updating task:', updateError);
+        throw updateError;
+      }
 
       this.onMessage?.({ type: 'client.done', status: 'Task scheduled successfully' });
+
+      const startTime = new Date(slot.start_time).toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      });
 
       return {
         success: true,
         task: updatedTask,
-        message: `Task scheduled for ${startTime.toLocaleDateString()} at ${startTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+        message: `I've scheduled "${task.title}" for ${startTime}.`
       };
     } catch (error) {
       console.error('❌ Error scheduling task:', error);
