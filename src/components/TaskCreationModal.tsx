@@ -33,6 +33,7 @@ import { fromHHMMToISO } from '@/lib/date';
 import { extractSchedulingContext, loadUserSchedulingConfig } from '@/services/schedulingService';
 import { useAssignmentSelection } from '@/contexts/AssignmentSelectionContext';
 import TimeSlotGrid from '@/components/TimeSlotGrid';
+import { useBatchScheduling } from '@/hooks/useBatchScheduling';
 
 interface ParsedTask {
   title: string;
@@ -76,6 +77,7 @@ interface TaskCreationModalProps {
   initialDate?: Date | null;
   initialHour?: number | null;
   initialMinute?: number | null;
+  targetDate?: Date; // Pass from DailyScheduleView for scheduling target
 }
 
 const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
@@ -86,11 +88,13 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
   userId,
   initialDate,
   initialHour,
-  initialMinute
+  initialMinute,
+  targetDate
 }) => {
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState<'ai' | 'manual' | 'assignments'>('ai');
   const { selectedAssignmentIds, setSelectedAssignmentIds, clearSelection } = useAssignmentSelection();
+  const { scheduleBatch, updateTasksWithSchedule, isScheduling: isBatchScheduling } = useBatchScheduling();
   
   // Assignments Tab State
   const [assignments, setAssignments] = useState<Assignment[]>([]);
@@ -526,7 +530,28 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
         throw new Error('No tasks could be parsed from the input');
       }
 
-      // Preview-schedule newly parsed AI tasks (non-assignment) and preserve existing assignment tasks
+      // Check if this is bulk mode - skip sequential preview scheduling
+      if (data.bulk) {
+        console.log('📦 Bulk mode detected - skipping preview scheduling, will batch schedule on save');
+        
+        const tasksWithHints = (data.tasks || []).map((t: ParsedTask & { needsScheduling?: boolean }) => ({
+          ...t,
+          needsScheduling: true,
+        }));
+        
+        setParsedTasks(prev => {
+          const preservedAssignments = prev.filter(pt => pt.assignment_id);
+          return [...preservedAssignments, ...tasksWithHints];
+        });
+        
+        toast({
+          title: "Tasks Parsed",
+          description: `${data.tasks.length} tasks ready. Click "Create Tasks" to save and schedule.`,
+        });
+        return; // Skip sequential preview scheduling
+      }
+
+      // Small batch (1-3 tasks): do preview scheduling as before
       const newAITasks: ParsedTask[] = (data.tasks || []).map((t: ParsedTask) => ({ ...t }));
       const previewedTasks: ParsedTask[] = [];
       const reservedSlots: any[] = [];
@@ -674,54 +699,92 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
       }
 
       // Log which tasks have times vs. need scheduling
-      console.log(`📋 Created ${createdTasks.length} tasks, ${createdTasks.filter(t => t.start_time).length} with preview times`);
+      console.log(`📋 Created ${createdTasks.length} tasks, ${createdTasks.filter((t: any) => t.start_time).length} with preview times`);
       
       // Auto-schedule ALL tasks that don't have explicit times set by user
-      const tasksToSchedule = createdTasks.filter(task => 
+      const tasksToSchedule = createdTasks.filter((task: any) => 
         !task.start_time && !task.end_time // Schedule if no times set
       );
 
-      // Accumulator for batch-scheduled tasks
-      const alreadyScheduled: Task[] = [];
-
-      for (const task of tasksToSchedule) {
-        if (!isDemoMode) {
-          try {
-            const { scheduleNewTask } = await import('@/utils/taskScheduling');
-            
-            // Extract keyword hints ONLY as fallback context
-            const { context, estimatedDuration } = extractSchedulingContext(
-              `${task.title} ${task.description || ''}`,
-              task.category,
-              task.priority
-            );
-            
-            // Merge AI-provided context with keyword hints (NO timeWindow override)
-            const fullContext = [
-              ...(task.scheduling_context || []),
-              ...context
-              // REMOVED: `timeWindow:${timeWindow}` - Let user settings decide
-            ];
-            
-            // Pass already scheduled tasks in this batch so scheduler knows about them
-            const scheduleResult = await scheduleNewTask({
-              ...task,
-              estimate_minutes: task.estimate_minutes || estimatedDuration,
-              scheduling_context: fullContext
-            }, alreadyScheduled);
-            
-            if (scheduleResult.success && scheduleResult.scheduledTask) {
-              // Add to accumulator for next task
-              alreadyScheduled.push(scheduleResult.scheduledTask);
-              
-              // Update the task in createdTasks with scheduled times
-              const taskIndex = createdTasks.findIndex(t => t.id === task.id);
-              if (taskIndex !== -1) {
-                createdTasks[taskIndex] = scheduleResult.scheduledTask;
-              }
+      // Use batch scheduler for 4+ tasks (optimized path)
+      if (tasksToSchedule.length >= 4 && !isDemoMode) {
+        console.log(`📦 Using batch scheduler for ${tasksToSchedule.length} tasks`);
+        
+        // Load user config for timezone
+        const userConfig = await loadUserSchedulingConfig(userId);
+        
+        const batchResult = await scheduleBatch(
+          tasksToSchedule.map((t: any) => ({
+            id: t.id,
+            title: t.title,
+            category: t.category,
+            priority: t.priority,
+            estimate_minutes: t.estimate_minutes,
+            due_date: t.due_date,
+          })),
+          userId,
+          userConfig?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
+          targetDate // Pass target date from DailyScheduleView
+        );
+        
+        if (batchResult.scheduled.length > 0) {
+          await updateTasksWithSchedule(batchResult.scheduled, createdTasks.map((t: any) => t.id));
+          
+          // Update createdTasks with scheduled times for UI refresh
+          batchResult.scheduled.forEach(scheduled => {
+            const taskIndex = createdTasks.findIndex((t: any) => t.id === scheduled.taskId || createdTasks.indexOf(t) === scheduled.taskIndex);
+            if (taskIndex !== -1) {
+              createdTasks[taskIndex] = {
+                ...createdTasks[taskIndex],
+                start_time: scheduled.start_time,
+                end_time: scheduled.end_time,
+                is_scheduled: true
+              };
             }
-          } catch (error) {
-            console.warn('Failed to auto-schedule task:', task.id, error);
+          });
+        }
+      } else {
+        // Sequential scheduling for small batches (1-3 tasks)
+        const alreadyScheduled: Task[] = [];
+
+        for (const task of tasksToSchedule) {
+          if (!isDemoMode) {
+            try {
+              const { scheduleNewTask } = await import('@/utils/taskScheduling');
+              
+              // Extract keyword hints ONLY as fallback context
+              const { context, estimatedDuration } = extractSchedulingContext(
+                `${task.title} ${task.description || ''}`,
+                task.category,
+                task.priority
+              );
+              
+              // Merge AI-provided context with keyword hints (NO timeWindow override)
+              const fullContext = [
+                ...(task.scheduling_context || []),
+                ...context
+              ];
+              
+              // Pass already scheduled tasks in this batch so scheduler knows about them
+              const scheduleResult = await scheduleNewTask({
+                ...task,
+                estimate_minutes: task.estimate_minutes || estimatedDuration,
+                scheduling_context: fullContext
+              }, alreadyScheduled);
+              
+              if (scheduleResult.success && scheduleResult.scheduledTask) {
+                // Add to accumulator for next task
+                alreadyScheduled.push(scheduleResult.scheduledTask);
+                
+                // Update the task in createdTasks with scheduled times
+                const taskIndex = createdTasks.findIndex((t: any) => t.id === task.id);
+                if (taskIndex !== -1) {
+                  createdTasks[taskIndex] = scheduleResult.scheduledTask;
+                }
+              }
+            } catch (error) {
+              console.warn('Failed to auto-schedule task:', task.id, error);
+            }
           }
         }
       }
