@@ -38,6 +38,42 @@ export type Database = {
         }
         Relationships: []
       }
+      app_builder_artifacts: {
+        Row: {
+          artifact_number: number
+          category: string
+          content: string
+          created_at: string | null
+          description: string | null
+          id: string
+          metadata: Json | null
+          title: string
+          updated_at: string | null
+        }
+        Insert: {
+          artifact_number: number
+          category: string
+          content: string
+          created_at?: string | null
+          description?: string | null
+          id?: string
+          metadata?: Json | null
+          title: string
+          updated_at?: string | null
+        }
+        Update: {
+          artifact_number?: number
+          category?: string
+          content?: string
+          created_at?: string | null
+          description?: string | null
+          id?: string
+          metadata?: Json | null
+          title?: string
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
       assignment_artifacts: {
         Row: {
           artifact_type: string
@@ -589,6 +625,7 @@ export type Database = {
           case_analysis: string | null
           case_extraction: string | null
           case_text: string | null
+          completed_sections: Json | null
           concepts_taught: string | null
           conceptual_learning: string | null
           created_at: string | null
@@ -610,6 +647,7 @@ export type Database = {
           case_analysis?: string | null
           case_extraction?: string | null
           case_text?: string | null
+          completed_sections?: Json | null
           concepts_taught?: string | null
           conceptual_learning?: string | null
           created_at?: string | null
@@ -631,6 +669,7 @@ export type Database = {
           case_analysis?: string | null
           case_extraction?: string | null
           case_text?: string | null
+          completed_sections?: Json | null
           concepts_taught?: string | null
           conceptual_learning?: string | null
           created_at?: string | null
@@ -885,6 +924,57 @@ export type Database = {
           },
         ]
       }
+      core_insights: {
+        Row: {
+          course_id: string
+          created_at: string
+          id: string
+          insight_text: string
+          insight_type: string
+          is_custom: boolean
+          source_document_id: string | null
+          source_document_name: string | null
+          user_id: string
+        }
+        Insert: {
+          course_id: string
+          created_at?: string
+          id?: string
+          insight_text: string
+          insight_type: string
+          is_custom?: boolean
+          source_document_id?: string | null
+          source_document_name?: string | null
+          user_id: string
+        }
+        Update: {
+          course_id?: string
+          created_at?: string
+          id?: string
+          insight_text?: string
+          insight_type?: string
+          is_custom?: boolean
+          source_document_id?: string | null
+          source_document_name?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "core_insights_course_id_fkey"
+            columns: ["course_id"]
+            isOneToOne: false
+            referencedRelation: "courses"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "core_insights_source_document_id_fkey"
+            columns: ["source_document_id"]
+            isOneToOne: false
+            referencedRelation: "extracted_content"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       core_learnings: {
         Row: {
           category: string | null
@@ -1043,6 +1133,10 @@ export type Database = {
           onedrive_folder_id: string | null
           onedrive_folder_name: string | null
           onedrive_folder_path: string | null
+          onenote_notebook_id: string | null
+          onenote_notebook_name: string | null
+          onenote_section_id: string | null
+          onenote_section_name: string | null
           program_id: string | null
           updated_at: string
           user_id: string
@@ -1057,6 +1151,10 @@ export type Database = {
           onedrive_folder_id?: string | null
           onedrive_folder_name?: string | null
           onedrive_folder_path?: string | null
+          onenote_notebook_id?: string | null
+          onenote_notebook_name?: string | null
+          onenote_section_id?: string | null
+          onenote_section_name?: string | null
           program_id?: string | null
           updated_at?: string
           user_id: string
@@ -1071,6 +1169,10 @@ export type Database = {
           onedrive_folder_id?: string | null
           onedrive_folder_name?: string | null
           onedrive_folder_path?: string | null
+          onenote_notebook_id?: string | null
+          onenote_notebook_name?: string | null
+          onenote_section_id?: string | null
+          onenote_section_name?: string | null
           program_id?: string | null
           updated_at?: string
           user_id?: string
@@ -2818,6 +2920,7 @@ export type Database = {
           timezone: string | null
           updated_at: string
           user_id: string
+          voice_preference: string | null
         }
         Insert: {
           assistant_extensions?: string | null
@@ -2830,6 +2933,7 @@ export type Database = {
           timezone?: string | null
           updated_at?: string
           user_id: string
+          voice_preference?: string | null
         }
         Update: {
           assistant_extensions?: string | null
@@ -2842,6 +2946,7 @@ export type Database = {
           timezone?: string | null
           updated_at?: string
           user_id?: string
+          voice_preference?: string | null
         }
         Relationships: []
       }
@@ -2866,6 +2971,7 @@ export type Database = {
           reviewer_attached_files: string[] | null
           updated_at: string
           user_id: string
+          voice_preference: string | null
           web_search_enabled: boolean | null
           writer_attached_files: string[] | null
         }
@@ -2889,6 +2995,7 @@ export type Database = {
           reviewer_attached_files?: string[] | null
           updated_at?: string
           user_id: string
+          voice_preference?: string | null
           web_search_enabled?: boolean | null
           writer_attached_files?: string[] | null
         }
@@ -2912,6 +3019,7 @@ export type Database = {
           reviewer_attached_files?: string[] | null
           updated_at?: string
           user_id?: string
+          voice_preference?: string | null
           web_search_enabled?: boolean | null
           writer_attached_files?: string[] | null
         }

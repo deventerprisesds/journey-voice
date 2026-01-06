@@ -300,12 +300,60 @@ Examples:
       console.log('✅ Successfully parsed tasks:', parsed.tasks?.length || 0, 'tasks');
 
       // Return tasks with AI's scheduling context hints
-      // Client-side will handle all scheduling with full user context
       const tasks = Array.isArray(parsed.tasks) ? parsed.tasks : [];
+      
+      // BULK MODE THRESHOLD
+      const BULK_THRESHOLD = 3;
+      const isBulkMode = tasks.length > BULK_THRESHOLD;
+      
+      if (isBulkMode) {
+        // BULK MODE: Skip preview scheduling, return tasks with hints for batch scheduling later
+        console.log(`📦 BULK MODE: ${tasks.length} tasks detected (>${BULK_THRESHOLD}), skipping preview scheduling`);
+        
+        // Load user's scheduling config to extract timing hints
+        let userConfig = null;
+        if (userId) {
+          const { data: userConfigData } = await supabaseAdmin
+            .from('user_scheduling_config')
+            .select('config')
+            .eq('user_id', userId)
+            .single();
+          userConfig = userConfigData?.config || null;
+        }
+        
+        // Add scheduling hints to each task for batch scheduler
+        const tasksWithHints = tasks.map((task: any) => {
+          const hints = extractSchedulingHints(
+            task.title,
+            task.category,
+            task.priority,
+            userConfig
+          );
+          return {
+            ...task,
+            needsScheduling: true,
+            schedulingHints: hints,
+          };
+        });
+        
+        console.log(`✅ Returning ${tasksWithHints.length} tasks with scheduling hints (no preview times)`);
+        
+        return new Response(JSON.stringify({ 
+          tasks: tasksWithHints,
+          bulk: true,
+          message: `${tasks.length} tasks parsed. Scheduling will happen when you save.`
+        }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
 
-      // Generate preview scheduling if context provided - SEQUENTIAL to avoid duplicates
-      if (userId && boardId) {
-        console.log('🔮 Generating SEQUENTIAL preview scheduling for', tasks.length, 'tasks');
+      // SMALL BATCH MODE (1-3 tasks): Do preview scheduling with timeout protection
+      if (userId && boardId && tasks.length > 0) {
+        console.log('🔮 SMALL BATCH: Generating preview scheduling for', tasks.length, 'tasks');
+        
+        const SCHEDULER_TIMEOUT_MS = 8000; // 8 seconds per task
+        const MAX_EXECUTION_MS = 30000; // 30 seconds total safety margin
+        const schedulingStartTime = Date.now();
         
         // Load user's scheduling config to extract timing hints
         const { data: userConfigData } = await supabaseAdmin
@@ -322,6 +370,20 @@ Examples:
         const reservedSlots: any[] = [];
         
         for (let i = 0; i < tasks.length; i++) {
+          // Check overall timeout guard
+          if (Date.now() - schedulingStartTime > MAX_EXECUTION_MS) {
+            console.warn(`⏱️ Timeout guard: stopping at task ${i + 1}/${tasks.length}`);
+            // Add remaining tasks without scheduling
+            for (let j = i; j < tasks.length; j++) {
+              tasksWithPreview.push({
+                ...tasks[j],
+                needsScheduling: true,
+                schedulingHints: extractSchedulingHints(tasks[j].title, tasks[j].category, tasks[j].priority, userConfig)
+              });
+            }
+            break;
+          }
+          
           const task = tasks[i];
           
           try {
@@ -338,70 +400,111 @@ Examples:
             // Build busy slots including previously scheduled preview tasks
             const allExistingTasks = [...existingTasks, ...reservedSlots];
             
-            const schedulerResponse = await fetch(`${supabaseUrl}/functions/v1/smart-calendar-scheduler`, {
-              method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${supabaseServiceKey}`,
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({
-                taskText: task.title,
-                userId,
-                existingTasks: allExistingTasks,
-                scheduling_context: schedulingContext.context,
-                taskCategory: task.category,
-                taskPriority: task.priority,
-                estimateMinutes: schedulingContext.estimatedDuration,
-                dueDate: task.due_date,
-                timezone: timezone || 'UTC',
-              }),
-            });
+            // Create abort controller for timeout
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), SCHEDULER_TIMEOUT_MS);
             
-            if (schedulerResponse.ok) {
-              const { scheduledTask } = await schedulerResponse.json();
+            try {
+              const schedulerResponse = await fetch(`${supabaseUrl}/functions/v1/smart-calendar-scheduler`, {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${supabaseServiceKey}`,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  taskText: task.title,
+                  userId,
+                  existingTasks: allExistingTasks,
+                  scheduling_context: schedulingContext.context,
+                  taskCategory: task.category,
+                  taskPriority: task.priority,
+                  estimateMinutes: schedulingContext.estimatedDuration,
+                  dueDate: task.due_date,
+                  timezone: timezone || 'UTC',
+                }),
+                signal: controller.signal,
+              });
               
-              if (scheduledTask?.start_time && scheduledTask?.end_time) {
-                console.log(`✅ Task ${i + 1} scheduled: ${scheduledTask.start_time}`);
+              clearTimeout(timeoutId);
+              
+              if (schedulerResponse.ok) {
+                const { scheduledTask } = await schedulerResponse.json();
                 
-                // Add to reserved slots for next iteration
-                reservedSlots.push({
-                  start_time: scheduledTask.start_time,
-                  end_time: scheduledTask.end_time,
-                  title: task.title,
-                  is_scheduled: true,
-                });
-                
+                if (scheduledTask?.start_time && scheduledTask?.end_time) {
+                  console.log(`✅ Task ${i + 1} scheduled: ${scheduledTask.start_time}`);
+                  
+                  // Add to reserved slots for next iteration
+                  reservedSlots.push({
+                    start_time: scheduledTask.start_time,
+                    end_time: scheduledTask.end_time,
+                    title: task.title,
+                    is_scheduled: true,
+                  });
+                  
+                  tasksWithPreview.push({
+                    ...task,
+                    start_time: scheduledTask.start_time,
+                    end_time: scheduledTask.end_time,
+                    isPreview: true,
+                  });
+                } else {
+                  console.warn(`⚠️ No time assigned for task ${i + 1}`);
+                  tasksWithPreview.push({
+                    ...task,
+                    needsScheduling: true,
+                    schedulingHints: schedulingContext
+                  });
+                }
+              } else {
+                const errorText = await schedulerResponse.text();
+                console.warn(`⚠️ Scheduling failed for task ${i + 1}:`, errorText);
                 tasksWithPreview.push({
                   ...task,
-                  start_time: scheduledTask.start_time,
-                  end_time: scheduledTask.end_time,
-                  isPreview: true,
+                  needsScheduling: true,
+                  schedulingHints: schedulingContext
                 });
-              } else {
-                console.warn(`⚠️ No time assigned for task ${i + 1}`);
-                tasksWithPreview.push(task);
               }
-            } else {
-              const errorText = await schedulerResponse.text();
-              console.warn(`⚠️ Scheduling failed for task ${i + 1}:`, errorText);
-              tasksWithPreview.push(task);
+            } catch (fetchError: any) {
+              clearTimeout(timeoutId);
+              if (fetchError.name === 'AbortError') {
+                console.warn(`⏱️ Scheduler timeout for task ${i + 1}, skipping preview`);
+              } else {
+                console.error(`❌ Fetch error for task ${i + 1}:`, fetchError);
+              }
+              tasksWithPreview.push({
+                ...task,
+                needsScheduling: true,
+                schedulingHints: schedulingContext
+              });
             }
           } catch (error) {
             console.error(`❌ Error scheduling task ${i + 1}:`, error);
-            tasksWithPreview.push(task);
+            tasksWithPreview.push({
+              ...task,
+              needsScheduling: true,
+              schedulingHints: extractSchedulingHints(task.title, task.category, task.priority, userConfig)
+            });
           }
         }
         
-        console.log('✅ Sequential preview scheduling complete');
+        console.log(`✅ Preview scheduling complete: ${tasksWithPreview.filter((t: any) => t.isPreview).length}/${tasks.length} tasks scheduled`);
         
-        return new Response(JSON.stringify({ tasks: tasksWithPreview }), {
+        return new Response(JSON.stringify({ 
+          tasks: tasksWithPreview,
+          bulk: false
+        }), {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
 
-      // Return unscheduled tasks with AI's context hints
-      // Client-side will handle all scheduling with full context
-      return new Response(JSON.stringify({ tasks }), {
+      // No userId/boardId - return unscheduled tasks with hints
+      const tasksWithHints = tasks.map((task: any) => ({
+        ...task,
+        needsScheduling: true,
+        schedulingHints: extractSchedulingHints(task.title, task.category, task.priority, null)
+      }));
+      
+      return new Response(JSON.stringify({ tasks: tasksWithHints }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     } catch (parseError) {
