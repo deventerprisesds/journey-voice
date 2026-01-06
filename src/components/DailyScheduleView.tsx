@@ -342,6 +342,7 @@ const DailyScheduleView: React.FC<DailyScheduleViewProps> = ({
           onTasksCreated={onTaskUpdate}
           boardId={defaultBoardId}
           userId={user.id}
+          targetDate={selectedDate}
         />
       )}
     </div>

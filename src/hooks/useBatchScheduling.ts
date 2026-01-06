@@ -37,21 +37,23 @@ export const useBatchScheduling = () => {
   const scheduleBatch = useCallback(async (
     tasks: TaskToSchedule[],
     userId: string,
-    timezone: string = Intl.DateTimeFormat().resolvedOptions().timeZone
+    timezone: string = Intl.DateTimeFormat().resolvedOptions().timeZone,
+    targetDate?: Date
   ): Promise<BatchSchedulingResult> => {
     if (!tasks || tasks.length === 0) {
       return { scheduled: [], tasksCount: 0 };
     }
 
     setIsScheduling(true);
-    console.log(`🚀 Starting batch scheduling for ${tasks.length} tasks`);
+    console.log(`🚀 Starting batch scheduling for ${tasks.length} tasks${targetDate ? ` (target: ${targetDate.toDateString()})` : ''}`);
 
     try {
       const { data, error } = await supabase.functions.invoke('batch-calendar-scheduler', {
         body: {
           tasks,
           userId,
-          timezone
+          timezone,
+          targetDate: targetDate?.toISOString()
         }
       });
 

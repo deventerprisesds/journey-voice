@@ -38,9 +38,9 @@ serve(async (req) => {
   const startTime = Date.now();
 
   try {
-    const { tasks, userId, timezone = 'UTC' } = await req.json();
+    const { tasks, userId, timezone = 'UTC', targetDate } = await req.json();
     
-    console.log(`📦 Batch scheduling ${tasks?.length || 0} tasks for user ${userId}`);
+    console.log(`📦 Batch scheduling ${tasks?.length || 0} tasks for user ${userId}${targetDate ? ` (target: ${targetDate})` : ''}`);
     
     if (!tasks || !Array.isArray(tasks) || tasks.length === 0) {
       throw new Error('Tasks array is required');
@@ -130,8 +130,15 @@ serve(async (req) => {
         }).join('\n')
       : 'No existing conflicts';
 
+    // Determine target date for scheduling
+    const targetDateObj = targetDate ? new Date(targetDate) : null;
+    const targetDateStr = targetDateObj 
+      ? targetDateObj.toLocaleDateString('en-US', { timeZone: timezone, dateStyle: 'full' })
+      : 'today or tomorrow based on current time';
+
     const batchPrompt = `You are a scheduling assistant. Schedule ALL ${tasks.length} tasks efficiently, avoiding conflicts.
 
+TARGET DATE: ${targetDateStr}
 CURRENT TIME: ${now.toLocaleString('en-US', { timeZone: timezone })}
 TIMEZONE: ${timezone}
 
@@ -142,12 +149,12 @@ EXISTING BUSY SLOTS (MUST AVOID):
 ${busySlotsStr}
 
 SCHEDULING RULES:
-1. Schedule each task in its preferred time window based on category
+1. ${targetDateObj ? `IMPORTANT: Schedule ALL tasks for ${targetDateStr}, starting from ${now.toLocaleTimeString('en-US', { timeZone: timezone, hour: 'numeric', minute: '2-digit' })} or later` : 'Schedule each task in its preferred time window based on category'}
 2. NEVER double-book - each new task must not overlap with busy slots OR other new tasks
 3. Higher priority tasks should get better time slots
 4. Respect due dates - schedule before deadline
 5. Leave 15-minute buffer between tasks when possible
-6. Start from tomorrow if today is mostly over
+6. ${targetDateObj ? `All tasks MUST be scheduled on ${targetDateStr}` : 'Start from tomorrow if today is mostly over'}
 
 CATEGORY TIME WINDOWS:
 - CAREER: 9am-5pm weekdays (business_hours)
