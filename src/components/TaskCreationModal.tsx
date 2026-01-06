@@ -515,7 +515,8 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
           timezone: userConfig.timezone,
           userId,
           boardId,
-          existingTasks: existingTasks || []
+          existingTasks: existingTasks || [],
+          targetDate: targetDate?.toISOString() // Pass target date for scheduling context
         }
       });
 

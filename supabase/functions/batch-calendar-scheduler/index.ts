@@ -38,9 +38,9 @@ serve(async (req) => {
   const startTime = Date.now();
 
   try {
-    const { tasks, userId, timezone = 'UTC', targetDate } = await req.json();
+    const { tasks, userId, timezone = 'UTC', targetDate, allowOverflow = false } = await req.json();
     
-    console.log(`📦 Batch scheduling ${tasks?.length || 0} tasks for user ${userId}${targetDate ? ` (target: ${targetDate})` : ''}`);
+    console.log(`📦 Batch scheduling ${tasks?.length || 0} tasks for user ${userId}${targetDate ? ` (target: ${targetDate})` : ''}${allowOverflow ? ' (overflow allowed)' : ''}`);
     
     if (!tasks || !Array.isArray(tasks) || tasks.length === 0) {
       throw new Error('Tasks array is required');
@@ -67,10 +67,31 @@ serve(async (req) => {
     
     const userConfig = userConfigData?.config || null;
 
-    // Single DB load for busy slots (next 14 days)
-    console.log('📅 Loading busy slots...');
+    // Determine date range for busy slots
     const now = new Date();
-    const futureDate = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
+    const targetDateObj = targetDate ? new Date(targetDate) : null;
+    
+    // If allowOverflow, fetch busy slots for target date + next day
+    // Otherwise, fetch for the next 14 days
+    let busySlotsEndDate: Date;
+    if (targetDateObj && allowOverflow) {
+      // Get end of next day after target
+      const nextDay = new Date(targetDateObj);
+      nextDay.setDate(nextDay.getDate() + 2); // target + 1 day buffer
+      nextDay.setHours(23, 59, 59, 999);
+      busySlotsEndDate = nextDay;
+    } else if (targetDateObj) {
+      // Just the target date
+      const endOfTarget = new Date(targetDateObj);
+      endOfTarget.setHours(23, 59, 59, 999);
+      busySlotsEndDate = endOfTarget;
+    } else {
+      // Default: 14 days
+      busySlotsEndDate = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
+    }
+
+    // Single DB load for busy slots
+    console.log(`📅 Loading busy slots until ${busySlotsEndDate.toISOString()}...`);
     
     const [tasksResult, eventsResult] = await Promise.all([
       supabase
@@ -79,13 +100,13 @@ serve(async (req) => {
         .eq('user_id', userId)
         .eq('is_scheduled', true)
         .gte('start_time', now.toISOString())
-        .lte('start_time', futureDate.toISOString()),
+        .lte('start_time', busySlotsEndDate.toISOString()),
       supabase
         .from('external_calendar_events')
         .select('title, start_time, end_time')
         .eq('user_id', userId)
         .gte('start_time', now.toISOString())
-        .lte('end_time', futureDate.toISOString())
+        .lte('end_time', busySlotsEndDate.toISOString())
     ]);
 
     const existingBusySlots = [
@@ -131,10 +152,20 @@ serve(async (req) => {
       : 'No existing conflicts';
 
     // Determine target date for scheduling
-    const targetDateObj = targetDate ? new Date(targetDate) : null;
     const targetDateStr = targetDateObj 
       ? targetDateObj.toLocaleDateString('en-US', { timeZone: timezone, dateStyle: 'full' })
       : 'today or tomorrow based on current time';
+
+    // Build overflow instructions
+    const overflowInstructions = allowOverflow 
+      ? `
+OVERFLOW RULES:
+- Primary target date: ${targetDateStr}
+- If there isn't enough time remaining on ${targetDateStr}, schedule remaining tasks for the NEXT DAY
+- Mark overflow tasks with reasoning like "Scheduled for tomorrow - today fully booked"
+- Prioritize HIGH/URGENT priority tasks for the target date
+- Tasks with earlier due dates should also be prioritized for the target date`
+      : '';
 
     const batchPrompt = `You are a scheduling assistant. Schedule ALL ${tasks.length} tasks efficiently, avoiding conflicts.
 
@@ -149,12 +180,13 @@ EXISTING BUSY SLOTS (MUST AVOID):
 ${busySlotsStr}
 
 SCHEDULING RULES:
-1. ${targetDateObj ? `IMPORTANT: Schedule ALL tasks for ${targetDateStr}, starting from ${now.toLocaleTimeString('en-US', { timeZone: timezone, hour: 'numeric', minute: '2-digit' })} or later` : 'Schedule each task in its preferred time window based on category'}
+1. ${targetDateObj ? `IMPORTANT: Schedule ALL tasks for ${targetDateStr} first. Start from current time if today, or from 9am if future date.` : 'Schedule each task in its preferred time window based on category'}
 2. NEVER double-book - each new task must not overlap with busy slots OR other new tasks
 3. Higher priority tasks should get better time slots
 4. Respect due dates - schedule before deadline
 5. Leave 15-minute buffer between tasks when possible
-6. ${targetDateObj ? `All tasks MUST be scheduled on ${targetDateStr}` : 'Start from tomorrow if today is mostly over'}
+6. ${targetDateObj ? `Try to fit all tasks on ${targetDateStr}` : 'Start from tomorrow if today is mostly over'}
+${overflowInstructions}
 
 CATEGORY TIME WINDOWS:
 - CAREER: 9am-5pm weekdays (business_hours)

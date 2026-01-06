@@ -67,14 +67,15 @@ serve(async (req) => {
   }
 
   try {
-    const { text, mode = 'single', timezone, userId, boardId, existingTasks = [] } = await req.json();
+    const { text, mode = 'single', timezone, userId, boardId, existingTasks = [], targetDate } = await req.json();
     
     console.log('📥 Received request:', { 
       text: text?.substring(0, 50), 
       mode, 
       timezone,
       hasContext: !!(userId && boardId),
-      existingTasksCount: existingTasks.length
+      existingTasksCount: existingTasks.length,
+      targetDate: targetDate || 'none'
     });
     
     if (!text) {
@@ -95,24 +96,44 @@ serve(async (req) => {
 
     console.log('✅ Starting task parsing...');
 
-// Get current date for context
-const now = new Date();
-const currentDateString = now.toLocaleDateString('en-US', { 
-  weekday: 'long',
-  year: 'numeric',
-  month: 'long',
-  day: 'numeric'
-});
-const currentTimeString = now.toLocaleTimeString('en-US', { 
-  hour: '2-digit',
-  minute: '2-digit'
-});
+    // Get current date for context
+    const now = new Date();
+    const currentDateString = now.toLocaleDateString('en-US', { 
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+    const currentTimeString = now.toLocaleTimeString('en-US', { 
+      hour: '2-digit',
+      minute: '2-digit'
+    });
 
-const systemPrompt = `You are an intelligent task parser that converts natural language into structured task data with smart context awareness.
+    // Parse target date for context in prompt
+    let targetDateContext = '';
+    let targetDateStr = '';
+    if (targetDate) {
+      const targetDateObj = new Date(targetDate);
+      targetDateStr = targetDateObj.toLocaleDateString('en-US', { 
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+      });
+      targetDateContext = `
+TARGET SCHEDULING DATE: ${targetDateStr}
+IMPORTANT: When no explicit deadline is mentioned in the task:
+- Set due_date to this target date (${targetDateStr}) at end of day
+- The user is adding tasks for this specific day
+- Only override if the user explicitly mentions a different date like "tomorrow", "next Friday", etc.`;
+    }
+
+    const systemPrompt = `You are an intelligent task parser that converts natural language into structured task data with smart context awareness.
 
 CURRENT DATE CONTEXT:
 - Today is: ${currentDateString}
 - Current time: ${currentTimeString}
+${targetDateContext}
 
 CRITICAL: Use this current date as your reference for relative dates like "tomorrow", "next Tuesday", "next week", etc.
 
@@ -142,6 +163,7 @@ DEFAULT BEHAVIOR:
 - "do X by Friday" → set due_date to Friday 11:59 PM, leave start_time/end_time null
 - "schedule meeting at 2pm Friday" → set start_time to Friday 2pm, can also set due_date to Friday
 - "finish report by Monday, work on it tomorrow 9am" → due_date Monday, start_time tomorrow 9am
+${targetDate ? `- When no date mentioned → set due_date to ${targetDateStr} (the target scheduling date)` : ''}
 
 DURATION ESTIMATES:
 - Quick meeting/call: 30 minutes
@@ -306,8 +328,110 @@ Examples:
       const BULK_THRESHOLD = 3;
       const isBulkMode = tasks.length > BULK_THRESHOLD;
       
+      if (isBulkMode && targetDate && userId) {
+        // BULK MODE WITH TARGET DATE: Call batch-calendar-scheduler for preview times
+        console.log(`📦 BULK MODE with targetDate: ${tasks.length} tasks, calling batch-scheduler for preview`);
+        
+        // Load user's scheduling config to extract timing hints
+        let userConfig = null;
+        const { data: userConfigData } = await supabaseAdmin
+          .from('user_scheduling_config')
+          .select('config')
+          .eq('user_id', userId)
+          .single();
+        userConfig = userConfigData?.config || null;
+        
+        // Prepare tasks for batch scheduler
+        const tasksForBatch = tasks.map((task: any, idx: number) => {
+          const hints = extractSchedulingHints(task.title, task.category, task.priority, userConfig);
+          return {
+            id: `preview-${idx}`,
+            index: idx,
+            title: task.title,
+            category: task.category,
+            priority: task.priority,
+            estimate_minutes: task.estimate_minutes || hints.estimatedDuration,
+            due_date: task.due_date,
+            schedulingHints: hints,
+          };
+        });
+        
+        try {
+          console.log('🔮 Calling batch-calendar-scheduler for preview times...');
+          const batchResponse = await fetch(`${supabaseUrl}/functions/v1/batch-calendar-scheduler`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${supabaseServiceKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              tasks: tasksForBatch,
+              userId,
+              timezone: timezone || 'UTC',
+              targetDate,
+              allowOverflow: true
+            }),
+          });
+          
+          if (batchResponse.ok) {
+            const batchResult = await batchResponse.json();
+            console.log(`✅ Batch scheduler returned ${batchResult.scheduled?.length || 0} scheduled slots`);
+            
+            // Merge scheduled times into parsed tasks
+            const tasksWithPreview = tasks.map((task: any, idx: number) => {
+              const scheduled = batchResult.scheduled?.find((s: any) => s.taskIndex === idx);
+              if (scheduled?.start_time && scheduled?.end_time) {
+                return {
+                  ...task,
+                  start_time: scheduled.start_time,
+                  end_time: scheduled.end_time,
+                  scheduling_note: scheduled.reasoning || null,
+                  isPreview: true,
+                };
+              }
+              return {
+                ...task,
+                needsScheduling: true,
+                schedulingHints: extractSchedulingHints(task.title, task.category, task.priority, userConfig),
+              };
+            });
+            
+            console.log(`✅ Returning ${tasksWithPreview.length} tasks with preview times`);
+            
+            return new Response(JSON.stringify({ 
+              tasks: tasksWithPreview,
+              bulk: false, // Set to false since we have preview times
+              previewScheduled: true,
+              processingTimeMs: batchResult.processingTimeMs,
+              message: `${tasks.length} tasks parsed and preview scheduled for ${targetDateStr}.`
+            }), {
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            });
+          } else {
+            console.warn('⚠️ Batch scheduler failed, falling back to hints-only mode');
+          }
+        } catch (batchError) {
+          console.error('❌ Error calling batch scheduler:', batchError);
+        }
+        
+        // Fallback: return tasks with hints only
+        const tasksWithHints = tasks.map((task: any) => ({
+          ...task,
+          needsScheduling: true,
+          schedulingHints: extractSchedulingHints(task.title, task.category, task.priority, userConfig),
+        }));
+        
+        return new Response(JSON.stringify({ 
+          tasks: tasksWithHints,
+          bulk: true,
+          message: `${tasks.length} tasks parsed. Scheduling will happen when you save.`
+        }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      
       if (isBulkMode) {
-        // BULK MODE: Skip preview scheduling, return tasks with hints for batch scheduling later
+        // BULK MODE without targetDate: Skip preview scheduling, return tasks with hints for batch scheduling later
         console.log(`📦 BULK MODE: ${tasks.length} tasks detected (>${BULK_THRESHOLD}), skipping preview scheduling`);
         
         // Load user's scheduling config to extract timing hints
@@ -421,6 +545,7 @@ Examples:
                   estimateMinutes: schedulingContext.estimatedDuration,
                   dueDate: task.due_date,
                   timezone: timezone || 'UTC',
+                  targetDate: targetDate, // Pass target date to smart scheduler too
                 }),
                 signal: controller.signal,
               });
