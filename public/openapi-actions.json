@@ -1,0 +1,165 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Iris Chase Actions API",
+    "version": "1.0.0",
+    "description": "Actions API for Iris Chase assistant to send notifications and create calendar events. Use these actions when the user asks to send messages, emails, or schedule events."
+  },
+  "servers": [
+    {
+      "url": "https://wwxgajrtmslzklnyplah.supabase.co/functions/v1",
+      "description": "Supabase Edge Functions"
+    }
+  ],
+  "paths": {
+    "/assistant-actions-webhook": {
+      "post": {
+        "operationId": "executeAssistantAction",
+        "summary": "Execute an action like sending a Slack message, email, or creating a calendar event",
+        "description": "This endpoint handles three types of actions: send_slack_message (for Slack notifications), send_email (for email notifications), and create_calendar_event (for calendar events). Choose the appropriate action_type based on user intent.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Action executed successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuccessResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - missing required fields",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ActionRequest": {
+        "type": "object",
+        "required": ["action_type"],
+        "properties": {
+          "action_type": {
+            "type": "string",
+            "enum": ["send_slack_message", "send_email", "create_calendar_event"],
+            "description": "The type of action to execute. Use 'send_slack_message' when user wants to send a Slack message. Use 'send_email' when user wants to send an email. Use 'create_calendar_event' when user wants to schedule or create a calendar event."
+          },
+          "message": {
+            "type": "string",
+            "description": "The message content to send. Required for send_slack_message and send_email actions. This is the body text of the Slack message or email."
+          },
+          "recipient": {
+            "type": "string",
+            "description": "Email address of the recipient. Required only for send_email action."
+          },
+          "subject": {
+            "type": "string",
+            "description": "Email subject line. Optional for send_email action. Defaults to 'Message from Iris Chase' if not provided."
+          },
+          "event_details": {
+            "type": "object",
+            "description": "Details for creating a calendar event. Required for create_calendar_event action.",
+            "properties": {
+              "title": {
+                "type": "string",
+                "description": "The title/name of the calendar event"
+              },
+              "start_time": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Start time of the event in ISO 8601 format (e.g., 2025-01-20T10:00:00Z)"
+              },
+              "end_time": {
+                "type": "string",
+                "format": "date-time",
+                "description": "End time of the event in ISO 8601 format"
+              },
+              "description": {
+                "type": "string",
+                "description": "Optional description or notes for the event"
+              },
+              "location": {
+                "type": "string",
+                "description": "Optional location for the event"
+              },
+              "attendees": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Optional list of attendee email addresses"
+              }
+            }
+          }
+        }
+      },
+      "SuccessResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "message": {
+            "type": "string",
+            "example": "Action executed successfully"
+          },
+          "action_type": {
+            "type": "string",
+            "example": "send_slack_message"
+          },
+          "notification_response": {
+            "type": "object",
+            "description": "Response from the notification service"
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "example": "Missing required field: message"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "ApiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-api-key",
+        "description": "Optional API key for authentication. Set ASSISTANT_ACTION_API_KEY in Supabase secrets to enable."
+      }
+    }
+  }
+}
