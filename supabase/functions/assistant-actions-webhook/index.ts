@@ -56,10 +56,11 @@ serve(async (req) => {
     }
 
     // Build notification payload based on action type
+    // Note: send-unified-notification expects 'body' not 'message'
     let channels: string[] = []
     let notificationPayload: Record<string, unknown> = {
       title: 'Iris Chase',
-      message: message || 'Action triggered by assistant',
+      body: message || 'Action triggered by assistant',
     }
 
     switch (action_type) {
@@ -71,7 +72,7 @@ serve(async (req) => {
           )
         }
         channels = ['SLACK']
-        notificationPayload.message = message
+        notificationPayload.body = message
         break
       
       case 'send_email':
@@ -84,7 +85,7 @@ serve(async (req) => {
         channels = ['EMAIL']
         notificationPayload.recipient = recipient
         notificationPayload.subject = subject || 'Message from Iris Chase'
-        notificationPayload.message = message
+        notificationPayload.body = message
         break
       
       case 'create_calendar_event':
