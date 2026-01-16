@@ -2475,6 +2475,7 @@ export type Database = {
       session_qa: {
         Row: {
           answer: string
+          answer_status: string | null
           context_used: Json | null
           course_id: string | null
           created_at: string
@@ -2486,6 +2487,7 @@ export type Database = {
         }
         Insert: {
           answer: string
+          answer_status?: string | null
           context_used?: Json | null
           course_id?: string | null
           created_at?: string
@@ -2497,6 +2499,7 @@ export type Database = {
         }
         Update: {
           answer?: string
+          answer_status?: string | null
           context_used?: Json | null
           course_id?: string | null
           created_at?: string

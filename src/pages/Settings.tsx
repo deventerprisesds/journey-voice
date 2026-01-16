@@ -19,6 +19,7 @@ import { useAuth } from '@/hooks/useAuth';
 import NotificationSettings from '@/components/NotificationSettings';
 import CronJobTesting from '@/components/CronJobTesting';
 import UpcomingReminders from '@/components/UpcomingReminders';
+import NotificationStatusDashboard from '@/components/NotificationStatusDashboard';
 import SchedulingSettings from '@/components/SchedulingSettings';
 import VoiceAssistantSettings from '@/components/VoiceAssistantSettings';
 import { AssignmentSyncSettings } from '@/components/AssignmentSyncSettings';
@@ -113,6 +114,7 @@ const Settings: React.FC = () => {
           <div className="space-y-6">
             <NotificationSettings />
             <UpcomingReminders />
+            <NotificationStatusDashboard />
           </div>
         </TabsContent>
 
