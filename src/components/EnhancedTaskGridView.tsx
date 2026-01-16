@@ -463,6 +463,9 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
           return;
         }
 
+        // TESTING: Commented out to test if database trigger handles notifications
+        // If duplicates stop, remove this block entirely
+        /*
         // Send notifications for the newly created task
         try {
           await supabase.functions.invoke('send-push-notification', {
@@ -477,6 +480,7 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
         } catch (notificationError) {
           console.warn('Failed to send notifications:', notificationError);
         }
+        */
       }
 
       setNewTaskTitle('');

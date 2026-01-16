@@ -804,6 +804,9 @@ export class RealtimeVoiceAssistant {
         };
       }
 
+      // TESTING: Commented out to test if database trigger handles notifications
+      // If duplicates stop, remove this block entirely
+      /*
       // Send notifications for the newly created task
       try {
         await supabase.functions.invoke('send-push-notification', {
@@ -818,6 +821,7 @@ export class RealtimeVoiceAssistant {
       } catch (notificationError) {
         console.warn('Failed to send notifications:', notificationError);
       }
+      */
 
       console.log('✅ Task created successfully:', task.title);
       this.onMessage?.({ type: 'client.done', status: 'Task created' });
