@@ -616,6 +616,9 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
           return;
         }
 
+        // TESTING: Commented out to test if database trigger handles notifications
+        // If duplicates stop, remove this block entirely
+        /*
         // Send notifications for the newly created task
         try {
           await supabase.functions.invoke('send-push-notification', {
@@ -630,6 +633,7 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
         } catch (notificationError) {
           console.warn('Failed to send notifications:', notificationError);
         }
+        */
       } catch (error) {
         console.error('Error creating quick task:', error);
         return;
