@@ -5,7 +5,8 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
-import { Calendar, Mail, MessageSquare, Volume2, VolumeX } from "lucide-react";
+import { Calendar, Mail, MessageSquare, Volume2, VolumeX, CheckCircle2 } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -42,6 +43,7 @@ const NotificationSettings = () => {
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [slackWebhookUrl, setSlackWebhookUrl] = useState('');
+  const [useCustomSlackWebhook, setUseCustomSlackWebhook] = useState(false);
   const { toast } = useToast();
   const { user, isDemoMode } = useAuth();
 
@@ -102,10 +104,14 @@ const NotificationSettings = () => {
         setEmail(profileData.email);
       }
 
-      // Load Slack webhook URL from localStorage for all users (not stored in database for security)
-      const storedSlackWebhook = localStorage.getItem('slack-webhook-url');
-      if (storedSlackWebhook) {
-        setSlackWebhookUrl(storedSlackWebhook);
+      // Load Slack custom webhook preference from localStorage
+      const useCustom = localStorage.getItem('use-custom-slack-webhook') === 'true';
+      setUseCustomSlackWebhook(useCustom);
+      if (useCustom) {
+        const storedSlackWebhook = localStorage.getItem('slack-webhook-url');
+        if (storedSlackWebhook) {
+          setSlackWebhookUrl(storedSlackWebhook);
+        }
       }
     } catch (error) {
       console.error('Error loading notification preferences:', error);
@@ -143,9 +149,14 @@ const NotificationSettings = () => {
         setEmail(storedEmail);
       }
       
-      const storedSlackWebhook = localStorage.getItem('slack-webhook-url');
-      if (storedSlackWebhook) {
-        setSlackWebhookUrl(storedSlackWebhook);
+      // Load Slack custom webhook preference
+      const useCustom = localStorage.getItem('use-custom-slack-webhook') === 'true';
+      setUseCustomSlackWebhook(useCustom);
+      if (useCustom) {
+        const storedSlackWebhook = localStorage.getItem('slack-webhook-url');
+        if (storedSlackWebhook) {
+          setSlackWebhookUrl(storedSlackWebhook);
+        }
       }
   };
 
@@ -164,8 +175,9 @@ const NotificationSettings = () => {
       }
 
 
-      // Save Slack webhook URL to localStorage (not in database for security)
-      if (slackWebhookUrl) {
+      // Save Slack custom webhook preference to localStorage
+      localStorage.setItem('use-custom-slack-webhook', useCustomSlackWebhook.toString());
+      if (useCustomSlackWebhook && slackWebhookUrl) {
         localStorage.setItem('slack-webhook-url', slackWebhookUrl);
       }
 
@@ -358,16 +370,17 @@ const NotificationSettings = () => {
 
   const sendTestSlack = async () => {
     try {
-      console.log('Testing Slack notification with webhook:', slackWebhookUrl ? '***configured***' : 'NOT_SET');
-      
-      if (!slackWebhookUrl) {
+      // Only require custom webhook URL if custom mode is enabled
+      if (useCustomSlackWebhook && !slackWebhookUrl) {
         toast({
-          title: "Slack webhook not configured",
-          description: "Please enter your Slack webhook URL first.",
+          title: "Custom webhook URL is empty",
+          description: "Please enter your custom Slack webhook URL or disable custom mode.",
           variant: "destructive",
         });
         return;
       }
+      
+      console.log('Testing Slack notification:', useCustomSlackWebhook ? 'using custom webhook' : 'using server secret');
       
       await supabase.functions.invoke('send-unified-notification', {
         body: {
@@ -376,14 +389,17 @@ const NotificationSettings = () => {
           body: 'Test Slack notification - Slack notifications will be sent here when enabled.',
           channels: ['SLACK'],
           data: { type: 'test_notification' },
-          slackWebhook: slackWebhookUrl,
+          // Only pass webhook if using custom mode, otherwise backend uses its secret
+          slackWebhook: useCustomSlackWebhook ? slackWebhookUrl : undefined,
           userProfile: { email, phone }
         }
       });
 
       toast({
         title: "Test Slack notification sent",
-        description: "Check your unified webhook for the Slack notification.",
+        description: useCustomSlackWebhook 
+          ? "Check your custom Slack channel for the notification."
+          : "Check your Slack channel for the notification (using server webhook).",
       });
     } catch (error) {
       console.error('Error sending test Slack notification:', error);
@@ -726,18 +742,46 @@ const NotificationSettings = () => {
             </div>
             
             {prefs.channels.includes('SLACK') && (
-              <div className="space-y-2 mt-4">
-                <Label htmlFor="slack-webhook-url">Slack Webhook URL</Label>
-                <Input
-                  id="slack-webhook-url"
-                  type="url"
-                  placeholder="https://hooks.slack.com/services/..."
-                  value={slackWebhookUrl}
-                  onChange={(e) => setSlackWebhookUrl(e.target.value)}
-                />
-                <p className="text-xs text-muted-foreground">
-                  This webhook URL is stored locally in your browser for security.
-                </p>
+              <div className="space-y-4 mt-4">
+                {/* Server webhook indicator */}
+                <div className="flex items-center gap-2 p-3 rounded-md bg-muted/50 border border-border">
+                  <CheckCircle2 className="h-4 w-4 text-green-500 flex-shrink-0" />
+                  <div className="text-sm">
+                    <span className="font-medium">Using server-configured webhook</span>
+                    <p className="text-xs text-muted-foreground">
+                      The SLACK_WEBHOOK_URL secret will be used automatically.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Custom webhook toggle */}
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id="use-custom-slack"
+                    checked={useCustomSlackWebhook}
+                    onCheckedChange={(checked) => setUseCustomSlackWebhook(checked === true)}
+                  />
+                  <Label htmlFor="use-custom-slack" className="text-sm cursor-pointer">
+                    Use a different webhook URL
+                  </Label>
+                </div>
+
+                {/* Custom webhook input (only visible when enabled) */}
+                {useCustomSlackWebhook && (
+                  <div className="space-y-2 pl-6">
+                    <Label htmlFor="slack-webhook-url">Custom Webhook URL</Label>
+                    <Input
+                      id="slack-webhook-url"
+                      type="url"
+                      placeholder="https://hooks.slack.com/services/..."
+                      value={slackWebhookUrl}
+                      onChange={(e) => setSlackWebhookUrl(e.target.value)}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      This overrides the server secret and is stored locally in your browser.
+                    </p>
+                  </div>
+                )}
               </div>
             )}
           </div>
