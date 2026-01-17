@@ -103,14 +103,46 @@ const phoneTools = [
 async function getUserContext(phoneNumber: string): Promise<{ userId: string | null; timezone: string; instructions: string }> {
   const supabase = createClient(supabaseUrl, supabaseServiceKey);
   
-  // Try to find user by phone number
+  // Try to find user by phone number (normalize format)
+  const normalizedPhone = phoneNumber.replace(/\D/g, '');
+  console.log(`[getUserContext] Looking up phone: ${phoneNumber} (normalized: ${normalizedPhone})`);
+  
   const { data: profile } = await supabase
     .from('profiles')
-    .select('user_id')
-    .eq('phone', phoneNumber)
+    .select('user_id, phone')
+    .or(`phone.eq.${phoneNumber},phone.eq.+${normalizedPhone},phone.ilike.%${normalizedPhone.slice(-10)}%`)
     .maybeSingle();
 
-  if (!profile?.user_id) {
+  let userId = profile?.user_id || null;
+
+  // Fallback: If no phone match, use the demo user or first user with scheduling prefs
+  if (!userId) {
+    console.log('[getUserContext] No phone match, using fallback...');
+    
+    // Try demo user first
+    const { data: demoCheck } = await supabase
+      .from('user_scheduling_prefs')
+      .select('user_id')
+      .eq('user_id', '00000000-0000-0000-0000-000000000001')
+      .maybeSingle();
+    
+    if (demoCheck?.user_id) {
+      userId = demoCheck.user_id;
+      console.log(`[getUserContext] Using demo user: ${userId}`);
+    } else {
+      // Fallback to first user with scheduling prefs
+      const { data: firstUser } = await supabase
+        .from('user_scheduling_prefs')
+        .select('user_id')
+        .limit(1)
+        .maybeSingle();
+      
+      userId = firstUser?.user_id || null;
+      console.log(`[getUserContext] Using first user with prefs: ${userId}`);
+    }
+  }
+
+  if (!userId) {
     return { userId: null, timezone: 'America/New_York', instructions: '' };
   }
 
@@ -118,11 +150,13 @@ async function getUserContext(phoneNumber: string): Promise<{ userId: string | n
   const { data: prefs } = await supabase
     .from('user_scheduling_prefs')
     .select('timezone, core_instructions, realtime_extensions')
-    .eq('user_id', profile.user_id)
+    .eq('user_id', userId)
     .maybeSingle();
 
+  console.log(`[getUserContext] Found user ${userId} with timezone ${prefs?.timezone || 'America/New_York'}`);
+
   return {
-    userId: profile.user_id,
+    userId: userId,
     timezone: prefs?.timezone || 'America/New_York',
     instructions: [prefs?.core_instructions, prefs?.realtime_extensions].filter(Boolean).join('\n\n')
   };
@@ -538,13 +572,13 @@ ${userId ? '' : '\n- Note: I could not identify this caller, so task management 
 }
 
 // Generate TwiML that connects to the realtime bridge via Media Streams
-function generateRealtimeBridgeTwiML(context?: string, userId?: string | null, callerPhone?: string, direction?: string): string {
+function generateRealtimeBridgeTwiML(context?: string, userId?: string | null, callerPhone?: string, direction?: string, timezone?: string): string {
   // Use clean URL with no query params - data is passed via Parameter tags
   // This avoids XML escaping issues with & characters in query strings
   const bridgeUrl = `wss://wwxgajrtmslzklnyplah.supabase.co/functions/v1/twilio-realtime-bridge`;
   
   console.log('Generating Media Streams TwiML with bridge URL:', bridgeUrl);
-  console.log('Call direction:', direction || 'inbound');
+  console.log('Call direction:', direction || 'inbound', 'userId:', userId, 'timezone:', timezone);
   
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -554,6 +588,7 @@ function generateRealtimeBridgeTwiML(context?: string, userId?: string | null, c
       <Parameter name="phone" value="${callerPhone || ''}" />
       <Parameter name="context" value="${escapeXml(context || '')}" />
       <Parameter name="direction" value="${direction || 'inbound'}" />
+      <Parameter name="timezone" value="${timezone || 'America/New_York'}" />
     </Stream>
   </Connect>
 </Response>`;
@@ -792,10 +827,13 @@ serve(async (req) => {
         const callerPhone = url.searchParams.get('From') || Deno.env.get('MY_PHONE_NUMBER');
         const directionParam = url.searchParams.get('direction') || 'inbound';
         let userId = userIdParam || null;
+        let timezone = 'America/New_York';
         
-        if (!userId && callerPhone) {
+        if (callerPhone) {
           const context = await getUserContext(callerPhone);
           userId = context.userId;
+          timezone = context.timezone;
+          console.log(`[incoming-call] Resolved userId=${userId}, timezone=${timezone} for phone ${callerPhone}`);
         }
 
         // Check if we should use realtime bridge or fallback
@@ -803,9 +841,9 @@ serve(async (req) => {
         
         const twiml = useFallback 
           ? generateFallbackGreetingTwiML(contextParam, userId)
-          : generateRealtimeBridgeTwiML(contextParam, userId, callerPhone || undefined, directionParam);
+          : generateRealtimeBridgeTwiML(contextParam, userId, callerPhone || undefined, directionParam, timezone);
         
-        console.log('Incoming call - using', useFallback ? 'fallback' : 'realtime bridge', '- direction:', directionParam);
+        console.log('Incoming call - using', useFallback ? 'fallback' : 'realtime bridge', '- direction:', directionParam, '- userId:', userId);
         
         return new Response(twiml, {
           headers: { 'Content-Type': 'application/xml' },
