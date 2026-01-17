@@ -1055,24 +1055,21 @@ serve(async (req) => {
     console.log('[BRIDGE] Call direction:', directionParam);
     console.log('[BRIDGE] Call context:', contextParam || '(none)');
     
-    // Get user context with full Iris capabilities
-    const userContext = await getUserContext(phoneParam, userIdParam);
-    console.log('[BRIDGE] User context:', { 
-      userId: userContext.userId, 
-      timezone: userContext.timezone,
-      hasInstructions: !!userContext.instructions,
-      hasRAGContext: !!userContext.ragContext,
-      threadId: userContext.threadId
-    });
-    
-    // Upgrade to WebSocket
+    // ✅ CRITICAL FIX: Upgrade WebSocket IMMEDIATELY - NO async work before this!
+    // Supabase Edge Functions have a 2-second CPU limit before WebSocket upgrade
+    // Any await before this line will cause the function to shut down silently
     const { socket: twilioWs, response } = Deno.upgradeWebSocket(req);
+    console.log('[BRIDGE] ✓ WebSocket upgraded successfully');
     
+    // Variables to be initialized AFTER socket opens (inside onopen)
+    let userContext: { userId: string | null; timezone: string; instructions: string; threadId: string; ragContext: string; } | null = null;
     let openaiWs: WebSocket | null = null;
     let streamSid: string | null = null;
     let isConnectedToOpenAI = false;
+    let isInitialized = false;
     let pendingFunctionCalls: Map<string, { name: string; args: string }> = new Map();
     let hasLoggedFirstAudio = false;
+    let earlyMediaBuffer: string[] = []; // Buffer for media that arrives before initialization
     
     // Connect to OpenAI Realtime API with robust error handling
     const connectToOpenAI = () => {
@@ -1130,6 +1127,13 @@ serve(async (req) => {
             case 'session.created': {
               console.log('[OPENAI] ✓ Session created, sending configuration...');
               console.log('[OPENAI] Session ID:', data.session?.id);
+              
+              // userContext should be initialized by now (connectToOpenAI only called after init)
+              if (!userContext) {
+                console.error('[OPENAI] ✗ User context not available');
+                twilioWs.close(1011, 'User context not available');
+                return;
+              }
               
               const sessionConfig = {
                 type: 'session.update',
@@ -1259,7 +1263,7 @@ serve(async (req) => {
                   break;
                 }
                 
-                if (userContext.userId) {
+                if (userContext?.userId) {
                   const result = await executeTool(
                     functionName,
                     args,
@@ -1316,7 +1320,7 @@ serve(async (req) => {
             case 'response.audio_transcript.done': {
               console.log('[OPENAI] AI transcript:', data.transcript);
               // Store AI response for RAG
-              if (userContext.userId && userContext.threadId && data.transcript) {
+              if (userContext?.userId && userContext?.threadId && data.transcript) {
                 storeMessage(userContext.userId, userContext.threadId, 'assistant', data.transcript);
               }
               break;
@@ -1325,7 +1329,7 @@ serve(async (req) => {
             case 'conversation.item.input_audio_transcription.completed': {
               console.log('[OPENAI] User said:', data.transcript);
               // Store user message for RAG
-              if (userContext.userId && userContext.threadId && data.transcript) {
+              if (userContext?.userId && userContext?.threadId && data.transcript) {
                 storeMessage(userContext.userId, userContext.threadId, 'user', data.transcript);
               }
               break;
@@ -1376,8 +1380,34 @@ serve(async (req) => {
     };
     
     // Handle Twilio WebSocket events
-    twilioWs.onopen = () => {
-      console.log('[TWILIO] WebSocket connected');
+    // ✅ CRITICAL: All async initialization happens HERE, after WebSocket is open
+    twilioWs.onopen = async () => {
+      console.log('[TWILIO] ✓ WebSocket connection established');
+      
+      try {
+        // NOW we can safely do async work - we're inside onopen
+        console.log('[BRIDGE] Loading user context...');
+        userContext = await getUserContext(phoneParam, userIdParam);
+        console.log('[BRIDGE] ✓ User context loaded:', { 
+          userId: userContext.userId, 
+          timezone: userContext.timezone,
+          hasInstructions: !!userContext.instructions,
+          hasRAGContext: !!userContext.ragContext,
+          threadId: userContext.threadId
+        });
+        
+        isInitialized = true;
+        console.log('[BRIDGE] ✓ Initialization complete, ready to process media');
+        
+        // Process any buffered early media
+        if (earlyMediaBuffer.length > 0) {
+          console.log(`[BRIDGE] Processing ${earlyMediaBuffer.length} buffered media packets`);
+          // Note: These will be processed when connectToOpenAI completes and OpenAI is ready
+        }
+      } catch (error) {
+        console.error('[BRIDGE] ✗ Failed to initialize:', error);
+        twilioWs.close(1011, 'Initialization failed');
+      }
     };
     
     twilioWs.onmessage = async (event) => {
@@ -1396,7 +1426,28 @@ serve(async (req) => {
             console.log('[TWILIO] Call SID:', data.start.callSid);
             console.log('[TWILIO] Media format:', data.start.mediaFormat);
             
-            connectToOpenAI();
+            // Wait for initialization before connecting to OpenAI
+            if (isInitialized && userContext) {
+              connectToOpenAI();
+            } else {
+              console.log('[BRIDGE] Waiting for initialization before connecting to OpenAI...');
+              // Poll for initialization completion
+              const waitForInit = setInterval(() => {
+                if (isInitialized && userContext) {
+                  clearInterval(waitForInit);
+                  console.log('[BRIDGE] Initialization complete, now connecting to OpenAI');
+                  connectToOpenAI();
+                }
+              }, 100);
+              // Timeout after 10 seconds
+              setTimeout(() => {
+                clearInterval(waitForInit);
+                if (!isInitialized) {
+                  console.error('[BRIDGE] ✗ Initialization timeout');
+                  twilioWs.close(1011, 'Initialization timeout');
+                }
+              }, 10000);
+            }
             break;
           }
           
