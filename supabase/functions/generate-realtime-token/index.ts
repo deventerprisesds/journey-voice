@@ -1,14 +1,5 @@
-// Generate Realtime Token - WebRTC session for in-app voice assistant
-// Uses shared assistant-core for unified tool definitions and instructions
-
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { 
-  toolDefinitions, 
-  buildFullContext,
-  type ChannelConfig 
-} from "../_shared/assistant-core.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -16,6 +7,7 @@ const corsHeaders = {
 };
 
 serve(async (req) => {
+  // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
@@ -36,6 +28,7 @@ serve(async (req) => {
     if (authHeader) {
       try {
         const token = authHeader.replace('Bearer ', '');
+        const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2');
         const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
         const { data: { user } } = await supabase.auth.getUser(token);
         userId = user?.id || null;
@@ -46,15 +39,62 @@ serve(async (req) => {
 
     console.log('Generating ephemeral token for user:', userId || 'anonymous');
 
-    // Build unified instructions using shared core
-    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
-    const channelConfig: ChannelConfig = {
-      type: 'webrtc',
-      voiceOptimized: true,
-      interruptionHandling: true
-    };
+    // Load user's AI instructions from scheduling preferences
+    let coreInstructions = `You are a helpful task management assistant. You can help users create, update, and manage their tasks through voice commands.
 
-    const { instructions } = await buildFullContext(supabase, userId, channelConfig);
+When users ask about historical information like "tasks from last week" or "what did I work on yesterday", use the get_tasks function with appropriate time_filter parameters.
+
+Available functions:
+- get_tasks: Retrieve tasks and chat history with time/keyword filtering
+- get_today_tasks: Get all tasks scheduled for today
+- create_task: Create new tasks with title, description, priority, and category
+- update_task: Update existing tasks (status, title, description, priority)
+- reschedule_task: Move a task to a different date or time
+- schedule_task: Schedule an unscheduled task (automatically finds optimal time slot)
+- unschedule_task: Remove a task from the calendar
+- disconnect: Disconnect when user says goodbye, "that's all", "disconnect", "I'm done", or similar farewell phrases
+- initiate_phone_call: Call the user on their phone when they request it (supports delay and context)
+
+When users ask about "today's tasks" or "what's on my schedule today", use get_today_tasks.
+When users want to move tasks around, use reschedule_task with the new date/time.
+When users want to add unscheduled tasks to today, use schedule_task which will automatically find the best time slot.
+
+Always confirm actions you take and provide helpful feedback about task management.
+
+When the user says goodbye phrases like 'that's all', 'thanks that's it', 'disconnect', 'I'm done', 'goodbye', or similar, call the disconnect function with a friendly farewell message.`;
+
+    let realtimeExtensions = '';
+    let schedulingPhilosophy = '';
+
+    if (userId) {
+      try {
+        const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2');
+        const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+        
+        const { data: prefs } = await supabase
+          .from('user_scheduling_prefs')
+          .select('core_instructions, realtime_extensions, config')
+          .eq('user_id', userId)
+          .maybeSingle();
+
+        if (prefs) {
+          if (prefs.core_instructions) coreInstructions = prefs.core_instructions;
+          if (prefs.realtime_extensions) realtimeExtensions = prefs.realtime_extensions;
+          if (prefs.config?.customAIInstructions) {
+            schedulingPhilosophy = `\n\nScheduling Philosophy:\n${prefs.config.customAIInstructions}`;
+          }
+        }
+      } catch (error) {
+        console.warn('Failed to load user instructions, using defaults:', error);
+      }
+    }
+
+    // Combine instructions
+    const fullInstructions = [
+      coreInstructions,
+      realtimeExtensions,
+      schedulingPhilosophy
+    ].filter(Boolean).join('\n\n');
 
     // Request an ephemeral token from OpenAI
     const response = await fetch("https://api.openai.com/v1/realtime/sessions", {
@@ -75,8 +115,167 @@ serve(async (req) => {
           silence_duration_ms: 1200
         },
         tool_choice: "auto",
-        tools: toolDefinitions,  // Use shared tool definitions
-        instructions: instructions  // Use unified instructions
+        tools: [
+          {
+            type: "function",
+            name: "get_tasks",
+            description: "Retrieve tasks and chat history. Can search by time period, keywords, or status. Use this for any historical queries like 'tasks from last week' or 'what did I work on yesterday'.",
+            parameters: {
+              type: "object",
+              properties: {
+                query: { 
+                  type: "string", 
+                  description: "Search query or keywords to find in tasks/messages" 
+                },
+                time_filter: { 
+                  type: "string", 
+                  description: "Time period like 'past week', 'last month', 'yesterday', 'last 7 days'" 
+                },
+                status: { 
+                  type: "string", 
+                  enum: ["BACKLOG", "TODO", "DOING", "DONE"],
+                  description: "Filter by task status" 
+                }
+              }
+            }
+          },
+          {
+            type: "function",
+            name: "create_task",
+            description: "Create a new task. Use UPPERCASE for priority (LOW, MEDIUM, HIGH, URGENT). For education/school tasks, use category 'EDUCATION'. The system will place tasks in the appropriate board.",
+            parameters: {
+              type: "object",
+              properties: {
+                title: { type: "string", description: "Task title" },
+                description: { type: "string", description: "Task description" },
+                priority: { 
+                  type: "string", 
+                  enum: ["LOW", "MEDIUM", "HIGH", "URGENT"],
+                  description: "Task priority level (UPPERCASE)" 
+                },
+                category: { 
+                  type: "string", 
+                  enum: ["LIFE", "CAREER", "VENTURES", "EDUCATION"],
+                  description: "Task category - use EDUCATION for school/MIT/EMBA tasks" 
+                }
+              },
+              required: ["title"]
+            }
+          },
+          {
+            type: "function",
+            name: "update_task",
+            description: "Update an existing task's properties. Use UPPERCASE for priority and status.",
+            parameters: {
+              type: "object",
+              properties: {
+                task_id: { type: "string", description: "ID of the task to update" },
+                title: { type: "string", description: "New task title" },
+                description: { type: "string", description: "New task description" },
+                status: { 
+                  type: "string", 
+                  enum: ["BACKLOG", "TODO", "DOING", "DONE"],
+                  description: "New task status (UPPERCASE)" 
+                },
+                priority: { 
+                  type: "string", 
+                  enum: ["LOW", "MEDIUM", "HIGH", "URGENT"],
+                  description: "New task priority (UPPERCASE)" 
+                },
+                category: { 
+                  type: "string", 
+                  enum: ["LIFE", "CAREER", "VENTURES", "EDUCATION"],
+                  description: "New task category" 
+                }
+              },
+              required: ["task_id"]
+            }
+          },
+          {
+            type: "function",
+            name: "get_today_tasks",
+            description: "Get all tasks for today, including both scheduled and unscheduled tasks. Shows what the user has planned for today.",
+            parameters: {
+              type: "object",
+              properties: {}
+            }
+          },
+          {
+            type: "function",
+            name: "reschedule_task",
+            description: "Move a task to a different date or time. Use this when user says 'move task to tomorrow', 'reschedule for next week', etc.",
+            parameters: {
+              type: "object",
+              properties: {
+                task_id: { type: "string", description: "ID of the task to reschedule" },
+                new_date: { type: "string", description: "New date in YYYY-MM-DD format" },
+                new_start_time: { type: "string", description: "New start time in HH:MM format (24-hour)" },
+                reason: { type: "string", description: "Optional reason for rescheduling" }
+              },
+              required: ["task_id", "new_date"]
+            }
+          },
+          {
+            type: "function",
+            name: "schedule_task",
+            description: "Schedule an unscheduled task to a specific date and time. Automatically finds optimal time slot based on category preferences if time not specified.",
+            parameters: {
+              type: "object",
+              properties: {
+                task_id: { type: "string", description: "ID of the task to schedule" },
+                date: { type: "string", description: "Date to schedule in YYYY-MM-DD format, defaults to today" },
+                start_time: { type: "string", description: "Optional start time in HH:MM format (24-hour)" },
+                duration_minutes: { type: "number", description: "Duration in minutes, defaults to task estimate or 60" }
+              },
+              required: ["task_id"]
+            }
+          },
+          {
+            type: "function",
+            name: "unschedule_task",
+            description: "Remove a task from the calendar schedule. The task will remain in backlog.",
+            parameters: {
+              type: "object",
+              properties: {
+                task_id: { type: "string", description: "ID of the task to unschedule" }
+              },
+              required: ["task_id"]
+            }
+          },
+          {
+            type: "function",
+            name: "disconnect",
+            description: "Disconnect the voice assistant when user says goodbye, 'that's all', 'disconnect', 'that will be all', 'thanks that's it', or similar phrases indicating they're done.",
+            parameters: {
+              type: "object",
+              properties: {
+                farewell_message: {
+                  type: "string",
+                  description: "Optional goodbye message to say before disconnecting"
+                }
+              }
+            }
+          },
+          {
+            type: "function",
+            name: "initiate_phone_call",
+            description: "Call the user on their phone. Use when user says 'call me', 'phone me', 'give me a call', or requests a phone conversation. Can include an optional delay in minutes.",
+            parameters: {
+              type: "object",
+              properties: {
+                delay_minutes: {
+                  type: "number",
+                  description: "Optional minutes to wait before calling (e.g., 'call me in 5 minutes')"
+                },
+                context: {
+                  type: "string",
+                  description: "What the call should be about (e.g., 'morning briefing', 'task review', 'afternoon schedule')"
+                }
+              }
+            }
+          }
+        ],
+        instructions: fullInstructions
       }),
     });
 
@@ -84,6 +283,7 @@ serve(async (req) => {
       const errorText = await response.text();
       console.error('OpenAI API error:', response.status, errorText);
 
+      // Parse OpenAI error details
       let errorDetails = { type: 'unknown', message: errorText };
       try {
         const errorJson = JSON.parse(errorText);
@@ -97,6 +297,7 @@ serve(async (req) => {
         console.warn('Could not parse OpenAI error response:', parseError);
       }
 
+      // Return structured error for client handling
       return new Response(JSON.stringify({ 
         error: 'openai_api_error',
         details: errorDetails,
