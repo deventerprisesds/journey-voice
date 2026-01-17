@@ -44,71 +44,161 @@ async function triggerOutboundCall(
   toNumber: string,
   context?: string,
   delayMinutes?: number
-): Promise<{ success: boolean; call_sid?: string; error?: string; scheduled_for?: string }> {
+): Promise<{ 
+  success: boolean; 
+  call_sid?: string; 
+  error?: string; 
+  scheduled_for?: string;
+  debug?: Record<string, unknown>;
+}> {
   const accountSid = Deno.env.get('TWILIO_ACCOUNT_SID');
   const authToken = Deno.env.get('TWILIO_AUTH_TOKEN');
   const fromNumber = Deno.env.get('TWILIO_PHONE_NUMBER');
 
-  if (!accountSid || !authToken || !fromNumber) {
-    console.error('Missing Twilio credentials');
-    return { success: false, error: 'Twilio not configured. Please add TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_PHONE_NUMBER secrets.' };
+  // Debug info object to return
+  const debug: Record<string, unknown> = {
+    timestamp: new Date().toISOString(),
+    toNumber_provided: !!toNumber,
+    toNumber_format: toNumber ? (toNumber.startsWith('+') ? 'E.164' : 'non-E.164') : 'missing',
+    fromNumber_configured: !!fromNumber,
+    fromNumber_format: fromNumber ? (fromNumber.startsWith('+') ? 'E.164' : 'non-E.164') : 'missing',
+    accountSid_configured: !!accountSid,
+    authToken_configured: !!authToken,
+  };
+
+  console.log('=== TWILIO OUTBOUND CALL DEBUG ===');
+  console.log('To Number:', toNumber ? `${toNumber.substring(0, 4)}...${toNumber.slice(-2)}` : 'MISSING');
+  console.log('From Number:', fromNumber ? `${fromNumber.substring(0, 4)}...${fromNumber.slice(-2)}` : 'MISSING');
+  console.log('Account SID:', accountSid ? `${accountSid.substring(0, 6)}...` : 'MISSING');
+  console.log('Auth Token:', authToken ? 'CONFIGURED' : 'MISSING');
+
+  // Validate credentials
+  if (!accountSid) {
+    const error = 'Missing TWILIO_ACCOUNT_SID secret';
+    console.error(error);
+    return { success: false, error, debug };
+  }
+  if (!authToken) {
+    const error = 'Missing TWILIO_AUTH_TOKEN secret';
+    console.error(error);
+    return { success: false, error, debug };
+  }
+  if (!fromNumber) {
+    const error = 'Missing TWILIO_PHONE_NUMBER secret';
+    console.error(error);
+    return { success: false, error, debug };
   }
 
+  // Validate phone number formats
   if (!toNumber) {
-    return { success: false, error: 'No phone number provided' };
+    const error = 'No destination phone number provided';
+    console.error(error);
+    return { success: false, error, debug };
   }
 
-  // If delay is specified, we could schedule it (for now, log and proceed)
+  if (!toNumber.startsWith('+')) {
+    const error = `Invalid TO phone number format: "${toNumber}". Must be E.164 format starting with + (e.g., +14155551234)`;
+    console.error(error);
+    return { success: false, error, debug };
+  }
+
+  if (!fromNumber.startsWith('+')) {
+    const error = `Invalid FROM phone number format: "${fromNumber}". Must be E.164 format starting with + (e.g., +18665854827)`;
+    console.error(error);
+    return { success: false, error, debug };
+  }
+
+  // Log delay info
   if (delayMinutes && delayMinutes > 0) {
-    console.log(`Call scheduled for ${delayMinutes} minutes from now`);
-    // In production, you'd use a queue or cron for delayed calls
-    // For now, we'll make the call immediately but note it was requested with delay
     const scheduledFor = new Date(Date.now() + delayMinutes * 60 * 1000).toISOString();
-    console.log(`Note: Delayed calls would be scheduled for ${scheduledFor}`);
+    console.log(`Call scheduled for ${delayMinutes} minutes from now: ${scheduledFor}`);
+    debug.scheduled_for = scheduledFor;
   }
 
   const twimlUrl = `${supabaseUrl}/functions/v1/twilio-voice-handler?action=incoming-call&context=${encodeURIComponent(context || '')}`;
   const statusCallbackUrl = `${supabaseUrl}/functions/v1/twilio-voice-handler?action=status-callback`;
 
+  debug.twiml_url = twimlUrl;
+  debug.status_callback_url = statusCallbackUrl;
+
+  console.log('TwiML URL:', twimlUrl);
+  console.log('Status Callback URL:', statusCallbackUrl);
+
   try {
     const credentials = btoa(`${accountSid}:${authToken}`);
+    const apiUrl = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Calls.json`;
     
-    const response = await fetch(
-      `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Calls.json`,
-      {
-        method: 'POST',
-        headers: {
-          'Authorization': `Basic ${credentials}`,
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        body: new URLSearchParams({
-          To: toNumber,
-          From: fromNumber,
-          Url: twimlUrl,
-          StatusCallback: statusCallbackUrl,
-          StatusCallbackEvent: 'initiated ringing answered completed',
-          StatusCallbackMethod: 'POST',
-        }),
-      }
-    );
+    console.log('Making Twilio API request to:', apiUrl);
+
+    const requestBody = new URLSearchParams({
+      To: toNumber,
+      From: fromNumber,
+      Url: twimlUrl,
+      StatusCallback: statusCallbackUrl,
+      StatusCallbackEvent: 'initiated ringing answered completed',
+      StatusCallbackMethod: 'POST',
+    });
+
+    debug.request_body = Object.fromEntries(requestBody.entries());
+
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Basic ${credentials}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: requestBody,
+    });
+
+    const responseText = await response.text();
+    debug.twilio_response_status = response.status;
+    debug.twilio_response_headers = Object.fromEntries(response.headers.entries());
+
+    console.log('Twilio API response status:', response.status);
+    console.log('Twilio API response:', responseText);
 
     if (!response.ok) {
-      const errorText = await response.text();
-      console.error('Twilio API error:', response.status, errorText);
-      return { success: false, error: `Twilio error: ${errorText}` };
+      let errorDetail = responseText;
+      try {
+        const errorJson = JSON.parse(responseText);
+        errorDetail = `Code ${errorJson.code}: ${errorJson.message}`;
+        debug.twilio_error_code = errorJson.code;
+        debug.twilio_error_message = errorJson.message;
+      } catch {
+        // Response wasn't JSON
+      }
+      const error = `Twilio API error (${response.status}): ${errorDetail}`;
+      console.error(error);
+      return { success: false, error, debug };
     }
 
-    const callData = await response.json();
-    console.log('Call initiated successfully:', callData.sid);
+    const callData = JSON.parse(responseText);
+    console.log('=== CALL INITIATED SUCCESSFULLY ===');
+    console.log('Call SID:', callData.sid);
+    console.log('Call Status:', callData.status);
+    console.log('Call Direction:', callData.direction);
+
+    debug.call_sid = callData.sid;
+    debug.call_status = callData.status;
+    debug.call_direction = callData.direction;
 
     return { 
       success: true, 
       call_sid: callData.sid,
-      scheduled_for: delayMinutes ? new Date(Date.now() + delayMinutes * 60 * 1000).toISOString() : undefined
+      scheduled_for: delayMinutes ? new Date(Date.now() + delayMinutes * 60 * 1000).toISOString() : undefined,
+      debug
     };
   } catch (error) {
-    console.error('Error making Twilio call:', error);
-    return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error('=== TWILIO CALL ERROR ===');
+    console.error('Error type:', error instanceof Error ? error.constructor.name : typeof error);
+    console.error('Error message:', errorMessage);
+    console.error('Full error:', error);
+    
+    debug.error_type = error instanceof Error ? error.constructor.name : typeof error;
+    debug.error_message = errorMessage;
+    
+    return { success: false, error: errorMessage, debug };
   }
 }
 
