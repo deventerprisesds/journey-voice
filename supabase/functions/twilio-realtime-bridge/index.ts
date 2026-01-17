@@ -963,7 +963,9 @@ async function getUserContext(
 function buildSystemInstructions(
   timezone: string, 
   userInstructions: string,
-  ragContext?: string
+  ragContext?: string,
+  direction?: string,
+  callContext?: string
 ): string {
   const now = new Date();
   const userTime = now.toLocaleString('en-US', { timeZone: timezone });
@@ -1003,13 +1005,35 @@ Always confirm actions and provide helpful feedback.`;
 - Use tools to get REAL task data - never make up information
 - When the user says goodbye, use end_call immediately
 - Confirm actions briefly: "Done", "Got it", "Created"
-- Offer helpful follow-up suggestions when appropriate
+- Do NOT proactively call tools or fetch data unless the user asks for it
 
 VOICE STYLE:
 - Natural pauses between thoughts
 - Friendly and professional tone
-- Brief confirmations
-- Dynamic greetings based on time of day`;
+- Brief confirmations`;
+
+  // Add CRITICAL direction-specific behavior
+  if (direction === 'outbound') {
+    instructions += `\n\n--- CRITICAL: OUTBOUND CALL ---
+YOU initiated this call to the user${callContext ? ` regarding: ${callContext}` : ''}.
+BEHAVIOR:
+1. WAIT SILENTLY until the user speaks (they will say "hello" or similar)
+2. When they greet you, respond: "Hi!" followed by ONE brief sentence explaining why you called
+3. Examples:
+   - "Hi! Just checking in on your schedule for today."
+   - "Hi! I'm calling about ${callContext || 'your tasks'}."
+4. Then WAIT for their response
+5. Do NOT fetch tasks or call any tools until they ask`;
+  } else {
+    instructions += `\n\n--- CRITICAL: INBOUND CALL ---
+The user called YOU.
+BEHAVIOR:
+1. You already greeted them with "Good [morning/afternoon/evening], sir."
+2. Now WAIT SILENTLY for them to tell you what they need
+3. Do NOT proactively offer information or fetch tasks
+4. Do NOT call any tools until they ask for something
+5. Respond ONLY when they speak`;
+  }
 
   return instructions;
 }
@@ -1026,6 +1050,10 @@ serve(async (req) => {
     const userIdParam = url.searchParams.get('userId') || undefined;
     const phoneParam = url.searchParams.get('phone') || undefined;
     const contextParam = url.searchParams.get('context') || '';
+    const directionParam = url.searchParams.get('direction') || 'inbound';
+    
+    console.log('[BRIDGE] Call direction:', directionParam);
+    console.log('[BRIDGE] Call context:', contextParam || '(none)');
     
     // Get user context with full Iris capabilities
     const userContext = await getUserContext(phoneParam, userIdParam);
@@ -1044,6 +1072,7 @@ serve(async (req) => {
     let streamSid: string | null = null;
     let isConnectedToOpenAI = false;
     let pendingFunctionCalls: Map<string, { name: string; args: string }> = new Map();
+    let hasLoggedFirstAudio = false;
     
     // Connect to OpenAI Realtime API with robust error handling
     const connectToOpenAI = () => {
@@ -1109,7 +1138,9 @@ serve(async (req) => {
                   instructions: buildSystemInstructions(
                     userContext.timezone, 
                     userContext.instructions,
-                    userContext.ragContext
+                    userContext.ragContext,
+                    directionParam,
+                    contextParam
                   ),
                   voice: 'alloy',
                   input_audio_format: 'pcm16',
@@ -1119,9 +1150,9 @@ serve(async (req) => {
                   },
                   turn_detection: {
                     type: 'server_vad',
-                    threshold: 0.3,
-                    prefix_padding_ms: 400,
-                    silence_duration_ms: 1200
+                    threshold: 0.2,           // Lower threshold for phone audio sensitivity
+                    prefix_padding_ms: 600,   // More padding for phone latency
+                    silence_duration_ms: 1000 // Shorter silence for responsiveness
                   },
                   tools: userContext.userId ? realtimeTools : [],
                   tool_choice: userContext.userId ? 'auto' : 'none',
@@ -1131,29 +1162,34 @@ serve(async (req) => {
               
               openaiWs!.send(JSON.stringify(sessionConfig));
               console.log('[OPENAI] Session configured with', realtimeTools.length, 'tools');
+              console.log('[OPENAI] Direction:', directionParam);
               
-              // Send initial greeting
+              // Direction-aware greeting behavior
               setTimeout(() => {
                 const hour = new Date().getHours();
-                const timeGreeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
                 
-                const greeting = contextParam 
-                  ? `${timeGreeting}! I'm calling about ${contextParam}. How can I help?`
-                  : `${timeGreeting}! This is Iris, your task assistant. How can I help you today?`;
-                
-                openaiWs!.send(JSON.stringify({
-                  type: 'conversation.item.create',
-                  item: {
-                    type: 'message',
-                    role: 'assistant',
-                    content: [{ type: 'text', text: greeting }]
-                  }
-                }));
-                
-                openaiWs!.send(JSON.stringify({
-                  type: 'response.create',
-                  response: { modalities: ['audio', 'text'] }
-                }));
+                if (directionParam === 'inbound') {
+                  // USER CALLED IRIS - Short greeting, then wait silently
+                  const greeting = hour < 12 ? 'Good morning, sir.' : 
+                                   hour < 17 ? 'Good afternoon, sir.' : 
+                                   'Good evening, sir.';
+                  
+                  console.log('[BRIDGE] Inbound call - sending greeting:', greeting);
+                  
+                  openaiWs!.send(JSON.stringify({
+                    type: 'response.create',
+                    response: { 
+                      modalities: ['audio', 'text'],
+                      instructions: `Say ONLY: "${greeting}" - nothing else. Then wait silently for the user to speak. Do NOT offer help or ask questions.`
+                    }
+                  }));
+                  
+                } else {
+                  // IRIS CALLED USER (outbound) - Wait for user's hello, then explain why calling
+                  console.log('[BRIDGE] Outbound call - waiting for user to speak first');
+                  // Don't send any greeting - the system instructions tell the AI to wait
+                  // and respond when the user speaks
+                }
               }, 500);
               break;
             }
@@ -1267,8 +1303,13 @@ serve(async (req) => {
               break;
             }
             
+            case 'input_audio_buffer.speech_started': {
+              console.log('[VAD] ✓ Speech STARTED at', new Date().toISOString());
+              break;
+            }
+            
             case 'input_audio_buffer.speech_stopped': {
-              console.log('[OPENAI] User stopped speaking');
+              console.log('[VAD] ✓ Speech STOPPED at', new Date().toISOString());
               break;
             }
             
@@ -1361,6 +1402,12 @@ serve(async (req) => {
           
           case 'media': {
             if (openaiWs && isConnectedToOpenAI && openaiWs.readyState === WebSocket.OPEN) {
+              // Log first audio packet to confirm we're receiving audio from Twilio
+              if (!hasLoggedFirstAudio) {
+                console.log('[AUDIO] ✓ First audio packet received from Twilio');
+                hasLoggedFirstAudio = true;
+              }
+              
               const mulawBytes = Uint8Array.from(atob(data.media.payload), c => c.charCodeAt(0));
               const pcm8k = decodeMulaw(mulawBytes);
               const pcm24k = upsample8to24(pcm8k);

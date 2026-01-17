@@ -538,17 +538,19 @@ ${userId ? '' : '\n- Note: I could not identify this caller, so task management 
 }
 
 // Generate TwiML that connects to the realtime bridge via Media Streams
-function generateRealtimeBridgeTwiML(context?: string, userId?: string | null, callerPhone?: string): string {
+function generateRealtimeBridgeTwiML(context?: string, userId?: string | null, callerPhone?: string, direction?: string): string {
   // Build the WebSocket URL for the realtime bridge
   const bridgeUrl = `wss://wwxgajrtmslzklnyplah.supabase.co/functions/v1/twilio-realtime-bridge`;
   const params = new URLSearchParams();
   if (userId) params.set('userId', userId);
   if (callerPhone) params.set('phone', callerPhone);
   if (context) params.set('context', context);
+  if (direction) params.set('direction', direction);
   
   const wsUrl = params.toString() ? `${bridgeUrl}?${params.toString()}` : bridgeUrl;
   
   console.log('Generating Media Streams TwiML with bridge URL:', wsUrl);
+  console.log('Call direction:', direction || 'inbound');
   
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -557,6 +559,7 @@ function generateRealtimeBridgeTwiML(context?: string, userId?: string | null, c
       <Parameter name="userId" value="${userId || ''}" />
       <Parameter name="phone" value="${callerPhone || ''}" />
       <Parameter name="context" value="${escapeXml(context || '')}" />
+      <Parameter name="direction" value="${direction || 'inbound'}" />
     </Stream>
   </Connect>
 </Response>`;
@@ -669,7 +672,7 @@ async function triggerOutboundCall(
     debug.scheduled_for = scheduledFor;
   }
 
-  const twimlUrl = `${supabaseUrl}/functions/v1/twilio-voice-handler?action=incoming-call&context=${encodeURIComponent(context || '')}${userId ? `&userId=${userId}` : ''}`;
+  const twimlUrl = `${supabaseUrl}/functions/v1/twilio-voice-handler?action=incoming-call&direction=outbound&context=${encodeURIComponent(context || '')}${userId ? `&userId=${userId}` : ''}`;
   const statusCallbackUrl = `${supabaseUrl}/functions/v1/twilio-voice-handler?action=status-callback`;
 
   debug.twiml_url = twimlUrl;
@@ -793,6 +796,7 @@ serve(async (req) => {
         // Initial call connection - use Media Streams for real-time AI
         // Try to identify user from caller ID
         const callerPhone = url.searchParams.get('From') || Deno.env.get('MY_PHONE_NUMBER');
+        const directionParam = url.searchParams.get('direction') || 'inbound';
         let userId = userIdParam || null;
         
         if (!userId && callerPhone) {
@@ -805,9 +809,9 @@ serve(async (req) => {
         
         const twiml = useFallback 
           ? generateFallbackGreetingTwiML(contextParam, userId)
-          : generateRealtimeBridgeTwiML(contextParam, userId, callerPhone || undefined);
+          : generateRealtimeBridgeTwiML(contextParam, userId, callerPhone || undefined, directionParam);
         
-        console.log('Incoming call - using', useFallback ? 'fallback' : 'realtime bridge');
+        console.log('Incoming call - using', useFallback ? 'fallback' : 'realtime bridge', '- direction:', directionParam);
         
         return new Response(twiml, {
           headers: { 'Content-Type': 'application/xml' },
