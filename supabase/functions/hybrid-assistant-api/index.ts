@@ -231,10 +231,45 @@ async function executeToolCall(
         }
       }
 
+      case 'initiate_phone_call':
+      case 'Phone_Call': {
+        // Trigger a phone call via Twilio
+        const response = await fetch(`${supabaseUrl}/functions/v1/twilio-voice-handler`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${supabaseServiceKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            action: 'trigger-call',
+            userId,
+            delay_minutes: args.delay_minutes,
+            context: args.context
+          })
+        });
+
+        const result = await response.json();
+        if (result.success) {
+          const message = args.delay_minutes 
+            ? `I'll call you in ${args.delay_minutes} minute${args.delay_minutes > 1 ? 's' : ''}`
+            : 'Calling you now';
+          return JSON.stringify({ 
+            success: true, 
+            message,
+            call_sid: result.call_sid
+          });
+        } else {
+          return JSON.stringify({ 
+            success: false, 
+            error: result.error || 'Failed to initiate phone call'
+          });
+        }
+      }
+
       default:
         return JSON.stringify({ 
           error: `Unknown tool: ${name}`,
-          availableTools: ['send_email', 'send_slack_message', 'create_outlook_event', 'create_google_event']
+          availableTools: ['send_email', 'send_slack_message', 'create_outlook_event', 'create_google_event', 'initiate_phone_call']
         });
     }
   } catch (error) {

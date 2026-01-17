@@ -50,3 +50,9 @@ verify_jwt = false
 
 [functions.sync-mit-sheets]
 verify_jwt = false
+
+[functions.twilio-voice-handler]
+verify_jwt = false
+
+[functions.twilio-scheduled-call]
+verify_jwt = false

@@ -53,6 +53,7 @@ Available functions:
 - schedule_task: Schedule an unscheduled task (automatically finds optimal time slot)
 - unschedule_task: Remove a task from the calendar
 - disconnect: Disconnect when user says goodbye, "that's all", "disconnect", "I'm done", or similar farewell phrases
+- initiate_phone_call: Call the user on their phone when they request it (supports delay and context)
 
 When users ask about "today's tasks" or "what's on my schedule today", use get_today_tasks.
 When users want to move tasks around, use reschedule_task with the new date/time.
@@ -251,6 +252,24 @@ When the user says goodbye phrases like 'that's all', 'thanks that's it', 'disco
                 farewell_message: {
                   type: "string",
                   description: "Optional goodbye message to say before disconnecting"
+                }
+              }
+            }
+          },
+          {
+            type: "function",
+            name: "initiate_phone_call",
+            description: "Call the user on their phone. Use when user says 'call me', 'phone me', 'give me a call', or requests a phone conversation. Can include an optional delay in minutes.",
+            parameters: {
+              type: "object",
+              properties: {
+                delay_minutes: {
+                  type: "number",
+                  description: "Optional minutes to wait before calling (e.g., 'call me in 5 minutes')"
+                },
+                context: {
+                  type: "string",
+                  description: "What the call should be about (e.g., 'morning briefing', 'task review', 'afternoon schedule')"
                 }
               }
             }
