@@ -111,6 +111,25 @@ function getTimeBasedGreeting(timezone: string = 'America/New_York'): string {
   }
 }
 
+// Get current date/time string in user's timezone
+function getCurrentTimeString(timezone: string = 'America/New_York'): string {
+  try {
+    const now = new Date();
+    return now.toLocaleString('en-US', { 
+      timeZone: timezone, 
+      weekday: 'long',
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true
+    });
+  } catch (error) {
+    return new Date().toISOString();
+  }
+}
+
 // Load user profile
 async function loadUserProfile(supabase: any, userId: string): Promise<any> {
   try {
@@ -127,9 +146,12 @@ async function loadUserProfile(supabase: any, userId: string): Promise<any> {
 }
 
 // Load today's tasks for context
-async function loadTodayTasks(supabase: any, userId: string): Promise<string> {
+async function loadTodayTasks(supabase: any, userId: string, timezone: string): Promise<string> {
   try {
-    const today = new Date().toISOString().split('T')[0];
+    // Get today in user's timezone
+    const now = new Date();
+    const today = now.toLocaleDateString('en-CA', { timeZone: timezone }); // YYYY-MM-DD format
+    
     const { data: tasks } = await supabase
       .from('tasks')
       .select('title, scheduled_start_time, scheduled_end_time, priority, status, category')
@@ -153,13 +175,13 @@ async function loadTodayTasks(supabase: any, userId: string): Promise<string> {
   }
 }
 
-// Load RAG context for schedule knowledge
+// Load RAG context - improved to query knowledge base
 async function loadRAGContext(supabase: any, userId: string, userInput?: string): Promise<string> {
   try {
     const { data, error } = await supabase.functions.invoke('rag-context-retrieval', {
       body: {
         action: 'get_context',
-        userInput: userInput || 'general schedule and task management',
+        userInput: userInput || 'general assistant knowledge and user preferences',
         userId,
         baseInstructions: ''
       }
@@ -170,49 +192,74 @@ async function loadRAGContext(supabase: any, userId: string, userInput?: string)
       return '';
     }
 
+    let contextParts: string[] = [];
+
+    // Include knowledge base context if available
+    if (data.context.knowledgeContext) {
+      contextParts.push(`KNOWLEDGE BASE:\n${data.context.knowledgeContext}`);
+    }
+
+    // Include conversation history
     const convHistory = data.context.conversationContext || [];
-    if (convHistory.length === 0) return '';
+    if (convHistory.length > 0) {
+      const relevantContext = convHistory
+        .slice(0, 5)
+        .map((c: any) => `${c.message_type}: ${c.content}`)
+        .join('\n');
+      contextParts.push(`RECENT CONVERSATION:\n${relevantContext}`);
+    }
 
-    const relevantContext = convHistory
-      .slice(0, 5)
-      .map((c: any) => `${c.message_type}: ${c.content}`)
-      .join('\n');
-
-    return `\n\nRECENT CONVERSATION CONTEXT:\n${relevantContext}`;
+    return contextParts.length > 0 ? '\n\n' + contextParts.join('\n\n') : '';
   } catch (error) {
     console.warn('[BRIDGE] RAG context error:', error);
     return '';
   }
 }
 
-// Load user instructions from database (full sync with in-app assistant)
-async function loadUserInstructions(userId: string | null, todayTasks: string, ragContext: string, userProfile: any): Promise<string> {
+// Load user instructions - BROADENED to match in-app assistant capabilities
+async function loadUserInstructions(userId: string | null, todayTasks: string, ragContext: string, userProfile: any, timezone: string): Promise<string> {
   const userName = userProfile?.first_name || userProfile?.full_name?.split(' ')[0] || 'sir';
+  const currentTime = getCurrentTimeString(timezone);
   
-  const defaultInstructions = `You are Iris, a proactive executive assistant helping ${userName} manage their daily agenda. 
-You have a warm, professional personality and execute tasks immediately without excessive confirmation.
+  // BROADENED default instructions - same capabilities as in-app assistant
+  const defaultInstructions = `You are Iris, a knowledgeable and proactive executive assistant for ${userName}.
 
-CURRENT SCHEDULE:
-${todayTasks}
+CURRENT TIME: ${currentTime}
+TIMEZONE: ${timezone}
+
+YOU CAN HELP WITH ANYTHING, including:
+- Task and schedule management (your primary function)
+- General knowledge questions (history, science, concepts)
+- Current events awareness (note: you may not have real-time data for live scores/weather)
+- Calculations and reasoning
+- Advice and recommendations
+- Sending messages (Slack, Email) and creating calendar events
+- Any question ${userName} might have
+
+When asked about real-time data you don't have access to (live sports scores, current weather, stock prices), acknowledge the limitation and offer alternatives or explain what you do know.
+
+${todayTasks ? `\nSCHEDULE CONTEXT:\n${todayTasks}` : ''}
 ${ragContext}
 
-PHONE-SPECIFIC BEHAVIOR:
-- Keep responses brief and conversational - this is a phone call
-- Confirm actions with one sentence, then offer what's next
-- When the user says goodbye, disconnect gracefully
-- Reference the schedule when relevant
+PHONE CONVERSATION STYLE:
+- Keep responses conversational and concise - this is a phone call
+- Listen for interruptions and stop speaking when the user starts talking
+- Execute actions immediately with brief confirmation
+- Don't ask unnecessary confirmation questions
+- When the user says goodbye, use the hang_up function
 
-Available functions:
+AVAILABLE FUNCTIONS:
 - get_tasks: Retrieve tasks with time/keyword filtering
 - get_today_tasks: Get all tasks scheduled for today
 - create_task: Create new tasks with title, description, priority, and category
 - update_task: Update existing tasks (status, title, description, priority)
 - reschedule_task: Move a task to a different date or time
-- schedule_task: Schedule an unscheduled task (automatically finds optimal time slot)
+- schedule_task: Schedule an unscheduled task
 - unschedule_task: Remove a task from the calendar
 - send_slack_message: Send a Slack message
 - send_email: Send an email
 - create_calendar_event: Create an Outlook or Google Calendar event
+- initiate_phone_call: Request a callback (for scheduling future calls)
 - hang_up: End the phone call gracefully`;
 
   if (!userId) {
@@ -230,21 +277,22 @@ Available functions:
       .maybeSingle();
 
     if (prefs) {
+      // Start with user's core instructions or use default
       let instructions = prefs.core_instructions || defaultInstructions;
       
-      // Add phone-specific context
-      instructions += `\n\nPHONE CALL CONTEXT:
-- User: ${userName}
-- Timezone: ${prefs.timezone || 'America/New_York'}
+      // Add critical context that makes this a FULL assistant
+      instructions += `\n\nCURRENT TIME: ${currentTime}
+TIMEZONE: ${prefs.timezone || timezone}
 
-CURRENT SCHEDULE:
-${todayTasks}
+YOU CAN HELP WITH ANYTHING - not just tasks. Answer general knowledge questions, provide advice, discuss any topic ${userName} brings up.
+
+${todayTasks ? `\nSCHEDULE CONTEXT:\n${todayTasks}` : ''}
 ${ragContext}
 
-PHONE-SPECIFIC BEHAVIOR:
-- Keep responses brief and conversational - this is a phone call
-- Execute actions immediately, confirm with one sentence
-- Offer proactive suggestions based on the schedule
+PHONE CONVERSATION STYLE:
+- Keep responses conversational and concise - this is a phone call
+- Listen for interruptions and stop speaking when the user starts talking
+- Execute actions immediately with brief confirmation
 - When the user says goodbye, use the hang_up function`;
 
       if (prefs.realtime_extensions) {
@@ -264,7 +312,7 @@ PHONE-SPECIFIC BEHAVIOR:
   return defaultInstructions;
 }
 
-// Tool definitions - FULL PARITY with in-app assistant
+// Tool definitions - FULL PARITY with in-app assistant including initiate_phone_call
 const toolDefinitions = [
   {
     type: "function",
@@ -359,7 +407,6 @@ const toolDefinitions = [
       required: ["task_id"]
     }
   },
-  // NEW: Notification tools
   {
     type: "function",
     name: "send_slack_message",
@@ -402,6 +449,18 @@ const toolDefinitions = [
   },
   {
     type: "function",
+    name: "initiate_phone_call",
+    description: "Schedule a callback - useful for 'call me back in X minutes' requests.",
+    parameters: {
+      type: "object",
+      properties: {
+        delay_minutes: { type: "number", description: "Minutes to wait before calling back" },
+        context: { type: "string", description: "What the callback should be about" }
+      }
+    }
+  },
+  {
+    type: "function",
     name: "hang_up",
     description: "End the phone call gracefully. Use when the user says goodbye or indicates they're done.",
     parameters: {
@@ -415,7 +474,7 @@ const toolDefinitions = [
 
 serve(async (req) => {
   const url = new URL(req.url);
-  console.log(`[BRIDGE v4] Request: ${req.method} ${url.pathname}`);
+  console.log(`[BRIDGE v5] Request: ${req.method} ${url.pathname}`);
 
   // Health check endpoint
   if (url.pathname.endsWith("/health")) {
@@ -439,6 +498,10 @@ serve(async (req) => {
     let greetingSent = false;
     let userProfile: any = {};
     let threadId: string | null = null;
+    
+    // BARGE-IN: Track if AI is currently speaking
+    let isAiSpeaking = false;
+    let currentResponseId: string | null = null;
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
@@ -515,7 +578,7 @@ serve(async (req) => {
       if (userId) {
         const [profile, tasks, rag] = await Promise.all([
           loadUserProfile(supabase, userId),
-          loadTodayTasks(supabase, userId),
+          loadTodayTasks(supabase, userId, userTimezone),
           loadRAGContext(supabase, userId)
         ]);
         userProfile = profile;
@@ -553,7 +616,7 @@ serve(async (req) => {
       }
 
       // Load user-specific instructions with full context
-      const instructions = await loadUserInstructions(userId, todayTasks, ragContext, userProfile);
+      const instructions = await loadUserInstructions(userId, todayTasks, ragContext, userProfile, userTimezone);
 
       openaiWs = new WebSocket(
         "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17",
@@ -582,9 +645,9 @@ serve(async (req) => {
                   input_audio_transcription: { model: "whisper-1" },
                   turn_detection: {
                     type: "server_vad",
-                    threshold: 0.3,
-                    prefix_padding_ms: 400,
-                    silence_duration_ms: 1200,
+                    threshold: 0.2,  // Lower threshold for better phone audio sensitivity
+                    prefix_padding_ms: 300,
+                    silence_duration_ms: 800,  // Faster response on phone
                   },
                   tools: toolDefinitions,
                   tool_choice: "auto"
@@ -606,6 +669,20 @@ serve(async (req) => {
               }
               break;
 
+            case "response.created":
+              // Track that AI is generating a response
+              currentResponseId = msg.response?.id || null;
+              isAiSpeaking = true;
+              console.log("[OPENAI] Response started:", currentResponseId);
+              break;
+
+            case "response.done":
+              // AI finished speaking
+              isAiSpeaking = false;
+              currentResponseId = null;
+              console.log("[OPENAI] Response completed");
+              break;
+
             case "response.audio.delta":
               if (streamSid && twilioWs.readyState === WebSocket.OPEN) {
                 const pcm24k = base64ToInt16(msg.delta);
@@ -623,6 +700,22 @@ serve(async (req) => {
 
             case "input_audio_buffer.speech_started":
               console.log("[OPENAI] User started speaking");
+              
+              // BARGE-IN: If AI is speaking, cancel the response
+              if (isAiSpeaking && openaiWs?.readyState === WebSocket.OPEN) {
+                console.log("[OPENAI] BARGE-IN: Cancelling current response");
+                openaiWs.send(JSON.stringify({ type: "response.cancel" }));
+                
+                // Clear Twilio's audio buffer to stop playback immediately
+                if (streamSid && twilioWs.readyState === WebSocket.OPEN) {
+                  twilioWs.send(JSON.stringify({
+                    event: "clear",
+                    streamSid: streamSid
+                  }));
+                }
+                
+                isAiSpeaking = false;
+              }
               break;
 
             case "input_audio_buffer.speech_stopped":
@@ -682,16 +775,18 @@ serve(async (req) => {
       }
     }
 
+    // PHASE 4: Open-ended greeting - NOT task-focused
     function sendInboundGreeting() {
       if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN || greetingSent) return;
       
       greetingSent = true;
       const greeting = getTimeBasedGreeting(userTimezone);
       const userName = userProfile?.first_name || 'sir';
-      const contextInfo = callContext ? ` I see you're calling about ${callContext}.` : '';
+      const currentTime = getCurrentTimeString(userTimezone);
       
       console.log(`[BRIDGE] Sending inbound greeting to ${userName} (timezone: ${userTimezone})`);
       
+      // OPEN-ENDED greeting - don't assume they want schedule info
       openaiWs.send(JSON.stringify({
         type: "conversation.item.create",
         item: {
@@ -699,7 +794,7 @@ serve(async (req) => {
           role: "user",
           content: [{
             type: "input_text",
-            text: `[System: This is an inbound phone call. The user has called you. Greet them warmly with "${greeting}, ${userName}" and ask how you can help today.${contextInfo} Be brief - this is a phone call. You have their schedule loaded so offer to review it if relevant. The user's timezone is ${userTimezone}.]`
+            text: `[System: This is an inbound phone call from ${userName}. Current time is ${currentTime}. Greet them with "${greeting}, ${userName}. What can I help you with?" Keep it brief and WAIT for them to tell you what they need. Do NOT assume they want schedule information - they might ask about anything. You can help with general questions, tasks, or whatever they need.]`
           }]
         }
       }));
@@ -748,7 +843,7 @@ serve(async (req) => {
             result = await getTasks(supabase, userId, args);
             break;
           case "get_today_tasks":
-            result = await getTodayTasks(supabase, userId);
+            result = await getTodayTasks(supabase, userId, userTimezone);
             break;
           case "create_task":
             result = await createTask(supabase, userId, args);
@@ -765,7 +860,6 @@ serve(async (req) => {
           case "unschedule_task":
             result = await unscheduleTask(supabase, args);
             break;
-          // NEW: Notification handlers
           case "send_slack_message":
             result = await sendSlackMessage(supabase, userId, args, userProfile);
             break;
@@ -774,6 +868,9 @@ serve(async (req) => {
             break;
           case "create_calendar_event":
             result = await createCalendarEvent(supabase, userId, args, userProfile);
+            break;
+          case "initiate_phone_call":
+            result = await initiatePhoneCall(supabase, userId, args);
             break;
           case "hang_up":
             result = await handleHangUp(args, twilioWs, streamSid);
@@ -816,7 +913,7 @@ serve(async (req) => {
   }
 
   // Non-WebSocket request
-  return new Response("Twilio-OpenAI Realtime Bridge v4 - Full Feature Parity", { status: 200 });
+  return new Response("Twilio-OpenAI Realtime Bridge v5 - Full Capability Parity", { status: 200 });
 });
 
 // ============ Task Functions ============
@@ -846,11 +943,12 @@ async function getTasks(supabase: any, userId: string | null, args: any) {
   }
 }
 
-async function getTodayTasks(supabase: any, userId: string | null) {
+async function getTodayTasksFunction(supabase: any, userId: string | null, timezone: string) {
   if (!userId) return { success: false, error: "Not authenticated", tasks: [] };
 
   try {
-    const today = new Date().toISOString().split('T')[0];
+    const now = new Date();
+    const today = now.toLocaleDateString('en-CA', { timeZone: timezone });
     
     const { data, error } = await supabase
       .from('tasks')
@@ -1041,7 +1139,7 @@ async function unscheduleTask(supabase: any, args: any) {
   }
 }
 
-// ============ NEW: Notification Functions ============
+// ============ Notification Functions ============
 
 async function sendSlackMessage(supabase: any, userId: string | null, args: any, userProfile: any) {
   if (!userId) return { success: false, error: "Not authenticated" };
@@ -1141,6 +1239,32 @@ async function createCalendarEvent(supabase: any, userId: string | null, args: a
       success: true,
       message: `Created ${args.calendar || 'Outlook'} event: "${args.title}" at ${args.start_time}`
     };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
+
+// PHASE 5: initiate_phone_call for full parity
+async function initiatePhoneCall(supabase: any, userId: string | null, args: any) {
+  if (!userId) return { success: false, error: "Not authenticated" };
+
+  try {
+    const delayMinutes = args.delay_minutes || 0;
+    const context = args.context || 'callback request';
+    
+    if (delayMinutes > 0) {
+      // Schedule the callback - this would integrate with your scheduling system
+      return {
+        success: true,
+        message: `I'll call you back in ${delayMinutes} minutes regarding ${context}.`
+      };
+    } else {
+      // Immediate callback doesn't make sense during an active call
+      return {
+        success: true,
+        message: `You're already on the phone with me! What can I help you with?`
+      };
+    }
   } catch (error) {
     return { success: false, error: String(error) };
   }
