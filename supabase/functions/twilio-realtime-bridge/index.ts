@@ -843,7 +843,7 @@ async function getRAGContext(userId: string, threadId: string): Promise<string> 
   return '';
 }
 
-// Get user context from phone number or userId
+// Get user context from phone number or userId with robust phone lookup
 async function getUserContext(
   phoneNumber?: string,
   userId?: string
@@ -858,16 +858,65 @@ async function getUserContext(
   
   let resolvedUserId = userId || null;
   
+  // Try to resolve user from phone number with multiple formats
   if (!resolvedUserId && phoneNumber) {
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('user_id')
-      .eq('phone', phoneNumber)
-      .maybeSingle();
-    resolvedUserId = profile?.user_id || null;
+    // Decode URL-encoded phone number (e.g., %2B14434150606 -> +14434150606)
+    const decodedPhone = decodeURIComponent(phoneNumber);
+    console.log(`[BRIDGE] Looking up user for phone: ${decodedPhone}`);
+    
+    // Try multiple phone formats
+    const digitsOnly = decodedPhone.replace(/\D/g, '');
+    const phonesToTry = [
+      decodedPhone,                    // Original decoded
+      digitsOnly,                      // Digits only
+      '+' + digitsOnly,               // +digits
+      '+1' + digitsOnly.slice(-10),   // +1 + last 10 digits
+    ];
+    
+    for (const phone of phonesToTry) {
+      console.log(`[BRIDGE] Trying phone format: ${phone}`);
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('user_id')
+        .eq('phone', phone)
+        .maybeSingle();
+      
+      if (profile?.user_id) {
+        console.log(`[BRIDGE] ✓ Found user ${profile.user_id} for phone ${phone}`);
+        resolvedUserId = profile.user_id;
+        break;
+      }
+    }
+    
+    // Fallback: If phone matches MY_PHONE_NUMBER secret, use default user
+    if (!resolvedUserId) {
+      const myPhone = Deno.env.get('MY_PHONE_NUMBER');
+      const myPhoneDigits = myPhone?.replace(/\D/g, '');
+      
+      if (myPhone && (digitsOnly === myPhoneDigits || digitsOnly.endsWith(myPhoneDigits?.slice(-10) || ''))) {
+        console.log('[BRIDGE] Phone matches MY_PHONE_NUMBER, using default user');
+        
+        // Get the first user with scheduling prefs (the primary user)
+        const { data: prefs } = await supabase
+          .from('user_scheduling_prefs')
+          .select('user_id')
+          .limit(1)
+          .maybeSingle();
+        
+        if (prefs?.user_id) {
+          console.log(`[BRIDGE] ✓ Using default user ${prefs.user_id} from MY_PHONE_NUMBER match`);
+          resolvedUserId = prefs.user_id;
+        }
+      }
+    }
+    
+    if (!resolvedUserId) {
+      console.warn(`[BRIDGE] ✗ No user found for phone: ${decodedPhone}`);
+    }
   }
 
   if (!resolvedUserId) {
+    console.warn('[BRIDGE] No user resolved - phone calls will have limited functionality');
     return { 
       userId: null, 
       timezone: 'America/New_York', 
@@ -996,40 +1045,62 @@ serve(async (req) => {
     let isConnectedToOpenAI = false;
     let pendingFunctionCalls: Map<string, { name: string; args: string }> = new Map();
     
-    // Connect to OpenAI Realtime API
+    // Connect to OpenAI Realtime API with robust error handling
     const connectToOpenAI = () => {
       const openaiKey = Deno.env.get('OPENAI_API_KEY');
       if (!openaiKey) {
-        console.error('[BRIDGE] Missing OPENAI_API_KEY');
+        console.error('[BRIDGE] ✗ CRITICAL: Missing OPENAI_API_KEY secret');
         twilioWs.close();
         return;
       }
       
       console.log('[BRIDGE] Connecting to OpenAI Realtime API...');
+      console.log('[BRIDGE] API Key present:', openaiKey ? `${openaiKey.substring(0, 10)}...` : 'MISSING');
       
-      openaiWs = new WebSocket(
-        'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17',
-        {
-          headers: {
-            'Authorization': `Bearer ${openaiKey}`,
-            'OpenAI-Beta': 'realtime=v1'
-          } as unknown as string[]
-        }
-      );
+      try {
+        // CRITICAL FIX: Deno WebSocket doesn't support custom headers
+        // Use subprotocols to pass API key (official OpenAI workaround for browser/Deno)
+        const openaiWsUrl = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17';
+        
+        openaiWs = new WebSocket(openaiWsUrl, [
+          'realtime',
+          `openai-insecure-api-key.${openaiKey}`,
+          'openai-beta.realtime-v1'
+        ]);
+        
+        console.log('[BRIDGE] WebSocket created with subprotocol auth');
+      } catch (wsError) {
+        console.error('[BRIDGE] ✗ Failed to create WebSocket:', wsError);
+        twilioWs.close();
+        return;
+      }
       
       openaiWs.onopen = () => {
-        console.log('[OPENAI] Connected to Realtime API');
+        console.log('[OPENAI] ✓ Connected to Realtime API successfully');
+        console.log('[OPENAI] WebSocket readyState:', openaiWs?.readyState);
         isConnectedToOpenAI = true;
       };
       
       openaiWs.onmessage = async (event) => {
         try {
           const data = JSON.parse(event.data as string);
-          console.log('[OPENAI] Event:', data.type);
+          
+          // Log all events with appropriate detail level
+          if (data.type === 'error') {
+            console.error('[OPENAI] ✗ API Error:', JSON.stringify(data.error, null, 2));
+          } else if (data.type.includes('audio')) {
+            // Don't log audio deltas to reduce noise
+            if (data.type !== 'response.audio.delta' && data.type !== 'input_audio_buffer.committed') {
+              console.log('[OPENAI] Event:', data.type);
+            }
+          } else {
+            console.log('[OPENAI] Event:', data.type);
+          }
           
           switch (data.type) {
             case 'session.created': {
-              console.log('[OPENAI] Session created, sending configuration...');
+              console.log('[OPENAI] ✓ Session created, sending configuration...');
+              console.log('[OPENAI] Session ID:', data.session?.id);
               
               const sessionConfig = {
                 type: 'session.update',
@@ -1229,13 +1300,37 @@ serve(async (req) => {
         }
       };
       
-      openaiWs.onerror = (e) => {
-        console.error('[OPENAI] WebSocket error:', e);
+      openaiWs.onerror = (error: Event) => {
+        console.error('[OPENAI] ✗ WebSocket error occurred');
+        console.error('[OPENAI] Error type:', error.type);
+        console.error('[OPENAI] WebSocket readyState:', openaiWs?.readyState);
+        // Note: WebSocket error events don't contain detailed error info for security
+        // Check the console for any preceding errors
       };
       
-      openaiWs.onclose = (e) => {
-        console.log('[OPENAI] Connection closed:', e.code, e.reason);
+      openaiWs.onclose = (e: CloseEvent) => {
+        console.log('[OPENAI] Connection closed');
+        console.log('[OPENAI] Close code:', e.code);
+        console.log('[OPENAI] Close reason:', e.reason || '(no reason provided)');
+        console.log('[OPENAI] Was clean:', e.wasClean);
         isConnectedToOpenAI = false;
+        
+        // Log common close codes
+        const closeCodeMeanings: Record<number, string> = {
+          1000: 'Normal closure',
+          1001: 'Going away',
+          1002: 'Protocol error',
+          1003: 'Unsupported data',
+          1006: 'Abnormal closure (no close frame)',
+          1007: 'Invalid payload',
+          1008: 'Policy violation',
+          1009: 'Message too big',
+          1011: 'Server error',
+          1015: 'TLS handshake failure'
+        };
+        if (closeCodeMeanings[e.code]) {
+          console.log('[OPENAI] Close meaning:', closeCodeMeanings[e.code]);
+        }
       };
     };
     
@@ -1308,6 +1403,37 @@ serve(async (req) => {
     return response;
   }
   
+  // Handle health check endpoint
+  if (url.pathname.endsWith('/health') || url.searchParams.get('action') === 'health') {
+    const openaiKey = Deno.env.get('OPENAI_API_KEY');
+    const myPhone = Deno.env.get('MY_PHONE_NUMBER');
+    const supabaseUrlCheck = Deno.env.get('SUPABASE_URL');
+    const serviceKeyCheck = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+    
+    const checks = {
+      openai_key: openaiKey ? `configured (${openaiKey.substring(0, 10)}...)` : '✗ MISSING',
+      my_phone: myPhone ? `configured (${myPhone.replace(/\d(?=\d{4})/g, '*')})` : '✗ MISSING',
+      supabase_url: supabaseUrlCheck ? 'configured' : '✗ MISSING',
+      supabase_key: serviceKeyCheck ? 'configured' : '✗ MISSING'
+    };
+    
+    const allConfigured = openaiKey && myPhone && supabaseUrlCheck && serviceKeyCheck;
+    
+    console.log('[HEALTH] Configuration check:', checks);
+    
+    return new Response(JSON.stringify({
+      status: allConfigured ? 'healthy' : 'unhealthy',
+      checks,
+      timestamp: new Date().toISOString(),
+      message: allConfigured 
+        ? 'All required secrets configured' 
+        : 'Some required secrets are missing - check Supabase Edge Function secrets'
+    }), {
+      status: allConfigured ? 200 : 503,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+  
   // Non-WebSocket request - return info
   return new Response(JSON.stringify({
     name: 'twilio-realtime-bridge',
@@ -1315,13 +1441,17 @@ serve(async (req) => {
     websocket: true,
     capabilities: [
       'Full Iris persona and instructions',
-      'All task management tools (9 tools)',
+      'All task management tools (10 tools)',
       'Smart scheduling via AI',
       'RAG memory from past conversations',
       'Thread persistence',
-      'Message storage for future context'
+      'Message storage for future context',
+      'Robust phone number lookup with fallback'
     ],
-    usage: 'Connect via WebSocket with ?userId= or ?phone= parameters'
+    endpoints: {
+      websocket: 'Connect via WebSocket with ?userId= or ?phone= parameters',
+      health: 'GET ?action=health to check configuration'
+    }
   }), {
     headers: { 'Content-Type': 'application/json' }
   });

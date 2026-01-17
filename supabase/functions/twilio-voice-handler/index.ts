@@ -133,15 +133,40 @@ async function getUserIdFromPhoneSecret(): Promise<string | null> {
   const supabase = createClient(supabaseUrl, supabaseServiceKey);
   const myPhone = Deno.env.get('MY_PHONE_NUMBER');
   
-  if (!myPhone) return null;
+  if (!myPhone) {
+    console.log('[getUserIdFromPhoneSecret] MY_PHONE_NUMBER not set');
+    return null;
+  }
 
+  console.log('[getUserIdFromPhoneSecret] Looking up user for MY_PHONE_NUMBER');
+  
+  // First try to find a profile with this phone number
   const { data: profile } = await supabase
     .from('profiles')
     .select('user_id')
     .eq('phone', myPhone)
     .maybeSingle();
 
-  return profile?.user_id || null;
+  if (profile?.user_id) {
+    console.log(`[getUserIdFromPhoneSecret] Found user ${profile.user_id} from phone match`);
+    return profile.user_id;
+  }
+  
+  // Fallback: Get the first user with scheduling preferences (primary app user)
+  console.log('[getUserIdFromPhoneSecret] No phone match, using fallback to scheduling_prefs');
+  const { data: prefs } = await supabase
+    .from('user_scheduling_prefs')
+    .select('user_id')
+    .limit(1)
+    .maybeSingle();
+
+  if (prefs?.user_id) {
+    console.log(`[getUserIdFromPhoneSecret] Using default user ${prefs.user_id} from scheduling_prefs`);
+    return prefs.user_id;
+  }
+  
+  console.log('[getUserIdFromPhoneSecret] No user found');
+  return null;
 }
 
 // Execute tool calls
