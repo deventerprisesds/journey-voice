@@ -512,13 +512,37 @@ ${userId ? '' : '\n- Note: I could not identify this caller, so task management 
   }
 }
 
-// Generate initial greeting TwiML with conversation state
-function generateGreetingTwiML(context?: string, userId?: string | null): string {
+// Generate TwiML that connects to the realtime bridge via Media Streams
+function generateRealtimeBridgeTwiML(context?: string, userId?: string | null, callerPhone?: string): string {
+  // Build the WebSocket URL for the realtime bridge
+  const bridgeUrl = `wss://wwxgajrtmslzklnyplah.supabase.co/functions/v1/twilio-realtime-bridge`;
+  const params = new URLSearchParams();
+  if (userId) params.set('userId', userId);
+  if (callerPhone) params.set('phone', callerPhone);
+  if (context) params.set('context', context);
+  
+  const wsUrl = params.toString() ? `${bridgeUrl}?${params.toString()}` : bridgeUrl;
+  
+  console.log('Generating Media Streams TwiML with bridge URL:', wsUrl);
+  
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Connect>
+    <Stream url="${wsUrl}">
+      <Parameter name="userId" value="${userId || ''}" />
+      <Parameter name="phone" value="${callerPhone || ''}" />
+      <Parameter name="context" value="${escapeXml(context || '')}" />
+    </Stream>
+  </Connect>
+</Response>`;
+}
+
+// Generate fallback TwiML with turn-based conversation (for debugging/fallback)
+function generateFallbackGreetingTwiML(context?: string, userId?: string | null): string {
   const greeting = context 
     ? `Hello! I'm calling about ${context}. How can I help you?`
     : `Hello! This is Iris, your task assistant. How can I help you today?`;
   
-  // Store conversation state in the gather URL
   const processUrl = `${supabaseUrl}/functions/v1/twilio-voice-handler?action=process-speech&turn=1${userId ? `&userId=${userId}` : ''}`;
   
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -741,7 +765,7 @@ serve(async (req) => {
       }
 
       case 'incoming-call': {
-        // Initial greeting when call connects
+        // Initial call connection - use Media Streams for real-time AI
         // Try to identify user from caller ID
         const callerPhone = url.searchParams.get('From') || Deno.env.get('MY_PHONE_NUMBER');
         let userId = userIdParam || null;
@@ -751,7 +775,14 @@ serve(async (req) => {
           userId = context.userId;
         }
 
-        const twiml = generateGreetingTwiML(contextParam, userId);
+        // Check if we should use realtime bridge or fallback
+        const useFallback = url.searchParams.get('fallback') === 'true';
+        
+        const twiml = useFallback 
+          ? generateFallbackGreetingTwiML(contextParam, userId)
+          : generateRealtimeBridgeTwiML(contextParam, userId, callerPhone || undefined);
+        
+        console.log('Incoming call - using', useFallback ? 'fallback' : 'realtime bridge');
         
         return new Response(twiml, {
           headers: { 'Content-Type': 'application/xml' },

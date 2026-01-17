@@ -56,3 +56,6 @@ verify_jwt = false
 
 [functions.twilio-scheduled-call]
 verify_jwt = false
+
+[functions.twilio-realtime-bridge]
+verify_jwt = false
