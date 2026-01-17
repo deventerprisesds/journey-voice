@@ -130,14 +130,21 @@ async function triggerOutboundCall(
     
     console.log('Making Twilio API request to:', apiUrl);
 
-    const requestBody = new URLSearchParams({
-      To: toNumber,
-      From: fromNumber,
-      Url: twimlUrl,
-      StatusCallback: statusCallbackUrl,
-      StatusCallbackEvent: 'initiated ringing answered completed',
-      StatusCallbackMethod: 'POST',
-    });
+    // Build request body with properly formatted StatusCallbackEvent params
+    const requestBody = new URLSearchParams();
+    requestBody.append('To', toNumber);
+    requestBody.append('From', fromNumber);
+    requestBody.append('Url', twimlUrl);
+    requestBody.append('StatusCallback', statusCallbackUrl);
+    // Each status event must be a separate parameter (fixes Warning 21626)
+    requestBody.append('StatusCallbackEvent', 'initiated');
+    requestBody.append('StatusCallbackEvent', 'ringing');
+    requestBody.append('StatusCallbackEvent', 'answered');
+    requestBody.append('StatusCallbackEvent', 'completed');
+    requestBody.append('StatusCallbackMethod', 'POST');
+    // Enable Answering Machine Detection to know if human or voicemail answered
+    requestBody.append('MachineDetection', 'DetectMessageEnd');
+    requestBody.append('MachineDetectionTimeout', '5');
 
     debug.request_body = Object.fromEntries(requestBody.entries());
 
@@ -316,15 +323,51 @@ serve(async (req) => {
       case 'status-callback': {
         // Handle call status updates from Twilio
         const formData = await req.formData();
-        const callSid = formData.get('CallSid') as string;
-        const callStatus = formData.get('CallStatus') as string;
-        const callDuration = formData.get('CallDuration') as string;
+        
+        // Capture ALL available fields from Twilio for debugging
+        const statusData = {
+          callSid: formData.get('CallSid'),
+          callStatus: formData.get('CallStatus'),
+          callDuration: formData.get('CallDuration'),
+          // AMD (Answering Machine Detection) result
+          answeredBy: formData.get('AnsweredBy'), // human, machine_start, machine_end_beep, machine_end_silence, machine_end_other, fax, unknown
+          machineDetectionDuration: formData.get('MachineDetectionDuration'),
+          // Call routing info
+          direction: formData.get('Direction'),
+          from: formData.get('From'),
+          to: formData.get('To'),
+          calledVia: formData.get('CalledVia'),
+          forwardedFrom: formData.get('ForwardedFrom'),
+          // Timing info
+          timestamp: formData.get('Timestamp'),
+          sequenceNumber: formData.get('SequenceNumber'),
+          // Error info if call failed
+          errorCode: formData.get('ErrorCode'),
+          errorMessage: formData.get('ErrorMessage'),
+          sipResponseCode: formData.get('SipResponseCode'),
+        };
 
-        console.log('Call status update:', { callSid, callStatus, callDuration });
+        console.log('=== TWILIO STATUS CALLBACK ===');
+        console.log(JSON.stringify(statusData, null, 2));
+        
+        // Log specific warnings for debugging
+        if (statusData.answeredBy && statusData.answeredBy !== 'human') {
+          console.warn(`⚠️ Call was NOT answered by human! AnsweredBy: ${statusData.answeredBy}`);
+        }
+        if (statusData.errorCode) {
+          console.error(`❌ Call error: Code ${statusData.errorCode} - ${statusData.errorMessage}`);
+        }
+        if (statusData.callStatus === 'busy') {
+          console.warn('⚠️ Line was busy');
+        }
+        if (statusData.callStatus === 'no-answer') {
+          console.warn('⚠️ Call was not answered');
+        }
+        if (statusData.callStatus === 'failed') {
+          console.error('❌ Call failed to connect');
+        }
 
-        // Update call log in database if needed
-        // For now, just acknowledge
-        return new Response(JSON.stringify({ received: true }), {
+        return new Response(JSON.stringify({ received: true, statusData }), {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
