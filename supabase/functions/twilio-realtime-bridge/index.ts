@@ -1,9 +1,25 @@
+// Twilio-OpenAI Realtime Bridge v6 - Unified with shared assistant-core
+// Bridges Twilio Media Streams (μ-law 8kHz) ↔ OpenAI Realtime API (PCM16 24kHz)
+// Uses shared assistant-core for 1:1 parity with in-app assistant
+
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  toolDefinitions,
+  buildFullContext,
+  executeTool,
+  getTimeBasedGreeting,
+  getCurrentTimeString,
+  loadUserProfile,
+  type ChannelConfig,
+  type UserContext
+} from "../_shared/assistant-core.ts";
 
 const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+// ============ Audio Conversion Utilities ============
 
 // G.711 μ-law decoding table (8-bit -> 16-bit)
 const mulawToLinearTable: Int16Array = new Int16Array(256);
@@ -18,7 +34,6 @@ for (let i = 0; i < 256; i++) {
   mulawToLinearTable[i] = sign !== 0 ? -mantissa : mantissa;
 }
 
-// μ-law to PCM16
 function decodeMulaw(mulawData: Uint8Array): Int16Array {
   const pcm = new Int16Array(mulawData.length);
   for (let i = 0; i < mulawData.length; i++) {
@@ -27,7 +42,6 @@ function decodeMulaw(mulawData: Uint8Array): Int16Array {
   return pcm;
 }
 
-// PCM16 to μ-law
 function encodeMulaw(pcmData: Int16Array): Uint8Array {
   const mulaw = new Uint8Array(pcmData.length);
   for (let i = 0; i < pcmData.length; i++) {
@@ -44,7 +58,6 @@ function encodeMulaw(pcmData: Int16Array): Uint8Array {
   return mulaw;
 }
 
-// Upsample 8kHz → 24kHz (3x)
 function upsample8to24(pcm8k: Int16Array): Int16Array {
   const pcm24k = new Int16Array(pcm8k.length * 3);
   for (let i = 0; i < pcm8k.length; i++) {
@@ -58,7 +71,6 @@ function upsample8to24(pcm8k: Int16Array): Int16Array {
   return pcm24k;
 }
 
-// Downsample 24kHz → 8kHz (1/3)
 function downsample24to8(pcm24k: Int16Array): Int16Array {
   const pcm8k = new Int16Array(Math.floor(pcm24k.length / 3));
   for (let i = 0; i < pcm8k.length; i++) {
@@ -68,7 +80,6 @@ function downsample24to8(pcm24k: Int16Array): Int16Array {
   return pcm8k;
 }
 
-// Int16Array → Base64
 function int16ToBase64(pcmData: Int16Array): string {
   const uint8 = new Uint8Array(pcmData.buffer);
   let binary = "";
@@ -78,7 +89,6 @@ function int16ToBase64(pcmData: Int16Array): string {
   return btoa(binary);
 }
 
-// Base64 → Int16Array
 function base64ToInt16(base64: string): Int16Array {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -88,402 +98,20 @@ function base64ToInt16(base64: string): Int16Array {
   return new Int16Array(bytes.buffer);
 }
 
-// Get time-based greeting with proper timezone
-function getTimeBasedGreeting(timezone: string = 'America/New_York'): string {
-  try {
-    const now = new Date();
-    const timeStr = now.toLocaleString('en-US', { 
-      timeZone: timezone, 
-      hour: 'numeric', 
-      hour12: false 
-    });
-    const hour = parseInt(timeStr, 10);
-    
-    if (hour < 12) return "Good morning";
-    if (hour < 17) return "Good afternoon";
-    return "Good evening";
-  } catch (error) {
-    console.warn('[BRIDGE] Timezone error, using UTC:', error);
-    const hour = new Date().getUTCHours();
-    if (hour < 12) return "Good morning";
-    if (hour < 17) return "Good afternoon";
-    return "Good evening";
-  }
-}
-
-// Get current date/time string in user's timezone
-function getCurrentTimeString(timezone: string = 'America/New_York'): string {
-  try {
-    const now = new Date();
-    return now.toLocaleString('en-US', { 
-      timeZone: timezone, 
-      weekday: 'long',
-      month: 'long',
-      day: 'numeric',
-      year: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true
-    });
-  } catch (error) {
-    return new Date().toISOString();
-  }
-}
-
-// Load user profile
-async function loadUserProfile(supabase: any, userId: string): Promise<any> {
-  try {
-    const { data } = await supabase
-      .from('profiles')
-      .select('full_name, first_name, email, phone')
-      .eq('user_id', userId)
-      .maybeSingle();
-    return data || {};
-  } catch (error) {
-    console.warn('[BRIDGE] Failed to load user profile:', error);
-    return {};
-  }
-}
-
-// Load today's tasks for context
-async function loadTodayTasks(supabase: any, userId: string, timezone: string): Promise<string> {
-  try {
-    // Get today in user's timezone
-    const now = new Date();
-    const today = now.toLocaleDateString('en-CA', { timeZone: timezone }); // YYYY-MM-DD format
-    
-    const { data: tasks } = await supabase
-      .from('tasks')
-      .select('title, scheduled_start_time, scheduled_end_time, priority, status, category')
-      .eq('user_id', userId)
-      .or(`due_date.eq.${today},scheduled_date.eq.${today}`)
-      .order('scheduled_start_time', { ascending: true });
-
-    if (!tasks || tasks.length === 0) {
-      return "No tasks scheduled for today.";
-    }
-
-    const taskList = tasks.map((t: any, i: number) => {
-      const time = t.scheduled_start_time ? `at ${t.scheduled_start_time}` : 'unscheduled';
-      return `${i + 1}. ${t.title} (${time}, ${t.priority} priority, ${t.status})`;
-    }).join('\n');
-
-    return `Today's ${tasks.length} tasks:\n${taskList}`;
-  } catch (error) {
-    console.warn('[BRIDGE] Failed to load today tasks:', error);
-    return "Unable to load today's tasks.";
-  }
-}
-
-// Load RAG context - improved to query knowledge base
-async function loadRAGContext(supabase: any, userId: string, userInput?: string): Promise<string> {
-  try {
-    const { data, error } = await supabase.functions.invoke('rag-context-retrieval', {
-      body: {
-        action: 'get_context',
-        userInput: userInput || 'general assistant knowledge and user preferences',
-        userId,
-        baseInstructions: ''
-      }
-    });
-
-    if (error || !data?.context) {
-      console.warn('[BRIDGE] RAG context retrieval failed:', error);
-      return '';
-    }
-
-    let contextParts: string[] = [];
-
-    // Include knowledge base context if available
-    if (data.context.knowledgeContext) {
-      contextParts.push(`KNOWLEDGE BASE:\n${data.context.knowledgeContext}`);
-    }
-
-    // Include conversation history
-    const convHistory = data.context.conversationContext || [];
-    if (convHistory.length > 0) {
-      const relevantContext = convHistory
-        .slice(0, 5)
-        .map((c: any) => `${c.message_type}: ${c.content}`)
-        .join('\n');
-      contextParts.push(`RECENT CONVERSATION:\n${relevantContext}`);
-    }
-
-    return contextParts.length > 0 ? '\n\n' + contextParts.join('\n\n') : '';
-  } catch (error) {
-    console.warn('[BRIDGE] RAG context error:', error);
-    return '';
-  }
-}
-
-// Load user instructions - BROADENED to match in-app assistant capabilities
-async function loadUserInstructions(userId: string | null, todayTasks: string, ragContext: string, userProfile: any, timezone: string): Promise<string> {
-  const userName = userProfile?.first_name || userProfile?.full_name?.split(' ')[0] || 'sir';
-  const currentTime = getCurrentTimeString(timezone);
-  
-  // BROADENED default instructions - same capabilities as in-app assistant
-  const defaultInstructions = `You are Iris, a knowledgeable and proactive executive assistant for ${userName}.
-
-CURRENT TIME: ${currentTime}
-TIMEZONE: ${timezone}
-
-YOU CAN HELP WITH ANYTHING, including:
-- Task and schedule management (your primary function)
-- General knowledge questions (history, science, concepts)
-- Current events awareness (note: you may not have real-time data for live scores/weather)
-- Calculations and reasoning
-- Advice and recommendations
-- Sending messages (Slack, Email) and creating calendar events
-- Any question ${userName} might have
-
-When asked about real-time data you don't have access to (live sports scores, current weather, stock prices), acknowledge the limitation and offer alternatives or explain what you do know.
-
-${todayTasks ? `\nSCHEDULE CONTEXT:\n${todayTasks}` : ''}
-${ragContext}
-
-PHONE CONVERSATION STYLE:
-- Keep responses conversational and concise - this is a phone call
-- Listen for interruptions and stop speaking when the user starts talking
-- Execute actions immediately with brief confirmation
-- Don't ask unnecessary confirmation questions
-- When the user says goodbye, use the hang_up function
-
-AVAILABLE FUNCTIONS:
-- get_tasks: Retrieve tasks with time/keyword filtering
-- get_today_tasks: Get all tasks scheduled for today
-- create_task: Create new tasks with title, description, priority, and category
-- update_task: Update existing tasks (status, title, description, priority)
-- reschedule_task: Move a task to a different date or time
-- schedule_task: Schedule an unscheduled task
-- unschedule_task: Remove a task from the calendar
-- send_slack_message: Send a Slack message
-- send_email: Send an email
-- create_calendar_event: Create an Outlook or Google Calendar event
-- initiate_phone_call: Request a callback (for scheduling future calls)
-- hang_up: End the phone call gracefully`;
-
-  if (!userId) {
-    console.log('[BRIDGE] No userId, using default instructions');
-    return defaultInstructions;
-  }
-
-  try {
-    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
-    
-    const { data: prefs } = await supabase
-      .from('user_scheduling_prefs')
-      .select('core_instructions, realtime_extensions, config, timezone')
-      .eq('user_id', userId)
-      .maybeSingle();
-
-    if (prefs) {
-      // Start with user's core instructions or use default
-      let instructions = prefs.core_instructions || defaultInstructions;
-      
-      // Add critical context that makes this a FULL assistant
-      instructions += `\n\nCURRENT TIME: ${currentTime}
-TIMEZONE: ${prefs.timezone || timezone}
-
-YOU CAN HELP WITH ANYTHING - not just tasks. Answer general knowledge questions, provide advice, discuss any topic ${userName} brings up.
-
-${todayTasks ? `\nSCHEDULE CONTEXT:\n${todayTasks}` : ''}
-${ragContext}
-
-PHONE CONVERSATION STYLE:
-- Keep responses conversational and concise - this is a phone call
-- Listen for interruptions and stop speaking when the user starts talking
-- Execute actions immediately with brief confirmation
-- When the user says goodbye, use the hang_up function`;
-
-      if (prefs.realtime_extensions) {
-        instructions += `\n\n${prefs.realtime_extensions}`;
-      }
-      if (prefs.config?.customAIInstructions) {
-        instructions += `\n\nScheduling Philosophy:\n${prefs.config.customAIInstructions}`;
-      }
-      
-      console.log('[BRIDGE] Loaded full user instructions from database');
-      return instructions;
-    }
-  } catch (error) {
-    console.warn('[BRIDGE] Failed to load user instructions:', error);
-  }
-
-  return defaultInstructions;
-}
-
-// Tool definitions - FULL PARITY with in-app assistant including initiate_phone_call
-const toolDefinitions = [
-  {
-    type: "function",
-    name: "get_tasks",
-    description: "Retrieve tasks and chat history. Can search by time period, keywords, or status.",
-    parameters: {
-      type: "object",
-      properties: {
-        query: { type: "string", description: "Search query or keywords" },
-        time_filter: { type: "string", description: "Time period like 'past week', 'yesterday'" },
-        status: { type: "string", enum: ["BACKLOG", "TODO", "DOING", "DONE"] }
-      }
-    }
-  },
-  {
-    type: "function",
-    name: "create_task",
-    description: "Create a new task. Use UPPERCASE for priority.",
-    parameters: {
-      type: "object",
-      properties: {
-        title: { type: "string", description: "Task title" },
-        description: { type: "string", description: "Task description" },
-        priority: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "URGENT"] },
-        category: { type: "string", enum: ["LIFE", "CAREER", "VENTURES", "EDUCATION"] }
-      },
-      required: ["title"]
-    }
-  },
-  {
-    type: "function",
-    name: "update_task",
-    description: "Update an existing task's properties.",
-    parameters: {
-      type: "object",
-      properties: {
-        task_id: { type: "string", description: "ID of the task to update" },
-        title: { type: "string" },
-        description: { type: "string" },
-        status: { type: "string", enum: ["BACKLOG", "TODO", "DOING", "DONE"] },
-        priority: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "URGENT"] },
-        category: { type: "string", enum: ["LIFE", "CAREER", "VENTURES", "EDUCATION"] }
-      },
-      required: ["task_id"]
-    }
-  },
-  {
-    type: "function",
-    name: "get_today_tasks",
-    description: "Get all tasks for today, including both scheduled and unscheduled tasks.",
-    parameters: { type: "object", properties: {} }
-  },
-  {
-    type: "function",
-    name: "reschedule_task",
-    description: "Move a task to a different date or time.",
-    parameters: {
-      type: "object",
-      properties: {
-        task_id: { type: "string", description: "ID of the task to reschedule" },
-        new_date: { type: "string", description: "New date in YYYY-MM-DD format" },
-        new_start_time: { type: "string", description: "New start time in HH:MM format" },
-        reason: { type: "string" }
-      },
-      required: ["task_id", "new_date"]
-    }
-  },
-  {
-    type: "function",
-    name: "schedule_task",
-    description: "Schedule an unscheduled task to a specific date and time.",
-    parameters: {
-      type: "object",
-      properties: {
-        task_id: { type: "string", description: "ID of the task to schedule" },
-        date: { type: "string", description: "Date in YYYY-MM-DD format" },
-        start_time: { type: "string", description: "Start time in HH:MM format" },
-        duration_minutes: { type: "number" }
-      },
-      required: ["task_id"]
-    }
-  },
-  {
-    type: "function",
-    name: "unschedule_task",
-    description: "Remove a task from the calendar schedule.",
-    parameters: {
-      type: "object",
-      properties: {
-        task_id: { type: "string", description: "ID of the task to unschedule" }
-      },
-      required: ["task_id"]
-    }
-  },
-  {
-    type: "function",
-    name: "send_slack_message",
-    description: "Send a Slack message to the user.",
-    parameters: {
-      type: "object",
-      properties: {
-        message: { type: "string", description: "The message to send" }
-      },
-      required: ["message"]
-    }
-  },
-  {
-    type: "function",
-    name: "send_email",
-    description: "Send an email to the user.",
-    parameters: {
-      type: "object",
-      properties: {
-        subject: { type: "string", description: "Email subject" },
-        body: { type: "string", description: "Email body content" }
-      },
-      required: ["subject", "body"]
-    }
-  },
-  {
-    type: "function",
-    name: "create_calendar_event",
-    description: "Create a calendar event in Outlook or Google Calendar.",
-    parameters: {
-      type: "object",
-      properties: {
-        title: { type: "string", description: "Event title" },
-        start_time: { type: "string", description: "Start time in ISO format or HH:MM" },
-        end_time: { type: "string", description: "End time in ISO format or HH:MM" },
-        calendar: { type: "string", enum: ["outlook", "google"], description: "Which calendar to use" }
-      },
-      required: ["title", "start_time"]
-    }
-  },
-  {
-    type: "function",
-    name: "initiate_phone_call",
-    description: "Schedule a callback - useful for 'call me back in X minutes' requests.",
-    parameters: {
-      type: "object",
-      properties: {
-        delay_minutes: { type: "number", description: "Minutes to wait before calling back" },
-        context: { type: "string", description: "What the callback should be about" }
-      }
-    }
-  },
-  {
-    type: "function",
-    name: "hang_up",
-    description: "End the phone call gracefully. Use when the user says goodbye or indicates they're done.",
-    parameters: {
-      type: "object",
-      properties: {
-        farewell_message: { type: "string", description: "Optional farewell message to say before hanging up" }
-      }
-    }
-  }
-];
+// ============ Main Server ============
 
 serve(async (req) => {
   const url = new URL(req.url);
-  console.log(`[BRIDGE v5] Request: ${req.method} ${url.pathname}`);
+  console.log(`[BRIDGE v6] Request: ${req.method} ${url.pathname}`);
 
-  // Health check endpoint
+  // Health check
   if (url.pathname.endsWith("/health")) {
-    return new Response(JSON.stringify({ status: "ok", timestamp: Date.now() }), {
+    return new Response(JSON.stringify({ status: "ok", version: 6 }), {
       headers: { "Content-Type": "application/json" },
     });
   }
 
-  // Handle WebSocket upgrade
+  // WebSocket upgrade for Twilio Media Streams
   if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
     const { socket: twilioWs, response } = Deno.upgradeWebSocket(req);
 
@@ -491,17 +119,14 @@ serve(async (req) => {
     let streamSid: string | null = null;
     let callDirection: string = 'inbound';
     let userId: string | null = null;
-    let userPhone: string | null = null;
-    let callContext: string | null = null;
     let userTimezone: string = 'America/New_York';
     let sessionConfigured = false;
     let greetingSent = false;
-    let userProfile: any = {};
+    let userContext: UserContext | null = null;
     let threadId: string | null = null;
     
-    // BARGE-IN: Track if AI is currently speaking
+    // Barge-in handling
     let isAiSpeaking = false;
-    let currentResponseId: string | null = null;
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
@@ -522,21 +147,17 @@ serve(async (req) => {
             streamSid = data.start.streamSid;
             const customParams = data.start.customParameters || {};
             userId = customParams.userId || null;
-            userPhone = customParams.phone || null;
-            callContext = customParams.context || null;
             callDirection = customParams.direction || 'inbound';
             userTimezone = customParams.timezone || 'America/New_York';
             
-            console.log(`[TWILIO] Stream started: ${streamSid}`);
-            console.log(`[TWILIO] Custom params:`, JSON.stringify(customParams));
-            console.log(`[TWILIO] Call direction: ${callDirection}, userId: ${userId}, timezone: ${userTimezone}`);
+            console.log(`[TWILIO] Stream: ${streamSid}, direction: ${callDirection}, user: ${userId}`);
             
             connectToOpenAI();
             break;
 
           case "media":
             if (openaiWs?.readyState === WebSocket.OPEN) {
-              // Decode μ-law → PCM16 → Upsample to 24kHz → Base64
+              // μ-law → PCM16 → Upsample 8kHz→24kHz → Base64
               const mulawBytes = Uint8Array.from(atob(data.media.payload), (c) => c.charCodeAt(0));
               const pcm8k = decodeMulaw(mulawBytes);
               const pcm24k = upsample8to24(pcm8k);
@@ -555,7 +176,7 @@ serve(async (req) => {
             break;
         }
       } catch (err) {
-        console.error("[TWILIO] Error processing message:", err);
+        console.error("[TWILIO] Error:", err);
       }
     };
 
@@ -571,25 +192,23 @@ serve(async (req) => {
     async function connectToOpenAI() {
       console.log("[OPENAI] Connecting...");
 
-      // Load all context in parallel
-      let todayTasks = "Loading...";
-      let ragContext = "";
-      
-      if (userId) {
-        const [profile, tasks, rag] = await Promise.all([
-          loadUserProfile(supabase, userId),
-          loadTodayTasks(supabase, userId, userTimezone),
-          loadRAGContext(supabase, userId)
-        ]);
-        userProfile = profile;
-        todayTasks = tasks;
-        ragContext = rag;
+      // Build unified context using shared core
+      const channelConfig: ChannelConfig = {
+        type: 'phone',
+        voiceOptimized: true,
+        interruptionHandling: true
+      };
 
-        // Create or get thread for conversation persistence
+      const { instructions, context } = await buildFullContext(supabase, userId, channelConfig);
+      userContext = context;
+      userTimezone = context.timezone;
+
+      // Create or get thread for conversation persistence
+      if (userId) {
         try {
           const { data: existingThread } = await supabase
             .from('ai_threads')
-            .select('id, openai_thread_id')
+            .select('id')
             .eq('user_id', userId)
             .order('updated_at', { ascending: false })
             .limit(1)
@@ -597,26 +216,18 @@ serve(async (req) => {
 
           if (existingThread) {
             threadId = existingThread.id;
-            console.log('[BRIDGE] Using existing thread:', threadId);
           } else {
             const { data: newThread } = await supabase
               .from('ai_threads')
-              .insert({ 
-                user_id: userId, 
-                openai_thread_id: `phone_${Date.now()}` 
-              })
+              .insert({ user_id: userId, openai_thread_id: `phone_${Date.now()}` })
               .select('id')
               .single();
             threadId = newThread?.id || null;
-            console.log('[BRIDGE] Created new thread:', threadId);
           }
         } catch (error) {
-          console.warn('[BRIDGE] Thread management error:', error);
+          console.warn('[BRIDGE] Thread error:', error);
         }
       }
-
-      // Load user-specific instructions with full context
-      const instructions = await loadUserInstructions(userId, todayTasks, ragContext, userProfile, userTimezone);
 
       openaiWs = new WebSocket(
         "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17",
@@ -624,7 +235,7 @@ serve(async (req) => {
       );
 
       openaiWs.onopen = () => {
-        console.log("[OPENAI] Connected, waiting for session.created...");
+        console.log("[OPENAI] Connected");
       };
 
       openaiWs.onmessage = (event) => {
@@ -633,7 +244,7 @@ serve(async (req) => {
 
           switch (msg.type) {
             case "session.created":
-              console.log("[OPENAI] Session created, sending config...");
+              console.log("[OPENAI] Session created, configuring...");
               openaiWs!.send(JSON.stringify({
                 type: "session.update",
                 session: {
@@ -645,11 +256,11 @@ serve(async (req) => {
                   input_audio_transcription: { model: "whisper-1" },
                   turn_detection: {
                     type: "server_vad",
-                    threshold: 0.2,  // Lower threshold for better phone audio sensitivity
+                    threshold: 0.2,  // Lower for phone audio
                     prefix_padding_ms: 300,
-                    silence_duration_ms: 800,  // Faster response on phone
+                    silence_duration_ms: 800,  // Faster response
                   },
-                  tools: toolDefinitions,
+                  tools: toolDefinitions,  // Shared tool definitions
                   tool_choice: "auto"
                 },
               }));
@@ -659,7 +270,6 @@ serve(async (req) => {
               console.log("[OPENAI] Session configured");
               sessionConfigured = true;
               
-              // Send greeting based on call direction
               if (!greetingSent) {
                 if (callDirection === 'inbound') {
                   sendInboundGreeting();
@@ -670,21 +280,16 @@ serve(async (req) => {
               break;
 
             case "response.created":
-              // Track that AI is generating a response
-              currentResponseId = msg.response?.id || null;
               isAiSpeaking = true;
-              console.log("[OPENAI] Response started:", currentResponseId);
               break;
 
             case "response.done":
-              // AI finished speaking
               isAiSpeaking = false;
-              currentResponseId = null;
-              console.log("[OPENAI] Response completed");
               break;
 
             case "response.audio.delta":
               if (streamSid && twilioWs.readyState === WebSocket.OPEN) {
+                // PCM16 24kHz → Downsample to 8kHz → μ-law → Base64
                 const pcm24k = base64ToInt16(msg.delta);
                 const pcm8k = downsample24to8(pcm24k);
                 const mulaw = encodeMulaw(pcm8k);
@@ -699,43 +304,33 @@ serve(async (req) => {
               break;
 
             case "input_audio_buffer.speech_started":
-              console.log("[OPENAI] User started speaking");
+              console.log("[OPENAI] User speaking - barge-in check");
               
-              // BARGE-IN: If AI is speaking, cancel the response
+              // Barge-in: Cancel AI response if speaking
               if (isAiSpeaking && openaiWs?.readyState === WebSocket.OPEN) {
-                console.log("[OPENAI] BARGE-IN: Cancelling current response");
+                console.log("[OPENAI] BARGE-IN: Cancelling response");
                 openaiWs.send(JSON.stringify({ type: "response.cancel" }));
                 
-                // Clear Twilio's audio buffer to stop playback immediately
+                // Clear Twilio audio buffer
                 if (streamSid && twilioWs.readyState === WebSocket.OPEN) {
-                  twilioWs.send(JSON.stringify({
-                    event: "clear",
-                    streamSid: streamSid
-                  }));
+                  twilioWs.send(JSON.stringify({ event: "clear", streamSid }));
                 }
-                
                 isAiSpeaking = false;
               }
               break;
 
-            case "input_audio_buffer.speech_stopped":
-              console.log("[OPENAI] User stopped speaking");
-              break;
-
             case "conversation.item.input_audio_transcription.completed":
-              console.log(`[OPENAI] User said: "${msg.transcript}"`);
-              // Save user message to conversation history
-              saveConversationMessage('user', msg.transcript);
+              console.log(`[USER] "${msg.transcript}"`);
+              saveMessage('user', msg.transcript);
               break;
 
             case "response.audio_transcript.done":
-              console.log(`[OPENAI] AI said: "${msg.transcript}"`);
-              // Save assistant message to conversation history
-              saveConversationMessage('assistant', msg.transcript);
+              console.log(`[IRIS] "${msg.transcript}"`);
+              saveMessage('assistant', msg.transcript);
               break;
 
             case "response.function_call_arguments.done":
-              console.log(`[OPENAI] Function call: ${msg.name}`, msg.arguments);
+              console.log(`[TOOL] ${msg.name}`, msg.arguments);
               handleFunctionCall(msg);
               break;
 
@@ -744,49 +339,42 @@ serve(async (req) => {
               break;
           }
         } catch (err) {
-          console.error("[OPENAI] Error processing message:", err);
+          console.error("[OPENAI] Message error:", err);
         }
       };
 
-      openaiWs.onclose = () => {
-        console.log("[OPENAI] Connection closed");
-      };
-
-      openaiWs.onerror = (err) => {
-        console.error("[OPENAI] Connection error:", err);
-      };
+      openaiWs.onclose = () => console.log("[OPENAI] Closed");
+      openaiWs.onerror = (err) => console.error("[OPENAI] Error:", err);
     }
 
-    async function saveConversationMessage(role: string, content: string) {
+    async function saveMessage(role: string, content: string) {
       if (!userId || !threadId || !content) return;
       
       try {
         await supabase.from('conversation_messages').insert({
           user_id: userId,
           thread_id: threadId,
-          role: role,
-          content: content,
+          role,
+          content,
           voice_session_id: streamSid,
           audio_transcript: content
         });
-        console.log(`[BRIDGE] Saved ${role} message to conversation history`);
       } catch (error) {
-        console.warn('[BRIDGE] Failed to save conversation message:', error);
+        console.warn('[BRIDGE] Save message error:', error);
       }
     }
 
-    // PHASE 4: Open-ended greeting - NOT task-focused
     function sendInboundGreeting() {
       if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN || greetingSent) return;
       
       greetingSent = true;
       const greeting = getTimeBasedGreeting(userTimezone);
-      const userName = userProfile?.first_name || 'sir';
+      const userName = userContext?.userName || 'sir';
       const currentTime = getCurrentTimeString(userTimezone);
       
-      console.log(`[BRIDGE] Sending inbound greeting to ${userName} (timezone: ${userTimezone})`);
+      console.log(`[BRIDGE] Inbound greeting for ${userName}`);
       
-      // OPEN-ENDED greeting - don't assume they want schedule info
+      // Open-ended greeting - same as in-app assistant
       openaiWs.send(JSON.stringify({
         type: "conversation.item.create",
         item: {
@@ -794,7 +382,7 @@ serve(async (req) => {
           role: "user",
           content: [{
             type: "input_text",
-            text: `[System: This is an inbound phone call from ${userName}. Current time is ${currentTime}. Greet them with "${greeting}, ${userName}. What can I help you with?" Keep it brief and WAIT for them to tell you what they need. Do NOT assume they want schedule information - they might ask about anything. You can help with general questions, tasks, or whatever they need.]`
+            text: `[System: Inbound call from ${userName}. Time: ${currentTime}. Greet with "${greeting}, ${userName}. What can I help you with?" Be brief, wait for them to speak. You can help with ANYTHING - tasks, general questions, etc.]`
           }]
         }
       }));
@@ -806,12 +394,11 @@ serve(async (req) => {
       if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN || greetingSent) return;
       
       greetingSent = true;
-      const userName = userProfile?.first_name || 'sir';
-      const contextInfo = callContext || 'your daily briefing';
+      const userName = userContext?.userName || 'sir';
       
-      console.log(`[BRIDGE] Waiting for user response on outbound call`);
+      console.log(`[BRIDGE] Outbound call - waiting for user`);
       
-      // For outbound calls, wait for user to say hello first
+      // Wait for user to say hello first
       openaiWs.send(JSON.stringify({
         type: "conversation.item.create",
         item: {
@@ -819,69 +406,49 @@ serve(async (req) => {
           role: "user",
           content: [{
             type: "input_text",
-            text: `[System: This is an outbound call YOU initiated to ${userName} for ${contextInfo}. Wait silently for them to answer with "hello" or similar. When they do, briefly introduce yourself as Iris and explain why you're calling in one sentence. You have their schedule loaded.]`
+            text: `[System: Outbound call to ${userName}. Wait silently for them to answer. When they say "hello", introduce yourself as Iris briefly and explain why you're calling.]`
           }]
         }
       }));
-      
-      // Don't trigger response yet - wait for user audio
     }
 
     async function handleFunctionCall(msg: any) {
-      if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN) return;
+      if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN || !userContext) return;
 
       try {
         const args = JSON.parse(msg.arguments);
         const functionName = msg.name;
         
-        console.log(`[BRIDGE] Executing function: ${functionName}`, args);
+        console.log(`[BRIDGE] Executing: ${functionName}`);
 
-        let result: any = { success: false, error: "Function not implemented" };
+        // Use shared tool execution from assistant-core
+        let result = await executeTool(supabase, functionName, args, userContext);
 
-        switch (functionName) {
-          case "get_tasks":
-            result = await getTasks(supabase, userId, args);
-            break;
-          case "get_today_tasks":
-            result = await getTodayTasks(supabase, userId, userTimezone);
-            break;
-          case "create_task":
-            result = await createTask(supabase, userId, args);
-            break;
-          case "update_task":
-            result = await updateTask(supabase, args);
-            break;
-          case "reschedule_task":
-            result = await rescheduleTask(supabase, args);
-            break;
-          case "schedule_task":
-            result = await scheduleTask(supabase, args);
-            break;
-          case "unschedule_task":
-            result = await unscheduleTask(supabase, args);
-            break;
-          case "send_slack_message":
-            result = await sendSlackMessage(supabase, userId, args, userProfile);
-            break;
-          case "send_email":
-            result = await sendEmail(supabase, userId, args, userProfile);
-            break;
-          case "create_calendar_event":
-            result = await createCalendarEvent(supabase, userId, args, userProfile);
-            break;
-          case "initiate_phone_call":
-            result = await initiatePhoneCall(supabase, userId, args);
-            break;
-          case "hang_up":
-            result = await handleHangUp(args, twilioWs, streamSid);
-            break;
-          default:
-            result = { success: false, error: `Unknown function: ${functionName}` };
+        // Handle disconnect/hang_up specially for phone
+        if (functionName === 'disconnect' || result.action === 'disconnect') {
+          console.log("[BRIDGE] Hang up requested");
+          
+          // Send farewell audio first, then hang up
+          openaiWs.send(JSON.stringify({
+            type: "conversation.item.create",
+            item: {
+              type: "function_call_output",
+              call_id: msg.call_id,
+              output: JSON.stringify({ success: true, message: "Ending call" })
+            }
+          }));
+          openaiWs.send(JSON.stringify({ type: "response.create" }));
+          
+          // Schedule hang up after response plays
+          setTimeout(() => {
+            if (twilioWs.readyState === WebSocket.OPEN) {
+              twilioWs.close();
+            }
+          }, 3000);
+          return;
         }
 
-        console.log(`[BRIDGE] Function result:`, result);
-
-        // Send function output back to OpenAI
+        // Send result back to OpenAI
         openaiWs.send(JSON.stringify({
           type: "conversation.item.create",
           item: {
@@ -891,11 +458,10 @@ serve(async (req) => {
           }
         }));
 
-        // Trigger response generation
         openaiWs.send(JSON.stringify({ type: "response.create" }));
 
       } catch (error) {
-        console.error("[BRIDGE] Function call error:", error);
+        console.error("[BRIDGE] Function error:", error);
         
         openaiWs.send(JSON.stringify({
           type: "conversation.item.create",
@@ -912,380 +478,5 @@ serve(async (req) => {
     return response;
   }
 
-  // Non-WebSocket request
-  return new Response("Twilio-OpenAI Realtime Bridge v5 - Full Capability Parity", { status: 200 });
+  return new Response("Twilio-OpenAI Realtime Bridge v6 - Unified Assistant Core", { status: 200 });
 });
-
-// ============ Task Functions ============
-
-async function getTasks(supabase: any, userId: string | null, args: any) {
-  if (!userId) return { success: false, error: "Not authenticated", tasks: [] };
-
-  try {
-    let query = supabase.from('tasks').select('*').eq('user_id', userId);
-    
-    if (args.status) {
-      query = query.eq('status', args.status);
-    }
-    
-    const { data, error } = await query.order('created_at', { ascending: false }).limit(20);
-    
-    if (error) throw error;
-    
-    return { 
-      success: true, 
-      tasks: data || [],
-      count: data?.length || 0,
-      message: `Found ${data?.length || 0} tasks`
-    };
-  } catch (error) {
-    return { success: false, error: String(error), tasks: [] };
-  }
-}
-
-async function getTodayTasksFunction(supabase: any, userId: string | null, timezone: string) {
-  if (!userId) return { success: false, error: "Not authenticated", tasks: [] };
-
-  try {
-    const now = new Date();
-    const today = now.toLocaleDateString('en-CA', { timeZone: timezone });
-    
-    const { data, error } = await supabase
-      .from('tasks')
-      .select('*')
-      .eq('user_id', userId)
-      .or(`due_date.eq.${today},scheduled_date.eq.${today}`)
-      .order('scheduled_start_time', { ascending: true });
-    
-    if (error) throw error;
-    
-    return { 
-      success: true, 
-      tasks: data || [],
-      count: data?.length || 0,
-      message: `You have ${data?.length || 0} tasks for today`
-    };
-  } catch (error) {
-    return { success: false, error: String(error), tasks: [] };
-  }
-}
-
-async function createTask(supabase: any, userId: string | null, args: any) {
-  if (!userId) return { success: false, error: "Not authenticated" };
-  if (!args.title) return { success: false, error: "Task title is required" };
-
-  try {
-    const { data: board } = await supabase
-      .from('boards')
-      .select('id')
-      .eq('user_id', userId)
-      .limit(1)
-      .single();
-
-    if (!board) return { success: false, error: "No board found" };
-
-    const taskData = {
-      title: args.title,
-      description: args.description || null,
-      priority: args.priority?.toUpperCase() || 'MEDIUM',
-      category: args.category?.toUpperCase() || 'LIFE',
-      status: 'BACKLOG',
-      board_id: board.id,
-      user_id: userId
-    };
-
-    const { data, error } = await supabase
-      .from('tasks')
-      .insert([taskData])
-      .select()
-      .single();
-
-    if (error) throw error;
-
-    return { 
-      success: true, 
-      task: data,
-      message: `Created task "${data.title}" with ${data.priority} priority`
-    };
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-}
-
-async function updateTask(supabase: any, args: any) {
-  if (!args.task_id) return { success: false, error: "Task ID is required" };
-
-  try {
-    const updateData: any = {};
-    if (args.title) updateData.title = args.title;
-    if (args.description !== undefined) updateData.description = args.description;
-    if (args.status) updateData.status = args.status.toUpperCase();
-    if (args.priority) updateData.priority = args.priority.toUpperCase();
-    if (args.category) updateData.category = args.category.toUpperCase();
-
-    const { data, error } = await supabase
-      .from('tasks')
-      .update(updateData)
-      .eq('id', args.task_id)
-      .select()
-      .single();
-
-    if (error) throw error;
-
-    return { 
-      success: true, 
-      task: data,
-      message: `Updated task "${data.title}"`
-    };
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-}
-
-async function rescheduleTask(supabase: any, args: any) {
-  if (!args.task_id) return { success: false, error: "Task ID is required" };
-  if (!args.new_date) return { success: false, error: "New date is required" };
-
-  try {
-    const updateData: any = {
-      scheduled_date: args.new_date,
-      due_date: args.new_date
-    };
-    
-    if (args.new_start_time) {
-      updateData.scheduled_start_time = args.new_start_time;
-    }
-
-    const { data, error } = await supabase
-      .from('tasks')
-      .update(updateData)
-      .eq('id', args.task_id)
-      .select()
-      .single();
-
-    if (error) throw error;
-
-    return { 
-      success: true, 
-      task: data,
-      message: `Rescheduled "${data.title}" to ${args.new_date}`
-    };
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-}
-
-async function scheduleTask(supabase: any, args: any) {
-  if (!args.task_id) return { success: false, error: "Task ID is required" };
-
-  try {
-    const today = new Date().toISOString().split('T')[0];
-    const updateData: any = {
-      scheduled_date: args.date || today,
-      status: 'TODO'
-    };
-    
-    if (args.start_time) {
-      updateData.scheduled_start_time = args.start_time;
-    }
-    if (args.duration_minutes) {
-      updateData.estimated_duration = args.duration_minutes;
-    }
-
-    const { data, error } = await supabase
-      .from('tasks')
-      .update(updateData)
-      .eq('id', args.task_id)
-      .select()
-      .single();
-
-    if (error) throw error;
-
-    return { 
-      success: true, 
-      task: data,
-      message: `Scheduled "${data.title}" for ${updateData.scheduled_date}`
-    };
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-}
-
-async function unscheduleTask(supabase: any, args: any) {
-  if (!args.task_id) return { success: false, error: "Task ID is required" };
-
-  try {
-    const { data, error } = await supabase
-      .from('tasks')
-      .update({
-        scheduled_date: null,
-        scheduled_start_time: null,
-        scheduled_end_time: null,
-        status: 'BACKLOG'
-      })
-      .eq('id', args.task_id)
-      .select()
-      .single();
-
-    if (error) throw error;
-
-    return { 
-      success: true, 
-      task: data,
-      message: `Unscheduled "${data.title}" and moved to backlog`
-    };
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-}
-
-// ============ Notification Functions ============
-
-async function sendSlackMessage(supabase: any, userId: string | null, args: any, userProfile: any) {
-  if (!userId) return { success: false, error: "Not authenticated" };
-  if (!args.message) return { success: false, error: "Message is required" };
-
-  try {
-    const { data, error } = await supabase.functions.invoke('send-unified-notification', {
-      body: {
-        userId,
-        title: 'Message from Iris',
-        body: args.message,
-        channels: ['SLACK'],
-        userProfile: userProfile,
-        data: { source: 'phone_call' }
-      }
-    });
-
-    if (error) throw error;
-
-    return {
-      success: true,
-      message: `Sent Slack message: "${args.message.substring(0, 50)}..."`
-    };
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-}
-
-async function sendEmail(supabase: any, userId: string | null, args: any, userProfile: any) {
-  if (!userId) return { success: false, error: "Not authenticated" };
-  if (!args.subject || !args.body) return { success: false, error: "Subject and body are required" };
-
-  try {
-    const { data, error } = await supabase.functions.invoke('send-unified-notification', {
-      body: {
-        userId,
-        title: args.subject,
-        body: args.body,
-        channels: ['EMAIL'],
-        userProfile: userProfile,
-        data: { source: 'phone_call' }
-      }
-    });
-
-    if (error) throw error;
-
-    return {
-      success: true,
-      message: `Sent email with subject: "${args.subject}"`
-    };
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-}
-
-async function createCalendarEvent(supabase: any, userId: string | null, args: any, userProfile: any) {
-  if (!userId) return { success: false, error: "Not authenticated" };
-  if (!args.title || !args.start_time) return { success: false, error: "Title and start time are required" };
-
-  try {
-    // Parse times - handle both ISO format and HH:MM format
-    let startTime = args.start_time;
-    let endTime = args.end_time;
-    
-    if (!startTime.includes('T')) {
-      // HH:MM format - add today's date
-      const today = new Date().toISOString().split('T')[0];
-      startTime = `${today}T${startTime}:00`;
-      endTime = endTime ? `${today}T${endTime}:00` : new Date(new Date(startTime).getTime() + 60 * 60 * 1000).toISOString();
-    }
-
-    const calendarType = args.calendar?.toUpperCase() || 'OUTLOOK';
-    const channel = calendarType === 'GOOGLE' ? 'GOOGLE_EVENT' : 'OUTLOOK_EVENT';
-
-    const eventData = {
-      title: args.title,
-      startTime,
-      endTime: endTime || new Date(new Date(startTime).getTime() + 60 * 60 * 1000).toISOString(),
-      reminder: '15'
-    };
-
-    const { data, error } = await supabase.functions.invoke('send-unified-notification', {
-      body: {
-        userId,
-        title: args.title,
-        body: `Calendar event created via phone call`,
-        channels: [channel],
-        userProfile: userProfile,
-        data: { source: 'phone_call' },
-        ...(channel === 'OUTLOOK_EVENT' ? { outlookEvent: eventData } : { googleEvent: eventData })
-      }
-    });
-
-    if (error) throw error;
-
-    return {
-      success: true,
-      message: `Created ${args.calendar || 'Outlook'} event: "${args.title}" at ${args.start_time}`
-    };
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-}
-
-// PHASE 5: initiate_phone_call for full parity
-async function initiatePhoneCall(supabase: any, userId: string | null, args: any) {
-  if (!userId) return { success: false, error: "Not authenticated" };
-
-  try {
-    const delayMinutes = args.delay_minutes || 0;
-    const context = args.context || 'callback request';
-    
-    if (delayMinutes > 0) {
-      // Schedule the callback - this would integrate with your scheduling system
-      return {
-        success: true,
-        message: `I'll call you back in ${delayMinutes} minutes regarding ${context}.`
-      };
-    } else {
-      // Immediate callback doesn't make sense during an active call
-      return {
-        success: true,
-        message: `You're already on the phone with me! What can I help you with?`
-      };
-    }
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-}
-
-async function handleHangUp(args: any, twilioWs: WebSocket, streamSid: string | null) {
-  try {
-    console.log('[BRIDGE] Hang up requested:', args.farewell_message);
-    
-    // Give time for the farewell message to play
-    setTimeout(() => {
-      if (twilioWs.readyState === WebSocket.OPEN) {
-        twilioWs.close();
-      }
-    }, 3000);
-
-    return {
-      success: true,
-      message: args.farewell_message || "Call ended gracefully"
-    };
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-}
