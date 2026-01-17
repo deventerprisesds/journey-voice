@@ -88,12 +88,27 @@ function base64ToInt16(base64: string): Int16Array {
   return new Int16Array(bytes.buffer);
 }
 
-// Get time-based greeting
-function getTimeBasedGreeting(): string {
-  const hour = new Date().getHours();
-  if (hour < 12) return "Good morning";
-  if (hour < 17) return "Good afternoon";
-  return "Good evening";
+// Get time-based greeting with proper timezone
+function getTimeBasedGreeting(timezone: string = 'America/New_York'): string {
+  try {
+    const now = new Date();
+    const timeStr = now.toLocaleString('en-US', { 
+      timeZone: timezone, 
+      hour: 'numeric', 
+      hour12: false 
+    });
+    const hour = parseInt(timeStr, 10);
+    
+    if (hour < 12) return "Good morning";
+    if (hour < 17) return "Good afternoon";
+    return "Good evening";
+  } catch (error) {
+    console.warn('[BRIDGE] Timezone error, using UTC:', error);
+    const hour = new Date().getUTCHours();
+    if (hour < 12) return "Good morning";
+    if (hour < 17) return "Good afternoon";
+    return "Good evening";
+  }
 }
 
 // Load user profile
@@ -419,6 +434,7 @@ serve(async (req) => {
     let userId: string | null = null;
     let userPhone: string | null = null;
     let callContext: string | null = null;
+    let userTimezone: string = 'America/New_York';
     let sessionConfigured = false;
     let greetingSent = false;
     let userProfile: any = {};
@@ -446,10 +462,11 @@ serve(async (req) => {
             userPhone = customParams.phone || null;
             callContext = customParams.context || null;
             callDirection = customParams.direction || 'inbound';
+            userTimezone = customParams.timezone || 'America/New_York';
             
             console.log(`[TWILIO] Stream started: ${streamSid}`);
             console.log(`[TWILIO] Custom params:`, JSON.stringify(customParams));
-            console.log(`[TWILIO] Call direction: ${callDirection}, userId: ${userId}`);
+            console.log(`[TWILIO] Call direction: ${callDirection}, userId: ${userId}, timezone: ${userTimezone}`);
             
             connectToOpenAI();
             break;
@@ -669,11 +686,11 @@ serve(async (req) => {
       if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN || greetingSent) return;
       
       greetingSent = true;
-      const greeting = getTimeBasedGreeting();
+      const greeting = getTimeBasedGreeting(userTimezone);
       const userName = userProfile?.first_name || 'sir';
       const contextInfo = callContext ? ` I see you're calling about ${callContext}.` : '';
       
-      console.log(`[BRIDGE] Sending inbound greeting to ${userName}`);
+      console.log(`[BRIDGE] Sending inbound greeting to ${userName} (timezone: ${userTimezone})`);
       
       openaiWs.send(JSON.stringify({
         type: "conversation.item.create",
@@ -682,7 +699,7 @@ serve(async (req) => {
           role: "user",
           content: [{
             type: "input_text",
-            text: `[System: This is an inbound phone call. The user has called you. Greet them warmly with "${greeting}, ${userName}" and ask how you can help today.${contextInfo} Be brief - this is a phone call. You have their schedule loaded so offer to review it if relevant.]`
+            text: `[System: This is an inbound phone call. The user has called you. Greet them warmly with "${greeting}, ${userName}" and ask how you can help today.${contextInfo} Be brief - this is a phone call. You have their schedule loaded so offer to review it if relevant. The user's timezone is ${userTimezone}.]`
           }]
         }
       }));
