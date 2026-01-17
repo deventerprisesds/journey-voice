@@ -461,6 +461,9 @@ export class RealtimeVoiceAssistant {
         case 'disconnect':
           result = await this.handleDisconnectTool(args);
           break;
+        case 'initiate_phone_call':
+          result = await this.initiatePhoneCall(args);
+          break;
         default:
           result = { error: `Unknown function: ${functionName}` };
       }
@@ -1319,5 +1322,64 @@ export class RealtimeVoiceAssistant {
     // Give the assistant time to speak the farewell, then disconnect
     setTimeout(() => this.disconnect(), 2000);
     return { success: true, message: "Disconnecting..." };
+  }
+
+  private async initiatePhoneCall(args: { delay_minutes?: number; context?: string }) {
+    console.log('📞 Initiate phone call with args:', args);
+    
+    try {
+      this.onMessage?.({ type: 'client.processing', status: 'Initiating phone call...' });
+
+      const userId = (await supabase.auth.getUser()).data.user?.id;
+      if (!userId) {
+        this.onMessage?.({ type: 'client.error', message: 'Not authenticated' });
+        return { success: false, error: 'Not authenticated' };
+      }
+
+      const { data, error } = await supabase.functions.invoke('twilio-voice-handler', {
+        body: {
+          action: 'trigger-call',
+          userId,
+          delay_minutes: args.delay_minutes,
+          context: args.context
+        }
+      });
+
+      if (error) {
+        console.error('❌ Error initiating phone call:', error);
+        this.onMessage?.({ type: 'client.error', message: 'Failed to initiate phone call' });
+        return { 
+          success: false, 
+          error: error.message || 'Failed to initiate phone call'
+        };
+      }
+
+      if (!data?.success) {
+        this.onMessage?.({ type: 'client.error', message: data?.error || 'Call failed' });
+        return { 
+          success: false, 
+          error: data?.error || 'Failed to initiate phone call'
+        };
+      }
+
+      const message = args.delay_minutes 
+        ? `I'll call you in ${args.delay_minutes} minute${args.delay_minutes > 1 ? 's' : ''}`
+        : 'Calling you now';
+
+      this.onMessage?.({ type: 'client.done', status: message });
+
+      return {
+        success: true,
+        message,
+        call_sid: data.call_sid
+      };
+    } catch (error) {
+      console.error('❌ Error initiating phone call:', error);
+      this.onMessage?.({ type: 'client.error', message: 'Failed to initiate phone call' });
+      return { 
+        success: false, 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      };
+    }
   }
 }
