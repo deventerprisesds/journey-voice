@@ -96,9 +96,96 @@ function getTimeBasedGreeting(): string {
   return "Good evening";
 }
 
-// Load user instructions from database
-async function loadUserInstructions(userId: string | null): Promise<string> {
-  const defaultInstructions = `You are Iris, a helpful and proactive executive assistant. You help with task management and daily planning.
+// Load user profile
+async function loadUserProfile(supabase: any, userId: string): Promise<any> {
+  try {
+    const { data } = await supabase
+      .from('profiles')
+      .select('full_name, first_name, email, phone')
+      .eq('user_id', userId)
+      .maybeSingle();
+    return data || {};
+  } catch (error) {
+    console.warn('[BRIDGE] Failed to load user profile:', error);
+    return {};
+  }
+}
+
+// Load today's tasks for context
+async function loadTodayTasks(supabase: any, userId: string): Promise<string> {
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    const { data: tasks } = await supabase
+      .from('tasks')
+      .select('title, scheduled_start_time, scheduled_end_time, priority, status, category')
+      .eq('user_id', userId)
+      .or(`due_date.eq.${today},scheduled_date.eq.${today}`)
+      .order('scheduled_start_time', { ascending: true });
+
+    if (!tasks || tasks.length === 0) {
+      return "No tasks scheduled for today.";
+    }
+
+    const taskList = tasks.map((t: any, i: number) => {
+      const time = t.scheduled_start_time ? `at ${t.scheduled_start_time}` : 'unscheduled';
+      return `${i + 1}. ${t.title} (${time}, ${t.priority} priority, ${t.status})`;
+    }).join('\n');
+
+    return `Today's ${tasks.length} tasks:\n${taskList}`;
+  } catch (error) {
+    console.warn('[BRIDGE] Failed to load today tasks:', error);
+    return "Unable to load today's tasks.";
+  }
+}
+
+// Load RAG context for schedule knowledge
+async function loadRAGContext(supabase: any, userId: string, userInput?: string): Promise<string> {
+  try {
+    const { data, error } = await supabase.functions.invoke('rag-context-retrieval', {
+      body: {
+        action: 'get_context',
+        userInput: userInput || 'general schedule and task management',
+        userId,
+        baseInstructions: ''
+      }
+    });
+
+    if (error || !data?.context) {
+      console.warn('[BRIDGE] RAG context retrieval failed:', error);
+      return '';
+    }
+
+    const convHistory = data.context.conversationContext || [];
+    if (convHistory.length === 0) return '';
+
+    const relevantContext = convHistory
+      .slice(0, 5)
+      .map((c: any) => `${c.message_type}: ${c.content}`)
+      .join('\n');
+
+    return `\n\nRECENT CONVERSATION CONTEXT:\n${relevantContext}`;
+  } catch (error) {
+    console.warn('[BRIDGE] RAG context error:', error);
+    return '';
+  }
+}
+
+// Load user instructions from database (full sync with in-app assistant)
+async function loadUserInstructions(userId: string | null, todayTasks: string, ragContext: string, userProfile: any): Promise<string> {
+  const userName = userProfile?.first_name || userProfile?.full_name?.split(' ')[0] || 'sir';
+  
+  const defaultInstructions = `You are Iris, a proactive executive assistant helping ${userName} manage their daily agenda. 
+You have a warm, professional personality and execute tasks immediately without excessive confirmation.
+
+CURRENT SCHEDULE:
+${todayTasks}
+${ragContext}
+
+PHONE-SPECIFIC BEHAVIOR:
+- Keep responses brief and conversational - this is a phone call
+- Confirm actions with one sentence, then offer what's next
+- When the user says goodbye, disconnect gracefully
+- Reference the schedule when relevant
 
 Available functions:
 - get_tasks: Retrieve tasks with time/keyword filtering
@@ -108,9 +195,10 @@ Available functions:
 - reschedule_task: Move a task to a different date or time
 - schedule_task: Schedule an unscheduled task (automatically finds optimal time slot)
 - unschedule_task: Remove a task from the calendar
-
-Keep responses brief and conversational - this is a phone call.
-When the user says goodbye, acknowledge and end gracefully.`;
+- send_slack_message: Send a Slack message
+- send_email: Send an email
+- create_calendar_event: Create an Outlook or Google Calendar event
+- hang_up: End the phone call gracefully`;
 
   if (!userId) {
     console.log('[BRIDGE] No userId, using default instructions');
@@ -122,19 +210,36 @@ When the user says goodbye, acknowledge and end gracefully.`;
     
     const { data: prefs } = await supabase
       .from('user_scheduling_prefs')
-      .select('core_instructions, realtime_extensions, config')
+      .select('core_instructions, realtime_extensions, config, timezone')
       .eq('user_id', userId)
       .maybeSingle();
 
     if (prefs) {
       let instructions = prefs.core_instructions || defaultInstructions;
+      
+      // Add phone-specific context
+      instructions += `\n\nPHONE CALL CONTEXT:
+- User: ${userName}
+- Timezone: ${prefs.timezone || 'America/New_York'}
+
+CURRENT SCHEDULE:
+${todayTasks}
+${ragContext}
+
+PHONE-SPECIFIC BEHAVIOR:
+- Keep responses brief and conversational - this is a phone call
+- Execute actions immediately, confirm with one sentence
+- Offer proactive suggestions based on the schedule
+- When the user says goodbye, use the hang_up function`;
+
       if (prefs.realtime_extensions) {
         instructions += `\n\n${prefs.realtime_extensions}`;
       }
       if (prefs.config?.customAIInstructions) {
         instructions += `\n\nScheduling Philosophy:\n${prefs.config.customAIInstructions}`;
       }
-      console.log('[BRIDGE] Loaded user instructions from database');
+      
+      console.log('[BRIDGE] Loaded full user instructions from database');
       return instructions;
     }
   } catch (error) {
@@ -144,7 +249,7 @@ When the user says goodbye, acknowledge and end gracefully.`;
   return defaultInstructions;
 }
 
-// Tool definitions (same as in-app assistant)
+// Tool definitions - FULL PARITY with in-app assistant
 const toolDefinitions = [
   {
     type: "function",
@@ -238,12 +343,64 @@ const toolDefinitions = [
       },
       required: ["task_id"]
     }
+  },
+  // NEW: Notification tools
+  {
+    type: "function",
+    name: "send_slack_message",
+    description: "Send a Slack message to the user.",
+    parameters: {
+      type: "object",
+      properties: {
+        message: { type: "string", description: "The message to send" }
+      },
+      required: ["message"]
+    }
+  },
+  {
+    type: "function",
+    name: "send_email",
+    description: "Send an email to the user.",
+    parameters: {
+      type: "object",
+      properties: {
+        subject: { type: "string", description: "Email subject" },
+        body: { type: "string", description: "Email body content" }
+      },
+      required: ["subject", "body"]
+    }
+  },
+  {
+    type: "function",
+    name: "create_calendar_event",
+    description: "Create a calendar event in Outlook or Google Calendar.",
+    parameters: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "Event title" },
+        start_time: { type: "string", description: "Start time in ISO format or HH:MM" },
+        end_time: { type: "string", description: "End time in ISO format or HH:MM" },
+        calendar: { type: "string", enum: ["outlook", "google"], description: "Which calendar to use" }
+      },
+      required: ["title", "start_time"]
+    }
+  },
+  {
+    type: "function",
+    name: "hang_up",
+    description: "End the phone call gracefully. Use when the user says goodbye or indicates they're done.",
+    parameters: {
+      type: "object",
+      properties: {
+        farewell_message: { type: "string", description: "Optional farewell message to say before hanging up" }
+      }
+    }
   }
 ];
 
 serve(async (req) => {
   const url = new URL(req.url);
-  console.log(`[BRIDGE v3] Request: ${req.method} ${url.pathname}`);
+  console.log(`[BRIDGE v4] Request: ${req.method} ${url.pathname}`);
 
   // Health check endpoint
   if (url.pathname.endsWith("/health")) {
@@ -264,6 +421,10 @@ serve(async (req) => {
     let callContext: string | null = null;
     let sessionConfigured = false;
     let greetingSent = false;
+    let userProfile: any = {};
+    let threadId: string | null = null;
+
+    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
     twilioWs.onopen = () => {
       console.log("[TWILIO] WebSocket connected");
@@ -330,8 +491,52 @@ serve(async (req) => {
     async function connectToOpenAI() {
       console.log("[OPENAI] Connecting...");
 
-      // Load user-specific instructions
-      const instructions = await loadUserInstructions(userId);
+      // Load all context in parallel
+      let todayTasks = "Loading...";
+      let ragContext = "";
+      
+      if (userId) {
+        const [profile, tasks, rag] = await Promise.all([
+          loadUserProfile(supabase, userId),
+          loadTodayTasks(supabase, userId),
+          loadRAGContext(supabase, userId)
+        ]);
+        userProfile = profile;
+        todayTasks = tasks;
+        ragContext = rag;
+
+        // Create or get thread for conversation persistence
+        try {
+          const { data: existingThread } = await supabase
+            .from('ai_threads')
+            .select('id, openai_thread_id')
+            .eq('user_id', userId)
+            .order('updated_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+          if (existingThread) {
+            threadId = existingThread.id;
+            console.log('[BRIDGE] Using existing thread:', threadId);
+          } else {
+            const { data: newThread } = await supabase
+              .from('ai_threads')
+              .insert({ 
+                user_id: userId, 
+                openai_thread_id: `phone_${Date.now()}` 
+              })
+              .select('id')
+              .single();
+            threadId = newThread?.id || null;
+            console.log('[BRIDGE] Created new thread:', threadId);
+          }
+        } catch (error) {
+          console.warn('[BRIDGE] Thread management error:', error);
+        }
+      }
+
+      // Load user-specific instructions with full context
+      const instructions = await loadUserInstructions(userId, todayTasks, ragContext, userProfile);
 
       openaiWs = new WebSocket(
         "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17",
@@ -360,9 +565,9 @@ serve(async (req) => {
                   input_audio_transcription: { model: "whisper-1" },
                   turn_detection: {
                     type: "server_vad",
-                    threshold: 0.3, // Lower threshold for phone audio
+                    threshold: 0.3,
                     prefix_padding_ms: 400,
-                    silence_duration_ms: 1200, // Longer silence for phone
+                    silence_duration_ms: 1200,
                   },
                   tools: toolDefinitions,
                   tool_choice: "auto"
@@ -374,15 +579,18 @@ serve(async (req) => {
               console.log("[OPENAI] Session configured");
               sessionConfigured = true;
               
-              // Send greeting for inbound calls
-              if (callDirection === 'inbound' && !greetingSent) {
-                sendGreeting();
+              // Send greeting based on call direction
+              if (!greetingSent) {
+                if (callDirection === 'inbound') {
+                  sendInboundGreeting();
+                } else {
+                  sendOutboundGreeting();
+                }
               }
               break;
 
             case "response.audio.delta":
               if (streamSid && twilioWs.readyState === WebSocket.OPEN) {
-                // Decode Base64 → PCM16 → Downsample to 8kHz → μ-law → Base64
                 const pcm24k = base64ToInt16(msg.delta);
                 const pcm8k = downsample24to8(pcm24k);
                 const mulaw = encodeMulaw(pcm8k);
@@ -406,10 +614,14 @@ serve(async (req) => {
 
             case "conversation.item.input_audio_transcription.completed":
               console.log(`[OPENAI] User said: "${msg.transcript}"`);
+              // Save user message to conversation history
+              saveConversationMessage('user', msg.transcript);
               break;
 
             case "response.audio_transcript.done":
               console.log(`[OPENAI] AI said: "${msg.transcript}"`);
+              // Save assistant message to conversation history
+              saveConversationMessage('assistant', msg.transcript);
               break;
 
             case "response.function_call_arguments.done":
@@ -435,16 +647,34 @@ serve(async (req) => {
       };
     }
 
-    function sendGreeting() {
+    async function saveConversationMessage(role: string, content: string) {
+      if (!userId || !threadId || !content) return;
+      
+      try {
+        await supabase.from('conversation_messages').insert({
+          user_id: userId,
+          thread_id: threadId,
+          role: role,
+          content: content,
+          voice_session_id: streamSid,
+          audio_transcript: content
+        });
+        console.log(`[BRIDGE] Saved ${role} message to conversation history`);
+      } catch (error) {
+        console.warn('[BRIDGE] Failed to save conversation message:', error);
+      }
+    }
+
+    function sendInboundGreeting() {
       if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN || greetingSent) return;
       
       greetingSent = true;
       const greeting = getTimeBasedGreeting();
-      const contextInfo = callContext ? ` regarding ${callContext}` : '';
+      const userName = userProfile?.first_name || 'sir';
+      const contextInfo = callContext ? ` I see you're calling about ${callContext}.` : '';
       
-      console.log(`[BRIDGE] Sending inbound greeting: ${greeting}`);
+      console.log(`[BRIDGE] Sending inbound greeting to ${userName}`);
       
-      // Create a conversation item with the greeting prompt
       openaiWs.send(JSON.stringify({
         type: "conversation.item.create",
         item: {
@@ -452,13 +682,37 @@ serve(async (req) => {
           role: "user",
           content: [{
             type: "input_text",
-            text: `[System: This is an inbound phone call. Greet the caller with "${greeting}" and ask how you can help${contextInfo}. Be warm and professional.]`
+            text: `[System: This is an inbound phone call. The user has called you. Greet them warmly with "${greeting}, ${userName}" and ask how you can help today.${contextInfo} Be brief - this is a phone call. You have their schedule loaded so offer to review it if relevant.]`
           }]
         }
       }));
 
-      // Trigger response
       openaiWs.send(JSON.stringify({ type: "response.create" }));
+    }
+
+    function sendOutboundGreeting() {
+      if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN || greetingSent) return;
+      
+      greetingSent = true;
+      const userName = userProfile?.first_name || 'sir';
+      const contextInfo = callContext || 'your daily briefing';
+      
+      console.log(`[BRIDGE] Waiting for user response on outbound call`);
+      
+      // For outbound calls, wait for user to say hello first
+      openaiWs.send(JSON.stringify({
+        type: "conversation.item.create",
+        item: {
+          type: "message",
+          role: "user",
+          content: [{
+            type: "input_text",
+            text: `[System: This is an outbound call YOU initiated to ${userName} for ${contextInfo}. Wait silently for them to answer with "hello" or similar. When they do, briefly introduce yourself as Iris and explain why you're calling in one sentence. You have their schedule loaded.]`
+          }]
+        }
+      }));
+      
+      // Don't trigger response yet - wait for user audio
     }
 
     async function handleFunctionCall(msg: any) {
@@ -470,10 +724,7 @@ serve(async (req) => {
         
         console.log(`[BRIDGE] Executing function: ${functionName}`, args);
 
-        let result: any = { success: false, error: "Function not implemented for phone" };
-
-        // Execute functions using Supabase
-        const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+        let result: any = { success: false, error: "Function not implemented" };
 
         switch (functionName) {
           case "get_tasks":
@@ -496,6 +747,19 @@ serve(async (req) => {
             break;
           case "unschedule_task":
             result = await unscheduleTask(supabase, args);
+            break;
+          // NEW: Notification handlers
+          case "send_slack_message":
+            result = await sendSlackMessage(supabase, userId, args, userProfile);
+            break;
+          case "send_email":
+            result = await sendEmail(supabase, userId, args, userProfile);
+            break;
+          case "create_calendar_event":
+            result = await createCalendarEvent(supabase, userId, args, userProfile);
+            break;
+          case "hang_up":
+            result = await handleHangUp(args, twilioWs, streamSid);
             break;
           default:
             result = { success: false, error: `Unknown function: ${functionName}` };
@@ -535,7 +799,7 @@ serve(async (req) => {
   }
 
   // Non-WebSocket request
-  return new Response("Twilio-OpenAI Realtime Bridge v3", { status: 200 });
+  return new Response("Twilio-OpenAI Realtime Bridge v4 - Full Feature Parity", { status: 200 });
 });
 
 // ============ Task Functions ============
@@ -596,7 +860,6 @@ async function createTask(supabase: any, userId: string | null, args: any) {
   if (!args.title) return { success: false, error: "Task title is required" };
 
   try {
-    // Get user's default board
     const { data: board } = await supabase
       .from('boards')
       .select('id')
@@ -755,6 +1018,131 @@ async function unscheduleTask(supabase: any, args: any) {
       success: true, 
       task: data,
       message: `Unscheduled "${data.title}" and moved to backlog`
+    };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
+
+// ============ NEW: Notification Functions ============
+
+async function sendSlackMessage(supabase: any, userId: string | null, args: any, userProfile: any) {
+  if (!userId) return { success: false, error: "Not authenticated" };
+  if (!args.message) return { success: false, error: "Message is required" };
+
+  try {
+    const { data, error } = await supabase.functions.invoke('send-unified-notification', {
+      body: {
+        userId,
+        title: 'Message from Iris',
+        body: args.message,
+        channels: ['SLACK'],
+        userProfile: userProfile,
+        data: { source: 'phone_call' }
+      }
+    });
+
+    if (error) throw error;
+
+    return {
+      success: true,
+      message: `Sent Slack message: "${args.message.substring(0, 50)}..."`
+    };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
+
+async function sendEmail(supabase: any, userId: string | null, args: any, userProfile: any) {
+  if (!userId) return { success: false, error: "Not authenticated" };
+  if (!args.subject || !args.body) return { success: false, error: "Subject and body are required" };
+
+  try {
+    const { data, error } = await supabase.functions.invoke('send-unified-notification', {
+      body: {
+        userId,
+        title: args.subject,
+        body: args.body,
+        channels: ['EMAIL'],
+        userProfile: userProfile,
+        data: { source: 'phone_call' }
+      }
+    });
+
+    if (error) throw error;
+
+    return {
+      success: true,
+      message: `Sent email with subject: "${args.subject}"`
+    };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
+
+async function createCalendarEvent(supabase: any, userId: string | null, args: any, userProfile: any) {
+  if (!userId) return { success: false, error: "Not authenticated" };
+  if (!args.title || !args.start_time) return { success: false, error: "Title and start time are required" };
+
+  try {
+    // Parse times - handle both ISO format and HH:MM format
+    let startTime = args.start_time;
+    let endTime = args.end_time;
+    
+    if (!startTime.includes('T')) {
+      // HH:MM format - add today's date
+      const today = new Date().toISOString().split('T')[0];
+      startTime = `${today}T${startTime}:00`;
+      endTime = endTime ? `${today}T${endTime}:00` : new Date(new Date(startTime).getTime() + 60 * 60 * 1000).toISOString();
+    }
+
+    const calendarType = args.calendar?.toUpperCase() || 'OUTLOOK';
+    const channel = calendarType === 'GOOGLE' ? 'GOOGLE_EVENT' : 'OUTLOOK_EVENT';
+
+    const eventData = {
+      title: args.title,
+      startTime,
+      endTime: endTime || new Date(new Date(startTime).getTime() + 60 * 60 * 1000).toISOString(),
+      reminder: '15'
+    };
+
+    const { data, error } = await supabase.functions.invoke('send-unified-notification', {
+      body: {
+        userId,
+        title: args.title,
+        body: `Calendar event created via phone call`,
+        channels: [channel],
+        userProfile: userProfile,
+        data: { source: 'phone_call' },
+        ...(channel === 'OUTLOOK_EVENT' ? { outlookEvent: eventData } : { googleEvent: eventData })
+      }
+    });
+
+    if (error) throw error;
+
+    return {
+      success: true,
+      message: `Created ${args.calendar || 'Outlook'} event: "${args.title}" at ${args.start_time}`
+    };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
+
+async function handleHangUp(args: any, twilioWs: WebSocket, streamSid: string | null) {
+  try {
+    console.log('[BRIDGE] Hang up requested:', args.farewell_message);
+    
+    // Give time for the farewell message to play
+    setTimeout(() => {
+      if (twilioWs.readyState === WebSocket.OPEN) {
+        twilioWs.close();
+      }
+    }, 3000);
+
+    return {
+      success: true,
+      message: args.farewell_message || "Call ended gracefully"
     };
   } catch (error) {
     return { success: false, error: String(error) };
