@@ -118,7 +118,9 @@ serve(async (req) => {
 
           case "start":
             streamSid = data.start.streamSid;
+            const customParams = data.start.customParameters || {};
             console.log(`[TWILIO] Stream started: ${streamSid}`);
+            console.log(`[TWILIO] Custom params:`, JSON.stringify(customParams));
             connectToOpenAI();
             break;
 

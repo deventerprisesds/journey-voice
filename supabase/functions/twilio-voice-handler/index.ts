@@ -539,23 +539,17 @@ ${userId ? '' : '\n- Note: I could not identify this caller, so task management 
 
 // Generate TwiML that connects to the realtime bridge via Media Streams
 function generateRealtimeBridgeTwiML(context?: string, userId?: string | null, callerPhone?: string, direction?: string): string {
-  // Build the WebSocket URL for the realtime bridge
+  // Use clean URL with no query params - data is passed via Parameter tags
+  // This avoids XML escaping issues with & characters in query strings
   const bridgeUrl = `wss://wwxgajrtmslzklnyplah.supabase.co/functions/v1/twilio-realtime-bridge`;
-  const params = new URLSearchParams();
-  if (userId) params.set('userId', userId);
-  if (callerPhone) params.set('phone', callerPhone);
-  if (context) params.set('context', context);
-  if (direction) params.set('direction', direction);
   
-  const wsUrl = params.toString() ? `${bridgeUrl}?${params.toString()}` : bridgeUrl;
-  
-  console.log('Generating Media Streams TwiML with bridge URL:', wsUrl);
+  console.log('Generating Media Streams TwiML with bridge URL:', bridgeUrl);
   console.log('Call direction:', direction || 'inbound');
   
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <Stream url="${wsUrl}">
+    <Stream url="${bridgeUrl}">
       <Parameter name="userId" value="${userId || ''}" />
       <Parameter name="phone" value="${callerPhone || ''}" />
       <Parameter name="context" value="${escapeXml(context || '')}" />
