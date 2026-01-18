@@ -972,7 +972,18 @@ async function webSearch(query: string, timezone?: string): Promise<ExecuteToolR
     } else if (lowerQuery.includes('weekend') || lowerQuery.includes('this week') || lowerQuery.includes('last week')) {
       searchRecencyFilter = 'week';
     }
-    
+
+    // Prefer high-trust domains for sports scores to avoid partial/projection data
+    let searchDomainFilter: string[] | undefined;
+    if (/(\bnba\b|\bbox score\b|\bscores?\b)/i.test(query)) {
+      searchDomainFilter = [
+        'nba.com',
+        'espn.com',
+        'cbssports.com',
+        'basketball-reference.com',
+      ];
+    }
+
     // Build system prompt with time context for Perplexity to interpret temporal terms
     const systemPrompt = `You are a factual search assistant. Provide complete, accurate information with source attribution. Never fabricate data.
 
@@ -986,20 +997,31 @@ TIME CONVENTIONS:
 - "This week" starts on Monday and ends on Sunday
 - "Last weekend" is the most recent Friday-Saturday-Sunday before today
 
+SPORTS SCORES RULES (important):
+- Only report FINAL scores (not live, projected, or partial)
+- Prefer official box score pages (NBA.com) or major sports outlets (ESPN/CBS)
+- If sources conflict, prefer NBA.com; otherwise say "conflicting sources" and include the sources
+
 When the user asks about "this weekend", "today", "last night", etc., interpret these relative to the current time context above.`;
 
     // Send query VERBATIM - no modification, no date suffix
     const requestBody: any = {
       model: 'sonar-pro',
+      temperature: 0.1,
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: query }  // VERBATIM - exactly as user spoke it
+        { role: 'user', content: query } // VERBATIM - exactly as user spoke it
       ],
       web_search_options: {
         search_context_size: 'high'
       },
       max_tokens: 1500
     };
+
+    if (searchDomainFilter?.length) {
+      requestBody.search_domain_filter = searchDomainFilter;
+      console.log('[WEB-SEARCH] Domain filter set:', JSON.stringify(searchDomainFilter));
+    }
     
     // Add recency filter if applicable (helps Perplexity prioritize recent results)
     if (searchRecencyFilter) {
