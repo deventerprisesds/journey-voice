@@ -201,11 +201,11 @@ export const toolDefinitions = [
   {
     type: "function",
     name: "web_search",
-    description: "Search the internet for REAL-TIME information. Use for: weather, sports scores (NFL, NBA, MLB, etc.), news, stock prices, current events, or anything requiring live data.",
+    description: "Search the internet for REAL-TIME information. Use for: weather, sports scores, news, stock prices, current events. CRITICAL: Pass the user's query EXACTLY as spoken - do NOT convert phrases like 'this weekend' or 'today' into specific dates.",
     parameters: {
       type: "object",
       properties: {
-        query: { type: "string", description: "The search query (e.g., 'Ravens game score today', 'weather in Baltimore', 'latest tech news', 'AAPL stock price')" }
+        query: { type: "string", description: "The user's search query VERBATIM - pass exactly what they said (e.g., 'this weekend's NBA scores', 'weather in Baltimore today')" }
       },
       required: ["query"]
     }
@@ -964,40 +964,24 @@ async function webSearch(query: string, timezone?: string): Promise<ExecuteToolR
   }
   
   try {
-    // Enhance the query with the current date for time-sensitive searches
-    const enhancedQuery = `${query} (current date: ${timeAnchor.todayDate})`;
-    
-    // Detect multi-day queries for appropriate recency filter
-    let recency: string = 'day';
-    if (/weekend|this week|last week|past \d+ days/i.test(query)) {
-      recency = 'week';
-    }
-    
+    // Send query VERBATIM - no modification, no date suffix
     const requestBody = {
-      model: 'sonar-pro',  // Advanced search model for complete results
+      model: 'sonar-pro',
       messages: [
         { 
           role: 'system', 
-          content: `You are a factual search assistant. Today's date is ${timeAnchor.currentDateTime}. 
-
-RESPONSE RULES:
-- Provide COMPLETE data - list ALL items found, not partial lists
-- For sports scores: Include BOTH teams' final scores for EVERY game
-- Weekend = Friday, Saturday, Sunday; Week starts Monday
-- End with brief source attribution (e.g., "Source: ESPN")
-- If data is incomplete, explicitly state what's missing
-- NEVER fabricate information - only report what search results contain` 
+          content: 'You are a factual search assistant. Provide complete, accurate information with source attribution. Never fabricate data.'
         },
-        { role: 'user', content: enhancedQuery }
+        { role: 'user', content: query }  // VERBATIM - exactly as user spoke it
       ],
-      search_recency_filter: recency,
       web_search_options: {
-        search_context_size: 'high'  // Get complete search context
+        search_context_size: 'high'
       },
-      max_tokens: 1500  // Allow longer responses for complete data
+      max_tokens: 1500
+      // No search_recency_filter - Perplexity determines relevance naturally
     };
     
-    console.log('[WEB-SEARCH] Enhanced query:', enhancedQuery);
+    console.log('[WEB-SEARCH] Verbatim query:', query);
     console.log('[WEB-SEARCH] Perplexity request body:', JSON.stringify(requestBody, null, 2));
     
     const startTime = Date.now();
