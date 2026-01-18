@@ -3,7 +3,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sh
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Send, Bot, User, Loader2, Plus, X } from 'lucide-react';
+import { Send, Bot, User, Loader2, Plus, X, Search, Cloud, Newspaper } from 'lucide-react';
 import { useChatAssistant, ChatMessage } from '@/hooks/useChatAssistant';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
@@ -107,9 +107,48 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ isOpen, onClose, onTaskUp
               <div className="text-center py-12">
                 <Bot className="h-12 w-12 mx-auto text-muted-foreground/50 mb-4" />
                 <h3 className="font-medium text-foreground mb-1">Start a conversation</h3>
-                <p className="text-sm text-muted-foreground">
+                <p className="text-sm text-muted-foreground mb-4">
                   Ask me to send emails, Slack messages, create calendar events, or help with tasks.
                 </p>
+                {/* Quick action buttons for testing */}
+                <div className="flex flex-wrap gap-2 justify-center">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setInputValue("What's the weather in Baltimore?");
+                      setTimeout(() => handleSend(), 100);
+                    }}
+                    className="text-xs"
+                  >
+                    <Cloud className="h-3 w-3 mr-1" />
+                    Weather
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setInputValue("What are today's top news headlines?");
+                      setTimeout(() => handleSend(), 100);
+                    }}
+                    className="text-xs"
+                  >
+                    <Newspaper className="h-3 w-3 mr-1" />
+                    News
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setInputValue("Search for recent AI developments");
+                      setTimeout(() => handleSend(), 100);
+                    }}
+                    className="text-xs"
+                  >
+                    <Search className="h-3 w-3 mr-1" />
+                    Web Search
+                  </Button>
+                </div>
               </div>
             ) : (
               messages.map((message) => (
