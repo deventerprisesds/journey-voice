@@ -1023,8 +1023,7 @@ async function webSearch(query: string, timezone?: string): Promise<ExecuteToolR
       result: { 
         answer, 
         sources, 
-        query, 
-        enhancedQuery,
+        query,
         searchTimestamp: new Date().toISOString(),
         currentDate: timeAnchor.todayDate
       },
