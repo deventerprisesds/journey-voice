@@ -27,10 +27,12 @@ interface ToolOutput {
   output: string;
 }
 
-// Execute tool calls from the Assistant
+// Execute tool calls via centralized execute-tool edge function
 async function executeToolCall(
   toolCall: ToolCall,
-  userId: string
+  userId: string,
+  userProfile?: any,
+  timezone?: string
 ): Promise<string> {
   const { name, arguments: argsString } = toolCall.function;
   
@@ -41,240 +43,45 @@ async function executeToolCall(
     return JSON.stringify({ error: 'Invalid tool arguments', details: argsString });
   }
 
-  console.log(`Executing tool: ${name}`, args);
+  console.log(`[HYBRID] Executing tool via execute-tool: ${name}`, args);
 
   try {
-    switch (name) {
-      case 'send_email':
-      case 'Email': {
-        // Get user profile for email
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('email, phone')
-          .eq('user_id', userId)
-          .maybeSingle();
-
-        const response = await fetch(`${supabaseUrl}/functions/v1/send-unified-notification`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${supabaseServiceKey}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            userId,
-            title: args.subject || args.title || 'AI Assistant Email',
-            body: args.body || args.message || args.content || '',
-            channels: ['EMAIL'],
-            data: { type: 'assistant_email' },
-            userProfile: profile || {}
-          })
-        });
-
-        const result = await response.json();
-        if (result.success) {
-          return JSON.stringify({ 
-            success: true, 
-            message: `Email sent successfully to ${profile?.email || 'user'}`,
-            details: result.channelResults?.email
-          });
-        } else {
-          return JSON.stringify({ 
-            success: false, 
-            error: result.errors?.join(', ') || 'Failed to send email',
-            details: result
-          });
+    // Call centralized execute-tool edge function
+    const response = await fetch(`${supabaseUrl}/functions/v1/execute-tool`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${supabaseServiceKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        toolName: name,
+        args,
+        userId,
+        context: {
+          interface: 'chat',
+          timezone: timezone || 'America/New_York',
+          userProfile
         }
-      }
+      })
+    });
 
-      case 'send_slack_message':
-      case 'Slack_Message': {
-        // Get Slack webhook from environment (stored as secret)
-        const slackWebhook = Deno.env.get('SLACK_WEBHOOK_URL');
-
-        const response = await fetch(`${supabaseUrl}/functions/v1/send-unified-notification`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${supabaseServiceKey}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            userId,
-            title: args.title || 'AI Assistant',
-            body: args.message || args.text || args.body || '',
-            channels: ['SLACK'],
-            slackWebhook,
-            data: { type: 'assistant_slack' }
-          })
-        });
-
-        const result = await response.json();
-        if (result.success) {
-          return JSON.stringify({ 
-            success: true, 
-            message: 'Slack message sent successfully',
-            details: result.channelResults?.slack
-          });
-        } else {
-          return JSON.stringify({ 
-            success: false, 
-            error: result.errors?.join(', ') || 'Failed to send Slack message',
-            details: result
-          });
-        }
-      }
-
-      case 'create_outlook_event':
-      case 'Outlook_Event': {
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('email')
-          .eq('user_id', userId)
-          .maybeSingle();
-
-        const startTime = args.start_time || args.startTime || new Date(Date.now() + 60 * 60 * 1000).toISOString();
-        const durationMinutes = args.duration || args.durationMinutes || 60;
-        const endTime = args.end_time || args.endTime || new Date(new Date(startTime).getTime() + durationMinutes * 60 * 1000).toISOString();
-
-        const response = await fetch(`${supabaseUrl}/functions/v1/send-unified-notification`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${supabaseServiceKey}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            userId,
-            channels: ['OUTLOOK_EVENT'],
-            userProfile: profile || {},
-            data: {
-              type: 'assistant_calendar',
-              taskTitle: args.title || args.subject || 'AI Created Event',
-              taskDescription: args.description || args.body || '',
-              startTime,
-              estimateMinutes: durationMinutes
-            },
-            outlookEvent: {
-              title: args.title || args.subject || 'AI Created Event',
-              startTime,
-              endTime,
-              reminder: args.reminder || '15'
-            }
-          })
-        });
-
-        const result = await response.json();
-        if (result.success) {
-          return JSON.stringify({ 
-            success: true, 
-            message: `Outlook event "${args.title || 'Event'}" created for ${new Date(startTime).toLocaleString()}`,
-            details: result.channelResults?.outlook
-          });
-        } else {
-          return JSON.stringify({ 
-            success: false, 
-            error: result.errors?.join(', ') || 'Failed to create Outlook event',
-            details: result
-          });
-        }
-      }
-
-      case 'create_google_event':
-      case 'Google_Event': {
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('email')
-          .eq('user_id', userId)
-          .maybeSingle();
-
-        const startTime = args.start_time || args.startTime || new Date(Date.now() + 60 * 60 * 1000).toISOString();
-        const durationMinutes = args.duration || args.durationMinutes || 60;
-        const endTime = args.end_time || args.endTime || new Date(new Date(startTime).getTime() + durationMinutes * 60 * 1000).toISOString();
-
-        const response = await fetch(`${supabaseUrl}/functions/v1/send-unified-notification`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${supabaseServiceKey}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            userId,
-            channels: ['GOOGLE_EVENT'],
-            userProfile: profile || {},
-            data: {
-              type: 'assistant_calendar',
-              taskTitle: args.title || args.subject || 'AI Created Event',
-              taskDescription: args.description || args.body || '',
-              startTime,
-              estimateMinutes: durationMinutes
-            },
-            googleEvent: {
-              title: args.title || args.subject || 'AI Created Event',
-              startTime,
-              endTime,
-              reminder: args.reminder || '15'
-            }
-          })
-        });
-
-        const result = await response.json();
-        if (result.success) {
-          return JSON.stringify({ 
-            success: true, 
-            message: `Google Calendar event "${args.title || 'Event'}" created for ${new Date(startTime).toLocaleString()}`,
-            details: result.channelResults?.google
-          });
-        } else {
-          return JSON.stringify({ 
-            success: false, 
-            error: result.errors?.join(', ') || 'Failed to create Google Calendar event',
-            details: result
-          });
-        }
-      }
-
-      case 'initiate_phone_call':
-      case 'Phone_Call': {
-        // Trigger a phone call via Twilio
-        const response = await fetch(`${supabaseUrl}/functions/v1/twilio-voice-handler`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${supabaseServiceKey}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            action: 'trigger-call',
-            userId,
-            delay_minutes: args.delay_minutes,
-            context: args.context
-          })
-        });
-
-        const result = await response.json();
-        if (result.success) {
-          const message = args.delay_minutes 
-            ? `I'll call you in ${args.delay_minutes} minute${args.delay_minutes > 1 ? 's' : ''}`
-            : 'Calling you now';
-          return JSON.stringify({ 
-            success: true, 
-            message,
-            call_sid: result.call_sid
-          });
-        } else {
-          return JSON.stringify({ 
-            success: false, 
-            error: result.error || 'Failed to initiate phone call'
-          });
-        }
-      }
-
-      default:
-        return JSON.stringify({ 
-          error: `Unknown tool: ${name}`,
-          availableTools: ['send_email', 'send_slack_message', 'create_outlook_event', 'create_google_event', 'initiate_phone_call']
-        });
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[HYBRID] execute-tool error: ${response.status}`, errorText);
+      return JSON.stringify({ 
+        success: false, 
+        error: `Tool execution failed: ${response.status}` 
+      });
     }
+
+    const result = await response.json();
+    console.log(`[HYBRID] Tool result:`, result);
+    
+    return JSON.stringify(result);
   } catch (error) {
-    console.error(`Error executing tool ${name}:`, error);
+    console.error(`[HYBRID] Error executing tool ${name}:`, error);
     return JSON.stringify({ 
+      success: false,
       error: `Tool execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`
     });
   }
