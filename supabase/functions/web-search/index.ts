@@ -26,7 +26,7 @@ serve(async (req) => {
   }
 
   try {
-    const { query, recencyFilter = 'day' } = await req.json();
+    const { query, recencyFilter } = await req.json();
 
     if (!query) {
       return new Response(JSON.stringify({ 
@@ -38,7 +38,13 @@ serve(async (req) => {
       });
     }
 
-    console.log(`[WEB-SEARCH] Searching for: "${query}" with recency: ${recencyFilter}`);
+    // Detect multi-day queries for appropriate recency filter
+    let recency: string = recencyFilter || 'day';
+    if (!recencyFilter && /weekend|this week|last week|past \d+ days/i.test(query)) {
+      recency = 'week';
+    }
+
+    console.log(`[WEB-SEARCH] Searching for: "${query}" with recency: ${recency}`);
 
     const response = await fetch('https://api.perplexity.ai/chat/completions', {
       method: 'POST',
@@ -47,15 +53,27 @@ serve(async (req) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'sonar',
+        model: 'sonar-pro',  // Advanced model for complete results
         messages: [
           { 
             role: 'system', 
-            content: 'Provide a concise, factual answer suitable for speaking aloud. Keep it brief - 2-3 sentences max. Focus on the most important facts.' 
+            content: `You are a factual search assistant.
+
+RESPONSE RULES:
+- Provide COMPLETE data - list ALL items found, not partial lists
+- For sports scores: Include BOTH teams' final scores for EVERY game
+- Weekend = Friday, Saturday, Sunday; Week starts Monday
+- End with brief source attribution (e.g., "Source: ESPN")
+- If data is incomplete, explicitly state what's missing
+- NEVER fabricate information` 
           },
           { role: 'user', content: query }
         ],
-        search_recency_filter: recencyFilter // 'day', 'week', 'month', 'year'
+        search_recency_filter: recency,
+        web_search_options: {
+          search_context_size: 'high'
+        },
+        max_tokens: 1500
       }),
     });
 

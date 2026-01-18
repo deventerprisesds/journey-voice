@@ -884,19 +884,34 @@ async function webSearch(query: string, timezone?: string): Promise<ExecuteToolR
     // Enhance the query with the current date for time-sensitive searches
     const enhancedQuery = `${query} (current date: ${timeAnchor.todayDate})`;
     
+    // Detect multi-day queries for appropriate recency filter
+    let recency: string = 'day';
+    if (/weekend|this week|last week|past \d+ days/i.test(query)) {
+      recency = 'week';
+    }
+    
     const requestBody = {
-      model: 'sonar',
+      model: 'sonar-pro',  // Advanced search model for complete results
       messages: [
         { 
           role: 'system', 
           content: `You are a factual search assistant. Today's date is ${timeAnchor.currentDateTime}. 
-Provide a concise, factual answer with sources. Keep it brief - 2-3 sentences max. 
-Focus on the most important facts. ALWAYS include the date of the information if available.
-NEVER fabricate information - only report what you find in your search results.` 
+
+RESPONSE RULES:
+- Provide COMPLETE data - list ALL items found, not partial lists
+- For sports scores: Include BOTH teams' final scores for EVERY game
+- Weekend = Friday, Saturday, Sunday; Week starts Monday
+- End with brief source attribution (e.g., "Source: ESPN")
+- If data is incomplete, explicitly state what's missing
+- NEVER fabricate information - only report what search results contain` 
         },
         { role: 'user', content: enhancedQuery }
       ],
-      search_recency_filter: 'day'
+      search_recency_filter: recency,
+      web_search_options: {
+        search_context_size: 'high'  // Get complete search context
+      },
+      max_tokens: 1500  // Allow longer responses for complete data
     };
     
     console.log('[WEB-SEARCH] Enhanced query:', enhancedQuery);
