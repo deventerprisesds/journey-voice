@@ -226,6 +226,40 @@ export const toolDefinitions = [
 ];
 
 // ============================================================================
+// CENTRAL TIME ANCHOR - Used by all tools for consistent date/time
+// ============================================================================
+
+function getCurrentTimeAnchor(timezone: string = 'America/New_York'): { 
+  currentDateTime: string; 
+  todayDate: string; 
+  timezone: string;
+} {
+  try {
+    const now = new Date();
+    const currentDateTime = now.toLocaleString('en-US', { 
+      timeZone: timezone, 
+      weekday: 'long',
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true
+    });
+    const todayDate = now.toLocaleDateString('en-CA', { timeZone: timezone }); // YYYY-MM-DD format
+    
+    return { currentDateTime, todayDate, timezone };
+  } catch (error) {
+    const now = new Date();
+    return {
+      currentDateTime: now.toISOString(),
+      todayDate: now.toISOString().split('T')[0],
+      timezone: 'UTC'
+    };
+  }
+}
+
+// ============================================================================
 // TOOL EXECUTION ENGINE
 // ============================================================================
 
@@ -245,6 +279,7 @@ interface ExecuteToolResponse {
   result?: any;
   error?: string;
   message?: string;
+  timeAnchor?: { currentDateTime: string; todayDate: string; timezone: string };
 }
 
 async function executeToolCall(
@@ -306,7 +341,7 @@ async function executeToolCall(
 
       // ============ SEARCH TOOLS ============
       case 'web_search':
-        return await webSearch(args.query);
+        return await webSearch(args.query, context.timezone);
 
       // ============ PHONE-ONLY TOOLS ============
       case 'hang_up':
@@ -824,11 +859,15 @@ async function initiatePhoneCall(supabase: any, userId: string, args: any, inter
 // SEARCH FUNCTIONS
 // ============================================================================
 
-async function webSearch(query: string): Promise<ExecuteToolResponse> {
+async function webSearch(query: string, timezone?: string): Promise<ExecuteToolResponse> {
   const PERPLEXITY_API_KEY = Deno.env.get('PERPLEXITY_API_KEY');
+  
+  // Get the central time anchor for accurate date context
+  const timeAnchor = getCurrentTimeAnchor(timezone || 'America/New_York');
   
   console.log('[WEB-SEARCH] ==================== START ====================');
   console.log('[WEB-SEARCH] Query received:', query);
+  console.log('[WEB-SEARCH] Time anchor:', JSON.stringify(timeAnchor));
   console.log('[WEB-SEARCH] API Key configured:', !!PERPLEXITY_API_KEY);
   
   if (!PERPLEXITY_API_KEY) {
@@ -836,23 +875,31 @@ async function webSearch(query: string): Promise<ExecuteToolResponse> {
     return { 
       success: false, 
       error: "Web search not configured - PERPLEXITY_API_KEY missing",
-      message: "I cannot search the web right now because the search API is not configured. I CANNOT provide real-time information without it."
+      message: "I cannot search the web right now because the search API is not configured. I CANNOT provide real-time information without it.",
+      timeAnchor
     };
   }
   
   try {
+    // Enhance the query with the current date for time-sensitive searches
+    const enhancedQuery = `${query} (current date: ${timeAnchor.todayDate})`;
+    
     const requestBody = {
       model: 'sonar',
       messages: [
         { 
           role: 'system', 
-          content: 'Provide a concise, factual answer with sources. Keep it brief - 2-3 sentences max. Focus on the most important facts. ALWAYS include the date of the information if available.' 
+          content: `You are a factual search assistant. Today's date is ${timeAnchor.currentDateTime}. 
+Provide a concise, factual answer with sources. Keep it brief - 2-3 sentences max. 
+Focus on the most important facts. ALWAYS include the date of the information if available.
+NEVER fabricate information - only report what you find in your search results.` 
         },
-        { role: 'user', content: query }
+        { role: 'user', content: enhancedQuery }
       ],
       search_recency_filter: 'day'
     };
     
+    console.log('[WEB-SEARCH] Enhanced query:', enhancedQuery);
     console.log('[WEB-SEARCH] Perplexity request body:', JSON.stringify(requestBody, null, 2));
     
     const startTime = Date.now();
@@ -874,7 +921,8 @@ async function webSearch(query: string): Promise<ExecuteToolResponse> {
       return { 
         success: false, 
         error: `Search API error: ${response.status} - ${errorText}`,
-        message: "The web search failed. I CANNOT provide real-time information right now."
+        message: "The web search failed. I CANNOT provide real-time information right now.",
+        timeAnchor
       };
     }
     
@@ -890,8 +938,16 @@ async function webSearch(query: string): Promise<ExecuteToolResponse> {
     
     return {
       success: true,
-      result: { answer, sources, query, searchTimestamp: new Date().toISOString() },
-      message: answer
+      result: { 
+        answer, 
+        sources, 
+        query, 
+        enhancedQuery,
+        searchTimestamp: new Date().toISOString(),
+        currentDate: timeAnchor.todayDate
+      },
+      message: answer,
+      timeAnchor
     };
   } catch (error) {
     console.error('[WEB-SEARCH] ❌ Exception:', error);
