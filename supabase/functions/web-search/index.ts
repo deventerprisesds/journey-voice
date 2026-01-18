@@ -44,7 +44,51 @@ serve(async (req) => {
       recency = 'week';
     }
 
+    // Prefer high-trust domains for sports scores to avoid partial/projection data
+    let searchDomainFilter: string[] | undefined;
+    if (/(\bnba\b|\bbox score\b|\bscores?\b)/i.test(query)) {
+      searchDomainFilter = [
+        'nba.com',
+        'espn.com',
+        'cbssports.com',
+        'basketball-reference.com',
+      ];
+    }
+
     console.log(`[WEB-SEARCH] Searching for: "${query}" with recency: ${recency}`);
+    if (searchDomainFilter?.length) {
+      console.log('[WEB-SEARCH] Domain filter set:', JSON.stringify(searchDomainFilter));
+    }
+
+    const requestBody: any = {
+      model: 'sonar-pro',  // Advanced model for complete results
+      temperature: 0.1,
+      messages: [
+        { 
+          role: 'system', 
+          content: `You are a factual search assistant.
+
+RESPONSE RULES:
+- Provide COMPLETE data - list ALL items found, not partial lists
+- For sports scores: ONLY include FINAL scores (no live/projection/partial)
+- Prefer official box score pages (NBA.com) or major sports outlets (ESPN/CBS)
+- Weekend = Friday, Saturday, Sunday; Week starts Monday
+- End with brief source attribution (e.g., "Source: NBA.com")
+- If data is incomplete, explicitly state what's missing
+- NEVER fabricate information` 
+        },
+        { role: 'user', content: query }
+      ],
+      search_recency_filter: recency,
+      web_search_options: {
+        search_context_size: 'high'
+      },
+      max_tokens: 1500
+    };
+
+    if (searchDomainFilter?.length) {
+      requestBody.search_domain_filter = searchDomainFilter;
+    }
 
     const response = await fetch('https://api.perplexity.ai/chat/completions', {
       method: 'POST',
@@ -52,29 +96,7 @@ serve(async (req) => {
         'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        model: 'sonar-pro',  // Advanced model for complete results
-        messages: [
-          { 
-            role: 'system', 
-            content: `You are a factual search assistant.
-
-RESPONSE RULES:
-- Provide COMPLETE data - list ALL items found, not partial lists
-- For sports scores: Include BOTH teams' final scores for EVERY game
-- Weekend = Friday, Saturday, Sunday; Week starts Monday
-- End with brief source attribution (e.g., "Source: ESPN")
-- If data is incomplete, explicitly state what's missing
-- NEVER fabricate information` 
-          },
-          { role: 'user', content: query }
-        ],
-        search_recency_filter: recency,
-        web_search_options: {
-          search_context_size: 'high'
-        },
-        max_tokens: 1500
-      }),
+      body: JSON.stringify(requestBody),
     });
 
     if (!response.ok) {
