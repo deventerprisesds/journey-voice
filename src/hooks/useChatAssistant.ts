@@ -19,8 +19,6 @@ interface UseChatAssistantReturn {
   loadThread: (threadId: string) => Promise<void>;
 }
 
-const ASSISTANT_ID = 'asst_KMHLsGgT3y6T80WGSlbBtblb'; // Iris Chase assistant
-
 export function useChatAssistant(): UseChatAssistantReturn {
   const { user } = useAuth();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -139,13 +137,12 @@ export function useChatAssistant(): UseChatAssistantReturn {
         content: userMessage.content
       });
 
-      // Call the hybrid assistant API
+      // Call the hybrid assistant API (uses OPENAI_ASSISTANT_ID secret on server)
       const { data, error } = await supabase.functions.invoke('hybrid-assistant-api', {
         body: {
           userInput: content.trim(),
           userId: user.id,
-          threadId: threadId,
-          assistantId: ASSISTANT_ID
+          threadId: threadId
         }
       });
 

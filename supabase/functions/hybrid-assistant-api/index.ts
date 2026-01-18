@@ -541,7 +541,7 @@ serve(async (req) => {
       userInput, 
       userId, 
       threadId, 
-      assistantId = 'asst_BcZBxlx9zH8VIPvfJrhPP3EF',
+      assistantId = Deno.env.get('OPENAI_ASSISTANT_ID') || 'asst_BcZBxlx9zH8VIPvfJrhPP3EF',
       contextualInstructions
     } = await req.json();
 
