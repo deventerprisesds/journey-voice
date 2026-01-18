@@ -87,6 +87,25 @@ async function executeToolCall(
   }
 }
 
+// Get current date/time string in user's timezone - CENTRAL TIME ANCHOR
+function getCurrentTimeString(timezone: string = 'America/New_York'): string {
+  try {
+    const now = new Date();
+    return now.toLocaleString('en-US', { 
+      timeZone: timezone, 
+      weekday: 'long',
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true
+    });
+  } catch (error) {
+    return new Date().toISOString();
+  }
+}
+
 async function handleAssistantRequest(
   userInput: string,
   userId: string,
@@ -97,18 +116,33 @@ async function handleAssistantRequest(
   console.log(`Processing assistant request for user ${userId}, thread ${threadId}`);
 
   try {
-    // Load user's AI instructions from scheduling preferences
+    // Load user's AI instructions and timezone from scheduling preferences
     let additionalInstructions = contextualInstructions || '';
+    let userTimezone = 'America/New_York';
     
     try {
       const { data: prefs } = await supabase
         .from('user_scheduling_prefs')
-        .select('core_instructions, assistant_extensions, config')
+        .select('core_instructions, assistant_extensions, config, timezone')
         .eq('user_id', userId)
         .maybeSingle();
 
       if (prefs) {
+        // Get user's timezone for accurate time anchor
+        if (prefs.timezone) {
+          userTimezone = prefs.timezone;
+        }
+        
         const instructionParts: string[] = [];
+        
+        // ============================================================
+        // CENTRAL TIME ANCHOR - This prevents wrong date/time issues
+        // ============================================================
+        const currentDateTime = getCurrentTimeString(userTimezone);
+        instructionParts.push(`CURRENT DATE AND TIME (ABSOLUTE TRUTH - DO NOT CONTRADICT):
+Today is ${currentDateTime} (${userTimezone}).
+Use this as your authoritative time reference for ALL date/time operations.
+When asked about "today", "tomorrow", "this week", etc., calculate from this anchor.`);
         
         if (prefs.core_instructions) {
           instructionParts.push(prefs.core_instructions);
@@ -127,10 +161,22 @@ async function handleAssistantRequest(
         }
         
         additionalInstructions = instructionParts.filter(Boolean).join('\n\n');
+        console.log(`[HYBRID] Time anchor set: ${currentDateTime} (${userTimezone})`);
         console.log('Loaded user-specific AI instructions');
+      } else {
+        // No prefs found - still add time anchor with default timezone
+        const currentDateTime = getCurrentTimeString(userTimezone);
+        additionalInstructions = `CURRENT DATE AND TIME (ABSOLUTE TRUTH - DO NOT CONTRADICT):
+Today is ${currentDateTime} (${userTimezone}).
+Use this as your authoritative time reference for ALL date/time operations.
+
+${contextualInstructions || ''}`;
+        console.log(`[HYBRID] Time anchor set (default): ${currentDateTime}`);
       }
     } catch (error) {
-      console.warn('Failed to load user instructions, using contextual only:', error);
+      console.warn('Failed to load user instructions, adding time anchor anyway:', error);
+      const currentDateTime = getCurrentTimeString(userTimezone);
+      additionalInstructions = `CURRENT DATE AND TIME: ${currentDateTime} (${userTimezone})\n\n${contextualInstructions || ''}`;
     }
 
     // Get or create OpenAI thread
