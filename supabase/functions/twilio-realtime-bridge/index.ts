@@ -631,6 +631,7 @@ serve(async (req) => {
     let currentResponseItemId: string | null = null;
     let audioSamplesPlayed: number = 0;
     let audioChunksSent: number = 0;
+    let firstAudioDeltaReceived: boolean = false;
     
     // POST-VALIDATION: Track last tool output for response validation
     let lastToolOutput: { toolName: string; extractedFacts?: any } | null = null;
@@ -787,24 +788,32 @@ serve(async (req) => {
           switch (msg.type) {
             case "session.created":
               console.log("[OPENAI] Session created, sending config...");
+              const sessionConfig = {
+                modalities: ["text", "audio"],
+                instructions: instructions,
+                voice: "alloy",
+                input_audio_format: "pcm16",
+                output_audio_format: "pcm16",
+                input_audio_transcription: { model: "whisper-1" },
+                turn_detection: {
+                  type: "server_vad",
+                  threshold: 0.2,
+                  prefix_padding_ms: 300,
+                  silence_duration_ms: 800,
+                },
+                tools: getInlineToolDefinitions(),
+                tool_choice: "auto"
+              };
+              console.log("[OPENAI] Sending session config:", JSON.stringify({
+                modalities: sessionConfig.modalities,
+                voice: sessionConfig.voice,
+                input_audio_transcription: sessionConfig.input_audio_transcription,
+                turn_detection: sessionConfig.turn_detection,
+                toolCount: sessionConfig.tools?.length || 0
+              }));
               openaiWs!.send(JSON.stringify({
                 type: "session.update",
-                session: {
-                  modalities: ["text", "audio"],
-                  instructions: instructions,
-                  voice: "alloy",
-                  input_audio_format: "pcm16",
-                  output_audio_format: "pcm16",
-                  input_audio_transcription: { model: "whisper-1" },
-                  turn_detection: {
-                    type: "server_vad",
-                    threshold: 0.2,  // Lower threshold for better phone audio sensitivity
-                    prefix_padding_ms: 300,
-                    silence_duration_ms: 800,  // Faster response on phone
-                  },
-                  tools: getInlineToolDefinitions(),
-                  tool_choice: "auto"
-                },
+                session: sessionConfig,
               }));
               break;
 
@@ -862,6 +871,12 @@ serve(async (req) => {
 
             case "response.audio.delta":
               if (streamSid && twilioWs.readyState === WebSocket.OPEN) {
+                // Log FIRST audio delta immediately
+                if (!firstAudioDeltaReceived) {
+                  console.log(`[AUDIO] 🔊 FIRST audio delta from OpenAI - bytes: ${msg.delta?.length || 0}, streamSid: ${streamSid}`);
+                  firstAudioDeltaReceived = true;
+                }
+                
                 const pcm24k = base64ToInt16(msg.delta);
                 const pcm8k = downsample24to8(pcm24k);
                 const mulaw = encodeMulaw(pcm8k);
@@ -884,6 +899,10 @@ serve(async (req) => {
               } else if (streamSid) {
                 console.warn(`[AUDIO] Cannot send - Twilio WS state: ${twilioWs.readyState}`);
               }
+              break;
+
+            case "error":
+              console.error("[OPENAI] ❌ ERROR EVENT:", JSON.stringify(msg));
               break;
 
             case "input_audio_buffer.speech_started":
@@ -1031,6 +1050,7 @@ serve(async (req) => {
       }));
 
       openaiWs.send(JSON.stringify({ type: "response.create" }));
+      console.log("[BRIDGE] ✅ response.create sent, waiting for audio...");
     }
 
     function sendOutboundGreeting() {
