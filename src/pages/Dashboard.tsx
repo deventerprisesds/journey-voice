@@ -287,7 +287,7 @@ const Dashboard = () => {
         </main>
 
         {/* Voice Status Area */}
-        <VoiceStatusArea />
+        <VoiceStatusArea onTaskUpdate={handleTaskUpdate} />
 
         {/* Task Detail Modal - Centralized at Dashboard level */}
         {selectedTask && (
