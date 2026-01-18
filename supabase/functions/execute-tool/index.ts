@@ -300,6 +300,159 @@ function getCurrentTimeAnchor(timezone: string = 'America/New_York'): {
 }
 
 // ============================================================================
+// TEMPORAL DATE CALCULATION - Auto-detect and calculate date ranges from query
+// ============================================================================
+
+/**
+ * Detect temporal intent from natural language query
+ * Order matters - check specific phrases first
+ */
+function detectTemporalIntent(query: string): string | null {
+  const q = query.toLowerCase();
+  
+  // Rolling periods (check first - more specific)
+  if (q.includes('over the next week') || q.includes('next 7 days') || q.includes('coming week')) return 'next_7_days';
+  if (q.includes('over the last week') || q.includes('past week') || q.includes('last 7 days') || q.includes('past 7 days')) return 'last_7_days';
+  
+  // Calendar weeks
+  if (q.includes('next week')) return 'next_week';      // Mon-Sun of NEXT week
+  if (q.includes('this week')) return 'this_week';      // Mon-Sun of CURRENT week
+  
+  // Weekends
+  if (q.includes('last weekend')) return 'last_weekend';
+  if (q.includes('this weekend') || q.match(/\bweekend\b/)) return 'this_weekend';
+  
+  // Single days
+  if (q.includes('tomorrow')) return 'tomorrow';
+  if (q.includes('yesterday')) return 'yesterday';
+  if (q.includes('today') || q.includes('tonight')) return 'today';
+  
+  return null;
+}
+
+/**
+ * Get today's date object in user's timezone
+ * Set to noon to avoid DST edge cases
+ */
+function getTodayInTz(timezone: string): Date {
+  const now = new Date();
+  // Get YYYY-MM-DD string in timezone, then create Date at noon
+  const tzString = now.toLocaleDateString('en-CA', { timeZone: timezone });
+  return new Date(tzString + 'T12:00:00');
+}
+
+/**
+ * Format date as YYYY-MM-DD
+ */
+function formatYMD(date: Date): string {
+  return date.toISOString().split('T')[0];
+}
+
+/**
+ * Calculate date range based on detected temporal intent and timezone
+ * Week starts Monday, weekend = Friday-Sunday
+ */
+function calculateDateRange(
+  intent: string, 
+  timezone: string
+): { start_date: string; end_date: string } | null {
+  const today = getTodayInTz(timezone);
+  const dayOfWeek = today.getDay(); // 0=Sun, 1=Mon, ... 6=Sat
+  
+  switch (intent) {
+    case 'today': {
+      const todayStr = formatYMD(today);
+      return { start_date: todayStr, end_date: todayStr };
+    }
+      
+    case 'tomorrow': {
+      const tomorrow = new Date(today);
+      tomorrow.setDate(today.getDate() + 1);
+      const tomorrowStr = formatYMD(tomorrow);
+      return { start_date: tomorrowStr, end_date: tomorrowStr };
+    }
+      
+    case 'yesterday': {
+      const yesterday = new Date(today);
+      yesterday.setDate(today.getDate() - 1);
+      const yesterdayStr = formatYMD(yesterday);
+      return { start_date: yesterdayStr, end_date: yesterdayStr };
+    }
+    
+    case 'this_weekend': {
+      // Weekend = Friday, Saturday, Sunday
+      // If today is Sun(0), Fri(5), or Sat(6) - we're already in the weekend
+      const friday = new Date(today);
+      if (dayOfWeek === 0) {
+        // Sunday: go back 2 days to Friday
+        friday.setDate(today.getDate() - 2);
+      } else if (dayOfWeek === 6) {
+        // Saturday: go back 1 day to Friday
+        friday.setDate(today.getDate() - 1);
+      } else if (dayOfWeek === 5) {
+        // Friday: today is Friday, keep it
+      } else {
+        // Mon-Thu: go forward to next Friday
+        const daysUntilFriday = 5 - dayOfWeek;
+        friday.setDate(today.getDate() + daysUntilFriday);
+      }
+      const sunday = new Date(friday);
+      sunday.setDate(friday.getDate() + 2);
+      return { start_date: formatYMD(friday), end_date: formatYMD(sunday) };
+    }
+    
+    case 'last_weekend': {
+      // Previous Fri-Sat-Sun
+      const lastSunday = new Date(today);
+      // If today is Sunday, last Sunday was 7 days ago
+      // Otherwise, last Sunday was (dayOfWeek) days ago
+      const daysSinceLastSunday = dayOfWeek === 0 ? 7 : dayOfWeek;
+      lastSunday.setDate(today.getDate() - daysSinceLastSunday);
+      const lastFriday = new Date(lastSunday);
+      lastFriday.setDate(lastSunday.getDate() - 2);
+      return { start_date: formatYMD(lastFriday), end_date: formatYMD(lastSunday) };
+    }
+    
+    case 'this_week': {
+      // Current calendar week: Monday to Sunday (Week starts Monday)
+      const monday = new Date(today);
+      const daysFromMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+      monday.setDate(today.getDate() - daysFromMonday);
+      const sunday = new Date(monday);
+      sunday.setDate(monday.getDate() + 6);
+      return { start_date: formatYMD(monday), end_date: formatYMD(sunday) };
+    }
+    
+    case 'next_week': {
+      // Next calendar week: Next Monday to next Sunday
+      const nextMonday = new Date(today);
+      const daysUntilNextMonday = dayOfWeek === 0 ? 1 : (8 - dayOfWeek);
+      nextMonday.setDate(today.getDate() + daysUntilNextMonday);
+      const nextSunday = new Date(nextMonday);
+      nextSunday.setDate(nextMonday.getDate() + 6);
+      return { start_date: formatYMD(nextMonday), end_date: formatYMD(nextSunday) };
+    }
+    
+    case 'last_7_days': {
+      // Rolling: today - 7 days to today
+      const weekAgo = new Date(today);
+      weekAgo.setDate(today.getDate() - 7);
+      return { start_date: formatYMD(weekAgo), end_date: formatYMD(today) };
+    }
+    
+    case 'next_7_days': {
+      // Rolling: today to today + 7 days
+      const weekAhead = new Date(today);
+      weekAhead.setDate(today.getDate() + 7);
+      return { start_date: formatYMD(today), end_date: formatYMD(weekAhead) };
+    }
+      
+    default:
+      return null;
+  }
+}
+
+// ============================================================================
 // TOOL EXECUTION ENGINE
 // ============================================================================
 
@@ -996,13 +1149,27 @@ interface WebSearchArgs {
 
 async function webSearch(args: WebSearchArgs, timezone?: string): Promise<ExecuteToolResponse> {
   const TAVILY_API_KEY = Deno.env.get('TAVILY_API_KEY');
-  const timeAnchor = getCurrentTimeAnchor(timezone || 'America/New_York');
+  const tz = timezone || 'America/New_York';
+  const timeAnchor = getCurrentTimeAnchor(tz);
   
   console.log('[WEB-SEARCH] ==================== START ====================');
   console.log('[WEB-SEARCH] Using TAVILY API');
   console.log('[WEB-SEARCH] Query (verbatim):', args.query);
+  console.log('[WEB-SEARCH] User timezone:', tz);
   console.log('[WEB-SEARCH] AI-provided params:', JSON.stringify(args, null, 2));
   console.log('[WEB-SEARCH] Time anchor:', JSON.stringify(timeAnchor));
+  
+  // AUTO-DETECT temporal intent and calculate dates from verbatim query
+  const temporalIntent = detectTemporalIntent(args.query);
+  let calculatedDates: { start_date: string; end_date: string } | null = null;
+  
+  if (temporalIntent) {
+    calculatedDates = calculateDateRange(temporalIntent, tz);
+    console.log(`[WEB-SEARCH] Detected temporal intent: "${temporalIntent}"`);
+    console.log(`[WEB-SEARCH] Auto-calculated dates: ${JSON.stringify(calculatedDates)}`);
+  } else {
+    console.log('[WEB-SEARCH] No temporal intent detected - using AI-provided params');
+  }
   
   if (!TAVILY_API_KEY) {
     console.error('[WEB-SEARCH] ❌ NO TAVILY_API_KEY - CANNOT SEARCH');
@@ -1026,10 +1193,19 @@ async function webSearch(args: WebSearchArgs, timezone?: string): Promise<Execut
       include_favicon: false
     };
     
-    // Add time filters if AI provided them
-    if (args.time_range) requestBody.time_range = args.time_range;
-    if (args.start_date) requestBody.start_date = args.start_date;
-    if (args.end_date) requestBody.end_date = args.end_date;
+    // Use calculated dates if detected, otherwise fall back to AI-provided params
+    if (calculatedDates) {
+      // Auto-calculated dates take precedence - ensures correct interpretation
+      requestBody.start_date = calculatedDates.start_date;
+      requestBody.end_date = calculatedDates.end_date;
+      // Don't use time_range when we have explicit calculated dates
+      console.log(`[WEB-SEARCH] Using AUTO-CALCULATED dates: ${calculatedDates.start_date} to ${calculatedDates.end_date}`);
+    } else {
+      // Fall back to AI-provided date parameters
+      if (args.time_range) requestBody.time_range = args.time_range;
+      if (args.start_date) requestBody.start_date = args.start_date;
+      if (args.end_date) requestBody.end_date = args.end_date;
+    }
     
     // Add domain filters if AI provided them (leave empty by default)
     if (args.include_domains?.length) requestBody.include_domains = args.include_domains;
