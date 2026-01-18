@@ -25,11 +25,11 @@ async function getTodaysBriefing(userId: string): Promise<string> {
 
   const { data: tasks, error } = await supabase
     .from('tasks')
-    .select('title, scheduled_start, priority, category')
+    .select('title, start_time, priority, category')
     .eq('user_id', userId)
-    .gte('scheduled_start', startOfDay)
-    .lte('scheduled_start', endOfDay)
-    .order('scheduled_start', { ascending: true });
+    .gte('start_time', startOfDay)
+    .lte('start_time', endOfDay)
+    .order('start_time', { ascending: true });
 
   if (error || !tasks || tasks.length === 0) {
     return 'your daily schedule';
