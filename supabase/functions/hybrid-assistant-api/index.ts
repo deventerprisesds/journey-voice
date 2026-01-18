@@ -27,6 +27,63 @@ interface ToolOutput {
   output: string;
 }
 
+// Interface for extracted facts from tool responses
+interface ExtractedFacts {
+  type: 'task_list' | 'today_tasks' | 'task_created' | 'task_updated' | 'web_search' | 'communication' | 'other';
+  count?: number;
+  scheduled?: number;
+  unscheduled?: number;
+  rawAnswer?: string;
+  source?: string;
+  taskTitle?: string;
+}
+
+// Collected tool outputs for validation
+const collectedToolOutputs: Array<{ toolName: string; extractedFacts?: ExtractedFacts }> = [];
+
+// Validation function - checks AI response against tool outputs
+function validateAiResponse(
+  aiResponse: string, 
+  toolOutputs: Array<{ toolName: string; extractedFacts?: ExtractedFacts }>
+): { valid: boolean; correction?: string } {
+  
+  for (const output of toolOutputs) {
+    if (!output.extractedFacts) continue;
+    
+    const facts = output.extractedFacts;
+    
+    // Validate task counts
+    if (facts.type === 'task_list' || facts.type === 'today_tasks') {
+      const actualCount = facts.count ?? 0;
+      
+      const countPatterns = [
+        /you have (\d+) tasks?/i,
+        /(\d+) tasks? (?:for|scheduled|today)/i,
+        /found (\d+) tasks?/i,
+        /there (?:are|is) (\d+) tasks?/i,
+        /(\d+) scheduled/i,
+        /have (\d+) things?/i
+      ];
+      
+      for (const pattern of countPatterns) {
+        const match = aiResponse.match(pattern);
+        if (match) {
+          const claimedCount = parseInt(match[1]);
+          if (claimedCount !== actualCount) {
+            console.log(`[HYBRID-VALIDATE] Discrepancy: AI claimed ${claimedCount}, tool returned ${actualCount}`);
+            return {
+              valid: false,
+              correction: `Actually, I need to correct myself - you have ${actualCount} task${actualCount !== 1 ? 's' : ''}, not ${claimedCount}.`
+            };
+          }
+        }
+      }
+    }
+  }
+  
+  return { valid: true };
+}
+
 // Execute tool calls via centralized execute-tool edge function
 async function executeToolCall(
   toolCall: ToolCall,
@@ -76,6 +133,12 @@ async function executeToolCall(
 
     const result = await response.json();
     console.log(`[HYBRID] Tool result:`, result);
+    
+    // Collect extracted facts for post-validation
+    if (result.extractedFacts) {
+      collectedToolOutputs.push({ toolName: name, extractedFacts: result.extractedFacts });
+      console.log(`[HYBRID] Collected extracted facts for validation:`, result.extractedFacts);
+    }
     
     return JSON.stringify(result);
   } catch (error) {
@@ -413,11 +476,26 @@ ${contextualInstructions || ''}`;
 
     console.log('[HYBRID] ==================== FINAL RESPONSE ====================');
     console.log('[HYBRID] Full assistant response:', responseContent);
+    
+    // POST-VALIDATION: Check AI response against tool outputs and correct if needed
+    let finalResponse = responseContent;
+    if (collectedToolOutputs.length > 0) {
+      const validation = validateAiResponse(responseContent, collectedToolOutputs);
+      if (!validation.valid && validation.correction) {
+        finalResponse = `${responseContent}\n\n${validation.correction}`;
+        console.log('[HYBRID] ⚠️ Self-correction applied:', validation.correction);
+      } else {
+        console.log('[HYBRID] ✅ Response validated - no discrepancies found');
+      }
+      // Clear collected outputs for next request
+      collectedToolOutputs.length = 0;
+    }
+    
     console.log('[HYBRID] ==========================================================');
 
     return {
       success: true,
-      response: responseContent,
+      response: finalResponse,
       threadId: openaiThreadId,
       runId
     };

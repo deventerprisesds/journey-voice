@@ -274,12 +274,85 @@ interface ExecuteToolRequest {
   };
 }
 
+// Machine-readable facts for post-validation
+interface ExtractedFacts {
+  type: 'task_list' | 'today_tasks' | 'task_created' | 'task_updated' | 'web_search' | 'communication' | 'other';
+  count?: number;
+  scheduled?: number;
+  unscheduled?: number;
+  rawAnswer?: string;
+  source?: string;
+  taskTitle?: string;
+}
+
 interface ExecuteToolResponse {
   success: boolean;
   result?: any;
   error?: string;
   message?: string;
   timeAnchor?: { currentDateTime: string; todayDate: string; timezone: string };
+  extractedFacts?: ExtractedFacts;
+}
+
+// ============================================================================
+// VALIDATION FUNCTION - Used by chat/voice to verify AI claims
+// ============================================================================
+
+export function validateAiResponse(
+  aiResponse: string, 
+  toolOutputs: Array<{ toolName: string; extractedFacts?: ExtractedFacts }>
+): { valid: boolean; correction?: string } {
+  
+  for (const output of toolOutputs) {
+    if (!output.extractedFacts) continue;
+    
+    const facts = output.extractedFacts;
+    
+    // Validate task counts
+    if (facts.type === 'task_list' || facts.type === 'today_tasks') {
+      const actualCount = facts.count ?? 0;
+      
+      // Look for task count claims in AI response
+      const countPatterns = [
+        /you have (\d+) tasks?/i,
+        /(\d+) tasks? (?:for|scheduled|today)/i,
+        /found (\d+) tasks?/i,
+        /there (?:are|is) (\d+) tasks?/i,
+        /(\d+) scheduled/i,
+        /have (\d+) things?/i
+      ];
+      
+      for (const pattern of countPatterns) {
+        const match = aiResponse.match(pattern);
+        if (match) {
+          const claimedCount = parseInt(match[1]);
+          if (claimedCount !== actualCount) {
+            console.log(`[VALIDATE] Discrepancy: AI claimed ${claimedCount}, tool returned ${actualCount}`);
+            return {
+              valid: false,
+              correction: `Actually, I need to correct myself - you have ${actualCount} task${actualCount !== 1 ? 's' : ''}, not ${claimedCount}.`
+            };
+          }
+        }
+      }
+    }
+    
+    // Validate scheduled vs unscheduled counts for today_tasks
+    if (facts.type === 'today_tasks' && facts.scheduled !== undefined) {
+      const scheduledMatch = aiResponse.match(/(\d+) scheduled/i);
+      if (scheduledMatch) {
+        const claimedScheduled = parseInt(scheduledMatch[1]);
+        if (claimedScheduled !== facts.scheduled) {
+          return {
+            valid: false,
+            correction: `Let me correct that - you have ${facts.scheduled} scheduled task${facts.scheduled !== 1 ? 's' : ''} for today.`
+          };
+        }
+      }
+    }
+  }
+  
+  return { valid: true };
 }
 
 async function executeToolCall(
@@ -384,10 +457,13 @@ async function getTasks(supabase: any, userId: string, args: any): Promise<Execu
     
     if (error) throw error;
     
+    const count = data?.length || 0;
+    
     return { 
       success: true, 
-      result: { tasks: data || [], count: data?.length || 0 },
-      message: `Found ${data?.length || 0} tasks`
+      result: { tasks: data || [], count },
+      message: `Found ${count} tasks`,
+      extractedFacts: { type: 'task_list', count }
     };
   } catch (error) {
     return { success: false, error: String(error) };
@@ -410,6 +486,7 @@ async function getTodayTasks(supabase: any, userId: string, timezone?: string): 
     
     const scheduled = data?.filter((t: any) => t.scheduled_start_time) || [];
     const unscheduled = data?.filter((t: any) => !t.scheduled_start_time) || [];
+    const totalCount = (data || []).length;
     
     return { 
       success: true, 
@@ -420,7 +497,13 @@ async function getTodayTasks(supabase: any, userId: string, timezone?: string): 
         date: today,
         timezone: tz
       },
-      message: `Today (${today}): ${scheduled.length} scheduled, ${unscheduled.length} unscheduled tasks`
+      message: `Today (${today}): ${scheduled.length} scheduled, ${unscheduled.length} unscheduled tasks`,
+      extractedFacts: { 
+        type: 'today_tasks', 
+        count: totalCount, 
+        scheduled: scheduled.length, 
+        unscheduled: unscheduled.length 
+      }
     };
   } catch (error) {
     return { success: false, error: String(error) };
@@ -962,7 +1045,8 @@ RESPONSE RULES:
         currentDate: timeAnchor.todayDate
       },
       message: answer,
-      timeAnchor
+      timeAnchor,
+      extractedFacts: { type: 'web_search', source: 'perplexity', rawAnswer: answer }
     };
   } catch (error) {
     console.error('[WEB-SEARCH] ❌ Exception:', error);

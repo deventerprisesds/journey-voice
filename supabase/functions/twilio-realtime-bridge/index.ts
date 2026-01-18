@@ -607,11 +607,25 @@ serve(async (req) => {
     // TRUNCATION: Track for proper interruption handling (not cancel)
     let currentResponseItemId: string | null = null;
     let audioSamplesPlayed: number = 0;
+    
+    // POST-VALIDATION: Track last tool output for response validation
+    let lastToolOutput: { toolName: string; extractedFacts?: any } | null = null;
+    
+    // KEEP-ALIVE: Prevent idle timeout
+    let keepAliveInterval: number | null = null;
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
     twilioWs.onopen = () => {
       console.log("[TWILIO] WebSocket connected");
+      
+      // Keep-alive ping every 30 seconds to prevent idle timeout
+      keepAliveInterval = setInterval(() => {
+        if (twilioWs.readyState === WebSocket.OPEN) {
+          console.log("[BRIDGE] Keep-alive ping");
+          twilioWs.send(JSON.stringify({ event: "ping" }));
+        }
+      }, 30000);
     };
 
     twilioWs.onmessage = (event) => {
@@ -666,6 +680,11 @@ serve(async (req) => {
 
     twilioWs.onclose = () => {
       console.log("[TWILIO] WebSocket closed");
+      // Clear keep-alive interval
+      if (keepAliveInterval) {
+        clearInterval(keepAliveInterval);
+        keepAliveInterval = null;
+      }
       openaiWs?.close();
     };
 
@@ -864,6 +883,31 @@ serve(async (req) => {
               console.log(`[OPENAI] AI said: "${msg.transcript}"`);
               // Save assistant message to conversation history
               saveConversationMessage('assistant', msg.transcript);
+              
+              // POST-VALIDATION: Check AI response against last tool output
+              if (lastToolOutput?.extractedFacts) {
+                const validation = validateVoiceResponse(msg.transcript, lastToolOutput);
+                if (!validation.valid && validation.correction) {
+                  console.log('[BRIDGE] ⚠️ Discrepancy detected, injecting correction');
+                  
+                  // Inject correction as new system message
+                  openaiWs!.send(JSON.stringify({
+                    type: "conversation.item.create",
+                    item: {
+                      type: "message",
+                      role: "user", 
+                      content: [{
+                        type: "input_text",
+                        text: `[System: IMPORTANT CORRECTION NEEDED. You just said something inaccurate. ${validation.correction} Please briefly acknowledge this correction to the user.]`
+                      }]
+                    }
+                  }));
+                  openaiWs!.send(JSON.stringify({ type: "response.create" }));
+                } else {
+                  console.log('[BRIDGE] ✅ Response validated - no discrepancies');
+                }
+                lastToolOutput = null;  // Clear after validation
+              }
               break;
 
             case "response.function_call_arguments.done":
@@ -959,6 +1003,46 @@ serve(async (req) => {
       // Don't trigger response yet - wait for user audio
     }
 
+    // Validation function for voice responses
+    function validateVoiceResponse(
+      aiResponse: string, 
+      toolOutput: { toolName: string; extractedFacts?: any }
+    ): { valid: boolean; correction?: string } {
+      if (!toolOutput.extractedFacts) return { valid: true };
+      
+      const facts = toolOutput.extractedFacts;
+      
+      // Validate task counts
+      if (facts.type === 'task_list' || facts.type === 'today_tasks') {
+        const actualCount = facts.count ?? 0;
+        
+        const countPatterns = [
+          /you have (\d+) tasks?/i,
+          /(\d+) tasks? (?:for|scheduled|today)/i,
+          /found (\d+) tasks?/i,
+          /there (?:are|is) (\d+) tasks?/i,
+          /(\d+) scheduled/i,
+          /have (\d+) things?/i
+        ];
+        
+        for (const pattern of countPatterns) {
+          const match = aiResponse.match(pattern);
+          if (match) {
+            const claimedCount = parseInt(match[1]);
+            if (claimedCount !== actualCount) {
+              console.log(`[BRIDGE-VALIDATE] Discrepancy: AI claimed ${claimedCount}, tool returned ${actualCount}`);
+              return {
+                valid: false,
+                correction: `You have ${actualCount} task${actualCount !== 1 ? 's' : ''}, not ${claimedCount}.`
+              };
+            }
+          }
+        }
+      }
+      
+      return { valid: true };
+    }
+
     async function handleFunctionCall(msg: any) {
       if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN) return;
 
@@ -977,6 +1061,12 @@ serve(async (req) => {
         });
 
         console.log(`[BRIDGE] Function result:`, result);
+        
+        // Store extracted facts for post-validation
+        if (result.extractedFacts) {
+          lastToolOutput = { toolName: functionName, extractedFacts: result.extractedFacts };
+          console.log(`[BRIDGE] Stored extracted facts for validation:`, result.extractedFacts);
+        }
 
         // Send function output back to OpenAI
         openaiWs.send(JSON.stringify({
@@ -1010,447 +1100,5 @@ serve(async (req) => {
   }
 
   // Non-WebSocket request
-  return new Response("Twilio-OpenAI Realtime Bridge v5 - Full Capability Parity", { status: 200 });
+  return new Response("Twilio-OpenAI Realtime Bridge v6 - Self-Correction System", { status: 200 });
 });
-
-// ============ Task Functions ============
-
-async function getTasks(supabase: any, userId: string | null, args: any) {
-  if (!userId) return { success: false, error: "Not authenticated", tasks: [] };
-
-  try {
-    let query = supabase.from('tasks').select('*').eq('user_id', userId);
-    
-    if (args.status) {
-      query = query.eq('status', args.status);
-    }
-    
-    const { data, error } = await query.order('created_at', { ascending: false }).limit(20);
-    
-    if (error) throw error;
-    
-    return { 
-      success: true, 
-      tasks: data || [],
-      count: data?.length || 0,
-      message: `Found ${data?.length || 0} tasks`
-    };
-  } catch (error) {
-    return { success: false, error: String(error), tasks: [] };
-  }
-}
-
-async function getTodayTasksFunction(supabase: any, userId: string | null, timezone: string) {
-  if (!userId) return { success: false, error: "Not authenticated", tasks: [] };
-
-  try {
-    const now = new Date();
-    const today = now.toLocaleDateString('en-CA', { timeZone: timezone });
-    
-    const { data, error } = await supabase
-      .from('tasks')
-      .select('*')
-      .eq('user_id', userId)
-      .or(`due_date.eq.${today},scheduled_date.eq.${today}`)
-      .order('scheduled_start_time', { ascending: true });
-    
-    if (error) throw error;
-    
-    return { 
-      success: true, 
-      tasks: data || [],
-      count: data?.length || 0,
-      message: `You have ${data?.length || 0} tasks for today`
-    };
-  } catch (error) {
-    return { success: false, error: String(error), tasks: [] };
-  }
-}
-
-async function createTask(supabase: any, userId: string | null, args: any) {
-  if (!userId) return { success: false, error: "Not authenticated" };
-  if (!args.title) return { success: false, error: "Task title is required" };
-
-  try {
-    const { data: board } = await supabase
-      .from('boards')
-      .select('id')
-      .eq('user_id', userId)
-      .limit(1)
-      .single();
-
-    if (!board) return { success: false, error: "No board found" };
-
-    const taskData = {
-      title: args.title,
-      description: args.description || null,
-      priority: args.priority?.toUpperCase() || 'MEDIUM',
-      category: args.category?.toUpperCase() || 'LIFE',
-      status: 'BACKLOG',
-      board_id: board.id,
-      user_id: userId
-    };
-
-    const { data, error } = await supabase
-      .from('tasks')
-      .insert([taskData])
-      .select()
-      .single();
-
-    if (error) throw error;
-
-    return { 
-      success: true, 
-      task: data,
-      message: `Created task "${data.title}" with ${data.priority} priority`
-    };
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-}
-
-async function updateTask(supabase: any, args: any) {
-  if (!args.task_id) return { success: false, error: "Task ID is required" };
-
-  try {
-    const updateData: any = {};
-    if (args.title) updateData.title = args.title;
-    if (args.description !== undefined) updateData.description = args.description;
-    if (args.status) updateData.status = args.status.toUpperCase();
-    if (args.priority) updateData.priority = args.priority.toUpperCase();
-    if (args.category) updateData.category = args.category.toUpperCase();
-
-    const { data, error } = await supabase
-      .from('tasks')
-      .update(updateData)
-      .eq('id', args.task_id)
-      .select()
-      .single();
-
-    if (error) throw error;
-
-    return { 
-      success: true, 
-      task: data,
-      message: `Updated task "${data.title}"`
-    };
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-}
-
-async function rescheduleTask(supabase: any, args: any) {
-  if (!args.task_id) return { success: false, error: "Task ID is required" };
-  if (!args.new_date) return { success: false, error: "New date is required" };
-
-  try {
-    const updateData: any = {
-      scheduled_date: args.new_date,
-      due_date: args.new_date
-    };
-    
-    if (args.new_start_time) {
-      updateData.scheduled_start_time = args.new_start_time;
-    }
-
-    const { data, error } = await supabase
-      .from('tasks')
-      .update(updateData)
-      .eq('id', args.task_id)
-      .select()
-      .single();
-
-    if (error) throw error;
-
-    return { 
-      success: true, 
-      task: data,
-      message: `Rescheduled "${data.title}" to ${args.new_date}`
-    };
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-}
-
-async function scheduleTask(supabase: any, args: any) {
-  if (!args.task_id) return { success: false, error: "Task ID is required" };
-
-  try {
-    const today = new Date().toISOString().split('T')[0];
-    const updateData: any = {
-      scheduled_date: args.date || today,
-      status: 'TODO'
-    };
-    
-    if (args.start_time) {
-      updateData.scheduled_start_time = args.start_time;
-    }
-    if (args.duration_minutes) {
-      updateData.estimated_duration = args.duration_minutes;
-    }
-
-    const { data, error } = await supabase
-      .from('tasks')
-      .update(updateData)
-      .eq('id', args.task_id)
-      .select()
-      .single();
-
-    if (error) throw error;
-
-    return { 
-      success: true, 
-      task: data,
-      message: `Scheduled "${data.title}" for ${updateData.scheduled_date}`
-    };
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-}
-
-async function unscheduleTask(supabase: any, args: any) {
-  if (!args.task_id) return { success: false, error: "Task ID is required" };
-
-  try {
-    const { data, error } = await supabase
-      .from('tasks')
-      .update({
-        scheduled_date: null,
-        scheduled_start_time: null,
-        scheduled_end_time: null,
-        status: 'BACKLOG'
-      })
-      .eq('id', args.task_id)
-      .select()
-      .single();
-
-    if (error) throw error;
-
-    return { 
-      success: true, 
-      task: data,
-      message: `Unscheduled "${data.title}" and moved to backlog`
-    };
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-}
-
-// ============ Notification Functions ============
-
-async function sendSlackMessage(supabase: any, userId: string | null, args: any, userProfile: any) {
-  if (!userId) return { success: false, error: "Not authenticated" };
-  if (!args.message) return { success: false, error: "Message is required" };
-
-  try {
-    const { data, error } = await supabase.functions.invoke('send-unified-notification', {
-      body: {
-        userId,
-        title: 'Message from Iris',
-        body: args.message,
-        channels: ['SLACK'],
-        userProfile: userProfile,
-        data: { source: 'phone_call' }
-      }
-    });
-
-    if (error) throw error;
-
-    return {
-      success: true,
-      message: `Sent Slack message: "${args.message.substring(0, 50)}..."`
-    };
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-}
-
-async function sendEmail(supabase: any, userId: string | null, args: any, userProfile: any) {
-  if (!userId) return { success: false, error: "Not authenticated" };
-  if (!args.subject || !args.body) return { success: false, error: "Subject and body are required" };
-
-  try {
-    const { data, error } = await supabase.functions.invoke('send-unified-notification', {
-      body: {
-        userId,
-        title: args.subject,
-        body: args.body,
-        channels: ['EMAIL'],
-        userProfile: userProfile,
-        data: { source: 'phone_call' }
-      }
-    });
-
-    if (error) throw error;
-
-    return {
-      success: true,
-      message: `Sent email with subject: "${args.subject}"`
-    };
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-}
-
-async function createCalendarEvent(supabase: any, userId: string | null, args: any, userProfile: any) {
-  if (!userId) return { success: false, error: "Not authenticated" };
-  if (!args.title || !args.start_time) return { success: false, error: "Title and start time are required" };
-
-  try {
-    // Parse times - handle both ISO format and HH:MM format
-    let startTime = args.start_time;
-    let endTime = args.end_time;
-    
-    if (!startTime.includes('T')) {
-      // HH:MM format - add today's date
-      const today = new Date().toISOString().split('T')[0];
-      startTime = `${today}T${startTime}:00`;
-      endTime = endTime ? `${today}T${endTime}:00` : new Date(new Date(startTime).getTime() + 60 * 60 * 1000).toISOString();
-    }
-
-    const calendarType = args.calendar?.toUpperCase() || 'OUTLOOK';
-    const channel = calendarType === 'GOOGLE' ? 'GOOGLE_EVENT' : 'OUTLOOK_EVENT';
-
-    const eventData = {
-      title: args.title,
-      startTime,
-      endTime: endTime || new Date(new Date(startTime).getTime() + 60 * 60 * 1000).toISOString(),
-      reminder: '15'
-    };
-
-    const { data, error } = await supabase.functions.invoke('send-unified-notification', {
-      body: {
-        userId,
-        title: args.title,
-        body: `Calendar event created via phone call`,
-        channels: [channel],
-        userProfile: userProfile,
-        data: { source: 'phone_call' },
-        ...(channel === 'OUTLOOK_EVENT' ? { outlookEvent: eventData } : { googleEvent: eventData })
-      }
-    });
-
-    if (error) throw error;
-
-    return {
-      success: true,
-      message: `Created ${args.calendar || 'Outlook'} event: "${args.title}" at ${args.start_time}`
-    };
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-}
-
-// PHASE 5: initiate_phone_call for full parity
-async function initiatePhoneCall(supabase: any, userId: string | null, args: any) {
-  if (!userId) return { success: false, error: "Not authenticated" };
-
-  try {
-    const delayMinutes = args.delay_minutes || 0;
-    const context = args.context || 'callback request';
-    
-    if (delayMinutes > 0) {
-      // Schedule the callback - this would integrate with your scheduling system
-      return {
-        success: true,
-        message: `I'll call you back in ${delayMinutes} minutes regarding ${context}.`
-      };
-    } else {
-      // Immediate callback doesn't make sense during an active call
-      return {
-        success: true,
-        message: `You're already on the phone with me! What can I help you with?`
-      };
-    }
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-}
-
-async function handleHangUp(args: any, twilioWs: WebSocket, streamSid: string | null) {
-  try {
-    console.log('[BRIDGE] Hang up requested:', args.farewell_message);
-    
-    // Give time for the farewell message to play
-    setTimeout(() => {
-      if (twilioWs.readyState === WebSocket.OPEN) {
-        twilioWs.close();
-      }
-    }, 3000);
-
-    return {
-      success: true,
-      message: args.farewell_message || "Call ended gracefully"
-    };
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-}
-
-// ============ Web Search Function ============
-
-async function webSearch(query: string): Promise<any> {
-  const PERPLEXITY_API_KEY = Deno.env.get('PERPLEXITY_API_KEY');
-  
-  if (!PERPLEXITY_API_KEY) {
-    console.warn('[BRIDGE] PERPLEXITY_API_KEY not configured');
-    return { 
-      success: false, 
-      error: "Web search not configured",
-      answer: "I don't have real-time search enabled, but I can help from my general knowledge."
-    };
-  }
-  
-  try {
-    console.log(`[BRIDGE] Web searching: "${query}"`);
-    
-    const response = await fetch('https://api.perplexity.ai/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'sonar',
-        messages: [
-          { 
-            role: 'system', 
-            content: 'Give a concise spoken answer (2-3 sentences max). Focus on the most important facts.' 
-          },
-          { role: 'user', content: query }
-        ],
-        search_recency_filter: 'day' // Get today's data for live scores/weather
-      }),
-    });
-    
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`[BRIDGE] Perplexity API error: ${response.status}`, errorText);
-      return { 
-        success: false, 
-        error: `Search API error: ${response.status}`,
-        answer: "I couldn't search for that information right now. Please try again."
-      };
-    }
-    
-    const data = await response.json();
-    const answer = data.choices?.[0]?.message?.content || "No results found.";
-    const sources = data.citations || [];
-    
-    console.log(`[BRIDGE] Search result: ${answer.substring(0, 100)}...`);
-    
-    return {
-      success: true,
-      answer,
-      sources,
-      query
-    };
-  } catch (error) {
-    console.error('[BRIDGE] Web search error:', error);
-    return { 
-      success: false, 
-      error: String(error),
-      answer: "I encountered an error while searching. Let me help with what I know."
-    };
-  }
-}
