@@ -794,7 +794,7 @@ serve(async (req) => {
                 voice: "alloy",
                 input_audio_format: "pcm16",
                 output_audio_format: "pcm16",
-                input_audio_transcription: { model: "whisper-1" },
+                // input_audio_transcription: { model: "whisper-1" },  // TEMPORARILY DISABLED FOR DEBUGGING
                 turn_detection: {
                   type: "server_vad",
                   threshold: 0.2,
