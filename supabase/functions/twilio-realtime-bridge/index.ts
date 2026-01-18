@@ -611,6 +611,9 @@ serve(async (req) => {
     // POST-VALIDATION: Track last tool output for response validation
     let lastToolOutput: { toolName: string; extractedFacts?: any } | null = null;
     
+    // VERBATIM WEB SEARCH: Track last user transcript for web_search override
+    let lastUserTranscript: string | null = null;
+    
     // KEEP-ALIVE: Prevent idle timeout
     let keepAliveInterval: number | null = null;
 
@@ -875,6 +878,8 @@ serve(async (req) => {
 
             case "conversation.item.input_audio_transcription.completed":
               console.log(`[OPENAI] User said: "${msg.transcript}"`);
+              // Track for verbatim web_search override
+              lastUserTranscript = msg.transcript;
               // Save user message to conversation history
               saveConversationMessage('user', msg.transcript);
               break;
@@ -1047,8 +1052,15 @@ serve(async (req) => {
       if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN) return;
 
       try {
-        const args = JSON.parse(msg.arguments);
+        let args = JSON.parse(msg.arguments);
         const functionName = msg.name;
+        
+        // For web_search, override with user's verbatim transcript (prevents AI date-rewriting)
+        if (functionName === 'web_search' && lastUserTranscript) {
+          console.log(`[BRIDGE] web_search - OpenAI query: "${args.query}"`);
+          console.log(`[BRIDGE] web_search - Overriding with verbatim: "${lastUserTranscript}"`);
+          args = { ...args, query: lastUserTranscript };
+        }
         
         console.log(`[BRIDGE] Executing function via execute-tool: ${functionName}`, args);
 
