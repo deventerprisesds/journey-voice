@@ -337,11 +337,19 @@ async function handleAssistantRequest(
       .eq('user_id', userId)
       .single();
 
-    if (existingThread?.openai_thread_id) {
-      openaiThreadId = existingThread.openai_thread_id;
+    // Validate that the stored thread ID is a valid OpenAI thread ID (must start with "thread_")
+    const storedThreadId = existingThread?.openai_thread_id;
+    const isValidOpenAIThread = storedThreadId && storedThreadId.startsWith('thread_');
+
+    if (isValidOpenAIThread) {
+      openaiThreadId = storedThreadId;
       console.log(`Using existing OpenAI thread: ${openaiThreadId}`);
     } else {
-      // Create new OpenAI thread
+      // Create new OpenAI thread (either no stored ID, or stored ID is invalid like "phone_xxx")
+      if (storedThreadId) {
+        console.log(`Invalid stored thread ID "${storedThreadId}", creating new OpenAI thread`);
+      }
+      
       const threadResponse = await fetch('https://api.openai.com/v1/threads', {
         method: 'POST',
         headers: {
