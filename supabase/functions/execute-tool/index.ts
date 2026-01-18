@@ -827,64 +827,79 @@ async function initiatePhoneCall(supabase: any, userId: string, args: any, inter
 async function webSearch(query: string): Promise<ExecuteToolResponse> {
   const PERPLEXITY_API_KEY = Deno.env.get('PERPLEXITY_API_KEY');
   
+  console.log('[WEB-SEARCH] ==================== START ====================');
+  console.log('[WEB-SEARCH] Query received:', query);
+  console.log('[WEB-SEARCH] API Key configured:', !!PERPLEXITY_API_KEY);
+  
   if (!PERPLEXITY_API_KEY) {
-    console.warn('[EXECUTE-TOOL] PERPLEXITY_API_KEY not configured');
+    console.error('[WEB-SEARCH] ❌ NO API KEY - CANNOT SEARCH');
     return { 
       success: false, 
-      error: "Web search not configured",
-      message: "I don't have real-time search enabled, but I can help from my general knowledge."
+      error: "Web search not configured - PERPLEXITY_API_KEY missing",
+      message: "I cannot search the web right now because the search API is not configured. I CANNOT provide real-time information without it."
     };
   }
   
   try {
-    console.log(`[EXECUTE-TOOL] Web searching: "${query}"`);
+    const requestBody = {
+      model: 'sonar',
+      messages: [
+        { 
+          role: 'system', 
+          content: 'Provide a concise, factual answer with sources. Keep it brief - 2-3 sentences max. Focus on the most important facts. ALWAYS include the date of the information if available.' 
+        },
+        { role: 'user', content: query }
+      ],
+      search_recency_filter: 'day'
+    };
     
+    console.log('[WEB-SEARCH] Perplexity request body:', JSON.stringify(requestBody, null, 2));
+    
+    const startTime = Date.now();
     const response = await fetch('https://api.perplexity.ai/chat/completions', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        model: 'sonar',
-        messages: [
-          { 
-            role: 'system', 
-            content: 'Provide a concise, factual answer. Keep it brief - 2-3 sentences max. Focus on the most important facts.' 
-          },
-          { role: 'user', content: query }
-        ],
-        search_recency_filter: 'day'
-      }),
+      body: JSON.stringify(requestBody),
     });
+    
+    const duration = Date.now() - startTime;
+    console.log(`[WEB-SEARCH] Perplexity responded in ${duration}ms with status: ${response.status}`);
     
     if (!response.ok) {
       const errorText = await response.text();
-      console.error(`[EXECUTE-TOOL] Perplexity API error: ${response.status}`, errorText);
+      console.error('[WEB-SEARCH] ❌ Perplexity API error:', response.status, errorText);
       return { 
         success: false, 
-        error: `Search API error: ${response.status}`,
-        message: "I couldn't search for that information right now."
+        error: `Search API error: ${response.status} - ${errorText}`,
+        message: "The web search failed. I CANNOT provide real-time information right now."
       };
     }
     
     const data = await response.json();
+    console.log('[WEB-SEARCH] ✅ Raw Perplexity response:', JSON.stringify(data, null, 2));
+    
     const answer = data.choices?.[0]?.message?.content || "No results found.";
     const sources = data.citations || [];
     
-    console.log(`[EXECUTE-TOOL] Search result: ${answer.substring(0, 100)}...`);
+    console.log('[WEB-SEARCH] Extracted answer:', answer);
+    console.log('[WEB-SEARCH] Sources:', JSON.stringify(sources));
+    console.log('[WEB-SEARCH] ==================== END ====================');
     
     return {
       success: true,
-      result: { answer, sources, query },
+      result: { answer, sources, query, searchTimestamp: new Date().toISOString() },
       message: answer
     };
   } catch (error) {
-    console.error('[EXECUTE-TOOL] Web search error:', error);
+    console.error('[WEB-SEARCH] ❌ Exception:', error);
+    console.log('[WEB-SEARCH] ==================== END (ERROR) ====================');
     return { 
       success: false, 
       error: String(error),
-      message: "I encountered an error while searching."
+      message: "I encountered an error while searching. I CANNOT provide real-time information right now."
     };
   }
 }

@@ -300,7 +300,14 @@ async function handleAssistantRequest(
             }))
           );
 
-          console.log('Tool outputs:', toolOutputs);
+          // DEBUGGING: Log exactly what we're sending to OpenAI
+          console.log('[HYBRID] ==================== TOOL OUTPUTS ====================');
+          console.log('[HYBRID] Tool outputs being submitted to OpenAI:');
+          for (const output of toolOutputs) {
+            console.log(`[HYBRID] Tool ID: ${output.tool_call_id}`);
+            console.log(`[HYBRID] Output: ${output.output}`);
+          }
+          console.log('[HYBRID] ======================================================');
 
           // Submit tool outputs back to OpenAI
           const submitResponse = await fetch(
@@ -322,7 +329,7 @@ async function handleAssistantRequest(
             throw new Error(`Failed to submit tool outputs: ${errorText}`);
           }
 
-          console.log('Tool outputs submitted successfully');
+          console.log('[HYBRID] Tool outputs submitted successfully');
           // Continue polling for completion
         }
       }
@@ -358,7 +365,9 @@ async function handleAssistantRequest(
       .map((content: any) => content.text.value)
       .join('\n');
 
-    console.log(`Assistant response: ${responseContent.substring(0, 100)}...`);
+    console.log('[HYBRID] ==================== FINAL RESPONSE ====================');
+    console.log('[HYBRID] Full assistant response:', responseContent);
+    console.log('[HYBRID] ==========================================================');
 
     return {
       success: true,
