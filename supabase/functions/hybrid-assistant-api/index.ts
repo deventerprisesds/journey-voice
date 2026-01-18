@@ -202,13 +202,48 @@ async function handleAssistantRequest(
       throw new Error(`Failed to add message: ${await messageResponse.text()}`);
     }
 
-    // Create run with combined instructions
+    // Fetch tool definitions from centralized execute-tool function
+    let toolDefinitions: any[] = [];
+    try {
+      const toolsResponse = await fetch(`${supabaseUrl}/functions/v1/execute-tool/definitions`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${supabaseServiceKey}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      if (toolsResponse.ok) {
+        const toolsData = await toolsResponse.json();
+        toolDefinitions = (toolsData.tools || [])
+          .filter((t: any) => !['hang_up', 'initiate_phone_call'].includes(t.name)) // Exclude phone-only tools
+          .map((t: any) => ({
+            type: "function",
+            function: {
+              name: t.name,
+              description: t.description,
+              parameters: t.parameters
+            }
+          }));
+        console.log(`[HYBRID] Loaded ${toolDefinitions.length} tool definitions for chat`);
+      }
+    } catch (error) {
+      console.warn('[HYBRID] Failed to fetch tool definitions:', error);
+    }
+
+    // Create run with combined instructions and tool overrides
     const runPayload: any = {
       assistant_id: assistantId
     };
 
     if (additionalInstructions) {
       runPayload.additional_instructions = additionalInstructions;
+    }
+
+    // Override tools with our centralized definitions (enables web_search without OpenAI Dashboard config)
+    if (toolDefinitions.length > 0) {
+      runPayload.tools = toolDefinitions;
+      console.log(`[HYBRID] Overriding assistant tools with ${toolDefinitions.length} definitions`);
     }
 
     const runResponse = await fetch(`https://api.openai.com/v1/threads/${openaiThreadId}/runs`, {
