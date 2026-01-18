@@ -360,24 +360,14 @@ function calculateDateRange(
   const dayOfWeek = today.getDay(); // 0=Sun, 1=Mon, ... 6=Sat
   
   switch (intent) {
-    case 'today': {
-      const todayStr = formatYMD(today);
-      return { start_date: todayStr, end_date: todayStr };
-    }
-      
-    case 'tomorrow': {
-      const tomorrow = new Date(today);
-      tomorrow.setDate(today.getDate() + 1);
-      const tomorrowStr = formatYMD(tomorrow);
-      return { start_date: tomorrowStr, end_date: tomorrowStr };
-    }
-      
-    case 'yesterday': {
-      const yesterday = new Date(today);
-      yesterday.setDate(today.getDate() - 1);
-      const yesterdayStr = formatYMD(yesterday);
-      return { start_date: yesterdayStr, end_date: yesterdayStr };
-    }
+    case 'today':
+    case 'tomorrow': 
+    case 'yesterday':
+      // Return null - don't inject dates for single-day queries
+      // Tavily rejects same start/end dates, and the verbatim query
+      // already contains the temporal context ("today", "yesterday", etc.)
+      console.log(`[DATE-CALC] Skipping date injection for single-day intent: ${intent}`);
+      return null;
     
     case 'this_weekend': {
       // Weekend = Friday, Saturday, Sunday
