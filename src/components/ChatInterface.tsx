@@ -17,15 +17,15 @@ interface ChatInterfaceProps {
 const ChatInterface: React.FC<ChatInterfaceProps> = ({ isOpen, onClose, onTaskUpdate }) => {
   const { messages, isLoading, sendMessage, createNewThread } = useChatAssistant();
   const [inputValue, setInputValue] = useState('');
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Auto-scroll to bottom when new messages arrive
+  // Auto-scroll to bottom when messages change or chat opens
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [messages]);
+  }, [messages, isOpen]);
 
   // Focus input when opened
   useEffect(() => {
@@ -101,7 +101,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ isOpen, onClose, onTaskUp
         </SheetHeader>
 
         {/* Messages */}
-        <ScrollArea className="flex-1 px-4" ref={scrollRef}>
+        <ScrollArea className="flex-1 px-4">
           <div className="py-4 space-y-4">
             {messages.length === 0 ? (
               <div className="text-center py-12">
@@ -155,6 +155,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ isOpen, onClose, onTaskUp
                 <MessageBubble key={message.id} message={message} />
               ))
             )}
+            {/* Scroll anchor */}
+            <div ref={messagesEndRef} />
           </div>
         </ScrollArea>
 
