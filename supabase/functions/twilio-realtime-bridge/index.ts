@@ -633,6 +633,14 @@ serve(async (req) => {
     let audioChunksSent: number = 0;
     let firstAudioDeltaReceived: boolean = false;
     
+    // DEBUG: Comprehensive audio pipeline tracking
+    let twilioMediaFramesIn = 0;
+    let twilioMediaBytesIn = 0;
+    let openaiAppendCount = 0;
+    let twilioMediaFramesOut = 0;
+    const openaiEventCounts: Record<string, number> = {};
+    let debugSummaryInterval: number | null = null;
+    
     // POST-VALIDATION: Track last tool output for response validation
     let lastToolOutput: { toolName: string; extractedFacts?: any } | null = null;
     
@@ -682,6 +690,15 @@ serve(async (req) => {
             break;
 
           case "media":
+            // DEBUG: Track inbound audio from Twilio
+            twilioMediaFramesIn++;
+            twilioMediaBytesIn += data.media.payload?.length || 0;
+            if (twilioMediaFramesIn === 1) {
+              console.log(`[TWILIO] 🎤 FIRST inbound audio frame - payload: ${data.media.payload?.length || 0} bytes, streamSid: ${data.streamSid || streamSid}`);
+            } else if (twilioMediaFramesIn % 100 === 0) {
+              console.log(`[TWILIO] 🎤 Inbound audio progress: ${twilioMediaFramesIn} frames, ${twilioMediaBytesIn} total bytes`);
+            }
+            
             if (openaiWs?.readyState === WebSocket.OPEN) {
               // Decode μ-law → PCM16 → Upsample to 24kHz → Base64
               const mulawBytes = Uint8Array.from(atob(data.media.payload), (c) => c.charCodeAt(0));
@@ -693,6 +710,17 @@ serve(async (req) => {
                 type: "input_audio_buffer.append",
                 audio: audioBase64,
               }));
+              
+              // DEBUG: Track audio appends to OpenAI
+              openaiAppendCount++;
+              if (openaiAppendCount === 1) {
+                console.log(`[OPENAI] 📤 FIRST audio append sent - base64 length: ${audioBase64.length}`);
+              }
+            } else {
+              // DEBUG: Log when we can't send audio
+              if (twilioMediaFramesIn <= 5) {
+                console.warn(`[TWILIO] ⚠️ Cannot forward audio - OpenAI WS state: ${openaiWs?.readyState ?? 'null'}`);
+              }
             }
             break;
 
@@ -707,11 +735,18 @@ serve(async (req) => {
     };
 
     twilioWs.onclose = () => {
-      console.log("[TWILIO] WebSocket closed");
-      // Clear keep-alive interval
+      // DEBUG: Final summary on close
+      console.log(`[TWILIO] WebSocket closed - FINAL AUDIO SUMMARY: TwilioIn=${twilioMediaFramesIn}, OpenAIAppend=${openaiAppendCount}, TwilioOut=${twilioMediaFramesOut}`);
+      console.log(`[TWILIO] OpenAI event types seen:`, openaiEventCounts);
+      
+      // Clear intervals
       if (keepAliveInterval) {
         clearInterval(keepAliveInterval);
         keepAliveInterval = null;
+      }
+      if (debugSummaryInterval) {
+        clearInterval(debugSummaryInterval);
+        debugSummaryInterval = null;
       }
       openaiWs?.close();
     };
@@ -784,6 +819,14 @@ serve(async (req) => {
       openaiWs.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
+          
+          // DEBUG: Track ALL OpenAI event types
+          const eventType = msg.type || "unknown";
+          if (!openaiEventCounts[eventType]) {
+            openaiEventCounts[eventType] = 0;
+            console.log(`[OPENAI] 📋 NEW event type seen: ${eventType}`, eventType === 'error' ? JSON.stringify(msg) : '');
+          }
+          openaiEventCounts[eventType]++;
 
           switch (msg.type) {
             case "session.created":
@@ -818,8 +861,24 @@ serve(async (req) => {
               break;
 
             case "session.updated":
-              console.log("[OPENAI] Session configured, Twilio readyState:", twilioWs.readyState);
+              // DEBUG: Log ACKNOWLEDGED session settings from server
+              console.log("[OPENAI] ✅ Session configured - ACKNOWLEDGED settings:", JSON.stringify({
+                modalities: msg.session?.modalities,
+                voice: msg.session?.voice,
+                output_audio_format: msg.session?.output_audio_format,
+                input_audio_format: msg.session?.input_audio_format,
+                turn_detection: msg.session?.turn_detection?.type,
+                toolCount: msg.session?.tools?.length,
+                twilioReadyState: twilioWs.readyState
+              }));
               sessionConfigured = true;
+              
+              // DEBUG: Start periodic summary logging
+              if (!debugSummaryInterval) {
+                debugSummaryInterval = setInterval(() => {
+                  console.log(`[DEBUG] 📊 AUDIO PIPELINE SUMMARY - TwilioIn: ${twilioMediaFramesIn}, OpenAIAppend: ${openaiAppendCount}, TwilioOut: ${twilioMediaFramesOut}, EventTypes:`, openaiEventCounts);
+                }, 5000);
+              }
               
               // Send greeting based on call direction
               if (!greetingSent) {
@@ -873,31 +932,43 @@ serve(async (req) => {
               if (streamSid && twilioWs.readyState === WebSocket.OPEN) {
                 // Log FIRST audio delta immediately
                 if (!firstAudioDeltaReceived) {
-                  console.log(`[AUDIO] 🔊 FIRST audio delta from OpenAI - bytes: ${msg.delta?.length || 0}, streamSid: ${streamSid}`);
+                  console.log(`[AUDIO] 🔊 FIRST audio delta from OpenAI - base64 length: ${msg.delta?.length || 0}, streamSid: ${streamSid}`);
                   firstAudioDeltaReceived = true;
                 }
                 
-                const pcm24k = base64ToInt16(msg.delta);
-                const pcm8k = downsample24to8(pcm24k);
-                const mulaw = encodeMulaw(pcm8k);
-                const mulawBase64 = btoa(String.fromCharCode(...mulaw));
+                try {
+                  const pcm24k = base64ToInt16(msg.delta);
+                  const pcm8k = downsample24to8(pcm24k);
+                  const mulaw = encodeMulaw(pcm8k);
+                  const mulawBase64 = btoa(String.fromCharCode(...mulaw));
 
-                // Track samples for truncation calculation
-                audioSamplesPlayed += pcm24k.length;
-                audioChunksSent++;
-                
-                // Log every 50 chunks (~1 second of audio) for debugging
-                if (audioChunksSent % 50 === 0) {
-                  console.log(`[AUDIO] Sent ${audioChunksSent} chunks to Twilio (${audioSamplesPlayed} samples)`);
+                  // Track samples for truncation calculation
+                  audioSamplesPlayed += pcm24k.length;
+                  audioChunksSent++;
+                  twilioMediaFramesOut++;
+                  
+                  // DEBUG: Log FIRST outbound frame to Twilio
+                  if (twilioMediaFramesOut === 1) {
+                    console.log(`[TWILIO] 🔈 FIRST outbound audio frame - mulaw length: ${mulaw.length}, streamSid: ${streamSid}`);
+                  }
+                  
+                  // Log every 50 chunks (~1 second of audio) for debugging
+                  if (audioChunksSent % 50 === 0) {
+                    console.log(`[AUDIO] Sent ${audioChunksSent} chunks to Twilio (${audioSamplesPlayed} samples, ${twilioMediaFramesOut} frames)`);
+                  }
+
+                  twilioWs.send(JSON.stringify({
+                    event: "media",
+                    streamSid: streamSid,
+                    media: { payload: mulawBase64 },
+                  }));
+                } catch (sendError) {
+                  console.error(`[TWILIO] ❌ Failed to send audio frame:`, sendError);
                 }
-
-                twilioWs.send(JSON.stringify({
-                  event: "media",
-                  streamSid: streamSid,
-                  media: { payload: mulawBase64 },
-                }));
               } else if (streamSid) {
-                console.warn(`[AUDIO] Cannot send - Twilio WS state: ${twilioWs.readyState}`);
+                console.warn(`[AUDIO] ⚠️ Cannot send - streamSid: ${streamSid}, Twilio WS state: ${twilioWs.readyState}`);
+              } else {
+                console.warn(`[AUDIO] ⚠️ Cannot send - no streamSid yet, Twilio WS state: ${twilioWs.readyState}`);
               }
               break;
 
