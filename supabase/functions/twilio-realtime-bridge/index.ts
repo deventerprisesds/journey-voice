@@ -929,7 +929,8 @@ serve(async (req) => {
               break;
 
             case "response.audio.delta":
-              if (streamSid && twilioWs.readyState === WebSocket.OPEN) {
+            case "response.output_audio.delta":
+            case "response.audio_output.delta":
                 // Log FIRST audio delta immediately
                 if (!firstAudioDeltaReceived) {
                   console.log(`[AUDIO] 🔊 FIRST audio delta from OpenAI - base64 length: ${msg.delta?.length || 0}, streamSid: ${streamSid}`);
@@ -1047,8 +1048,7 @@ serve(async (req) => {
                       }]
                     }
                   }));
-                  openaiWs!.send(JSON.stringify({ type: "response.create" }));
-                } else {
+                  sendResponseCreate('post_validation_correction');
                   console.log('[BRIDGE] ✅ Response validated - no discrepancies');
                 }
                 lastToolOutput = null;  // Clear after validation
@@ -1097,6 +1097,28 @@ serve(async (req) => {
     }
 
     // PHASE 4: Open-ended greeting - NOT task-focused
+    function sendResponseCreate(contextLabel: string) {
+      if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN) return;
+
+      // NOTE: Recent Realtime API versions may require audio output config on each response.create.
+      // We keep this minimal and always request audio+text.
+      openaiWs.send(JSON.stringify({
+        type: "response.create",
+        response: {
+          conversation: "auto",
+          output_modalities: ["audio", "text"],
+          audio: {
+            output: {
+              format: { type: "audio/pcm", rate: 24000 },
+              voice: "alloy",
+            },
+          },
+        },
+      }));
+
+      console.log(`[BRIDGE] ✅ response.create sent (${contextLabel}), waiting for audio...`);
+    }
+
     function sendInboundGreeting() {
       if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN || greetingSent) return;
       
@@ -1120,8 +1142,7 @@ serve(async (req) => {
         }
       }));
 
-      openaiWs.send(JSON.stringify({ type: "response.create" }));
-      console.log("[BRIDGE] ✅ response.create sent, waiting for audio...");
+      sendResponseCreate('inbound_greeting');
     }
 
     function sendOutboundGreeting() {
@@ -1232,9 +1253,7 @@ serve(async (req) => {
         }));
 
         // Trigger response generation
-        openaiWs.send(JSON.stringify({ type: "response.create" }));
-
-      } catch (error) {
+        sendResponseCreate(`tool_${functionName}`);
         console.error("[BRIDGE] Function call error:", error);
         
         openaiWs.send(JSON.stringify({
