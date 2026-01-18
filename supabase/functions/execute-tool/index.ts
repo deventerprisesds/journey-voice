@@ -201,11 +201,51 @@ export const toolDefinitions = [
   {
     type: "function",
     name: "web_search",
-    description: "Search the internet for REAL-TIME information. Use for: weather, sports scores, news, stock prices, current events. CRITICAL: Pass the user's query EXACTLY as spoken - do NOT convert phrases like 'this weekend' or 'today' into specific dates.",
+    description: "Search the internet for REAL-TIME information using Tavily. CRITICAL INSTRUCTION: The 'query' parameter MUST be a VERBATIM transcription of what the user said - do NOT rephrase, summarize, or convert temporal phrases like 'this weekend' or 'today' into specific dates. Pass the EXACT words the user spoke. Use the other parameters to configure the search appropriately.",
     parameters: {
       type: "object",
       properties: {
-        query: { type: "string", description: "The user's search query VERBATIM - pass exactly what they said (e.g., 'this weekend's NBA scores', 'weather in Baltimore today')" }
+        query: { 
+          type: "string", 
+          description: "The user's EXACT spoken words - pass verbatim without any modification (e.g., if user says 'What are the NBA scores for this weekend?', pass EXACTLY that string)" 
+        },
+        topic: {
+          type: "string",
+          enum: ["general", "news", "finance"],
+          description: "Search category. Use 'news' for sports scores, current events, breaking news, real-time updates. Use 'finance' for stock prices, market data, financial news. Use 'general' for everything else."
+        },
+        search_depth: {
+          type: "string",
+          enum: ["basic", "advanced"],
+          description: "Search depth. Use 'advanced' for complex queries requiring high relevance (sports scores, specific facts). Use 'basic' for simple lookups."
+        },
+        time_range: {
+          type: "string",
+          enum: ["day", "week", "month", "year"],
+          description: "Relative time filter. Use 'day' for 'today/tonight', 'week' for 'this week/this weekend', 'month' for recent news, 'year' for broader searches. Only set if query implies a time constraint."
+        },
+        start_date: {
+          type: "string",
+          description: "Explicit start date in YYYY-MM-DD format. Only use if you can determine a specific date range from context. Leave empty if unsure."
+        },
+        end_date: {
+          type: "string",
+          description: "Explicit end date in YYYY-MM-DD format. Only use if you can determine a specific date range from context. Leave empty if unsure."
+        },
+        include_domains: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional: List of domains to prioritize (e.g., ['espn.com', 'nba.com'] for sports, ['reuters.com', 'bbc.com'] for news). Only provide if you have specific trusted sources for the query type. Leave empty to search all sources."
+        },
+        exclude_domains: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional: Domains to exclude from results. Leave empty unless there's a specific reason to exclude."
+        },
+        max_results: {
+          type: "integer",
+          description: "Number of results to return (1-20). Default 10. Use higher for broad queries, lower for specific lookups."
+        }
       },
       required: ["query"]
     }
@@ -414,7 +454,7 @@ async function executeToolCall(
 
       // ============ SEARCH TOOLS ============
       case 'web_search':
-        return await webSearch(args.query, context.timezone);
+        return await webSearch(args, context.timezone);
 
       // ============ PHONE-ONLY TOOLS ============
       case 'hang_up':
@@ -942,142 +982,121 @@ async function initiatePhoneCall(supabase: any, userId: string, args: any, inter
 // SEARCH FUNCTIONS
 // ============================================================================
 
-async function webSearch(query: string, timezone?: string): Promise<ExecuteToolResponse> {
-  const PERPLEXITY_API_KEY = Deno.env.get('PERPLEXITY_API_KEY');
-  
-  // Get the central time anchor for accurate date context
+interface WebSearchArgs {
+  query: string;
+  topic?: "general" | "news" | "finance";
+  search_depth?: "basic" | "advanced";
+  time_range?: "day" | "week" | "month" | "year";
+  start_date?: string;
+  end_date?: string;
+  include_domains?: string[];
+  exclude_domains?: string[];
+  max_results?: number;
+}
+
+async function webSearch(args: WebSearchArgs, timezone?: string): Promise<ExecuteToolResponse> {
+  const TAVILY_API_KEY = Deno.env.get('TAVILY_API_KEY');
   const timeAnchor = getCurrentTimeAnchor(timezone || 'America/New_York');
   
   console.log('[WEB-SEARCH] ==================== START ====================');
-  console.log('[WEB-SEARCH] Query received:', query);
+  console.log('[WEB-SEARCH] Using TAVILY API');
+  console.log('[WEB-SEARCH] Query (verbatim):', args.query);
+  console.log('[WEB-SEARCH] AI-provided params:', JSON.stringify(args, null, 2));
   console.log('[WEB-SEARCH] Time anchor:', JSON.stringify(timeAnchor));
-  console.log('[WEB-SEARCH] API Key configured:', !!PERPLEXITY_API_KEY);
   
-  if (!PERPLEXITY_API_KEY) {
-    console.error('[WEB-SEARCH] ❌ NO API KEY - CANNOT SEARCH');
+  if (!TAVILY_API_KEY) {
+    console.error('[WEB-SEARCH] ❌ NO TAVILY_API_KEY - CANNOT SEARCH');
     return { 
       success: false, 
-      error: "Web search not configured - PERPLEXITY_API_KEY missing",
-      message: "I cannot search the web right now because the search API is not configured. I CANNOT provide real-time information without it.",
+      error: "TAVILY_API_KEY not configured",
+      message: "I cannot search the web right now because the search API is not configured.",
       timeAnchor
     };
   }
   
   try {
-    // Determine search recency filter based on query keywords (without modifying query)
-    let searchRecencyFilter: string | undefined;
-    const lowerQuery = query.toLowerCase();
-    if (lowerQuery.includes('today') || lowerQuery.includes('tonight') || lowerQuery.includes('yesterday')) {
-      searchRecencyFilter = 'day';
-    } else if (lowerQuery.includes('weekend') || lowerQuery.includes('this week') || lowerQuery.includes('last week')) {
-      searchRecencyFilter = 'week';
-    }
-
-    // Prefer high-trust domains for sports scores to avoid partial/projection data
-    let searchDomainFilter: string[] | undefined;
-    if (/(\bnba\b|\bbox score\b|\bscores?\b)/i.test(query)) {
-      searchDomainFilter = [
-        'nba.com',
-        'espn.com',
-        'cbssports.com',
-        'basketball-reference.com',
-      ];
-    }
-
-    // Build system prompt with time context for Perplexity to interpret temporal terms
-    const systemPrompt = `You are a factual search assistant. Provide complete, accurate information with source attribution. Never fabricate data.
-
-CURRENT TIME CONTEXT (use this to interpret temporal references):
-- Current date/time: ${timeAnchor.currentDateTime}
-- Timezone: ${timeAnchor.timezone}
-- Today's date: ${timeAnchor.todayDate}
-
-TIME CONVENTIONS:
-- "Weekend" typically means Friday evening, Saturday, and Sunday
-- "This week" starts on Monday and ends on Sunday
-- "Last weekend" is the most recent Friday-Saturday-Sunday before today
-
-SPORTS SCORES RULES (important):
-- Only report FINAL scores (not live, projected, or partial)
-- Prefer official box score pages (NBA.com) or major sports outlets (ESPN/CBS)
-- If sources conflict, prefer NBA.com; otherwise say "conflicting sources" and include the sources
-
-When the user asks about "this weekend", "today", "last night", etc., interpret these relative to the current time context above.`;
-
-    // Send query VERBATIM - no modification, no date suffix
-    const requestBody: any = {
-      model: 'sonar-pro',
-      temperature: 0.1,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: query } // VERBATIM - exactly as user spoke it
-      ],
-      web_search_options: {
-        search_context_size: 'high'
-      },
-      max_tokens: 1500
+    // Build Tavily request from AI-provided parameters
+    const requestBody: Record<string, any> = {
+      query: args.query, // VERBATIM - exactly as user spoke
+      topic: args.topic || 'general',
+      search_depth: args.search_depth || 'advanced', // Default to advanced for better results
+      max_results: args.max_results || 10,
+      include_answer: 'advanced', // Always get AI summary
+      include_raw_content: false,
+      include_favicon: false
     };
-
-    if (searchDomainFilter?.length) {
-      requestBody.search_domain_filter = searchDomainFilter;
-      console.log('[WEB-SEARCH] Domain filter set:', JSON.stringify(searchDomainFilter));
-    }
     
-    // Add recency filter if applicable (helps Perplexity prioritize recent results)
-    if (searchRecencyFilter) {
-      requestBody.search_recency_filter = searchRecencyFilter;
-      console.log(`[WEB-SEARCH] Recency filter set: ${searchRecencyFilter}`);
-    }
+    // Add time filters if AI provided them
+    if (args.time_range) requestBody.time_range = args.time_range;
+    if (args.start_date) requestBody.start_date = args.start_date;
+    if (args.end_date) requestBody.end_date = args.end_date;
     
-    console.log('[WEB-SEARCH] Verbatim query:', query);
-    console.log('[WEB-SEARCH] Perplexity request body:', JSON.stringify(requestBody, null, 2));
+    // Add domain filters if AI provided them (leave empty by default)
+    if (args.include_domains?.length) requestBody.include_domains = args.include_domains;
+    if (args.exclude_domains?.length) requestBody.exclude_domains = args.exclude_domains;
+    
+    console.log('[WEB-SEARCH] Tavily request:', JSON.stringify(requestBody, null, 2));
     
     const startTime = Date.now();
-    const response = await fetch('https://api.perplexity.ai/chat/completions', {
+    const response = await fetch('https://api.tavily.com/search', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
+        'Authorization': `Bearer ${TAVILY_API_KEY}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(requestBody),
     });
     
     const duration = Date.now() - startTime;
-    console.log(`[WEB-SEARCH] Perplexity responded in ${duration}ms with status: ${response.status}`);
+    console.log(`[WEB-SEARCH] Tavily responded in ${duration}ms with status: ${response.status}`);
     
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('[WEB-SEARCH] ❌ Perplexity API error:', response.status, errorText);
+      console.error('[WEB-SEARCH] ❌ Tavily API error:', response.status, errorText);
       return { 
         success: false, 
-        error: `Search API error: ${response.status} - ${errorText}`,
-        message: "The web search failed. I CANNOT provide real-time information right now.",
+        error: `Search API error: ${response.status}`,
+        message: "The web search failed. I cannot provide real-time information right now.",
         timeAnchor
       };
     }
     
     const data = await response.json();
-    console.log('[WEB-SEARCH] ✅ Raw Perplexity response:', JSON.stringify(data, null, 2));
+    console.log('[WEB-SEARCH] ✅ Tavily results count:', data.results?.length || 0);
+    console.log('[WEB-SEARCH] Answer preview:', data.answer?.substring(0, 300) + '...');
     
-    const answer = data.choices?.[0]?.message?.content || "No results found.";
-    const sources = data.citations || [];
+    const answer = data.answer || "No results found.";
+    const sources = data.results?.map((r: any) => r.url) || [];
     
-    console.log('[WEB-SEARCH] Extracted answer:', answer);
     console.log('[WEB-SEARCH] Sources:', JSON.stringify(sources));
     console.log('[WEB-SEARCH] ==================== END ====================');
     
     return {
       success: true,
-      result: { 
-        answer, 
-        sources, 
-        query,
+      result: {
+        answer,
+        sources,
+        results: data.results?.map((r: any) => ({
+          title: r.title,
+          url: r.url,
+          content: r.content,
+          score: r.score,
+          published_date: r.published_date
+        })),
+        query: args.query,
         searchTimestamp: new Date().toISOString(),
-        currentDate: timeAnchor.todayDate
+        currentDate: timeAnchor.todayDate,
+        paramsUsed: {
+          topic: requestBody.topic,
+          search_depth: requestBody.search_depth,
+          time_range: requestBody.time_range,
+          start_date: requestBody.start_date,
+          end_date: requestBody.end_date
+        }
       },
       message: answer,
       timeAnchor,
-      extractedFacts: { type: 'web_search', source: 'perplexity', rawAnswer: answer }
+      extractedFacts: { type: 'web_search', source: 'tavily', rawAnswer: answer }
     };
   } catch (error) {
     console.error('[WEB-SEARCH] ❌ Exception:', error);
@@ -1085,7 +1104,7 @@ When the user asks about "this weekend", "today", "last night", etc., interpret 
     return { 
       success: false, 
       error: String(error),
-      message: "I encountered an error while searching. I CANNOT provide real-time information right now."
+      message: "I encountered an error while searching."
     };
   }
 }

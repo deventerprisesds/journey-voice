@@ -5,19 +5,31 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+interface WebSearchArgs {
+  query: string;
+  topic?: "general" | "news" | "finance";
+  search_depth?: "basic" | "advanced";
+  time_range?: "day" | "week" | "month" | "year";
+  start_date?: string;
+  end_date?: string;
+  include_domains?: string[];
+  exclude_domains?: string[];
+  max_results?: number;
+}
+
 serve(async (req) => {
   // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
 
-  const PERPLEXITY_API_KEY = Deno.env.get('PERPLEXITY_API_KEY');
+  const TAVILY_API_KEY = Deno.env.get('TAVILY_API_KEY');
   
-  if (!PERPLEXITY_API_KEY) {
-    console.error('[WEB-SEARCH] PERPLEXITY_API_KEY not configured');
+  if (!TAVILY_API_KEY) {
+    console.error('[WEB-SEARCH] TAVILY_API_KEY not configured');
     return new Response(JSON.stringify({ 
       success: false, 
-      error: "Web search not configured. Please connect the Perplexity connector.",
+      error: "Web search not configured. Please add the TAVILY_API_KEY secret.",
       answer: "I don't have real-time search enabled, but I can help from my general knowledge."
     }), { 
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -26,9 +38,9 @@ serve(async (req) => {
   }
 
   try {
-    const { query, recencyFilter } = await req.json();
+    const args: WebSearchArgs = await req.json();
 
-    if (!query) {
+    if (!args.query) {
       return new Response(JSON.stringify({ 
         success: false, 
         error: "Query is required" 
@@ -38,70 +50,49 @@ serve(async (req) => {
       });
     }
 
-    // Detect multi-day queries for appropriate recency filter
-    let recency: string = recencyFilter || 'day';
-    if (!recencyFilter && /weekend|this week|last week|past \d+ days/i.test(query)) {
-      recency = 'week';
-    }
+    console.log('[WEB-SEARCH] ==================== START ====================');
+    console.log('[WEB-SEARCH] Using TAVILY API');
+    console.log('[WEB-SEARCH] Query (verbatim):', args.query);
+    console.log('[WEB-SEARCH] AI-provided params:', JSON.stringify(args, null, 2));
 
-    // Prefer high-trust domains for sports scores to avoid partial/projection data
-    let searchDomainFilter: string[] | undefined;
-    if (/(\bnba\b|\bbox score\b|\bscores?\b)/i.test(query)) {
-      searchDomainFilter = [
-        'nba.com',
-        'espn.com',
-        'cbssports.com',
-        'basketball-reference.com',
-      ];
-    }
-
-    console.log(`[WEB-SEARCH] Searching for: "${query}" with recency: ${recency}`);
-    if (searchDomainFilter?.length) {
-      console.log('[WEB-SEARCH] Domain filter set:', JSON.stringify(searchDomainFilter));
-    }
-
-    const requestBody: any = {
-      model: 'sonar-pro',  // Advanced model for complete results
-      temperature: 0.1,
-      messages: [
-        { 
-          role: 'system', 
-          content: `You are a factual search assistant.
-
-RESPONSE RULES:
-- Provide COMPLETE data - list ALL items found, not partial lists
-- For sports scores: ONLY include FINAL scores (no live/projection/partial)
-- Prefer official box score pages (NBA.com) or major sports outlets (ESPN/CBS)
-- Weekend = Friday, Saturday, Sunday; Week starts Monday
-- End with brief source attribution (e.g., "Source: NBA.com")
-- If data is incomplete, explicitly state what's missing
-- NEVER fabricate information` 
-        },
-        { role: 'user', content: query }
-      ],
-      search_recency_filter: recency,
-      web_search_options: {
-        search_context_size: 'high'
-      },
-      max_tokens: 1500
+    // Build Tavily request from AI-provided parameters
+    const requestBody: Record<string, any> = {
+      query: args.query, // VERBATIM - exactly as user spoke
+      topic: args.topic || 'general',
+      search_depth: args.search_depth || 'advanced',
+      max_results: args.max_results || 10,
+      include_answer: 'advanced',
+      include_raw_content: false,
+      include_favicon: false
     };
+    
+    // Add time filters if AI provided them
+    if (args.time_range) requestBody.time_range = args.time_range;
+    if (args.start_date) requestBody.start_date = args.start_date;
+    if (args.end_date) requestBody.end_date = args.end_date;
+    
+    // Add domain filters if AI provided them
+    if (args.include_domains?.length) requestBody.include_domains = args.include_domains;
+    if (args.exclude_domains?.length) requestBody.exclude_domains = args.exclude_domains;
 
-    if (searchDomainFilter?.length) {
-      requestBody.search_domain_filter = searchDomainFilter;
-    }
+    console.log('[WEB-SEARCH] Tavily request:', JSON.stringify(requestBody, null, 2));
 
-    const response = await fetch('https://api.perplexity.ai/chat/completions', {
+    const startTime = Date.now();
+    const response = await fetch('https://api.tavily.com/search', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
+        'Authorization': `Bearer ${TAVILY_API_KEY}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(requestBody),
     });
 
+    const duration = Date.now() - startTime;
+    console.log(`[WEB-SEARCH] Tavily responded in ${duration}ms with status: ${response.status}`);
+
     if (!response.ok) {
       const errorText = await response.text();
-      console.error(`[WEB-SEARCH] Perplexity API error: ${response.status}`, errorText);
+      console.error(`[WEB-SEARCH] Tavily API error: ${response.status}`, errorText);
       
       return new Response(JSON.stringify({
         success: false,
@@ -114,16 +105,33 @@ RESPONSE RULES:
     }
     
     const data = await response.json();
-    const answer = data.choices?.[0]?.message?.content || "No results found.";
-    const citations = data.citations || [];
+    const answer = data.answer || "No results found.";
+    const sources = data.results?.map((r: any) => r.url) || [];
     
-    console.log(`[WEB-SEARCH] Found answer with ${citations.length} sources`);
+    console.log('[WEB-SEARCH] ✅ Results count:', data.results?.length || 0);
+    console.log('[WEB-SEARCH] Answer preview:', answer.substring(0, 200) + '...');
+    console.log('[WEB-SEARCH] Sources:', JSON.stringify(sources));
+    console.log('[WEB-SEARCH] ==================== END ====================');
     
     return new Response(JSON.stringify({
       success: true,
       answer,
-      sources: citations,
-      query
+      sources,
+      results: data.results?.map((r: any) => ({
+        title: r.title,
+        url: r.url,
+        content: r.content,
+        score: r.score,
+        published_date: r.published_date
+      })),
+      query: args.query,
+      paramsUsed: {
+        topic: requestBody.topic,
+        search_depth: requestBody.search_depth,
+        time_range: requestBody.time_range,
+        start_date: requestBody.start_date,
+        end_date: requestBody.end_date
+      }
     }), { 
       headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
     });

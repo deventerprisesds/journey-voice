@@ -499,11 +499,34 @@ function getInlineToolDefinitions(): any[] {
     {
       type: "function",
       name: "web_search",
-      description: "Search the internet for REAL-TIME information. Use for: weather, sports scores (NFL, NBA, MLB, etc.), news, stock prices, current events, or anything requiring live data.",
+      description: "Search the internet for REAL-TIME information using Tavily. CRITICAL: The 'query' parameter MUST be a VERBATIM transcription of what the user said - do NOT rephrase or convert temporal phrases like 'this weekend' or 'today' into specific dates. Use the other parameters to configure the search.",
       parameters: {
         type: "object",
         properties: {
-          query: { type: "string", description: "The search query (e.g., 'Ravens game score today', 'weather in Baltimore', 'latest tech news', 'AAPL stock price')" }
+          query: { 
+            type: "string", 
+            description: "The user's EXACT spoken words - pass verbatim without modification" 
+          },
+          topic: {
+            type: "string",
+            enum: ["general", "news", "finance"],
+            description: "Search category. Use 'news' for sports scores, current events, breaking news. Use 'finance' for stock prices. Use 'general' for everything else."
+          },
+          search_depth: {
+            type: "string",
+            enum: ["basic", "advanced"],
+            description: "Use 'advanced' for complex queries (sports scores, specific facts). Use 'basic' for simple lookups."
+          },
+          time_range: {
+            type: "string",
+            enum: ["day", "week", "month", "year"],
+            description: "Use 'day' for today/tonight, 'week' for this week/weekend. Only set if query implies time constraint."
+          },
+          include_domains: {
+            type: "array",
+            items: { type: "string" },
+            description: "Optional: Domains to prioritize. Leave empty to search all sources."
+          }
         },
         required: ["query"]
       }
