@@ -964,22 +964,48 @@ async function webSearch(query: string, timezone?: string): Promise<ExecuteToolR
   }
   
   try {
+    // Determine search recency filter based on query keywords (without modifying query)
+    let searchRecencyFilter: string | undefined;
+    const lowerQuery = query.toLowerCase();
+    if (lowerQuery.includes('today') || lowerQuery.includes('tonight') || lowerQuery.includes('yesterday')) {
+      searchRecencyFilter = 'day';
+    } else if (lowerQuery.includes('weekend') || lowerQuery.includes('this week') || lowerQuery.includes('last week')) {
+      searchRecencyFilter = 'week';
+    }
+    
+    // Build system prompt with time context for Perplexity to interpret temporal terms
+    const systemPrompt = `You are a factual search assistant. Provide complete, accurate information with source attribution. Never fabricate data.
+
+CURRENT TIME CONTEXT (use this to interpret temporal references):
+- Current date/time: ${timeAnchor.currentDateTime}
+- Timezone: ${timeAnchor.timezone}
+- Today's date: ${timeAnchor.todayDate}
+
+TIME CONVENTIONS:
+- "Weekend" typically means Friday evening, Saturday, and Sunday
+- "This week" starts on Monday and ends on Sunday
+- "Last weekend" is the most recent Friday-Saturday-Sunday before today
+
+When the user asks about "this weekend", "today", "last night", etc., interpret these relative to the current time context above.`;
+
     // Send query VERBATIM - no modification, no date suffix
-    const requestBody = {
+    const requestBody: any = {
       model: 'sonar-pro',
       messages: [
-        { 
-          role: 'system', 
-          content: 'You are a factual search assistant. Provide complete, accurate information with source attribution. Never fabricate data.'
-        },
+        { role: 'system', content: systemPrompt },
         { role: 'user', content: query }  // VERBATIM - exactly as user spoke it
       ],
       web_search_options: {
         search_context_size: 'high'
       },
       max_tokens: 1500
-      // No search_recency_filter - Perplexity determines relevance naturally
     };
+    
+    // Add recency filter if applicable (helps Perplexity prioritize recent results)
+    if (searchRecencyFilter) {
+      requestBody.search_recency_filter = searchRecencyFilter;
+      console.log(`[WEB-SEARCH] Recency filter set: ${searchRecencyFilter}`);
+    }
     
     console.log('[WEB-SEARCH] Verbatim query:', query);
     console.log('[WEB-SEARCH] Perplexity request body:', JSON.stringify(requestBody, null, 2));

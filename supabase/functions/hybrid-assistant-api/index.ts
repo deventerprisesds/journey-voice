@@ -401,12 +401,32 @@ ${contextualInstructions || ''}`;
           const toolCalls: ToolCall[] = finalRunData.required_action.submit_tool_outputs.tool_calls;
           console.log(`Processing ${toolCalls.length} tool calls`);
 
-          // Execute all tool calls
+          // Execute all tool calls - override web_search query with verbatim userInput
           const toolOutputs: ToolOutput[] = await Promise.all(
-            toolCalls.map(async (toolCall) => ({
-              tool_call_id: toolCall.id,
-              output: await executeToolCall(toolCall, userId)
-            }))
+            toolCalls.map(async (toolCall) => {
+              // For web_search, override the assistant's rewritten query with user's original input
+              if (toolCall.function.name === 'web_search') {
+                const originalArgs = JSON.parse(toolCall.function.arguments || '{}');
+                console.log(`[HYBRID] web_search - Assistant query: "${originalArgs.query}"`);
+                console.log(`[HYBRID] web_search - Overriding with verbatim userInput: "${userInput}"`);
+                // Create modified tool call with verbatim query
+                const modifiedToolCall = {
+                  ...toolCall,
+                  function: {
+                    ...toolCall.function,
+                    arguments: JSON.stringify({ ...originalArgs, query: userInput })
+                  }
+                };
+                return {
+                  tool_call_id: toolCall.id,
+                  output: await executeToolCall(modifiedToolCall, userId, undefined, userTimezone)
+                };
+              }
+              return {
+                tool_call_id: toolCall.id,
+                output: await executeToolCall(toolCall, userId, undefined, userTimezone)
+              };
+            })
           );
 
           // DEBUGGING: Log exactly what we're sending to OpenAI
