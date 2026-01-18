@@ -145,35 +145,8 @@ async function loadUserProfile(supabase: any, userId: string): Promise<any> {
   }
 }
 
-// Load today's tasks for context
-async function loadTodayTasks(supabase: any, userId: string, timezone: string): Promise<string> {
-  try {
-    // Get today in user's timezone
-    const now = new Date();
-    const today = now.toLocaleDateString('en-CA', { timeZone: timezone }); // YYYY-MM-DD format
-    
-    const { data: tasks } = await supabase
-      .from('tasks')
-      .select('title, scheduled_start_time, scheduled_end_time, priority, status, category')
-      .eq('user_id', userId)
-      .or(`due_date.eq.${today},scheduled_date.eq.${today}`)
-      .order('scheduled_start_time', { ascending: true });
-
-    if (!tasks || tasks.length === 0) {
-      return "No tasks scheduled for today.";
-    }
-
-    const taskList = tasks.map((t: any, i: number) => {
-      const time = t.scheduled_start_time ? `at ${t.scheduled_start_time}` : 'unscheduled';
-      return `${i + 1}. ${t.title} (${time}, ${t.priority} priority, ${t.status})`;
-    }).join('\n');
-
-    return `Today's ${tasks.length} tasks:\n${taskList}`;
-  } catch (error) {
-    console.warn('[BRIDGE] Failed to load today tasks:', error);
-    return "Unable to load today's tasks.";
-  }
-}
+// REMOVED: loadTodayTasks - AI should use tools instead of pre-loaded context
+// This forces tool-first architecture matching in-app assistant
 
 // Load RAG context - improved to query knowledge base
 async function loadRAGContext(supabase: any, userId: string, userInput?: string): Promise<string> {
@@ -216,42 +189,24 @@ async function loadRAGContext(supabase: any, userId: string, userInput?: string)
   }
 }
 
-// Load user instructions - BROADENED to match in-app assistant capabilities
-async function loadUserInstructions(userId: string | null, todayTasks: string, ragContext: string, userProfile: any, timezone: string): Promise<string> {
+// Load user instructions - TOOL-FIRST architecture (no pre-loaded task context)
+async function loadUserInstructions(userId: string | null, ragContext: string, userProfile: any, timezone: string): Promise<string> {
   const userName = userProfile?.first_name || userProfile?.full_name?.split(' ')[0] || 'sir';
   const currentTime = getCurrentTimeString(timezone);
   
-  // BROADENED default instructions - same capabilities as in-app assistant
+  // CRITICAL: Tool-first instructions - AI must use tools for data, not pre-loaded context
   const defaultInstructions = `You are Iris, a knowledgeable and proactive executive assistant for ${userName}.
 
 CURRENT TIME: ${currentTime}
 TIMEZONE: ${timezone}
 
-YOU CAN HELP WITH ANYTHING, including:
-- Task and schedule management (your primary function)
-- General knowledge questions (history, science, concepts)
-- Current events awareness (note: you may not have real-time data for live scores/weather)
-- Calculations and reasoning
-- Advice and recommendations
-- Sending messages (Slack, Email) and creating calendar events
-- Any question ${userName} might have
+CRITICAL: ALWAYS USE TOOLS for data. Do NOT rely on any pre-loaded context.
 
-When asked about real-time data you don't have access to (live sports scores, current weather, stock prices), acknowledge the limitation and offer alternatives or explain what you do know.
-
-${todayTasks ? `\nSCHEDULE CONTEXT:\n${todayTasks}` : ''}
-${ragContext}
-
-PHONE CONVERSATION STYLE:
-- Keep responses conversational and concise - this is a phone call
-- Listen for interruptions and stop speaking when the user starts talking
-- Execute actions immediately with brief confirmation
-- Don't ask unnecessary confirmation questions
-- When the user says goodbye, use the hang_up function
-
-AVAILABLE FUNCTIONS:
-- get_tasks: Retrieve tasks with time/keyword filtering
-- get_today_tasks: Get all tasks scheduled for today
-- create_task: Create new tasks with title, description, priority, and category
+AVAILABLE TOOLS - USE THEM:
+- web_search: Search the internet for REAL-TIME info (weather, sports scores, news, stocks, current events)
+- get_tasks: Query ALL tasks - by keyword, status, time period. Use for "how many tasks", "what did I work on", etc.
+- get_today_tasks: Get today's COMPLETE schedule. Use for "what's on my calendar", "today's tasks"
+- create_task: Create new tasks with title, description, priority, category
 - update_task: Update existing tasks (status, title, description, priority)
 - reschedule_task: Move a task to a different date or time
 - schedule_task: Schedule an unscheduled task
@@ -259,11 +214,41 @@ AVAILABLE FUNCTIONS:
 - send_slack_message: Send a Slack message
 - send_email: Send an email
 - create_calendar_event: Create an Outlook or Google Calendar event
-- initiate_phone_call: Request a callback (for scheduling future calls)
-- hang_up: End the phone call gracefully`;
+- initiate_phone_call: Request a callback
+- hang_up: End the phone call gracefully
+
+WHEN USER ASKS ABOUT TASKS:
+- "What's on my schedule?" → USE get_today_tasks tool
+- "How many tasks do I have?" → USE get_tasks tool
+- "What did I work on last week?" → USE get_tasks with time_filter
+- Any schedule question → USE the appropriate tool
+
+WHEN USER ASKS REAL-TIME DATA:
+- Sports scores → USE web_search
+- Weather → USE web_search  
+- News → USE web_search
+- Stock prices → USE web_search
+- Any current events → USE web_search
+
+YOU CAN HELP WITH ANYTHING:
+- Task and schedule management (use tools)
+- General knowledge questions
+- Real-time information (use web_search)
+- Calculations and reasoning
+- Advice and recommendations
+- Sending messages and creating calendar events
+
+${ragContext}
+
+PHONE CONVERSATION STYLE:
+- Keep responses conversational and concise - this is a phone call
+- Listen for interruptions and stop speaking when the user starts talking
+- Execute actions immediately with brief confirmation
+- Don't ask unnecessary confirmation questions
+- When the user says goodbye, use the hang_up function`;
 
   if (!userId) {
-    console.log('[BRIDGE] No userId, using default instructions');
+    console.log('[BRIDGE] No userId, using default tool-first instructions');
     return defaultInstructions;
   }
 
@@ -280,13 +265,15 @@ AVAILABLE FUNCTIONS:
       // Start with user's core instructions or use default
       let instructions = prefs.core_instructions || defaultInstructions;
       
-      // Add critical context that makes this a FULL assistant
+      // Add critical tool-first context
       instructions += `\n\nCURRENT TIME: ${currentTime}
 TIMEZONE: ${prefs.timezone || timezone}
 
-YOU CAN HELP WITH ANYTHING - not just tasks. Answer general knowledge questions, provide advice, discuss any topic ${userName} brings up.
+CRITICAL: ALWAYS USE TOOLS for data. Do NOT rely on context alone.
+- Use get_today_tasks for schedule questions
+- Use get_tasks for task queries
+- Use web_search for real-time information (sports, weather, news)
 
-${todayTasks ? `\nSCHEDULE CONTEXT:\n${todayTasks}` : ''}
 ${ragContext}
 
 PHONE CONVERSATION STYLE:
@@ -302,7 +289,7 @@ PHONE CONVERSATION STYLE:
         instructions += `\n\nScheduling Philosophy:\n${prefs.config.customAIInstructions}`;
       }
       
-      console.log('[BRIDGE] Loaded full user instructions from database');
+      console.log('[BRIDGE] Loaded tool-first user instructions from database');
       return instructions;
     }
   } catch (error) {
@@ -469,6 +456,18 @@ const toolDefinitions = [
         farewell_message: { type: "string", description: "Optional farewell message to say before hanging up" }
       }
     }
+  },
+  {
+    type: "function",
+    name: "web_search",
+    description: "Search the internet for REAL-TIME information. Use for: weather, sports scores (NFL, NBA, MLB, etc.), news, stock prices, current events, or anything requiring live data.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "The search query (e.g., 'Ravens game score today', 'weather in Baltimore', 'latest tech news', 'AAPL stock price')" }
+      },
+      required: ["query"]
+    }
   }
 ];
 
@@ -502,6 +501,10 @@ serve(async (req) => {
     // BARGE-IN: Track if AI is currently speaking
     let isAiSpeaking = false;
     let currentResponseId: string | null = null;
+    
+    // TRUNCATION: Track for proper interruption handling (not cancel)
+    let currentResponseItemId: string | null = null;
+    let audioSamplesPlayed: number = 0;
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
@@ -571,18 +574,15 @@ serve(async (req) => {
     async function connectToOpenAI() {
       console.log("[OPENAI] Connecting...");
 
-      // Load all context in parallel
-      let todayTasks = "Loading...";
+      // Load context in parallel - NO pre-loaded tasks (AI uses tools instead)
       let ragContext = "";
       
       if (userId) {
-        const [profile, tasks, rag] = await Promise.all([
+        const [profile, rag] = await Promise.all([
           loadUserProfile(supabase, userId),
-          loadTodayTasks(supabase, userId, userTimezone),
           loadRAGContext(supabase, userId)
         ]);
         userProfile = profile;
-        todayTasks = tasks;
         ragContext = rag;
 
         // Create or get thread for conversation persistence
@@ -615,8 +615,8 @@ serve(async (req) => {
         }
       }
 
-      // Load user-specific instructions with full context
-      const instructions = await loadUserInstructions(userId, todayTasks, ragContext, userProfile, userTimezone);
+      // Load user-specific instructions (no pre-loaded tasks - uses tools instead)
+      const instructions = await loadUserInstructions(userId, ragContext, userProfile, userTimezone);
 
       openaiWs = new WebSocket(
         "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17",
@@ -680,7 +680,18 @@ serve(async (req) => {
               // AI finished speaking
               isAiSpeaking = false;
               currentResponseId = null;
+              currentResponseItemId = null;
+              audioSamplesPlayed = 0;
               console.log("[OPENAI] Response completed");
+              break;
+
+            case "response.output_item.added":
+              // Track item IDs for truncation
+              if (msg.item?.type === "message") {
+                currentResponseItemId = msg.item.id;
+                audioSamplesPlayed = 0;
+                console.log("[OPENAI] Tracking response item:", currentResponseItemId);
+              }
               break;
 
             case "response.audio.delta":
@@ -689,6 +700,9 @@ serve(async (req) => {
                 const pcm8k = downsample24to8(pcm24k);
                 const mulaw = encodeMulaw(pcm8k);
                 const mulawBase64 = btoa(String.fromCharCode(...mulaw));
+
+                // Track samples for truncation calculation
+                audioSamplesPlayed += pcm24k.length;
 
                 twilioWs.send(JSON.stringify({
                   event: "media",
@@ -701,10 +715,24 @@ serve(async (req) => {
             case "input_audio_buffer.speech_started":
               console.log("[OPENAI] User started speaking");
               
-              // BARGE-IN: If AI is speaking, cancel the response
+              // BARGE-IN: Use truncation (not cancel) so AI remembers what it said
               if (isAiSpeaking && openaiWs?.readyState === WebSocket.OPEN) {
-                console.log("[OPENAI] BARGE-IN: Cancelling current response");
-                openaiWs.send(JSON.stringify({ type: "response.cancel" }));
+                if (currentResponseItemId) {
+                  // Truncation preserves context - AI knows what it said up to this point
+                  const audioEndMs = Math.floor(audioSamplesPlayed / 24); // 24kHz to milliseconds
+                  console.log(`[OPENAI] BARGE-IN: Truncating at ${audioSamplesPlayed} samples (${audioEndMs}ms)`);
+                  
+                  openaiWs.send(JSON.stringify({
+                    type: "conversation.item.truncate",
+                    item_id: currentResponseItemId,
+                    content_index: 0,
+                    audio_end_ms: audioEndMs
+                  }));
+                } else {
+                  // Fallback to cancel if no item ID tracked
+                  console.log("[OPENAI] BARGE-IN: Cancelling (no item ID for truncation)");
+                  openaiWs.send(JSON.stringify({ type: "response.cancel" }));
+                }
                 
                 // Clear Twilio's audio buffer to stop playback immediately
                 if (streamSid && twilioWs.readyState === WebSocket.OPEN) {
@@ -715,6 +743,8 @@ serve(async (req) => {
                 }
                 
                 isAiSpeaking = false;
+                currentResponseItemId = null;
+                audioSamplesPlayed = 0;
               }
               break;
 
@@ -874,6 +904,9 @@ serve(async (req) => {
             break;
           case "hang_up":
             result = await handleHangUp(args, twilioWs, streamSid);
+            break;
+          case "web_search":
+            result = await webSearch(args.query);
             break;
           default:
             result = { success: false, error: `Unknown function: ${functionName}` };
@@ -1287,5 +1320,73 @@ async function handleHangUp(args: any, twilioWs: WebSocket, streamSid: string | 
     };
   } catch (error) {
     return { success: false, error: String(error) };
+  }
+}
+
+// ============ Web Search Function ============
+
+async function webSearch(query: string): Promise<any> {
+  const PERPLEXITY_API_KEY = Deno.env.get('PERPLEXITY_API_KEY');
+  
+  if (!PERPLEXITY_API_KEY) {
+    console.warn('[BRIDGE] PERPLEXITY_API_KEY not configured');
+    return { 
+      success: false, 
+      error: "Web search not configured",
+      answer: "I don't have real-time search enabled, but I can help from my general knowledge."
+    };
+  }
+  
+  try {
+    console.log(`[BRIDGE] Web searching: "${query}"`);
+    
+    const response = await fetch('https://api.perplexity.ai/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'sonar',
+        messages: [
+          { 
+            role: 'system', 
+            content: 'Give a concise spoken answer (2-3 sentences max). Focus on the most important facts.' 
+          },
+          { role: 'user', content: query }
+        ],
+        search_recency_filter: 'day' // Get today's data for live scores/weather
+      }),
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[BRIDGE] Perplexity API error: ${response.status}`, errorText);
+      return { 
+        success: false, 
+        error: `Search API error: ${response.status}`,
+        answer: "I couldn't search for that information right now. Please try again."
+      };
+    }
+    
+    const data = await response.json();
+    const answer = data.choices?.[0]?.message?.content || "No results found.";
+    const sources = data.citations || [];
+    
+    console.log(`[BRIDGE] Search result: ${answer.substring(0, 100)}...`);
+    
+    return {
+      success: true,
+      answer,
+      sources,
+      query
+    };
+  } catch (error) {
+    console.error('[BRIDGE] Web search error:', error);
+    return { 
+      success: false, 
+      error: String(error),
+      answer: "I encountered an error while searching. Let me help with what I know."
+    };
   }
 }

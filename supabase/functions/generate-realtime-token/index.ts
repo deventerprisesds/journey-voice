@@ -273,6 +273,21 @@ When the user says goodbye phrases like 'that's all', 'thanks that's it', 'disco
                 }
               }
             }
+          },
+          {
+            type: "function",
+            name: "web_search",
+            description: "Search the internet for real-time information. Use for: weather, sports scores, news, stock prices, current events, or anything requiring live data that you don't have.",
+            parameters: {
+              type: "object",
+              properties: {
+                query: { 
+                  type: "string", 
+                  description: "The search query (e.g., 'Ravens game score today', 'weather in Baltimore', 'latest tech news')" 
+                }
+              },
+              required: ["query"]
+            }
           }
         ],
         instructions: fullInstructions
