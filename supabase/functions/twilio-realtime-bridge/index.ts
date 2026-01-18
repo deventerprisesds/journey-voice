@@ -299,177 +299,266 @@ PHONE CONVERSATION STYLE:
   return defaultInstructions;
 }
 
-// Tool definitions - FULL PARITY with in-app assistant including initiate_phone_call
-const toolDefinitions = [
-  {
-    type: "function",
-    name: "get_tasks",
-    description: "Retrieve tasks and chat history. Can search by time period, keywords, or status.",
-    parameters: {
-      type: "object",
-      properties: {
-        query: { type: "string", description: "Search query or keywords" },
-        time_filter: { type: "string", description: "Time period like 'past week', 'yesterday'" },
-        status: { type: "string", enum: ["BACKLOG", "TODO", "DOING", "DONE"] }
+// Tool definitions imported from centralized execute-tool function
+// This ensures feature parity with chat interface
+async function fetchToolDefinitions(): Promise<any[]> {
+  try {
+    const response = await fetch(`${SUPABASE_URL}/functions/v1/execute-tool/definitions`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
+        'Content-Type': 'application/json'
       }
+    });
+    
+    if (response.ok) {
+      const data = await response.json();
+      console.log(`[BRIDGE] Loaded ${data.count} tool definitions from execute-tool`);
+      return data.tools || [];
     }
-  },
-  {
-    type: "function",
-    name: "create_task",
-    description: "Create a new task. Use UPPERCASE for priority.",
-    parameters: {
-      type: "object",
-      properties: {
-        title: { type: "string", description: "Task title" },
-        description: { type: "string", description: "Task description" },
-        priority: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "URGENT"] },
-        category: { type: "string", enum: ["LIFE", "CAREER", "VENTURES", "EDUCATION"] }
-      },
-      required: ["title"]
-    }
-  },
-  {
-    type: "function",
-    name: "update_task",
-    description: "Update an existing task's properties.",
-    parameters: {
-      type: "object",
-      properties: {
-        task_id: { type: "string", description: "ID of the task to update" },
-        title: { type: "string" },
-        description: { type: "string" },
-        status: { type: "string", enum: ["BACKLOG", "TODO", "DOING", "DONE"] },
-        priority: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "URGENT"] },
-        category: { type: "string", enum: ["LIFE", "CAREER", "VENTURES", "EDUCATION"] }
-      },
-      required: ["task_id"]
-    }
-  },
-  {
-    type: "function",
-    name: "get_today_tasks",
-    description: "Get all tasks for today, including both scheduled and unscheduled tasks.",
-    parameters: { type: "object", properties: {} }
-  },
-  {
-    type: "function",
-    name: "reschedule_task",
-    description: "Move a task to a different date or time.",
-    parameters: {
-      type: "object",
-      properties: {
-        task_id: { type: "string", description: "ID of the task to reschedule" },
-        new_date: { type: "string", description: "New date in YYYY-MM-DD format" },
-        new_start_time: { type: "string", description: "New start time in HH:MM format" },
-        reason: { type: "string" }
-      },
-      required: ["task_id", "new_date"]
-    }
-  },
-  {
-    type: "function",
-    name: "schedule_task",
-    description: "Schedule an unscheduled task to a specific date and time.",
-    parameters: {
-      type: "object",
-      properties: {
-        task_id: { type: "string", description: "ID of the task to schedule" },
-        date: { type: "string", description: "Date in YYYY-MM-DD format" },
-        start_time: { type: "string", description: "Start time in HH:MM format" },
-        duration_minutes: { type: "number" }
-      },
-      required: ["task_id"]
-    }
-  },
-  {
-    type: "function",
-    name: "unschedule_task",
-    description: "Remove a task from the calendar schedule.",
-    parameters: {
-      type: "object",
-      properties: {
-        task_id: { type: "string", description: "ID of the task to unschedule" }
-      },
-      required: ["task_id"]
-    }
-  },
-  {
-    type: "function",
-    name: "send_slack_message",
-    description: "Send a Slack message to the user.",
-    parameters: {
-      type: "object",
-      properties: {
-        message: { type: "string", description: "The message to send" }
-      },
-      required: ["message"]
-    }
-  },
-  {
-    type: "function",
-    name: "send_email",
-    description: "Send an email to the user.",
-    parameters: {
-      type: "object",
-      properties: {
-        subject: { type: "string", description: "Email subject" },
-        body: { type: "string", description: "Email body content" }
-      },
-      required: ["subject", "body"]
-    }
-  },
-  {
-    type: "function",
-    name: "create_calendar_event",
-    description: "Create a calendar event in Outlook or Google Calendar.",
-    parameters: {
-      type: "object",
-      properties: {
-        title: { type: "string", description: "Event title" },
-        start_time: { type: "string", description: "Start time in ISO format or HH:MM" },
-        end_time: { type: "string", description: "End time in ISO format or HH:MM" },
-        calendar: { type: "string", enum: ["outlook", "google"], description: "Which calendar to use" }
-      },
-      required: ["title", "start_time"]
-    }
-  },
-  {
-    type: "function",
-    name: "initiate_phone_call",
-    description: "Schedule a callback - useful for 'call me back in X minutes' requests.",
-    parameters: {
-      type: "object",
-      properties: {
-        delay_minutes: { type: "number", description: "Minutes to wait before calling back" },
-        context: { type: "string", description: "What the callback should be about" }
-      }
-    }
-  },
-  {
-    type: "function",
-    name: "hang_up",
-    description: "End the phone call gracefully. Use when the user says goodbye or indicates they're done.",
-    parameters: {
-      type: "object",
-      properties: {
-        farewell_message: { type: "string", description: "Optional farewell message to say before hanging up" }
-      }
-    }
-  },
-  {
-    type: "function",
-    name: "web_search",
-    description: "Search the internet for REAL-TIME information. Use for: weather, sports scores (NFL, NBA, MLB, etc.), news, stock prices, current events, or anything requiring live data.",
-    parameters: {
-      type: "object",
-      properties: {
-        query: { type: "string", description: "The search query (e.g., 'Ravens game score today', 'weather in Baltimore', 'latest tech news', 'AAPL stock price')" }
-      },
-      required: ["query"]
-    }
+  } catch (error) {
+    console.warn('[BRIDGE] Failed to fetch tool definitions, using fallback:', error);
   }
-];
+  
+  // Fallback to inline definitions if fetch fails
+  return getInlineToolDefinitions();
+}
+
+// Fallback tool definitions (kept in sync with execute-tool)
+function getInlineToolDefinitions(): any[] {
+  return [
+    {
+      type: "function",
+      name: "get_tasks",
+      description: "Retrieve tasks and chat history. Can search by time period, keywords, or status.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Search query or keywords" },
+          time_filter: { type: "string", description: "Time period like 'past week', 'yesterday'" },
+          status: { type: "string", enum: ["BACKLOG", "TODO", "DOING", "DONE"] }
+        }
+      }
+    },
+    {
+      type: "function",
+      name: "create_task",
+      description: "Create a new task. Use UPPERCASE for priority.",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string", description: "Task title" },
+          description: { type: "string", description: "Task description" },
+          priority: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "URGENT"] },
+          category: { type: "string", enum: ["LIFE", "CAREER", "VENTURES", "EDUCATION"] }
+        },
+        required: ["title"]
+      }
+    },
+    {
+      type: "function",
+      name: "update_task",
+      description: "Update an existing task's properties.",
+      parameters: {
+        type: "object",
+        properties: {
+          task_id: { type: "string", description: "ID of the task to update" },
+          title: { type: "string" },
+          description: { type: "string" },
+          status: { type: "string", enum: ["BACKLOG", "TODO", "DOING", "DONE"] },
+          priority: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "URGENT"] },
+          category: { type: "string", enum: ["LIFE", "CAREER", "VENTURES", "EDUCATION"] }
+        },
+        required: ["task_id"]
+      }
+    },
+    {
+      type: "function",
+      name: "get_today_tasks",
+      description: "Get all tasks for today, including both scheduled and unscheduled tasks.",
+      parameters: { type: "object", properties: {} }
+    },
+    {
+      type: "function",
+      name: "reschedule_task",
+      description: "Move a task to a different date or time.",
+      parameters: {
+        type: "object",
+        properties: {
+          task_id: { type: "string", description: "ID of the task to reschedule" },
+          new_date: { type: "string", description: "New date in YYYY-MM-DD format" },
+          new_start_time: { type: "string", description: "New start time in HH:MM format" },
+          reason: { type: "string" }
+        },
+        required: ["task_id", "new_date"]
+      }
+    },
+    {
+      type: "function",
+      name: "schedule_task",
+      description: "Schedule an unscheduled task to a specific date and time.",
+      parameters: {
+        type: "object",
+        properties: {
+          task_id: { type: "string", description: "ID of the task to schedule" },
+          date: { type: "string", description: "Date in YYYY-MM-DD format" },
+          start_time: { type: "string", description: "Start time in HH:MM format" },
+          duration_minutes: { type: "number" }
+        },
+        required: ["task_id"]
+      }
+    },
+    {
+      type: "function",
+      name: "unschedule_task",
+      description: "Remove a task from the calendar schedule.",
+      parameters: {
+        type: "object",
+        properties: {
+          task_id: { type: "string", description: "ID of the task to unschedule" }
+        },
+        required: ["task_id"]
+      }
+    },
+    {
+      type: "function",
+      name: "send_slack_message",
+      description: "Send a Slack message to the user.",
+      parameters: {
+        type: "object",
+        properties: {
+          message: { type: "string", description: "The message to send" }
+        },
+        required: ["message"]
+      }
+    },
+    {
+      type: "function",
+      name: "send_email",
+      description: "Send an email to the user.",
+      parameters: {
+        type: "object",
+        properties: {
+          subject: { type: "string", description: "Email subject" },
+          body: { type: "string", description: "Email body content" }
+        },
+        required: ["subject", "body"]
+      }
+    },
+    {
+      type: "function",
+      name: "create_calendar_event",
+      description: "Create a calendar event in Outlook or Google Calendar.",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string", description: "Event title" },
+          start_time: { type: "string", description: "Start time in ISO format or HH:MM" },
+          end_time: { type: "string", description: "End time in ISO format or HH:MM" },
+          calendar: { type: "string", enum: ["outlook", "google"], description: "Which calendar to use" }
+        },
+        required: ["title", "start_time"]
+      }
+    },
+    {
+      type: "function",
+      name: "initiate_phone_call",
+      description: "Schedule a callback - useful for 'call me back in X minutes' requests.",
+      parameters: {
+        type: "object",
+        properties: {
+          delay_minutes: { type: "number", description: "Minutes to wait before calling back" },
+          context: { type: "string", description: "What the callback should be about" }
+        }
+      }
+    },
+    {
+      type: "function",
+      name: "hang_up",
+      description: "End the phone call gracefully. Use when the user says goodbye or indicates they're done.",
+      parameters: {
+        type: "object",
+        properties: {
+          farewell_message: { type: "string", description: "Optional farewell message to say before hanging up" }
+        }
+      }
+    },
+    {
+      type: "function",
+      name: "web_search",
+      description: "Search the internet for REAL-TIME information. Use for: weather, sports scores (NFL, NBA, MLB, etc.), news, stock prices, current events, or anything requiring live data.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "The search query (e.g., 'Ravens game score today', 'weather in Baltimore', 'latest tech news', 'AAPL stock price')" }
+        },
+        required: ["query"]
+      }
+    }
+  ];
+}
+
+// Centralized tool execution via execute-tool edge function
+async function executeTool(
+  toolName: string,
+  args: any,
+  userId: string | null,
+  context: { timezone?: string; userProfile?: any; twilioWs?: WebSocket; streamSid?: string | null }
+): Promise<any> {
+  // Handle hang_up specially - needs direct access to WebSocket
+  if (toolName === 'hang_up') {
+    console.log('[BRIDGE] Hang up requested:', args.farewell_message);
+    
+    // Give time for the farewell message to play, then close
+    if (context.twilioWs) {
+      setTimeout(() => {
+        if (context.twilioWs && context.twilioWs.readyState === WebSocket.OPEN) {
+          context.twilioWs.close();
+        }
+      }, 3000);
+    }
+
+    return {
+      success: true,
+      message: args.farewell_message || "Call ended gracefully"
+    };
+  }
+
+  if (!userId) {
+    return { success: false, error: "Not authenticated" };
+  }
+
+  try {
+    const response = await fetch(`${SUPABASE_URL}/functions/v1/execute-tool`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        toolName,
+        args,
+        userId,
+        context: {
+          interface: 'phone',
+          timezone: context.timezone || 'America/New_York',
+          userProfile: context.userProfile || {}
+        }
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[BRIDGE] execute-tool error: ${response.status}`, errorText);
+      return { success: false, error: `Tool execution failed: ${response.status}` };
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error(`[BRIDGE] Error executing tool ${toolName}:`, error);
+    return { success: false, error: String(error) };
+  }
+}
 
 serve(async (req) => {
   const url = new URL(req.url);
@@ -649,7 +738,7 @@ serve(async (req) => {
                     prefix_padding_ms: 300,
                     silence_duration_ms: 800,  // Faster response on phone
                   },
-                  tools: toolDefinitions,
+                  tools: getInlineToolDefinitions(),
                   tool_choice: "auto"
                 },
               }));
@@ -864,53 +953,15 @@ serve(async (req) => {
         const args = JSON.parse(msg.arguments);
         const functionName = msg.name;
         
-        console.log(`[BRIDGE] Executing function: ${functionName}`, args);
+        console.log(`[BRIDGE] Executing function via execute-tool: ${functionName}`, args);
 
-        let result: any = { success: false, error: "Function not implemented" };
-
-        switch (functionName) {
-          case "get_tasks":
-            result = await getTasks(supabase, userId, args);
-            break;
-          case "get_today_tasks":
-            result = await getTodayTasks(supabase, userId, userTimezone);
-            break;
-          case "create_task":
-            result = await createTask(supabase, userId, args);
-            break;
-          case "update_task":
-            result = await updateTask(supabase, args);
-            break;
-          case "reschedule_task":
-            result = await rescheduleTask(supabase, args);
-            break;
-          case "schedule_task":
-            result = await scheduleTask(supabase, args);
-            break;
-          case "unschedule_task":
-            result = await unscheduleTask(supabase, args);
-            break;
-          case "send_slack_message":
-            result = await sendSlackMessage(supabase, userId, args, userProfile);
-            break;
-          case "send_email":
-            result = await sendEmail(supabase, userId, args, userProfile);
-            break;
-          case "create_calendar_event":
-            result = await createCalendarEvent(supabase, userId, args, userProfile);
-            break;
-          case "initiate_phone_call":
-            result = await initiatePhoneCall(supabase, userId, args);
-            break;
-          case "hang_up":
-            result = await handleHangUp(args, twilioWs, streamSid);
-            break;
-          case "web_search":
-            result = await webSearch(args.query);
-            break;
-          default:
-            result = { success: false, error: `Unknown function: ${functionName}` };
-        }
+        // Use centralized tool execution
+        const result = await executeTool(functionName, args, userId, {
+          timezone: userTimezone,
+          userProfile,
+          twilioWs,
+          streamSid
+        });
 
         console.log(`[BRIDGE] Function result:`, result);
 
