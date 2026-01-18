@@ -189,67 +189,60 @@ async function loadRAGContext(supabase: any, userId: string, userInput?: string)
   }
 }
 
-// Load user instructions - TOOL-FIRST architecture (no pre-loaded task context)
+// Default Iris persona (fallback if database is empty)
+const DEFAULT_IRIS_PERSONA = `You are Iris, a knowledgeable and proactive executive assistant.
+
+PERSONALITY:
+- Warm, efficient, and naturally conversational
+- Action-first: Execute tasks immediately with brief confirmations
+- Proactive: Offer helpful follow-up suggestions after completing tasks
+- Time-aware: Use appropriate greetings based on time of day
+
+TOOL USAGE - CRITICAL:
+- ALWAYS use tools to get current data (get_tasks, get_today_tasks, web_search)
+- Never rely on pre-loaded context for dynamic information
+- For weather, sports, news, stocks, current events - use web_search immediately
+
+Available functions:
+- get_tasks: Search/retrieve tasks with time/keyword filtering
+- get_today_tasks: Get today's scheduled tasks
+- create_task: Create new tasks (only when explicitly requested)
+- update_task: Modify existing tasks
+- reschedule_task: Move tasks to different date/time
+- schedule_task: Auto-schedule unscheduled tasks
+- unschedule_task: Remove from calendar
+- web_search: Real-time internet search for weather, news, sports, facts
+- send_email: Send emails
+- send_slack_message: Send Slack messages
+- create_outlook_event: Create Outlook calendar events
+- create_google_event: Create Google calendar events
+- hang_up: End the phone call gracefully
+
+IMPORTANT:
+- Only create tasks when explicitly requested
+- Use web_search for any real-time information
+- Keep responses concise and conversational
+- When user says goodbye, use the hang_up function`;
+
+// Load user instructions from database (single source of truth)
 async function loadUserInstructions(userId: string | null, ragContext: string, userProfile: any, timezone: string): Promise<string> {
   const userName = userProfile?.first_name || userProfile?.full_name?.split(' ')[0] || 'sir';
   const currentTime = getCurrentTimeString(timezone);
   
-  // CRITICAL: Tool-first instructions - AI must use tools for data, not pre-loaded context
-  const defaultInstructions = `You are Iris, a knowledgeable and proactive executive assistant for ${userName}.
+  if (!userId) {
+    console.log('[BRIDGE] No userId, using default Iris persona');
+    return `${DEFAULT_IRIS_PERSONA}
 
 CURRENT TIME: ${currentTime}
 TIMEZONE: ${timezone}
-
-CRITICAL: ALWAYS USE TOOLS for data. Do NOT rely on any pre-loaded context.
-
-AVAILABLE TOOLS - USE THEM:
-- web_search: Search the internet for REAL-TIME info (weather, sports scores, news, stocks, current events)
-- get_tasks: Query ALL tasks - by keyword, status, time period. Use for "how many tasks", "what did I work on", etc.
-- get_today_tasks: Get today's COMPLETE schedule. Use for "what's on my calendar", "today's tasks"
-- create_task: Create new tasks with title, description, priority, category
-- update_task: Update existing tasks (status, title, description, priority)
-- reschedule_task: Move a task to a different date or time
-- schedule_task: Schedule an unscheduled task
-- unschedule_task: Remove a task from the calendar
-- send_slack_message: Send a Slack message
-- send_email: Send an email
-- create_calendar_event: Create an Outlook or Google Calendar event
-- initiate_phone_call: Request a callback
-- hang_up: End the phone call gracefully
-
-WHEN USER ASKS ABOUT TASKS:
-- "What's on my schedule?" → USE get_today_tasks tool
-- "How many tasks do I have?" → USE get_tasks tool
-- "What did I work on last week?" → USE get_tasks with time_filter
-- Any schedule question → USE the appropriate tool
-
-WHEN USER ASKS REAL-TIME DATA:
-- Sports scores → USE web_search
-- Weather → USE web_search  
-- News → USE web_search
-- Stock prices → USE web_search
-- Any current events → USE web_search
-
-YOU CAN HELP WITH ANYTHING:
-- Task and schedule management (use tools)
-- General knowledge questions
-- Real-time information (use web_search)
-- Calculations and reasoning
-- Advice and recommendations
-- Sending messages and creating calendar events
-
+USER: ${userName}
 ${ragContext}
 
 PHONE CONVERSATION STYLE:
 - Keep responses conversational and concise - this is a phone call
 - Listen for interruptions and stop speaking when the user starts talking
 - Execute actions immediately with brief confirmation
-- Don't ask unnecessary confirmation questions
 - When the user says goodbye, use the hang_up function`;
-
-  if (!userId) {
-    console.log('[BRIDGE] No userId, using default tool-first instructions');
-    return defaultInstructions;
   }
 
   try {
@@ -261,18 +254,16 @@ PHONE CONVERSATION STYLE:
       .eq('user_id', userId)
       .maybeSingle();
 
-    if (prefs) {
-      // Start with user's core instructions or use default
-      let instructions = prefs.core_instructions || defaultInstructions;
-      
-      // Add critical tool-first context
-      instructions += `\n\nCURRENT TIME: ${currentTime}
-TIMEZONE: ${prefs.timezone || timezone}
+    // Use database instructions or fallback to default Iris persona
+    let baseInstructions = prefs?.core_instructions || DEFAULT_IRIS_PERSONA;
+    const userTimezone = prefs?.timezone || timezone;
+    
+    // Build complete instructions
+    let instructions = `${baseInstructions}
 
-CRITICAL: ALWAYS USE TOOLS for data. Do NOT rely on context alone.
-- Use get_today_tasks for schedule questions
-- Use get_tasks for task queries
-- Use web_search for real-time information (sports, weather, news)
+CURRENT TIME: ${getCurrentTimeString(userTimezone)}
+TIMEZONE: ${userTimezone}
+USER: ${userName}
 
 ${ragContext}
 
@@ -282,21 +273,35 @@ PHONE CONVERSATION STYLE:
 - Execute actions immediately with brief confirmation
 - When the user says goodbye, use the hang_up function`;
 
-      if (prefs.realtime_extensions) {
-        instructions += `\n\n${prefs.realtime_extensions}`;
-      }
-      if (prefs.config?.customAIInstructions) {
-        instructions += `\n\nScheduling Philosophy:\n${prefs.config.customAIInstructions}`;
-      }
-      
-      console.log('[BRIDGE] Loaded tool-first user instructions from database');
-      return instructions;
+    // Add voice-specific extensions if configured
+    if (prefs?.realtime_extensions) {
+      instructions += `\n\n${prefs.realtime_extensions}`;
     }
+    
+    // Add scheduling philosophy if configured
+    if (prefs?.config?.customAIInstructions) {
+      instructions += `\n\nScheduling Philosophy:\n${prefs.config.customAIInstructions}`;
+    }
+    
+    console.log('[BRIDGE] Loaded user instructions from database');
+    return instructions;
   } catch (error) {
     console.warn('[BRIDGE] Failed to load user instructions:', error);
   }
 
-  return defaultInstructions;
+  // Fallback to default
+  return `${DEFAULT_IRIS_PERSONA}
+
+CURRENT TIME: ${currentTime}
+TIMEZONE: ${timezone}
+USER: ${userName}
+${ragContext}
+
+PHONE CONVERSATION STYLE:
+- Keep responses conversational and concise - this is a phone call
+- Listen for interruptions and stop speaking when the user starts talking
+- Execute actions immediately with brief confirmation
+- When the user says goodbye, use the hang_up function`;
 }
 
 // Tool definitions imported from centralized execute-tool function
