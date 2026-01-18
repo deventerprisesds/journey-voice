@@ -630,6 +630,7 @@ serve(async (req) => {
     // TRUNCATION: Track for proper interruption handling (not cancel)
     let currentResponseItemId: string | null = null;
     let audioSamplesPlayed: number = 0;
+    let audioChunksSent: number = 0;
     
     // POST-VALIDATION: Track last tool output for response validation
     let lastToolOutput: { toolName: string; extractedFacts?: any } | null = null;
@@ -716,6 +717,11 @@ serve(async (req) => {
 
     twilioWs.onerror = (err) => {
       console.error("[TWILIO] WebSocket error:", err);
+      // Close OpenAI connection if Twilio fails
+      if (openaiWs?.readyState === WebSocket.OPEN) {
+        console.log("[TWILIO] Closing OpenAI connection due to Twilio error");
+        openaiWs.close();
+      }
     };
 
     async function connectToOpenAI() {
@@ -771,7 +777,7 @@ serve(async (req) => {
       );
 
       openaiWs.onopen = () => {
-        console.log("[OPENAI] Connected, waiting for session.created...");
+        console.log("[OPENAI] WebSocket state: OPEN, connected to realtime API");
       };
 
       openaiWs.onmessage = (event) => {
@@ -803,7 +809,7 @@ serve(async (req) => {
               break;
 
             case "session.updated":
-              console.log("[OPENAI] Session configured");
+              console.log("[OPENAI] Session configured, Twilio readyState:", twilioWs.readyState);
               sessionConfigured = true;
               
               // Send greeting based on call direction
@@ -813,6 +819,19 @@ serve(async (req) => {
                 } else {
                   sendOutboundGreeting();
                 }
+                
+                // Fallback timer: If no audio sent within 5 seconds, retry greeting
+                setTimeout(() => {
+                  if (audioChunksSent === 0 && greetingSent && twilioWs.readyState === WebSocket.OPEN) {
+                    console.log("[BRIDGE] ⚠️ No audio sent after 5s - retrying greeting");
+                    greetingSent = false;
+                    if (callDirection === 'inbound') {
+                      sendInboundGreeting();
+                    } else {
+                      sendOutboundGreeting();
+                    }
+                  }
+                }, 5000);
               }
               break;
 
@@ -850,12 +869,20 @@ serve(async (req) => {
 
                 // Track samples for truncation calculation
                 audioSamplesPlayed += pcm24k.length;
+                audioChunksSent++;
+                
+                // Log every 50 chunks (~1 second of audio) for debugging
+                if (audioChunksSent % 50 === 0) {
+                  console.log(`[AUDIO] Sent ${audioChunksSent} chunks to Twilio (${audioSamplesPlayed} samples)`);
+                }
 
                 twilioWs.send(JSON.stringify({
                   event: "media",
                   streamSid: streamSid,
                   media: { payload: mulawBase64 },
                 }));
+              } else if (streamSid) {
+                console.warn(`[AUDIO] Cannot send - Twilio WS state: ${twilioWs.readyState}`);
               }
               break;
 
