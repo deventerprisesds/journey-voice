@@ -464,6 +464,9 @@ export class RealtimeVoiceAssistant {
         case 'initiate_phone_call':
           result = await this.initiatePhoneCall(args);
           break;
+        case 'web_search':
+          result = await this.webSearch(args);
+          break;
         default:
           result = { error: `Unknown function: ${functionName}` };
       }
@@ -1379,6 +1382,45 @@ export class RealtimeVoiceAssistant {
       return { 
         success: false, 
         error: error instanceof Error ? error.message : 'Unknown error' 
+      };
+    }
+  }
+
+  private async webSearch(args: { query: string }) {
+    console.log('🔍 Web search with query:', args.query);
+    
+    try {
+      this.onMessage?.({ type: 'client.processing', status: 'Searching the web...' });
+
+      const { data, error } = await supabase.functions.invoke('web-search', {
+        body: { query: args.query }
+      });
+
+      if (error) {
+        console.error('❌ Web search error:', error);
+        this.onMessage?.({ type: 'client.error', message: 'Search failed' });
+        return { 
+          success: false, 
+          error: error.message || 'Web search failed',
+          answer: "I couldn't search for that information right now."
+        };
+      }
+
+      this.onMessage?.({ type: 'client.done', status: 'Search complete' });
+
+      return {
+        success: data?.success ?? false,
+        answer: data?.answer || "No results found.",
+        sources: data?.sources || [],
+        query: args.query
+      };
+    } catch (error) {
+      console.error('❌ Web search error:', error);
+      this.onMessage?.({ type: 'client.error', message: 'Search failed' });
+      return { 
+        success: false, 
+        error: error instanceof Error ? error.message : 'Unknown error',
+        answer: "I encountered an error while searching."
       };
     }
   }
