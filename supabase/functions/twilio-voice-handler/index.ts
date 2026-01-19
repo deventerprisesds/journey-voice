@@ -761,6 +761,11 @@ async function triggerOutboundCall(
 }
 
 serve(async (req) => {
+  // === ENTRY POINT DEBUG ===
+  console.log('=== TWILIO VOICE HANDLER ENTRY ===');
+  console.log('URL:', req.url);
+  console.log('Method:', req.method);
+  
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -772,7 +777,7 @@ serve(async (req) => {
   const turnParam = parseInt(url.searchParams.get('turn') || '1', 10);
   const userIdParam = url.searchParams.get('userId') || '';
 
-  console.log(`Twilio voice handler: action=${action}, turn=${turnParam}`);
+  console.log(`[HANDLER] Action: ${action}, Turn: ${turnParam}, UserIdParam: ${userIdParam}`);
 
   try {
     switch (action) {
@@ -822,6 +827,12 @@ serve(async (req) => {
       }
 
       case 'incoming-call': {
+        console.log('=== INCOMING CALL RECEIVED ===');
+        console.log('From:', url.searchParams.get('From'));
+        console.log('To:', url.searchParams.get('To'));
+        console.log('CallSid:', url.searchParams.get('CallSid'));
+        console.log('Direction:', url.searchParams.get('Direction'));
+        
         // Initial call connection - use Media Streams for real-time AI
         // Try to identify user from caller ID
         const callerPhone = url.searchParams.get('From') || Deno.env.get('MY_PHONE_NUMBER');
@@ -830,20 +841,22 @@ serve(async (req) => {
         let timezone = 'America/New_York';
         
         if (callerPhone) {
+          console.log(`[incoming-call] Looking up user for phone: ${callerPhone}`);
           const context = await getUserContext(callerPhone);
           userId = context.userId;
           timezone = context.timezone;
-          console.log(`[incoming-call] Resolved userId=${userId}, timezone=${timezone} for phone ${callerPhone}`);
+          console.log(`[incoming-call] ✅ Resolved userId=${userId}, timezone=${timezone}`);
         }
 
         // Check if we should use realtime bridge or fallback
         const useFallback = url.searchParams.get('fallback') === 'true';
         
+        console.log(`[incoming-call] Generating TwiML - useFallback: ${useFallback}`);
         const twiml = useFallback 
           ? generateFallbackGreetingTwiML(contextParam, userId)
           : generateRealtimeBridgeTwiML(contextParam, userId, callerPhone || undefined, directionParam, timezone);
         
-        console.log('Incoming call - using', useFallback ? 'fallback' : 'realtime bridge', '- direction:', directionParam, '- userId:', userId);
+        console.log(`[incoming-call] ✅ TwiML ready - using ${useFallback ? 'fallback' : 'realtime bridge'} - direction: ${directionParam} - userId: ${userId}`);
         
         return new Response(twiml, {
           headers: { 'Content-Type': 'application/xml' },
