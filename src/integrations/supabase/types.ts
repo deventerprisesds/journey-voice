@@ -3280,6 +3280,17 @@ export type Database = {
         Args: { _connection_id: string }
         Returns: boolean
       }
+      schedule_next_call: {
+        Args: {
+          p_call_context: string
+          p_call_id: string
+          p_call_name: string
+          p_call_time: string
+          p_timezone?: string
+          p_user_id: string
+        }
+        Returns: string
+      }
       update_calendar_connection_tokens: {
         Args: {
           _access_token: string
