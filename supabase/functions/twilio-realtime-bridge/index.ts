@@ -1166,7 +1166,8 @@ serve(async (req) => {
                       }]
                     }
                   }));
-                  openaiWs!.send(JSON.stringify({ type: "response.create", response: { modalities: ["text", "audio"] } }));
+                  const correctionModalities = ttsProvider === 'elevenlabs' ? ["text"] : ["text", "audio"];
+                  openaiWs!.send(JSON.stringify({ type: "response.create", response: { modalities: correctionModalities } }));
                 } else {
                   console.log('[BRIDGE] ✅ Response validated - no discrepancies');
                 }
@@ -1253,14 +1254,15 @@ serve(async (req) => {
         }
       }));
 
-      // CRITICAL: Must specify modalities for audio output
+      // CRITICAL: Must specify modalities based on TTS provider
+      const greetingModalities = ttsProvider === 'elevenlabs' ? ["text"] : ["text", "audio"];
       openaiWs.send(JSON.stringify({ 
         type: "response.create",
         response: {
-          modalities: ["text", "audio"]
+          modalities: greetingModalities
         }
       }));
-      console.log(`[GREETING] ✅ response.create sent with modalities=[text,audio] - awaiting audio generation`);
+      console.log(`[GREETING] ✅ response.create sent with modalities=${JSON.stringify(greetingModalities)} (ttsProvider: ${ttsProvider})`);
     }
 
     function sendOutboundGreeting() {
@@ -1370,8 +1372,9 @@ serve(async (req) => {
           }
         }));
 
-        // Trigger response generation
-        openaiWs.send(JSON.stringify({ type: "response.create", response: { modalities: ["text", "audio"] } }));
+        // Trigger response generation with dynamic modalities
+        const fnModalities = ttsProvider === 'elevenlabs' ? ["text"] : ["text", "audio"];
+        openaiWs.send(JSON.stringify({ type: "response.create", response: { modalities: fnModalities } }));
 
       } catch (error) {
         console.error("[BRIDGE] Function call error:", error);
@@ -1384,7 +1387,8 @@ serve(async (req) => {
             output: JSON.stringify({ success: false, error: String(error) })
           }
         }));
-        openaiWs.send(JSON.stringify({ type: "response.create", response: { modalities: ["text", "audio"] } }));
+        const errModalities = ttsProvider === 'elevenlabs' ? ["text"] : ["text", "audio"];
+        openaiWs.send(JSON.stringify({ type: "response.create", response: { modalities: errModalities } }));
       }
     }
 
