@@ -931,6 +931,7 @@ serve(async (req) => {
             case "response.audio.delta":
             case "response.output_audio.delta":
             case "response.audio_output.delta":
+              if (streamSid && twilioWs.readyState === WebSocket.OPEN) {
                 // Log FIRST audio delta immediately
                 if (!firstAudioDeltaReceived) {
                   console.log(`[AUDIO] 🔊 FIRST audio delta from OpenAI - base64 length: ${msg.delta?.length || 0}, streamSid: ${streamSid}`);
@@ -1254,6 +1255,7 @@ serve(async (req) => {
 
         // Trigger response generation
         sendResponseCreate(`tool_${functionName}`);
+      } catch (error) {
         console.error("[BRIDGE] Function call error:", error);
         
         openaiWs.send(JSON.stringify({
@@ -1264,7 +1266,7 @@ serve(async (req) => {
             output: JSON.stringify({ success: false, error: String(error) })
           }
         }));
-        openaiWs.send(JSON.stringify({ type: "response.create" }));
+        sendResponseCreate(`tool_error_${functionName}`);
       }
     }
 
