@@ -37,7 +37,13 @@ serve(async (req) => {
       }
     }
 
-    console.log('Generating ephemeral token for user:', userId || 'anonymous');
+    // Use demo user ID if no authenticated user (for demo mode)
+    if (!userId) {
+      userId = '00000000-0000-0000-0000-000000000001';
+      console.log('Using demo user for preferences');
+    }
+
+    console.log('Generating ephemeral token for user:', userId);
 
     // Load user's AI instructions and TTS preferences from scheduling preferences
     let coreInstructions = `You are a helpful task management assistant. You can help users create, update, and manage their tasks through voice commands.
