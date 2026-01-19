@@ -1002,7 +1002,17 @@ serve(async (req) => {
               break;
 
             case "error":
-              console.error("[OPENAI] Error:", msg.error);
+              console.error("[OPENAI] ❌ ERROR:", JSON.stringify(msg.error, null, 2));
+              // Check for common billing/quota errors
+              const errorCode = msg.error?.code;
+              const errorMessage = msg.error?.message || '';
+              if (errorCode === 'insufficient_quota' || errorMessage.includes('quota') || errorMessage.includes('billing')) {
+                console.error("[OPENAI] 💳 BILLING ERROR: OpenAI API credits exhausted or billing issue!");
+              } else if (errorCode === 'rate_limit_exceeded' || errorMessage.includes('rate limit')) {
+                console.error("[OPENAI] ⏱️ RATE LIMIT: Too many requests - slow down!");
+              } else if (errorCode === 'invalid_api_key' || errorMessage.includes('api_key')) {
+                console.error("[OPENAI] 🔑 API KEY ERROR: Invalid or expired API key!");
+              }
               break;
           }
         } catch (err) {
