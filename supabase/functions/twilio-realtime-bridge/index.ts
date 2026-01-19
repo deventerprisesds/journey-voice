@@ -637,13 +637,25 @@ serve(async (req) => {
     // VERBATIM WEB SEARCH: Track last user transcript for web_search override
     let lastUserTranscript: string | null = null;
     
+    // === AUDIO PIPELINE TELEMETRY ===
+    let twilioMediaFramesIn = 0;
+    let openaiAppendCount = 0;
+    let openaiAudioDeltaCount = 0;
+    let twilioMediaFramesOut = 0;
+    let firstInboundLogged = false;
+    let firstAppendLogged = false;
+    let firstDeltaLogged = false;
+    let firstOutboundLogged = false;
+    // Track all OpenAI message types for debugging
+    const openaiEventCounts: Record<string, number> = {};
+    
     // KEEP-ALIVE: Prevent idle timeout
     let keepAliveInterval: number | null = null;
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
     twilioWs.onopen = () => {
-      console.log("[TWILIO] WebSocket connected");
+      console.log("[TWILIO-WS] ✅ WebSocket OPEN - ready to receive stream");
       
       // Keep-alive ping every 30 seconds to prevent idle timeout
       keepAliveInterval = setInterval(() => {
@@ -660,7 +672,7 @@ serve(async (req) => {
 
         switch (data.event) {
           case "connected":
-            console.log("[TWILIO] Media stream connected");
+            console.log("[TWILIO-STREAM] ✅ Media stream connected - Twilio is ready");
             break;
 
           case "start":
@@ -672,14 +684,20 @@ serve(async (req) => {
             callDirection = customParams.direction || 'inbound';
             userTimezone = customParams.timezone || 'America/New_York';
             
-            console.log(`[TWILIO] Stream started: ${streamSid}`);
-            console.log(`[TWILIO] Custom params:`, JSON.stringify(customParams));
-            console.log(`[TWILIO] Call direction: ${callDirection}, userId: ${userId}, timezone: ${userTimezone}`);
+            console.log(`[TWILIO-STREAM] ✅ Stream START received - streamSid: ${streamSid}`);
+            console.log(`[TWILIO-STREAM] Custom params:`, JSON.stringify(customParams));
+            console.log(`[TWILIO-STREAM] Call direction: ${callDirection}, userId: ${userId}, timezone: ${userTimezone}`);
             
             connectToOpenAI();
             break;
 
           case "media":
+            twilioMediaFramesIn++;
+            if (!firstInboundLogged) {
+              console.log(`[AUDIO-IN] 📥 First Twilio inbound frame received (streamSid: ${streamSid})`);
+              firstInboundLogged = true;
+            }
+            
             if (openaiWs?.readyState === WebSocket.OPEN) {
               // Decode μ-law → PCM16 → Upsample to 24kHz → Base64
               const mulawBytes = Uint8Array.from(atob(data.media.payload), (c) => c.charCodeAt(0));
@@ -687,15 +705,23 @@ serve(async (req) => {
               const pcm24k = upsample8to24(pcm8k);
               const audioBase64 = int16ToBase64(pcm24k);
 
+              openaiAppendCount++;
+              if (!firstAppendLogged) {
+                console.log(`[AUDIO-APPEND] ➡️ First audio sent to OpenAI (${audioBase64.length} chars)`);
+                firstAppendLogged = true;
+              }
+
               openaiWs.send(JSON.stringify({
                 type: "input_audio_buffer.append",
                 audio: audioBase64,
               }));
+            } else {
+              console.warn(`[AUDIO-APPEND] ⚠️ Cannot send - OpenAI WS not open (state: ${openaiWs?.readyState})`);
             }
             break;
 
           case "stop":
-            console.log("[TWILIO] Stream stopped");
+            console.log("[TWILIO-STREAM] Stream stopped");
             openaiWs?.close();
             break;
         }
@@ -705,7 +731,14 @@ serve(async (req) => {
     };
 
     twilioWs.onclose = () => {
-      console.log("[TWILIO] WebSocket closed");
+      console.log("[TWILIO-WS] WebSocket closed");
+      console.log(`[AUDIO-SUMMARY] === Call Pipeline Stats ===`);
+      console.log(`  Twilio frames IN:  ${twilioMediaFramesIn}`);
+      console.log(`  OpenAI appends:    ${openaiAppendCount}`);
+      console.log(`  OpenAI deltas:     ${openaiAudioDeltaCount}`);
+      console.log(`  Twilio frames OUT: ${twilioMediaFramesOut}`);
+      console.log(`[OPENAI-SUMMARY] Event types received:`, JSON.stringify(openaiEventCounts));
+      
       // Clear keep-alive interval
       if (keepAliveInterval) {
         clearInterval(keepAliveInterval);
@@ -777,10 +810,19 @@ serve(async (req) => {
       openaiWs.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
+          
+          // Track all OpenAI message types for debugging
+          openaiEventCounts[msg.type] = (openaiEventCounts[msg.type] || 0) + 1;
+          
+          // Log all message types except high-frequency audio deltas
+          if (!['response.audio.delta', 'input_audio_buffer.speech_started'].includes(msg.type)) {
+            console.log(`[OPENAI-MSG] ${msg.type}`);
+          }
 
           switch (msg.type) {
             case "session.created":
-              console.log("[OPENAI] Session created, sending config...");
+              console.log("[OPENAI-SESSION] ✅ Session CREATED - configuring...");
+              console.log("[OPENAI-SESSION] Sending config: modalities=['text','audio'], voice='alloy', format='pcm16'");
               openaiWs!.send(JSON.stringify({
                 type: "session.update",
                 session: {
@@ -803,7 +845,8 @@ serve(async (req) => {
               break;
 
             case "session.updated":
-              console.log("[OPENAI] Session configured");
+              console.log("[OPENAI-SESSION] ✅ Session CONFIGURED - voice output enabled");
+              console.log("[OPENAI-SESSION] Modalities: text + audio, Voice: alloy, Format: pcm16");
               sessionConfigured = true;
               
               // Send greeting based on call direction
@@ -842,6 +885,13 @@ serve(async (req) => {
               break;
 
             case "response.audio.delta":
+              openaiAudioDeltaCount++;
+              if (!firstDeltaLogged) {
+                console.log(`[AUDIO-DELTA] 🔊 First audio delta from OpenAI (delta length: ${msg.delta?.length || 0} chars)`);
+                console.log(`[AUDIO-DELTA] 🔊 streamSid: ${streamSid}, twilioWs.readyState: ${twilioWs.readyState}`);
+                firstDeltaLogged = true;
+              }
+              
               if (streamSid && twilioWs.readyState === WebSocket.OPEN) {
                 const pcm24k = base64ToInt16(msg.delta);
                 const pcm8k = downsample24to8(pcm24k);
@@ -851,11 +901,19 @@ serve(async (req) => {
                 // Track samples for truncation calculation
                 audioSamplesPlayed += pcm24k.length;
 
+                twilioMediaFramesOut++;
+                if (!firstOutboundLogged) {
+                  console.log(`[AUDIO-OUT] ⬅️ First audio frame sent to Twilio (${mulawBase64.length} chars)`);
+                  firstOutboundLogged = true;
+                }
+
                 twilioWs.send(JSON.stringify({
                   event: "media",
                   streamSid: streamSid,
                   media: { payload: mulawBase64 },
                 }));
+              } else {
+                console.warn(`[AUDIO-OUT] ⚠️ Cannot send - streamSid: ${streamSid}, twilio state: ${twilioWs.readyState}`);
               }
               break;
 
@@ -900,7 +958,7 @@ serve(async (req) => {
               break;
 
             case "conversation.item.input_audio_transcription.completed":
-              console.log(`[OPENAI] User said: "${msg.transcript}"`);
+              console.log(`[TRANSCRIPT-USER] 📢 "${msg.transcript}"`);
               // Track for verbatim web_search override
               lastUserTranscript = msg.transcript;
               // Save user message to conversation history
@@ -908,7 +966,7 @@ serve(async (req) => {
               break;
 
             case "response.audio_transcript.done":
-              console.log(`[OPENAI] AI said: "${msg.transcript}"`);
+              console.log(`[TRANSCRIPT-AI] 🤖 "${msg.transcript}"`);
               // Save assistant message to conversation history
               saveConversationMessage('assistant', msg.transcript);
               
@@ -981,14 +1039,18 @@ serve(async (req) => {
 
     // PHASE 4: Open-ended greeting - NOT task-focused
     function sendInboundGreeting() {
-      if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN || greetingSent) return;
+      if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN || greetingSent) {
+        console.log(`[GREETING] ⚠️ Cannot send - openaiWs open: ${openaiWs?.readyState === WebSocket.OPEN}, greetingSent: ${greetingSent}`);
+        return;
+      }
       
       greetingSent = true;
       const greeting = getTimeBasedGreeting(userTimezone);
       const userName = userProfile?.first_name || 'sir';
       const currentTime = getCurrentTimeString(userTimezone);
       
-      console.log(`[BRIDGE] Sending inbound greeting to ${userName} (timezone: ${userTimezone})`);
+      console.log(`[GREETING] 🎤 Triggering greeting for ${userName} with "${greeting}" (timezone: ${userTimezone})`);
+      console.log(`[GREETING] System message being sent to OpenAI...`);
       
       // OPEN-ENDED greeting - don't assume they want schedule info
       openaiWs.send(JSON.stringify({
@@ -1004,6 +1066,7 @@ serve(async (req) => {
       }));
 
       openaiWs.send(JSON.stringify({ type: "response.create" }));
+      console.log(`[GREETING] ✅ response.create sent - awaiting audio generation`);
     }
 
     function sendOutboundGreeting() {
