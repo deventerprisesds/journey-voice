@@ -9,10 +9,21 @@ const corsHeaders = {
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
 const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
+interface ScheduledCall {
+  id: string;
+  name: string;
+  time: string; // HH:mm format
+  enabled: boolean;
+  callType: 'morning_standup' | 'midday_checkin' | 'eod_wrapup' | 'custom';
+  context: string;
+}
+
 interface ScheduledCallConfig {
   userId?: string;
   callType: 'morning_briefing' | 'task_reminder' | 'custom';
   context?: string;
+  trigger?: string;
+  checkRecurring?: boolean;
 }
 
 // Get today's tasks for briefing context
@@ -25,7 +36,7 @@ async function getTodaysBriefing(userId: string): Promise<string> {
 
   const { data: tasks, error } = await supabase
     .from('tasks')
-    .select('title, start_time, priority, category')
+    .select('title, start_time, priority, category, status')
     .eq('user_id', userId)
     .gte('start_time', startOfDay)
     .lte('start_time', endOfDay)
@@ -37,13 +48,167 @@ async function getTodaysBriefing(userId: string): Promise<string> {
 
   const taskCount = tasks.length;
   const highPriorityCount = tasks.filter(t => t.priority === 'HIGH' || t.priority === 'URGENT').length;
+  const completedCount = tasks.filter(t => t.status === 'DONE').length;
   
   let briefing = `${taskCount} task${taskCount > 1 ? 's' : ''} scheduled for today`;
   if (highPriorityCount > 0) {
     briefing += `, including ${highPriorityCount} high priority item${highPriorityCount > 1 ? 's' : ''}`;
   }
+  if (completedCount > 0) {
+    briefing += `. ${completedCount} already completed`;
+  }
   
   return briefing;
+}
+
+// Build context based on call type
+async function buildCallContext(call: ScheduledCall, userId: string): Promise<string> {
+  const briefing = await getTodaysBriefing(userId);
+  
+  switch (call.callType) {
+    case 'morning_standup':
+      return `Morning stand-up. ${call.context} Today's briefing: ${briefing}`;
+    case 'midday_checkin':
+      return `Midday check-in. ${call.context} Current status: ${briefing}`;
+    case 'eod_wrapup':
+      return `End of day wrap-up. ${call.context} Day summary: ${briefing}`;
+    case 'custom':
+    default:
+      return call.context || 'Custom scheduled call';
+  }
+}
+
+// Check if current time matches scheduled time (±1 minute tolerance)
+function isTimeMatch(currentHHMM: string, scheduledTime: string): boolean {
+  const [currentH, currentM] = currentHHMM.split(':').map(Number);
+  const [scheduledH, scheduledM] = scheduledTime.split(':').map(Number);
+  
+  const currentMinutes = currentH * 60 + currentM;
+  const scheduledMinutes = scheduledH * 60 + scheduledM;
+  
+  // Allow ±1 minute tolerance
+  return Math.abs(currentMinutes - scheduledMinutes) <= 1;
+}
+
+// Format time in user's timezone
+function getTimeInTimezone(date: Date, timezone: string): string {
+  try {
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+      timeZone: timezone,
+    });
+    return formatter.format(date);
+  } catch {
+    // Fallback to UTC
+    return date.toISOString().slice(11, 16);
+  }
+}
+
+// Process recurring calls for all users
+async function processRecurringCalls(): Promise<{ processed: number; triggered: number; errors: string[] }> {
+  const supabase = createClient(supabaseUrl, supabaseServiceKey);
+  const now = new Date();
+  const errors: string[] = [];
+  let processed = 0;
+  let triggered = 0;
+
+  console.log('[RECURRING] Starting recurring calls check at:', now.toISOString());
+
+  // Get all users with scheduled calls and their phone numbers
+  const { data: users, error: usersError } = await supabase
+    .from('user_scheduling_prefs')
+    .select(`
+      user_id,
+      timezone,
+      scheduled_calls
+    `)
+    .not('scheduled_calls', 'is', null);
+
+  if (usersError) {
+    console.error('[RECURRING] Error fetching users:', usersError);
+    return { processed: 0, triggered: 0, errors: [usersError.message] };
+  }
+
+  if (!users || users.length === 0) {
+    console.log('[RECURRING] No users with scheduled calls found');
+    return { processed: 0, triggered: 0, errors: [] };
+  }
+
+  console.log(`[RECURRING] Found ${users.length} users with scheduled calls`);
+
+  for (const user of users) {
+    const userId = user.user_id;
+    const timezone = user.timezone || 'America/New_York';
+    const scheduledCalls = (user.scheduled_calls as ScheduledCall[]) || [];
+
+    if (scheduledCalls.length === 0) continue;
+
+    // Get current time in user's timezone
+    const currentHHMM = getTimeInTimezone(now, timezone);
+    console.log(`[RECURRING] User ${userId}: timezone=${timezone}, current time=${currentHHMM}`);
+
+    // Get user's phone number from profiles
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('phone')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    const phoneNumber = profile?.phone;
+    if (!phoneNumber) {
+      console.log(`[RECURRING] User ${userId}: No phone number configured, skipping`);
+      continue;
+    }
+
+    // Check each scheduled call
+    for (const call of scheduledCalls) {
+      if (!call.enabled) continue;
+      processed++;
+
+      if (isTimeMatch(currentHHMM, call.time)) {
+        console.log(`[RECURRING] User ${userId}: Triggering ${call.name} at ${call.time}`);
+        
+        try {
+          // Build context based on call type
+          const context = await buildCallContext(call, userId);
+
+          // Trigger the call via twilio-voice-handler
+          const response = await fetch(`${supabaseUrl}/functions/v1/twilio-voice-handler`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${supabaseServiceKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              action: 'trigger-call',
+              userId,
+              context,
+              phoneNumber,
+            }),
+          });
+
+          const result = await response.json();
+          
+          if (result.success) {
+            triggered++;
+            console.log(`[RECURRING] User ${userId}: Call triggered successfully for ${call.name}`);
+          } else {
+            errors.push(`User ${userId}: Failed to trigger ${call.name} - ${result.error}`);
+            console.error(`[RECURRING] User ${userId}: Failed to trigger ${call.name}:`, result.error);
+          }
+        } catch (error) {
+          const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+          errors.push(`User ${userId}: Error triggering ${call.name} - ${errorMsg}`);
+          console.error(`[RECURRING] User ${userId}: Error triggering ${call.name}:`, error);
+        }
+      }
+    }
+  }
+
+  console.log(`[RECURRING] Completed: processed=${processed}, triggered=${triggered}, errors=${errors.length}`);
+  return { processed, triggered, errors };
 }
 
 serve(async (req) => {
@@ -62,10 +227,22 @@ serve(async (req) => {
       // No body or invalid JSON, use defaults
     }
 
-    // For cron jobs, we need to determine which user(s) to call
-    // In a single-user setup, use MY_PHONE_NUMBER
-    // In multi-user, you'd query users with scheduled calls enabled
-    
+    // Check if this is a recurring calls check (triggered by cron)
+    if (config.trigger === 'cron' && config.checkRecurring) {
+      console.log('[CRON] Processing recurring calls...');
+      const result = await processRecurringCalls();
+      
+      return new Response(JSON.stringify({
+        success: true,
+        type: 'recurring_check',
+        ...result
+      }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // For manual/direct calls, use the legacy behavior
     const phoneNumber = Deno.env.get('MY_PHONE_NUMBER');
     if (!phoneNumber) {
       console.log('No phone number configured for scheduled calls');

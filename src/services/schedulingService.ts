@@ -24,6 +24,16 @@ export interface CustomVoice {
   id: string;
 }
 
+// Scheduled call type for recurring voice calls
+export interface ScheduledCall {
+  id: string;
+  name: string;
+  time: string; // HH:mm format
+  enabled: boolean;
+  callType: 'morning_standup' | 'midday_checkin' | 'eod_wrapup' | 'custom';
+  context: string;
+}
+
 // Extended config with AI instructions and TTS settings
 export interface SchedulingConfigWithInstructions extends SchedulingConfig {
   core_instructions?: string;
@@ -32,7 +42,9 @@ export interface SchedulingConfigWithInstructions extends SchedulingConfig {
   auto_greeting_timeout?: number;
   tts_provider?: 'openai' | 'elevenlabs';
   elevenlabs_voice_id?: string;
+  openai_voice?: string;
   custom_voices?: CustomVoice[];
+  scheduled_calls?: ScheduledCall[];
 }
 
 /**
@@ -54,7 +66,7 @@ export async function loadUserSchedulingConfig(userId?: string): Promise<Schedul
   try {
     const { data, error } = await supabase
       .from('user_scheduling_prefs')
-      .select('config, timezone, core_instructions, realtime_extensions, assistant_extensions, auto_greeting_timeout, tts_provider, elevenlabs_voice_id, custom_voices')
+      .select('config, timezone, core_instructions, realtime_extensions, assistant_extensions, auto_greeting_timeout, tts_provider, elevenlabs_voice_id, openai_voice, custom_voices, scheduled_calls')
       .eq('user_id', userId)
       .maybeSingle();
 
@@ -86,7 +98,9 @@ export async function loadUserSchedulingConfig(userId?: string): Promise<Schedul
         auto_greeting_timeout: data.auto_greeting_timeout || 5,
         tts_provider: (data.tts_provider as 'openai' | 'elevenlabs') || 'openai',
         elevenlabs_voice_id: data.elevenlabs_voice_id || 'EXAVITQu4vr4xnSDxMaL',
+        openai_voice: data.openai_voice || 'alloy',
         custom_voices: Array.isArray(data.custom_voices) ? (data.custom_voices as unknown as CustomVoice[]) : [],
+        scheduled_calls: Array.isArray(data.scheduled_calls) ? (data.scheduled_calls as unknown as ScheduledCall[]) : [],
       };
       cachedConfig = mergedConfig;
       cachedUserId = userId;
@@ -119,7 +133,19 @@ export async function saveUserSchedulingConfig(
 ): Promise<boolean> {
   try {
     // Extract fields to save in dedicated columns
-    const { timezone, core_instructions, realtime_extensions, assistant_extensions, auto_greeting_timeout, tts_provider, elevenlabs_voice_id, custom_voices, ...restConfig } = config;
+    const { 
+      timezone, 
+      core_instructions, 
+      realtime_extensions, 
+      assistant_extensions, 
+      auto_greeting_timeout, 
+      tts_provider, 
+      elevenlabs_voice_id, 
+      openai_voice,
+      custom_voices, 
+      scheduled_calls,
+      ...restConfig 
+    } = config;
     
     const updateData: any = {
       user_id: userId,
@@ -158,8 +184,16 @@ export async function saveUserSchedulingConfig(
       updateData.elevenlabs_voice_id = elevenlabs_voice_id;
     }
     
+    if (openai_voice !== undefined) {
+      updateData.openai_voice = openai_voice;
+    }
+    
     if (custom_voices !== undefined) {
       updateData.custom_voices = custom_voices;
+    }
+    
+    if (scheduled_calls !== undefined) {
+      updateData.scheduled_calls = scheduled_calls;
     }
     
     const { error } = await supabase

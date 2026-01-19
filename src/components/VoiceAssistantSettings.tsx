@@ -6,11 +6,13 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useAuth';
-import { loadUserSchedulingConfig, saveUserSchedulingConfig, type SchedulingConfigWithInstructions, type CustomVoice } from '@/services/schedulingService';
-import { Loader2, RotateCcw, Save, Plus, Trash2, Volume2 } from 'lucide-react';
+import { loadUserSchedulingConfig, saveUserSchedulingConfig, type SchedulingConfigWithInstructions, type CustomVoice, type ScheduledCall } from '@/services/schedulingService';
+import { Loader2, RotateCcw, Save, Plus, Trash2, Volume2, Phone, Clock } from 'lucide-react';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 
 const DEFAULT_CORE_INSTRUCTIONS = `You are Iris, a knowledgeable and proactive executive assistant.
 
@@ -54,11 +56,54 @@ IMPORTANT:
 - When user says goodbye, end the conversation gracefully`;
 
 // Preset ElevenLabs voices
-const PRESET_VOICES = [
+const PRESET_ELEVENLABS_VOICES = [
   { name: 'Sarah', id: 'EXAVITQu4vr4xnSDxMaL', description: 'Female, warm (Default)' },
   { name: 'George', id: 'JBFqnCBsd6RMkjVDRZzb', description: 'Male, professional' },
   { name: 'Roger', id: 'CwhRBWXzGAHq8TQ4Fs17', description: 'Male, clear' },
   { name: 'Lily', id: 'pFZP5JQG7iQjIQuC4Bku', description: 'Female, friendly' },
+];
+
+// OpenAI Realtime voices
+const OPENAI_VOICES = [
+  { name: 'Alloy', id: 'alloy', description: 'Neutral, balanced' },
+  { name: 'Ash', id: 'ash', description: 'Warm, conversational' },
+  { name: 'Ballad', id: 'ballad', description: 'Soft, gentle' },
+  { name: 'Coral', id: 'coral', description: 'Clear, professional' },
+  { name: 'Echo', id: 'echo', description: 'Smooth, engaging' },
+  { name: 'Fable', id: 'fable', description: 'Storytelling, expressive' },
+  { name: 'Onyx', id: 'onyx', description: 'Deep, authoritative' },
+  { name: 'Nova', id: 'nova', description: 'Warm, friendly' },
+  { name: 'Sage', id: 'sage', description: 'Calm, measured' },
+  { name: 'Shimmer', id: 'shimmer', description: 'Bright, energetic' },
+  { name: 'Verse', id: 'verse', description: 'Dynamic, versatile' },
+];
+
+// Default scheduled calls
+const DEFAULT_SCHEDULED_CALLS: ScheduledCall[] = [
+  {
+    id: 'morning_standup',
+    name: 'Morning Stand-up',
+    time: '11:00',
+    enabled: true,
+    callType: 'morning_standup',
+    context: "Today's agenda review. Share what's scheduled for today, check on priorities, and see if any tasks need to be added."
+  },
+  {
+    id: 'midday_checkin',
+    name: 'Midday Check-in',
+    time: '12:30',
+    enabled: true,
+    callType: 'midday_checkin',
+    context: "Progress check. See how the day is going, ask if there's anything blocking progress, and if any help or rescheduling is needed."
+  },
+  {
+    id: 'eod_wrapup',
+    name: 'End of Day Wrap-up',
+    time: '19:00',
+    enabled: true,
+    callType: 'eod_wrapup',
+    context: "Daily summary. Summarize what was completed, what still needs to be done, priorities for tomorrow, and ask about evening focus areas."
+  }
 ];
 
 const VoiceAssistantSettings: React.FC = () => {
@@ -76,9 +121,15 @@ const VoiceAssistantSettings: React.FC = () => {
   // TTS settings
   const [ttsProvider, setTtsProvider] = useState<'openai' | 'elevenlabs'>('openai');
   const [elevenlabsVoiceId, setElevenlabsVoiceId] = useState('EXAVITQu4vr4xnSDxMaL');
+  const [openaiVoice, setOpenaiVoice] = useState('alloy');
   const [customVoices, setCustomVoices] = useState<CustomVoice[]>([]);
   const [newVoiceName, setNewVoiceName] = useState('');
   const [newVoiceId, setNewVoiceId] = useState('');
+
+  // Scheduled calls
+  const [scheduledCalls, setScheduledCalls] = useState<ScheduledCall[]>(DEFAULT_SCHEDULED_CALLS);
+  const [newCallName, setNewCallName] = useState('');
+  const [newCallTime, setNewCallTime] = useState('09:00');
 
   useEffect(() => {
     if (user?.id) {
@@ -99,7 +150,11 @@ const VoiceAssistantSettings: React.FC = () => {
       setAutoGreetingTimeout(config.auto_greeting_timeout?.toString() || '5');
       setTtsProvider(config.tts_provider || 'openai');
       setElevenlabsVoiceId(config.elevenlabs_voice_id || 'EXAVITQu4vr4xnSDxMaL');
+      setOpenaiVoice(config.openai_voice || 'alloy');
       setCustomVoices(config.custom_voices || []);
+      setScheduledCalls(config.scheduled_calls && config.scheduled_calls.length > 0 
+        ? config.scheduled_calls 
+        : DEFAULT_SCHEDULED_CALLS);
     } catch (error) {
       console.error('Failed to load AI instructions:', error);
       toast({
@@ -125,7 +180,9 @@ const VoiceAssistantSettings: React.FC = () => {
         auto_greeting_timeout: parseInt(autoGreetingTimeout) || 5,
         tts_provider: ttsProvider,
         elevenlabs_voice_id: elevenlabsVoiceId,
+        openai_voice: openaiVoice,
         custom_voices: customVoices,
+        scheduled_calls: scheduledCalls,
       } as any);
 
       if (success) {
@@ -156,7 +213,9 @@ const VoiceAssistantSettings: React.FC = () => {
     setAutoGreetingTimeout('5');
     setTtsProvider('openai');
     setElevenlabsVoiceId('EXAVITQu4vr4xnSDxMaL');
+    setOpenaiVoice('alloy');
     setCustomVoices([]);
+    setScheduledCalls(DEFAULT_SCHEDULED_CALLS);
     toast({
       title: "Reset",
       description: "All instructions reset to defaults",
@@ -173,7 +232,6 @@ const VoiceAssistantSettings: React.FC = () => {
       return;
     }
 
-    // Check for duplicates
     if (customVoices.some(v => v.id === newVoiceId)) {
       toast({
         title: "Error",
@@ -194,19 +252,88 @@ const VoiceAssistantSettings: React.FC = () => {
 
   const handleRemoveCustomVoice = (voiceId: string) => {
     setCustomVoices(customVoices.filter(v => v.id !== voiceId));
-    // If the removed voice was selected, switch to default
     if (elevenlabsVoiceId === voiceId) {
       setElevenlabsVoiceId('EXAVITQu4vr4xnSDxMaL');
     }
   };
 
-  const getAllVoices = () => {
-    return [...PRESET_VOICES, ...customVoices.map(v => ({ ...v, description: 'Custom' }))];
+  const getAllElevenlabsVoices = () => {
+    return [...PRESET_ELEVENLABS_VOICES, ...customVoices.map(v => ({ ...v, description: 'Custom' }))];
   };
 
-  const getSelectedVoiceName = () => {
-    const voice = getAllVoices().find(v => v.id === elevenlabsVoiceId);
+  const getSelectedElevenlabsVoiceName = () => {
+    const voice = getAllElevenlabsVoices().find(v => v.id === elevenlabsVoiceId);
     return voice?.name || 'Unknown';
+  };
+
+  const getSelectedOpenaiVoiceName = () => {
+    const voice = OPENAI_VOICES.find(v => v.id === openaiVoice);
+    return voice?.name || 'Alloy';
+  };
+
+  // Scheduled calls handlers
+  const handleToggleCall = (callId: string) => {
+    setScheduledCalls(calls =>
+      calls.map(call =>
+        call.id === callId ? { ...call, enabled: !call.enabled } : call
+      )
+    );
+  };
+
+  const handleUpdateCallTime = (callId: string, time: string) => {
+    setScheduledCalls(calls =>
+      calls.map(call =>
+        call.id === callId ? { ...call, time } : call
+      )
+    );
+  };
+
+  const handleUpdateCallName = (callId: string, name: string) => {
+    setScheduledCalls(calls =>
+      calls.map(call =>
+        call.id === callId ? { ...call, name } : call
+      )
+    );
+  };
+
+  const handleUpdateCallContext = (callId: string, context: string) => {
+    setScheduledCalls(calls =>
+      calls.map(call =>
+        call.id === callId ? { ...call, context } : call
+      )
+    );
+  };
+
+  const handleAddCustomCall = () => {
+    if (!newCallName.trim()) {
+      toast({
+        title: "Error",
+        description: "Please provide a name for the call",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const newCall: ScheduledCall = {
+      id: `custom_${Date.now()}`,
+      name: newCallName.trim(),
+      time: newCallTime,
+      enabled: true,
+      callType: 'custom',
+      context: 'Custom check-in call.',
+    };
+
+    setScheduledCalls([...scheduledCalls, newCall]);
+    setNewCallName('');
+    setNewCallTime('09:00');
+    toast({
+      title: "Call Added",
+      description: `Added "${newCall.name}" to your recurring calls`,
+    });
+  };
+
+  const handleRemoveCall = (callId: string) => {
+    setScheduledCalls(calls => calls.filter(call => call.id !== callId));
   };
 
   if (loading) {
@@ -233,10 +360,11 @@ const VoiceAssistantSettings: React.FC = () => {
       </CardHeader>
       <CardContent>
         <Tabs defaultValue="core" className="w-full">
-          <TabsList className="grid w-full grid-cols-4">
+          <TabsList className="grid w-full grid-cols-5">
             <TabsTrigger value="core">Core</TabsTrigger>
             <TabsTrigger value="scheduling">Scheduling</TabsTrigger>
             <TabsTrigger value="voice">Voice</TabsTrigger>
+            <TabsTrigger value="recurring">Recurring Calls</TabsTrigger>
             <TabsTrigger value="assistant">Assistant</TabsTrigger>
           </TabsList>
 
@@ -278,7 +406,7 @@ const VoiceAssistantSettings: React.FC = () => {
               <div>
                 <Label className="text-base font-medium">Voice Provider</Label>
                 <p className="text-sm text-muted-foreground mb-3">
-                  Choose the text-to-speech engine for phone calls
+                  Choose the text-to-speech engine for both in-app and phone calls
                 </p>
               </div>
               
@@ -307,13 +435,41 @@ const VoiceAssistantSettings: React.FC = () => {
               </RadioGroup>
             </div>
 
+            {/* OpenAI Voice Selection (shown when OpenAI is selected) */}
+            {ttsProvider === 'openai' && (
+              <div className="space-y-4 border-t pt-4">
+                <div>
+                  <Label className="text-base font-medium">OpenAI Voice</Label>
+                  <p className="text-sm text-muted-foreground mb-3">
+                    Select a voice for the AI assistant (currently: {getSelectedOpenaiVoiceName()})
+                  </p>
+                </div>
+
+                <Select value={openaiVoice} onValueChange={setOpenaiVoice}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Select a voice" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {OPENAI_VOICES.map((voice) => (
+                      <SelectItem key={voice.id} value={voice.id}>
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">{voice.name}</span>
+                          <span className="text-muted-foreground text-sm">- {voice.description}</span>
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
             {/* ElevenLabs Voice Selection (shown when ElevenLabs is selected) */}
             {ttsProvider === 'elevenlabs' && (
               <div className="space-y-4 border-t pt-4">
                 <div>
                   <Label className="text-base font-medium">ElevenLabs Voice</Label>
                   <p className="text-sm text-muted-foreground mb-3">
-                    Select a voice for phone calls (currently: {getSelectedVoiceName()})
+                    Select a voice for the AI assistant (currently: {getSelectedElevenlabsVoiceName()})
                   </p>
                 </div>
 
@@ -323,7 +479,7 @@ const VoiceAssistantSettings: React.FC = () => {
                   </SelectTrigger>
                   <SelectContent>
                     <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">Preset Voices</div>
-                    {PRESET_VOICES.map((voice) => (
+                    {PRESET_ELEVENLABS_VOICES.map((voice) => (
                       <SelectItem key={voice.id} value={voice.id}>
                         <div className="flex items-center gap-2">
                           <span className="font-medium">{voice.name}</span>
@@ -431,6 +587,115 @@ const VoiceAssistantSettings: React.FC = () => {
                 className="min-h-[200px] font-mono text-sm"
                 placeholder="E.g., 'Use casual language when responding to voice commands...'"
               />
+            </div>
+          </TabsContent>
+
+          {/* Recurring Calls Tab */}
+          <TabsContent value="recurring" className="space-y-6">
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <Phone className="h-5 w-5 text-primary" />
+                <Label className="text-base font-medium">Recurring Voice Calls</Label>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Schedule automated phone calls for daily stand-ups, check-ins, and wrap-ups. 
+                The AI will call you at the specified times with context-aware briefings.
+              </p>
+            </div>
+
+            {/* Scheduled Calls List */}
+            <div className="space-y-4">
+              {scheduledCalls.map((call) => (
+                <Collapsible key={call.id} className="border rounded-lg">
+                  <div className="flex items-center justify-between p-4">
+                    <div className="flex items-center gap-4 flex-1">
+                      <Switch
+                        checked={call.enabled}
+                        onCheckedChange={() => handleToggleCall(call.id)}
+                      />
+                      <div className="flex-1">
+                        <Input
+                          value={call.name}
+                          onChange={(e) => handleUpdateCallName(call.id, e.target.value)}
+                          className="font-medium border-none p-0 h-auto focus-visible:ring-0 bg-transparent"
+                        />
+                        <div className="flex items-center gap-2 mt-1">
+                          <Clock className="h-3 w-3 text-muted-foreground" />
+                          <Input
+                            type="time"
+                            value={call.time}
+                            onChange={(e) => handleUpdateCallTime(call.id, e.target.value)}
+                            className="w-24 h-6 text-xs border-none p-0 focus-visible:ring-0 bg-transparent text-muted-foreground"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <CollapsibleTrigger asChild>
+                        <Button variant="ghost" size="sm">
+                          Edit Context
+                        </Button>
+                      </CollapsibleTrigger>
+                      {call.callType === 'custom' && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-destructive hover:text-destructive"
+                          onClick={() => handleRemoveCall(call.id)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                  <CollapsibleContent className="px-4 pb-4">
+                    <Textarea
+                      value={call.context}
+                      onChange={(e) => handleUpdateCallContext(call.id, e.target.value)}
+                      className="min-h-[100px] text-sm"
+                      placeholder="Describe what the AI should focus on during this call..."
+                    />
+                  </CollapsibleContent>
+                </Collapsible>
+              ))}
+            </div>
+
+            {/* Add Custom Call */}
+            <div className="space-y-3 pt-4 border-t">
+              <Label className="text-sm font-medium">Add Custom Call</Label>
+              <div className="flex gap-2">
+                <Input
+                  placeholder="Call name (e.g., 'Weekly Review')"
+                  value={newCallName}
+                  onChange={(e) => setNewCallName(e.target.value)}
+                  className="flex-1"
+                />
+                <Input
+                  type="time"
+                  value={newCallTime}
+                  onChange={(e) => setNewCallTime(e.target.value)}
+                  className="w-32"
+                />
+                <Button
+                  variant="outline"
+                  onClick={handleAddCustomCall}
+                  disabled={!newCallName.trim()}
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Call
+                </Button>
+              </div>
+            </div>
+
+            {/* Info Note */}
+            <div className="bg-muted/50 rounded-lg p-4 text-sm text-muted-foreground">
+              <p className="font-medium text-foreground mb-1">How it works:</p>
+              <ul className="list-disc list-inside space-y-1">
+                <li>Calls are made to your phone number saved in your profile</li>
+                <li>The AI uses the context you provide to personalize each call</li>
+                <li>Morning calls include your daily agenda, EOD calls summarize your progress</li>
+                <li>You can add, remove, and customize calls as needed</li>
+              </ul>
             </div>
           </TabsContent>
 
