@@ -18,12 +18,21 @@ export type { SchedulingConfig, TimeWindow };
 let cachedConfig: SchedulingConfig | null = null;
 let cachedUserId: string | null = null;
 
-// Extended config with AI instructions
+// Custom voice type for ElevenLabs
+export interface CustomVoice {
+  name: string;
+  id: string;
+}
+
+// Extended config with AI instructions and TTS settings
 export interface SchedulingConfigWithInstructions extends SchedulingConfig {
   core_instructions?: string;
   realtime_extensions?: string;
   assistant_extensions?: string;
   auto_greeting_timeout?: number;
+  tts_provider?: 'openai' | 'elevenlabs';
+  elevenlabs_voice_id?: string;
+  custom_voices?: CustomVoice[];
 }
 
 /**
@@ -45,7 +54,7 @@ export async function loadUserSchedulingConfig(userId?: string): Promise<Schedul
   try {
     const { data, error } = await supabase
       .from('user_scheduling_prefs')
-      .select('config, timezone, core_instructions, realtime_extensions, assistant_extensions, auto_greeting_timeout')
+      .select('config, timezone, core_instructions, realtime_extensions, assistant_extensions, auto_greeting_timeout, tts_provider, elevenlabs_voice_id, custom_voices')
       .eq('user_id', userId)
       .maybeSingle();
 
@@ -75,6 +84,9 @@ export async function loadUserSchedulingConfig(userId?: string): Promise<Schedul
         realtime_extensions: data.realtime_extensions || undefined,
         assistant_extensions: data.assistant_extensions || undefined,
         auto_greeting_timeout: data.auto_greeting_timeout || 5,
+        tts_provider: (data.tts_provider as 'openai' | 'elevenlabs') || 'openai',
+        elevenlabs_voice_id: data.elevenlabs_voice_id || 'EXAVITQu4vr4xnSDxMaL',
+        custom_voices: Array.isArray(data.custom_voices) ? (data.custom_voices as unknown as CustomVoice[]) : [],
       };
       cachedConfig = mergedConfig;
       cachedUserId = userId;
@@ -107,7 +119,7 @@ export async function saveUserSchedulingConfig(
 ): Promise<boolean> {
   try {
     // Extract fields to save in dedicated columns
-    const { timezone, core_instructions, realtime_extensions, assistant_extensions, auto_greeting_timeout, ...restConfig } = config;
+    const { timezone, core_instructions, realtime_extensions, assistant_extensions, auto_greeting_timeout, tts_provider, elevenlabs_voice_id, custom_voices, ...restConfig } = config;
     
     const updateData: any = {
       user_id: userId,
@@ -135,6 +147,19 @@ export async function saveUserSchedulingConfig(
     
     if (auto_greeting_timeout !== undefined) {
       updateData.auto_greeting_timeout = auto_greeting_timeout;
+    }
+    
+    // Add TTS settings
+    if (tts_provider !== undefined) {
+      updateData.tts_provider = tts_provider;
+    }
+    
+    if (elevenlabs_voice_id !== undefined) {
+      updateData.elevenlabs_voice_id = elevenlabs_voice_id;
+    }
+    
+    if (custom_voices !== undefined) {
+      updateData.custom_voices = custom_voices;
     }
     
     const { error } = await supabase
