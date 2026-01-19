@@ -988,7 +988,7 @@ serve(async (req) => {
                       }]
                     }
                   }));
-                  openaiWs!.send(JSON.stringify({ type: "response.create" }));
+                  openaiWs!.send(JSON.stringify({ type: "response.create", response: { modalities: ["text", "audio"] } }));
                 } else {
                   console.log('[BRIDGE] ✅ Response validated - no discrepancies');
                 }
@@ -1065,8 +1065,14 @@ serve(async (req) => {
         }
       }));
 
-      openaiWs.send(JSON.stringify({ type: "response.create" }));
-      console.log(`[GREETING] ✅ response.create sent - awaiting audio generation`);
+      // CRITICAL: Must specify modalities for audio output
+      openaiWs.send(JSON.stringify({ 
+        type: "response.create",
+        response: {
+          modalities: ["text", "audio"]
+        }
+      }));
+      console.log(`[GREETING] ✅ response.create sent with modalities=[text,audio] - awaiting audio generation`);
     }
 
     function sendOutboundGreeting() {
@@ -1177,7 +1183,7 @@ serve(async (req) => {
         }));
 
         // Trigger response generation
-        openaiWs.send(JSON.stringify({ type: "response.create" }));
+        openaiWs.send(JSON.stringify({ type: "response.create", response: { modalities: ["text", "audio"] } }));
 
       } catch (error) {
         console.error("[BRIDGE] Function call error:", error);
@@ -1190,7 +1196,7 @@ serve(async (req) => {
             output: JSON.stringify({ success: false, error: String(error) })
           }
         }));
-        openaiWs.send(JSON.stringify({ type: "response.create" }));
+        openaiWs.send(JSON.stringify({ type: "response.create", response: { modalities: ["text", "audio"] } }));
       }
     }
 
