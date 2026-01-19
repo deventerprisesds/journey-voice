@@ -1269,23 +1269,61 @@ serve(async (req) => {
       if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN || greetingSent) return;
       
       greetingSent = true;
+      const greeting = getTimeBasedGreeting(userTimezone);
       const userName = userProfile?.first_name || 'sir';
-      const contextInfo = callContext || 'your daily briefing';
       
-      console.log(`[BRIDGE] Waiting for user response on outbound call`);
+      // Parse call context for scheduled calls - it contains structured agenda
+      const isScheduledCall = callContext && (
+        callContext.includes('[CALL AGENDA]') || 
+        callContext.includes('Morning stand-up') ||
+        callContext.includes('Midday check-in') ||
+        callContext.includes('End of day wrap-up')
+      );
       
-      // For outbound calls, wait for user to say hello first
-      openaiWs.send(JSON.stringify({
-        type: "conversation.item.create",
-        item: {
-          type: "message",
-          role: "user",
-          content: [{
-            type: "input_text",
-            text: `[System: This is an outbound call YOU initiated to ${userName} for ${contextInfo}. Wait silently for them to answer with "hello" or similar. When they do, briefly introduce yourself as Iris and explain why you're calling in one sentence. You have their schedule loaded.]`
-          }]
-        }
-      }));
+      console.log(`[BRIDGE] Outbound call for ${userName}, scheduled: ${isScheduledCall}`);
+      console.log(`[BRIDGE] Call context: ${callContext?.substring(0, 100)}...`);
+      
+      if (isScheduledCall && callContext) {
+        // SCHEDULED CALL: Use the context to drive the entire conversation
+        // Context includes the call type, agenda items, and what to cover
+        openaiWs.send(JSON.stringify({
+          type: "conversation.item.create",
+          item: {
+            type: "message",
+            role: "user",
+            content: [{
+              type: "input_text",
+              text: `[System: This is a SCHEDULED outbound call to ${userName}. Current time: ${getCurrentTimeString(userTimezone)}.
+
+${callContext}
+
+CRITICAL INSTRUCTIONS FOR THIS CALL:
+1. GREETING: Start with "${greeting}, ${userName}!" followed by a brief intro matching the call type above
+2. AGENDA-DRIVEN: You MUST cover ALL items listed in the agenda before ending the call
+3. PIVOT HANDLING: If the user goes off-topic, address their question briefly, then say "Now, back to..." or "One more thing I wanted to cover..."
+4. COMPLETION CHECK: Before using hang_up, mentally verify you've addressed every agenda item
+5. NATURAL FLOW: Cover items conversationally, not as a checklist - weave them into dialogue
+6. END SIGNAL: Only end the call when ALL agenda items are addressed OR the user explicitly wants to end early
+
+Wait for them to answer, then immediately start with your greeting and first agenda item.]`
+            }]
+          }
+        }));
+      } else {
+        // MANUAL OUTBOUND CALL: Wait for user response first
+        const contextInfo = callContext || 'your daily briefing';
+        openaiWs.send(JSON.stringify({
+          type: "conversation.item.create",
+          item: {
+            type: "message",
+            role: "user",
+            content: [{
+              type: "input_text",
+              text: `[System: This is an outbound call YOU initiated to ${userName} for ${contextInfo}. Wait silently for them to answer with "hello" or similar. When they do, briefly introduce yourself as Iris and explain why you're calling in one sentence. You have their schedule loaded.]`
+            }]
+          }
+        }));
+      }
       
       // Don't trigger response yet - wait for user audio
     }

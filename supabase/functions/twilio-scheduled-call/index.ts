@@ -61,20 +61,71 @@ async function getTodaysBriefing(userId: string): Promise<string> {
   return briefing;
 }
 
-// Build context based on call type
+// Build structured context with clear agenda items the AI must cover
 async function buildCallContext(call: ScheduledCall, userId: string): Promise<string> {
   const briefing = await getTodaysBriefing(userId);
   
+  // Base context from user's custom configuration
+  const userContext = call.context || '';
+  
   switch (call.callType) {
     case 'morning_standup':
-      return `Morning stand-up. ${call.context} Today's briefing: ${briefing}`;
+      return `CALL TYPE: Morning Stand-up
+      
+[CALL AGENDA - MUST COVER ALL]
+1. Greet warmly and mention it's the morning check-in
+2. Share today's schedule overview: ${briefing}
+3. Highlight any high-priority or urgent tasks
+4. Ask if there's anything they want to add to today's schedule
+5. Ask if there are any blockers or concerns for today
+6. Offer encouragement and wish them a productive day
+
+USER NOTES: ${userContext}
+
+Remember: Cover ALL 6 agenda items naturally before ending the call.`;
+
     case 'midday_checkin':
-      return `Midday check-in. ${call.context} Current status: ${briefing}`;
+      return `CALL TYPE: Midday Check-in
+
+[CALL AGENDA - MUST COVER ALL]
+1. Greet and mention it's the midday check-in
+2. Ask how the day is going so far
+3. Check on progress: ${briefing}
+4. Ask if anything is blocking progress or needs rescheduling
+5. Ask if they need any help or want to reprioritize
+6. Offer a quick motivational note before ending
+
+USER NOTES: ${userContext}
+
+Remember: Cover ALL 6 agenda items naturally before ending the call.`;
+
     case 'eod_wrapup':
-      return `End of day wrap-up. ${call.context} Day summary: ${briefing}`;
+      return `CALL TYPE: End of Day Wrap-up
+
+[CALL AGENDA - MUST COVER ALL]
+1. Greet and acknowledge the end of the workday
+2. Summarize what was accomplished today: ${briefing}
+3. Note any tasks that weren't completed and ask if they should be rescheduled
+4. Ask what the top priorities should be for tomorrow
+5. Ask if there's anything specific they want to tackle tonight or first thing tomorrow
+6. Wish them a good evening and encourage rest/downtime
+
+USER NOTES: ${userContext}
+
+Remember: Cover ALL 6 agenda items naturally before ending the call.`;
+
     case 'custom':
     default:
-      return call.context || 'Custom scheduled call';
+      if (!userContext) {
+        return 'CALL TYPE: Custom Scheduled Call\n\n[CALL AGENDA]\n1. Greet the user\n2. Ask what they need help with\n\nThis is a user-scheduled call - follow their lead.';
+      }
+      
+      return `CALL TYPE: Custom Scheduled Call
+
+[CALL AGENDA - FROM USER CONFIGURATION]
+${userContext}
+
+Interpret the user notes above as your agenda. Cover all mentioned topics before ending the call.`;
   }
 }
 
