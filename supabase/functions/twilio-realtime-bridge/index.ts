@@ -4,6 +4,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const ELEVENLABS_API_KEY = Deno.env.get("ELEVENLABS_API_KEY");
 
 // G.711 μ-law decoding table (8-bit -> 16-bit)
 const mulawToLinearTable: Int16Array = new Int16Array(256);
@@ -258,7 +259,7 @@ PHONE CONVERSATION STYLE:
     
     const { data: prefs } = await supabase
       .from('user_scheduling_prefs')
-      .select('core_instructions, realtime_extensions, config, timezone')
+      .select('core_instructions, realtime_extensions, config, timezone, tts_provider, elevenlabs_voice_id')
       .eq('user_id', userId)
       .maybeSingle();
 
@@ -685,6 +686,15 @@ serve(async (req) => {
     // VERBATIM WEB SEARCH: Track last user transcript for web_search override
     let lastUserTranscript: string | null = null;
     
+    // === TTS PROVIDER SETTINGS ===
+    let ttsProvider: 'openai' | 'elevenlabs' = 'openai';
+    let elevenlabsVoiceId: string = 'EXAVITQu4vr4xnSDxMaL';
+    
+    // === ELEVENLABS TEXT BUFFER ===
+    // When using ElevenLabs, we buffer text from OpenAI and send to ElevenLabs TTS
+    let pendingTextBuffer: string = '';
+    let isProcessingElevenLabsTTS = false;
+    
     // === AUDIO PIPELINE TELEMETRY ===
     let twilioMediaFramesIn = 0;
     let openaiAppendCount = 0;
@@ -699,6 +709,92 @@ serve(async (req) => {
     
     // KEEP-ALIVE: Prevent idle timeout
     let keepAliveInterval: number | null = null;
+    
+    // ElevenLabs TTS function - sends text to ElevenLabs and streams μ-law audio to Twilio
+    async function sendElevenLabsTTS(text: string) {
+      if (!streamSid || twilioWs.readyState !== WebSocket.OPEN || !ELEVENLABS_API_KEY) {
+        console.warn('[ELEVENLABS] Cannot send TTS - missing streamSid, closed WS, or no API key');
+        return;
+      }
+      
+      if (isProcessingElevenLabsTTS) {
+        console.log('[ELEVENLABS] Already processing TTS, queueing text');
+        pendingTextBuffer += ' ' + text;
+        return;
+      }
+      
+      isProcessingElevenLabsTTS = true;
+      const fullText = text;
+      pendingTextBuffer = '';
+      
+      console.log(`[ELEVENLABS] Generating TTS for: "${fullText.substring(0, 50)}..." with voice: ${elevenlabsVoiceId}`);
+      
+      try {
+        const startTime = Date.now();
+        
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/elevenlabs-tts`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            text: fullText,
+            voiceId: elevenlabsVoiceId,
+            format: 'ulaw'
+          })
+        });
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error(`[ELEVENLABS] TTS API error: ${response.status} - ${errorText}`);
+          isProcessingElevenLabsTTS = false;
+          return;
+        }
+        
+        const data = await response.json();
+        const latency = Date.now() - startTime;
+        
+        console.log(`[ELEVENLABS] ✅ Generated ${data.bytes} bytes of μ-law audio in ${latency}ms`);
+        
+        // Send the μ-law audio directly to Twilio (it's already in the right format!)
+        if (data.audio && streamSid && twilioWs.readyState === WebSocket.OPEN) {
+          // ElevenLabs returns the full audio at once - we need to chunk it for Twilio
+          // Twilio expects ~20ms chunks (160 bytes at 8kHz μ-law)
+          const audioBytes = Uint8Array.from(atob(data.audio), c => c.charCodeAt(0));
+          const chunkSize = 160; // 20ms at 8kHz
+          
+          for (let i = 0; i < audioBytes.length; i += chunkSize) {
+            const chunk = audioBytes.slice(i, i + chunkSize);
+            const chunkBase64 = btoa(String.fromCharCode(...chunk));
+            
+            twilioMediaFramesOut++;
+            twilioWs.send(JSON.stringify({
+              event: "media",
+              streamSid: streamSid,
+              media: { payload: chunkBase64 }
+            }));
+          }
+          
+          if (!firstOutboundLogged) {
+            console.log(`[ELEVENLABS-OUT] ⬅️ First ElevenLabs audio sent to Twilio`);
+            firstOutboundLogged = true;
+          }
+        }
+        
+      } catch (error) {
+        console.error('[ELEVENLABS] TTS error:', error);
+      } finally {
+        isProcessingElevenLabsTTS = false;
+        
+        // Process any queued text
+        if (pendingTextBuffer.trim()) {
+          const queuedText = pendingTextBuffer;
+          pendingTextBuffer = '';
+          setTimeout(() => sendElevenLabsTTS(queuedText), 50);
+        }
+      }
+    }
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
@@ -806,12 +902,25 @@ serve(async (req) => {
       let ragContext = "";
       
       if (userId) {
-        const [profile, rag] = await Promise.all([
+        const [profile, rag, ttsPrefs] = await Promise.all([
           loadUserProfile(supabase, userId),
-          loadRAGContext(supabase, userId)
+          loadRAGContext(supabase, userId),
+          // Load TTS provider settings
+          supabase
+            .from('user_scheduling_prefs')
+            .select('tts_provider, elevenlabs_voice_id')
+            .eq('user_id', userId)
+            .maybeSingle()
         ]);
         userProfile = profile;
         ragContext = rag;
+        
+        // Set TTS provider from user preferences
+        if (ttsPrefs.data) {
+          ttsProvider = (ttsPrefs.data.tts_provider as 'openai' | 'elevenlabs') || 'openai';
+          elevenlabsVoiceId = ttsPrefs.data.elevenlabs_voice_id || 'EXAVITQu4vr4xnSDxMaL';
+          console.log(`[BRIDGE] TTS Provider: ${ttsProvider}, Voice ID: ${elevenlabsVoiceId}`);
+        }
 
         // Create or get thread for conversation persistence
         try {
@@ -870,11 +979,19 @@ serve(async (req) => {
           switch (msg.type) {
             case "session.created":
               console.log("[OPENAI-SESSION] ✅ Session CREATED - configuring...");
-              console.log("[OPENAI-SESSION] Sending config: modalities=['text','audio'], voice='alloy', format='pcm16'");
+              
+              // Configure modalities based on TTS provider
+              // If using ElevenLabs, we only need text output (no audio)
+              const modalities = ttsProvider === 'elevenlabs' 
+                ? ["text"] 
+                : ["text", "audio"];
+              
+              console.log(`[OPENAI-SESSION] Sending config: modalities=${JSON.stringify(modalities)}, ttsProvider=${ttsProvider}`);
+              
               openaiWs!.send(JSON.stringify({
                 type: "session.update",
                 session: {
-                  modalities: ["text", "audio"],
+                  modalities: modalities,
                   instructions: instructions,
                   voice: "alloy",
                   input_audio_format: "pcm16",
@@ -893,8 +1010,8 @@ serve(async (req) => {
               break;
 
             case "session.updated":
-              console.log("[OPENAI-SESSION] ✅ Session CONFIGURED - voice output enabled");
-              console.log("[OPENAI-SESSION] Modalities: text + audio, Voice: alloy, Format: pcm16");
+              console.log("[OPENAI-SESSION] ✅ Session CONFIGURED");
+              console.log(`[OPENAI-SESSION] TTS Provider: ${ttsProvider}, ElevenLabs Voice: ${elevenlabsVoiceId}`);
               sessionConfigured = true;
               
               // Send greeting based on call direction
@@ -933,6 +1050,11 @@ serve(async (req) => {
               break;
 
             case "response.audio.delta":
+              // Skip OpenAI audio when using ElevenLabs TTS
+              if (ttsProvider === 'elevenlabs') {
+                break;
+              }
+              
               openaiAudioDeltaCount++;
               if (!firstDeltaLogged) {
                 console.log(`[AUDIO-DELTA] 🔊 First audio delta from OpenAI (delta length: ${msg.delta?.length || 0} chars)`);
@@ -962,6 +1084,14 @@ serve(async (req) => {
                 }));
               } else {
                 console.warn(`[AUDIO-OUT] ⚠️ Cannot send - streamSid: ${streamSid}, twilio state: ${twilioWs.readyState}`);
+              }
+              break;
+
+            // ElevenLabs text-to-speech: Handle text output and send to ElevenLabs
+            case "response.text.done":
+              if (ttsProvider === 'elevenlabs' && msg.text) {
+                console.log(`[ELEVENLABS] Text response received: "${msg.text.substring(0, 50)}..."`);
+                sendElevenLabsTTS(msg.text);
               }
               break;
 

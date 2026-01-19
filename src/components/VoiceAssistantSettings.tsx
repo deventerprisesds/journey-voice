@@ -5,10 +5,12 @@ import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useAuth';
-import { loadUserSchedulingConfig, saveUserSchedulingConfig, type SchedulingConfigWithInstructions } from '@/services/schedulingService';
-import { Loader2, RotateCcw, Save } from 'lucide-react';
+import { loadUserSchedulingConfig, saveUserSchedulingConfig, type SchedulingConfigWithInstructions, type CustomVoice } from '@/services/schedulingService';
+import { Loader2, RotateCcw, Save, Plus, Trash2, Volume2 } from 'lucide-react';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 
 const DEFAULT_CORE_INSTRUCTIONS = `You are Iris, a knowledgeable and proactive executive assistant.
 
@@ -51,6 +53,14 @@ IMPORTANT:
 - Keep responses concise and conversational
 - When user says goodbye, end the conversation gracefully`;
 
+// Preset ElevenLabs voices
+const PRESET_VOICES = [
+  { name: 'Sarah', id: 'EXAVITQu4vr4xnSDxMaL', description: 'Female, warm (Default)' },
+  { name: 'George', id: 'JBFqnCBsd6RMkjVDRZzb', description: 'Male, professional' },
+  { name: 'Roger', id: 'CwhRBWXzGAHq8TQ4Fs17', description: 'Male, clear' },
+  { name: 'Lily', id: 'pFZP5JQG7iQjIQuC4Bku', description: 'Female, friendly' },
+];
+
 const VoiceAssistantSettings: React.FC = () => {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -62,6 +72,13 @@ const VoiceAssistantSettings: React.FC = () => {
   const [realtimeExtensions, setRealtimeExtensions] = useState('');
   const [assistantExtensions, setAssistantExtensions] = useState('');
   const [autoGreetingTimeout, setAutoGreetingTimeout] = useState('5');
+  
+  // TTS settings
+  const [ttsProvider, setTtsProvider] = useState<'openai' | 'elevenlabs'>('openai');
+  const [elevenlabsVoiceId, setElevenlabsVoiceId] = useState('EXAVITQu4vr4xnSDxMaL');
+  const [customVoices, setCustomVoices] = useState<CustomVoice[]>([]);
+  const [newVoiceName, setNewVoiceName] = useState('');
+  const [newVoiceId, setNewVoiceId] = useState('');
 
   useEffect(() => {
     if (user?.id) {
@@ -80,6 +97,9 @@ const VoiceAssistantSettings: React.FC = () => {
       setRealtimeExtensions(config.realtime_extensions || '');
       setAssistantExtensions(config.assistant_extensions || '');
       setAutoGreetingTimeout(config.auto_greeting_timeout?.toString() || '5');
+      setTtsProvider(config.tts_provider || 'openai');
+      setElevenlabsVoiceId(config.elevenlabs_voice_id || 'EXAVITQu4vr4xnSDxMaL');
+      setCustomVoices(config.custom_voices || []);
     } catch (error) {
       console.error('Failed to load AI instructions:', error);
       toast({
@@ -103,6 +123,9 @@ const VoiceAssistantSettings: React.FC = () => {
         realtime_extensions: realtimeExtensions,
         assistant_extensions: assistantExtensions,
         auto_greeting_timeout: parseInt(autoGreetingTimeout) || 5,
+        tts_provider: ttsProvider,
+        elevenlabs_voice_id: elevenlabsVoiceId,
+        custom_voices: customVoices,
       } as any);
 
       if (success) {
@@ -131,10 +154,59 @@ const VoiceAssistantSettings: React.FC = () => {
     setRealtimeExtensions('');
     setAssistantExtensions('');
     setAutoGreetingTimeout('5');
+    setTtsProvider('openai');
+    setElevenlabsVoiceId('EXAVITQu4vr4xnSDxMaL');
+    setCustomVoices([]);
     toast({
       title: "Reset",
       description: "All instructions reset to defaults",
     });
+  };
+
+  const handleAddCustomVoice = () => {
+    if (!newVoiceName.trim() || !newVoiceId.trim()) {
+      toast({
+        title: "Error",
+        description: "Please provide both voice name and ID",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Check for duplicates
+    if (customVoices.some(v => v.id === newVoiceId)) {
+      toast({
+        title: "Error",
+        description: "A voice with this ID already exists",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setCustomVoices([...customVoices, { name: newVoiceName.trim(), id: newVoiceId.trim() }]);
+    setNewVoiceName('');
+    setNewVoiceId('');
+    toast({
+      title: "Voice Added",
+      description: `Added "${newVoiceName}" to your custom voices`,
+    });
+  };
+
+  const handleRemoveCustomVoice = (voiceId: string) => {
+    setCustomVoices(customVoices.filter(v => v.id !== voiceId));
+    // If the removed voice was selected, switch to default
+    if (elevenlabsVoiceId === voiceId) {
+      setElevenlabsVoiceId('EXAVITQu4vr4xnSDxMaL');
+    }
+  };
+
+  const getAllVoices = () => {
+    return [...PRESET_VOICES, ...customVoices.map(v => ({ ...v, description: 'Custom' }))];
+  };
+
+  const getSelectedVoiceName = () => {
+    const voice = getAllVoices().find(v => v.id === elevenlabsVoiceId);
+    return voice?.name || 'Unknown';
   };
 
   if (loading) {
@@ -200,37 +272,165 @@ const VoiceAssistantSettings: React.FC = () => {
             </div>
           </TabsContent>
 
-          <TabsContent value="voice" className="space-y-4">
+          <TabsContent value="voice" className="space-y-6">
+            {/* TTS Provider Selection */}
             <div className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="auto-greeting-timeout">Auto-Greeting Timeout (seconds)</Label>
-                <p className="text-sm text-muted-foreground">
-                  If no speech is detected within this time after connecting, the assistant will greet you
+              <div>
+                <Label className="text-base font-medium">Voice Provider</Label>
+                <p className="text-sm text-muted-foreground mb-3">
+                  Choose the text-to-speech engine for phone calls
                 </p>
-                <Input
-                  id="auto-greeting-timeout"
-                  type="number"
-                  min="1"
-                  max="30"
-                  value={autoGreetingTimeout}
-                  onChange={(e) => setAutoGreetingTimeout(e.target.value)}
-                  className="max-w-xs"
-                />
               </div>
               
-              <div className="space-y-2">
-                <Label htmlFor="realtime-extensions">Voice-Specific Extensions</Label>
-                <p className="text-sm text-muted-foreground">
-                  Additional instructions specific to the realtime voice assistant (WebRTC)
-                </p>
-                <Textarea
-                  id="realtime-extensions"
-                  value={realtimeExtensions}
-                  onChange={(e) => setRealtimeExtensions(e.target.value)}
-                  className="min-h-[300px] font-mono text-sm"
-                  placeholder="E.g., 'Use casual language when responding to voice commands...'"
-                />
+              <RadioGroup
+                value={ttsProvider}
+                onValueChange={(value) => setTtsProvider(value as 'openai' | 'elevenlabs')}
+                className="grid gap-3"
+              >
+                <div className="flex items-center space-x-3 rounded-lg border p-4">
+                  <RadioGroupItem value="openai" id="openai" />
+                  <Label htmlFor="openai" className="flex-1 cursor-pointer">
+                    <div className="font-medium">OpenAI (Standard)</div>
+                    <div className="text-sm text-muted-foreground">Built-in voice with fast response</div>
+                  </Label>
+                </div>
+                <div className="flex items-center space-x-3 rounded-lg border p-4">
+                  <RadioGroupItem value="elevenlabs" id="elevenlabs" />
+                  <Label htmlFor="elevenlabs" className="flex-1 cursor-pointer">
+                    <div className="font-medium flex items-center gap-2">
+                      ElevenLabs (Natural Voice)
+                      <Volume2 className="h-4 w-4 text-primary" />
+                    </div>
+                    <div className="text-sm text-muted-foreground">Premium natural-sounding voices</div>
+                  </Label>
+                </div>
+              </RadioGroup>
+            </div>
+
+            {/* ElevenLabs Voice Selection (shown when ElevenLabs is selected) */}
+            {ttsProvider === 'elevenlabs' && (
+              <div className="space-y-4 border-t pt-4">
+                <div>
+                  <Label className="text-base font-medium">ElevenLabs Voice</Label>
+                  <p className="text-sm text-muted-foreground mb-3">
+                    Select a voice for phone calls (currently: {getSelectedVoiceName()})
+                  </p>
+                </div>
+
+                <Select value={elevenlabsVoiceId} onValueChange={setElevenlabsVoiceId}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Select a voice" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">Preset Voices</div>
+                    {PRESET_VOICES.map((voice) => (
+                      <SelectItem key={voice.id} value={voice.id}>
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">{voice.name}</span>
+                          <span className="text-muted-foreground text-sm">- {voice.description}</span>
+                        </div>
+                      </SelectItem>
+                    ))}
+                    {customVoices.length > 0 && (
+                      <>
+                        <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground mt-2">Custom Voices</div>
+                        {customVoices.map((voice) => (
+                          <SelectItem key={voice.id} value={voice.id}>
+                            <span className="font-medium">{voice.name}</span>
+                          </SelectItem>
+                        ))}
+                      </>
+                    )}
+                  </SelectContent>
+                </Select>
+
+                {/* Add Custom Voice */}
+                <div className="space-y-3 pt-2">
+                  <Label className="text-sm font-medium">Add Custom Voice</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Add voices from your ElevenLabs library using the voice ID
+                  </p>
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="Voice name"
+                      value={newVoiceName}
+                      onChange={(e) => setNewVoiceName(e.target.value)}
+                      className="flex-1"
+                    />
+                    <Input
+                      placeholder="Voice ID"
+                      value={newVoiceId}
+                      onChange={(e) => setNewVoiceId(e.target.value)}
+                      className="flex-1"
+                    />
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={handleAddCustomVoice}
+                      disabled={!newVoiceName.trim() || !newVoiceId.trim()}
+                    >
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                  </div>
+
+                  {/* Custom Voice List */}
+                  {customVoices.length > 0 && (
+                    <div className="space-y-2 pt-2">
+                      {customVoices.map((voice) => (
+                        <div
+                          key={voice.id}
+                          className="flex items-center justify-between rounded-md border px-3 py-2"
+                        >
+                          <div>
+                            <span className="font-medium">{voice.name}</span>
+                            <span className="text-xs text-muted-foreground ml-2">({voice.id.substring(0, 12)}...)</span>
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-destructive hover:text-destructive"
+                            onClick={() => handleRemoveCustomVoice(voice.id)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
+            )}
+
+            {/* Auto-Greeting Timeout */}
+            <div className="space-y-2 border-t pt-4">
+              <Label htmlFor="auto-greeting-timeout">Auto-Greeting Timeout (seconds)</Label>
+              <p className="text-sm text-muted-foreground">
+                If no speech is detected within this time after connecting, the assistant will greet you
+              </p>
+              <Input
+                id="auto-greeting-timeout"
+                type="number"
+                min="1"
+                max="30"
+                value={autoGreetingTimeout}
+                onChange={(e) => setAutoGreetingTimeout(e.target.value)}
+                className="max-w-xs"
+              />
+            </div>
+            
+            {/* Voice-Specific Extensions */}
+            <div className="space-y-2 border-t pt-4">
+              <Label htmlFor="realtime-extensions">Voice-Specific Extensions</Label>
+              <p className="text-sm text-muted-foreground">
+                Additional instructions specific to the realtime voice assistant (WebRTC)
+              </p>
+              <Textarea
+                id="realtime-extensions"
+                value={realtimeExtensions}
+                onChange={(e) => setRealtimeExtensions(e.target.value)}
+                className="min-h-[200px] font-mono text-sm"
+                placeholder="E.g., 'Use casual language when responding to voice commands...'"
+              />
             </div>
           </TabsContent>
 

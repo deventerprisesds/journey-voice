@@ -2918,9 +2918,12 @@ export type Database = {
           config: Json
           core_instructions: string | null
           created_at: string
+          custom_voices: Json | null
+          elevenlabs_voice_id: string | null
           id: string
           realtime_extensions: string | null
           timezone: string | null
+          tts_provider: string | null
           updated_at: string
           user_id: string
           voice_preference: string | null
@@ -2931,9 +2934,12 @@ export type Database = {
           config?: Json
           core_instructions?: string | null
           created_at?: string
+          custom_voices?: Json | null
+          elevenlabs_voice_id?: string | null
           id?: string
           realtime_extensions?: string | null
           timezone?: string | null
+          tts_provider?: string | null
           updated_at?: string
           user_id: string
           voice_preference?: string | null
@@ -2944,9 +2950,12 @@ export type Database = {
           config?: Json
           core_instructions?: string | null
           created_at?: string
+          custom_voices?: Json | null
+          elevenlabs_voice_id?: string | null
           id?: string
           realtime_extensions?: string | null
           timezone?: string | null
+          tts_provider?: string | null
           updated_at?: string
           user_id?: string
           voice_preference?: string | null
