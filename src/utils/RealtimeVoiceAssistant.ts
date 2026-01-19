@@ -187,6 +187,8 @@ export class RealtimeVoiceAssistant {
   private recorder: AudioRecorder | null = null;
   private audioContext: AudioContext | null = null;
   private isListening = false;
+  private ttsProvider: 'openai' | 'elevenlabs' = 'openai';
+  private elevenlabsVoiceId: string = '';
 
   constructor(
     private onMessage: (message: any) => void,
@@ -247,6 +249,14 @@ export class RealtimeVoiceAssistant {
       }
 
       const EPHEMERAL_KEY = data.client_secret.value;
+      
+      // Store TTS configuration from token response
+      if (data.tts_config) {
+        this.ttsProvider = data.tts_config.provider || 'openai';
+        this.elevenlabsVoiceId = data.tts_config.elevenlabs_voice_id || '';
+        console.log(`TTS Config: provider=${this.ttsProvider}, voice=${this.elevenlabsVoiceId}`);
+      }
+      
       console.log('Ephemeral token received, establishing WebRTC connection...');
 
       // Initialize audio context with user gesture for autoplay policy
@@ -365,11 +375,19 @@ export class RealtimeVoiceAssistant {
     // Handle different event types
     switch (event.type) {
       case 'response.audio.delta':
+        // Skip OpenAI audio when using ElevenLabs TTS
+        if (this.ttsProvider === 'elevenlabs') break;
         this.handleAudioDelta(event);
         break;
       case 'response.audio.done':
         console.log('Audio playback finished');
         this.onSpeakingChange(false);
+        break;
+      case 'response.text.done':
+        // ElevenLabs mode: send text to TTS and play MP3
+        if (this.ttsProvider === 'elevenlabs' && event.text) {
+          this.playElevenLabsAudio(event.text);
+        }
         break;
       case 'response.function_call_arguments.done':
         this.handleFunctionCall(event);
@@ -425,6 +443,55 @@ export class RealtimeVoiceAssistant {
       await playAudioData(this.audioContext, bytes);
     } catch (error) {
       console.error('Error playing audio delta:', error);
+    }
+  }
+
+  private async playElevenLabsAudio(text: string): Promise<void> {
+    if (!text.trim()) return;
+    
+    console.log('🎙️ ElevenLabs TTS:', text.substring(0, 50) + '...');
+    this.onSpeakingChange(true);
+    
+    try {
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/elevenlabs-tts`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+          },
+          body: JSON.stringify({
+            text,
+            voiceId: this.elevenlabsVoiceId,
+            format: 'mp3'
+          })
+        }
+      );
+      
+      if (!response.ok) {
+        throw new Error(`ElevenLabs TTS error: ${response.status}`);
+      }
+      
+      const audioBlob = await response.blob();
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const audio = new Audio(audioUrl);
+      
+      audio.onended = () => {
+        this.onSpeakingChange(false);
+        URL.revokeObjectURL(audioUrl);
+      };
+      
+      audio.onerror = () => {
+        console.error('Audio playback error');
+        this.onSpeakingChange(false);
+        URL.revokeObjectURL(audioUrl);
+      };
+      
+      await audio.play();
+    } catch (error) {
+      console.error('ElevenLabs TTS error:', error);
+      this.onSpeakingChange(false);
     }
   }
 
