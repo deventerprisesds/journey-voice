@@ -2921,7 +2921,9 @@ export type Database = {
           custom_voices: Json | null
           elevenlabs_voice_id: string | null
           id: string
+          openai_voice: string | null
           realtime_extensions: string | null
+          scheduled_calls: Json | null
           timezone: string | null
           tts_provider: string | null
           updated_at: string
@@ -2937,7 +2939,9 @@ export type Database = {
           custom_voices?: Json | null
           elevenlabs_voice_id?: string | null
           id?: string
+          openai_voice?: string | null
           realtime_extensions?: string | null
+          scheduled_calls?: Json | null
           timezone?: string | null
           tts_provider?: string | null
           updated_at?: string
@@ -2953,7 +2957,9 @@ export type Database = {
           custom_voices?: Json | null
           elevenlabs_voice_id?: string | null
           id?: string
+          openai_voice?: string | null
           realtime_extensions?: string | null
+          scheduled_calls?: Json | null
           timezone?: string | null
           tts_provider?: string | null
           updated_at?: string

@@ -39,7 +39,7 @@ serve(async (req) => {
 
     console.log('Generating ephemeral token for user:', userId || 'anonymous');
 
-    // Load user's AI instructions from scheduling preferences
+    // Load user's AI instructions and TTS preferences from scheduling preferences
     let coreInstructions = `You are a helpful task management assistant. You can help users create, update, and manage their tasks through voice commands.
 
 When users ask about historical information like "tasks from last week" or "what did I work on yesterday", use the get_tasks function with appropriate time_filter parameters.
@@ -61,10 +61,13 @@ When users want to add unscheduled tasks to today, use schedule_task which will 
 
 Always confirm actions you take and provide helpful feedback about task management.
 
-When the user says goodbye phrases like 'that's all', 'thanks that's it', 'disconnect', 'I'm done', 'goodbye', or similar, call the disconnect function with a friendly farewell message.`;
+When the user says goodbye phrases like 'that's all', 'thanks that's it', 'disconnect', 'that will be all', 'goodbye', or similar, call the disconnect function with a friendly farewell message.`;
 
     let realtimeExtensions = '';
     let schedulingPhilosophy = '';
+    let ttsProvider: 'openai' | 'elevenlabs' = 'openai';
+    let openaiVoice = 'alloy';
+    let elevenlabsVoiceId = 'EXAVITQu4vr4xnSDxMaL';
 
     if (userId) {
       try {
@@ -73,7 +76,7 @@ When the user says goodbye phrases like 'that's all', 'thanks that's it', 'disco
         
         const { data: prefs } = await supabase
           .from('user_scheduling_prefs')
-          .select('core_instructions, realtime_extensions, config')
+          .select('core_instructions, realtime_extensions, config, tts_provider, openai_voice, elevenlabs_voice_id')
           .eq('user_id', userId)
           .maybeSingle();
 
@@ -83,6 +86,9 @@ When the user says goodbye phrases like 'that's all', 'thanks that's it', 'disco
           if (prefs.config?.customAIInstructions) {
             schedulingPhilosophy = `\n\nScheduling Philosophy:\n${prefs.config.customAIInstructions}`;
           }
+          if (prefs.tts_provider) ttsProvider = prefs.tts_provider as 'openai' | 'elevenlabs';
+          if (prefs.openai_voice) openaiVoice = prefs.openai_voice;
+          if (prefs.elevenlabs_voice_id) elevenlabsVoiceId = prefs.elevenlabs_voice_id;
         }
       } catch (error) {
         console.warn('Failed to load user instructions, using defaults:', error);
@@ -96,6 +102,13 @@ When the user says goodbye phrases like 'that's all', 'thanks that's it', 'disco
       schedulingPhilosophy
     ].filter(Boolean).join('\n\n');
 
+    // Determine modalities based on TTS provider
+    // If ElevenLabs is selected, we need text-only output from OpenAI
+    // The client will then send text to ElevenLabs TTS
+    const modalities = ttsProvider === 'elevenlabs' ? ['text'] : ['text', 'audio'];
+
+    console.log(`TTS Provider: ${ttsProvider}, OpenAI Voice: ${openaiVoice}, Modalities: ${JSON.stringify(modalities)}`);
+
     // Request an ephemeral token from OpenAI
     const response = await fetch("https://api.openai.com/v1/realtime/sessions", {
       method: "POST",
@@ -105,7 +118,8 @@ When the user says goodbye phrases like 'that's all', 'thanks that's it', 'disco
       },
       body: JSON.stringify({
         model: "gpt-4o-realtime-preview-2024-12-17",
-        voice: "alloy",
+        voice: openaiVoice,  // Use user's selected OpenAI voice
+        modalities: modalities,  // Dynamic based on TTS provider
         input_audio_format: "pcm16",
         output_audio_format: "pcm16",
         turn_detection: {
@@ -327,7 +341,15 @@ When the user says goodbye phrases like 'that's all', 'thanks that's it', 'disco
     const data = await response.json();
     console.log("Ephemeral token generated successfully");
 
-    return new Response(JSON.stringify(data), {
+    // Return token along with TTS config for client
+    return new Response(JSON.stringify({
+      ...data,
+      tts_config: {
+        provider: ttsProvider,
+        openai_voice: openaiVoice,
+        elevenlabs_voice_id: elevenlabsVoiceId,
+      }
+    }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   } catch (error) {
