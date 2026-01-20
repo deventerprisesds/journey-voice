@@ -45,6 +45,7 @@ export interface SchedulingConfigWithInstructions extends SchedulingConfig {
   openai_voice?: string;
   custom_voices?: CustomVoice[];
   scheduled_calls?: ScheduledCall[];
+  recurring_calls_enabled?: boolean;
 }
 
 /**
@@ -66,7 +67,7 @@ export async function loadUserSchedulingConfig(userId?: string): Promise<Schedul
   try {
     const { data, error } = await supabase
       .from('user_scheduling_prefs')
-      .select('config, timezone, core_instructions, realtime_extensions, assistant_extensions, auto_greeting_timeout, tts_provider, elevenlabs_voice_id, openai_voice, custom_voices, scheduled_calls')
+      .select('config, timezone, core_instructions, realtime_extensions, assistant_extensions, auto_greeting_timeout, tts_provider, elevenlabs_voice_id, openai_voice, custom_voices, scheduled_calls, recurring_calls_enabled')
       .eq('user_id', userId)
       .maybeSingle();
 
@@ -101,6 +102,7 @@ export async function loadUserSchedulingConfig(userId?: string): Promise<Schedul
         openai_voice: data.openai_voice || 'alloy',
         custom_voices: Array.isArray(data.custom_voices) ? (data.custom_voices as unknown as CustomVoice[]) : [],
         scheduled_calls: Array.isArray(data.scheduled_calls) ? (data.scheduled_calls as unknown as ScheduledCall[]) : [],
+        recurring_calls_enabled: data.recurring_calls_enabled ?? true,
       };
       cachedConfig = mergedConfig;
       cachedUserId = userId;
@@ -144,6 +146,7 @@ export async function saveUserSchedulingConfig(
       openai_voice,
       custom_voices, 
       scheduled_calls,
+      recurring_calls_enabled,
       ...restConfig 
     } = config;
     
@@ -194,6 +197,10 @@ export async function saveUserSchedulingConfig(
     
     if (scheduled_calls !== undefined) {
       updateData.scheduled_calls = scheduled_calls;
+    }
+    
+    if (recurring_calls_enabled !== undefined) {
+      updateData.recurring_calls_enabled = recurring_calls_enabled;
     }
     
     const { error } = await supabase

@@ -646,7 +646,7 @@ async function executeTool(
 }
 
 // === PRE-CONNECT SESSION STORAGE ===
-// Stores pre-established sessions for instant greeting playback
+// Stores pre-established sessions in DATABASE for persistence across Edge Function instances
 interface PreConnectSession {
   userId: string;
   context: string;
@@ -660,29 +660,62 @@ interface PreConnectSession {
   createdAt: number;
 }
 
-const preConnectSessions = new Map<string, PreConnectSession>();
-const SESSION_TTL_MS = 60000; // 1 minute - calls should connect within this
-
-function storePreConnectSession(sessionId: string, session: PreConnectSession) {
-  preConnectSessions.set(sessionId, session);
-  // Auto-cleanup after TTL
-  setTimeout(() => {
-    preConnectSessions.delete(sessionId);
-    console.log(`[PRE-CONNECT] Session ${sessionId} expired and removed`);
-  }, SESSION_TTL_MS);
+// Store session in database for cross-instance persistence
+async function storePreConnectSession(supabase: any, sessionId: string, session: PreConnectSession) {
+  const { error } = await supabase
+    .from('pre_connect_sessions')
+    .insert({
+      session_id: sessionId,
+      user_id: session.userId,
+      context: session.context,
+      agenda: session.agenda,
+      timezone: session.timezone,
+      profile: session.profile,
+      greeting_text: session.greetingText,
+      audio_base64: session.audioBase64,
+      tts_provider: session.ttsProvider,
+      voice_id: session.voiceId,
+      expires_at: new Date(Date.now() + 120000).toISOString() // 2 min TTL
+    });
+  
+  if (error) {
+    console.error('[PRE-CONNECT] Failed to store session in database:', error);
+  } else {
+    console.log(`[PRE-CONNECT] ✅ Session ${sessionId} stored in database`);
+  }
 }
 
-function getPreConnectSession(sessionId: string): PreConnectSession | null {
-  const session = preConnectSessions.get(sessionId);
-  if (!session) return null;
+// Retrieve session from database (works across Edge Function instances)
+async function getPreConnectSession(supabase: any, sessionId: string): Promise<PreConnectSession | null> {
+  const { data, error } = await supabase
+    .from('pre_connect_sessions')
+    .select('*')
+    .eq('session_id', sessionId)
+    .gt('expires_at', new Date().toISOString())
+    .single();
   
-  // Check TTL
-  if (Date.now() - session.createdAt > SESSION_TTL_MS) {
-    preConnectSessions.delete(sessionId);
+  if (error || !data) {
+    console.log(`[PRE-CONNECT] Session ${sessionId} not found or expired in database`);
     return null;
   }
   
-  return session;
+  // Delete after retrieval (one-time use)
+  await supabase.from('pre_connect_sessions').delete().eq('session_id', sessionId);
+  
+  console.log(`[PRE-CONNECT] ✅ Retrieved session ${sessionId} from database with ${data.audio_base64?.length || 0} bytes audio`);
+  
+  return {
+    userId: data.user_id,
+    context: data.context,
+    agenda: data.agenda,
+    timezone: data.timezone,
+    profile: data.profile,
+    greetingText: data.greeting_text,
+    audioBase64: data.audio_base64,
+    ttsProvider: data.tts_provider,
+    voiceId: data.voice_id,
+    createdAt: new Date(data.created_at).getTime()
+  };
 }
 
 // === AGENDA MANAGER ===
@@ -907,10 +940,10 @@ async function handlePreConnect(params: {
     }
   }
 
-  // 4. Store session for later resumption
+  // 4. Store session in database for cross-instance persistence
   const sessionId = crypto.randomUUID();
 
-  storePreConnectSession(sessionId, {
+  await storePreConnectSession(supabase, sessionId, {
     userId,
     context,
     agenda,
@@ -923,7 +956,7 @@ async function handlePreConnect(params: {
     createdAt: Date.now()
   });
 
-  console.log(`[PRE-CONNECT] ✅ Session stored: ${sessionId}`);
+  console.log(`[PRE-CONNECT] ✅ Session stored in database: ${sessionId}`);
 
   return new Response(JSON.stringify({
     sessionId,
@@ -1226,53 +1259,52 @@ serve(async (req) => {
             
             // === PRE-CONNECTED SESSION HANDLING ===
             if (sessionId) {
-              preConnectedSession = getPreConnectSession(sessionId);
-              
-              if (preConnectedSession) {
-                console.log(`[TWILIO-STREAM] ✅ Resuming pre-connected session: ${sessionId}`);
-                
-                // Use pre-loaded session data
-                userId = preConnectedSession.userId;
-                callContext = preConnectedSession.context;
-                userTimezone = preConnectedSession.timezone;
-                userProfile = preConnectedSession.profile;
-                ttsProvider = preConnectedSession.ttsProvider;
-                elevenlabsVoiceId = preConnectedSession.voiceId;
-                cachedAudioBase64 = preConnectedSession.audioBase64;
-                preConnectedGreetingText = preConnectedSession.greetingText;
-                
-                // Initialize agenda manager with pre-parsed agenda
-                if (preConnectedSession.agenda && preConnectedSession.agenda.length > 0) {
-                  agendaManager = new AgendaManager(preConnectedSession.agenda);
-                  agendaManager.startItem(0);
+              // Retrieve from database asynchronously
+              getPreConnectSession(supabase, sessionId).then((session) => {
+                if (session) {
+                  console.log(`[TWILIO-STREAM] ✅ Resuming pre-connected session: ${sessionId}`);
+                  userId = session.userId;
+                  callContext = session.context;
+                  userTimezone = session.timezone;
+                  userProfile = session.profile;
+                  ttsProvider = session.ttsProvider;
+                  elevenlabsVoiceId = session.voiceId;
+                  cachedAudioBase64 = session.audioBase64;
+                  preConnectedGreetingText = session.greetingText;
+                  
+                  if (session.agenda && session.agenda.length > 0) {
+                    agendaManager = new AgendaManager(session.agenda);
+                    agendaManager.startItem(0);
+                  }
+                  
+                  if (cachedAudioBase64 && streamSid) {
+                    console.log(`[TWILIO-STREAM] 🎙️ Playing cached greeting audio immediately`);
+                    playCachedAudio(cachedAudioBase64);
+                    greetingSent = true;
+                    firstOutboundLogged = true;
+                  }
+                  
+                  const csp = customParams.callSid || data.start.callSid || `call_${Date.now()}`;
+                  createCallSession(csp, customParams.fromNumber, customParams.toNumber);
+                  connectToOpenAI();
+                } else {
+                  console.warn(`[TWILIO-STREAM] ⚠️ Pre-connected session ${sessionId} not found`);
+                  const csp = customParams.callSid || data.start.callSid || `call_${Date.now()}`;
+                  createCallSession(csp, customParams.fromNumber, customParams.toNumber);
+                  connectToOpenAI();
                 }
-                
-                // Play cached greeting audio immediately!
-                if (cachedAudioBase64 && streamSid) {
-                  console.log(`[TWILIO-STREAM] 🎙️ Playing cached greeting audio immediately`);
-                  playCachedAudio(cachedAudioBase64);
-                  greetingSent = true;
-                  firstOutboundLogged = true;
-                }
-                
-                // Create call session for pre-connected calls too
-                const callSidFromParams = customParams.callSid || data.start.callSid || `call_${Date.now()}`;
-                createCallSession(callSidFromParams, customParams.fromNumber, customParams.toNumber);
-                
-                // Connect to OpenAI with pre-loaded context
+              }).catch((err) => {
+                console.error(`[TWILIO-STREAM] Session retrieval error:`, err);
+                const csp = customParams.callSid || data.start.callSid || `call_${Date.now()}`;
+                createCallSession(csp, customParams.fromNumber, customParams.toNumber);
                 connectToOpenAI();
-                return;
-              } else {
-                console.warn(`[TWILIO-STREAM] ⚠️ Pre-connected session ${sessionId} not found or expired`);
-              }
+              });
+              break; // Async handler will call connectToOpenAI
             }
             
             console.log(`[TWILIO-STREAM] Call direction: ${callDirection}, userId: ${userId}, timezone: ${userTimezone}`);
-            
-            // Create call session for tracking
             const callSidFromParams = customParams.callSid || data.start.callSid || `call_${Date.now()}`;
             createCallSession(callSidFromParams, customParams.fromNumber, customParams.toNumber);
-            
             connectToOpenAI();
             break;
 

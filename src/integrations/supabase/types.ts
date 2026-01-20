@@ -2148,6 +2148,54 @@ export type Database = {
           },
         ]
       }
+      pre_connect_sessions: {
+        Row: {
+          agenda: Json | null
+          audio_base64: string | null
+          context: string | null
+          created_at: string | null
+          expires_at: string | null
+          greeting_text: string | null
+          id: string
+          profile: Json | null
+          session_id: string
+          timezone: string | null
+          tts_provider: string | null
+          user_id: string | null
+          voice_id: string | null
+        }
+        Insert: {
+          agenda?: Json | null
+          audio_base64?: string | null
+          context?: string | null
+          created_at?: string | null
+          expires_at?: string | null
+          greeting_text?: string | null
+          id?: string
+          profile?: Json | null
+          session_id: string
+          timezone?: string | null
+          tts_provider?: string | null
+          user_id?: string | null
+          voice_id?: string | null
+        }
+        Update: {
+          agenda?: Json | null
+          audio_base64?: string | null
+          context?: string | null
+          created_at?: string | null
+          expires_at?: string | null
+          greeting_text?: string | null
+          id?: string
+          profile?: Json | null
+          session_id?: string
+          timezone?: string | null
+          tts_provider?: string | null
+          user_id?: string | null
+          voice_id?: string | null
+        }
+        Relationships: []
+      }
       profile_access_log: {
         Row: {
           access_type: string
@@ -3039,6 +3087,7 @@ export type Database = {
           id: string
           openai_voice: string | null
           realtime_extensions: string | null
+          recurring_calls_enabled: boolean | null
           scheduled_calls: Json | null
           timezone: string | null
           tts_provider: string | null
@@ -3057,6 +3106,7 @@ export type Database = {
           id?: string
           openai_voice?: string | null
           realtime_extensions?: string | null
+          recurring_calls_enabled?: boolean | null
           scheduled_calls?: Json | null
           timezone?: string | null
           tts_provider?: string | null
@@ -3075,6 +3125,7 @@ export type Database = {
           id?: string
           openai_voice?: string | null
           realtime_extensions?: string | null
+          recurring_calls_enabled?: boolean | null
           scheduled_calls?: Json | null
           timezone?: string | null
           tts_provider?: string | null
