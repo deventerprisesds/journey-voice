@@ -991,6 +991,15 @@ serve(async (req) => {
     // VERBATIM WEB SEARCH: Track last user transcript for web_search override
     let lastUserTranscript: string | null = null;
     
+    // === CALL SESSION TRACKING ===
+    // For full conversation logging and review
+    let callSessionId: string | null = null;
+    let messageIndex = 0;
+    let callStartTime = Date.now();
+    let responseStartTime = 0;
+    let firstAudioTime: number | null = null;
+    let greetingLatencyMs: number | null = null;
+    
     // === TTS PROVIDER SETTINGS ===
     let ttsProvider: 'openai' | 'elevenlabs' = 'openai';
     let elevenlabsVoiceId: string = 'EXAVITQu4vr4xnSDxMaL';
@@ -1246,6 +1255,10 @@ serve(async (req) => {
                   firstOutboundLogged = true;
                 }
                 
+                // Create call session for pre-connected calls too
+                const callSidFromParams = customParams.callSid || data.start.callSid || `call_${Date.now()}`;
+                createCallSession(callSidFromParams, customParams.fromNumber, customParams.toNumber);
+                
                 // Connect to OpenAI with pre-loaded context
                 connectToOpenAI();
                 return;
@@ -1255,6 +1268,10 @@ serve(async (req) => {
             }
             
             console.log(`[TWILIO-STREAM] Call direction: ${callDirection}, userId: ${userId}, timezone: ${userTimezone}`);
+            
+            // Create call session for tracking
+            const callSidFromParams = customParams.callSid || data.start.callSid || `call_${Date.now()}`;
+            createCallSession(callSidFromParams, customParams.fromNumber, customParams.toNumber);
             
             connectToOpenAI();
             break;
@@ -1298,7 +1315,7 @@ serve(async (req) => {
       }
     };
 
-    twilioWs.onclose = () => {
+    twilioWs.onclose = async () => {
       console.log("[TWILIO-WS] WebSocket closed");
       console.log(`[AUDIO-SUMMARY] === Call Pipeline Stats ===`);
       console.log(`  Twilio frames IN:  ${twilioMediaFramesIn}`);
@@ -1306,6 +1323,9 @@ serve(async (req) => {
       console.log(`  OpenAI deltas:     ${openaiAudioDeltaCount}`);
       console.log(`  Twilio frames OUT: ${twilioMediaFramesOut}`);
       console.log(`[OPENAI-SUMMARY] Event types received:`, JSON.stringify(openaiEventCounts));
+      
+      // Close call session for tracking
+      await closeCallSession();
       
       // Clear keep-alive interval
       if (keepAliveInterval) {
@@ -1423,9 +1443,9 @@ serve(async (req) => {
                   input_audio_transcription: { model: "whisper-1" },
                   turn_detection: {
                     type: "server_vad",
-                    threshold: 0.3,  // Balance between sensitivity and false triggers
-                    prefix_padding_ms: 400,  // More buffer to capture speech start
-                    silence_duration_ms: 600,  // Faster response after confirmed silence
+                    threshold: 0.5,  // INCREASED: Less sensitive to phone line noise
+                    prefix_padding_ms: 500,  // INCREASED: More buffer to capture speech start
+                    silence_duration_ms: 800,  // INCREASED: Wait longer before responding to avoid cutting off
                   },
                   tools: getInlineToolDefinitions(),
                   tool_choice: "auto"
@@ -1496,6 +1516,8 @@ CRITICAL INSTRUCTIONS:
               // Track that AI is generating a response
               currentResponseId = msg.response?.id || null;
               isAiSpeaking = true;
+              responseStartTime = Date.now();  // Track for latency measurement
+              if (!firstAudioTime) firstAudioTime = Date.now();
               console.log("[OPENAI] Response started:", currentResponseId);
               break;
 
@@ -1574,9 +1596,18 @@ CRITICAL INSTRUCTIONS:
               }
               break;
               
-            // ElevenLabs text-to-speech: Flush remaining buffer on completion
+            // ElevenLabs text-to-speech: Flush remaining buffer on completion + LOG ASSISTANT MESSAGE
             case "response.text.done":
               if (ttsProvider === 'elevenlabs') {
+                const fullText = msg.text || sentenceBuffer;
+                
+                // CRITICAL FIX: Save assistant message to database for ElevenLabs mode
+                if (fullText) {
+                  const latency = responseStartTime > 0 ? Date.now() - responseStartTime : undefined;
+                  console.log(`[TRANSCRIPT-AI] 🤖 "${fullText.substring(0, 80)}..." (${latency}ms)`);
+                  saveCallMessage('assistant', fullText, latency);
+                }
+                
                 // Flush any remaining buffered text
                 if (sentenceBuffer.trim()) {
                   console.log(`[ELEVENLABS] 📝 Flushing remaining: "${sentenceBuffer.substring(0, 40)}..."`);
@@ -1726,22 +1757,106 @@ CRITICAL INSTRUCTIONS:
       };
     }
 
-    async function saveConversationMessage(role: string, content: string) {
-      if (!userId || !threadId || !content) return;
+    // === CALL SESSION MANAGEMENT ===
+    async function createCallSession(callSid: string, fromNumber?: string, toNumber?: string) {
+      if (!userId) return;
       
       try {
-        await supabase.from('conversation_messages').insert({
+        const { data, error } = await supabase.from('call_sessions').insert({
           user_id: userId,
-          thread_id: threadId,
-          role: role,
-          content: content,
-          voice_session_id: streamSid,
-          audio_transcript: content
-        });
-        console.log(`[BRIDGE] Saved ${role} message to conversation history`);
+          call_sid: callSid,
+          stream_sid: streamSid,
+          direction: callDirection,
+          from_number: fromNumber || null,
+          to_number: toNumber || null,
+          call_context: callContext,
+          tts_provider: ttsProvider,
+          started_at: new Date().toISOString()
+        }).select('id').single();
+        
+        if (data) {
+          callSessionId = data.id;
+          console.log(`[CALL-TRACK] ✅ Created call session: ${callSessionId}`);
+        } else if (error) {
+          console.warn('[CALL-TRACK] Failed to create call session:', error);
+        }
       } catch (error) {
-        console.warn('[BRIDGE] Failed to save conversation message:', error);
+        console.warn('[CALL-TRACK] Error creating call session:', error);
       }
+    }
+
+    async function closeCallSession() {
+      if (!callSessionId) return;
+      
+      try {
+        const durationSeconds = Math.floor((Date.now() - callStartTime) / 1000);
+        await supabase.from('call_sessions').update({
+          ended_at: new Date().toISOString(),
+          duration_seconds: durationSeconds,
+          first_audio_at: firstAudioTime ? new Date(firstAudioTime).toISOString() : null,
+          greeting_latency_ms: greetingLatencyMs
+        }).eq('id', callSessionId);
+        console.log(`[CALL-TRACK] ✅ Closed call session: ${durationSeconds}s duration`);
+      } catch (error) {
+        console.warn('[CALL-TRACK] Error closing call session:', error);
+      }
+    }
+
+    // === UNIFIED MESSAGE SAVING ===
+    async function saveCallMessage(
+      role: string, 
+      content: string, 
+      latencyMs?: number,
+      toolInfo?: { name: string; input?: any; output?: any }
+    ) {
+      if (!userId || !content) return;
+      
+      messageIndex++;
+      const startTime = new Date().toISOString();
+      
+      try {
+        // Save to call_messages for full call review
+        if (callSessionId) {
+          await supabase.from('call_messages').insert({
+            call_session_id: callSessionId,
+            user_id: userId,
+            role: role,
+            content: content,
+            message_index: messageIndex,
+            started_at: startTime,
+            latency_ms: latencyMs,
+            tool_name: toolInfo?.name || null,
+            tool_input: toolInfo?.input || null,
+            tool_output: toolInfo?.output || null,
+            word_count: content.split(/\s+/).length
+          });
+        }
+        
+        // Also save to conversation_messages for RAG continuity
+        if (threadId && role !== 'tool') {
+          await supabase.from('conversation_messages').insert({
+            user_id: userId,
+            thread_id: threadId,
+            role: role,
+            content: content,
+            voice_session_id: streamSid,
+            audio_transcript: content,
+            metadata: { latency_ms: latencyMs, call_session_id: callSessionId }
+          });
+        }
+        
+        console.log(`[CALL-TRACK] 💬 ${role.toUpperCase()} [#${messageIndex}] ${latencyMs ? `(${latencyMs}ms)` : ''}`);
+      } catch (error) {
+        console.warn('[CALL-TRACK] Failed to save message:', error);
+      }
+    }
+
+    async function saveConversationMessage(role: string, content: string) {
+      // Delegate to unified saveCallMessage
+      const latency = role === 'assistant' && responseStartTime > 0 
+        ? Date.now() - responseStartTime 
+        : undefined;
+      await saveCallMessage(role, content, latency);
     }
 
     // PHASE 4: Open-ended greeting - NOT task-focused
@@ -1931,6 +2046,13 @@ Start speaking IMMEDIATELY with your greeting - the user has just answered the p
         }
 
         console.log(`[BRIDGE] Function result:`, result);
+        
+        // Log tool call to call_messages for review
+        await saveCallMessage('tool', `Called ${functionName}`, undefined, {
+          name: functionName,
+          input: args,
+          output: result
+        });
         
         // Store extracted facts for post-validation
         if (result.extractedFacts) {
