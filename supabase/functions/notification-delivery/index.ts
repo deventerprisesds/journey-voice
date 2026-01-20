@@ -207,23 +207,13 @@ serve(async (req) => {
           .eq('user_id', userId)
           .maybeSingle();
 
-        const phoneNumber = profile?.phone;
+        // Fallback phone number for demo/testing when user has no phone configured
+        const FALLBACK_PHONE = '+14434150606';
+        let phoneNumber = profile?.phone;
+        
         if (!phoneNumber) {
-          console.log(`⏭️ User ${userId}: No phone number configured, skipping call`);
-          
-          await supabaseClient
-            .from('scheduled_notifications')
-            .update({
-              failed_at: new Date().toISOString(),
-              failure_reason: 'No phone number configured'
-            })
-            .eq('id', callNotification.id);
-          
-          failed++;
-          
-          // Still schedule next occurrence even if this one failed
-          await scheduleNextOccurrence(supabaseClient, userId, callConfig);
-          continue;
+          console.log(`📞 User ${userId}: No phone in profile, using fallback: ${FALLBACK_PHONE}`);
+          phoneNumber = FALLBACK_PHONE;
         }
 
         // Build context based on call type

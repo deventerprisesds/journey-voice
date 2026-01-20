@@ -695,6 +695,16 @@ serve(async (req) => {
     let pendingTextBuffer: string = '';
     let isProcessingElevenLabsTTS = false;
     
+    // === SENTENCE STREAMING FOR ELEVENLABS ===
+    // Buffer text deltas and send complete sentences for faster TTS
+    let sentenceBuffer: string = '';
+    const SENTENCE_ENDERS = /[.!?]\s*$/;
+    
+    // === SPEECH EVENT DEBOUNCE ===
+    // Prevent rapid-fire speech events from causing stuttering
+    let lastSpeechStartTime = 0;
+    const SPEECH_DEBOUNCE_MS = 300;
+    
     // === AUDIO PIPELINE TELEMETRY ===
     let twilioMediaFramesIn = 0;
     let openaiAppendCount = 0;
@@ -999,9 +1009,9 @@ serve(async (req) => {
                   input_audio_transcription: { model: "whisper-1" },
                   turn_detection: {
                     type: "server_vad",
-                    threshold: 0.2,  // Lower threshold for better phone audio sensitivity
-                    prefix_padding_ms: 300,
-                    silence_duration_ms: 800,  // Faster response on phone
+                    threshold: 0.3,  // Balance between sensitivity and false triggers
+                    prefix_padding_ms: 400,  // More buffer to capture speech start
+                    silence_duration_ms: 600,  // Faster response after confirmed silence
                   },
                   tools: getInlineToolDefinitions(),
                   tool_choice: "auto"
@@ -1087,18 +1097,68 @@ serve(async (req) => {
               }
               break;
 
-            // ElevenLabs text-to-speech: Handle text output and send to ElevenLabs
+            // ElevenLabs sentence streaming: Buffer text deltas and send complete sentences
+            case "response.text.delta":
+              if (ttsProvider === 'elevenlabs' && msg.delta) {
+                sentenceBuffer += msg.delta;
+                
+                // Check if we have a complete sentence
+                if (SENTENCE_ENDERS.test(sentenceBuffer)) {
+                  const sentence = sentenceBuffer.trim();
+                  sentenceBuffer = '';
+                  
+                  // Send sentence to ElevenLabs immediately (skip tiny fragments)
+                  if (sentence.length > 5) {
+                    console.log(`[ELEVENLABS] 📝 Streaming sentence: "${sentence.substring(0, 40)}..."`);
+                    sendElevenLabsTTS(sentence);
+                  }
+                }
+              }
+              break;
+              
+            // ElevenLabs text-to-speech: Flush remaining buffer on completion
             case "response.text.done":
-              if (ttsProvider === 'elevenlabs' && msg.text) {
-                console.log(`[ELEVENLABS] Text response received: "${msg.text.substring(0, 50)}..."`);
-                sendElevenLabsTTS(msg.text);
+              if (ttsProvider === 'elevenlabs') {
+                // Flush any remaining buffered text
+                if (sentenceBuffer.trim()) {
+                  console.log(`[ELEVENLABS] 📝 Flushing remaining: "${sentenceBuffer.substring(0, 40)}..."`);
+                  sendElevenLabsTTS(sentenceBuffer.trim());
+                  sentenceBuffer = '';
+                } else if (msg.text && !sentenceBuffer) {
+                  // Fallback if no buffer - send complete text (shouldn't happen often)
+                  console.log(`[ELEVENLABS] Text response received: "${msg.text.substring(0, 50)}..."`);
+                  sendElevenLabsTTS(msg.text);
+                }
               }
               break;
 
             case "input_audio_buffer.speech_started":
+              // Debounce rapid speech events to prevent stuttering
+              const now = Date.now();
+              if (now - lastSpeechStartTime < SPEECH_DEBOUNCE_MS) {
+                console.log("[OPENAI] Debounced rapid speech event");
+                break;
+              }
+              lastSpeechStartTime = now;
+              
               console.log("[OPENAI] User started speaking");
               
-              // BARGE-IN: Use truncation (not cancel) so AI remembers what it said
+              // ElevenLabs mode: No OpenAI audio to truncate - just clear Twilio buffer
+              if (ttsProvider === 'elevenlabs') {
+                console.log("[OPENAI] BARGE-IN: ElevenLabs mode - clearing Twilio buffer only");
+                if (streamSid && twilioWs.readyState === WebSocket.OPEN) {
+                  twilioWs.send(JSON.stringify({
+                    event: "clear",
+                    streamSid: streamSid
+                  }));
+                }
+                // Clear sentence buffer to stop pending TTS
+                sentenceBuffer = '';
+                isAiSpeaking = false;
+                break;
+              }
+              
+              // OpenAI audio mode: Use truncation (not cancel) so AI remembers what it said
               if (isAiSpeaking && openaiWs?.readyState === WebSocket.OPEN) {
                 if (currentResponseItemId) {
                   // Truncation preserves context - AI knows what it said up to this point
