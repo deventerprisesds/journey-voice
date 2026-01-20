@@ -619,6 +619,122 @@ export type Database = {
         }
         Relationships: []
       }
+      call_messages: {
+        Row: {
+          audio_duration_ms: number | null
+          call_session_id: string
+          completed_at: string | null
+          content: string
+          id: string
+          latency_ms: number | null
+          message_index: number
+          metadata: Json | null
+          role: string
+          started_at: string | null
+          tool_input: Json | null
+          tool_name: string | null
+          tool_output: Json | null
+          user_id: string
+          word_count: number | null
+        }
+        Insert: {
+          audio_duration_ms?: number | null
+          call_session_id: string
+          completed_at?: string | null
+          content: string
+          id?: string
+          latency_ms?: number | null
+          message_index: number
+          metadata?: Json | null
+          role: string
+          started_at?: string | null
+          tool_input?: Json | null
+          tool_name?: string | null
+          tool_output?: Json | null
+          user_id: string
+          word_count?: number | null
+        }
+        Update: {
+          audio_duration_ms?: number | null
+          call_session_id?: string
+          completed_at?: string | null
+          content?: string
+          id?: string
+          latency_ms?: number | null
+          message_index?: number
+          metadata?: Json | null
+          role?: string
+          started_at?: string | null
+          tool_input?: Json | null
+          tool_name?: string | null
+          tool_output?: Json | null
+          user_id?: string
+          word_count?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "call_messages_call_session_id_fkey"
+            columns: ["call_session_id"]
+            isOneToOne: false
+            referencedRelation: "call_sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      call_sessions: {
+        Row: {
+          call_context: string | null
+          call_sid: string
+          direction: string
+          duration_seconds: number | null
+          ended_at: string | null
+          first_audio_at: string | null
+          from_number: string | null
+          greeting_latency_ms: number | null
+          id: string
+          metadata: Json | null
+          started_at: string | null
+          stream_sid: string | null
+          to_number: string | null
+          tts_provider: string | null
+          user_id: string
+        }
+        Insert: {
+          call_context?: string | null
+          call_sid: string
+          direction: string
+          duration_seconds?: number | null
+          ended_at?: string | null
+          first_audio_at?: string | null
+          from_number?: string | null
+          greeting_latency_ms?: number | null
+          id?: string
+          metadata?: Json | null
+          started_at?: string | null
+          stream_sid?: string | null
+          to_number?: string | null
+          tts_provider?: string | null
+          user_id: string
+        }
+        Update: {
+          call_context?: string | null
+          call_sid?: string
+          direction?: string
+          duration_seconds?: number | null
+          ended_at?: string | null
+          first_audio_at?: string | null
+          from_number?: string | null
+          greeting_latency_ms?: number | null
+          id?: string
+          metadata?: Json | null
+          started_at?: string | null
+          stream_sid?: string | null
+          to_number?: string | null
+          tts_provider?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       case_study_analyses: {
         Row: {
           assignment_id: string | null
