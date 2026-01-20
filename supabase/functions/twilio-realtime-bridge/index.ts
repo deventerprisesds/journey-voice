@@ -1685,67 +1685,11 @@ CRITICAL INSTRUCTIONS:
               break;
 
             case "conversation.item.input_audio_transcription.completed":
-              const userTranscript = msg.transcript || '';
-              console.log(`[TRANSCRIPT-USER] 📢 "${userTranscript}"`);
-              
-              // VOICEMAIL DETECTION: Detect voicemail prompts and hang up gracefully
-              // Common voicemail phrases that indicate we reached voicemail not the user
-              const voicemailPhrases = [
-                'leave a message',
-                'leave your message',
-                'after the tone',
-                'after the beep',
-                'record your message',
-                'to replay your message',
-                'press pound',
-                'press star',
-                'press 1',
-                'press 2',
-                'not available',
-                'cannot take your call',
-                'mailbox',
-                'voicemail',
-                'to send this message',
-                'delivery options',
-                'to delete and re-record',
-                'continue recording',
-                'to send a fax'
-              ];
-              
-              const transcriptLower = userTranscript.toLowerCase();
-              const isVoicemail = voicemailPhrases.some(phrase => transcriptLower.includes(phrase));
-              
-              if (isVoicemail) {
-                console.log(`[VOICEMAIL] 📞 Detected voicemail prompt, hanging up gracefully`);
-                
-                // Send brief goodbye message
-                const goodbyeText = "I'll try calling again later. Goodbye!";
-                if (ttsProvider === 'elevenlabs') {
-                  await sendElevenLabsTTS(goodbyeText);
-                  // Wait briefly for TTS to complete before hanging up
-                  await new Promise(resolve => setTimeout(resolve, 2000));
-                } else {
-                  openaiWs?.send(JSON.stringify({
-                    type: "conversation.item.create",
-                    item: {
-                      type: "message",
-                      role: "assistant",
-                      content: [{ type: "input_text", text: goodbyeText }]
-                    }
-                  }));
-                  openaiWs?.send(JSON.stringify({ type: "response.create", response: { modalities: ["text", "audio"] } }));
-                  await new Promise(resolve => setTimeout(resolve, 3000));
-                }
-                
-                // Close the call
-                twilioWs.close();
-                break;
-              }
-              
+              console.log(`[TRANSCRIPT-USER] 📢 "${msg.transcript}"`);
               // Track for verbatim web_search override
-              lastUserTranscript = userTranscript;
+              lastUserTranscript = msg.transcript;
               // Save user message to conversation history
-              saveConversationMessage('user', userTranscript);
+              saveConversationMessage('user', msg.transcript);
               break;
 
             case "response.audio_transcript.done":

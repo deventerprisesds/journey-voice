@@ -211,25 +211,10 @@ serve(async (req) => {
     let delivered = 0;
     let failed = 0;
 
-    // Demo user ID - skip scheduled calls for this user to prevent duplicate calls
-    const DEMO_USER_ID = '00000000-0000-0000-0000-000000000001';
-
     // Process scheduled_call notifications separately
     for (const callNotification of scheduledCallNotifications) {
       try {
         const userId = callNotification.user_id;
-        
-        // CRITICAL: Skip calls for demo user to prevent duplicate calls to fallback phone
-        if (userId === DEMO_USER_ID) {
-          console.log(`📞 Skipping scheduled call for DEMO user: "${callNotification.title}"`);
-          // Mark as delivered to prevent re-processing
-          await supabaseClient
-            .from('scheduled_notifications')
-            .update({ delivered_at: new Date().toISOString() })
-            .eq('id', callNotification.id);
-          continue;
-        }
-        
         console.log(`📞 Processing scheduled call for user ${userId}: "${callNotification.title}"`);
 
         // Parse call configuration from body
