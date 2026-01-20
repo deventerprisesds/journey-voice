@@ -89,6 +89,17 @@ function base64ToInt16(base64: string): Int16Array {
   return new Int16Array(bytes.buffer);
 }
 
+// Calculate RMS (Root Mean Square) amplitude from PCM audio data
+// Used for echo detection and real barge-in detection
+function calculateRMSAmplitude(pcmData: Int16Array): number {
+  if (pcmData.length === 0) return 0;
+  let sum = 0;
+  for (let i = 0; i < pcmData.length; i++) {
+    sum += pcmData[i] * pcmData[i];
+  }
+  return Math.sqrt(sum / pcmData.length);
+}
+
 // Get time-based greeting with proper timezone
 function getTimeBasedGreeting(timezone: string = 'America/New_York'): string {
   try {
@@ -1052,6 +1063,23 @@ serve(async (req) => {
     let lastSpeechStartTime = 0;
     const SPEECH_DEBOUNCE_MS = 300;
     
+    // === AMPLITUDE-BASED ECHO FILTERING ===
+    // Suppress OpenAI VAD false-positives caused by TTS echo on phone line
+    // Track when we're actively sending TTS audio to detect echo vs real speech
+    let isSendingTtsAudio = false;
+    let ttsAudioEndTime = 0;
+    const TTS_ECHO_GRACE_PERIOD_MS = 500; // Extra time for audio to clear after TTS ends
+    
+    // Amplitude thresholds for echo vs real speech detection
+    // Echo from speaker tends to be lower amplitude than real speech into mic
+    const ECHO_AMPLITUDE_THRESHOLD = 1500;     // Below this = likely echo, ignore
+    const INTERRUPT_AMPLITUDE_THRESHOLD = 3000; // Above this = real speech, process
+    
+    // Rolling window of recent amplitudes for smoother detection
+    let recentAmplitudes: number[] = [];
+    const AMPLITUDE_WINDOW = 5; // Number of chunks to average
+    let amplitudeDebugCounter = 0;
+    
     // === AUDIO PIPELINE TELEMETRY ===
     let twilioMediaFramesIn = 0;
     let openaiAppendCount = 0;
@@ -1218,10 +1246,18 @@ serve(async (req) => {
         
         // Send the μ-law audio directly to Twilio (it's already in the right format!)
         if (data.audio && streamSid && twilioWs.readyState === WebSocket.OPEN) {
+          // === ECHO FILTERING: Mark that we're sending TTS audio ===
+          isSendingTtsAudio = true;
+          recentAmplitudes = []; // Reset amplitude tracking at start of TTS
+          
           // ElevenLabs returns the full audio at once - we need to chunk it for Twilio
           // Twilio expects ~20ms chunks (160 bytes at 8kHz μ-law)
           const audioBytes = Uint8Array.from(atob(data.audio), c => c.charCodeAt(0));
           const chunkSize = 160; // 20ms at 8kHz
+          const numChunks = Math.ceil(audioBytes.length / chunkSize);
+          const estimatedDurationMs = numChunks * 20; // 20ms per chunk
+          
+          console.log(`[ELEVENLABS] 🔊 Sending ${numChunks} chunks (~${estimatedDurationMs}ms duration)`);
           
           for (let i = 0; i < audioBytes.length; i += chunkSize) {
             const chunk = audioBytes.slice(i, i + chunkSize);
@@ -1234,6 +1270,19 @@ serve(async (req) => {
               media: { payload: chunkBase64 }
             }));
           }
+          
+          // === ECHO FILTERING: Schedule end of TTS playback window ===
+          // Audio takes time to play + echo takes time to return
+          ttsAudioEndTime = Date.now() + estimatedDurationMs + TTS_ECHO_GRACE_PERIOD_MS;
+          console.log(`[ECHO-FILTER] TTS playback window: now + ${estimatedDurationMs + TTS_ECHO_GRACE_PERIOD_MS}ms`);
+          
+          // Schedule turning off the flag after audio finishes + grace period
+          setTimeout(() => {
+            if (isSendingTtsAudio && Date.now() >= ttsAudioEndTime - 50) {
+              isSendingTtsAudio = false;
+              console.log(`[ECHO-FILTER] TTS playback window ended`);
+            }
+          }, estimatedDurationMs + TTS_ECHO_GRACE_PERIOD_MS);
           
           if (!firstOutboundLogged) {
             console.log(`[ELEVENLABS-OUT] ⬅️ First ElevenLabs audio sent to Twilio`);
@@ -1265,9 +1314,17 @@ serve(async (req) => {
       console.log(`[CACHED-AUDIO] 🎙️ Playing ${audioBase64.length} chars of cached audio`);
 
       try {
+        // === ECHO FILTERING: Mark that we're sending TTS audio ===
+        isSendingTtsAudio = true;
+        recentAmplitudes = []; // Reset amplitude tracking at start of TTS
+        
         // The audio is already in μ-law format from ElevenLabs - chunk it for Twilio
         const audioBytes = Uint8Array.from(atob(audioBase64), c => c.charCodeAt(0));
         const chunkSize = 160; // 20ms at 8kHz
+        const numChunks = Math.ceil(audioBytes.length / chunkSize);
+        const estimatedDurationMs = numChunks * 20; // 20ms per chunk
+
+        console.log(`[CACHED-AUDIO] 🔊 Sending ${numChunks} chunks (~${estimatedDurationMs}ms duration)`);
 
         for (let i = 0; i < audioBytes.length; i += chunkSize) {
           const chunk = audioBytes.slice(i, i + chunkSize);
@@ -1281,7 +1338,19 @@ serve(async (req) => {
           }));
         }
 
-        console.log(`[CACHED-AUDIO] ✅ Sent ${Math.ceil(audioBytes.length / chunkSize)} chunks`);
+        // === ECHO FILTERING: Schedule end of TTS playback window ===
+        ttsAudioEndTime = Date.now() + estimatedDurationMs + TTS_ECHO_GRACE_PERIOD_MS;
+        console.log(`[ECHO-FILTER] Cached audio playback window: now + ${estimatedDurationMs + TTS_ECHO_GRACE_PERIOD_MS}ms`);
+        
+        // Schedule turning off the flag after audio finishes + grace period
+        setTimeout(() => {
+          if (isSendingTtsAudio && Date.now() >= ttsAudioEndTime - 50) {
+            isSendingTtsAudio = false;
+            console.log(`[ECHO-FILTER] Cached audio playback window ended`);
+          }
+        }, estimatedDurationMs + TTS_ECHO_GRACE_PERIOD_MS);
+
+        console.log(`[CACHED-AUDIO] ✅ Sent ${numChunks} chunks`);
       } catch (error) {
         console.error('[CACHED-AUDIO] Error playing cached audio:', error);
       }
@@ -1398,22 +1467,99 @@ serve(async (req) => {
             }
             
             if (openaiWs?.readyState === WebSocket.OPEN) {
-              // Decode μ-law → PCM16 → Upsample to 24kHz → Base64
+              // Decode μ-law → PCM16
               const mulawBytes = Uint8Array.from(atob(data.media.payload), (c) => c.charCodeAt(0));
               const pcm8k = decodeMulaw(mulawBytes);
-              const pcm24k = upsample8to24(pcm8k);
-              const audioBase64 = int16ToBase64(pcm24k);
-
-              openaiAppendCount++;
-              if (!firstAppendLogged) {
-                console.log(`[AUDIO-APPEND] ➡️ First audio sent to OpenAI (${audioBase64.length} chars)`);
-                firstAppendLogged = true;
+              
+              // === AMPLITUDE-BASED ECHO FILTERING ===
+              // When we're actively sending TTS audio, the phone line will echo it back
+              // OpenAI's VAD picks this up as "user speech" and interrupts itself
+              // Solution: Check amplitude to distinguish echo (low) from real speech (high)
+              
+              const amplitude = calculateRMSAmplitude(pcm8k);
+              amplitudeDebugCounter++;
+              
+              // Periodic amplitude debugging (every 100 chunks = ~2 seconds)
+              if (amplitudeDebugCounter % 100 === 0) {
+                console.log(`[AMPLITUDE-DEBUG] chunk=${amplitudeDebugCounter} amp=${amplitude.toFixed(0)} isTTS=${isSendingTtsAudio}`);
               }
+              
+              // Check if we're in TTS echo window (actively playing or grace period)
+              const inEchoWindow = isSendingTtsAudio || Date.now() < ttsAudioEndTime;
+              
+              if (inEchoWindow && ttsProvider === 'elevenlabs') {
+                // During TTS playback - use amplitude to detect real interrupts
+                recentAmplitudes.push(amplitude);
+                if (recentAmplitudes.length > AMPLITUDE_WINDOW) {
+                  recentAmplitudes.shift();
+                }
+                
+                const avgAmplitude = recentAmplitudes.length > 0 
+                  ? recentAmplitudes.reduce((a, b) => a + b, 0) / recentAmplitudes.length 
+                  : 0;
+                
+                if (avgAmplitude > INTERRUPT_AMPLITUDE_THRESHOLD) {
+                  // Real interrupt detected - loud enough to be actual speech
+                  console.log(`[BARGE-IN] 🎤 REAL INTERRUPT! avgAmp=${avgAmplitude.toFixed(0)} > ${INTERRUPT_AMPLITUDE_THRESHOLD}`);
+                  
+                  // Stop TTS playback tracking
+                  isSendingTtsAudio = false;
+                  ttsAudioEndTime = 0;
+                  recentAmplitudes = [];
+                  
+                  // Clear sentence buffer to stop pending TTS
+                  sentenceBuffer = '';
+                  
+                  // Clear Twilio's audio buffer to stop playback
+                  if (streamSid && twilioWs.readyState === WebSocket.OPEN) {
+                    twilioWs.send(JSON.stringify({
+                      event: "clear",
+                      streamSid: streamSid
+                    }));
+                    console.log(`[BARGE-IN] Cleared Twilio buffer`);
+                  }
+                  
+                  // NOW forward this audio to OpenAI - it's a real interrupt
+                  const pcm24k = upsample8to24(pcm8k);
+                  const audioBase64 = int16ToBase64(pcm24k);
+                  openaiAppendCount++;
+                  openaiWs.send(JSON.stringify({
+                    type: "input_audio_buffer.append",
+                    audio: audioBase64,
+                  }));
+                } else if (avgAmplitude < ECHO_AMPLITUDE_THRESHOLD) {
+                  // Echo detected - too quiet to be real speech, ignore it
+                  // Log occasionally for debugging
+                  if (amplitudeDebugCounter % 50 === 0) {
+                    console.log(`[ECHO-FILTER] Ignoring echo: avgAmp=${avgAmplitude.toFixed(0)} < ${ECHO_AMPLITUDE_THRESHOLD}`);
+                  }
+                  // DON'T forward to OpenAI - this prevents VAD from triggering on echo
+                } else {
+                  // Ambiguous zone - forward with caution (OpenAI VAD will decide)
+                  const pcm24k = upsample8to24(pcm8k);
+                  const audioBase64 = int16ToBase64(pcm24k);
+                  openaiAppendCount++;
+                  openaiWs.send(JSON.stringify({
+                    type: "input_audio_buffer.append",
+                    audio: audioBase64,
+                  }));
+                }
+              } else {
+                // Not in TTS echo window - send all audio to OpenAI normally
+                const pcm24k = upsample8to24(pcm8k);
+                const audioBase64 = int16ToBase64(pcm24k);
 
-              openaiWs.send(JSON.stringify({
-                type: "input_audio_buffer.append",
-                audio: audioBase64,
-              }));
+                openaiAppendCount++;
+                if (!firstAppendLogged) {
+                  console.log(`[AUDIO-APPEND] ➡️ First audio sent to OpenAI (${audioBase64.length} chars)`);
+                  firstAppendLogged = true;
+                }
+
+                openaiWs.send(JSON.stringify({
+                  type: "input_audio_buffer.append",
+                  audio: audioBase64,
+                }));
+              }
             } else {
               console.warn(`[AUDIO-APPEND] ⚠️ Cannot send - OpenAI WS not open (state: ${openaiWs?.readyState})`);
             }
