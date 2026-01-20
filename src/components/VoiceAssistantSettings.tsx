@@ -10,9 +10,10 @@ import { Switch } from '@/components/ui/switch';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useAuth';
 import { loadUserSchedulingConfig, saveUserSchedulingConfig, type SchedulingConfigWithInstructions, type CustomVoice, type ScheduledCall } from '@/services/schedulingService';
-import { Loader2, RotateCcw, Save, Plus, Trash2, Volume2, Phone, Clock } from 'lucide-react';
+import { Loader2, RotateCcw, Save, Plus, Trash2, Volume2, Phone, Clock, AlertCircle } from 'lucide-react';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 
 const DEFAULT_CORE_INSTRUCTIONS = `You are Iris, a knowledgeable and proactive executive assistant.
 
@@ -128,6 +129,7 @@ const VoiceAssistantSettings: React.FC = () => {
 
   // Scheduled calls
   const [scheduledCalls, setScheduledCalls] = useState<ScheduledCall[]>(DEFAULT_SCHEDULED_CALLS);
+  const [recurringCallsEnabled, setRecurringCallsEnabled] = useState(true);
   const [newCallName, setNewCallName] = useState('');
   const [newCallTime, setNewCallTime] = useState('09:00');
 
@@ -155,6 +157,7 @@ const VoiceAssistantSettings: React.FC = () => {
       setScheduledCalls(config.scheduled_calls && config.scheduled_calls.length > 0 
         ? config.scheduled_calls 
         : DEFAULT_SCHEDULED_CALLS);
+      setRecurringCallsEnabled(config.recurring_calls_enabled ?? true);
     } catch (error) {
       console.error('Failed to load AI instructions:', error);
       toast({
@@ -183,6 +186,7 @@ const VoiceAssistantSettings: React.FC = () => {
         openai_voice: openaiVoice,
         custom_voices: customVoices,
         scheduled_calls: scheduledCalls,
+        recurring_calls_enabled: recurringCallsEnabled,
       } as any);
 
       if (success) {
@@ -216,6 +220,7 @@ const VoiceAssistantSettings: React.FC = () => {
     setOpenaiVoice('alloy');
     setCustomVoices([]);
     setScheduledCalls(DEFAULT_SCHEDULED_CALLS);
+    setRecurringCallsEnabled(true);
     toast({
       title: "Reset",
       description: "All instructions reset to defaults",
@@ -603,8 +608,32 @@ const VoiceAssistantSettings: React.FC = () => {
               </p>
             </div>
 
+            {/* Master Toggle */}
+            <div className="flex items-center justify-between p-4 bg-muted/50 rounded-lg border">
+              <div className="space-y-0.5">
+                <Label className="text-base font-medium">Enable Recurring Calls</Label>
+                <p className="text-sm text-muted-foreground">
+                  Turn off to pause all scheduled calls during testing
+                </p>
+              </div>
+              <Switch
+                checked={recurringCallsEnabled}
+                onCheckedChange={setRecurringCallsEnabled}
+              />
+            </div>
+
+            {/* Alert when paused */}
+            {!recurringCallsEnabled && (
+              <Alert>
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>
+                  All recurring calls are paused. Individual settings are preserved.
+                </AlertDescription>
+              </Alert>
+            )}
+
             {/* Scheduled Calls List */}
-            <div className="space-y-4">
+            <div className={`space-y-4 ${!recurringCallsEnabled ? 'opacity-50' : ''}`}>
               {scheduledCalls.map((call) => (
                 <Collapsible key={call.id} className="border rounded-lg">
                   <div className="flex items-center justify-between p-4">

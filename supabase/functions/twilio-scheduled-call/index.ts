@@ -173,7 +173,8 @@ async function processRecurringCalls(): Promise<{ processed: number; triggered: 
     .select(`
       user_id,
       timezone,
-      scheduled_calls
+      scheduled_calls,
+      recurring_calls_enabled
     `)
     .not('scheduled_calls', 'is', null);
 
@@ -193,6 +194,12 @@ async function processRecurringCalls(): Promise<{ processed: number; triggered: 
     const userId = user.user_id;
     const timezone = user.timezone || 'America/New_York';
     const scheduledCalls = (user.scheduled_calls as ScheduledCall[]) || [];
+
+    // Check master toggle - skip if disabled
+    if (user.recurring_calls_enabled === false) {
+      console.log(`[RECURRING] User ${userId}: Master toggle OFF, skipping all calls`);
+      continue;
+    }
 
     if (scheduledCalls.length === 0) continue;
 
