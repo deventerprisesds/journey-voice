@@ -645,9 +645,314 @@ async function executeTool(
   }
 }
 
+// === PRE-CONNECT SESSION STORAGE ===
+// Stores pre-established sessions for instant greeting playback
+interface PreConnectSession {
+  userId: string;
+  context: string;
+  agenda: Array<{ index: number; text: string; status: string }>;
+  timezone: string;
+  profile: any;
+  greetingText: string;
+  audioBase64: string;
+  ttsProvider: 'openai' | 'elevenlabs';
+  voiceId: string;
+  createdAt: number;
+}
+
+const preConnectSessions = new Map<string, PreConnectSession>();
+const SESSION_TTL_MS = 60000; // 1 minute - calls should connect within this
+
+function storePreConnectSession(sessionId: string, session: PreConnectSession) {
+  preConnectSessions.set(sessionId, session);
+  // Auto-cleanup after TTL
+  setTimeout(() => {
+    preConnectSessions.delete(sessionId);
+    console.log(`[PRE-CONNECT] Session ${sessionId} expired and removed`);
+  }, SESSION_TTL_MS);
+}
+
+function getPreConnectSession(sessionId: string): PreConnectSession | null {
+  const session = preConnectSessions.get(sessionId);
+  if (!session) return null;
+  
+  // Check TTL
+  if (Date.now() - session.createdAt > SESSION_TTL_MS) {
+    preConnectSessions.delete(sessionId);
+    return null;
+  }
+  
+  return session;
+}
+
+// === AGENDA MANAGER ===
+// Tracks conversation progress through agenda items
+class AgendaManager {
+  private items: Array<{ index: number; text: string; status: string; startedAt?: number; completedAt?: number }>;
+  private currentIndex = 0;
+  private isPausedState = false;
+  private pausedForQuery?: string;
+
+  constructor(parsedAgenda: Array<{ index: number; text: string; status: string }>) {
+    this.items = parsedAgenda.map(item => ({ ...item }));
+    console.log(`[AGENDA] Initialized with ${this.items.length} items`);
+  }
+
+  startItem(index?: number) {
+    const idx = index ?? this.currentIndex;
+    if (this.items[idx]) {
+      this.items[idx].status = 'in_progress';
+      this.items[idx].startedAt = Date.now();
+      this.currentIndex = idx;
+      console.log(`[AGENDA] Started item ${idx}: "${this.items[idx].text.substring(0, 40)}..."`);
+    }
+  }
+
+  completeCurrentItem() {
+    if (this.items[this.currentIndex]) {
+      this.items[this.currentIndex].status = 'completed';
+      this.items[this.currentIndex].completedAt = Date.now();
+      console.log(`[AGENDA] Completed item ${this.currentIndex}`);
+      
+      // Find next pending
+      const nextIdx = this.items.findIndex(
+        (i, idx) => idx > this.currentIndex && i.status === 'pending'
+      );
+      if (nextIdx !== -1) {
+        this.currentIndex = nextIdx;
+      }
+    }
+  }
+
+  pauseForQuery(userQuery: string) {
+    if (this.items[this.currentIndex]?.status === 'in_progress') {
+      this.items[this.currentIndex].status = 'paused';
+      this.isPausedState = true;
+      this.pausedForQuery = userQuery;
+      console.log(`[AGENDA] Paused for user query: "${userQuery.substring(0, 40)}..."`);
+    }
+  }
+
+  resume() {
+    if (this.isPausedState && this.items[this.currentIndex]) {
+      this.items[this.currentIndex].status = 'in_progress';
+      this.isPausedState = false;
+      this.pausedForQuery = undefined;
+      console.log(`[AGENDA] Resumed item ${this.currentIndex}`);
+    }
+  }
+
+  getResumeHint(): string | null {
+    if (!this.isPausedState) return null;
+    const item = this.items[this.currentIndex];
+    return item ? `Getting back to: ${item.text}` : null;
+  }
+
+  getCurrentItem() {
+    return this.items[this.currentIndex] || null;
+  }
+
+  getProgress(): { completed: number; total: number; remaining: string[] } {
+    const completed = this.items.filter(i => i.status === 'completed').length;
+    const remaining = this.items.filter(i => i.status !== 'completed').map(i => i.text);
+    return { completed, total: this.items.length, remaining };
+  }
+
+  isComplete(): boolean {
+    return this.items.every(i => i.status === 'completed');
+  }
+
+  get isPaused(): boolean {
+    return this.isPausedState;
+  }
+}
+
+// === SMART FILLER MANAGER ===
+// Inserts natural fillers during long tool calls based on elapsed time
+class SmartFillerManager {
+  private toolStartTime = 0;
+  private fillerTimeouts: number[] = [];
+  private sendFiller: (text: string) => void;
+  private lastFillerUsed: string = '';
+
+  private readonly FILLERS = {
+    short: ["One moment.", "Let me check.", "Checking.", "One sec."],
+    medium: ["Still looking...", "Almost there...", "Bear with me..."],
+    long: ["This is taking a moment...", "Still working on it...", "Just a bit longer..."]
+  };
+
+  private readonly DELAYS = {
+    short: 1500,   // First filler after 1.5s
+    medium: 3500,  // Second at 3.5s
+    long: 6000     // Third at 6s
+  };
+
+  constructor(sendFiller: (text: string) => void) {
+    this.sendFiller = sendFiller;
+  }
+
+  startTool(toolName: string) {
+    this.toolStartTime = Date.now();
+    console.log(`[FILLER] Starting timer for tool: ${toolName}`);
+
+    // Schedule fillers at intervals
+    this.fillerTimeouts.push(
+      setTimeout(() => this.insertFiller('short'), this.DELAYS.short) as unknown as number,
+      setTimeout(() => this.insertFiller('medium'), this.DELAYS.medium) as unknown as number,
+      setTimeout(() => this.insertFiller('long'), this.DELAYS.long) as unknown as number
+    );
+  }
+
+  endTool() {
+    // Cancel all pending fillers
+    this.fillerTimeouts.forEach(clearTimeout);
+    this.fillerTimeouts = [];
+    const elapsed = Date.now() - this.toolStartTime;
+    console.log(`[FILLER] Tool completed in ${elapsed}ms`);
+  }
+
+  private insertFiller(tier: 'short' | 'medium' | 'long') {
+    const phrases = this.FILLERS[tier];
+    // Avoid repeating the same filler
+    let phrase = phrases[Math.floor(Math.random() * phrases.length)];
+    while (phrase === this.lastFillerUsed && phrases.length > 1) {
+      phrase = phrases[Math.floor(Math.random() * phrases.length)];
+    }
+    this.lastFillerUsed = phrase;
+    console.log(`[FILLER] Inserting ${tier} filler: "${phrase}"`);
+    this.sendFiller(phrase);
+  }
+}
+
+// Generate greeting text based on call type
+function generateGreetingForCallType(context: string, timeGreeting: string, userName: string): string {
+  if (context.includes('Morning Stand-up')) {
+    return `${timeGreeting}, ${userName}. This is your morning check-in.`;
+  } else if (context.includes('Midday Check-in')) {
+    return `${timeGreeting}, ${userName}. Just checking in on how your day is going.`;
+  } else if (context.includes('End of Day Wrap-up')) {
+    return `${timeGreeting}, ${userName}. Let's wrap up the day.`;
+  } else if (context.includes('Task reminder')) {
+    return `${timeGreeting}, ${userName}. Quick reminder about an upcoming task.`;
+  }
+  
+  // Default
+  return `${timeGreeting}, ${userName}. This is Iris.`;
+}
+
+// Handle pre-connect mode - establish session before call
+async function handlePreConnect(params: {
+  userId: string;
+  context: string;
+  agenda: Array<{ index: number; text: string; status: string }>;
+  timezone: string;
+  phoneNumber: string;
+}): Promise<Response> {
+  const { userId, context, agenda, timezone } = params;
+  console.log(`[PRE-CONNECT] Starting pre-connect for user ${userId}`);
+
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+
+  // 1. Load user context (same as existing connectToOpenAI)
+  const [profile, ttsPrefs] = await Promise.all([
+    loadUserProfile(supabase, userId),
+    supabase
+      .from('user_scheduling_prefs')
+      .select('tts_provider, elevenlabs_voice_id')
+      .eq('user_id', userId)
+      .maybeSingle()
+  ]);
+
+  const ttsProvider = (ttsPrefs.data?.tts_provider as 'openai' | 'elevenlabs') || 'elevenlabs';
+  const voiceId = ttsPrefs.data?.elevenlabs_voice_id || 'EXAVITQu4vr4xnSDxMaL';
+
+  console.log(`[PRE-CONNECT] TTS Provider: ${ttsProvider}, Voice ID: ${voiceId}`);
+
+  // 2. Generate greeting text
+  const timeGreeting = getTimeBasedGreeting(timezone);
+  const userName = profile?.first_name || 'sir';
+  const greetingText = generateGreetingForCallType(context, timeGreeting, userName);
+
+  console.log(`[PRE-CONNECT] Generated greeting: "${greetingText}"`);
+
+  // 3. Generate audio via ElevenLabs TTS
+  let audioBase64 = '';
+  let audioBytes = 0;
+
+  if (ttsProvider === 'elevenlabs' && ELEVENLABS_API_KEY) {
+    try {
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/elevenlabs-tts`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          text: greetingText,
+          voiceId: voiceId,
+          format: 'ulaw'
+        })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        audioBase64 = data.audio || '';
+        audioBytes = data.bytes || 0;
+        console.log(`[PRE-CONNECT] ✅ Generated ${audioBytes} bytes of cached audio`);
+      } else {
+        console.error(`[PRE-CONNECT] ElevenLabs TTS failed: ${response.status}`);
+      }
+    } catch (error) {
+      console.error('[PRE-CONNECT] TTS error:', error);
+    }
+  }
+
+  // 4. Store session for later resumption
+  const sessionId = crypto.randomUUID();
+
+  storePreConnectSession(sessionId, {
+    userId,
+    context,
+    agenda,
+    timezone,
+    profile,
+    greetingText,
+    audioBase64,
+    ttsProvider,
+    voiceId,
+    createdAt: Date.now()
+  });
+
+  console.log(`[PRE-CONNECT] ✅ Session stored: ${sessionId}`);
+
+  return new Response(JSON.stringify({
+    sessionId,
+    greetingText,
+    audioBase64,
+    audioBytes,
+    agenda,
+    ttsProvider
+  }), {
+    headers: { 'Content-Type': 'application/json' }
+  });
+}
+
 serve(async (req) => {
   const url = new URL(req.url);
-  console.log(`[BRIDGE v5] Request: ${req.method} ${url.pathname}`);
+  console.log(`[BRIDGE v7] Request: ${req.method} ${url.pathname}`);
+
+  // Handle pre-connect mode (HTTP POST, not WebSocket upgrade)
+  if (req.method === 'POST') {
+    try {
+      const body = await req.json();
+      if (body.mode === 'pre-connect') {
+        return handlePreConnect(body);
+      }
+    } catch (e) {
+      // Not JSON or parsing failed, continue to other handlers
+      console.log('[BRIDGE] POST request not pre-connect mode');
+    }
+  }
 
   // Health check endpoint
   if (url.pathname.endsWith("/health")) {
@@ -719,6 +1024,17 @@ serve(async (req) => {
     
     // KEEP-ALIVE: Prevent idle timeout
     let keepAliveInterval: number | null = null;
+    
+    // === AGENDA MANAGER INSTANCE ===
+    let agendaManager: AgendaManager | null = null;
+    
+    // === SMART FILLER MANAGER INSTANCE ===
+    let fillerManager: SmartFillerManager | null = null;
+    
+    // === PRE-CONNECTED SESSION STATE ===
+    let preConnectedSession: PreConnectSession | null = null;
+    let cachedAudioBase64: string = '';
+    let preConnectedGreetingText: string = '';
     
     // ElevenLabs TTS function - sends text to ElevenLabs and streams μ-law audio to Twilio
     async function sendElevenLabsTTS(text: string) {
@@ -806,6 +1122,58 @@ serve(async (req) => {
       }
     }
 
+    // Play pre-cached audio directly to Twilio (for pre-connected sessions)
+    function playCachedAudio(audioBase64: string) {
+      if (!streamSid || twilioWs.readyState !== WebSocket.OPEN || !audioBase64) {
+        console.warn('[CACHED-AUDIO] Cannot play - missing streamSid, closed WS, or no audio');
+        return;
+      }
+
+      console.log(`[CACHED-AUDIO] 🎙️ Playing ${audioBase64.length} chars of cached audio`);
+
+      try {
+        // The audio is already in μ-law format from ElevenLabs - chunk it for Twilio
+        const audioBytes = Uint8Array.from(atob(audioBase64), c => c.charCodeAt(0));
+        const chunkSize = 160; // 20ms at 8kHz
+
+        for (let i = 0; i < audioBytes.length; i += chunkSize) {
+          const chunk = audioBytes.slice(i, i + chunkSize);
+          const chunkBase64 = btoa(String.fromCharCode(...chunk));
+
+          twilioMediaFramesOut++;
+          twilioWs.send(JSON.stringify({
+            event: "media",
+            streamSid: streamSid,
+            media: { payload: chunkBase64 }
+          }));
+        }
+
+        console.log(`[CACHED-AUDIO] ✅ Sent ${Math.ceil(audioBytes.length / chunkSize)} chunks`);
+      } catch (error) {
+        console.error('[CACHED-AUDIO] Error playing cached audio:', error);
+      }
+    }
+
+    // Initialize filler manager with TTS function
+    fillerManager = new SmartFillerManager((text) => {
+      if (ttsProvider === 'elevenlabs') {
+        sendElevenLabsTTS(text);
+      } else {
+        // For OpenAI TTS, inject as system message
+        if (openaiWs && openaiWs.readyState === WebSocket.OPEN) {
+          openaiWs.send(JSON.stringify({
+            type: "conversation.item.create",
+            item: {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "text", text }]
+            }
+          }));
+          openaiWs.send(JSON.stringify({ type: "response.create", response: { modalities: ["text", "audio"] } }));
+        }
+      }
+    });
+
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
     twilioWs.onopen = () => {
@@ -838,8 +1206,54 @@ serve(async (req) => {
             callDirection = customParams.direction || 'inbound';
             userTimezone = customParams.timezone || 'America/New_York';
             
+            // Check for pre-connected session
+            const sessionId = customParams.sessionId;
+            const greetingCached = customParams.greetingCached === 'true';
+            const cachedGreetingText = customParams.greetingText || '';
+            
             console.log(`[TWILIO-STREAM] ✅ Stream START received - streamSid: ${streamSid}`);
             console.log(`[TWILIO-STREAM] Custom params:`, JSON.stringify(customParams));
+            console.log(`[TWILIO-STREAM] Pre-connected session: ${sessionId || 'none'}, greetingCached: ${greetingCached}`);
+            
+            // === PRE-CONNECTED SESSION HANDLING ===
+            if (sessionId) {
+              preConnectedSession = getPreConnectSession(sessionId);
+              
+              if (preConnectedSession) {
+                console.log(`[TWILIO-STREAM] ✅ Resuming pre-connected session: ${sessionId}`);
+                
+                // Use pre-loaded session data
+                userId = preConnectedSession.userId;
+                callContext = preConnectedSession.context;
+                userTimezone = preConnectedSession.timezone;
+                userProfile = preConnectedSession.profile;
+                ttsProvider = preConnectedSession.ttsProvider;
+                elevenlabsVoiceId = preConnectedSession.voiceId;
+                cachedAudioBase64 = preConnectedSession.audioBase64;
+                preConnectedGreetingText = preConnectedSession.greetingText;
+                
+                // Initialize agenda manager with pre-parsed agenda
+                if (preConnectedSession.agenda && preConnectedSession.agenda.length > 0) {
+                  agendaManager = new AgendaManager(preConnectedSession.agenda);
+                  agendaManager.startItem(0);
+                }
+                
+                // Play cached greeting audio immediately!
+                if (cachedAudioBase64 && streamSid) {
+                  console.log(`[TWILIO-STREAM] 🎙️ Playing cached greeting audio immediately`);
+                  playCachedAudio(cachedAudioBase64);
+                  greetingSent = true;
+                  firstOutboundLogged = true;
+                }
+                
+                // Connect to OpenAI with pre-loaded context
+                connectToOpenAI();
+                return;
+              } else {
+                console.warn(`[TWILIO-STREAM] ⚠️ Pre-connected session ${sessionId} not found or expired`);
+              }
+            }
+            
             console.log(`[TWILIO-STREAM] Call direction: ${callDirection}, userId: ${userId}, timezone: ${userTimezone}`);
             
             connectToOpenAI();
@@ -1024,7 +1438,51 @@ serve(async (req) => {
               console.log(`[OPENAI-SESSION] TTS Provider: ${ttsProvider}, ElevenLabs Voice: ${elevenlabsVoiceId}`);
               sessionConfigured = true;
               
-              // Send greeting based on call direction
+              // Handle pre-connected sessions differently
+              if (preConnectedSession && greetingSent) {
+                // Greeting already played from cache - just update OpenAI context
+                console.log("[OPENAI-SESSION] Pre-connected session - updating AI context with greeting");
+                
+                // Inject the pre-spoken greeting into OpenAI's conversation context
+                openaiWs!.send(JSON.stringify({
+                  type: "conversation.item.create",
+                  item: {
+                    type: "message",
+                    role: "assistant",
+                    content: [{ type: "text", text: preConnectedGreetingText }]
+                  }
+                }));
+                
+                // Inject the call context/agenda for AI to follow
+                const userName = userProfile?.first_name || 'sir';
+                openaiWs!.send(JSON.stringify({
+                  type: "conversation.item.create",
+                  item: {
+                    type: "message",
+                    role: "user",
+                    content: [{
+                      type: "input_text",
+                      text: `[System: PRE-CONNECTED CALL - Greeting already delivered. You just said: "${preConnectedGreetingText}"
+
+The user has answered the phone and heard your greeting. Current time: ${getCurrentTimeString(userTimezone)}.
+
+${callContext || ''}
+
+CRITICAL INSTRUCTIONS:
+1. You've already greeted them - do NOT repeat the greeting
+2. Wait for their response, then continue with the agenda
+3. Cover ALL agenda items naturally before ending
+4. If they go off-topic, address briefly then redirect: "Now, back to..."
+5. Use hang_up only after all agenda items are covered]`
+                    }]
+                  }
+                }));
+                
+                console.log("[OPENAI-SESSION] ✅ Pre-connected context injected - waiting for user response");
+                return;
+              }
+              
+              // Standard flow: Send greeting based on call direction
               if (!greetingSent) {
                 if (callDirection === 'inbound') {
                   sendInboundGreeting();
@@ -1441,6 +1899,11 @@ Start speaking IMMEDIATELY with your greeting - the user has just answered the p
     async function handleFunctionCall(msg: any) {
       if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN) return;
 
+      // Start filler timer for natural conversation during tool calls
+      if (fillerManager) {
+        fillerManager.startTool(msg.name);
+      }
+
       try {
         let args = JSON.parse(msg.arguments);
         const functionName = msg.name;
@@ -1461,6 +1924,11 @@ Start speaking IMMEDIATELY with your greeting - the user has just answered the p
           twilioWs,
           streamSid
         });
+
+        // Cancel pending fillers since we have the result
+        if (fillerManager) {
+          fillerManager.endTool();
+        }
 
         console.log(`[BRIDGE] Function result:`, result);
         
@@ -1485,6 +1953,11 @@ Start speaking IMMEDIATELY with your greeting - the user has just answered the p
         openaiWs.send(JSON.stringify({ type: "response.create", response: { modalities: fnModalities } }));
 
       } catch (error) {
+        // Cancel pending fillers on error
+        if (fillerManager) {
+          fillerManager.endTool();
+        }
+        
         console.error("[BRIDGE] Function call error:", error);
         
         openaiWs.send(JSON.stringify({
@@ -1504,5 +1977,5 @@ Start speaking IMMEDIATELY with your greeting - the user has just answered the p
   }
 
   // Non-WebSocket request
-  return new Response("Twilio-OpenAI Realtime Bridge v6 - Self-Correction System", { status: 200 });
+  return new Response("Twilio-OpenAI Realtime Bridge v7 - Pre-Connect Architecture with AgendaManager", { status: 200 });
 });
