@@ -1275,13 +1275,14 @@ serve(async (req) => {
       // Parse call context for scheduled calls - it contains structured agenda
       const isScheduledCall = callContext && (
         callContext.includes('[CALL AGENDA]') || 
-        callContext.includes('Morning stand-up') ||
-        callContext.includes('Midday check-in') ||
-        callContext.includes('End of day wrap-up')
+        callContext.includes('CALL TYPE:') ||
+        callContext.includes('Morning Stand-up') ||
+        callContext.includes('Midday Check-in') ||
+        callContext.includes('End of Day Wrap-up')
       );
       
       console.log(`[BRIDGE] Outbound call for ${userName}, scheduled: ${isScheduledCall}`);
-      console.log(`[BRIDGE] Call context: ${callContext?.substring(0, 100)}...`);
+      console.log(`[BRIDGE] Call context: ${callContext?.substring(0, 200)}...`);
       
       if (isScheduledCall && callContext) {
         // SCHEDULED CALL: Use the context to drive the entire conversation
@@ -1305,10 +1306,20 @@ CRITICAL INSTRUCTIONS FOR THIS CALL:
 5. NATURAL FLOW: Cover items conversationally, not as a checklist - weave them into dialogue
 6. END SIGNAL: Only end the call when ALL agenda items are addressed OR the user explicitly wants to end early
 
-Wait for them to answer, then immediately start with your greeting and first agenda item.]`
+Start speaking IMMEDIATELY with your greeting - the user has just answered the phone!]`
             }]
           }
         }));
+        
+        // CRITICAL FIX: Trigger AI response immediately for scheduled calls!
+        // The user just answered the phone and is waiting for the AI to speak
+        const outboundModalities = ttsProvider === 'elevenlabs' ? ["text"] : ["text", "audio"];
+        openaiWs.send(JSON.stringify({ 
+          type: "response.create",
+          response: { modalities: outboundModalities }
+        }));
+        console.log(`[GREETING] ✅ SCHEDULED CALL - Triggered immediate response (modalities: ${JSON.stringify(outboundModalities)})`);
+        
       } else {
         // MANUAL OUTBOUND CALL: Wait for user response first
         const contextInfo = callContext || 'your daily briefing';
@@ -1323,9 +1334,8 @@ Wait for them to answer, then immediately start with your greeting and first age
             }]
           }
         }));
+        // Manual calls: Wait for user audio before responding
       }
-      
-      // Don't trigger response yet - wait for user audio
     }
 
     // Validation function for voice responses
