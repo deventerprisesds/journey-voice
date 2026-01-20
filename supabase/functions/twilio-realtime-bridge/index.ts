@@ -1078,6 +1078,97 @@ serve(async (req) => {
     let cachedAudioBase64: string = '';
     let preConnectedGreetingText: string = '';
     
+    // =====================================================
+    // === ENHANCED RESPONSE TRIGGER LOGGING SYSTEM ===
+    // =====================================================
+    // Track EVERY response.create call to identify duplicate/unexpected triggers
+    
+    type ResponseTrigger = 
+      | 'INBOUND_GREETING'
+      | 'OUTBOUND_GREETING' 
+      | 'OUTBOUND_SCHEDULED_GREETING'
+      | 'PRE_CONNECT_CACHED_AUDIO'
+      | 'FUNCTION_RESULT'
+      | 'VALIDATION_CORRECTION'
+      | 'FILLER_INJECTION'
+      | 'UNKNOWN';
+    
+    let lastResponseTrigger: ResponseTrigger = 'UNKNOWN';
+    let lastResponseTriggerTime: number = 0;
+    let responseCreateCount: number = 0;
+    const DUPLICATE_THRESHOLD_MS = 500;
+    
+    // Wrapper for response.create - logs trigger source and detects duplicates
+    function createResponse(trigger: ResponseTrigger, reason?: string): boolean {
+      if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN) {
+        console.warn(`[RESPONSE-CREATE] ⚠️ Cannot send - OpenAI WS not open`);
+        return false;
+      }
+      
+      responseCreateCount++;
+      const now = Date.now();
+      const timeSinceLast = lastResponseTriggerTime > 0 ? now - lastResponseTriggerTime : -1;
+      const modalities = ttsProvider === 'elevenlabs' ? ["text"] : ["text", "audio"];
+      
+      console.log(`[RESPONSE-CREATE] #${responseCreateCount} trigger=${trigger} modalities=${JSON.stringify(modalities)} reason="${reason || ''}" timeSinceLast=${timeSinceLast}ms`);
+      
+      // DUPLICATE DETECTION: Warn and skip if same trigger within threshold
+      if (trigger === lastResponseTrigger && timeSinceLast >= 0 && timeSinceLast < DUPLICATE_THRESHOLD_MS) {
+        console.warn(`[RESPONSE-CREATE] ⚠️ DUPLICATE TRIGGER: ${trigger} within ${timeSinceLast}ms - SKIPPING to prevent repeat`);
+        return false;
+      }
+      
+      lastResponseTrigger = trigger;
+      lastResponseTriggerTime = now;
+      
+      openaiWs.send(JSON.stringify({
+        type: "response.create",
+        response: { modalities }
+      }));
+      
+      return true;
+    }
+    
+    // Wrapper for conversation.item.create - logs what context we're injecting
+    function injectSystemMessage(content: string, logTag: string) {
+      if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN) {
+        console.warn(`[INJECT-MSG] ⚠️ Cannot send - OpenAI WS not open`);
+        return;
+      }
+      
+      // Log first 120 chars to understand what we're telling the AI
+      const preview = content.length > 120 ? content.substring(0, 120) + '...' : content;
+      console.log(`[INJECT-MSG] ${logTag}: "${preview}"`);
+      
+      openaiWs.send(JSON.stringify({
+        type: "conversation.item.create",
+        item: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: content }]
+        }
+      }));
+    }
+    
+    // Wrapper for injecting assistant messages (for filler/cached greetings)
+    function injectAssistantMessage(content: string, logTag: string) {
+      if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN) {
+        console.warn(`[INJECT-ASST] ⚠️ Cannot send - OpenAI WS not open`);
+        return;
+      }
+      
+      console.log(`[INJECT-ASST] ${logTag}: "${content}"`);
+      
+      openaiWs.send(JSON.stringify({
+        type: "conversation.item.create",
+        item: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "text", text: content }]
+        }
+      }));
+    }
+    
     // ElevenLabs TTS function - sends text to ElevenLabs and streams μ-law audio to Twilio
     async function sendElevenLabsTTS(text: string) {
       if (!streamSid || twilioWs.readyState !== WebSocket.OPEN || !ELEVENLABS_API_KEY) {
@@ -1201,18 +1292,9 @@ serve(async (req) => {
       if (ttsProvider === 'elevenlabs') {
         sendElevenLabsTTS(text);
       } else {
-        // For OpenAI TTS, inject as system message
-        if (openaiWs && openaiWs.readyState === WebSocket.OPEN) {
-          openaiWs.send(JSON.stringify({
-            type: "conversation.item.create",
-            item: {
-              type: "message",
-              role: "assistant",
-              content: [{ type: "text", text }]
-            }
-          }));
-          openaiWs.send(JSON.stringify({ type: "response.create", response: { modalities: ["text", "audio"] } }));
-        }
+        // For OpenAI TTS, inject as assistant message and trigger response
+        injectAssistantMessage(text, 'FILLER');
+        createResponse('FILLER_INJECTION', `filler: "${text}"`);
       }
     });
 
@@ -1348,13 +1430,18 @@ serve(async (req) => {
     };
 
     twilioWs.onclose = async () => {
+      const callDuration = Math.floor((Date.now() - callStartTime) / 1000);
       console.log("[TWILIO-WS] WebSocket closed");
-      console.log(`[AUDIO-SUMMARY] === Call Pipeline Stats ===`);
-      console.log(`  Twilio frames IN:  ${twilioMediaFramesIn}`);
-      console.log(`  OpenAI appends:    ${openaiAppendCount}`);
-      console.log(`  OpenAI deltas:     ${openaiAudioDeltaCount}`);
-      console.log(`  Twilio frames OUT: ${twilioMediaFramesOut}`);
-      console.log(`[OPENAI-SUMMARY] Event types received:`, JSON.stringify(openaiEventCounts));
+      console.log(`[CALL-SUMMARY] =============================================`);
+      console.log(`[CALL-SUMMARY] Duration: ${callDuration}s`);
+      console.log(`[CALL-SUMMARY] Greeting latency: ${greetingLatencyMs ?? 'N/A'}ms`);
+      console.log(`[CALL-SUMMARY] Total response.create calls: ${responseCreateCount}`);
+      console.log(`[CALL-SUMMARY] Last trigger: ${lastResponseTrigger}`);
+      console.log(`[CALL-SUMMARY] TTS Provider: ${ttsProvider}`);
+      console.log(`[CALL-SUMMARY] Audio - Twilio IN: ${twilioMediaFramesIn}, OpenAI appends: ${openaiAppendCount}`);
+      console.log(`[CALL-SUMMARY] Audio - OpenAI deltas: ${openaiAudioDeltaCount}, Twilio OUT: ${twilioMediaFramesOut}`);
+      console.log(`[CALL-SUMMARY] OpenAI event types:`, JSON.stringify(openaiEventCounts));
+      console.log(`[CALL-SUMMARY] =============================================`);
       
       // Close call session for tracking
       await closeCallSession();
@@ -1496,25 +1583,11 @@ serve(async (req) => {
                 console.log("[OPENAI-SESSION] Pre-connected session - updating AI context with greeting");
                 
                 // Inject the pre-spoken greeting into OpenAI's conversation context
-                openaiWs!.send(JSON.stringify({
-                  type: "conversation.item.create",
-                  item: {
-                    type: "message",
-                    role: "assistant",
-                    content: [{ type: "text", text: preConnectedGreetingText }]
-                  }
-                }));
+                injectAssistantMessage(preConnectedGreetingText, 'PRE_CONNECT_GREETING_HISTORY');
                 
                 // Inject the call context/agenda for AI to follow
                 const userName = userProfile?.first_name || 'sir';
-                openaiWs!.send(JSON.stringify({
-                  type: "conversation.item.create",
-                  item: {
-                    type: "message",
-                    role: "user",
-                    content: [{
-                      type: "input_text",
-                      text: `[System: PRE-CONNECTED CALL - Greeting already delivered. You just said: "${preConnectedGreetingText}"
+                const contextMsg = `[System: PRE-CONNECTED CALL - Greeting already delivered. You just said: "${preConnectedGreetingText}"
 
 The user has answered the phone and heard your greeting. Current time: ${getCurrentTimeString(userTimezone)}.
 
@@ -1525,12 +1598,12 @@ CRITICAL INSTRUCTIONS:
 2. Wait for their response, then continue with the agenda
 3. Cover ALL agenda items naturally before ending
 4. If they go off-topic, address briefly then redirect: "Now, back to..."
-5. Use hang_up only after all agenda items are covered]`
-                    }]
-                  }
-                }));
+5. Use hang_up only after all agenda items are covered]`;
                 
-                console.log("[OPENAI-SESSION] ✅ Pre-connected context injected - waiting for user response");
+                injectSystemMessage(contextMsg, 'PRE_CONNECT_CONTEXT');
+                
+                // NOTE: Do NOT call createResponse here - we wait for user speech
+                console.log("[OPENAI-SESSION] ✅ Pre-connected context injected - waiting for user response (NO response.create)");
                 return;
               }
               
@@ -1548,18 +1621,19 @@ CRITICAL INSTRUCTIONS:
               // Track that AI is generating a response
               currentResponseId = msg.response?.id || null;
               isAiSpeaking = true;
-              responseStartTime = Date.now();  // Track for latency measurement
+              responseStartTime = Date.now();
               if (!firstAudioTime) firstAudioTime = Date.now();
-              console.log("[OPENAI] Response started:", currentResponseId);
+              console.log(`[RESPONSE-LIFECYCLE] CREATED id=${currentResponseId} trigger=${lastResponseTrigger} #${responseCreateCount}`);
               break;
 
             case "response.done":
               // AI finished speaking
+              const responseDuration = responseStartTime > 0 ? Date.now() - responseStartTime : 0;
+              console.log(`[RESPONSE-LIFECYCLE] DONE id=${currentResponseId} duration=${responseDuration}ms trigger=${lastResponseTrigger}`);
               isAiSpeaking = false;
               currentResponseId = null;
               currentResponseItemId = null;
               audioSamplesPlayed = 0;
-              console.log("[OPENAI] Response completed");
               break;
 
             case "response.output_item.added":
@@ -1736,19 +1810,11 @@ CRITICAL INSTRUCTIONS:
                   console.log('[BRIDGE] ⚠️ Discrepancy detected, injecting correction');
                   
                   // Inject correction as new system message
-                  openaiWs!.send(JSON.stringify({
-                    type: "conversation.item.create",
-                    item: {
-                      type: "message",
-                      role: "user", 
-                      content: [{
-                        type: "input_text",
-                        text: `[System: IMPORTANT CORRECTION NEEDED. You just said something inaccurate. ${validation.correction} Please briefly acknowledge this correction to the user.]`
-                      }]
-                    }
-                  }));
-                  const correctionModalities = ttsProvider === 'elevenlabs' ? ["text"] : ["text", "audio"];
-                  openaiWs!.send(JSON.stringify({ type: "response.create", response: { modalities: correctionModalities } }));
+                  injectSystemMessage(
+                    `[System: IMPORTANT CORRECTION NEEDED. You just said something inaccurate. ${validation.correction} Please briefly acknowledge this correction to the user.]`,
+                    'VALIDATION_CORRECTION'
+                  );
+                  createResponse('VALIDATION_CORRECTION', validation.correction);
                 } else {
                   console.log('[BRIDGE] ✅ Response validated - no discrepancies');
                 }
@@ -1903,31 +1969,13 @@ CRITICAL INSTRUCTIONS:
       const userName = userProfile?.first_name || 'sir';
       const currentTime = getCurrentTimeString(userTimezone);
       
-      console.log(`[GREETING] 🎤 Triggering greeting for ${userName} with "${greeting}" (timezone: ${userTimezone})`);
-      console.log(`[GREETING] System message being sent to OpenAI...`);
+      console.log(`[GREETING] 🎤 Triggering INBOUND greeting for ${userName} with "${greeting}" (timezone: ${userTimezone})`);
       
       // OPEN-ENDED greeting - don't assume they want schedule info
-      openaiWs.send(JSON.stringify({
-        type: "conversation.item.create",
-        item: {
-          type: "message",
-          role: "user",
-          content: [{
-            type: "input_text",
-            text: `[System: This is an inbound phone call from ${userName}. Current time is ${currentTime}. Greet them with "${greeting}, ${userName}. What can I help you with?" Keep it brief and WAIT for them to tell you what they need. Do NOT assume they want schedule information - they might ask about anything. You can help with general questions, tasks, or whatever they need.]`
-          }]
-        }
-      }));
-
-      // CRITICAL: Must specify modalities based on TTS provider
-      const greetingModalities = ttsProvider === 'elevenlabs' ? ["text"] : ["text", "audio"];
-      openaiWs.send(JSON.stringify({ 
-        type: "response.create",
-        response: {
-          modalities: greetingModalities
-        }
-      }));
-      console.log(`[GREETING] ✅ response.create sent with modalities=${JSON.stringify(greetingModalities)} (ttsProvider: ${ttsProvider})`);
+      const greetingContext = `[System: This is an inbound phone call from ${userName}. Current time is ${currentTime}. Greet them with "${greeting}, ${userName}. What can I help you with?" Keep it brief and WAIT for them to tell you what they need. Do NOT assume they want schedule information - they might ask about anything. You can help with general questions, tasks, or whatever they need.]`;
+      
+      injectSystemMessage(greetingContext, 'INBOUND_GREETING_CONTEXT');
+      createResponse('INBOUND_GREETING', `inbound call from ${userName}`);
     }
 
     function sendOutboundGreeting() {
@@ -1946,20 +1994,12 @@ CRITICAL INSTRUCTIONS:
         callContext.includes('End of Day Wrap-up')
       );
       
-      console.log(`[BRIDGE] Outbound call for ${userName}, scheduled: ${isScheduledCall}`);
-      console.log(`[BRIDGE] Call context: ${callContext?.substring(0, 200)}...`);
+      console.log(`[GREETING] Outbound call for ${userName}, scheduled: ${isScheduledCall}`);
+      console.log(`[GREETING] Call context preview: ${callContext?.substring(0, 150)}...`);
       
       if (isScheduledCall && callContext) {
         // SCHEDULED CALL: Use the context to drive the entire conversation
-        // Context includes the call type, agenda items, and what to cover
-        openaiWs.send(JSON.stringify({
-          type: "conversation.item.create",
-          item: {
-            type: "message",
-            role: "user",
-            content: [{
-              type: "input_text",
-              text: `[System: This is a SCHEDULED outbound call to ${userName}. Current time: ${getCurrentTimeString(userTimezone)}.
+        const scheduledContext = `[System: This is a SCHEDULED outbound call to ${userName}. Current time: ${getCurrentTimeString(userTimezone)}.
 
 ${callContext}
 
@@ -1971,35 +2011,19 @@ CRITICAL INSTRUCTIONS FOR THIS CALL:
 5. NATURAL FLOW: Cover items conversationally, not as a checklist - weave them into dialogue
 6. END SIGNAL: Only end the call when ALL agenda items are addressed OR the user explicitly wants to end early
 
-Start speaking IMMEDIATELY with your greeting - the user has just answered the phone!]`
-            }]
-          }
-        }));
+Start speaking IMMEDIATELY with your greeting - the user has just answered the phone!]`;
         
-        // CRITICAL FIX: Trigger AI response immediately for scheduled calls!
-        // The user just answered the phone and is waiting for the AI to speak
-        const outboundModalities = ttsProvider === 'elevenlabs' ? ["text"] : ["text", "audio"];
-        openaiWs.send(JSON.stringify({ 
-          type: "response.create",
-          response: { modalities: outboundModalities }
-        }));
-        console.log(`[GREETING] ✅ SCHEDULED CALL - Triggered immediate response (modalities: ${JSON.stringify(outboundModalities)})`);
+        injectSystemMessage(scheduledContext, 'OUTBOUND_SCHEDULED_CONTEXT');
+        createResponse('OUTBOUND_SCHEDULED_GREETING', `scheduled call to ${userName}`);
         
       } else {
         // MANUAL OUTBOUND CALL: Wait for user response first
         const contextInfo = callContext || 'your daily briefing';
-        openaiWs.send(JSON.stringify({
-          type: "conversation.item.create",
-          item: {
-            type: "message",
-            role: "user",
-            content: [{
-              type: "input_text",
-              text: `[System: This is an outbound call YOU initiated to ${userName} for ${contextInfo}. Wait silently for them to answer with "hello" or similar. When they do, briefly introduce yourself as Iris and explain why you're calling in one sentence. You have their schedule loaded.]`
-            }]
-          }
-        }));
-        // Manual calls: Wait for user audio before responding
+        const manualContext = `[System: This is an outbound call YOU initiated to ${userName} for ${contextInfo}. Wait silently for them to answer with "hello" or similar. When they do, briefly introduce yourself as Iris and explain why you're calling in one sentence. You have their schedule loaded.]`;
+        
+        injectSystemMessage(manualContext, 'OUTBOUND_MANUAL_CONTEXT');
+        // Manual calls: Wait for user audio before responding (NO createResponse here)
+        console.log(`[GREETING] Manual outbound - waiting for user audio (NO response.create)`);
       }
     }
 
@@ -2101,10 +2125,10 @@ Start speaking IMMEDIATELY with your greeting - the user has just answered the p
             output: JSON.stringify(result)
           }
         }));
+        console.log(`[FUNCTION-OUTPUT] Sent result for ${functionName}`);
 
-        // Trigger response generation with dynamic modalities
-        const fnModalities = ttsProvider === 'elevenlabs' ? ["text"] : ["text", "audio"];
-        openaiWs.send(JSON.stringify({ type: "response.create", response: { modalities: fnModalities } }));
+        // Trigger response generation using wrapper
+        createResponse('FUNCTION_RESULT', functionName);
 
       } catch (error) {
         // Cancel pending fillers on error
@@ -2122,8 +2146,7 @@ Start speaking IMMEDIATELY with your greeting - the user has just answered the p
             output: JSON.stringify({ success: false, error: String(error) })
           }
         }));
-        const errModalities = ttsProvider === 'elevenlabs' ? ["text"] : ["text", "audio"];
-        openaiWs.send(JSON.stringify({ type: "response.create", response: { modalities: errModalities } }));
+        createResponse('FUNCTION_RESULT', `${functionName} (error)`);
       }
     }
 
