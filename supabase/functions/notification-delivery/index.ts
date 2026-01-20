@@ -99,6 +99,31 @@ Interpret the user notes above as your agenda. Cover all mentioned topics before
   }
 }
 
+// Parse agenda items from context for tracking during the call
+function parseAgendaFromContext(context: string): Array<{ index: number; text: string; status: string }> {
+  const agenda: Array<{ index: number; text: string; status: string }> = [];
+  
+  // Find lines that look like numbered agenda items
+  const lines = context.split('\n');
+  let itemIndex = 0;
+  
+  for (const line of lines) {
+    const trimmed = line.trim();
+    // Match patterns like "1. Greet warmly" or "1) Greet warmly"
+    const match = trimmed.match(/^(\d+)[.)\s]+(.+)$/);
+    if (match) {
+      agenda.push({
+        index: itemIndex++,
+        text: match[2].trim(),
+        status: 'pending'
+      });
+    }
+  }
+  
+  console.log(`📋 Parsed ${agenda.length} agenda items from context`);
+  return agenda;
+}
+
 // Schedule the next occurrence of a call after it's been delivered
 async function scheduleNextOccurrence(supabaseClient: any, userId: string, callConfig: any): Promise<void> {
   try {
@@ -218,16 +243,73 @@ serve(async (req) => {
 
         // Build context based on call type
         const context = await buildCallContext(callConfig, userId, supabaseClient);
+        
+        // Parse agenda items from context for tracking
+        const agenda = parseAgendaFromContext(context);
 
-        // Trigger the call via twilio-voice-handler
-        const { data: callResult, error: callError } = await supabaseClient.functions.invoke('twilio-voice-handler', {
-          body: {
-            action: 'trigger-call',
-            userId,
-            context,
-            phoneNumber,
+        // Get user preferences for timezone
+        const { data: userPrefs } = await supabaseClient
+          .from('user_scheduling_prefs')
+          .select('timezone')
+          .eq('user_id', userId)
+          .maybeSingle();
+
+        // === PRE-CONNECT ARCHITECTURE ===
+        // Step 1: Establish OpenAI session BEFORE placing call to eliminate greeting latency
+        console.log(`📞 Pre-connecting OpenAI session for user ${userId}...`);
+        
+        const { data: preConnectResult, error: preConnectError } = await supabaseClient.functions.invoke(
+          'twilio-realtime-bridge',
+          {
+            body: {
+              mode: 'pre-connect',
+              userId,
+              context,
+              agenda,
+              timezone: userPrefs?.timezone || 'America/New_York',
+              phoneNumber
+            }
           }
-        });
+        );
+
+        let callResult: any;
+        let callError: any;
+
+        if (preConnectError || !preConnectResult?.sessionId) {
+          console.error(`⚠️ Pre-connect failed, falling back to live greeting:`, preConnectError);
+          
+          // Fallback to existing behavior - call triggers greeting live
+          const fallbackResult = await supabaseClient.functions.invoke('twilio-voice-handler', {
+            body: {
+              action: 'trigger-call',
+              userId,
+              context,
+              phoneNumber,
+            }
+          });
+          callResult = fallbackResult.data;
+          callError = fallbackResult.error;
+        } else {
+          console.log(`✅ Pre-connected session: ${preConnectResult.sessionId}`);
+          console.log(`🎙️ Greeting cached (${preConnectResult.audioBytes || 0} bytes): "${(preConnectResult.greetingText || '').substring(0, 50)}..."`);
+          
+          // Step 2: Place call with reference to existing session
+          const sessionCallResult = await supabaseClient.functions.invoke('twilio-voice-handler', {
+            body: {
+              action: 'trigger-call-with-session',
+              userId,
+              phoneNumber,
+              sessionId: preConnectResult.sessionId,
+              cachedAudioBase64: preConnectResult.audioBase64,
+              greetingText: preConnectResult.greetingText,
+              agenda: preConnectResult.agenda,
+              context,
+              timezone: userPrefs?.timezone || 'America/New_York'
+            }
+          });
+          callResult = sessionCallResult.data;
+          callError = sessionCallResult.error;
+        }
 
         if (callError) {
           console.error(`📞 Call failed for user ${userId}:`, callError);

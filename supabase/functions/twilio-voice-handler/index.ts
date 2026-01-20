@@ -11,11 +11,17 @@ const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
 const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
 interface TwilioCallRequest {
-  action: 'trigger-call' | 'incoming-call' | 'status-callback' | 'process-speech';
+  action: 'trigger-call' | 'trigger-call-with-session' | 'incoming-call' | 'status-callback' | 'process-speech';
   userId?: string;
   delay_minutes?: number;
   context?: string;
   phoneNumber?: string;
+  // Pre-connect session fields
+  sessionId?: string;
+  cachedAudioBase64?: string;
+  greetingText?: string;
+  agenda?: Array<{ index: number; text: string; status: string }>;
+  timezone?: string;
 }
 
 // Tool definitions for OpenAI
@@ -654,6 +660,126 @@ function escapeXml(text: string): string {
     .replace(/'/g, '&apos;');
 }
 
+// Generate TwiML with pre-connected session reference
+function generateTwiMLWithSession(
+  sessionId: string,
+  cachedAudioBase64: string,
+  greetingText: string,
+  context: string,
+  userId: string | undefined,
+  timezone: string
+): string {
+  const bridgeUrl = `wss://wwxgajrtmslzklnyplah.supabase.co/functions/v1/twilio-realtime-bridge`;
+  
+  console.log(`[TwiML] Generating with pre-connected session: ${sessionId}`);
+  
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Connect>
+    <Stream url="${bridgeUrl}">
+      <Parameter name="userId" value="${userId || ''}" />
+      <Parameter name="sessionId" value="${sessionId}" />
+      <Parameter name="greetingCached" value="true" />
+      <Parameter name="greetingText" value="${escapeXml(greetingText)}" />
+      <Parameter name="context" value="${escapeXml(context)}" />
+      <Parameter name="direction" value="outbound" />
+      <Parameter name="timezone" value="${timezone}" />
+    </Stream>
+  </Connect>
+</Response>`;
+}
+
+// Make outbound call with pre-connected session
+async function triggerOutboundCallWithSession(
+  toNumber: string,
+  sessionId: string,
+  cachedAudioBase64: string,
+  greetingText: string,
+  context: string,
+  timezone: string,
+  userId?: string
+): Promise<{ 
+  success: boolean; 
+  call_sid?: string; 
+  error?: string; 
+  debug?: Record<string, unknown>;
+}> {
+  const accountSid = Deno.env.get('TWILIO_ACCOUNT_SID');
+  const authToken = Deno.env.get('TWILIO_AUTH_TOKEN');
+  const fromNumber = Deno.env.get('TWILIO_PHONE_NUMBER');
+
+  const debug: Record<string, unknown> = {
+    timestamp: new Date().toISOString(),
+    sessionId,
+    greetingLength: greetingText.length,
+    audioLength: cachedAudioBase64.length,
+  };
+
+  if (!accountSid || !authToken || !fromNumber) {
+    return { success: false, error: 'Missing Twilio credentials', debug };
+  }
+
+  if (!toNumber || !toNumber.startsWith('+')) {
+    return { success: false, error: 'Invalid phone number format (must be E.164)', debug };
+  }
+
+  // Generate TwiML with session reference - bridge will play cached audio
+  const twiml = generateTwiMLWithSession(
+    sessionId,
+    cachedAudioBase64,
+    greetingText,
+    context,
+    userId,
+    timezone
+  );
+
+  try {
+    const credentials = btoa(`${accountSid}:${authToken}`);
+    const apiUrl = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Calls.json`;
+
+    const requestBody = new URLSearchParams();
+    requestBody.append('To', toNumber);
+    requestBody.append('From', fromNumber);
+    requestBody.append('Twiml', twiml);
+    requestBody.append('StatusCallback', `${supabaseUrl}/functions/v1/twilio-voice-handler?action=status-callback`);
+    requestBody.append('StatusCallbackEvent', 'initiated');
+    requestBody.append('StatusCallbackEvent', 'ringing');
+    requestBody.append('StatusCallbackEvent', 'answered');
+    requestBody.append('StatusCallbackEvent', 'completed');
+    requestBody.append('StatusCallbackMethod', 'POST');
+
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Basic ${credentials}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: requestBody,
+    });
+
+    const responseText = await response.text();
+    debug.twilio_response_status = response.status;
+
+    if (!response.ok) {
+      let errorDetail = responseText;
+      try {
+        const errorJson = JSON.parse(responseText);
+        errorDetail = `Code ${errorJson.code}: ${errorJson.message}`;
+      } catch { /* Response wasn't JSON */ }
+      return { success: false, error: `Twilio API error: ${errorDetail}`, debug };
+    }
+
+    const callData = JSON.parse(responseText);
+    console.log(`=== PRE-CONNECTED CALL INITIATED === SID: ${callData.sid}, Session: ${sessionId}`);
+
+    return { success: true, call_sid: callData.sid, debug };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error('Twilio call error:', errorMessage);
+    return { success: false, error: errorMessage, debug };
+  }
+}
+
 // Make outbound call using Twilio REST API
 async function triggerOutboundCall(
   toNumber: string,
@@ -817,6 +943,52 @@ serve(async (req) => {
           phoneNumber,
           body.context,
           body.delay_minutes,
+          userId
+        );
+
+        return new Response(JSON.stringify(result), {
+          status: result.success ? 200 : 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      // === NEW: Pre-connected session call - greeting audio already cached ===
+      case 'trigger-call-with-session': {
+        const body: TwilioCallRequest = await req.json();
+        
+        const phoneNumber = body.phoneNumber || Deno.env.get('MY_PHONE_NUMBER');
+        const userId = body.userId;
+        
+        if (!phoneNumber) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'No phone number configured.'
+          }), {
+            status: 400,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+
+        if (!body.sessionId) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'Missing sessionId for pre-connected call.'
+          }), {
+            status: 400,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+
+        console.log(`[trigger-call-with-session] Triggering call with pre-connected session: ${body.sessionId}`);
+        console.log(`[trigger-call-with-session] Cached greeting: "${(body.greetingText || '').substring(0, 50)}..."`);
+
+        const result = await triggerOutboundCallWithSession(
+          phoneNumber,
+          body.sessionId,
+          body.cachedAudioBase64 || '',
+          body.greetingText || '',
+          body.context || '',
+          body.timezone || 'America/New_York',
           userId
         );
 
