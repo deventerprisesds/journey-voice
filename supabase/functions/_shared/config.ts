@@ -3,13 +3,33 @@
 // Update GLOBAL_VERSION here and all functions will use it automatically
 // =============================================================================
 
-export const GLOBAL_VERSION = "2026-01-21-v8";
+export const GLOBAL_VERSION = "2026-01-21-v9";
 
 // Voice greeting behavior configuration
 export const VOICE_CONFIG = {
   // Max time to wait for user audio on outbound calls before playing greeting
   OUTBOUND_HELLO_WAIT_MS: 2000,
 };
+
+// Twilio ConversationRelay configuration
+export const CONVERSATION_RELAY_CONFIG = {
+  // STT provider: 'deepgram' or 'google'
+  transcriptionProvider: "deepgram",
+  // Speech recognition model
+  speechModel: "nova-2-general",
+  // TTS voice (Google Journey voices are very natural)
+  voice: "Google.en-US-Journey-D",
+  // Allow user to interrupt the assistant
+  interruptible: true,
+  // Enable DTMF detection
+  dtmfDetection: true,
+  // Language for STT
+  language: "en-US",
+  // Profanity filter
+  profanityFilter: true,
+  // Welcome greeting (default, can be overridden)
+  welcomeGreeting: "Hey! What can I help you with?",
+} as const;
 
 // Function-specific identifiers (combine with GLOBAL_VERSION for full version)
 export const FUNCTION_IDS = {
@@ -26,6 +46,7 @@ export const FUNCTION_IDS = {
   PUSH_NOTIFICATION: "send-push-notification",
   UNIFIED_NOTIFICATION: "send-unified-notification",
   WEB_SEARCH: "web-search",
+  CONVERSATION_RELAY: "conversation-relay-handler",
 } as const;
 
 // Helper to generate full version string

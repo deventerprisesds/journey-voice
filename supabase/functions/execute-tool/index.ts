@@ -551,7 +551,7 @@ async function executeToolCall(
     switch (toolName) {
       // ============ TASK TOOLS ============
       case 'get_tasks':
-        return await getTasks(supabase, userId, args);
+        return await getTasks(supabase, userId, args, context.timezone);
       
       case 'get_today_tasks':
         return await getTodayTasks(supabase, userId, context.timezone);
@@ -628,29 +628,165 @@ async function executeToolCall(
 // TASK FUNCTIONS
 // ============================================================================
 
-async function getTasks(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
+async function getTasks(supabase: any, userId: string, args: any, timezone: string = 'America/New_York'): Promise<ExecuteToolResponse> {
   try {
+    console.log(`[GET_TASKS] Args:`, args, `Timezone: ${timezone}`);
+    
     let query = supabase.from('tasks').select('*').eq('user_id', userId);
     
+    // Apply status filter
     if (args.status) {
       query = query.eq('status', args.status.toUpperCase());
     }
     
-    const { data, error } = await query.order('created_at', { ascending: false }).limit(20);
+    // Apply date filtering if time_filter provided
+    if (args.time_filter) {
+      console.log(`[GET_TASKS] Applying time_filter: "${args.time_filter}"`);
+      
+      const intent = detectTemporalIntent(args.time_filter);
+      console.log(`[GET_TASKS] Detected intent: ${intent}`);
+      
+      if (intent) {
+        const dateRange = calculateDateRange(intent, timezone);
+        
+        if (dateRange) {
+          console.log(`[GET_TASKS] Date range: ${dateRange.start_date} to ${dateRange.end_date}`);
+          
+          // For date ranges, filter by start_time (scheduled) OR due_date (unscheduled)
+          const startBoundary = `${dateRange.start_date}T00:00:00`;
+          const endBoundary = `${dateRange.end_date}T23:59:59`;
+          
+          // Use OR filter: scheduled tasks by start_time, unscheduled by due_date
+          query = query.or(
+            `and(is_scheduled.eq.true,start_time.gte.${startBoundary},start_time.lte.${endBoundary}),` +
+            `and(is_scheduled.is.null,due_date.gte.${startBoundary},due_date.lte.${endBoundary}),` +
+            `and(is_scheduled.eq.false,due_date.gte.${startBoundary},due_date.lte.${endBoundary})`
+          );
+        } else if (intent === 'today' || intent === 'tomorrow' || intent === 'yesterday') {
+          // For single-day intents, calculate the specific date
+          const today = getTodayInTz(timezone);
+          let targetDate: Date;
+          
+          if (intent === 'tomorrow') {
+            targetDate = new Date(today);
+            targetDate.setDate(today.getDate() + 1);
+          } else if (intent === 'yesterday') {
+            targetDate = new Date(today);
+            targetDate.setDate(today.getDate() - 1);
+          } else {
+            targetDate = today;
+          }
+          
+          const dateStr = formatYMD(targetDate);
+          const startBoundary = `${dateStr}T00:00:00`;
+          const endBoundary = `${dateStr}T23:59:59`;
+          
+          console.log(`[GET_TASKS] Single-day filter for ${intent}: ${dateStr}`);
+          
+          query = query.or(
+            `and(is_scheduled.eq.true,start_time.gte.${startBoundary},start_time.lte.${endBoundary}),` +
+            `and(is_scheduled.is.null,due_date.gte.${startBoundary},due_date.lte.${endBoundary}),` +
+            `and(is_scheduled.eq.false,due_date.gte.${startBoundary},due_date.lte.${endBoundary})`
+          );
+        }
+      } else {
+        // No standard intent detected - try to parse as specific date like "January 19th"
+        const parsedDate = parseSpecificDate(args.time_filter, timezone);
+        if (parsedDate) {
+          const startBoundary = `${parsedDate}T00:00:00`;
+          const endBoundary = `${parsedDate}T23:59:59`;
+          
+          console.log(`[GET_TASKS] Parsed specific date: ${parsedDate}`);
+          
+          query = query.or(
+            `and(is_scheduled.eq.true,start_time.gte.${startBoundary},start_time.lte.${endBoundary}),` +
+            `and(is_scheduled.is.null,due_date.gte.${startBoundary},due_date.lte.${endBoundary}),` +
+            `and(is_scheduled.eq.false,due_date.gte.${startBoundary},due_date.lte.${endBoundary})`
+          );
+        }
+      }
+    }
+    
+    const { data, error } = await query.order('start_time', { ascending: true, nullsFirst: false }).limit(50);
     
     if (error) throw error;
     
     const count = data?.length || 0;
+    const scheduled = (data || []).filter((t: any) => t.is_scheduled === true).length;
+    const unscheduled = count - scheduled;
+    
+    console.log(`[GET_TASKS] Found ${count} tasks (${scheduled} scheduled, ${unscheduled} unscheduled)`);
     
     return { 
       success: true, 
-      result: { tasks: data || [], count },
-      message: `Found ${count} tasks`,
-      extractedFacts: { type: 'task_list', count }
+      result: { tasks: data || [], count, scheduled, unscheduled },
+      message: `Found ${count} tasks${args.time_filter ? ` for "${args.time_filter}"` : ''} (${scheduled} scheduled, ${unscheduled} unscheduled)`,
+      extractedFacts: { type: 'task_list', count, scheduled, unscheduled }
     };
   } catch (error) {
+    console.error('[GET_TASKS] Error:', error);
     return { success: false, error: String(error) };
   }
+}
+
+/**
+ * Parse specific date strings like "January 19th", "Jan 19", "19th January"
+ * Returns YYYY-MM-DD string or null
+ */
+function parseSpecificDate(dateStr: string, timezone: string): string | null {
+  const months: Record<string, number> = {
+    'january': 0, 'jan': 0,
+    'february': 1, 'feb': 1,
+    'march': 2, 'mar': 2,
+    'april': 3, 'apr': 3,
+    'may': 4,
+    'june': 5, 'jun': 5,
+    'july': 6, 'jul': 6,
+    'august': 7, 'aug': 7,
+    'september': 8, 'sep': 8, 'sept': 8,
+    'october': 9, 'oct': 9,
+    'november': 10, 'nov': 10,
+    'december': 11, 'dec': 11
+  };
+  
+  const normalized = dateStr.toLowerCase().trim();
+  
+  // Pattern: "January 19th", "Jan 19", "January 19"
+  const pattern1 = /^(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\s+(\d{1,2})(?:st|nd|rd|th)?$/i;
+  // Pattern: "19th January", "19 Jan"
+  const pattern2 = /^(\d{1,2})(?:st|nd|rd|th)?\s+(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)$/i;
+  
+  let month: number | null = null;
+  let day: number | null = null;
+  
+  const match1 = normalized.match(pattern1);
+  if (match1) {
+    month = months[match1[1].toLowerCase()];
+    day = parseInt(match1[2], 10);
+  }
+  
+  const match2 = normalized.match(pattern2);
+  if (match2) {
+    day = parseInt(match2[1], 10);
+    month = months[match2[2].toLowerCase()];
+  }
+  
+  if (month !== null && day !== null && day >= 1 && day <= 31) {
+    const today = getTodayInTz(timezone);
+    let year = today.getFullYear();
+    
+    // If the date has already passed this year, assume next year
+    const candidateDate = new Date(year, month, day);
+    if (candidateDate < today) {
+      year++;
+    }
+    
+    const result = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    console.log(`[PARSE_DATE] Parsed "${dateStr}" as ${result}`);
+    return result;
+  }
+  
+  return null;
 }
 
 async function getTodayTasks(supabase: any, userId: string, timezone?: string): Promise<ExecuteToolResponse> {

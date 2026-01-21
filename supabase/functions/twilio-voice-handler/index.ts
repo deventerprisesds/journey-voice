@@ -1,12 +1,15 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { GLOBAL_VERSION, FUNCTION_IDS, corsHeaders, createHealthResponse } from "../_shared/config.ts";
+import { GLOBAL_VERSION, FUNCTION_IDS, corsHeaders, createHealthResponse, CONVERSATION_RELAY_CONFIG } from "../_shared/config.ts";
 
 // Version derived from centralized config
 const HANDLER_VERSION = `${GLOBAL_VERSION}-${FUNCTION_IDS.HANDLER}`;
 
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
 const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+
+// Voice mode: 'stream' for Media Streams (existing), 'relay' for ConversationRelay (new)
+type VoiceMode = 'stream' | 'relay';
 
 interface TwilioCallRequest {
   action: 'trigger-call' | 'trigger-call-with-session' | 'incoming-call' | 'status-callback' | 'process-speech';
@@ -598,6 +601,52 @@ function generateRealtimeBridgeTwiML(context?: string, userId?: string | null, c
 </Response>`;
 }
 
+// Generate TwiML that uses Twilio ConversationRelay for STT/TTS
+// This allows calls up to 4 hours since we only exchange text, not audio
+function generateConversationRelayTwiML(
+  context?: string, 
+  userId?: string | null, 
+  callerPhone?: string, 
+  direction?: string, 
+  timezone?: string
+): string {
+  const relayUrl = `wss://wwxgajrtmslzklnyplah.supabase.co/functions/v1/conversation-relay-handler`;
+  
+  // Get config
+  const config = CONVERSATION_RELAY_CONFIG;
+  const greeting = context 
+    ? `Hey! I'm calling about ${context}. How can I help?`
+    : config.welcomeGreeting;
+  
+  console.log('[TwiML] Generating ConversationRelay TwiML');
+  console.log(`[TwiML] Relay URL: ${relayUrl}`);
+  console.log(`[TwiML] Voice: ${config.voice}, Direction: ${direction || 'inbound'}`);
+  
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Connect>
+    <ConversationRelay 
+      url="${relayUrl}"
+      voice="${config.voice}"
+      transcriptionProvider="${config.transcriptionProvider}"
+      speechModel="${config.speechModel}"
+      welcomeGreeting="${escapeXml(greeting)}"
+      welcomeGreetingInterruptible="true"
+      interruptible="${config.interruptible}"
+      interruptByDtmf="${config.dtmfDetection}"
+      profanityFilter="${config.profanityFilter}"
+      language="${config.language}"
+    >
+      <Parameter name="userId" value="${userId || ''}" />
+      <Parameter name="phone" value="${callerPhone || ''}" />
+      <Parameter name="context" value="${escapeXml(context || '')}" />
+      <Parameter name="direction" value="${direction || 'inbound'}" />
+      <Parameter name="timezone" value="${timezone || 'America/New_York'}" />
+    </ConversationRelay>
+  </Connect>
+</Response>`;
+}
+
 // Generate fallback TwiML with turn-based conversation (for debugging/fallback)
 function generateFallbackGreetingTwiML(context?: string, userId?: string | null): string {
   const greeting = context 
@@ -1059,15 +1108,24 @@ serve(async (req) => {
           console.log(`[incoming-call] ✅ Resolved userId=${userId}, timezone=${timezone}`);
         }
 
-        // Check if we should use realtime bridge or fallback
+        // Determine voice mode: 'relay' for ConversationRelay (default now), 'stream' for Media Streams
+        // Use mode=stream to fallback to Media Streams bridge
+        const modeParam = url.searchParams.get('mode') as VoiceMode | null;
+        const useRelay = modeParam !== 'stream';
         const useFallback = url.searchParams.get('fallback') === 'true';
         
-        console.log(`[incoming-call] Generating TwiML - useFallback: ${useFallback}`);
-        const twiml = useFallback 
-          ? generateFallbackGreetingTwiML(contextParam, userId)
-          : generateRealtimeBridgeTwiML(contextParam, userId, callerPhone || undefined, directionParam, timezone);
+        console.log(`[incoming-call] Voice mode: ${useRelay ? 'relay' : 'stream'}, Fallback: ${useFallback}`);
         
-        console.log(`[incoming-call] ✅ TwiML ready - using ${useFallback ? 'fallback' : 'realtime bridge'} - direction: ${directionParam} - userId: ${userId}`);
+        let twiml: string;
+        if (useFallback) {
+          twiml = generateFallbackGreetingTwiML(contextParam, userId);
+        } else if (useRelay) {
+          twiml = generateConversationRelayTwiML(contextParam, userId, callerPhone || undefined, directionParam, timezone);
+        } else {
+          twiml = generateRealtimeBridgeTwiML(contextParam, userId, callerPhone || undefined, directionParam, timezone);
+        }
+        
+        console.log(`[incoming-call] ✅ TwiML ready - using ${useFallback ? 'fallback' : useRelay ? 'ConversationRelay' : 'Media Streams'} - direction: ${directionParam} - userId: ${userId}`);
         
         return new Response(twiml, {
           headers: { 'Content-Type': 'application/xml' },

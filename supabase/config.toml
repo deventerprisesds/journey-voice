@@ -65,3 +65,6 @@ verify_jwt = false
 
 [functions.execute-tool]
 verify_jwt = false
+
+[functions.conversation-relay-handler]
+verify_jwt = false
