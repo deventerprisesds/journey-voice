@@ -50,86 +50,40 @@ interface DtmfMessage {
 
 type TwilioMessage = SetupMessage | PromptMessage | InterruptMessage | DtmfMessage;
 
-// OpenAI tool definitions for voice context
-const voiceTools = [
-  {
-    type: "function",
-    function: {
-      name: "get_today_tasks",
-      description: "Get all tasks scheduled for today",
-      parameters: { type: "object", properties: {}, required: [] }
+// Fetch tool definitions from centralized execute-tool function
+// This ensures feature parity with chat interface and twilio-realtime-bridge
+async function fetchToolDefinitions(): Promise<any[]> {
+  console.log(`[RELAY] Fetching tool definitions from execute-tool...`);
+  
+  const response = await fetch(`${supabaseUrl}/functions/v1/execute-tool/definitions`, {
+    method: 'GET',
+    headers: {
+      'Authorization': `Bearer ${supabaseServiceKey}`,
+      'Content-Type': 'application/json'
     }
-  },
-  {
-    type: "function",
-    function: {
-      name: "get_tasks",
-      description: "Get tasks with optional filtering by date or status",
-      parameters: {
-        type: "object",
-        properties: {
-          time_filter: { type: "string", description: "Time filter like 'tomorrow', 'this week', 'January 19th'" },
-          status: { type: "string", enum: ["BACKLOG", "TODO", "DOING", "DONE"] }
-        },
-        required: []
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
-      name: "create_task",
-      description: "Create a new task",
-      parameters: {
-        type: "object",
-        properties: {
-          title: { type: "string", description: "Task title" },
-          description: { type: "string", description: "Optional description" },
-          priority: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "URGENT"] }
-        },
-        required: ["title"]
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
-      name: "update_task",
-      description: "Update an existing task's status",
-      parameters: {
-        type: "object",
-        properties: {
-          task_id: { type: "string", description: "Task ID to update" },
-          status: { type: "string", enum: ["BACKLOG", "TODO", "DOING", "DONE"] }
-        },
-        required: ["task_id", "status"]
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
-      name: "web_search",
-      description: "Search the web for real-time information",
-      parameters: {
-        type: "object",
-        properties: {
-          query: { type: "string", description: "Search query - pass the user's exact words" },
-          topic: { type: "string", enum: ["general", "news", "finance"] }
-        },
-        required: ["query"]
-      }
-    }
-  },
-  {
-    type: "function",
-    function: {
-      name: "end_call",
-      description: "End the phone call when the user says goodbye",
-      parameters: { type: "object", properties: {}, required: [] }
-    }
+  });
+  
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to fetch tool definitions: ${response.status} - ${errorText}`);
   }
-];
+  
+  const data = await response.json();
+  console.log(`[RELAY] Loaded ${data.count} tool definitions from execute-tool`);
+  
+  // Convert to OpenAI Chat Completions format (with nested function object)
+  return data.tools.map((tool: any) => ({
+    type: "function",
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters
+    }
+  }));
+}
+
+// Cached tools (loaded once per session)
+let cachedTools: any[] | null = null;
 
 // Execute tool via centralized execute-tool function
 async function executeTool(
@@ -214,7 +168,8 @@ async function processWithOpenAI(
   conversationHistory: Array<{ role: string; content: string }>,
   systemPrompt: string,
   userId: string,
-  timezone: string
+  timezone: string,
+  tools: any[]
 ): Promise<{ response: string; shouldEndCall: boolean; toolsUsed: string[] }> {
   
   const messages = [
@@ -223,7 +178,7 @@ async function processWithOpenAI(
     { role: 'user', content: userMessage }
   ];
   
-  console.log(`[RELAY] Calling OpenAI with ${messages.length} messages`);
+  console.log(`[RELAY] Calling OpenAI with ${messages.length} messages and ${tools.length} tools`);
   
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -234,7 +189,7 @@ async function processWithOpenAI(
     body: JSON.stringify({
       model: 'gpt-4o',
       messages,
-      tools: voiceTools,
+      tools,
       tool_choice: 'auto',
       max_tokens: 300,
       temperature: 0.7
@@ -380,6 +335,13 @@ serve(async (req) => {
           
           console.log(`[RELAY] Setup - CallSid: ${callSid}, UserId: ${userId}`);
           
+          // Load tools from centralized execute-tool (no fallback - fail fast)
+          if (!cachedTools) {
+            console.log(`[RELAY] Loading tool definitions...`);
+            cachedTools = await fetchToolDefinitions();
+            console.log(`[RELAY] Loaded ${cachedTools.length} tools`);
+          }
+          
           if (userId) {
             const context = await getUserContext(userId);
             timezone = context.timezone;
@@ -409,13 +371,26 @@ serve(async (req) => {
             break;
           }
           
+          if (!cachedTools || cachedTools.length === 0) {
+            console.error(`[RELAY] No tools available - tool loading failed`);
+            socket.send(JSON.stringify({
+              type: 'text',
+              token: "I'm having trouble connecting to my tools. Let me try again.",
+              last: true
+            }));
+            // Try to reload tools
+            cachedTools = await fetchToolDefinitions();
+            break;
+          }
+          
           // Process with OpenAI
           const result = await processWithOpenAI(
             userMessage,
             conversationHistory,
             systemPrompt,
             userId,
-            timezone
+            timezone,
+            cachedTools
           );
           
           // Update history
