@@ -3,7 +3,13 @@
 // Update GLOBAL_VERSION here and all functions will use it automatically
 // =============================================================================
 
-export const GLOBAL_VERSION = "2026-01-21-v6";
+export const GLOBAL_VERSION = "2026-01-21-v7";
+
+// Voice greeting behavior configuration
+export const VOICE_CONFIG = {
+  // Max time to wait for user audio on outbound calls before playing greeting
+  OUTBOUND_HELLO_WAIT_MS: 2000,
+};
 
 // Function-specific identifiers (combine with GLOBAL_VERSION for full version)
 export const FUNCTION_IDS = {
