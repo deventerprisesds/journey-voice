@@ -1,8 +1,9 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { GLOBAL_VERSION, FUNCTION_IDS, corsHeaders, createHealthResponse } from "../_shared/config.ts";
 
-// Version identifier for deployment verification
-const BRIDGE_VERSION = "2026-01-21-v4-immediate-greeting";
+// Version derived from centralized config
+const BRIDGE_VERSION = `${GLOBAL_VERSION}-${FUNCTION_IDS.BRIDGE}`;
 
 const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;

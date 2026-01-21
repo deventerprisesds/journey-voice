@@ -1,13 +1,9 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+import { GLOBAL_VERSION, FUNCTION_IDS, corsHeaders, createHealthResponse } from "../_shared/config.ts";
 
-// Version for deployment verification - update on each deploy
-const DELIVERY_VERSION = "2026-01-21-v5-logging";
-
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
+// Version derived from centralized config
+const DELIVERY_VERSION = `${GLOBAL_VERSION}-${FUNCTION_IDS.DELIVERY}`;
 
 // Build structured context with clear agenda items the AI must cover
 async function buildCallContext(callConfig: any, userId: string, supabaseClient: any): Promise<string> {
