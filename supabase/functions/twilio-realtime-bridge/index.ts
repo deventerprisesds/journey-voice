@@ -1586,96 +1586,95 @@ type ResponseTrigger =
               console.log(`[AUDIO-IN] 📥 First Twilio inbound frame received (streamSid: ${streamSid})`);
               firstInboundLogged = true;
             }
-              
-              // === AMPLITUDE-BASED ECHO FILTERING ===
-              // When we're actively sending TTS audio, the phone line will echo it back
-              // OpenAI's VAD picks this up as "user speech" and interrupts itself
-              // Solution: Check amplitude to distinguish echo (low) from real speech (high)
-              
-              const amplitude = calculateRMSAmplitude(pcm8k);
-              amplitudeDebugCounter++;
-              
-              // Periodic amplitude debugging (every 100 chunks = ~2 seconds)
-              if (amplitudeDebugCounter % 100 === 0) {
-                console.log(`[AMPLITUDE-DEBUG] chunk=${amplitudeDebugCounter} amp=${amplitude.toFixed(0)} isTTS=${isSendingTtsAudio}`);
+            
+            // === AMPLITUDE-BASED ECHO FILTERING ===
+            // When we're actively sending TTS audio, the phone line will echo it back
+            // OpenAI's VAD picks this up as "user speech" and interrupts itself
+            // Solution: Check amplitude to distinguish echo (low) from real speech (high)
+            
+            const amplitude = calculateRMSAmplitude(pcm8k);
+            amplitudeDebugCounter++;
+            
+            // Periodic amplitude debugging (every 100 chunks = ~2 seconds)
+            if (amplitudeDebugCounter % 100 === 0) {
+              console.log(`[AMPLITUDE-DEBUG] chunk=${amplitudeDebugCounter} amp=${amplitude.toFixed(0)} isTTS=${isSendingTtsAudio}`);
+            }
+            
+            // Check if we're in TTS echo window (actively playing or grace period)
+            const inEchoWindow = isSendingTtsAudio || Date.now() < ttsAudioEndTime;
+            
+            if (inEchoWindow && ttsProvider === 'elevenlabs') {
+              // During TTS playback - use amplitude to detect real interrupts
+              recentAmplitudes.push(amplitude);
+              if (recentAmplitudes.length > AMPLITUDE_WINDOW) {
+                recentAmplitudes.shift();
               }
               
-              // Check if we're in TTS echo window (actively playing or grace period)
-              const inEchoWindow = isSendingTtsAudio || Date.now() < ttsAudioEndTime;
+              const avgAmplitude = recentAmplitudes.length > 0 
+                ? recentAmplitudes.reduce((a, b) => a + b, 0) / recentAmplitudes.length 
+                : 0;
               
-              if (inEchoWindow && ttsProvider === 'elevenlabs') {
-                // During TTS playback - use amplitude to detect real interrupts
-                recentAmplitudes.push(amplitude);
-                if (recentAmplitudes.length > AMPLITUDE_WINDOW) {
-                  recentAmplitudes.shift();
+              if (avgAmplitude > INTERRUPT_AMPLITUDE_THRESHOLD) {
+                // Real interrupt detected - loud enough to be actual speech
+                console.log(`[BARGE-IN] 🎤 REAL INTERRUPT! avgAmp=${avgAmplitude.toFixed(0)} > ${INTERRUPT_AMPLITUDE_THRESHOLD}`);
+                
+                // Stop TTS playback tracking
+                isSendingTtsAudio = false;
+                ttsAudioEndTime = 0;
+                recentAmplitudes = [];
+                
+                // Clear sentence buffer to stop pending TTS
+                sentenceBuffer = '';
+                
+                // Clear Twilio's audio buffer to stop playback
+                if (streamSid && twilioWs.readyState === WebSocket.OPEN) {
+                  twilioWs.send(JSON.stringify({
+                    event: "clear",
+                    streamSid: streamSid
+                  }));
+                  console.log(`[BARGE-IN] Cleared Twilio buffer`);
                 }
                 
-                const avgAmplitude = recentAmplitudes.length > 0 
-                  ? recentAmplitudes.reduce((a, b) => a + b, 0) / recentAmplitudes.length 
-                  : 0;
-                
-                if (avgAmplitude > INTERRUPT_AMPLITUDE_THRESHOLD) {
-                  // Real interrupt detected - loud enough to be actual speech
-                  console.log(`[BARGE-IN] 🎤 REAL INTERRUPT! avgAmp=${avgAmplitude.toFixed(0)} > ${INTERRUPT_AMPLITUDE_THRESHOLD}`);
-                  
-                  // Stop TTS playback tracking
-                  isSendingTtsAudio = false;
-                  ttsAudioEndTime = 0;
-                  recentAmplitudes = [];
-                  
-                  // Clear sentence buffer to stop pending TTS
-                  sentenceBuffer = '';
-                  
-                  // Clear Twilio's audio buffer to stop playback
-                  if (streamSid && twilioWs.readyState === WebSocket.OPEN) {
-                    twilioWs.send(JSON.stringify({
-                      event: "clear",
-                      streamSid: streamSid
-                    }));
-                    console.log(`[BARGE-IN] Cleared Twilio buffer`);
-                  }
-                  
-                  // NOW forward this audio to OpenAI - it's a real interrupt
-                  const pcm24k = upsample8to24(pcm8k);
-                  const audioBase64 = int16ToBase64(pcm24k);
-                  openaiAppendCount++;
-                  openaiWs.send(JSON.stringify({
-                    type: "input_audio_buffer.append",
-                    audio: audioBase64,
-                  }));
-                } else if (avgAmplitude < ECHO_AMPLITUDE_THRESHOLD) {
-                  // Echo detected - too quiet to be real speech, ignore it
-                  // Log occasionally for debugging
-                  if (amplitudeDebugCounter % 50 === 0) {
-                    console.log(`[ECHO-FILTER] Ignoring echo: avgAmp=${avgAmplitude.toFixed(0)} < ${ECHO_AMPLITUDE_THRESHOLD}`);
-                  }
-                  // DON'T forward to OpenAI - this prevents VAD from triggering on echo
-                } else {
-                  // Ambiguous zone - forward with caution (OpenAI VAD will decide)
-                  const pcm24k = upsample8to24(pcm8k);
-                  const audioBase64 = int16ToBase64(pcm24k);
-                  openaiAppendCount++;
-                  openaiWs.send(JSON.stringify({
-                    type: "input_audio_buffer.append",
-                    audio: audioBase64,
-                  }));
-                }
-              } else {
-                // Not in TTS echo window - send all audio to OpenAI normally
+                // NOW forward this audio to OpenAI - it's a real interrupt
                 const pcm24k = upsample8to24(pcm8k);
                 const audioBase64 = int16ToBase64(pcm24k);
-
                 openaiAppendCount++;
-                if (!firstAppendLogged) {
-                  console.log(`[AUDIO-APPEND] ➡️ First audio sent to OpenAI (${audioBase64.length} chars)`);
-                  firstAppendLogged = true;
+                openaiWs.send(JSON.stringify({
+                  type: "input_audio_buffer.append",
+                  audio: audioBase64,
+                }));
+              } else if (avgAmplitude < ECHO_AMPLITUDE_THRESHOLD) {
+                // Echo detected - too quiet to be real speech, ignore it
+                // Log occasionally for debugging
+                if (amplitudeDebugCounter % 50 === 0) {
+                  console.log(`[ECHO-FILTER] Ignoring echo: avgAmp=${avgAmplitude.toFixed(0)} < ${ECHO_AMPLITUDE_THRESHOLD}`);
                 }
-
+                // DON'T forward to OpenAI - this prevents VAD from triggering on echo
+              } else {
+                // Ambiguous zone - forward with caution (OpenAI VAD will decide)
+                const pcm24k = upsample8to24(pcm8k);
+                const audioBase64 = int16ToBase64(pcm24k);
+                openaiAppendCount++;
                 openaiWs.send(JSON.stringify({
                   type: "input_audio_buffer.append",
                   audio: audioBase64,
                 }));
               }
+            } else {
+              // Not in TTS echo window - send all audio to OpenAI normally
+              const pcm24k = upsample8to24(pcm8k);
+              const audioBase64 = int16ToBase64(pcm24k);
+
+              openaiAppendCount++;
+              if (!firstAppendLogged) {
+                console.log(`[AUDIO-APPEND] ➡️ First audio sent to OpenAI (${audioBase64.length} chars)`);
+                firstAppendLogged = true;
+              }
+
+              openaiWs.send(JSON.stringify({
+                type: "input_audio_buffer.append",
+                audio: audioBase64,
+              }));
             }
             break;
 
