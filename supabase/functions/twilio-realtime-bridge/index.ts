@@ -1056,6 +1056,7 @@ serve(async (req) => {
     // === SENTENCE STREAMING FOR ELEVENLABS ===
     // Buffer text deltas and send complete sentences for faster TTS
     let sentenceBuffer: string = '';
+    let audioSentDuringResponse: boolean = false;  // Track if any audio was sent via streaming
     const SENTENCE_ENDERS = /[.!?]\s*$/;
     
     // === SPEECH EVENT DEBOUNCE ===
@@ -1845,6 +1846,7 @@ CRITICAL INSTRUCTIONS:
                   // Send sentence to ElevenLabs immediately (skip tiny fragments)
                   if (sentence.length > 5) {
                     console.log(`[ELEVENLABS] 📝 Streaming sentence: "${sentence.substring(0, 40)}..."`);
+                    audioSentDuringResponse = true;  // Track that audio was sent
                     sendElevenLabsTTS(sentence);
                   }
                 }
@@ -1863,16 +1865,21 @@ CRITICAL INSTRUCTIONS:
                   saveCallMessage('assistant', fullText, latency);
                 }
                 
-                // Flush any remaining buffered text
+                // Flush any remaining buffered text (e.g., text without sentence-ending punctuation)
                 if (sentenceBuffer.trim()) {
                   console.log(`[ELEVENLABS] 📝 Flushing remaining: "${sentenceBuffer.substring(0, 40)}..."`);
+                  audioSentDuringResponse = true;
                   sendElevenLabsTTS(sentenceBuffer.trim());
                   sentenceBuffer = '';
-                } else if (msg.text && !sentenceBuffer) {
-                  // Fallback if no buffer - send complete text (shouldn't happen often)
-                  console.log(`[ELEVENLABS] Text response received: "${msg.text.substring(0, 50)}..."`);
+                } else if (!audioSentDuringResponse && msg.text) {
+                  // SAFETY FALLBACK: Only send full text if NO audio was sent via streaming
+                  // This handles edge cases where streaming didn't trigger (e.g., no sentence enders)
+                  console.log(`[ELEVENLABS] ⚠️ No audio sent via streaming, sending full text as fallback`);
                   sendElevenLabsTTS(msg.text);
                 }
+                
+                // Reset flag for next response
+                audioSentDuringResponse = false;
               }
               break;
 
