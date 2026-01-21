@@ -1,6 +1,9 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+// Version identifier for deployment verification
+const BRIDGE_VERSION = "2026-01-21-v4-immediate-greeting";
+
 const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -1481,20 +1484,23 @@ type ResponseTrigger =
             console.log(`[TWILIO-STREAM] Pre-connected session: ${sessionId || 'none'}, greetingCached: ${greetingCached}`);
             
             // === PRE-CONNECTED SESSION HANDLING ===
-            // For pre-connected calls: WAIT for session data BEFORE connecting to OpenAI
-            // This ensures the fast-path check in connectToOpenAI() has preConnectedSession set
+            // For scheduled calls: PLAY GREETING IMMEDIATELY, then connect to OpenAI in parallel
+            // This eliminates the 3-second delay waiting for OpenAI connection
             if (sessionId) {
               t_twilioStart = Date.now();
-              console.log(`[TWILIO-STREAM] ⚡ Pre-connected mode: fetching session before OpenAI connection`);
+              console.log(`[BRIDGE] Version: ${BRIDGE_VERSION}`);
+              console.log(`[TWILIO-STREAM] ⚡ Pre-connected mode: fetching session...`);
+              console.log(`[PRE-CONNECT-DEBUG] sessionId="${sessionId}", greetingCached="${greetingCached}"`);
+              console.log(`[PRE-CONNECT-DEBUG] All custom params: ${JSON.stringify(customParams)}`);
               
-              // Retrieve session data FIRST, then connect
+              // Retrieve session data
               getPreConnectSession(supabase, sessionId).then((session) => {
+                console.log(`[PRE-CONNECT-DEBUG] Session lookup result: ${session ? 'FOUND' : 'NULL'}`);
                 if (session) {
+                  console.log(`[PRE-CONNECT-DEBUG] Session has: audioBase64=${session.audioBase64?.length || 0} chars, greetingText="${session.greetingText?.substring(0, 50)}..."`);
                   console.log(`[TWILIO-STREAM] ✅ Pre-connected session loaded in ${Date.now() - t_twilioStart}ms`);
-                  console.log(`[TWILIO-STREAM] ⚡ Pre-computed data: instructions=${session.instructions.length} chars, threadId=${session.threadId}`);
                   
-                  // CRITICAL: Set ALL session data BEFORE calling connectToOpenAI
-                  // This ensures the fast-path check succeeds
+                  // CRITICAL: Set ALL session data
                   preConnectedSession = session;
                   userId = session.userId;
                   callContext = session.context;
@@ -1511,14 +1517,26 @@ type ResponseTrigger =
                     agendaManager.startItem(0);
                   }
                   
-                  // === HELLO-TRIGGERED GREETING ===
-                  // Set up to wait for user speech before playing greeting
-                  if (cachedAudioBase64 && streamSid) {
+                  // Detect if this is a scheduled call (has agenda or call context)
+                  const isScheduledCall = !!(session.agenda?.length > 0 || (callContext && callContext.includes('[CALL AGENDA]')));
+                  console.log(`[PRE-CONNECT-DEBUG] isScheduledCall=${isScheduledCall}, hasAudio=${!!cachedAudioBase64}, streamSid=${streamSid}`);
+                  
+                  // === IMMEDIATE GREETING FOR SCHEDULED CALLS ===
+                  // Play cached greeting IMMEDIATELY - don't wait for OpenAI or user speech
+                  if (isScheduledCall && cachedAudioBase64 && streamSid) {
+                    console.log(`[HELLO-TRIGGER] 🎤 IMMEDIATE PLAY: Scheduled call - playing greeting NOW (no wait)`);
+                    t_cachedGreetingPlayed = Date.now();
+                    playCachedAudio(cachedAudioBase64);
+                    greetingSent = true;
+                    firstOutboundLogged = true;
+                    waitingForUserHello = false;
+                    console.log(`[TIMING] twilioStart→greetingPlayed: ${t_cachedGreetingPlayed - t_twilioStart}ms (immediate-scheduled)`);
+                  } else if (cachedAudioBase64 && streamSid) {
+                    // For non-scheduled calls: wait for user hello
                     console.log(`[TWILIO-STREAM] 🎤 Hello-trigger mode: waiting for user speech (fallback: ${HELLO_FALLBACK_MS}ms)`);
                     waitingForUserHello = true;
                     pendingCachedGreeting = cachedAudioBase64;
                     
-                    // Fallback timer: play greeting after N seconds if no speech detected
                     helloTriggerTimer = setTimeout(() => {
                       if (waitingForUserHello && pendingCachedGreeting) {
                         console.log(`[HELLO-TRIGGER] ⏱️ Fallback: Playing greeting after ${HELLO_FALLBACK_MS}ms timeout`);
@@ -1536,8 +1554,8 @@ type ResponseTrigger =
                   const csp = customParams.callSid || data.start.callSid || `call_${Date.now()}`;
                   createCallSession(csp, customParams.fromNumber, customParams.toNumber);
                   
-                  // NOW connect to OpenAI - fast-path will work because preConnectedSession is set
-                  console.log(`[TWILIO-STREAM] 🚀 Connecting to OpenAI (fast-path ready)`);
+                  // Connect to OpenAI in parallel (for handling conversation after greeting)
+                  console.log(`[TWILIO-STREAM] 🚀 Connecting to OpenAI in parallel`);
                   connectToOpenAI();
                 } else {
                   console.warn(`[TWILIO-STREAM] ⚠️ Pre-connected session ${sessionId} not found - using slow path`);
@@ -1928,6 +1946,25 @@ Cover ALL agenda items naturally before ending. Use hang_up only after all items
                 
                 console.log(`[TIMING] twilioStart→greetingPlayed: ${t_cachedGreetingPlayed - t_twilioStart}ms (buffer-speech-detected)`);
                 return; // Don't fall through to waiting logic
+              }
+              
+              // === HANDLE SCHEDULED CALLS (greeting already sent) ===
+              // For scheduled calls, greeting was played immediately on stream start
+              // Now inject context so OpenAI knows what was said
+              if (preConnectedSession && greetingSent && !waitingForUserHello) {
+                console.log("[OPENAI-SESSION] Scheduled call - greeting already sent, injecting context");
+                
+                // Tell OpenAI what greeting was already said
+                injectAssistantMessage(preConnectedGreetingText, 'PRE_CONNECT_GREETING_HISTORY');
+                
+                const userName = userProfile?.first_name || 'sir';
+                const contextMsg = `[System: SCHEDULED CALL - You just said: "${preConnectedGreetingText}"
+The user is listening. Current time: ${getCurrentTimeString(userTimezone)}.
+${callContext || ''}
+Cover ALL agenda items naturally before ending. Use hang_up only after all items covered.]`;
+                injectSystemMessage(contextMsg, 'PRE_CONNECT_CONTEXT_SCHEDULED');
+                console.log("[OPENAI-SESSION] ✅ Context injected for scheduled call - ready for user response");
+                return;
               }
               
               // Handle pre-connected sessions - greeting will be played on user speech (VAD fallback)
