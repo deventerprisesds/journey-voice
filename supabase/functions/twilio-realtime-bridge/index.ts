@@ -1942,7 +1942,7 @@ type ResponseTrigger =
                   turn_detection: {
                     type: "semantic_vad",  // Uses AI to detect when user is ACTUALLY done speaking
                     eagerness: "low",       // Let user take their time (prevents cutting off)
-                    create_response: false, // CRITICAL: Disable auto-response on VAD detection
+                    create_response: true,  // Let OpenAI auto-respond when it thinks user is done
                     interrupt_response: true, // Still allow user to interrupt AI
                   },
                   tools: getInlineToolDefinitions(),
@@ -2274,13 +2274,9 @@ CRITICAL INSTRUCTIONS:
 
             case "input_audio_buffer.speech_stopped":
               console.log("[OPENAI] User stopped speaking");
-              // Since we disabled auto-response (create_response: false), manually trigger response
-              // Only if AI isn't currently speaking (prevents interrupting itself or double responses)
-              if (!isAiSpeaking && !isSendingTtsAudio) {
-                createResponse('USER_SPEECH_ENDED', 'VAD detected user finished speaking');
-              } else {
-                console.log("[OPENAI] Skipping response - AI is speaking or TTS in progress");
-              }
+              // With create_response: true, OpenAI auto-responds - no manual trigger needed
+              // This prevents double responses and lets OpenAI fully control turn-taking
+              console.log("[OPENAI] Auto-response enabled - OpenAI will trigger response when ready");
               break;
 
             case "conversation.item.input_audio_transcription.completed":

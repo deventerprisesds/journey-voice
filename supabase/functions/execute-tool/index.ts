@@ -656,39 +656,64 @@ async function getTasks(supabase: any, userId: string, args: any): Promise<Execu
 async function getTodayTasks(supabase: any, userId: string, timezone?: string): Promise<ExecuteToolResponse> {
   try {
     const tz = timezone || 'America/New_York';
-    const today = new Date().toLocaleDateString('en-CA', { timeZone: tz });
     
-    const { data, error } = await supabase
+    // Calculate today's boundaries in the user's timezone
+    const now = new Date();
+    const todayStr = now.toLocaleDateString('en-CA', { timeZone: tz });
+    const startOfDay = `${todayStr}T00:00:00`;
+    const endOfDay = `${todayStr}T23:59:59`;
+    
+    console.log(`[GET_TODAY_TASKS] Querying for date=${todayStr}, tz=${tz}`);
+    
+    // Get scheduled tasks (start_time falls within today)
+    const { data: scheduledTasks, error: schedError } = await supabase
       .from('tasks')
       .select('*')
       .eq('user_id', userId)
-      .or(`scheduled_date.eq.${today},due_date.eq.${today}`)
-      .order('scheduled_start_time', { ascending: true, nullsFirst: false });
+      .eq('is_scheduled', true)
+      .gte('start_time', startOfDay)
+      .lte('start_time', endOfDay)
+      .order('start_time', { ascending: true });
     
-    if (error) throw error;
+    if (schedError) throw schedError;
     
-    const scheduled = data?.filter((t: any) => t.scheduled_start_time) || [];
-    const unscheduled = data?.filter((t: any) => !t.scheduled_start_time) || [];
-    const totalCount = (data || []).length;
+    // Get unscheduled tasks due today
+    const { data: unscheduledTasks, error: unschedError } = await supabase
+      .from('tasks')
+      .select('*')
+      .eq('user_id', userId)
+      .or('is_scheduled.is.null,is_scheduled.eq.false')
+      .gte('due_date', startOfDay)
+      .lte('due_date', endOfDay)
+      .order('due_date', { ascending: true });
+    
+    if (unschedError) throw unschedError;
+    
+    const scheduled = scheduledTasks || [];
+    const unscheduled = unscheduledTasks || [];
+    const allTasks = [...scheduled, ...unscheduled];
+    
+    console.log(`[GET_TODAY_TASKS] Found ${scheduled.length} scheduled, ${unscheduled.length} unscheduled`);
     
     return { 
       success: true, 
       result: { 
-        tasks: data || [],
+        tasks: allTasks,
         scheduled,
         unscheduled,
-        date: today,
+        date: todayStr,
         timezone: tz
       },
-      message: `Today (${today}): ${scheduled.length} scheduled, ${unscheduled.length} unscheduled tasks`,
+      message: `Today (${todayStr}): ${scheduled.length} scheduled, ${unscheduled.length} unscheduled tasks`,
       extractedFacts: { 
         type: 'today_tasks', 
-        count: totalCount, 
+        count: allTasks.length, 
         scheduled: scheduled.length, 
         unscheduled: unscheduled.length 
       }
     };
   } catch (error) {
+    console.error('[GET_TODAY_TASKS] Error:', error);
     return { success: false, error: String(error) };
   }
 }
@@ -769,13 +794,20 @@ async function rescheduleTask(supabase: any, args: any): Promise<ExecuteToolResp
   if (!args.new_date) return { success: false, error: "New date is required" };
 
   try {
+    // Parse the new date and optional time
+    let startTime = args.new_date;
+    if (args.new_start_time) {
+      startTime = `${args.new_date}T${args.new_start_time}`;
+    }
+    
     const updateData: any = {
-      scheduled_date: args.new_date,
-      due_date: args.new_date
+      start_time: startTime,
+      is_scheduled: true
     };
     
-    if (args.new_start_time) {
-      updateData.scheduled_start_time = args.new_start_time;
+    // Optionally update due_date if requested
+    if (args.update_due_date) {
+      updateData.due_date = args.new_date;
     }
 
     const { data, error } = await supabase
@@ -790,7 +822,7 @@ async function rescheduleTask(supabase: any, args: any): Promise<ExecuteToolResp
     return { 
       success: true, 
       result: { task: data },
-      message: `Rescheduled "${data.title}" to ${args.new_date}`
+      message: `Rescheduled "${data.title}" to ${startTime}`
     };
   } catch (error) {
     return { success: false, error: String(error) };
@@ -802,16 +834,27 @@ async function scheduleTask(supabase: any, args: any): Promise<ExecuteToolRespon
 
   try {
     const today = new Date().toISOString().split('T')[0];
+    const dateStr = args.date || today;
+    
+    let startTime = dateStr;
+    if (args.start_time) {
+      startTime = `${dateStr}T${args.start_time}`;
+    }
+    
     const updateData: any = {
-      scheduled_date: args.date || today,
+      start_time: startTime,
+      is_scheduled: true,
       status: 'TODO'
     };
     
-    if (args.start_time) {
-      updateData.scheduled_start_time = args.start_time;
-    }
     if (args.duration_minutes) {
-      updateData.estimated_duration = args.duration_minutes;
+      updateData.estimate_minutes = args.duration_minutes;
+      // Calculate end_time if start_time and duration provided
+      if (args.start_time) {
+        const start = new Date(startTime);
+        const end = new Date(start.getTime() + args.duration_minutes * 60000);
+        updateData.end_time = end.toISOString();
+      }
     }
 
     const { data, error } = await supabase
@@ -826,7 +869,7 @@ async function scheduleTask(supabase: any, args: any): Promise<ExecuteToolRespon
     return { 
       success: true, 
       result: { task: data },
-      message: `Scheduled "${data.title}" for ${updateData.scheduled_date}`
+      message: `Scheduled "${data.title}" for ${startTime}`
     };
   } catch (error) {
     return { success: false, error: String(error) };
@@ -840,9 +883,9 @@ async function unscheduleTask(supabase: any, args: any): Promise<ExecuteToolResp
     const { data, error } = await supabase
       .from('tasks')
       .update({
-        scheduled_date: null,
-        scheduled_start_time: null,
-        scheduled_end_time: null,
+        start_time: null,
+        end_time: null,
+        is_scheduled: false,
         status: 'BACKLOG'
       })
       .eq('id', args.task_id)
