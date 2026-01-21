@@ -1938,7 +1938,11 @@ type ResponseTrigger =
                   voice: "alloy",
                   input_audio_format: "pcm16",
                   output_audio_format: "pcm16",
-                  input_audio_transcription: { model: "whisper-1" },
+                  input_audio_transcription: { 
+                    model: "gpt-4o-mini-transcribe",
+                    language: "en",
+                    prompt: "tasks, schedule, calendar, reschedule, today, tomorrow, priorities, assignments, meetings, due date, deadline, work session, focus time"
+                  },
                   turn_detection: {
                     type: "semantic_vad",  // Uses AI to detect when user is ACTUALLY done speaking
                     eagerness: "low",       // Let user take their time (prevents cutting off)
