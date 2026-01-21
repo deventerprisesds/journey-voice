@@ -669,6 +669,10 @@ interface PreConnectSession {
   ttsProvider: 'openai' | 'elevenlabs';
   voiceId: string;
   createdAt: number;
+  // NEW: Pre-computed data to skip DB queries during call connect
+  ragContext: string;
+  instructions: string;
+  threadId: string | null;
 }
 
 // Store session in database for cross-instance persistence
@@ -686,6 +690,10 @@ async function storePreConnectSession(supabase: any, sessionId: string, session:
       audio_base64: session.audioBase64,
       tts_provider: session.ttsProvider,
       voice_id: session.voiceId,
+      // NEW: Pre-computed data to eliminate DB queries during call connect
+      rag_context: session.ragContext,
+      instructions: session.instructions,
+      thread_id: session.threadId,
       expires_at: new Date(Date.now() + 120000).toISOString() // 2 min TTL
     });
   
@@ -725,7 +733,11 @@ async function getPreConnectSession(supabase: any, sessionId: string): Promise<P
     audioBase64: data.audio_base64,
     ttsProvider: data.tts_provider,
     voiceId: data.voice_id,
-    createdAt: new Date(data.created_at).getTime()
+    createdAt: new Date(data.created_at).getTime(),
+    // NEW: Pre-computed data
+    ragContext: data.rag_context || '',
+    instructions: data.instructions || '',
+    threadId: data.thread_id || null
   };
 }
 
@@ -885,6 +897,7 @@ function generateGreetingForCallType(context: string, timeGreeting: string, user
 }
 
 // Handle pre-connect mode - establish session before call
+// NOW: Pre-computes RAG, instructions, threadId so connectToOpenAI can skip DB queries
 async function handlePreConnect(params: {
   userId: string;
   context: string;
@@ -893,24 +906,49 @@ async function handlePreConnect(params: {
   phoneNumber: string;
 }): Promise<Response> {
   const { userId, context, agenda, timezone } = params;
-  console.log(`[PRE-CONNECT] Starting pre-connect for user ${userId}`);
+  const startTime = Date.now();
+  console.log(`[PRE-CONNECT] Starting FULL pre-connect for user ${userId}`);
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
-  // 1. Load user context (same as existing connectToOpenAI)
-  const [profile, ttsPrefs] = await Promise.all([
+  // 1. Load ALL context in parallel - profile, TTS prefs, RAG, and thread
+  const [profile, ttsPrefs, ragContext, threadResult] = await Promise.all([
     loadUserProfile(supabase, userId),
     supabase
       .from('user_scheduling_prefs')
       .select('tts_provider, elevenlabs_voice_id')
       .eq('user_id', userId)
+      .maybeSingle(),
+    // NEW: Pre-load RAG context
+    loadRAGContext(supabase, userId),
+    // NEW: Pre-fetch thread ID
+    supabase
+      .from('ai_threads')
+      .select('id')
+      .eq('user_id', userId)
+      .order('updated_at', { ascending: false })
+      .limit(1)
       .maybeSingle()
   ]);
 
   const ttsProvider = (ttsPrefs.data?.tts_provider as 'openai' | 'elevenlabs') || 'elevenlabs';
   const voiceId = ttsPrefs.data?.elevenlabs_voice_id || 'EXAVITQu4vr4xnSDxMaL';
+  
+  // Get or create thread
+  let threadId: string | null = threadResult.data?.id || null;
+  if (!threadId) {
+    const { data: newThread } = await supabase
+      .from('ai_threads')
+      .insert({ user_id: userId, openai_thread_id: `phone_${Date.now()}` })
+      .select('id')
+      .single();
+    threadId = newThread?.id || null;
+    console.log(`[PRE-CONNECT] Created new thread: ${threadId}`);
+  } else {
+    console.log(`[PRE-CONNECT] Using existing thread: ${threadId}`);
+  }
 
-  console.log(`[PRE-CONNECT] TTS Provider: ${ttsProvider}, Voice ID: ${voiceId}`);
+  console.log(`[PRE-CONNECT] TTS Provider: ${ttsProvider}, Voice ID: ${voiceId}, RAG: ${ragContext.length} chars`);
 
   // 2. Generate greeting text
   const timeGreeting = getTimeBasedGreeting(timezone);
@@ -919,7 +957,11 @@ async function handlePreConnect(params: {
 
   console.log(`[PRE-CONNECT] Generated greeting: "${greetingText}"`);
 
-  // 3. Generate audio via ElevenLabs TTS
+  // 3. NEW: Pre-generate full instructions (the expensive loadUserInstructions call)
+  const instructions = await loadUserInstructions(userId, ragContext, profile, timezone);
+  console.log(`[PRE-CONNECT] Pre-generated instructions: ${instructions.length} chars`);
+
+  // 4. Generate audio via ElevenLabs TTS
   let audioBase64 = '';
   let audioBytes = 0;
 
@@ -951,8 +993,9 @@ async function handlePreConnect(params: {
     }
   }
 
-  // 4. Store session in database for cross-instance persistence
+  // 5. Store session in database with ALL pre-computed data
   const sessionId = crypto.randomUUID();
+  const totalTime = Date.now() - startTime;
 
   await storePreConnectSession(supabase, sessionId, {
     userId,
@@ -964,10 +1007,15 @@ async function handlePreConnect(params: {
     audioBase64,
     ttsProvider,
     voiceId,
-    createdAt: Date.now()
+    createdAt: Date.now(),
+    // NEW: Pre-computed data to skip DB queries during call connect
+    ragContext,
+    instructions,
+    threadId
   });
 
-  console.log(`[PRE-CONNECT] ✅ Session stored in database: ${sessionId}`);
+  console.log(`[PRE-CONNECT] ✅ FULL session stored in ${totalTime}ms: ${sessionId}`);
+  console.log(`[PRE-CONNECT] ✅ connectToOpenAI will now skip ~5 DB queries`);
 
   return new Response(JSON.stringify({
     sessionId,
@@ -975,7 +1023,8 @@ async function handlePreConnect(params: {
     audioBase64,
     audioBytes,
     agenda,
-    ttsProvider
+    ttsProvider,
+    preConnectTimeMs: totalTime
   }), {
     headers: { 'Content-Type': 'application/json' }
   });
@@ -1106,6 +1155,27 @@ serve(async (req) => {
     let preConnectedSession: PreConnectSession | null = null;
     let cachedAudioBase64: string = '';
     let preConnectedGreetingText: string = '';
+    
+    // === HELLO-TRIGGERED GREETING FOR PRE-CONNECTED CALLS ===
+    // Instead of playing greeting immediately, wait for user to say hello
+    let waitingForUserHello = false;
+    let pendingCachedGreeting: string = '';
+    let helloTriggerTimer: number | null = null;
+    const HELLO_FALLBACK_MS = 3000; // Play greeting after 3s if no speech detected
+    
+    // === EARLY AUDIO BUFFERING ===
+    // Buffer audio while OpenAI WS is connecting so we don't lose user's "hello"
+    const audioRingBuffer: Int16Array[] = [];
+    const MAX_BUFFER_FRAMES = 150; // ~3 seconds of audio at 8kHz (20ms/frame)
+    let audioBufferFlushed = false;
+    
+    // === TELEMETRY TIMESTAMPS ===
+    let t_twilioStart = 0;
+    let t_openaiWsConstructed = 0;
+    let t_sessionConfigured = 0;
+    let t_firstAudioBuffered = 0;
+    let t_bufferFlushed = 0;
+    let t_cachedGreetingPlayed = 0;
     
     // =====================================================
     // === ENHANCED RESPONSE TRIGGER LOGGING SYSTEM ===
@@ -1412,11 +1482,19 @@ type ResponseTrigger =
             
             // === PRE-CONNECTED SESSION HANDLING ===
             if (sessionId) {
-              // Retrieve from database asynchronously
+              t_twilioStart = Date.now();
+              
+              // Start OpenAI connection IMMEDIATELY - don't wait for session retrieval
+              // This is critical: the WS handshake can start while we fetch session data
+              connectToOpenAI();
+              
+              // Retrieve session data in parallel
               getPreConnectSession(supabase, sessionId).then((session) => {
               if (session) {
                   console.log(`[TWILIO-STREAM] ✅ Resuming pre-connected session: ${sessionId}`);
-                  // CRITICAL: Assign preConnectedSession so guard check at session.updated works
+                  console.log(`[TWILIO-STREAM] ⚡ Pre-computed data available: instructions=${session.instructions.length} chars, threadId=${session.threadId}`);
+                  
+                  // CRITICAL: Assign preConnectedSession so fast-path in connectToOpenAI works
                   preConnectedSession = session;
                   userId = session.userId;
                   callContext = session.context;
@@ -1426,35 +1504,51 @@ type ResponseTrigger =
                   elevenlabsVoiceId = session.voiceId;
                   cachedAudioBase64 = session.audioBase64;
                   preConnectedGreetingText = session.greetingText;
+                  threadId = session.threadId;
                   
                   if (session.agenda && session.agenda.length > 0) {
                     agendaManager = new AgendaManager(session.agenda);
                     agendaManager.startItem(0);
                   }
                   
+                  // === HELLO-TRIGGERED GREETING ===
+                  // DON'T play greeting immediately - wait for user speech or fallback timer
                   if (cachedAudioBase64 && streamSid) {
-                    console.log(`[TWILIO-STREAM] 🎙️ Playing cached greeting audio immediately`);
-                    playCachedAudio(cachedAudioBase64);
-                    greetingSent = true;
-                    firstOutboundLogged = true;
+                    console.log(`[TWILIO-STREAM] 🎤 Waiting for user hello before playing greeting (fallback: ${HELLO_FALLBACK_MS}ms)`);
+                    waitingForUserHello = true;
+                    pendingCachedGreeting = cachedAudioBase64;
+                    
+                    // Fallback timer: play greeting after N seconds if no speech detected
+                    helloTriggerTimer = setTimeout(() => {
+                      if (waitingForUserHello && pendingCachedGreeting) {
+                        console.log(`[HELLO-TRIGGER] ⏱️ Fallback: Playing greeting after ${HELLO_FALLBACK_MS}ms timeout`);
+                        waitingForUserHello = false;
+                        t_cachedGreetingPlayed = Date.now();
+                        playCachedAudio(pendingCachedGreeting);
+                        pendingCachedGreeting = '';
+                        greetingSent = true;
+                        firstOutboundLogged = true;
+                        console.log(`[TIMING] twilioStart→greetingPlayed: ${t_cachedGreetingPlayed - t_twilioStart}ms (fallback)`);
+                      }
+                    }, HELLO_FALLBACK_MS) as unknown as number;
                   }
                   
                   const csp = customParams.callSid || data.start.callSid || `call_${Date.now()}`;
                   createCallSession(csp, customParams.fromNumber, customParams.toNumber);
-                  connectToOpenAI();
+                  // NOTE: connectToOpenAI() already called above - session data will be used via fast-path
                 } else {
                   console.warn(`[TWILIO-STREAM] ⚠️ Pre-connected session ${sessionId} not found`);
                   const csp = customParams.callSid || data.start.callSid || `call_${Date.now()}`;
                   createCallSession(csp, customParams.fromNumber, customParams.toNumber);
-                  connectToOpenAI();
+                  // NOTE: connectToOpenAI() already called above - will use slow path
                 }
               }).catch((err) => {
                 console.error(`[TWILIO-STREAM] Session retrieval error:`, err);
                 const csp = customParams.callSid || data.start.callSid || `call_${Date.now()}`;
                 createCallSession(csp, customParams.fromNumber, customParams.toNumber);
-                connectToOpenAI();
+                // NOTE: connectToOpenAI() already called above
               });
-              break; // Async handler will call connectToOpenAI
+              break; // Async handler manages session data
             }
             
             console.log(`[TWILIO-STREAM] Call direction: ${callDirection}, userId: ${userId}, timezone: ${userTimezone}`);
@@ -1465,15 +1559,33 @@ type ResponseTrigger =
 
           case "media":
             twilioMediaFramesIn++;
+            
+            // Decode μ-law → PCM16 (always needed for buffering or forwarding)
+            const mulawBytes = Uint8Array.from(atob(data.media.payload), (c) => c.charCodeAt(0));
+            const pcm8k = decodeMulaw(mulawBytes);
+            
+            // === EARLY AUDIO BUFFERING ===
+            // Buffer audio while OpenAI WS is connecting so we don't lose user's "hello"
+            if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN || !sessionConfigured) {
+              // Buffer the audio - OpenAI not ready yet
+              audioRingBuffer.push(pcm8k);
+              if (audioRingBuffer.length > MAX_BUFFER_FRAMES) {
+                audioRingBuffer.shift(); // Keep last ~3 seconds
+              }
+              if (audioRingBuffer.length === 1) {
+                t_firstAudioBuffered = Date.now();
+                console.log(`[AUDIO-BUFFER] 📥 Started buffering audio (OpenAI WS state: ${openaiWs?.readyState}, configured: ${sessionConfigured})`);
+              }
+              if (audioRingBuffer.length % 50 === 0) {
+                console.log(`[AUDIO-BUFFER] 📥 Buffered ${audioRingBuffer.length} frames (~${(audioRingBuffer.length * 20)}ms)`);
+              }
+              break;
+            }
+            
             if (!firstInboundLogged) {
               console.log(`[AUDIO-IN] 📥 First Twilio inbound frame received (streamSid: ${streamSid})`);
               firstInboundLogged = true;
             }
-            
-            if (openaiWs?.readyState === WebSocket.OPEN) {
-              // Decode μ-law → PCM16
-              const mulawBytes = Uint8Array.from(atob(data.media.payload), (c) => c.charCodeAt(0));
-              const pcm8k = decodeMulaw(mulawBytes);
               
               // === AMPLITUDE-BASED ECHO FILTERING ===
               // When we're actively sending TTS audio, the phone line will echo it back
@@ -1564,8 +1676,6 @@ type ResponseTrigger =
                   audio: audioBase64,
                 }));
               }
-            } else {
-              console.warn(`[AUDIO-APPEND] ⚠️ Cannot send - OpenAI WS not open (state: ${openaiWs?.readyState})`);
             }
             break;
 
@@ -1609,64 +1719,83 @@ type ResponseTrigger =
     };
 
     async function connectToOpenAI() {
+      const connectStart = Date.now();
       console.log("[OPENAI] Connecting...");
 
-      // Load context in parallel - NO pre-loaded tasks (AI uses tools instead)
+      // === FAST PATH: Pre-connected sessions have all data pre-computed ===
+      let instructions: string;
       let ragContext = "";
       
-      if (userId) {
-        const [profile, rag, ttsPrefs] = await Promise.all([
-          loadUserProfile(supabase, userId),
-          loadRAGContext(supabase, userId),
-          // Load TTS provider settings
-          supabase
-            .from('user_scheduling_prefs')
-            .select('tts_provider, elevenlabs_voice_id')
-            .eq('user_id', userId)
-            .maybeSingle()
-        ]);
-        userProfile = profile;
-        ragContext = rag;
+      if (preConnectedSession && preConnectedSession.instructions) {
+        // ⚡ FAST PATH: Skip ALL database queries - use pre-computed data
+        console.log(`[OPENAI] ⚡ FAST PATH: Using pre-connected session data (skipping ~5 DB queries)`);
+        instructions = preConnectedSession.instructions;
+        ragContext = preConnectedSession.ragContext;
+        threadId = preConnectedSession.threadId;
+        // userProfile, ttsProvider, elevenlabsVoiceId already set in start handler
+        console.log(`[OPENAI] ⚡ Pre-loaded: instructions=${instructions.length} chars, ragContext=${ragContext.length} chars, threadId=${threadId}`);
+      } else {
+        // === SLOW PATH: Standard inbound calls - load everything from DB ===
+        console.log("[OPENAI] 🐢 SLOW PATH: Loading context from database...");
         
-        // Set TTS provider from user preferences
-        if (ttsPrefs.data) {
-          ttsProvider = (ttsPrefs.data.tts_provider as 'openai' | 'elevenlabs') || 'openai';
-          elevenlabsVoiceId = ttsPrefs.data.elevenlabs_voice_id || 'EXAVITQu4vr4xnSDxMaL';
-          console.log(`[BRIDGE] TTS Provider: ${ttsProvider}, Voice ID: ${elevenlabsVoiceId}`);
-        }
-
-        // Create or get thread for conversation persistence
-        try {
-          const { data: existingThread } = await supabase
-            .from('ai_threads')
-            .select('id, openai_thread_id')
-            .eq('user_id', userId)
-            .order('updated_at', { ascending: false })
-            .limit(1)
-            .maybeSingle();
-
-          if (existingThread) {
-            threadId = existingThread.id;
-            console.log('[BRIDGE] Using existing thread:', threadId);
-          } else {
-            const { data: newThread } = await supabase
-              .from('ai_threads')
-              .insert({ 
-                user_id: userId, 
-                openai_thread_id: `phone_${Date.now()}` 
-              })
-              .select('id')
-              .single();
-            threadId = newThread?.id || null;
-            console.log('[BRIDGE] Created new thread:', threadId);
+        if (userId) {
+          const [profile, rag, ttsPrefs] = await Promise.all([
+            loadUserProfile(supabase, userId),
+            loadRAGContext(supabase, userId),
+            // Load TTS provider settings
+            supabase
+              .from('user_scheduling_prefs')
+              .select('tts_provider, elevenlabs_voice_id')
+              .eq('user_id', userId)
+              .maybeSingle()
+          ]);
+          userProfile = profile;
+          ragContext = rag;
+          
+          // Set TTS provider from user preferences
+          if (ttsPrefs.data) {
+            ttsProvider = (ttsPrefs.data.tts_provider as 'openai' | 'elevenlabs') || 'openai';
+            elevenlabsVoiceId = ttsPrefs.data.elevenlabs_voice_id || 'EXAVITQu4vr4xnSDxMaL';
+            console.log(`[BRIDGE] TTS Provider: ${ttsProvider}, Voice ID: ${elevenlabsVoiceId}`);
           }
-        } catch (error) {
-          console.warn('[BRIDGE] Thread management error:', error);
-        }
-      }
 
-      // Load user-specific instructions (no pre-loaded tasks - uses tools instead)
-      const instructions = await loadUserInstructions(userId, ragContext, userProfile, userTimezone);
+          // Create or get thread for conversation persistence
+          try {
+            const { data: existingThread } = await supabase
+              .from('ai_threads')
+              .select('id, openai_thread_id')
+              .eq('user_id', userId)
+              .order('updated_at', { ascending: false })
+              .limit(1)
+              .maybeSingle();
+
+            if (existingThread) {
+              threadId = existingThread.id;
+              console.log('[BRIDGE] Using existing thread:', threadId);
+            } else {
+              const { data: newThread } = await supabase
+                .from('ai_threads')
+                .insert({ 
+                  user_id: userId, 
+                  openai_thread_id: `phone_${Date.now()}` 
+                })
+                .select('id')
+                .single();
+              threadId = newThread?.id || null;
+              console.log('[BRIDGE] Created new thread:', threadId);
+            }
+          } catch (error) {
+            console.warn('[BRIDGE] Thread management error:', error);
+          }
+        }
+
+        // Load user-specific instructions (no pre-loaded tasks - uses tools instead)
+        instructions = await loadUserInstructions(userId, ragContext, userProfile, userTimezone);
+        console.log(`[OPENAI] 🐢 SLOW PATH completed in ${Date.now() - connectStart}ms`);
+      }
+      
+      t_openaiWsConstructed = Date.now();
+      console.log(`[TIMING] connectToOpenAI pre-WS work: ${t_openaiWsConstructed - connectStart}ms`);
 
       openaiWs = new WebSocket(
         "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17",
@@ -1726,8 +1855,49 @@ type ResponseTrigger =
               console.log("[OPENAI-SESSION] ✅ Session CONFIGURED");
               console.log(`[OPENAI-SESSION] TTS Provider: ${ttsProvider}, ElevenLabs Voice: ${elevenlabsVoiceId}`);
               sessionConfigured = true;
+              t_sessionConfigured = Date.now();
+              console.log(`[TIMING] twilioStart→sessionConfigured: ${t_sessionConfigured - t_twilioStart}ms`);
               
-              // Handle pre-connected sessions differently
+              // === FLUSH AUDIO BUFFER ===
+              // Now that session is configured, send all buffered audio to OpenAI
+              if (audioRingBuffer.length > 0) {
+                t_bufferFlushed = Date.now();
+                console.log(`[AUDIO-BUFFER] 🔄 Flushing ${audioRingBuffer.length} buffered frames to OpenAI`);
+                for (const frame of audioRingBuffer) {
+                  const pcm24k = upsample8to24(frame);
+                  const audioBase64 = int16ToBase64(pcm24k);
+                  openaiAppendCount++;
+                  openaiWs!.send(JSON.stringify({
+                    type: "input_audio_buffer.append",
+                    audio: audioBase64
+                  }));
+                }
+                console.log(`[AUDIO-BUFFER] ✅ Flushed ${audioRingBuffer.length} frames in ${Date.now() - t_bufferFlushed}ms`);
+                audioRingBuffer.length = 0; // Clear buffer
+                audioBufferFlushed = true;
+              }
+              
+              // Handle pre-connected sessions - greeting will be played on user speech
+              if (preConnectedSession && waitingForUserHello) {
+                // Greeting is pending - will be played when speech_started fires
+                console.log("[OPENAI-SESSION] Pre-connected session - waiting for user hello to play greeting");
+                
+                // Inject the call context/agenda for AI to follow (but don't mark greeting as sent yet)
+                const userName = userProfile?.first_name || 'sir';
+                const contextMsg = `[System: PRE-CONNECTED CALL - You are about to greet ${userName}. Current time: ${getCurrentTimeString(userTimezone)}.
+
+${callContext || ''}
+
+IMPORTANT: Your greeting audio is ready. When the user says hello, you will greet them.
+After greeting, cover ALL agenda items naturally before ending.
+Use hang_up only after all agenda items are covered.]`;
+                
+                injectSystemMessage(contextMsg, 'PRE_CONNECT_WAITING_CONTEXT');
+                console.log("[OPENAI-SESSION] ✅ Pre-connected context injected - waiting for user speech to trigger greeting");
+                return;
+              }
+              
+              // Handle pre-connected sessions where greeting already played (fallback timer)
               if (preConnectedSession && greetingSent) {
                 // Greeting already played from cache - just update OpenAI context
                 console.log("[OPENAI-SESSION] Pre-connected session - updating AI context with greeting");
@@ -1893,6 +2063,38 @@ CRITICAL INSTRUCTIONS:
               lastSpeechStartTime = now;
               
               console.log("[OPENAI] User started speaking");
+              
+              // === HELLO-TRIGGERED GREETING ===
+              // If waiting for user hello, play cached greeting immediately
+              if (waitingForUserHello && pendingCachedGreeting) {
+                console.log("[HELLO-TRIGGER] 🎤 User spoke - playing cached greeting NOW");
+                waitingForUserHello = false;
+                t_cachedGreetingPlayed = Date.now();
+                
+                // Cancel the fallback timer
+                if (helloTriggerTimer) {
+                  clearTimeout(helloTriggerTimer);
+                  helloTriggerTimer = null;
+                }
+                
+                playCachedAudio(pendingCachedGreeting);
+                pendingCachedGreeting = '';
+                greetingSent = true;
+                firstOutboundLogged = true;
+                
+                // Inject greeting context now that we've played it
+                injectAssistantMessage(preConnectedGreetingText, 'PRE_CONNECT_GREETING_HISTORY');
+                const userName = userProfile?.first_name || 'sir';
+                const contextMsg = `[System: PRE-CONNECTED CALL - You just said: "${preConnectedGreetingText}"
+The user answered with hello. Current time: ${getCurrentTimeString(userTimezone)}.
+${callContext || ''}
+Cover ALL agenda items naturally before ending. Use hang_up only after all items covered.]`;
+                injectSystemMessage(contextMsg, 'PRE_CONNECT_CONTEXT_AFTER_HELLO');
+                
+                console.log(`[TIMING] twilioStart→greetingPlayed: ${t_cachedGreetingPlayed - t_twilioStart}ms (hello-triggered)`);
+                // Don't treat this as a barge-in - let OpenAI continue listening
+                break;
+              }
               
               // ElevenLabs mode: No OpenAI audio to truncate - just clear Twilio buffer
               if (ttsProvider === 'elevenlabs') {
