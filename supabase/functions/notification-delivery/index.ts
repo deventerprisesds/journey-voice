@@ -1,6 +1,9 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 
+// Version for deployment verification - update on each deploy
+const DELIVERY_VERSION = "2026-01-21-v5-logging";
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -156,12 +159,28 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  const url = new URL(req.url);
+  
+  // === HEALTH CHECK ENDPOINT ===
+  if (url.searchParams.get('health') === '1') {
+    return new Response(JSON.stringify({
+      name: 'notification-delivery',
+      version: DELIVERY_VERSION,
+      timestamp: new Date().toISOString(),
+      status: 'healthy'
+    }), {
+      status: 200,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+
   try {
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
+    console.log(`[DELIVERY] Version: ${DELIVERY_VERSION}`);
     console.log('Processing pending notifications...');
     
     const now = new Date();
@@ -279,6 +298,7 @@ serve(async (req) => {
           console.error(`⚠️ Pre-connect failed, falling back to live greeting:`, preConnectError);
           
           // Fallback to existing behavior - call triggers greeting live
+          console.log(`📞 [INVOKE] twilio-voice-handler with action=trigger-call (fallback)`);
           const fallbackResult = await supabaseClient.functions.invoke('twilio-voice-handler', {
             body: {
               action: 'trigger-call',
@@ -294,6 +314,7 @@ serve(async (req) => {
           console.log(`🎙️ Greeting cached (${preConnectResult.audioBytes || 0} bytes): "${(preConnectResult.greetingText || '').substring(0, 50)}..."`);
           
           // Step 2: Place call with reference to existing session
+          console.log(`📞 [INVOKE] twilio-voice-handler with action=trigger-call-with-session, sessionId=${preConnectResult.sessionId}`);
           const sessionCallResult = await supabaseClient.functions.invoke('twilio-voice-handler', {
             body: {
               action: 'trigger-call-with-session',

@@ -1,6 +1,9 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
+// Version for deployment verification - update on each deploy
+const HANDLER_VERSION = "2026-01-21-v5-action-body-fix";
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -889,6 +892,7 @@ async function triggerOutboundCall(
 serve(async (req) => {
   // === ENTRY POINT DEBUG ===
   console.log('=== TWILIO VOICE HANDLER ENTRY ===');
+  console.log(`[HANDLER] Version: ${HANDLER_VERSION}`);
   console.log('URL:', req.url);
   console.log('Method:', req.method);
   
@@ -898,17 +902,56 @@ serve(async (req) => {
   }
 
   const url = new URL(req.url);
-  const action = url.searchParams.get('action') || 'trigger-call';
   const contextParam = url.searchParams.get('context') || '';
   const turnParam = parseInt(url.searchParams.get('turn') || '1', 10);
   const userIdParam = url.searchParams.get('userId') || '';
 
-  console.log(`[HANDLER] Action: ${action}, Turn: ${turnParam}, UserIdParam: ${userIdParam}`);
+  // === FIX: Read action from body first (for functions.invoke calls), then URL params (for Twilio webhooks) ===
+  let action = url.searchParams.get('action');
+  let actionSource = action ? 'url-param' : 'none';
+  let parsedBody: TwilioCallRequest | null = null;
+
+  // For POST requests, try to parse body to get action if not in URL
+  if (req.method === 'POST' && !action) {
+    try {
+      const clonedReq = req.clone(); // Clone to allow re-reading body later
+      const contentType = req.headers.get('content-type') || '';
+      
+      if (contentType.includes('application/json')) {
+        parsedBody = await clonedReq.json();
+        if (parsedBody?.action) {
+          action = parsedBody.action;
+          actionSource = 'body-json';
+        }
+      }
+    } catch (e) {
+      console.warn('[HANDLER] Failed to parse body for action:', e);
+      // Not JSON or no action in body, continue with URL param
+    }
+  }
+
+  action = action || 'trigger-call'; // Default
+
+  console.log(`[HANDLER] Action: ${action}, Source: ${actionSource}, Turn: ${turnParam}, UserIdParam: ${userIdParam}`);
+
+  // === HEALTH CHECK ENDPOINT ===
+  if (action === 'health' || url.searchParams.get('health') === '1') {
+    return new Response(JSON.stringify({
+      name: 'twilio-voice-handler',
+      version: HANDLER_VERSION,
+      timestamp: new Date().toISOString(),
+      status: 'healthy'
+    }), {
+      status: 200,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
 
   try {
     switch (action) {
       case 'trigger-call': {
-        const body: TwilioCallRequest = await req.json();
+        // Use pre-parsed body if available, otherwise parse fresh
+        const body: TwilioCallRequest = parsedBody || await req.json();
         
         let phoneNumber = body.phoneNumber || Deno.env.get('MY_PHONE_NUMBER');
         let userId = body.userId;
@@ -952,9 +995,10 @@ serve(async (req) => {
         });
       }
 
-      // === NEW: Pre-connected session call - greeting audio already cached ===
+      // === PRE-CONNECTED SESSION CALL - greeting audio already cached ===
       case 'trigger-call-with-session': {
-        const body: TwilioCallRequest = await req.json();
+        // Use pre-parsed body if available, otherwise parse fresh
+        const body: TwilioCallRequest = parsedBody || await req.json();
         
         const phoneNumber = body.phoneNumber || Deno.env.get('MY_PHONE_NUMBER');
         const userId = body.userId;

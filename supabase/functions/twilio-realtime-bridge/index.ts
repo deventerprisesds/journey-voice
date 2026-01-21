@@ -1035,7 +1035,8 @@ async function handlePreConnect(params: {
 
 serve(async (req) => {
   const url = new URL(req.url);
-  console.log(`[BRIDGE v7] Request: ${req.method} ${url.pathname}`);
+  console.log(`[BRIDGE] Version: ${BRIDGE_VERSION}`);
+  console.log(`[BRIDGE] Request: ${req.method} ${url.pathname}`);
 
   // Handle pre-connect mode (HTTP POST, not WebSocket upgrade)
   if (req.method === 'POST') {
@@ -1050,9 +1051,14 @@ serve(async (req) => {
     }
   }
 
-  // Health check endpoint
-  if (url.pathname.endsWith("/health")) {
-    return new Response(JSON.stringify({ status: "ok", timestamp: Date.now() }), {
+  // Health check endpoint - supports both /health path and ?health=1 param
+  if (url.pathname.endsWith("/health") || url.searchParams.get('health') === '1') {
+    return new Response(JSON.stringify({
+      name: 'twilio-realtime-bridge',
+      version: BRIDGE_VERSION,
+      timestamp: new Date().toISOString(),
+      status: 'healthy'
+    }), {
       headers: { "Content-Type": "application/json" },
     });
   }
