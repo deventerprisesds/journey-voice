@@ -1481,20 +1481,20 @@ type ResponseTrigger =
             console.log(`[TWILIO-STREAM] Pre-connected session: ${sessionId || 'none'}, greetingCached: ${greetingCached}`);
             
             // === PRE-CONNECTED SESSION HANDLING ===
+            // For pre-connected calls: WAIT for session data BEFORE connecting to OpenAI
+            // This ensures the fast-path check in connectToOpenAI() has preConnectedSession set
             if (sessionId) {
               t_twilioStart = Date.now();
+              console.log(`[TWILIO-STREAM] ⚡ Pre-connected mode: fetching session before OpenAI connection`);
               
-              // Start OpenAI connection IMMEDIATELY - don't wait for session retrieval
-              // This is critical: the WS handshake can start while we fetch session data
-              connectToOpenAI();
-              
-              // Retrieve session data in parallel
+              // Retrieve session data FIRST, then connect
               getPreConnectSession(supabase, sessionId).then((session) => {
-              if (session) {
-                  console.log(`[TWILIO-STREAM] ✅ Resuming pre-connected session: ${sessionId}`);
-                  console.log(`[TWILIO-STREAM] ⚡ Pre-computed data available: instructions=${session.instructions.length} chars, threadId=${session.threadId}`);
+                if (session) {
+                  console.log(`[TWILIO-STREAM] ✅ Pre-connected session loaded in ${Date.now() - t_twilioStart}ms`);
+                  console.log(`[TWILIO-STREAM] ⚡ Pre-computed data: instructions=${session.instructions.length} chars, threadId=${session.threadId}`);
                   
-                  // CRITICAL: Assign preConnectedSession so fast-path in connectToOpenAI works
+                  // CRITICAL: Set ALL session data BEFORE calling connectToOpenAI
+                  // This ensures the fast-path check succeeds
                   preConnectedSession = session;
                   userId = session.userId;
                   callContext = session.context;
@@ -1512,9 +1512,9 @@ type ResponseTrigger =
                   }
                   
                   // === HELLO-TRIGGERED GREETING ===
-                  // DON'T play greeting immediately - wait for user speech or fallback timer
+                  // Set up to wait for user speech before playing greeting
                   if (cachedAudioBase64 && streamSid) {
-                    console.log(`[TWILIO-STREAM] 🎤 Waiting for user hello before playing greeting (fallback: ${HELLO_FALLBACK_MS}ms)`);
+                    console.log(`[TWILIO-STREAM] 🎤 Hello-trigger mode: waiting for user speech (fallback: ${HELLO_FALLBACK_MS}ms)`);
                     waitingForUserHello = true;
                     pendingCachedGreeting = cachedAudioBase64;
                     
@@ -1535,18 +1535,21 @@ type ResponseTrigger =
                   
                   const csp = customParams.callSid || data.start.callSid || `call_${Date.now()}`;
                   createCallSession(csp, customParams.fromNumber, customParams.toNumber);
-                  // NOTE: connectToOpenAI() already called above - session data will be used via fast-path
+                  
+                  // NOW connect to OpenAI - fast-path will work because preConnectedSession is set
+                  console.log(`[TWILIO-STREAM] 🚀 Connecting to OpenAI (fast-path ready)`);
+                  connectToOpenAI();
                 } else {
-                  console.warn(`[TWILIO-STREAM] ⚠️ Pre-connected session ${sessionId} not found`);
+                  console.warn(`[TWILIO-STREAM] ⚠️ Pre-connected session ${sessionId} not found - using slow path`);
                   const csp = customParams.callSid || data.start.callSid || `call_${Date.now()}`;
                   createCallSession(csp, customParams.fromNumber, customParams.toNumber);
-                  // NOTE: connectToOpenAI() already called above - will use slow path
+                  connectToOpenAI();
                 }
               }).catch((err) => {
                 console.error(`[TWILIO-STREAM] Session retrieval error:`, err);
                 const csp = customParams.callSid || data.start.callSid || `call_${Date.now()}`;
                 createCallSession(csp, customParams.fromNumber, customParams.toNumber);
-                // NOTE: connectToOpenAI() already called above
+                connectToOpenAI();
               });
               break; // Async handler manages session data
             }
