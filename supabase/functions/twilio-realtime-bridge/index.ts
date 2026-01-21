@@ -1111,15 +1111,16 @@ serve(async (req) => {
     // =====================================================
     // Track EVERY response.create call to identify duplicate/unexpected triggers
     
-    type ResponseTrigger = 
-      | 'INBOUND_GREETING'
-      | 'OUTBOUND_GREETING' 
-      | 'OUTBOUND_SCHEDULED_GREETING'
-      | 'PRE_CONNECT_CACHED_AUDIO'
-      | 'FUNCTION_RESULT'
-      | 'VALIDATION_CORRECTION'
-      | 'FILLER_INJECTION'
-      | 'UNKNOWN';
+type ResponseTrigger = 
+  | 'INBOUND_GREETING'
+  | 'OUTBOUND_GREETING' 
+  | 'OUTBOUND_SCHEDULED_GREETING'
+  | 'PRE_CONNECT_CACHED_AUDIO'
+  | 'FUNCTION_RESULT'
+  | 'VALIDATION_CORRECTION'
+  | 'FILLER_INJECTION'
+  | 'USER_SPEECH_ENDED'
+  | 'UNKNOWN';
     
     let lastResponseTrigger: ResponseTrigger = 'UNKNOWN';
     let lastResponseTriggerTime: number = 0;
@@ -1412,8 +1413,10 @@ serve(async (req) => {
             if (sessionId) {
               // Retrieve from database asynchronously
               getPreConnectSession(supabase, sessionId).then((session) => {
-                if (session) {
+              if (session) {
                   console.log(`[TWILIO-STREAM] ✅ Resuming pre-connected session: ${sessionId}`);
+                  // CRITICAL: Assign preConnectedSession so guard check at session.updated works
+                  preConnectedSession = session;
                   userId = session.userId;
                   callContext = session.context;
                   userTimezone = session.timezone;
@@ -1707,10 +1710,10 @@ serve(async (req) => {
                   output_audio_format: "pcm16",
                   input_audio_transcription: { model: "whisper-1" },
                   turn_detection: {
-                    type: "server_vad",
-                    threshold: 0.5,  // INCREASED: Less sensitive to phone line noise
-                    prefix_padding_ms: 500,  // INCREASED: More buffer to capture speech start
-                    silence_duration_ms: 800,  // INCREASED: Wait longer before responding to avoid cutting off
+                    type: "semantic_vad",  // Uses AI to detect when user is ACTUALLY done speaking
+                    eagerness: "low",       // Let user take their time (prevents cutting off)
+                    create_response: false, // CRITICAL: Disable auto-response on VAD detection
+                    interrupt_response: true, // Still allow user to interrupt AI
                   },
                   tools: getInlineToolDefinitions(),
                   tool_choice: "auto"
@@ -1934,6 +1937,13 @@ CRITICAL INSTRUCTIONS:
 
             case "input_audio_buffer.speech_stopped":
               console.log("[OPENAI] User stopped speaking");
+              // Since we disabled auto-response (create_response: false), manually trigger response
+              // Only if AI isn't currently speaking (prevents interrupting itself or double responses)
+              if (!isAiSpeaking && !isSendingTtsAudio) {
+                createResponse('USER_SPEECH_ENDED', 'VAD detected user finished speaking');
+              } else {
+                console.log("[OPENAI] Skipping response - AI is speaking or TTS in progress");
+              }
               break;
 
             case "conversation.item.input_audio_transcription.completed":
