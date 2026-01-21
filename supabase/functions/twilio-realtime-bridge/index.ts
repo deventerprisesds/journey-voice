@@ -1860,11 +1860,26 @@ type ResponseTrigger =
               t_sessionConfigured = Date.now();
               console.log(`[TIMING] twilioStart→sessionConfigured: ${t_sessionConfigured - t_twilioStart}ms`);
               
-              // === FLUSH AUDIO BUFFER ===
-              // Now that session is configured, send all buffered audio to OpenAI
+              // === FLUSH AUDIO BUFFER WITH SPEECH DETECTION ===
+              // Analyze buffer for speech BEFORE flushing - this is key to detecting buffered "hello"
+              let bufferHadSpeech = false;
               if (audioRingBuffer.length > 0) {
                 t_bufferFlushed = Date.now();
-                console.log(`[AUDIO-BUFFER] 🔄 Flushing ${audioRingBuffer.length} buffered frames to OpenAI`);
+                
+                // Check if buffer contains actual speech (not just noise)
+                // Use amplitude analysis since OpenAI VAD doesn't work well on bulk-flushed audio
+                const SPEECH_THRESHOLD = 500; // RMS amplitude threshold
+                let speechFrames = 0;
+                for (const frame of audioRingBuffer) {
+                  const rms = calculateRMSAmplitude(frame);
+                  if (rms > SPEECH_THRESHOLD) {
+                    speechFrames++;
+                  }
+                }
+                bufferHadSpeech = audioRingBuffer.length >= 10 && (speechFrames / audioRingBuffer.length) > 0.15;
+                console.log(`[AUDIO-BUFFER] 🔄 Flushing ${audioRingBuffer.length} frames, speechFrames=${speechFrames}, containsSpeech=${bufferHadSpeech}`);
+                
+                // Flush all buffered audio to OpenAI
                 for (const frame of audioRingBuffer) {
                   const pcm24k = upsample8to24(frame);
                   const audioBase64 = int16ToBase64(pcm24k);
@@ -1879,10 +1894,46 @@ type ResponseTrigger =
                 audioBufferFlushed = true;
               }
               
-              // Handle pre-connected sessions - greeting will be played on user speech
+              // === PROACTIVE HELLO TRIGGER ===
+              // If buffer contained speech AND we're waiting for hello, trigger greeting NOW
+              // This bypasses OpenAI's VAD which doesn't work well on bulk-flushed audio
+              if (bufferHadSpeech && waitingForUserHello && pendingCachedGreeting) {
+                console.log("[HELLO-TRIGGER] 🎤 Speech detected in buffer - playing greeting NOW (bypassing VAD)");
+                waitingForUserHello = false;
+                t_cachedGreetingPlayed = Date.now();
+                
+                // Cancel fallback timer
+                if (helloTriggerTimer) {
+                  clearTimeout(helloTriggerTimer);
+                  helloTriggerTimer = null;
+                }
+                
+                // Play the cached greeting immediately
+                playCachedAudio(pendingCachedGreeting);
+                pendingCachedGreeting = '';
+                greetingSent = true;
+                firstOutboundLogged = true;
+                
+                // Inject context for AI - greeting already delivered
+                injectAssistantMessage(preConnectedGreetingText, 'PRE_CONNECT_GREETING_HISTORY');
+                const userName = userProfile?.first_name || 'sir';
+                const contextMsg = `[System: PRE-CONNECTED CALL - You just said: "${preConnectedGreetingText}"
+The user answered with hello/speech. Current time: ${getCurrentTimeString(userTimezone)}.
+${callContext || ''}
+Cover ALL agenda items naturally before ending. Use hang_up only after all items covered.]`;
+                injectSystemMessage(contextMsg, 'PRE_CONNECT_CONTEXT_AFTER_HELLO');
+                
+                // Commit the buffered audio so OpenAI transcribes it
+                openaiWs!.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+                
+                console.log(`[TIMING] twilioStart→greetingPlayed: ${t_cachedGreetingPlayed - t_twilioStart}ms (buffer-speech-detected)`);
+                return; // Don't fall through to waiting logic
+              }
+              
+              // Handle pre-connected sessions - greeting will be played on user speech (VAD fallback)
               if (preConnectedSession && waitingForUserHello) {
-                // Greeting is pending - will be played when speech_started fires
-                console.log("[OPENAI-SESSION] Pre-connected session - waiting for user hello to play greeting");
+                // No speech detected in buffer yet - wait for real-time VAD
+                console.log("[OPENAI-SESSION] Pre-connected session - no speech in buffer, waiting for VAD");
                 
                 // Inject the call context/agenda for AI to follow (but don't mark greeting as sent yet)
                 const userName = userProfile?.first_name || 'sir';
