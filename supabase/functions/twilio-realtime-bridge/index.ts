@@ -1166,12 +1166,50 @@ serve(async (req) => {
     let cachedAudioBase64: string = '';
     let preConnectedGreetingText: string = '';
     
-    // === HELLO-TRIGGERED GREETING FOR PRE-CONNECTED CALLS ===
-    // Instead of playing greeting immediately, wait for user to say hello
+    // === HELLO-TRIGGERED GREETING FOR OUTBOUND CALLS ===
+    // Wait for user to say hello before AI speaks (works with or without cached audio)
     let waitingForUserHello = false;
     let pendingCachedGreeting: string = '';
+    let pendingGreetingMode: 'cached' | 'openai' | null = null; // Track greeting delivery method
     let helloTriggerTimer: number | null = null;
     const HELLO_FALLBACK_MS = VOICE_CONFIG.OUTBOUND_HELLO_WAIT_MS; // Max wait for user audio on outbound
+    
+    // Unified trigger for pending greeting (called by timer, buffer detection, or VAD)
+    function triggerPendingGreeting(source: 'timer' | 'buffer' | 'vad') {
+      if (!waitingForUserHello) return;
+      
+      waitingForUserHello = false;
+      if (helloTriggerTimer) {
+        clearTimeout(helloTriggerTimer);
+        helloTriggerTimer = null;
+      }
+      
+      console.log(`[HELLO-TRIGGER] 🎤 Triggered by ${source}, mode=${pendingGreetingMode}`);
+      
+      if (pendingGreetingMode === 'cached' && pendingCachedGreeting) {
+        t_cachedGreetingPlayed = Date.now();
+        playCachedAudio(pendingCachedGreeting);
+        greetingSent = true;
+        firstOutboundLogged = true;
+        console.log(`[TIMING] twilioStart→greetingPlayed: ${t_cachedGreetingPlayed - t_twilioStart}ms (${source})`);
+        
+        // Inject greeting context now that we've played it
+        injectAssistantMessage(preConnectedGreetingText, 'PRE_CONNECT_GREETING_HISTORY');
+        const userName = userProfile?.first_name || 'sir';
+        const contextMsg = `[System: PRE-CONNECTED CALL - You just said: "${preConnectedGreetingText}"
+The user answered with hello/speech. Current time: ${getCurrentTimeString(userTimezone)}.
+${callContext || ''}
+Cover ALL agenda items naturally before ending. Use hang_up only after all items covered.]`;
+        injectSystemMessage(contextMsg, 'PRE_CONNECT_CONTEXT_AFTER_HELLO');
+      } else if (pendingGreetingMode === 'openai') {
+        // Trigger live OpenAI greeting - sendOutboundGreeting will be called
+        console.log(`[HELLO-TRIGGER] 📡 Mode=openai - will trigger sendOutboundGreeting()`);
+        sendOutboundGreeting();
+      }
+      
+      pendingCachedGreeting = '';
+      pendingGreetingMode = null;
+    }
     
     // === EARLY AUDIO BUFFERING ===
     // Buffer audio while OpenAI WS is connecting so we don't lose user's "hello"
@@ -1530,26 +1568,23 @@ type ResponseTrigger =
                   const isOutboundCall = callDirection === 'outbound';
                   console.log(`[PRE-CONNECT-DEBUG] callDirection=${callDirection}, isOutbound=${isOutboundCall}, hasAudio=${!!cachedAudioBase64}, streamSid=${streamSid}`);
                   
-                  if (isOutboundCall && cachedAudioBase64 && streamSid) {
-                    // OUTBOUND: Wait for user to answer and greet, then play AI greeting
+                  if (isOutboundCall && streamSid) {
+                    // OUTBOUND: Wait for user to answer and greet (or 2s timeout)
+                    // Works with OR without cached audio
                     console.log(`[HELLO-WAIT] 🎧 Outbound call - waiting for user audio (max ${HELLO_FALLBACK_MS}ms)`);
                     waitingForUserHello = true;
-                    pendingCachedGreeting = cachedAudioBase64;
+                    pendingGreetingMode = cachedAudioBase64 ? 'cached' : 'openai';
+                    pendingCachedGreeting = cachedAudioBase64 || '';
+                    console.log(`[HELLO-WAIT] mode=${pendingGreetingMode}, hasCachedAudio=${!!cachedAudioBase64}`);
                     
                     helloTriggerTimer = setTimeout(() => {
-                      if (waitingForUserHello && pendingCachedGreeting) {
-                        console.log(`[HELLO-TRIGGER] ⏱️ No audio after ${HELLO_FALLBACK_MS}ms - playing greeting`);
-                        waitingForUserHello = false;
-                        t_cachedGreetingPlayed = Date.now();
-                        playCachedAudio(pendingCachedGreeting);
-                        pendingCachedGreeting = '';
-                        greetingSent = true;
-                        firstOutboundLogged = true;
-                        console.log(`[TIMING] twilioStart→greetingPlayed: ${t_cachedGreetingPlayed - t_twilioStart}ms (fallback)`);
+                      if (waitingForUserHello) {
+                        console.log(`[HELLO-TRIGGER] ⏱️ No audio after ${HELLO_FALLBACK_MS}ms - triggering greeting (mode=${pendingGreetingMode})`);
+                        triggerPendingGreeting('timer');
                       }
                     }, HELLO_FALLBACK_MS) as unknown as number;
                   } else if (cachedAudioBase64 && streamSid) {
-                    // INBOUND: AI speaks immediately (user called in)
+                    // INBOUND with cached audio: AI speaks immediately (user called in)
                     console.log(`[HELLO-TRIGGER] 🎤 Inbound call - playing greeting immediately`);
                     t_cachedGreetingPlayed = Date.now();
                     playCachedAudio(cachedAudioBase64);
@@ -1923,31 +1958,9 @@ type ResponseTrigger =
               // === PROACTIVE HELLO TRIGGER ===
               // If buffer contained speech AND we're waiting for hello, trigger greeting NOW
               // This bypasses OpenAI's VAD which doesn't work well on bulk-flushed audio
-              if (bufferHadSpeech && waitingForUserHello && pendingCachedGreeting) {
-                console.log("[HELLO-TRIGGER] 🎤 Speech detected in buffer - playing greeting NOW (bypassing VAD)");
-                waitingForUserHello = false;
-                t_cachedGreetingPlayed = Date.now();
-                
-                // Cancel fallback timer
-                if (helloTriggerTimer) {
-                  clearTimeout(helloTriggerTimer);
-                  helloTriggerTimer = null;
-                }
-                
-                // Play the cached greeting immediately
-                playCachedAudio(pendingCachedGreeting);
-                pendingCachedGreeting = '';
-                greetingSent = true;
-                firstOutboundLogged = true;
-                
-                // Inject context for AI - greeting already delivered
-                injectAssistantMessage(preConnectedGreetingText, 'PRE_CONNECT_GREETING_HISTORY');
-                const userName = userProfile?.first_name || 'sir';
-                const contextMsg = `[System: PRE-CONNECTED CALL - You just said: "${preConnectedGreetingText}"
-The user answered with hello/speech. Current time: ${getCurrentTimeString(userTimezone)}.
-${callContext || ''}
-Cover ALL agenda items naturally before ending. Use hang_up only after all items covered.]`;
-                injectSystemMessage(contextMsg, 'PRE_CONNECT_CONTEXT_AFTER_HELLO');
+              if (bufferHadSpeech && waitingForUserHello) {
+                console.log("[HELLO-TRIGGER] 🎤 Speech detected in buffer - triggering greeting NOW (bypassing VAD)");
+                triggerPendingGreeting('buffer');
                 
                 // Commit the buffered audio so OpenAI transcribes it
                 openaiWs!.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
@@ -2029,8 +2042,11 @@ CRITICAL INSTRUCTIONS:
               if (!greetingSent) {
                 if (callDirection === 'inbound') {
                   sendInboundGreeting();
-                } else {
+                } else if (!waitingForUserHello) {
+                  // Only send outbound greeting if NOT waiting for user hello
                   sendOutboundGreeting();
+                } else {
+                  console.log(`[OPENAI-SESSION] Outbound call waiting for user hello (mode=${pendingGreetingMode}) - NOT sending greeting yet`);
                 }
               }
               break;
@@ -2164,32 +2180,9 @@ CRITICAL INSTRUCTIONS:
               
               // === HELLO-TRIGGERED GREETING ===
               // If waiting for user hello, play cached greeting immediately
-              if (waitingForUserHello && pendingCachedGreeting) {
-                console.log("[HELLO-TRIGGER] 🎤 User spoke - playing cached greeting NOW");
-                waitingForUserHello = false;
-                t_cachedGreetingPlayed = Date.now();
-                
-                // Cancel the fallback timer
-                if (helloTriggerTimer) {
-                  clearTimeout(helloTriggerTimer);
-                  helloTriggerTimer = null;
-                }
-                
-                playCachedAudio(pendingCachedGreeting);
-                pendingCachedGreeting = '';
-                greetingSent = true;
-                firstOutboundLogged = true;
-                
-                // Inject greeting context now that we've played it
-                injectAssistantMessage(preConnectedGreetingText, 'PRE_CONNECT_GREETING_HISTORY');
-                const userName = userProfile?.first_name || 'sir';
-                const contextMsg = `[System: PRE-CONNECTED CALL - You just said: "${preConnectedGreetingText}"
-The user answered with hello. Current time: ${getCurrentTimeString(userTimezone)}.
-${callContext || ''}
-Cover ALL agenda items naturally before ending. Use hang_up only after all items covered.]`;
-                injectSystemMessage(contextMsg, 'PRE_CONNECT_CONTEXT_AFTER_HELLO');
-                
-                console.log(`[TIMING] twilioStart→greetingPlayed: ${t_cachedGreetingPlayed - t_twilioStart}ms (hello-triggered)`);
+              if (waitingForUserHello) {
+                console.log("[HELLO-TRIGGER] 🎤 VAD detected user speech - triggering greeting");
+                triggerPendingGreeting('vad');
                 // Don't treat this as a barge-in - let OpenAI continue listening
                 break;
               }
