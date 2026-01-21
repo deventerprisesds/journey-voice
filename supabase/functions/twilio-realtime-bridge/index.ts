@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { GLOBAL_VERSION, FUNCTION_IDS, corsHeaders, createHealthResponse } from "../_shared/config.ts";
+import { GLOBAL_VERSION, FUNCTION_IDS, corsHeaders, createHealthResponse, VOICE_CONFIG } from "../_shared/config.ts";
 
 // Version derived from centralized config
 const BRIDGE_VERSION = `${GLOBAL_VERSION}-${FUNCTION_IDS.BRIDGE}`;
@@ -1171,7 +1171,7 @@ serve(async (req) => {
     let waitingForUserHello = false;
     let pendingCachedGreeting: string = '';
     let helloTriggerTimer: number | null = null;
-    const HELLO_FALLBACK_MS = 3000; // Play greeting after 3s if no speech detected
+    const HELLO_FALLBACK_MS = VOICE_CONFIG.OUTBOUND_HELLO_WAIT_MS; // Max wait for user audio on outbound
     
     // === EARLY AUDIO BUFFERING ===
     // Buffer audio while OpenAI WS is connecting so we don't lose user's "hello"
@@ -1524,29 +1524,21 @@ type ResponseTrigger =
                     agendaManager.startItem(0);
                   }
                   
-                  // Detect if this is a scheduled call (has agenda or call context)
-                  const isScheduledCall = !!(session.agenda?.length > 0 || (callContext && callContext.includes('[CALL AGENDA]')));
-                  console.log(`[PRE-CONNECT-DEBUG] isScheduledCall=${isScheduledCall}, hasAudio=${!!cachedAudioBase64}, streamSid=${streamSid}`);
+                  // Direction-based greeting logic:
+                  // - OUTBOUND: Wait for user audio (or 2s timeout) before AI speaks
+                  // - INBOUND: AI speaks immediately (user called in, they're ready)
+                  const isOutboundCall = callDirection === 'outbound';
+                  console.log(`[PRE-CONNECT-DEBUG] callDirection=${callDirection}, isOutbound=${isOutboundCall}, hasAudio=${!!cachedAudioBase64}, streamSid=${streamSid}`);
                   
-                  // === IMMEDIATE GREETING FOR SCHEDULED CALLS ===
-                  // Play cached greeting IMMEDIATELY - don't wait for OpenAI or user speech
-                  if (isScheduledCall && cachedAudioBase64 && streamSid) {
-                    console.log(`[HELLO-TRIGGER] 🎤 IMMEDIATE PLAY: Scheduled call - playing greeting NOW (no wait)`);
-                    t_cachedGreetingPlayed = Date.now();
-                    playCachedAudio(cachedAudioBase64);
-                    greetingSent = true;
-                    firstOutboundLogged = true;
-                    waitingForUserHello = false;
-                    console.log(`[TIMING] twilioStart→greetingPlayed: ${t_cachedGreetingPlayed - t_twilioStart}ms (immediate-scheduled)`);
-                  } else if (cachedAudioBase64 && streamSid) {
-                    // For non-scheduled calls: wait for user hello
-                    console.log(`[TWILIO-STREAM] 🎤 Hello-trigger mode: waiting for user speech (fallback: ${HELLO_FALLBACK_MS}ms)`);
+                  if (isOutboundCall && cachedAudioBase64 && streamSid) {
+                    // OUTBOUND: Wait for user to answer and greet, then play AI greeting
+                    console.log(`[HELLO-WAIT] 🎧 Outbound call - waiting for user audio (max ${HELLO_FALLBACK_MS}ms)`);
                     waitingForUserHello = true;
                     pendingCachedGreeting = cachedAudioBase64;
                     
                     helloTriggerTimer = setTimeout(() => {
                       if (waitingForUserHello && pendingCachedGreeting) {
-                        console.log(`[HELLO-TRIGGER] ⏱️ Fallback: Playing greeting after ${HELLO_FALLBACK_MS}ms timeout`);
+                        console.log(`[HELLO-TRIGGER] ⏱️ No audio after ${HELLO_FALLBACK_MS}ms - playing greeting`);
                         waitingForUserHello = false;
                         t_cachedGreetingPlayed = Date.now();
                         playCachedAudio(pendingCachedGreeting);
@@ -1556,6 +1548,15 @@ type ResponseTrigger =
                         console.log(`[TIMING] twilioStart→greetingPlayed: ${t_cachedGreetingPlayed - t_twilioStart}ms (fallback)`);
                       }
                     }, HELLO_FALLBACK_MS) as unknown as number;
+                  } else if (cachedAudioBase64 && streamSid) {
+                    // INBOUND: AI speaks immediately (user called in)
+                    console.log(`[HELLO-TRIGGER] 🎤 Inbound call - playing greeting immediately`);
+                    t_cachedGreetingPlayed = Date.now();
+                    playCachedAudio(cachedAudioBase64);
+                    greetingSent = true;
+                    firstOutboundLogged = true;
+                    waitingForUserHello = false;
+                    console.log(`[TIMING] twilioStart→greetingPlayed: ${t_cachedGreetingPlayed - t_twilioStart}ms (immediate-inbound)`);
                   }
                   
                   const csp = customParams.callSid || data.start.callSid || `call_${Date.now()}`;
