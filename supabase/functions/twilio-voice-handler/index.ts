@@ -707,31 +707,45 @@ function escapeXml(text: string): string {
     .replace(/'/g, '&apos;');
 }
 
-// Generate TwiML with pre-connected session reference
+// Generate TwiML with pre-connected session using ConversationRelay (supports 4hr calls)
 function generateTwiMLWithSession(
   sessionId: string,
-  cachedAudioBase64: string,
+  cachedAudioBase64: string, // Deprecated: ConversationRelay uses text-based TTS
   greetingText: string,
   context: string,
   userId: string | undefined,
   timezone: string
 ): string {
-  const bridgeUrl = `wss://wwxgajrtmslzklnyplah.supabase.co/functions/v1/twilio-realtime-bridge`;
+  const relayUrl = `wss://wwxgajrtmslzklnyplah.supabase.co/functions/v1/conversation-relay-handler`;
+  const config = CONVERSATION_RELAY_CONFIG;
   
-  console.log(`[TwiML] Generating with pre-connected session: ${sessionId}`);
+  console.log(`[TwiML] Generating ConversationRelay with pre-connected session: ${sessionId}`);
+  console.log(`[TwiML] Greeting: "${greetingText.substring(0, 80)}..."`);
+  
+  // Use cached greeting text as welcomeGreeting - Twilio handles TTS
+  const greeting = greetingText || config.welcomeGreeting;
   
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <Stream url="${bridgeUrl}">
+    <ConversationRelay 
+      url="${relayUrl}"
+      voice="${config.voice}"
+      transcriptionProvider="${config.transcriptionProvider}"
+      speechModel="${config.speechModel}"
+      welcomeGreeting="${escapeXml(greeting)}"
+      welcomeGreetingInterruptible="true"
+      interruptible="${config.interruptible}"
+      interruptByDtmf="${config.dtmfDetection}"
+      profanityFilter="${config.profanityFilter}"
+      language="${config.language}"
+    >
       <Parameter name="userId" value="${userId || ''}" />
       <Parameter name="sessionId" value="${sessionId}" />
-      <Parameter name="greetingCached" value="true" />
-      <Parameter name="greetingText" value="${escapeXml(greetingText)}" />
       <Parameter name="context" value="${escapeXml(context)}" />
       <Parameter name="direction" value="outbound" />
       <Parameter name="timezone" value="${timezone}" />
-    </Stream>
+    </ConversationRelay>
   </Connect>
 </Response>`;
 }
