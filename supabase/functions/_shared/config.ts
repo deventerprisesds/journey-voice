@@ -3,7 +3,7 @@
 // Update GLOBAL_VERSION here and all functions will use it automatically
 // =============================================================================
 
-export const GLOBAL_VERSION = "2026-01-21-v10";
+export const GLOBAL_VERSION = "2026-01-23-v11";
 
 // Voice greeting behavior configuration
 export const VOICE_CONFIG = {
