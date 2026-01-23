@@ -108,6 +108,29 @@ export const toolDefinitions = [
       required: ["task_id"]
     }
   },
+  {
+    type: "function",
+    name: "parse_and_create_tasks",
+    description: "Parse natural language into tasks using AI and create them. Handles multiple tasks, date parsing ('today', 'tomorrow', 'next week'), categories, priorities, and optional auto-scheduling. Use this when user describes tasks in conversational language rather than explicit field values.",
+    parameters: {
+      type: "object",
+      properties: {
+        text: { 
+          type: "string", 
+          description: "Natural language task description. Can include multiple tasks, dates, priorities. Example: 'I need to get a haircut, work on the Nexus application, and meet with my MBA partner'" 
+        },
+        target_date: { 
+          type: "string", 
+          description: "Target date for tasks. Can be YYYY-MM-DD format or keywords like 'today', 'tomorrow'. Used when user specifies a day context." 
+        },
+        auto_schedule: { 
+          type: "boolean", 
+          description: "If true, automatically find optimal time slots for tasks based on user preferences and calendar. Default: true" 
+        }
+      },
+      required: ["text"]
+    }
+  },
 
   // COMMUNICATION TOOLS
   {
@@ -570,6 +593,9 @@ async function executeToolCall(
       
       case 'unschedule_task':
         return await unscheduleTask(supabase, args);
+      
+      case 'parse_and_create_tasks':
+        return await parseAndCreateTasks(supabase, userId, args, context?.timezone);
 
       // ============ COMMUNICATION TOOLS ============
       case 'send_email':
@@ -1036,6 +1062,251 @@ async function unscheduleTask(supabase: any, args: any): Promise<ExecuteToolResp
       message: `Unscheduled "${data.title}" and moved to backlog`
     };
   } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
+
+// ============================================================================
+// PARSE AND CREATE TASKS - Leverages AI task parser for NLP extraction
+// ============================================================================
+
+async function parseAndCreateTasks(
+  supabase: any, 
+  userId: string, 
+  args: { text: string; target_date?: string; auto_schedule?: boolean },
+  timezone?: string
+): Promise<ExecuteToolResponse> {
+  const tz = timezone || 'America/New_York';
+  const autoSchedule = args.auto_schedule !== false; // Default true
+  
+  console.log(`[PARSE_AND_CREATE] Input: "${args.text}", target_date: ${args.target_date}, auto_schedule: ${autoSchedule}, tz: ${tz}`);
+  
+  if (!args.text || args.text.trim().length === 0) {
+    return { success: false, error: "Task text is required" };
+  }
+
+  try {
+    // 1. Get user's board
+    const { data: board, error: boardError } = await supabase
+      .from('boards')
+      .select('id')
+      .eq('user_id', userId)
+      .limit(1)
+      .single();
+      
+    if (boardError || !board) {
+      console.error('[PARSE_AND_CREATE] Board error:', boardError);
+      return { success: false, error: "No board found for user" };
+    }
+
+    // 2. Parse target_date keywords
+    let targetDate = args.target_date;
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: tz }); // YYYY-MM-DD
+    
+    if (targetDate) {
+      const lowerDate = targetDate.toLowerCase().trim();
+      if (lowerDate === 'today') {
+        targetDate = today;
+      } else if (lowerDate === 'tomorrow') {
+        const d = new Date();
+        d.setDate(d.getDate() + 1);
+        targetDate = d.toLocaleDateString('en-CA', { timeZone: tz });
+      }
+    }
+    
+    console.log(`[PARSE_AND_CREATE] Resolved target_date: ${targetDate || 'none'}`);
+
+    // 3. Get existing tasks for scheduling context
+    const { data: existingTasks } = await supabase
+      .from('tasks')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('board_id', board.id);
+
+    // 4. Call ai-task-parser edge function
+    console.log('[PARSE_AND_CREATE] Calling ai-task-parser...');
+    const parserResponse = await fetch(
+      `${SUPABASE_URL}/functions/v1/ai-task-parser`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          text: args.text,
+          mode: 'multiple',
+          timezone: tz,
+          userId,
+          boardId: board.id,
+          existingTasks: existingTasks || [],
+          targetDate: targetDate ? `${targetDate}T12:00:00` : undefined
+        })
+      }
+    );
+
+    if (!parserResponse.ok) {
+      const errorText = await parserResponse.text();
+      console.error('[PARSE_AND_CREATE] Parser error:', parserResponse.status, errorText);
+      return { success: false, error: `Failed to parse tasks: ${parserResponse.status}` };
+    }
+
+    const parsed = await parserResponse.json();
+    const tasks = parsed.tasks || [];
+
+    console.log(`[PARSE_AND_CREATE] Parsed ${tasks.length} tasks:`, tasks.map((t: any) => t.title));
+
+    if (tasks.length === 0) {
+      return { success: false, error: "No tasks could be parsed from the input. Please try rephrasing." };
+    }
+
+    // 5. Create tasks in database
+    const createdTasks: any[] = [];
+    for (const task of tasks) {
+      const taskData = {
+        title: task.title,
+        description: task.description || null,
+        priority: (task.priority || 'MEDIUM').toUpperCase(),
+        category: (task.category || 'LIFE').toUpperCase(),
+        status: task.status || 'BACKLOG',
+        due_date: task.due_date || (targetDate ? `${targetDate}T23:59:59` : null),
+        start_time: task.start_time || null,
+        end_time: task.end_time || null,
+        estimate_minutes: task.estimate_minutes || task.estimatedDuration || 60,
+        is_scheduled: !!(task.start_time && task.end_time),
+        board_id: board.id,
+        user_id: userId
+      };
+
+      const { data, error } = await supabase
+        .from('tasks')
+        .insert([taskData])
+        .select()
+        .single();
+
+      if (data) {
+        createdTasks.push(data);
+        console.log(`[PARSE_AND_CREATE] Created task: ${data.title} (${data.id})`);
+      } else if (error) {
+        console.error(`[PARSE_AND_CREATE] Failed to create task "${task.title}":`, error);
+      }
+    }
+
+    if (createdTasks.length === 0) {
+      return { success: false, error: "Failed to create any tasks" };
+    }
+
+    // 6. If auto_schedule is enabled and tasks need scheduling, call batch-calendar-scheduler
+    const unscheduledTasks = createdTasks.filter(t => !t.is_scheduled);
+    const scheduledResults: Array<{ title: string; time: string }> = [];
+
+    if (autoSchedule && unscheduledTasks.length > 0) {
+      console.log(`[PARSE_AND_CREATE] Auto-scheduling ${unscheduledTasks.length} tasks...`);
+      
+      try {
+        const batchResponse = await fetch(
+          `${SUPABASE_URL}/functions/v1/batch-calendar-scheduler`,
+          {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              tasks: unscheduledTasks.map((t, idx) => ({
+                id: t.id,
+                index: idx,
+                title: t.title,
+                category: t.category,
+                priority: t.priority,
+                estimate_minutes: t.estimate_minutes || 60,
+                due_date: t.due_date
+              })),
+              userId,
+              timezone: tz,
+              targetDate: targetDate || today,
+              allowOverflow: true
+            })
+          }
+        );
+
+        if (batchResponse.ok) {
+          const batchResult = await batchResponse.json();
+          console.log('[PARSE_AND_CREATE] Batch scheduler result:', batchResult);
+          
+          // Apply scheduled times to tasks
+          for (const slot of batchResult.scheduled || []) {
+            const task = unscheduledTasks[slot.taskIndex];
+            if (task && slot.start_time && slot.end_time) {
+              const { error: updateError } = await supabase
+                .from('tasks')
+                .update({
+                  start_time: slot.start_time,
+                  end_time: slot.end_time,
+                  is_scheduled: true,
+                  status: 'TODO'
+                })
+                .eq('id', task.id);
+
+              if (!updateError) {
+                scheduledResults.push({
+                  title: task.title,
+                  time: new Date(slot.start_time).toLocaleTimeString('en-US', {
+                    hour: 'numeric',
+                    minute: '2-digit',
+                    timeZone: tz
+                  })
+                });
+                console.log(`[PARSE_AND_CREATE] Scheduled "${task.title}" at ${slot.start_time}`);
+              }
+            }
+          }
+        } else {
+          console.error('[PARSE_AND_CREATE] Batch scheduler error:', await batchResponse.text());
+        }
+      } catch (e) {
+        console.error('[PARSE_AND_CREATE] Batch scheduling exception:', e);
+        // Continue - tasks are created, just not scheduled
+      }
+    }
+
+    // 7. Build response message
+    const taskCount = createdTasks.length;
+    let message = `Created ${taskCount} task${taskCount > 1 ? 's' : ''}`;
+    
+    if (scheduledResults.length > 0) {
+      const scheduleDetails = scheduledResults.map(s => `${s.title} at ${s.time}`).join(', ');
+      message += `. Scheduled: ${scheduleDetails}`;
+    } else if (autoSchedule && unscheduledTasks.length > 0) {
+      message += ` (scheduling was requested but no optimal slots found)`;
+    }
+
+    console.log(`[PARSE_AND_CREATE] Complete. ${message}`);
+
+    return {
+      success: true,
+      result: {
+        created: createdTasks.length,
+        scheduled: scheduledResults.length,
+        tasks: createdTasks.map(t => ({
+          id: t.id,
+          title: t.title,
+          priority: t.priority,
+          category: t.category,
+          due_date: t.due_date,
+          start_time: t.start_time,
+          is_scheduled: t.is_scheduled
+        }))
+      },
+      message,
+      extractedFacts: { 
+        type: 'task_created', 
+        count: createdTasks.length,
+        scheduled: scheduledResults.length
+      }
+    };
+  } catch (error) {
+    console.error('[PARSE_AND_CREATE] Error:', error);
     return { success: false, error: String(error) };
   }
 }
