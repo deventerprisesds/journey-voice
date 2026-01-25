@@ -12,7 +12,9 @@ export type PhoneCallMode = 'media_streams' | 'conversation_relay' | 'cloudflare
 export const BRIDGE_ENDPOINTS = {
   supabase: 'wss://wwxgajrtmslzklnyplah.supabase.co/functions/v1/twilio-realtime-bridge',
   conversation_relay: 'wss://wwxgajrtmslzklnyplah.supabase.co/functions/v1/conversation-relay-handler',
-  cloudflare: '', // Future: wss://your-worker.your-account.workers.dev/call
+  // Cloudflare Durable Objects bridge for unlimited call duration
+  // Deploy your Worker and update this URL (format: wss://your-worker.your-subdomain.workers.dev/call)
+  cloudflare: '', 
 } as const;
 
 // Voice greeting behavior configuration
