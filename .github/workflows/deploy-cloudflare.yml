@@ -45,7 +45,7 @@ jobs:
 
       - name: Verify Health Endpoint
         run: |
-          HEALTH_RESPONSE=$(curl -s https://purple-bush-495e.workers.dev/health)
+          HEALTH_RESPONSE=$(curl -s https://twilio-openai-bridge.purple-bush-495e.workers.dev/health)
           echo "Health response: $HEALTH_RESPONSE"
           
           if echo "$HEALTH_RESPONSE" | grep -q '"status":"ok"'; then
@@ -57,7 +57,7 @@ jobs:
 
       - name: Verify WebSocket Endpoint Exists
         run: |
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://purple-bush-495e.workers.dev/call)
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://twilio-openai-bridge.purple-bush-495e.workers.dev/call)
           echo "WebSocket endpoint status: $HTTP_STATUS"
           
           if [ "$HTTP_STATUS" = "426" ]; then
@@ -72,7 +72,7 @@ jobs:
           echo "=========================================="
           echo "🚀 Cloudflare Worker Deployed Successfully"
           echo "=========================================="
-          echo "Worker URL: https://purple-bush-495e.workers.dev"
-          echo "Health: https://purple-bush-495e.workers.dev/health"
-          echo "WebSocket: wss://purple-bush-495e.workers.dev/call"
+          echo "Worker URL: https://twilio-openai-bridge.purple-bush-495e.workers.dev"
+          echo "Health: https://twilio-openai-bridge.purple-bush-495e.workers.dev/health"
+          echo "WebSocket: wss://twilio-openai-bridge.purple-bush-495e.workers.dev/call"
           echo "=========================================="
