@@ -686,7 +686,9 @@ interface PreConnectSession {
   greetingText: string;
   audioBase64: string;
   ttsProvider: 'openai' | 'elevenlabs';
-  voiceId: string;
+  voiceId: string;  // ElevenLabs voice ID
+  openaiVoice: string;  // OpenAI voice selection
+  phoneCallMode: string;  // User's preferred phone call mode
   createdAt: number;
   // NEW: Pre-computed data to skip DB queries during call connect
   ragContext: string;
@@ -709,6 +711,8 @@ async function storePreConnectSession(supabase: any, sessionId: string, session:
       audio_base64: session.audioBase64,
       tts_provider: session.ttsProvider,
       voice_id: session.voiceId,
+      openai_voice: session.openaiVoice,
+      phone_call_mode: session.phoneCallMode,
       // NEW: Pre-computed data to eliminate DB queries during call connect
       rag_context: session.ragContext,
       instructions: session.instructions,
@@ -752,6 +756,8 @@ async function getPreConnectSession(supabase: any, sessionId: string): Promise<P
     audioBase64: data.audio_base64,
     ttsProvider: data.tts_provider,
     voiceId: data.voice_id,
+    openaiVoice: data.openai_voice || 'alloy',
+    phoneCallMode: data.phone_call_mode || 'media_streams',
     createdAt: new Date(data.created_at).getTime(),
     // NEW: Pre-computed data
     ragContext: data.rag_context || '',
@@ -935,7 +941,7 @@ async function handlePreConnect(params: {
     loadUserProfile(supabase, userId),
     supabase
       .from('user_scheduling_prefs')
-      .select('tts_provider, elevenlabs_voice_id')
+      .select('tts_provider, elevenlabs_voice_id, openai_voice, phone_call_mode')
       .eq('user_id', userId)
       .maybeSingle(),
     // NEW: Pre-load RAG context
@@ -952,6 +958,8 @@ async function handlePreConnect(params: {
 
   const ttsProvider = (ttsPrefs.data?.tts_provider as 'openai' | 'elevenlabs') || 'elevenlabs';
   const voiceId = ttsPrefs.data?.elevenlabs_voice_id || 'EXAVITQu4vr4xnSDxMaL';
+  const openaiVoice = ttsPrefs.data?.openai_voice || 'alloy';
+  const phoneCallMode = ttsPrefs.data?.phone_call_mode || 'media_streams';
   
   // Get or create thread
   let threadId: string | null = threadResult.data?.id || null;
@@ -1026,6 +1034,8 @@ async function handlePreConnect(params: {
     audioBase64,
     ttsProvider,
     voiceId,
+    openaiVoice,
+    phoneCallMode,
     createdAt: Date.now(),
     // NEW: Pre-computed data to skip DB queries during call connect
     ragContext,
@@ -1121,6 +1131,7 @@ serve(async (req) => {
     // === TTS PROVIDER SETTINGS ===
     let ttsProvider: 'openai' | 'elevenlabs' = 'openai';
     let elevenlabsVoiceId: string = 'EXAVITQu4vr4xnSDxMaL';
+    let openaiVoice: string = 'alloy';  // User's selected OpenAI voice
     
     // === ELEVENLABS TEXT BUFFER ===
     // When using ElevenLabs, we buffer text from OpenAI and send to ElevenLabs TTS
@@ -1572,9 +1583,11 @@ type ResponseTrigger =
                   userProfile = session.profile;
                   ttsProvider = session.ttsProvider;
                   elevenlabsVoiceId = session.voiceId;
+                  openaiVoice = session.openaiVoice || 'alloy';
                   cachedAudioBase64 = session.audioBase64;
                   preConnectedGreetingText = session.greetingText;
                   threadId = session.threadId;
+                  console.log(`[PRE-CONNECT] Voice settings: ttsProvider=${ttsProvider}, openaiVoice=${openaiVoice}, elevenlabsVoice=${elevenlabsVoiceId}`);
                   
                   if (session.agenda && session.agenda.length > 0) {
                     agendaManager = new AgendaManager(session.agenda);
@@ -1845,7 +1858,7 @@ type ResponseTrigger =
             // Load TTS provider settings
             supabase
               .from('user_scheduling_prefs')
-              .select('tts_provider, elevenlabs_voice_id')
+              .select('tts_provider, elevenlabs_voice_id, openai_voice')
               .eq('user_id', userId)
               .maybeSingle()
           ]);
@@ -1856,7 +1869,8 @@ type ResponseTrigger =
           if (ttsPrefs.data) {
             ttsProvider = (ttsPrefs.data.tts_provider as 'openai' | 'elevenlabs') || 'openai';
             elevenlabsVoiceId = ttsPrefs.data.elevenlabs_voice_id || 'EXAVITQu4vr4xnSDxMaL';
-            console.log(`[BRIDGE] TTS Provider: ${ttsProvider}, Voice ID: ${elevenlabsVoiceId}`);
+            openaiVoice = ttsPrefs.data.openai_voice || 'alloy';
+            console.log(`[BRIDGE] TTS Provider: ${ttsProvider}, ElevenLabs Voice: ${elevenlabsVoiceId}, OpenAI Voice: ${openaiVoice}`);
           }
 
           // Create or get thread for conversation persistence
@@ -1928,14 +1942,14 @@ type ResponseTrigger =
                 ? ["text"] 
                 : ["text", "audio"];
               
-              console.log(`[OPENAI-SESSION] Sending config: modalities=${JSON.stringify(modalities)}, ttsProvider=${ttsProvider}`);
+              console.log(`[OPENAI-SESSION] Sending config: modalities=${JSON.stringify(modalities)}, ttsProvider=${ttsProvider}, openaiVoice=${openaiVoice}`);
               
               openaiWs!.send(JSON.stringify({
                 type: "session.update",
                 session: {
                   modalities: modalities,
                   instructions: instructions,
-                  voice: "alloy",
+                  voice: openaiVoice,  // Use user's selected voice (not hardcoded "alloy")
                   input_audio_format: "pcm16",
                   output_audio_format: "pcm16",
                   input_audio_transcription: { 
