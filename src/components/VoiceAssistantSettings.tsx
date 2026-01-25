@@ -445,13 +445,10 @@ const VoiceAssistantSettings: React.FC = () => {
                     </div>
                   </Label>
                 </div>
-                <div className="flex items-center space-x-3 rounded-lg border p-4 opacity-50">
-                  <RadioGroupItem value="cloudflare" id="cloudflare" disabled />
-                  <Label htmlFor="cloudflare" className="flex-1 cursor-not-allowed">
-                    <div className="font-medium flex items-center gap-2">
-                      Cloudflare Workers
-                      <span className="text-xs bg-muted px-2 py-0.5 rounded">Coming Soon</span>
-                    </div>
+                <div className="flex items-center space-x-3 rounded-lg border p-4">
+                  <RadioGroupItem value="cloudflare" id="cloudflare" />
+                  <Label htmlFor="cloudflare" className="flex-1 cursor-pointer">
+                    <div className="font-medium">Cloudflare Workers</div>
                     <div className="text-sm text-muted-foreground">
                       OpenAI/ElevenLabs voices • Unlimited duration • Best of both
                     </div>
