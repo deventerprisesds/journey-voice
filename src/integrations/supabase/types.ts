@@ -3133,6 +3133,7 @@ export type Database = {
           elevenlabs_voice_id: string | null
           id: string
           openai_voice: string | null
+          phone_call_mode: string | null
           realtime_extensions: string | null
           recurring_calls_enabled: boolean | null
           scheduled_calls: Json | null
@@ -3152,6 +3153,7 @@ export type Database = {
           elevenlabs_voice_id?: string | null
           id?: string
           openai_voice?: string | null
+          phone_call_mode?: string | null
           realtime_extensions?: string | null
           recurring_calls_enabled?: boolean | null
           scheduled_calls?: Json | null
@@ -3171,6 +3173,7 @@ export type Database = {
           elevenlabs_voice_id?: string | null
           id?: string
           openai_voice?: string | null
+          phone_call_mode?: string | null
           realtime_extensions?: string | null
           recurring_calls_enabled?: boolean | null
           scheduled_calls?: Json | null
