@@ -648,6 +648,35 @@ function generateConversationRelayTwiML(
 </Response>`;
 }
 
+// Generate TwiML that connects to Cloudflare Durable Objects bridge
+// This enables unlimited call duration by using Cloudflare's WebSocket infrastructure
+function generateCloudflareBridgeTwiML(
+  context?: string, 
+  userId?: string | null, 
+  callerPhone?: string, 
+  direction?: string, 
+  timezone?: string
+): string {
+  const cloudflareUrl = BRIDGE_ENDPOINTS.cloudflare;
+  
+  console.log('[TwiML] Generating Cloudflare Bridge TwiML');
+  console.log(`[TwiML] Cloudflare URL: ${cloudflareUrl}`);
+  console.log(`[TwiML] Direction: ${direction || 'inbound'}, userId: ${userId}, timezone: ${timezone}`);
+  
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Connect>
+    <Stream url="${cloudflareUrl}">
+      <Parameter name="userId" value="${userId || ''}" />
+      <Parameter name="phone" value="${callerPhone || ''}" />
+      <Parameter name="context" value="${escapeXml(context || '')}" />
+      <Parameter name="direction" value="${direction || 'inbound'}" />
+      <Parameter name="timezone" value="${timezone || 'America/New_York'}" />
+    </Stream>
+  </Connect>
+</Response>`;
+}
+
 // Generate fallback TwiML with turn-based conversation (for debugging/fallback)
 function generateFallbackGreetingTwiML(context?: string, userId?: string | null): string {
   const greeting = context 
@@ -1130,32 +1159,38 @@ serve(async (req) => {
         const modeParam = url.searchParams.get('mode') as VoiceMode | null;
         const useFallback = url.searchParams.get('fallback') === 'true';
         
-        // Map phone_call_mode to useRelay boolean
-        // URL param 'relay' forces ConversationRelay, 'stream' forces Media Streams
-        // Otherwise use user's saved preference
-        let useRelay: boolean;
+        // Determine voice engine based on URL param or user preference
+        // Priority: URL param > user preference > default (media_streams)
+        // URL params: 'relay' (ConversationRelay), 'stream' (Media Streams), 'cloudflare' (Durable Objects)
+        let selectedMode: PhoneCallMode = phoneCallMode;
         if (modeParam === 'relay') {
-          useRelay = true;
+          selectedMode = 'conversation_relay';
         } else if (modeParam === 'stream') {
-          useRelay = false;
-        } else {
-          // No URL override - use user's saved preference
-          // Default to Media Streams (false) for OpenAI/ElevenLabs voices
-          useRelay = phoneCallMode === 'conversation_relay';
+          selectedMode = 'media_streams';
+        } else if (modeParam === 'cloudflare') {
+          selectedMode = 'cloudflare';
         }
         
-        console.log(`[incoming-call] Voice mode: ${useRelay ? 'relay' : 'stream'}, User preference: ${phoneCallMode}, Fallback: ${useFallback}`);
+        console.log(`[incoming-call] Voice mode: ${selectedMode}, User preference: ${phoneCallMode}, Fallback: ${useFallback}`);
         
         let twiml: string;
         if (useFallback) {
           twiml = generateFallbackGreetingTwiML(contextParam, userId);
-        } else if (useRelay) {
+        } else if (selectedMode === 'cloudflare') {
+          // Cloudflare Durable Objects bridge for unlimited duration
+          if (!BRIDGE_ENDPOINTS.cloudflare) {
+            console.warn('[incoming-call] ⚠️ Cloudflare endpoint not configured, falling back to Media Streams');
+            twiml = generateRealtimeBridgeTwiML(contextParam, userId, callerPhone || undefined, directionParam, timezone);
+          } else {
+            twiml = generateCloudflareBridgeTwiML(contextParam, userId, callerPhone || undefined, directionParam, timezone);
+          }
+        } else if (selectedMode === 'conversation_relay') {
           twiml = generateConversationRelayTwiML(contextParam, userId, callerPhone || undefined, directionParam, timezone);
         } else {
           twiml = generateRealtimeBridgeTwiML(contextParam, userId, callerPhone || undefined, directionParam, timezone);
         }
         
-        console.log(`[incoming-call] ✅ TwiML ready - using ${useFallback ? 'fallback' : useRelay ? 'ConversationRelay' : 'Media Streams'} - direction: ${directionParam} - userId: ${userId}`);
+        console.log(`[incoming-call] ✅ TwiML ready - using ${useFallback ? 'fallback' : selectedMode} - direction: ${directionParam} - userId: ${userId}`);
         
         return new Response(twiml, {
           headers: { 'Content-Type': 'application/xml' },
