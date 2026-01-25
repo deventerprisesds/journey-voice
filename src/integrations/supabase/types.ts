@@ -529,6 +529,53 @@ export type Database = {
         }
         Relationships: []
       }
+      auto_notes_state: {
+        Row: {
+          bullets: Json
+          created_at: string
+          id: string
+          last_update_reason: string | null
+          processing_mode: string | null
+          session_id: string
+          topics: Json
+          transcript_cursor: number
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          bullets?: Json
+          created_at?: string
+          id?: string
+          last_update_reason?: string | null
+          processing_mode?: string | null
+          session_id: string
+          topics?: Json
+          transcript_cursor?: number
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          bullets?: Json
+          created_at?: string
+          id?: string
+          last_update_reason?: string | null
+          processing_mode?: string | null
+          session_id?: string
+          topics?: Json
+          transcript_cursor?: number
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "auto_notes_state_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "class_schedules"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       boards: {
         Row: {
           color: string | null
@@ -3154,6 +3201,7 @@ export type Database = {
           outline_generation_prompt: string | null
           requirements_extraction_prompt: string | null
           reviewer_attached_files: string[] | null
+          transcription_model: string
           updated_at: string
           user_id: string
           voice_preference: string | null
@@ -3178,6 +3226,7 @@ export type Database = {
           outline_generation_prompt?: string | null
           requirements_extraction_prompt?: string | null
           reviewer_attached_files?: string[] | null
+          transcription_model?: string
           updated_at?: string
           user_id: string
           voice_preference?: string | null
@@ -3202,6 +3251,7 @@ export type Database = {
           outline_generation_prompt?: string | null
           requirements_extraction_prompt?: string | null
           reviewer_attached_files?: string[] | null
+          transcription_model?: string
           updated_at?: string
           user_id?: string
           voice_preference?: string | null
