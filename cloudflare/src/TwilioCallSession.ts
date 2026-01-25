@@ -36,7 +36,17 @@ interface OpenAIEvent {
   call_id?: string;
   name?: string;
   arguments?: string;
+  text?: string;
 }
+
+interface UserVoicePrefs {
+  tts_provider: 'openai' | 'elevenlabs';
+  openai_voice: string;
+  elevenlabs_voice_id: string;
+}
+
+// Sentence detection for ElevenLabs streaming
+const SENTENCE_ENDERS = /[.!?]+[\s"')\]]*$/;
 
 export class TwilioCallSession {
   private state: DurableObjectState;
@@ -49,7 +59,15 @@ export class TwilioCallSession {
   private timezone: string = 'America/New_York';
   private isPlaying: boolean = false;
   private toolDefinitions: any[] = [];
-  private pendingToolCalls: Map<string, { name: string; arguments: string }> = new Map();
+
+  // Voice preferences
+  private ttsProvider: 'openai' | 'elevenlabs' = 'openai';
+  private openaiVoice: string = 'alloy';
+  private elevenlabsVoiceId: string = 'JBFqnCBsd6RMkjVDRZzb'; // George
+
+  // ElevenLabs text buffering
+  private textBuffer: string = '';
+  private audioSentDuringResponse: boolean = false;
 
   // Echo suppression thresholds
   private readonly ECHO_THRESHOLD = 1500;
@@ -114,11 +132,45 @@ export class TwilioCallSession {
 
     console.log(`[CF] Stream: ${this.streamSid}, User: ${this.userId}, TZ: ${this.timezone}`);
 
-    // Fetch tool definitions from Supabase
-    await this.fetchToolDefinitions();
+    // Load user voice preferences and tool definitions in parallel
+    await Promise.all([
+      this.loadUserVoicePrefs(),
+      this.fetchToolDefinitions()
+    ]);
+
+    console.log(`[CF] TTS Provider: ${this.ttsProvider}, Voice: ${this.ttsProvider === 'elevenlabs' ? this.elevenlabsVoiceId : this.openaiVoice}`);
 
     // Connect to OpenAI
     await this.connectToOpenAI();
+  }
+
+  private async loadUserVoicePrefs() {
+    if (!this.userId) return;
+
+    try {
+      const response = await fetch(
+        `${this.env.SUPABASE_URL}/rest/v1/user_scheduling_prefs?user_id=eq.${this.userId}&select=tts_provider,openai_voice,elevenlabs_voice_id`,
+        {
+          headers: {
+            'Authorization': `Bearer ${this.env.SUPABASE_SERVICE_KEY}`,
+            'apikey': this.env.SUPABASE_SERVICE_KEY,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data && data.length > 0) {
+          const prefs = data[0];
+          this.ttsProvider = prefs.tts_provider || 'openai';
+          this.openaiVoice = prefs.openai_voice || 'alloy';
+          this.elevenlabsVoiceId = prefs.elevenlabs_voice_id || 'JBFqnCBsd6RMkjVDRZzb';
+        }
+      }
+    } catch (error) {
+      console.error('[CF] Failed to load voice preferences:', error);
+    }
   }
 
   private async fetchToolDefinitions() {
@@ -190,10 +242,35 @@ export class TwilioCallSession {
           break;
 
         case 'response.audio.delta':
-          this.handleAudioDelta(data);
+          // Only handle if using OpenAI TTS
+          if (this.ttsProvider === 'openai') {
+            this.handleAudioDelta(data);
+          }
           break;
 
         case 'response.audio.done':
+          if (this.ttsProvider === 'openai') {
+            this.isPlaying = false;
+          }
+          break;
+
+        case 'response.text.delta':
+          // Only handle if using ElevenLabs TTS
+          if (this.ttsProvider === 'elevenlabs') {
+            await this.handleTextDelta(data);
+          }
+          break;
+
+        case 'response.text.done':
+          // Flush remaining text buffer for ElevenLabs
+          if (this.ttsProvider === 'elevenlabs' && this.textBuffer.trim()) {
+            await this.sendToElevenLabs(this.textBuffer);
+            this.textBuffer = '';
+          }
+          this.audioSentDuringResponse = false;
+          break;
+
+        case 'response.done':
           this.isPlaying = false;
           break;
 
@@ -215,12 +292,16 @@ export class TwilioCallSession {
   }
 
   private async configureSession() {
-    const sessionConfig = {
+    // Use text-only modality for ElevenLabs, text+audio for OpenAI TTS
+    const modalities = this.ttsProvider === 'elevenlabs' 
+      ? ['text'] 
+      : ['text', 'audio'];
+
+    const sessionConfig: any = {
       type: 'session.update',
       session: {
-        modalities: ['text', 'audio'],
+        modalities,
         instructions: this.buildSystemPrompt(),
-        voice: 'alloy',
         input_audio_format: 'pcm16',
         output_audio_format: 'pcm16',
         input_audio_transcription: {
@@ -238,8 +319,13 @@ export class TwilioCallSession {
       }
     };
 
+    // Only set voice for OpenAI TTS mode
+    if (this.ttsProvider === 'openai') {
+      sessionConfig.session.voice = this.openaiVoice;
+    }
+
     this.openaiWs?.send(JSON.stringify(sessionConfig));
-    console.log('[CF] Session configured with', this.toolDefinitions.length, 'tools');
+    console.log(`[CF] Session configured: ${this.ttsProvider} mode, ${this.toolDefinitions.length} tools`);
 
     // Send initial greeting
     this.sendGreeting();
@@ -289,6 +375,8 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
     this.openaiWs?.send(JSON.stringify({ type: 'response.create' }));
   }
 
+  // ==================== OpenAI TTS Handling ====================
+
   private handleAudioDelta(data: OpenAIEvent) {
     if (!data.delta || !this.twilioWs || !this.streamSid) return;
 
@@ -318,6 +406,111 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
       console.error('[CF] Error sending audio to Twilio:', error);
     }
   }
+
+  // ==================== ElevenLabs TTS Handling ====================
+
+  private async handleTextDelta(data: OpenAIEvent) {
+    if (!data.delta) return;
+
+    this.textBuffer += data.delta;
+
+    // Check if we have a complete sentence
+    if (SENTENCE_ENDERS.test(this.textBuffer)) {
+      const textToSpeak = this.textBuffer.trim();
+      this.textBuffer = '';
+      
+      if (textToSpeak) {
+        await this.sendToElevenLabs(textToSpeak);
+      }
+    }
+  }
+
+  private async sendToElevenLabs(text: string) {
+    if (!this.twilioWs || !this.streamSid) return;
+
+    console.log(`[CF] ElevenLabs TTS: "${text.substring(0, 50)}..."`);
+    this.isPlaying = true;
+    this.audioSentDuringResponse = true;
+
+    try {
+      const response = await fetch(
+        `${this.env.SUPABASE_URL}/functions/v1/elevenlabs-tts`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${this.env.SUPABASE_SERVICE_KEY}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            text,
+            voiceId: this.elevenlabsVoiceId,
+            outputFormat: 'ulaw_8000' // Twilio format
+          })
+        }
+      );
+
+      if (!response.ok) {
+        console.error(`[CF] ElevenLabs error: ${response.status}`);
+        // Fallback to OpenAI TTS
+        await this.fallbackToOpenAI(text);
+        return;
+      }
+
+      // Get μ-law audio and send to Twilio
+      const audioBuffer = await response.arrayBuffer();
+      const mulawBytes = new Uint8Array(audioBuffer);
+
+      // Send in chunks to Twilio
+      const chunkSize = 640; // 80ms of audio at 8kHz
+      for (let i = 0; i < mulawBytes.length; i += chunkSize) {
+        const chunk = mulawBytes.slice(i, i + chunkSize);
+        const mediaMessage = {
+          event: 'media',
+          streamSid: this.streamSid,
+          media: {
+            payload: btoa(String.fromCharCode(...chunk))
+          }
+        };
+        this.twilioWs?.send(JSON.stringify(mediaMessage));
+      }
+
+      console.log(`[CF] ElevenLabs audio sent: ${mulawBytes.length} bytes`);
+
+    } catch (error) {
+      console.error('[CF] ElevenLabs TTS failed:', error);
+      await this.fallbackToOpenAI(text);
+    }
+  }
+
+  private async fallbackToOpenAI(text: string) {
+    console.log('[CF] Falling back to OpenAI TTS');
+    
+    // Temporarily switch to OpenAI mode and request audio response
+    this.openaiWs?.send(JSON.stringify({
+      type: 'session.update',
+      session: {
+        modalities: ['text', 'audio'],
+        voice: this.openaiVoice
+      }
+    }));
+
+    // Inject the text as a system message and request response
+    this.openaiWs?.send(JSON.stringify({
+      type: 'conversation.item.create',
+      item: {
+        type: 'message',
+        role: 'system',
+        content: [{
+          type: 'input_text',
+          text: `Please say this exact text to the user: "${text}"`
+        }]
+      }
+    }));
+
+    this.openaiWs?.send(JSON.stringify({ type: 'response.create' }));
+  }
+
+  // ==================== Audio Input Handling ====================
 
   private async handleMedia(message: TwilioMessage) {
     if (!message.media?.payload || !this.openaiWs) return;
@@ -358,6 +551,7 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
   private handleBargeIn() {
     console.log('[CF] Barge-in detected');
     this.isPlaying = false;
+    this.textBuffer = ''; // Clear pending text
 
     // Clear Twilio audio buffer
     if (this.twilioWs && this.streamSid) {
@@ -370,6 +564,8 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
     // Cancel OpenAI response
     this.openaiWs?.send(JSON.stringify({ type: 'response.cancel' }));
   }
+
+  // ==================== Tool Handling ====================
 
   private async handleFunctionCall(data: OpenAIEvent) {
     const { name, arguments: args, call_id } = data;
@@ -481,5 +677,6 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
 
     this.streamSid = null;
     this.callSid = null;
+    this.textBuffer = '';
   }
 }
