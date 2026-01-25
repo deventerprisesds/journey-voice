@@ -738,9 +738,9 @@ function escapeXml(text: string): string {
 }
 
 // Generate TwiML with pre-connected session using ConversationRelay (supports 4hr calls)
-function generateTwiMLWithSession(
+// Used when phone_call_mode = 'conversation_relay'
+function generateConversationRelayTwiMLWithSession(
   sessionId: string,
-  cachedAudioBase64: string, // Deprecated: ConversationRelay uses text-based TTS
   greetingText: string,
   context: string,
   userId: string | undefined,
@@ -780,7 +780,62 @@ function generateTwiMLWithSession(
 </Response>`;
 }
 
+// Generate TwiML with pre-connected session using Media Streams (Supabase bridge)
+// Used when phone_call_mode = 'media_streams' - supports OpenAI/ElevenLabs voices
+function generateMediaStreamsTwiMLWithSession(
+  sessionId: string,
+  context: string,
+  userId: string | undefined,
+  timezone: string
+): string {
+  const bridgeUrl = BRIDGE_ENDPOINTS.supabase;
+  
+  console.log(`[TwiML] Generating Media Streams with pre-connected session: ${sessionId}`);
+  console.log(`[TwiML] Bridge URL: ${bridgeUrl}`);
+  
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Connect>
+    <Stream url="${bridgeUrl}">
+      <Parameter name="userId" value="${userId || ''}" />
+      <Parameter name="sessionId" value="${sessionId}" />
+      <Parameter name="context" value="${escapeXml(context)}" />
+      <Parameter name="direction" value="outbound" />
+      <Parameter name="timezone" value="${timezone}" />
+    </Stream>
+  </Connect>
+</Response>`;
+}
+
+// Generate TwiML with pre-connected session using Cloudflare Durable Objects
+// Used when phone_call_mode = 'cloudflare' - unlimited duration with OpenAI/ElevenLabs voices
+function generateCloudflareTwiMLWithSession(
+  sessionId: string,
+  context: string,
+  userId: string | undefined,
+  timezone: string
+): string {
+  const cloudflareUrl = BRIDGE_ENDPOINTS.cloudflare;
+  
+  console.log(`[TwiML] Generating Cloudflare with pre-connected session: ${sessionId}`);
+  console.log(`[TwiML] Cloudflare URL: ${cloudflareUrl}`);
+  
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Connect>
+    <Stream url="${cloudflareUrl}">
+      <Parameter name="userId" value="${userId || ''}" />
+      <Parameter name="sessionId" value="${sessionId}" />
+      <Parameter name="context" value="${escapeXml(context)}" />
+      <Parameter name="direction" value="outbound" />
+      <Parameter name="timezone" value="${timezone}" />
+    </Stream>
+  </Connect>
+</Response>`;
+}
+
 // Make outbound call with pre-connected session
+// Routes to appropriate bridge based on phoneCallMode
 async function triggerOutboundCallWithSession(
   toNumber: string,
   sessionId: string,
@@ -788,7 +843,8 @@ async function triggerOutboundCallWithSession(
   greetingText: string,
   context: string,
   timezone: string,
-  userId?: string
+  userId?: string,
+  phoneCallMode: PhoneCallMode = 'media_streams'
 ): Promise<{ 
   success: boolean; 
   call_sid?: string; 
@@ -804,6 +860,7 @@ async function triggerOutboundCallWithSession(
     sessionId,
     greetingLength: greetingText.length,
     audioLength: cachedAudioBase64.length,
+    phoneCallMode,
   };
 
   if (!accountSid || !authToken || !fromNumber) {
@@ -814,15 +871,22 @@ async function triggerOutboundCallWithSession(
     return { success: false, error: 'Invalid phone number format (must be E.164)', debug };
   }
 
-  // Generate TwiML with session reference - bridge will play cached audio
-  const twiml = generateTwiMLWithSession(
-    sessionId,
-    cachedAudioBase64,
-    greetingText,
-    context,
-    userId,
-    timezone
-  );
+  // Generate TwiML based on user's phone_call_mode preference
+  let twiml: string;
+  
+  if (phoneCallMode === 'cloudflare') {
+    // Cloudflare Durable Objects - unlimited duration, OpenAI/ElevenLabs voices
+    console.log(`[triggerOutboundCallWithSession] Using Cloudflare bridge for session: ${sessionId}`);
+    twiml = generateCloudflareTwiMLWithSession(sessionId, context, userId, timezone);
+  } else if (phoneCallMode === 'media_streams') {
+    // Supabase Media Streams - 6 min limit, OpenAI/ElevenLabs voices
+    console.log(`[triggerOutboundCallWithSession] Using Media Streams bridge for session: ${sessionId}`);
+    twiml = generateMediaStreamsTwiMLWithSession(sessionId, context, userId, timezone);
+  } else {
+    // ConversationRelay - 4hr limit, Twilio/Google voices only (no ElevenLabs)
+    console.log(`[triggerOutboundCallWithSession] Using ConversationRelay for session: ${sessionId}`);
+    twiml = generateConversationRelayTwiMLWithSession(sessionId, greetingText, context, userId, timezone);
+  }
 
   try {
     const credentials = btoa(`${accountSid}:${authToken}`);
@@ -1111,8 +1175,24 @@ serve(async (req) => {
           });
         }
 
+        // Fetch user's phone_call_mode preference to route to correct bridge
+        let phoneCallMode: PhoneCallMode = 'media_streams'; // Default
+        if (userId) {
+          const supabase = createClient(supabaseUrl, supabaseServiceKey);
+          const { data: prefs } = await supabase
+            .from('user_scheduling_prefs')
+            .select('phone_call_mode')
+            .eq('user_id', userId)
+            .maybeSingle();
+          
+          if (prefs?.phone_call_mode) {
+            phoneCallMode = prefs.phone_call_mode as PhoneCallMode;
+          }
+          console.log(`[trigger-call-with-session] User ${userId} phone_call_mode: ${phoneCallMode}`);
+        }
+
         console.log(`[trigger-call-with-session] Triggering call with pre-connected session: ${body.sessionId}`);
-        console.log(`[trigger-call-with-session] Cached greeting: "${(body.greetingText || '').substring(0, 50)}..."`);
+        console.log(`[trigger-call-with-session] Using mode: ${phoneCallMode}, Cached greeting: "${(body.greetingText || '').substring(0, 50)}..."`);
 
         const result = await triggerOutboundCallWithSession(
           phoneNumber,
@@ -1121,7 +1201,8 @@ serve(async (req) => {
           body.greetingText || '',
           body.context || '',
           body.timezone || 'America/New_York',
-          userId
+          userId,
+          phoneCallMode
         );
 
         return new Response(JSON.stringify(result), {
