@@ -9,7 +9,7 @@ bindings = [
 
 [[migrations]]
 tag = "v1"
-new_classes = ["TwilioCallSession"]
+new_sqlite_classes = ["TwilioCallSession"]
 
 [vars]
 SUPABASE_URL = "https://wwxgajrtmslzklnyplah.supabase.co"
