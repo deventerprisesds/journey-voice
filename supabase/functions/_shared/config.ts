@@ -3,7 +3,17 @@
 // Update GLOBAL_VERSION here and all functions will use it automatically
 // =============================================================================
 
-export const GLOBAL_VERSION = "2026-01-23-v12";
+export const GLOBAL_VERSION = "2026-01-25-v15";
+
+// Phone call mode types
+export type PhoneCallMode = 'media_streams' | 'conversation_relay' | 'cloudflare';
+
+// Bridge endpoint configuration for switching infrastructure
+export const BRIDGE_ENDPOINTS = {
+  supabase: 'wss://wwxgajrtmslzklnyplah.supabase.co/functions/v1/twilio-realtime-bridge',
+  conversation_relay: 'wss://wwxgajrtmslzklnyplah.supabase.co/functions/v1/conversation-relay-handler',
+  cloudflare: '', // Future: wss://your-worker.your-account.workers.dev/call
+} as const;
 
 // Voice greeting behavior configuration
 export const VOICE_CONFIG = {

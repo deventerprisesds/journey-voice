@@ -9,8 +9,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useAuth';
-import { loadUserSchedulingConfig, saveUserSchedulingConfig, type SchedulingConfigWithInstructions, type CustomVoice, type ScheduledCall } from '@/services/schedulingService';
-import { Loader2, RotateCcw, Save, Plus, Trash2, Volume2, Phone, Clock, AlertCircle } from 'lucide-react';
+import { loadUserSchedulingConfig, saveUserSchedulingConfig, type SchedulingConfigWithInstructions, type CustomVoice, type ScheduledCall, type PhoneCallMode } from '@/services/schedulingService';
+import { Loader2, RotateCcw, Save, Plus, Trash2, Volume2, Phone, Clock, AlertCircle, Radio } from 'lucide-react';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -132,6 +132,9 @@ const VoiceAssistantSettings: React.FC = () => {
   const [recurringCallsEnabled, setRecurringCallsEnabled] = useState(true);
   const [newCallName, setNewCallName] = useState('');
   const [newCallTime, setNewCallTime] = useState('09:00');
+  
+  // Phone call infrastructure
+  const [phoneCallMode, setPhoneCallMode] = useState<PhoneCallMode>('media_streams');
 
   useEffect(() => {
     if (user?.id) {
@@ -158,6 +161,7 @@ const VoiceAssistantSettings: React.FC = () => {
         ? config.scheduled_calls 
         : DEFAULT_SCHEDULED_CALLS);
       setRecurringCallsEnabled(config.recurring_calls_enabled ?? true);
+      setPhoneCallMode(config.phone_call_mode || 'media_streams');
     } catch (error) {
       console.error('Failed to load AI instructions:', error);
       toast({
@@ -187,6 +191,7 @@ const VoiceAssistantSettings: React.FC = () => {
         custom_voices: customVoices,
         scheduled_calls: scheduledCalls,
         recurring_calls_enabled: recurringCallsEnabled,
+        phone_call_mode: phoneCallMode,
       } as any);
 
       if (success) {
@@ -221,6 +226,7 @@ const VoiceAssistantSettings: React.FC = () => {
     setCustomVoices([]);
     setScheduledCalls(DEFAULT_SCHEDULED_CALLS);
     setRecurringCallsEnabled(true);
+    setPhoneCallMode('media_streams');
     toast({
       title: "Reset",
       description: "All instructions reset to defaults",
@@ -406,8 +412,56 @@ const VoiceAssistantSettings: React.FC = () => {
           </TabsContent>
 
           <TabsContent value="voice" className="space-y-6">
-            {/* TTS Provider Selection */}
+            {/* Phone Call Engine Selection */}
             <div className="space-y-4">
+              <div className="flex items-center gap-2">
+                <Radio className="h-5 w-5 text-primary" />
+                <Label className="text-base font-medium">Phone Call Engine</Label>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Choose the infrastructure for phone calls. This affects call duration limits and available voices.
+              </p>
+              
+              <RadioGroup
+                value={phoneCallMode}
+                onValueChange={(value) => setPhoneCallMode(value as PhoneCallMode)}
+                className="grid gap-3"
+              >
+                <div className="flex items-center space-x-3 rounded-lg border p-4">
+                  <RadioGroupItem value="media_streams" id="media_streams" />
+                  <Label htmlFor="media_streams" className="flex-1 cursor-pointer">
+                    <div className="font-medium">Media Streams (Recommended)</div>
+                    <div className="text-sm text-muted-foreground">
+                      OpenAI/ElevenLabs voices • ~6 min call limit • Best voice quality
+                    </div>
+                  </Label>
+                </div>
+                <div className="flex items-center space-x-3 rounded-lg border p-4">
+                  <RadioGroupItem value="conversation_relay" id="conversation_relay" />
+                  <Label htmlFor="conversation_relay" className="flex-1 cursor-pointer">
+                    <div className="font-medium">Conversation Relay</div>
+                    <div className="text-sm text-muted-foreground">
+                      Twilio voices only • 4 hour call limit • Text-based processing
+                    </div>
+                  </Label>
+                </div>
+                <div className="flex items-center space-x-3 rounded-lg border p-4 opacity-50">
+                  <RadioGroupItem value="cloudflare" id="cloudflare" disabled />
+                  <Label htmlFor="cloudflare" className="flex-1 cursor-not-allowed">
+                    <div className="font-medium flex items-center gap-2">
+                      Cloudflare Workers
+                      <span className="text-xs bg-muted px-2 py-0.5 rounded">Coming Soon</span>
+                    </div>
+                    <div className="text-sm text-muted-foreground">
+                      OpenAI/ElevenLabs voices • Unlimited duration • Best of both
+                    </div>
+                  </Label>
+                </div>
+              </RadioGroup>
+            </div>
+
+            {/* TTS Provider Selection */}
+            <div className="space-y-4 border-t pt-4">
               <div>
                 <Label className="text-base font-medium">Voice Provider</Label>
                 <p className="text-sm text-muted-foreground mb-3">

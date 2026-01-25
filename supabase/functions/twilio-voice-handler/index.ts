@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { GLOBAL_VERSION, FUNCTION_IDS, corsHeaders, createHealthResponse, CONVERSATION_RELAY_CONFIG } from "../_shared/config.ts";
+import { GLOBAL_VERSION, FUNCTION_IDS, corsHeaders, createHealthResponse, CONVERSATION_RELAY_CONFIG, BRIDGE_ENDPOINTS, type PhoneCallMode } from "../_shared/config.ts";
 
 // Version derived from centralized config
 const HANDLER_VERSION = `${GLOBAL_VERSION}-${FUNCTION_IDS.HANDLER}`;
@@ -8,7 +8,7 @@ const HANDLER_VERSION = `${GLOBAL_VERSION}-${FUNCTION_IDS.HANDLER}`;
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
 const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
-// Voice mode: 'stream' for Media Streams (existing), 'relay' for ConversationRelay (new)
+// Voice mode: 'stream' for Media Streams (existing), 'relay' for ConversationRelay
 type VoiceMode = 'stream' | 'relay';
 
 interface TwilioCallRequest {
@@ -107,7 +107,7 @@ const phoneTools = [
 ];
 
 // Get user context for the AI
-async function getUserContext(phoneNumber: string): Promise<{ userId: string | null; timezone: string; instructions: string }> {
+async function getUserContext(phoneNumber: string): Promise<{ userId: string | null; timezone: string; instructions: string; phoneCallMode: PhoneCallMode }> {
   const supabase = createClient(supabaseUrl, supabaseServiceKey);
   
   // Try to find user by phone number (normalize format)
@@ -150,22 +150,23 @@ async function getUserContext(phoneNumber: string): Promise<{ userId: string | n
   }
 
   if (!userId) {
-    return { userId: null, timezone: 'America/New_York', instructions: '' };
+    return { userId: null, timezone: 'America/New_York', instructions: '', phoneCallMode: 'media_streams' };
   }
 
-  // Get user preferences
+  // Get user preferences including phone_call_mode
   const { data: prefs } = await supabase
     .from('user_scheduling_prefs')
-    .select('timezone, core_instructions, realtime_extensions')
+    .select('timezone, core_instructions, realtime_extensions, phone_call_mode')
     .eq('user_id', userId)
     .maybeSingle();
 
-  console.log(`[getUserContext] Found user ${userId} with timezone ${prefs?.timezone || 'America/New_York'}`);
+  console.log(`[getUserContext] Found user ${userId} with timezone ${prefs?.timezone || 'America/New_York'}, phone_call_mode=${prefs?.phone_call_mode || 'media_streams'}`);
 
   return {
     userId: userId,
     timezone: prefs?.timezone || 'America/New_York',
-    instructions: [prefs?.core_instructions, prefs?.realtime_extensions].filter(Boolean).join('\n\n')
+    instructions: [prefs?.core_instructions, prefs?.realtime_extensions].filter(Boolean).join('\n\n'),
+    phoneCallMode: (prefs?.phone_call_mode as PhoneCallMode) || 'media_streams',
   };
 }
 
@@ -1113,22 +1114,37 @@ serve(async (req) => {
         const directionParam = url.searchParams.get('direction') || 'inbound';
         let userId = userIdParam || null;
         let timezone = 'America/New_York';
+        let phoneCallMode: PhoneCallMode = 'media_streams';
         
         if (callerPhone) {
           console.log(`[incoming-call] Looking up user for phone: ${callerPhone}`);
           const context = await getUserContext(callerPhone);
           userId = context.userId;
           timezone = context.timezone;
-          console.log(`[incoming-call] ✅ Resolved userId=${userId}, timezone=${timezone}`);
+          phoneCallMode = context.phoneCallMode;
+          console.log(`[incoming-call] ✅ Resolved userId=${userId}, timezone=${timezone}, phoneCallMode=${phoneCallMode}`);
         }
 
-        // Determine voice mode: 'relay' for ConversationRelay (default now), 'stream' for Media Streams
-        // Use mode=stream to fallback to Media Streams bridge
+        // Determine voice mode from user preference or URL override
+        // Priority: URL param > user preference > default (media_streams)
         const modeParam = url.searchParams.get('mode') as VoiceMode | null;
-        const useRelay = modeParam !== 'stream';
         const useFallback = url.searchParams.get('fallback') === 'true';
         
-        console.log(`[incoming-call] Voice mode: ${useRelay ? 'relay' : 'stream'}, Fallback: ${useFallback}`);
+        // Map phone_call_mode to useRelay boolean
+        // URL param 'relay' forces ConversationRelay, 'stream' forces Media Streams
+        // Otherwise use user's saved preference
+        let useRelay: boolean;
+        if (modeParam === 'relay') {
+          useRelay = true;
+        } else if (modeParam === 'stream') {
+          useRelay = false;
+        } else {
+          // No URL override - use user's saved preference
+          // Default to Media Streams (false) for OpenAI/ElevenLabs voices
+          useRelay = phoneCallMode === 'conversation_relay';
+        }
+        
+        console.log(`[incoming-call] Voice mode: ${useRelay ? 'relay' : 'stream'}, User preference: ${phoneCallMode}, Fallback: ${useFallback}`);
         
         let twiml: string;
         if (useFallback) {

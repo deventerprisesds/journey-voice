@@ -34,6 +34,9 @@ export interface ScheduledCall {
   context: string;
 }
 
+// Phone call mode for infrastructure selection
+export type PhoneCallMode = 'media_streams' | 'conversation_relay' | 'cloudflare';
+
 // Extended config with AI instructions and TTS settings
 export interface SchedulingConfigWithInstructions extends SchedulingConfig {
   core_instructions?: string;
@@ -46,6 +49,7 @@ export interface SchedulingConfigWithInstructions extends SchedulingConfig {
   custom_voices?: CustomVoice[];
   scheduled_calls?: ScheduledCall[];
   recurring_calls_enabled?: boolean;
+  phone_call_mode?: PhoneCallMode;
 }
 
 /**
@@ -67,7 +71,7 @@ export async function loadUserSchedulingConfig(userId?: string): Promise<Schedul
   try {
     const { data, error } = await supabase
       .from('user_scheduling_prefs')
-      .select('config, timezone, core_instructions, realtime_extensions, assistant_extensions, auto_greeting_timeout, tts_provider, elevenlabs_voice_id, openai_voice, custom_voices, scheduled_calls, recurring_calls_enabled')
+      .select('config, timezone, core_instructions, realtime_extensions, assistant_extensions, auto_greeting_timeout, tts_provider, elevenlabs_voice_id, openai_voice, custom_voices, scheduled_calls, recurring_calls_enabled, phone_call_mode')
       .eq('user_id', userId)
       .maybeSingle();
 
@@ -103,6 +107,7 @@ export async function loadUserSchedulingConfig(userId?: string): Promise<Schedul
         custom_voices: Array.isArray(data.custom_voices) ? (data.custom_voices as unknown as CustomVoice[]) : [],
         scheduled_calls: Array.isArray(data.scheduled_calls) ? (data.scheduled_calls as unknown as ScheduledCall[]) : [],
         recurring_calls_enabled: data.recurring_calls_enabled ?? true,
+        phone_call_mode: (data.phone_call_mode as PhoneCallMode) || 'media_streams',
       };
       cachedConfig = mergedConfig;
       cachedUserId = userId;
@@ -147,6 +152,7 @@ export async function saveUserSchedulingConfig(
       custom_voices, 
       scheduled_calls,
       recurring_calls_enabled,
+      phone_call_mode,
       ...restConfig 
     } = config;
     
@@ -201,6 +207,10 @@ export async function saveUserSchedulingConfig(
     
     if (recurring_calls_enabled !== undefined) {
       updateData.recurring_calls_enabled = recurring_calls_enabled;
+    }
+    
+    if (phone_call_mode !== undefined) {
+      updateData.phone_call_mode = phone_call_mode;
     }
     
     const { error } = await supabase
