@@ -430,9 +430,9 @@ const VoiceAssistantSettings: React.FC = () => {
                 <div className="flex items-center space-x-3 rounded-lg border p-4">
                   <RadioGroupItem value="media_streams" id="media_streams" />
                   <Label htmlFor="media_streams" className="flex-1 cursor-pointer">
-                    <div className="font-medium">Media Streams (Recommended)</div>
+                    <div className="font-medium">90 sec OpenAI Media Streams (Recommended)</div>
                     <div className="text-sm text-muted-foreground">
-                      OpenAI/ElevenLabs voices • ~6 min call limit • Best voice quality
+                      OpenAI/ElevenLabs voices • ~90 sec call limit • Best voice quality
                     </div>
                   </Label>
                 </div>
