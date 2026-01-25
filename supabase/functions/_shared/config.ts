@@ -13,8 +13,8 @@ export const BRIDGE_ENDPOINTS = {
   supabase: 'wss://wwxgajrtmslzklnyplah.supabase.co/functions/v1/twilio-realtime-bridge',
   conversation_relay: 'wss://wwxgajrtmslzklnyplah.supabase.co/functions/v1/conversation-relay-handler',
   // Cloudflare Durable Objects bridge for unlimited call duration
-  // Deploy your Worker and update this URL (format: wss://your-worker.your-subdomain.workers.dev/call)
-  cloudflare: '', 
+  // This URL will be updated after first deployment - check GitHub Actions logs for actual subdomain
+  cloudflare: 'wss://twilio-openai-bridge.YOUR_SUBDOMAIN.workers.dev/call', 
 } as const;
 
 // Voice greeting behavior configuration
