@@ -7,6 +7,8 @@ interface VoiceOrbProps {
   color?: string;
   size?: 'sm' | 'md' | 'lg';
   className?: string;
+  onClick?: () => void;
+  isConnected?: boolean;
 }
 
 const sizeClasses = {
@@ -20,9 +22,21 @@ const VoiceOrb: React.FC<VoiceOrbProps> = ({
   color = '#3B82F6',
   size = 'lg',
   className,
+  onClick,
+  isConnected = false,
 }) => {
   return (
-    <div className={cn('relative flex items-center justify-center', className)}>
+    <div 
+      className={cn(
+        'relative flex items-center justify-center',
+        onClick && 'cursor-pointer',
+        className
+      )}
+      onClick={onClick}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? (e) => e.key === 'Enter' && onClick() : undefined}
+    >
       {/* Outer glow rings - animated based on state */}
       {state === 'listening' && (
         <>

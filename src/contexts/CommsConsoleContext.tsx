@@ -19,6 +19,7 @@ interface CommsConsoleContextValue extends CommsConsoleState {
   sendMessage: (content: string) => Promise<void>;
   connectVoice: () => Promise<void>;
   disconnectVoice: () => void;
+  setPhoneCallState: (state: PhoneCallState) => void;
 }
 
 const CommsConsoleContext = createContext<CommsConsoleContextValue | null>(null);
@@ -199,10 +200,9 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const setMode = useCallback((mode: CommunicationMode) => {
     setCurrentMode(mode);
     
-    // Handle mode transitions
-    if (mode === 'voice' && !voiceAssistant.isConnected) {
-      voiceAssistant.connectToAssistant();
-    } else if (mode !== 'voice' && voiceAssistant.isConnected) {
+    // Disconnect voice when leaving voice mode
+    // Connection is handled explicitly by VoiceOrb click
+    if (mode !== 'voice' && voiceAssistant.isConnected) {
       voiceAssistant.disconnectAssistant();
     }
   }, [voiceAssistant]);
@@ -292,6 +292,7 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     sendMessage,
     connectVoice,
     disconnectVoice,
+    setPhoneCallState,
   };
 
   return (
