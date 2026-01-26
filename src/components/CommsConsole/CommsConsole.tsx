@@ -10,9 +10,10 @@ import ModeToggle from './ModeToggle';
 
 interface CommsConsoleProps {
   className?: string;
+  embedded?: boolean;
 }
 
-const CommsConsole: React.FC<CommsConsoleProps> = ({ className }) => {
+const CommsConsole: React.FC<CommsConsoleProps> = ({ className, embedded = false }) => {
   const isMobile = useIsMobile();
   const {
     isPanelOpen,
@@ -30,12 +31,70 @@ const CommsConsole: React.FC<CommsConsoleProps> = ({ className }) => {
     sendMessage,
   } = useCommsConsole();
 
-  if (!isPanelOpen) {
+  // In embedded mode, always show. Otherwise, respect isPanelOpen
+  if (!embedded && !isPanelOpen) {
     return null;
   }
 
   const orbColor = currentAssistant?.orb_color || '#3B82F6';
 
+  // Embedded mode - full page layout
+  if (embedded) {
+    return (
+      <div className={cn('flex h-screen w-full bg-background', className)}>
+        {/* Sidebar - hidden on mobile by default */}
+        {!isMobile && (
+          <AssistantSidebar
+            assistants={assistants}
+            currentAssistant={currentAssistant}
+            onSelectAssistant={selectAssistant}
+            isExpanded={isSidebarExpanded}
+            onToggleExpanded={toggleSidebar}
+          />
+        )}
+
+        {/* Main content area */}
+        <div className="flex-1 flex flex-col min-h-0 min-w-0">
+          {/* Header */}
+          <AssistantHeader
+            currentAssistant={currentAssistant}
+            assistants={assistants}
+            onSelectAssistant={selectAssistant}
+            onToggleSidebar={toggleSidebar}
+            onClose={togglePanel}
+            isSidebarExpanded={isSidebarExpanded}
+            showCloseButton={false}
+            showSidebarToggle={isMobile}
+          />
+
+          {/* Conversation pane */}
+          <ConversationPane
+            mode={currentMode}
+            voiceState={voiceState}
+            messages={messages}
+            orbColor={orbColor}
+            isLoading={isLoading}
+          />
+
+          {/* Text input */}
+          <TextInputBar
+            onSend={sendMessage}
+            mode={currentMode}
+            isLoading={isLoading}
+          />
+
+          {/* Mode toggle */}
+          <ModeToggle
+            currentMode={currentMode}
+            onModeChange={setMode}
+            className="border-t"
+          />
+        </div>
+      </div>
+    );
+  }
+
+  // Overlay mode (legacy - for other pages)
   return (
     <div
       className={cn(
@@ -64,6 +123,7 @@ const CommsConsole: React.FC<CommsConsoleProps> = ({ className }) => {
             currentAssistant={currentAssistant}
             onSelectAssistant={selectAssistant}
             isExpanded={isSidebarExpanded}
+            onToggleExpanded={toggleSidebar}
           />
         )}
 

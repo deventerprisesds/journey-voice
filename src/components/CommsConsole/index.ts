@@ -1,10 +1,10 @@
 export { default as CommsConsole } from './CommsConsole';
-export { default as CommsConsoleTrigger } from './CommsConsoleTrigger';
 export { default as AssistantAvatar } from './AssistantAvatar';
 export { default as AssistantHeader } from './AssistantHeader';
 export { default as AssistantSidebar } from './AssistantSidebar';
 export { default as ConversationPane } from './ConversationPane';
 export { default as ModeToggle } from './ModeToggle';
+export { default as NavigationSection } from './NavigationSection';
 export { default as TextInputBar } from './TextInputBar';
 export { default as TranscriptScroll } from './TranscriptScroll';
 export { default as VoiceOrb } from './VoiceOrb';

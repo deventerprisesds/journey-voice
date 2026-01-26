@@ -7,8 +7,9 @@ import { AuthProvider } from "@/hooks/useAuth";
 import { AssignmentSelectionProvider } from "@/contexts/AssignmentSelectionContext";
 import { VoiceAssistantProvider } from "@/contexts/VoiceAssistantContext";
 import { CommsConsoleProvider } from "@/contexts/CommsConsoleContext";
+import CommsHome from "./pages/CommsHome";
+import TasksPage from "./pages/TasksPage";
 import DailyPriorities from "./pages/DailyPriorities";
-import Dashboard from "./pages/Dashboard";
 import Auth from "./pages/Auth";
 import Admin from "./pages/Admin";
 import Settings from "./pages/Settings";
@@ -16,7 +17,6 @@ import Calendar from "./pages/Calendar";
 import NotFound from "./pages/NotFound";
 import DemoModeBadge from "./components/DemoModeBadge";
 import ErrorBoundary from "./components/ErrorBoundary";
-import { CommsConsole, CommsConsoleTrigger } from "./components/CommsConsole";
 import { supabase } from "@/integrations/supabase/client";
 import { useEffect } from "react";
 
@@ -78,7 +78,8 @@ const App = () => {
                   <DemoModeBadge />
                   <ErrorBoundary>
                     <Routes>
-                      <Route path="/" element={<Dashboard />} />
+                      <Route path="/" element={<CommsHome />} />
+                      <Route path="/tasks" element={<TasksPage />} />
                       <Route path="/agenda" element={<DailyPriorities />} />
                       <Route path="/auth" element={<Auth />} />
                       <Route path="/admin" element={<Admin />} />
@@ -88,10 +89,6 @@ const App = () => {
                       <Route path="*" element={<NotFound />} />
                     </Routes>
                   </ErrorBoundary>
-                  
-                  {/* Comms Console - persistent across all pages */}
-                  <CommsConsole />
-                  <CommsConsoleTrigger />
                 </AssignmentSelectionProvider>
               </CommsConsoleProvider>
             </VoiceAssistantProvider>
