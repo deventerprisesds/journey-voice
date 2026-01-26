@@ -19,6 +19,7 @@ interface AssistantHeaderProps {
   onClose: () => void;
   isSidebarExpanded: boolean;
   showCloseButton?: boolean;
+  showSidebarToggle?: boolean;
   className?: string;
 }
 
@@ -30,6 +31,7 @@ const AssistantHeader: React.FC<AssistantHeaderProps> = ({
   onClose,
   isSidebarExpanded,
   showCloseButton = true,
+  showSidebarToggle = true,
   className,
 }) => {
   const displayName = currentAssistant?.name || 'Select Assistant';
@@ -44,16 +46,18 @@ const AssistantHeader: React.FC<AssistantHeaderProps> = ({
     >
       {/* Left group: Sidebar toggle + Avatar + Dropdown */}
       <div className="flex items-center gap-2">
-        {/* Sidebar expand button */}
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={onToggleSidebar}
-          className="h-8 w-8 flex-shrink-0"
-          aria-label={isSidebarExpanded ? 'Collapse sidebar' : 'Expand sidebar'}
-        >
-          <PanelLeft className={cn('w-4 h-4 transition-transform', isSidebarExpanded && 'rotate-180')} />
-        </Button>
+        {/* Sidebar expand button (conditionally shown) */}
+        {showSidebarToggle && (
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onToggleSidebar}
+            className="h-8 w-8 flex-shrink-0"
+            aria-label={isSidebarExpanded ? 'Collapse sidebar' : 'Expand sidebar'}
+          >
+            <PanelLeft className={cn('w-4 h-4 transition-transform', isSidebarExpanded && 'rotate-180')} />
+          </Button>
+        )}
 
         {/* Avatar */}
         {currentAssistant && (
