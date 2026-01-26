@@ -20,6 +20,8 @@ interface CommsConsoleContextValue extends CommsConsoleState {
   connectVoice: () => Promise<void>;
   disconnectVoice: () => void;
   setPhoneCallState: (state: PhoneCallState) => void;
+  isMobileSidebarOpen: boolean;
+  setMobileSidebarOpen: (open: boolean) => void;
 }
 
 const CommsConsoleContext = createContext<CommsConsoleContextValue | null>(null);
@@ -53,6 +55,7 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     const stored = localStorage.getItem('comms-sidebar-expanded');
     return stored ? JSON.parse(stored) : true;
   });
+  const [isMobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   // Assistant state
   const [assistants, setAssistants] = useState<Assistant[]>([]);
@@ -228,7 +231,7 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
           userInput: content,
           userId,
           threadId,
-          assistantId: currentAssistant?.id,
+          assistantId: currentAssistant?.openai_assistant_id || undefined,
         },
       });
 
@@ -293,6 +296,8 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     connectVoice,
     disconnectVoice,
     setPhoneCallState,
+    isMobileSidebarOpen,
+    setMobileSidebarOpen,
   };
 
   return (
