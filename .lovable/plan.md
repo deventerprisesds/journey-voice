@@ -1,158 +1,190 @@
 
+# Phase 1: Add Performative Ring Sound to PhoneDialer
 
-# Consolidated Fix Plan: Comms Console - All Issues
+## Summary
 
-## Overview
+When you tap the green call button in the PhoneDialer, a realistic phone ringing sound will play to give the illusion of placing a call. The ring loops during the "dialing" state and stops when the WebRTC voice connection is established and the AI starts speaking.
 
-This plan addresses all identified issues in one implementation pass:
-- Mobile sidebar not appearing (button does nothing)
-- Text chat failing (wrong assistant ID)
-- Phone calls failing (missing backend action)
-- Phone dialer missing features (no tabs, agent display)
-- Mobile responsiveness (viewport not filling properly)
+Additionally, a "Call from my phone" fallback button will be added for when you need car Bluetooth, lock screen controls, etc.
 
 ---
 
-## Issue 1: Mobile Sidebar Not Appearing
+## What Changes
 
-**Root Cause**: The `AssistantSidebar` is completely hidden on mobile with `{!isMobile && <AssistantSidebar />}`. The toggle button changes state but has no visible effect since nothing is rendered.
+### 1. Add Ring Tone Audio File
 
-**Fix**: Add a Sheet (slide-out drawer) for mobile users.
+Create a `public/sounds/` directory and add a phone ring sound:
 
-**File: `src/components/CommsConsole/CommsConsole.tsx`**
-- Import Sheet components from `@/components/ui/sheet`
-- Add `isMobileSidebarOpen` state
-- Render Sheet containing sidebar content when on mobile
-- Connect toggle button to open/close the drawer
+- **File**: `public/sounds/ring-tone.mp3`
+- A standard phone ring sound (~3-4 seconds, looping)
+- Can use royalty-free audio from mixkit.co or freesound.org
 
-**File: `src/contexts/CommsConsoleContext.tsx`**
-- Add `isMobileSidebarOpen: boolean` to context
-- Add `setMobileSidebarOpen: (open: boolean) => void` to context
+### 2. Update PhoneDialer Component
 
-**File: `src/components/CommsConsole/AssistantHeader.tsx`**
-- Update toggle button to call `setMobileSidebarOpen(true)` on mobile
+**File**: `src/components/CommsConsole/PhoneDialer.tsx`
 
----
-
-## Issue 2: Text Chat Fails
-
-**Root Cause**: `sendMessage` passes `currentAssistant?.id` (e.g., `'mock-iris-id'`) instead of the OpenAI assistant ID.
-
-**Error**: `Invalid 'assistant_id': 'mock-iris-id'. Expected an ID that begins with 'asst_'.`
-
-**File: `src/contexts/CommsConsoleContext.tsx`**
-- Line 231: Change `assistantId: currentAssistant?.id` to `assistantId: currentAssistant?.openai_assistant_id || undefined`
+Changes:
+1. Add `useRef` for audio element and initialize on mount
+2. Import `connectVoice`, `disconnectVoice`, and `isConnected` from `useCommsConsole`
+3. Modify `initiateCall()` to:
+   - Play ring sound immediately when tapped
+   - Use `connectVoice()` (WebRTC) instead of the slow Twilio REST API callback
+   - Stop ring when `isConnected` becomes true
+4. Add `useEffect` to watch `isConnected` state and transition from `dialing` → `connected`
+5. Update `endCall()` to use `disconnectVoice()`
+6. Add "Call from my phone" button that uses `tel:+18665854827` for native dialer
 
 ---
 
-## Issue 3: Phone Calls Fail
+## Call Flow
 
-**Root Cause**: The edge function does not handle `action: 'initiate-outbound-call'`.
-
-**Error**: `Unknown action: initiate-outbound-call`
-
-**File: `supabase/functions/twilio-voice-handler/index.ts`**
-- Add new action handler for `initiate-outbound-call`
-- Use Twilio REST API to make outbound call
-- From: TWILIO_PHONE_NUMBER (env var)
-- To: User's phone (from profiles table or request)
-- Connect call to `twilio-realtime-bridge` with agent context
-
----
-
-## Issue 4: Phone Dialer Redesign
-
-**Current State**: Basic keypad with phone number input field
-
-**Requested Features**:
-1. Three-tab navigation: Keypad | Recents | Contacts (agents)
-2. Agent name display as header (not phone number input)
-3. Twilio number shown as subtitle
-4. Android-style dark theme aesthetic
-5. In-call UI with Mute/Speaker/End buttons
-
-**File: `src/components/CommsConsole/PhoneDialer.tsx`** (complete rewrite)
-
-New structure:
 ```
-+----------------------------------+
-|         Iris Chase               |  <- Agent name (large)
-|    +1 866-xxx-xxxx               |  <- Twilio number
-+----------------------------------+
-|                                  |
-|         [Keypad Grid]            |
-|         1  2  3                  |
-|         4  5  6                  |
-|         7  8  9                  |
-|         *  0  #                  |
-|                                  |
-|      [Green Call Button]         |
-|                                  |
-+----------------------------------+
-|  Keypad  |  Recents  | Contacts  |  <- Tab bar
-+----------------------------------+
+User taps green Call button
+  ↓
+Set state to 'dialing'
+  ↓
+Play ring-tone.mp3 (looping)
+  ↓
+Call connectVoice() → WebRTC handshake (~2 seconds)
+  ↓
+isConnected becomes true
+  ↓
+Stop ring sound
+  ↓
+Set state to 'connected'
+  ↓
+AI speaks
 ```
 
-**Contacts Tab**: Shows list of available assistants - tap to select before calling
-**Recents Tab**: Shows recent call history with agents
-**Keypad Tab**: Traditional dial pad (for DTMF tones during call)
+---
+
+## Code Changes
+
+### PhoneDialer.tsx - Key Modifications
+
+```typescript
+// Add imports
+import { useRef, useEffect } from 'react';
+
+// Inside component - get voice connection methods
+const { connectVoice, disconnectVoice, isConnected } = useCommsConsole();
+
+// Add audio ref
+const ringAudioRef = useRef<HTMLAudioElement | null>(null);
+
+// Initialize ring audio on mount
+useEffect(() => {
+  ringAudioRef.current = new Audio('/sounds/ring-tone.mp3');
+  ringAudioRef.current.loop = true;
+  return () => {
+    ringAudioRef.current?.pause();
+    ringAudioRef.current = null;
+  };
+}, []);
+
+// Watch connection state to stop ring and update UI
+useEffect(() => {
+  if (isConnected && callState === 'dialing') {
+    ringAudioRef.current?.pause();
+    if (ringAudioRef.current) ringAudioRef.current.currentTime = 0;
+    onCallStateChange('connected');
+  }
+}, [isConnected, callState, onCallStateChange]);
+
+// Updated initiateCall - uses WebRTC voice
+const initiateCall = async () => {
+  if (!user?.id) {
+    toast({ title: 'Not Signed In', ... });
+    return;
+  }
+
+  setIsLoading(true);
+  onCallStateChange('dialing');
+  
+  // Start playing ring sound immediately
+  try {
+    await ringAudioRef.current?.play();
+  } catch (e) {
+    // Autoplay may be blocked - call still proceeds
+    console.log('Ring audio autoplay blocked');
+  }
+
+  try {
+    await connectVoice(); // Fast WebRTC connection
+    // The useEffect above handles stopping ring and updating state
+  } catch (err) {
+    ringAudioRef.current?.pause();
+    onCallStateChange('idle');
+    toast({ title: 'Call Failed', ... });
+  } finally {
+    setIsLoading(false);
+  }
+};
+
+// Updated endCall - uses disconnectVoice
+const endCall = () => {
+  ringAudioRef.current?.pause();
+  disconnectVoice();
+  onCallStateChange('ended');
+  // ... rest of existing logic
+};
+
+// Add native dialer function
+const callFromPhone = () => {
+  window.location.href = 'tel:+18665854827';
+};
+```
+
+### JSX Addition - Below the green call button
+
+```tsx
+{/* Call button */}
+<Button
+  variant="default"
+  size="icon"
+  className="w-16 h-16 rounded-full bg-green-600 hover:bg-green-700 mt-6"
+  onClick={initiateCall}
+  disabled={isLoading}
+>
+  <Phone className="h-7 w-7" />
+</Button>
+
+{/* Native dialer fallback */}
+<button
+  onClick={callFromPhone}
+  className="text-sm text-muted-foreground mt-4 flex items-center gap-1.5 hover:text-foreground transition-colors"
+>
+  <Phone className="h-4 w-4" />
+  Call from my phone
+</button>
+```
 
 ---
 
-## Issue 5: Mobile Responsiveness
+## Files to Create/Modify
 
-**Problems**: Layout doesn't fill mobile screen, content appears centered with whitespace
-
-**File: `src/pages/CommsHome.tsx`**
-- Use `min-h-[100dvh]` for dynamic viewport height (mobile browser chrome)
-- Add `overscroll-behavior: none` to prevent pull-to-refresh
-- Ensure safe-area-inset padding for notched devices
-
-**File: `src/components/CommsConsole/CommsConsole.tsx`**
-- Ensure flex layout fills available space
-- Minimum 44px touch targets on all buttons
-- Proper spacing for thumb-reachable UI elements
+| File | Action | Description |
+|------|--------|-------------|
+| `public/sounds/ring-tone.mp3` | Create | Phone ring sound effect (looping, ~3-4 sec) |
+| `src/components/CommsConsole/PhoneDialer.tsx` | Modify | Add ring audio, use WebRTC voice, add native dialer button |
 
 ---
 
-## Files Summary
+## UX Details
 
-| File | Action | Changes |
-|------|--------|---------|
-| `src/contexts/CommsConsoleContext.tsx` | Modify | Add mobile sidebar state + fix assistant ID |
-| `src/components/CommsConsole/CommsConsole.tsx` | Modify | Add Sheet for mobile sidebar + responsive fixes |
-| `src/components/CommsConsole/AssistantHeader.tsx` | Modify | Connect toggle to mobile drawer |
-| `src/components/CommsConsole/PhoneDialer.tsx` | Rewrite | Android-style dialer with tabs |
-| `src/pages/CommsHome.tsx` | Modify | Mobile viewport fixes |
-| `supabase/functions/twilio-voice-handler/index.ts` | Modify | Add outbound call action |
+- **Ring duration**: Loops until WebRTC connection established (typically ~2 seconds)
+- **Volume**: Uses browser/device volume settings
+- **Autoplay fallback**: If browser blocks autoplay, call still proceeds silently
+- **Native dialer button**: Positioned below main call button, subtle styling
+- **End call**: Stops ring audio immediately and disconnects WebRTC voice
 
 ---
 
-## Implementation Order
+## Benefits Over Current Implementation
 
-1. **Context updates** - Add mobile sidebar state + fix assistant ID (CommsConsoleContext)
-2. **Mobile sidebar drawer** - Add Sheet component (CommsConsole + AssistantHeader)
-3. **Mobile responsiveness** - Viewport fixes (CommsHome)
-4. **Backend outbound call** - Add action handler (twilio-voice-handler)
-5. **Phone dialer redesign** - Android-style UI (PhoneDialer)
-
----
-
-## Technical Notes
-
-### Mobile Sidebar Behavior
-- Desktop: Inline sidebar, toggle expands/collapses
-- Mobile: Sheet slides in from left, toggle opens drawer, tap outside dismisses
-
-### Twilio Outbound Call Flow
-1. User taps Call button in PhoneDialer
-2. Frontend sends `{ action: 'initiate-outbound-call', userId, agentId }`
-3. Edge function looks up user's phone from profiles
-4. Twilio REST API initiates call FROM Twilio number TO user's phone
-5. When answered, Twilio connects to realtime bridge with agent context
-
-### Sheet Component Usage
-The Sheet from `@/components/ui/sheet` provides the slide-out drawer:
-- `SheetContent side="left"` for left-side drawer
-- Automatically handles backdrop and dismiss on outside click
-
+| Aspect | Before | After |
+|--------|--------|-------|
+| Call latency | 13-16 seconds (Twilio REST API callback) | ~2 seconds (WebRTC) |
+| User feedback | Waiting with no audio feedback | Ring sound provides immediate feedback |
+| Connection method | Phone rings, user answers | In-app voice starts automatically |
+| Bluetooth option | Only option | Secondary "Call from my phone" button |
