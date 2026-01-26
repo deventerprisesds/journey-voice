@@ -2,6 +2,10 @@ import React from 'react';
 import { cn } from '@/lib/utils';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { useCommsConsole } from '@/contexts/CommsConsoleContext';
+import {
+  Sheet,
+  SheetContent,
+} from '@/components/ui/sheet';
 import AssistantHeader from './AssistantHeader';
 import AssistantSidebar from './AssistantSidebar';
 import ConversationPane from './ConversationPane';
@@ -34,6 +38,8 @@ const CommsConsole: React.FC<CommsConsoleProps> = ({ className, embedded = false
     disconnectVoice,
     phoneCallState,
     setPhoneCallState,
+    isMobileSidebarOpen,
+    setMobileSidebarOpen,
   } = useCommsConsole();
 
   // In embedded mode, always show. Otherwise, respect isPanelOpen
@@ -51,11 +57,35 @@ const CommsConsole: React.FC<CommsConsoleProps> = ({ className, embedded = false
     }
   };
 
+  const handleMobileSidebarToggle = () => {
+    if (isMobile) {
+      setMobileSidebarOpen(true);
+    } else {
+      toggleSidebar();
+    }
+  };
+
+  // Sidebar content component for reuse
+  const SidebarContent = (
+    <AssistantSidebar
+      assistants={assistants}
+      currentAssistant={currentAssistant}
+      onSelectAssistant={(assistant) => {
+        selectAssistant(assistant);
+        if (isMobile) {
+          setMobileSidebarOpen(false);
+        }
+      }}
+      isExpanded={true}
+      onToggleExpanded={() => setMobileSidebarOpen(false)}
+    />
+  );
+
   // Embedded mode - full page layout
   if (embedded) {
     return (
-      <div className={cn('flex h-screen w-full bg-background', className)}>
-        {/* Sidebar - hidden on mobile by default */}
+      <div className={cn('flex min-h-[100dvh] w-full bg-background', className)} style={{ overscrollBehavior: 'none' }}>
+        {/* Desktop sidebar */}
         {!isMobile && (
           <AssistantSidebar
             assistants={assistants}
@@ -66,6 +96,15 @@ const CommsConsole: React.FC<CommsConsoleProps> = ({ className, embedded = false
           />
         )}
 
+        {/* Mobile sidebar drawer */}
+        {isMobile && (
+          <Sheet open={isMobileSidebarOpen} onOpenChange={setMobileSidebarOpen}>
+            <SheetContent side="left" className="w-72 p-0 pt-12">
+              {SidebarContent}
+            </SheetContent>
+          </Sheet>
+        )}
+
         {/* Main content area */}
         <div className="flex-1 flex flex-col min-h-0 min-w-0">
           {/* Header */}
@@ -73,7 +112,7 @@ const CommsConsole: React.FC<CommsConsoleProps> = ({ className, embedded = false
             currentAssistant={currentAssistant}
             assistants={assistants}
             onSelectAssistant={selectAssistant}
-            onToggleSidebar={toggleSidebar}
+            onToggleSidebar={handleMobileSidebarToggle}
             onClose={togglePanel}
             isSidebarExpanded={isSidebarExpanded}
             showCloseButton={false}
@@ -104,7 +143,7 @@ const CommsConsole: React.FC<CommsConsoleProps> = ({ className, embedded = false
           <ModeToggle
             currentMode={currentMode}
             onModeChange={setMode}
-            className="border-t"
+            className="border-t pb-safe"
           />
         </div>
       </div>
@@ -125,11 +164,21 @@ const CommsConsole: React.FC<CommsConsoleProps> = ({ className, embedded = false
         currentAssistant={currentAssistant}
         assistants={assistants}
         onSelectAssistant={selectAssistant}
-        onToggleSidebar={toggleSidebar}
+        onToggleSidebar={handleMobileSidebarToggle}
         onClose={togglePanel}
         isSidebarExpanded={isSidebarExpanded}
         showCloseButton={isMobile}
+        showSidebarToggle={isMobile}
       />
+
+      {/* Mobile sidebar drawer for overlay mode too */}
+      {isMobile && (
+        <Sheet open={isMobileSidebarOpen} onOpenChange={setMobileSidebarOpen}>
+          <SheetContent side="left" className="w-72 p-0 pt-12">
+            {SidebarContent}
+          </SheetContent>
+        </Sheet>
+      )}
 
       {/* Main content area with optional sidebar */}
       <div className="flex flex-1 min-h-0">
@@ -169,7 +218,7 @@ const CommsConsole: React.FC<CommsConsoleProps> = ({ className, embedded = false
           <ModeToggle
             currentMode={currentMode}
             onModeChange={setMode}
-            className="border-t"
+            className="border-t pb-safe"
           />
         </div>
       </div>

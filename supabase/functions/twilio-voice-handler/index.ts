@@ -12,7 +12,7 @@ const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 type VoiceMode = 'stream' | 'relay';
 
 interface TwilioCallRequest {
-  action: 'trigger-call' | 'trigger-call-with-session' | 'incoming-call' | 'status-callback' | 'process-speech';
+  action: 'trigger-call' | 'trigger-call-with-session' | 'incoming-call' | 'status-callback' | 'process-speech' | 'initiate-outbound-call';
   userId?: string;
   delay_minutes?: number;
   context?: string;
@@ -23,6 +23,9 @@ interface TwilioCallRequest {
   greetingText?: string;
   agenda?: Array<{ index: number; text: string; status: string }>;
   timezone?: string;
+  // Outbound call fields
+  agentId?: string;
+  agentName?: string;
 }
 
 // Tool definitions for OpenAI
@@ -1147,7 +1150,83 @@ serve(async (req) => {
         });
       }
 
-      // === PRE-CONNECTED SESSION CALL - greeting audio already cached ===
+      // === OUTBOUND CALL FROM APP UI - user initiated from CommsConsole ===
+      case 'initiate-outbound-call': {
+        const body: TwilioCallRequest = parsedBody || await req.json();
+        
+        console.log('[initiate-outbound-call] Received request:', JSON.stringify({
+          userId: body.userId,
+          agentId: body.agentId,
+          agentName: body.agentName,
+        }));
+
+        if (!body.userId) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'User ID is required.',
+          }), {
+            status: 400,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+
+        const supabase = createClient(supabaseUrl, supabaseServiceKey);
+        
+        // Look up user's phone from profile
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('phone')
+          .eq('user_id', body.userId)
+          .maybeSingle();
+        
+        let phoneNumber = profile?.phone || Deno.env.get('MY_PHONE_NUMBER');
+        
+        if (!phoneNumber) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'No phone number found. Please add your phone number in Settings.',
+          }), {
+            status: 400,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+
+        // Normalize phone number to E.164 format
+        if (!phoneNumber.startsWith('+')) {
+          const digits = phoneNumber.replace(/\D/g, '');
+          if (digits.length === 10) {
+            phoneNumber = `+1${digits}`;
+          } else if (digits.length === 11 && digits.startsWith('1')) {
+            phoneNumber = `+${digits}`;
+          } else {
+            phoneNumber = `+${digits}`;
+          }
+        }
+
+        console.log(`[initiate-outbound-call] Calling ${phoneNumber} for user ${body.userId}`);
+
+        // Get user preferences for timezone and call mode
+        const { data: prefs } = await supabase
+          .from('user_scheduling_prefs')
+          .select('timezone, phone_call_mode')
+          .eq('user_id', body.userId)
+          .maybeSingle();
+        
+        const timezone = prefs?.timezone || 'America/New_York';
+        const context = body.agentName ? `Call from ${body.agentName}` : 'App-initiated call';
+
+        // Make the call using existing function
+        const result = await triggerOutboundCall(
+          phoneNumber,
+          context,
+          undefined, // no delay
+          body.userId
+        );
+
+        return new Response(JSON.stringify(result), {
+          status: result.success ? 200 : 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
       case 'trigger-call-with-session': {
         // Use pre-parsed body if available, otherwise parse fresh
         const body: TwilioCallRequest = parsedBody || await req.json();

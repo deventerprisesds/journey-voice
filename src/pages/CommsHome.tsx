@@ -23,7 +23,13 @@ const CommsHome: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen w-full bg-background">
+    <div 
+      className="min-h-[100dvh] w-full bg-background" 
+      style={{ 
+        overscrollBehavior: 'none',
+        WebkitOverflowScrolling: 'touch',
+      }}
+    >
       <CommsConsole embedded />
     </div>
   );
