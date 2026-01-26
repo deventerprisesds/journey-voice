@@ -1227,6 +1227,8 @@ serve(async (req) => {
           status: result.success ? 200 : 400,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
+      }
+
       case 'trigger-call-with-session': {
         // Use pre-parsed body if available, otherwise parse fresh
         const body: TwilioCallRequest = parsedBody || await req.json();
