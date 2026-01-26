@@ -77,7 +77,7 @@ const PhoneDialer: React.FC<PhoneDialerProps> = ({
 
   // Initialize ring audio on mount
   useEffect(() => {
-    ringAudioRef.current = new Audio('/sounds/ring-tone.m4a');
+    ringAudioRef.current = new Audio('/sounds/ring-tone.mp3');
     ringAudioRef.current.loop = true;
     return () => {
       ringAudioRef.current?.pause();
