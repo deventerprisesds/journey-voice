@@ -29,6 +29,11 @@ const CommsConsole: React.FC<CommsConsoleProps> = ({ className, embedded = false
     isLoading,
     voiceState,
     sendMessage,
+    isConnected,
+    connectVoice,
+    disconnectVoice,
+    phoneCallState,
+    setPhoneCallState,
   } = useCommsConsole();
 
   // In embedded mode, always show. Otherwise, respect isPanelOpen
@@ -37,6 +42,14 @@ const CommsConsole: React.FC<CommsConsoleProps> = ({ className, embedded = false
   }
 
   const orbColor = currentAssistant?.orb_color || '#3B82F6';
+
+  const handleVoiceToggle = () => {
+    if (isConnected) {
+      disconnectVoice();
+    } else {
+      connectVoice();
+    }
+  };
 
   // Embedded mode - full page layout
   if (embedded) {
@@ -74,6 +87,10 @@ const CommsConsole: React.FC<CommsConsoleProps> = ({ className, embedded = false
             messages={messages}
             orbColor={orbColor}
             isLoading={isLoading}
+            isConnected={isConnected}
+            onVoiceToggle={handleVoiceToggle}
+            phoneCallState={phoneCallState}
+            onPhoneCallStateChange={setPhoneCallState}
           />
 
           {/* Text input */}
@@ -135,6 +152,10 @@ const CommsConsole: React.FC<CommsConsoleProps> = ({ className, embedded = false
             messages={messages}
             orbColor={orbColor}
             isLoading={isLoading}
+            isConnected={isConnected}
+            onVoiceToggle={handleVoiceToggle}
+            phoneCallState={phoneCallState}
+            onPhoneCallStateChange={setPhoneCallState}
           />
 
           {/* Text input */}

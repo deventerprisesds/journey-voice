@@ -194,6 +194,12 @@ export const VoiceAssistantProvider: React.FC<VoiceAssistantProviderProps> = ({
   };
 
   const connectToAssistant = async () => {
+    // Guard against duplicate connections
+    if (isConnected || assistantRef.current) {
+      console.log('Voice assistant already connected or connecting, skipping');
+      return;
+    }
+    
     try {
       assistantRef.current = new RealtimeVoiceAssistant(
         handleMessage,
