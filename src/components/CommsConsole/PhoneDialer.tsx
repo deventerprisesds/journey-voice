@@ -1,9 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Phone, PhoneOff, Mic, MicOff, Volume2, VolumeX, Clock, Users, Grid3X3, Delete } from 'lucide-react';
-import { supabase } from '@/integrations/supabase/client';
+import { Phone, PhoneOff, Mic, MicOff, Volume2, VolumeX, Clock, Users, Grid3X3, Delete, Smartphone } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
 import { useCommsConsole } from '@/contexts/CommsConsoleContext';
@@ -53,7 +52,10 @@ const PhoneDialer: React.FC<PhoneDialerProps> = ({
 }) => {
   const { user } = useAuth();
   const { toast } = useToast();
-  const { currentAssistant, assistants, selectAssistant } = useCommsConsole();
+  const { currentAssistant, assistants, selectAssistant, connectVoice, disconnectVoice, isConnected } = useCommsConsole();
+  
+  // Ring tone audio ref
+  const ringAudioRef = useRef<HTMLAudioElement | null>(null);
   
   const [activeTab, setActiveTab] = useState<string>('keypad');
   const [dialedDigits, setDialedDigits] = useState('');
@@ -72,6 +74,25 @@ const PhoneDialer: React.FC<PhoneDialerProps> = ({
       type: 'outgoing',
     },
   ]);
+
+  // Initialize ring audio on mount
+  useEffect(() => {
+    ringAudioRef.current = new Audio('/sounds/ring-tone.m4a');
+    ringAudioRef.current.loop = true;
+    return () => {
+      ringAudioRef.current?.pause();
+      ringAudioRef.current = null;
+    };
+  }, []);
+
+  // Watch connection state to stop ring and transition to connected
+  useEffect(() => {
+    if (isConnected && callState === 'dialing') {
+      ringAudioRef.current?.pause();
+      if (ringAudioRef.current) ringAudioRef.current.currentTime = 0;
+      onCallStateChange('connected');
+    }
+  }, [isConnected, callState, onCallStateChange]);
 
   // Call duration timer
   useEffect(() => {
@@ -120,34 +141,22 @@ const PhoneDialer: React.FC<PhoneDialerProps> = ({
     setIsLoading(true);
     onCallStateChange('dialing');
 
+    // Start playing ring sound immediately for feedback
     try {
-      const { data, error } = await supabase.functions.invoke('twilio-voice-handler', {
-        body: {
-          action: 'initiate-outbound-call',
-          userId: user.id,
-          agentId: currentAssistant?.openai_assistant_id || undefined,
-          agentName: currentAssistant?.name || 'Iris',
-        },
-      });
+      await ringAudioRef.current?.play();
+    } catch (e) {
+      // Autoplay may be blocked by browser - call still proceeds
+      console.log('Ring audio autoplay blocked:', e);
+    }
 
-      if (error) throw error;
-
-      if (data?.success) {
-        onCallStateChange('ringing');
-        toast({
-          title: 'Calling...',
-          description: `Connecting to ${currentAssistant?.name || 'Iris'}`,
-        });
-
-        // Simulate call connection (in reality, this would be webhook-driven)
-        setTimeout(() => {
-          onCallStateChange('connected');
-        }, 3000);
-      } else {
-        throw new Error(data?.error || 'Failed to initiate call');
-      }
+    try {
+      // Use WebRTC voice connection (fast ~2s) instead of Twilio REST API callback
+      await connectVoice();
+      // The useEffect above handles stopping ring and transitioning to 'connected'
     } catch (err) {
       console.error('Failed to initiate call:', err);
+      ringAudioRef.current?.pause();
+      if (ringAudioRef.current) ringAudioRef.current.currentTime = 0;
       onCallStateChange('idle');
       toast({
         title: 'Call Failed',
@@ -159,7 +168,19 @@ const PhoneDialer: React.FC<PhoneDialerProps> = ({
     }
   };
 
+  // Native dialer fallback for car Bluetooth, lock screen controls, etc.
+  const callFromPhone = () => {
+    window.location.href = 'tel:+18665854827';
+  };
+
   const endCall = () => {
+    // Stop ring audio if still playing
+    ringAudioRef.current?.pause();
+    if (ringAudioRef.current) ringAudioRef.current.currentTime = 0;
+    
+    // Disconnect WebRTC voice
+    disconnectVoice();
+    
     onCallStateChange('ended');
     setIsMuted(false);
     setIsSpeaker(false);
@@ -305,6 +326,15 @@ const PhoneDialer: React.FC<PhoneDialerProps> = ({
               >
                 <Phone className="h-7 w-7" />
               </Button>
+
+              {/* Native dialer fallback */}
+              <button
+                onClick={callFromPhone}
+                className="text-sm text-muted-foreground mt-4 flex items-center gap-1.5 hover:text-foreground transition-colors"
+              >
+                <Smartphone className="h-4 w-4" />
+                Call from my phone
+              </button>
             </TabsContent>
 
             <TabsContent value="recents" className="flex-1 overflow-auto p-4 m-0">
