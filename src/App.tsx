@@ -5,6 +5,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/hooks/useAuth";
 import { AssignmentSelectionProvider } from "@/contexts/AssignmentSelectionContext";
+import { VoiceAssistantProvider } from "@/contexts/VoiceAssistantContext";
+import { CommsConsoleProvider } from "@/contexts/CommsConsoleContext";
 import DailyPriorities from "./pages/DailyPriorities";
 import Dashboard from "./pages/Dashboard";
 import Auth from "./pages/Auth";
@@ -14,6 +16,7 @@ import Calendar from "./pages/Calendar";
 import NotFound from "./pages/NotFound";
 import DemoModeBadge from "./components/DemoModeBadge";
 import ErrorBoundary from "./components/ErrorBoundary";
+import { CommsConsole, CommsConsoleTrigger } from "./components/CommsConsole";
 import { supabase } from "@/integrations/supabase/client";
 import { useEffect } from "react";
 
@@ -69,21 +72,29 @@ const App = () => {
         <Sonner />
         <BrowserRouter>
           <AuthProvider>
-            <AssignmentSelectionProvider>
-              <DemoModeBadge />
-              <ErrorBoundary>
-                <Routes>
-                  <Route path="/" element={<Dashboard />} />
-                  <Route path="/agenda" element={<DailyPriorities />} />
-                  <Route path="/auth" element={<Auth />} />
-                  <Route path="/admin" element={<Admin />} />
-                  <Route path="/settings" element={<Settings />} />
-                  <Route path="/calendar" element={<Calendar />} />
-                  {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
-                  <Route path="*" element={<NotFound />} />
-                </Routes>
-              </ErrorBoundary>
-            </AssignmentSelectionProvider>
+            <VoiceAssistantProvider>
+              <CommsConsoleProvider>
+                <AssignmentSelectionProvider>
+                  <DemoModeBadge />
+                  <ErrorBoundary>
+                    <Routes>
+                      <Route path="/" element={<Dashboard />} />
+                      <Route path="/agenda" element={<DailyPriorities />} />
+                      <Route path="/auth" element={<Auth />} />
+                      <Route path="/admin" element={<Admin />} />
+                      <Route path="/settings" element={<Settings />} />
+                      <Route path="/calendar" element={<Calendar />} />
+                      {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
+                      <Route path="*" element={<NotFound />} />
+                    </Routes>
+                  </ErrorBoundary>
+                  
+                  {/* Comms Console - persistent across all pages */}
+                  <CommsConsole />
+                  <CommsConsoleTrigger />
+                </AssignmentSelectionProvider>
+              </CommsConsoleProvider>
+            </VoiceAssistantProvider>
           </AuthProvider>
         </BrowserRouter>
       </TooltipProvider>

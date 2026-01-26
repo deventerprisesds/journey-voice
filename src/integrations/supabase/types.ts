@@ -16,27 +16,41 @@ export type Database = {
     Tables: {
       ai_threads: {
         Row: {
+          assistant_id: string | null
           created_at: string
           id: string
+          mode: string | null
           openai_thread_id: string
           updated_at: string
           user_id: string
         }
         Insert: {
+          assistant_id?: string | null
           created_at?: string
           id?: string
+          mode?: string | null
           openai_thread_id: string
           updated_at?: string
           user_id: string
         }
         Update: {
+          assistant_id?: string | null
           created_at?: string
           id?: string
+          mode?: string | null
           openai_thread_id?: string
           updated_at?: string
           user_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "ai_threads_assistant_id_fkey"
+            columns: ["assistant_id"]
+            isOneToOne: false
+            referencedRelation: "assistants"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       app_builder_artifacts: {
         Row: {
@@ -526,6 +540,63 @@ export type Database = {
           metadata?: Json | null
           source_type?: string
           user_id?: string
+        }
+        Relationships: []
+      }
+      assistants: {
+        Row: {
+          avatar_initial: string | null
+          avatar_url: string | null
+          created_at: string | null
+          description: string | null
+          id: string
+          is_active: boolean | null
+          is_default: boolean | null
+          name: string
+          openai_assistant_id: string | null
+          orb_animation: string | null
+          orb_color: string | null
+          persona_prompt: string | null
+          tools_enabled: Json | null
+          updated_at: string | null
+          user_id: string
+          voice_id: string | null
+        }
+        Insert: {
+          avatar_initial?: string | null
+          avatar_url?: string | null
+          created_at?: string | null
+          description?: string | null
+          id?: string
+          is_active?: boolean | null
+          is_default?: boolean | null
+          name: string
+          openai_assistant_id?: string | null
+          orb_animation?: string | null
+          orb_color?: string | null
+          persona_prompt?: string | null
+          tools_enabled?: Json | null
+          updated_at?: string | null
+          user_id: string
+          voice_id?: string | null
+        }
+        Update: {
+          avatar_initial?: string | null
+          avatar_url?: string | null
+          created_at?: string | null
+          description?: string | null
+          id?: string
+          is_active?: boolean | null
+          is_default?: boolean | null
+          name?: string
+          openai_assistant_id?: string | null
+          orb_animation?: string | null
+          orb_color?: string | null
+          persona_prompt?: string | null
+          tools_enabled?: Json | null
+          updated_at?: string | null
+          user_id?: string
+          voice_id?: string | null
         }
         Relationships: []
       }
@@ -1045,39 +1116,52 @@ export type Database = {
       }
       conversation_messages: {
         Row: {
+          assistant_id: string | null
           audio_transcript: string | null
           content: string
           created_at: string
           id: string
           metadata: Json | null
           role: string
+          source: string | null
           thread_id: string | null
           user_id: string
           voice_session_id: string | null
         }
         Insert: {
+          assistant_id?: string | null
           audio_transcript?: string | null
           content: string
           created_at?: string
           id?: string
           metadata?: Json | null
           role: string
+          source?: string | null
           thread_id?: string | null
           user_id: string
           voice_session_id?: string | null
         }
         Update: {
+          assistant_id?: string | null
           audio_transcript?: string | null
           content?: string
           created_at?: string
           id?: string
           metadata?: Json | null
           role?: string
+          source?: string | null
           thread_id?: string | null
           user_id?: string
           voice_session_id?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "conversation_messages_assistant_id_fkey"
+            columns: ["assistant_id"]
+            isOneToOne: false
+            referencedRelation: "assistants"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "conversation_messages_thread_id_fkey"
             columns: ["thread_id"]
