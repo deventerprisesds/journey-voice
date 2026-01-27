@@ -189,6 +189,11 @@ export class RealtimeVoiceAssistant {
   private isListening = false;
   private ttsProvider: 'openai' | 'elevenlabs' = 'openai';
   private elevenlabsVoiceId: string = '';
+  
+  // Session tracking for transcript persistence
+  private sessionId: string | null = null;
+  private threadId: string | null = null;
+  private userId: string | null = null;
 
   constructor(
     private onMessage: (message: any) => void,
@@ -269,6 +274,33 @@ export class RealtimeVoiceAssistant {
       }
       
       console.log('Ephemeral token received, establishing WebRTC connection...');
+      
+      // Generate WebRTC session ID for transcript tracking (WR prefix for WebRTC)
+      this.sessionId = `WR${Date.now().toString(36)}${Math.random().toString(36).substring(2, 8)}`;
+      console.log('📍 WebRTC Session ID:', this.sessionId);
+      
+      // Get user ID for persistence
+      const { data: { user } } = await supabase.auth.getUser();
+      this.userId = user?.id || null;
+      
+      // Create thread for this voice session
+      if (this.userId) {
+        try {
+          const { data: thread } = await supabase
+            .from('ai_threads')
+            .insert({ 
+              user_id: this.userId, 
+              openai_thread_id: `webrtc_${this.sessionId}`,
+              mode: 'voice'
+            })
+            .select('id')
+            .single();
+          this.threadId = thread?.id || null;
+          console.log('📍 Created voice thread:', this.threadId);
+        } catch (err) {
+          console.warn('Could not create voice thread:', err);
+        }
+      }
 
       // Initialize audio context with user gesture for autoplay policy
       this.audioContext = new AudioContext({ sampleRate: 24000 });
@@ -434,6 +466,65 @@ export class RealtimeVoiceAssistant {
       case 'response.done':
         console.log('🎯 AI response completed');
         break;
+        
+      // Transcript capture for persistence
+      case 'conversation.item.input_audio_transcription.completed':
+        // User speech transcript
+        console.log('📝 User transcript:', event.transcript);
+        if (event.transcript?.trim()) {
+          this.saveTranscript('user', event.transcript);
+        }
+        break;
+        
+      case 'response.audio_transcript.done':
+        // Assistant speech transcript  
+        console.log('📝 Assistant transcript:', event.transcript);
+        if (event.transcript?.trim()) {
+          this.saveTranscript('assistant', event.transcript);
+        }
+        break;
+    }
+  }
+  
+  // Save transcript to database via generate-embeddings edge function
+  private async saveTranscript(role: 'user' | 'assistant', content: string): Promise<void> {
+    if (!this.userId || !content?.trim()) return;
+
+    try {
+      // Call existing generate-embeddings function for unified storage
+      const { error } = await supabase.functions.invoke('generate-embeddings', {
+        body: {
+          action: 'store_conversation',
+          userId: this.userId,
+          threadId: this.threadId,
+          role: role,
+          content: content,
+          audioTranscript: content,
+          voiceSessionId: this.sessionId,
+          messageType: role,
+          metadata: { 
+            source: 'voice',
+            session_type: 'webrtc',
+            tts_provider: this.ttsProvider
+          }
+        }
+      });
+
+      if (error) {
+        console.warn('Failed to save transcript:', error);
+      } else {
+        console.log(`💾 Saved ${role} transcript via generate-embeddings`);
+      }
+
+      // Emit for UI updates
+      this.onMessage({
+        type: 'transcript.saved',
+        role,
+        content,
+        sessionId: this.sessionId
+      });
+    } catch (error) {
+      console.error('Error saving transcript:', error);
     }
   }
 

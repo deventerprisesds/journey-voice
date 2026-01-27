@@ -3,6 +3,7 @@ import { useToast } from '@/hooks/use-toast';
 import { RealtimeVoiceAssistant } from '@/utils/RealtimeVoiceAssistant';
 import { loadUserSchedulingConfig } from '@/services/schedulingService';
 import { useAuth } from '@/hooks/useAuth';
+import type { ConversationMessage } from '@/components/CommsConsole/types';
 
 interface VoiceAssistantContextType {
   // Connection state
@@ -14,6 +15,10 @@ interface VoiceAssistantContextType {
   processingStatus: string;
   connectionError: { type?: string; message: string } | null;
   retryAttempts: number;
+  
+  // Voice transcripts for UI display
+  voiceTranscripts: ConversationMessage[];
+  clearVoiceTranscripts: () => void;
   
   // Actions
   connectToAssistant: () => Promise<void>;
@@ -57,6 +62,7 @@ export const VoiceAssistantProvider: React.FC<VoiceAssistantProviderProps> = ({
   const [connectionError, setConnectionError] = useState<{ type?: string; message: string } | null>(null);
   const [retryAttempts, setRetryAttempts] = useState(0);
   const [autoGreetingTimeout, setAutoGreetingTimeout] = useState(5000); // Default 5 seconds
+  const [voiceTranscripts, setVoiceTranscripts] = useState<ConversationMessage[]>([]);
   const assistantRef = useRef<RealtimeVoiceAssistant | null>(null);
   const autoGreetingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   
@@ -121,6 +127,20 @@ export const VoiceAssistantProvider: React.FC<VoiceAssistantProviderProps> = ({
       });
       return;
     }
+    
+    // Capture transcripts for UI display
+    if (message.type === 'transcript.saved') {
+      const newMessage: ConversationMessage = {
+        id: `${message.sessionId}-${Date.now()}`,
+        role: message.role,
+        content: message.content,
+        source: 'voice',
+        assistant_id: null,
+        created_at: new Date().toISOString(),
+      };
+      setVoiceTranscripts(prev => [...prev, newMessage]);
+      return;
+    }
 
     // Handle processing status updates from function calls
     if (message.type === 'response.function_call_arguments.delta' || 
@@ -164,11 +184,15 @@ export const VoiceAssistantProvider: React.FC<VoiceAssistantProviderProps> = ({
     if (connected) {
       setConnectionError(null);
       setRetryAttempts(0);
+      // Clear transcripts for new session
+      setVoiceTranscripts([]);
     } else {
       setIsListening(false);
       setIsSpeaking(false);
     }
   };
+  
+  const clearVoiceTranscripts = () => setVoiceTranscripts([]);
 
   const handleListeningChange = (listening: boolean) => {
     setIsListening(listening);
@@ -335,6 +359,8 @@ export const VoiceAssistantProvider: React.FC<VoiceAssistantProviderProps> = ({
         processingStatus,
         connectionError,
         retryAttempts,
+        voiceTranscripts,
+        clearVoiceTranscripts,
         connectToAssistant,
         disconnectAssistant,
         toggleListening,
