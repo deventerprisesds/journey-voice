@@ -1,164 +1,232 @@
 
-# End Call via AI Hang-Up Tool + Connection Indicator
+# Mobile Responsiveness and Navigation Consistency
 
 ## Summary
 
-Update the End Call button to trigger the AI's built-in `disconnect` tool (with farewell message) instead of immediately tearing down the connection. Add a visible indicator in Phone mode when the voice session remains connected.
+Add a consistent back button to the Agenda page and implement mobile-responsive layouts across all pages using the existing shadcn/ui components and Tailwind CSS utilities.
+
+---
+
+## Current UI Framework
+
+The app uses **shadcn/ui** - a modern React component library built on:
+- Tailwind CSS for styling
+- Radix UI for accessible primitives
+- Lucide React for icons
+
+This is a solid choice that provides clean, customizable components. The issue is not the framework but rather incomplete mobile optimization across pages.
 
 ---
 
 ## Changes
 
-### 1. Update PhoneDialer End Call Logic
+### 1. Add Back Button to Agenda Page
 
-**File**: `src/components/CommsConsole/PhoneDialer.tsx`
+**File**: `src/pages/DailyPriorities.tsx`
 
-Replace the direct `disconnectVoice()` call with a message to the AI requesting it to hang up. This leverages the existing `handleDisconnectTool` in `RealtimeVoiceAssistant.ts` which includes:
-- A farewell message toast
-- A 2-second delay before actual WebRTC teardown
+Add a back button consistent with other pages:
 
 ```typescript
-// Current implementation (line 176-195):
-const endCall = () => {
-  ringAudioRef.current?.pause();
-  if (ringAudioRef.current) ringAudioRef.current.currentTime = 0;
-  disconnectVoice();  // Direct disconnect
-  onCallStateChange('ended');
-  // ...
-};
-
-// New implementation:
-const endCall = () => {
-  ringAudioRef.current?.pause();
-  if (ringAudioRef.current) ringAudioRef.current.currentTime = 0;
-  
-  // Use AI hang-up tool if connected, otherwise direct disconnect
-  if (isConnected) {
-    sendHangUpMessage();  // New function - sends text to AI
-  } else {
-    disconnectVoice();
-  }
-  
-  onCallStateChange('ended');
-  // ...
-};
-```
-
-Add a new function to send a hang-up request to the AI:
-
-```typescript
-const sendHangUpMessage = () => {
-  // Access the voice assistant and send a disconnect command
-  // This triggers the AI's disconnect tool which handles farewell
-};
-```
-
----
-
-### 2. Expose sendTextMessage in VoiceAssistantContext
-
-**File**: `src/contexts/VoiceAssistantContext.tsx`
-
-Add `sendTextMessage` to the context so PhoneDialer can send the hang-up command:
-
-```typescript
-interface VoiceAssistantContextType {
-  // ... existing props
-  sendTextMessage: (text: string) => void;  // New
-}
-
-// In provider:
-const sendTextMessage = useCallback((text: string) => {
-  assistantRef.current?.sendTextMessage(text);
-}, []);
-```
-
----
-
-### 3. Expose sendTextMessage in CommsConsoleContext
-
-**File**: `src/contexts/CommsConsoleContext.tsx`
-
-Pass through the `sendTextMessage` from VoiceAssistantContext:
-
-```typescript
-interface CommsConsoleContextValue extends CommsConsoleState {
-  // ... existing props
-  sendTextMessage: (text: string) => void;  // New
-}
-
-// In provider:
-const sendTextMessage = useCallback((text: string) => {
-  voiceAssistant.sendTextMessage(text);
-}, [voiceAssistant]);
-```
-
----
-
-### 4. Add Connection Indicator in Phone Mode
-
-**File**: `src/components/CommsConsole/PhoneDialer.tsx`
-
-Add a persistent visual indicator when the voice session is still connected after a call "ends":
-
-```typescript
-// In the Agent Header section (around line 214):
-{/* Connection indicator - shows when voice is still connected */}
-{isConnected && callState === 'idle' && (
-  <div className="mt-2 flex items-center gap-2 text-xs text-amber-500">
-    <div className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
-    Voice session active
+// In the header section (around line 93-101):
+<div className="flex items-center gap-4">
+  <Link to="/">
+    <Button variant="ghost" size="icon">
+      <ArrowLeft className="h-5 w-5" />
+    </Button>
+  </Link>
+  <div>
+    <h1 className="text-2xl font-bold text-primary">
+      Today's Priorities
+    </h1>
+    <p className="text-sm text-muted-foreground hidden sm:block">
+      {format(selectedDate, 'EEEE, MMMM d, yyyy')}
+    </p>
   </div>
-)}
+</div>
 ```
 
-Also add an indicator during the "ended" state showing disconnect is in progress:
+---
+
+### 2. Make Agenda Page Header Mobile-Responsive
+
+**File**: `src/pages/DailyPriorities.tsx`
+
+Convert the header to stack vertically on mobile with a hamburger menu or dropdown for navigation:
 
 ```typescript
-{callState === 'ended' && isConnected && (
-  <div className="mt-2 text-sm text-muted-foreground">
-    Disconnecting...
+// Mobile: Show hamburger menu with nav options
+// Desktop: Show full button row
+<header className="border-b border-border bg-card sticky top-0 z-40">
+  <div className="container mx-auto px-4 py-3">
+    {/* Mobile header */}
+    <div className="flex items-center justify-between md:hidden">
+      <div className="flex items-center gap-2">
+        <Link to="/">
+          <Button variant="ghost" size="icon">
+            <ArrowLeft className="h-5 w-5" />
+          </Button>
+        </Link>
+        <h1 className="text-lg font-bold">Priorities</h1>
+      </div>
+      <DropdownMenu>
+        {/* Navigation options */}
+      </DropdownMenu>
+    </div>
+    
+    {/* Desktop header - existing layout */}
+    <div className="hidden md:flex items-center justify-between">
+      {/* ... existing desktop layout ... */}
+    </div>
   </div>
+</header>
+```
+
+---
+
+### 3. Make Settings Page Tabs Mobile-Responsive
+
+**File**: `src/pages/Settings.tsx`
+
+Replace the 8-column grid with a scrollable tab list or dropdown on mobile:
+
+```typescript
+// Option A: Scrollable tabs on mobile
+<TabsList className="flex w-full overflow-x-auto md:grid md:grid-cols-8 gap-1">
+  {/* Tabs become scrollable horizontally on mobile */}
+</TabsList>
+
+// Option B: Use a Select dropdown on mobile
+{isMobile ? (
+  <Select value={currentTab} onValueChange={setCurrentTab}>
+    {/* Tab options as select items */}
+  </Select>
+) : (
+  <TabsList className="grid grid-cols-8">
+    {/* Desktop tab buttons */}
+  </TabsList>
 )}
 ```
 
 ---
 
-## Technical Details
+### 4. Create a Shared Mobile Header Component (Optional)
 
-### Message Flow
+**New File**: `src/components/MobilePageHeader.tsx`
 
-```text
-User clicks End Call
-        ↓
-PhoneDialer sends "Please hang up now"
-        ↓
-RealtimeVoiceAssistant receives message
-        ↓
-AI calls disconnect tool
-        ↓
-handleDisconnectTool() executes:
-  - Shows farewell toast
-  - Waits 2 seconds
-  - Calls this.disconnect()
-        ↓
-WebRTC teardown, mic released
-        ↓
-isConnected becomes false
-        ↓
-Indicator disappears
+Create a reusable header component for consistent navigation:
+
+```typescript
+interface MobilePageHeaderProps {
+  title: string;
+  subtitle?: string;
+  backTo?: string;
+  actions?: React.ReactNode;
+}
+
+const MobilePageHeader: React.FC<MobilePageHeaderProps> = ({
+  title,
+  subtitle,
+  backTo = '/',
+  actions
+}) => {
+  const isMobile = useIsMobile();
+  
+  return (
+    <header className="sticky top-0 z-40 border-b bg-card/95 backdrop-blur">
+      <div className="container mx-auto px-4 py-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Link to={backTo}>
+              <Button variant="ghost" size="icon">
+                <ArrowLeft className="h-5 w-5" />
+              </Button>
+            </Link>
+            <div>
+              <h1 className="text-lg md:text-2xl font-bold">{title}</h1>
+              {subtitle && (
+                <p className="text-xs md:text-sm text-muted-foreground hidden sm:block">
+                  {subtitle}
+                </p>
+              )}
+            </div>
+          </div>
+          {actions}
+        </div>
+      </div>
+    </header>
+  );
+};
 ```
 
-### Files to Modify
+---
+
+### 5. Apply Mobile Styles to Calendar Page
+
+**File**: `src/pages/Calendar.tsx`
+
+Simplify the header on mobile:
+
+```typescript
+<div className="flex items-center justify-between">
+  <div className="flex items-center gap-2 md:gap-4">
+    <Button
+      variant="ghost"
+      size="icon"
+      onClick={handleNavigation}
+    >
+      <ArrowLeft className="h-5 w-5" />
+    </Button>
+    <div>
+      <h1 className="text-lg md:text-2xl font-bold">Calendar</h1>
+      <p className="text-xs md:text-sm text-muted-foreground hidden sm:block">
+        View and manage your tasks
+      </p>
+    </div>
+  </div>
+  {/* Hide Dashboard button on mobile - back button is enough */}
+  <Button
+    variant="secondary"
+    size="sm"
+    onClick={handleNavigation}
+    className="hidden md:flex items-center gap-2"
+  >
+    <Home className="h-4 w-4" />
+    Dashboard
+  </Button>
+</div>
+```
+
+---
+
+## Files to Modify
 
 | File | Changes |
 |------|---------|
-| `src/contexts/VoiceAssistantContext.tsx` | Expose `sendTextMessage` function |
-| `src/contexts/CommsConsoleContext.tsx` | Pass through `sendTextMessage` |
-| `src/components/CommsConsole/PhoneDialer.tsx` | Use AI hang-up, add connection indicator |
+| `src/pages/DailyPriorities.tsx` | Add back button, make header mobile-responsive |
+| `src/pages/Settings.tsx` | Make TabsList mobile-friendly (scrollable or dropdown) |
+| `src/pages/Calendar.tsx` | Simplify mobile header |
+| `src/pages/TasksPage.tsx` | Minor mobile adjustments |
+| `src/components/MobilePageHeader.tsx` (new) | Optional shared header component |
 
 ---
 
-## Fallback Behavior
+## Mobile Breakpoints
 
-If the AI doesn't respond within a reasonable time (the existing 2-second delay in `handleDisconnectTool`), the connection will still be terminated. The indicator ensures users know when the session is still active.
+Using Tailwind's default breakpoints:
+- `sm`: 640px (small tablets)
+- `md`: 768px (tablets)
+- `lg`: 1024px (laptops)
+
+Key pattern: `hidden md:flex` to hide on mobile, show on tablet+
+
+---
+
+## Why Not Google Material or Another Framework?
+
+shadcn/ui is already a great choice because:
+- Lightweight (only include components you use)
+- Highly customizable (you own the code)
+- Built on accessible Radix primitives
+- Works seamlessly with Tailwind
+
+Switching to Material UI would require significant refactoring and add bundle size. The current setup just needs consistent mobile patterns applied.
