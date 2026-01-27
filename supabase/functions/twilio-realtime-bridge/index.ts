@@ -1347,6 +1347,9 @@ type ResponseTrigger =
       }));
     }
     
+    // ElevenLabs TTS timeout - fallback to OpenAI if ElevenLabs hangs
+    const ELEVENLABS_TIMEOUT_MS = 5000; // 5 second timeout
+    
     // ElevenLabs TTS function - sends text to ElevenLabs and streams μ-law audio to Twilio
     async function sendElevenLabsTTS(text: string) {
       if (!streamSid || twilioWs.readyState !== WebSocket.OPEN || !ELEVENLABS_API_KEY) {
@@ -1369,18 +1372,65 @@ type ResponseTrigger =
       try {
         const startTime = Date.now();
         
-        const response = await fetch(`${SUPABASE_URL}/functions/v1/elevenlabs-tts`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            text: fullText,
-            voiceId: elevenlabsVoiceId,
-            format: 'ulaw'
-          })
-        });
+        // Create abort controller for timeout
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => {
+          console.warn(`[ELEVENLABS] ⚠️ TIMEOUT after ${ELEVENLABS_TIMEOUT_MS}ms - aborting request`);
+          controller.abort();
+        }, ELEVENLABS_TIMEOUT_MS);
+        
+        let response: Response;
+        try {
+          response = await fetch(`${SUPABASE_URL}/functions/v1/elevenlabs-tts`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              text: fullText,
+              voiceId: elevenlabsVoiceId,
+              format: 'ulaw'
+            }),
+            signal: controller.signal
+          });
+        } catch (fetchError: any) {
+          clearTimeout(timeoutId);
+          
+          // If timeout/abort, trigger OpenAI fallback
+          if (fetchError.name === 'AbortError') {
+            console.warn(`[ELEVENLABS] ⚠️ Request timed out, falling back to OpenAI voice`);
+            isProcessingElevenLabsTTS = false;
+            
+            // Fallback: Inject text and trigger OpenAI audio response
+            if (openaiWs && openaiWs.readyState === WebSocket.OPEN) {
+              console.log(`[ELEVENLABS-FALLBACK] Triggering OpenAI audio for: "${fullText.substring(0, 50)}..."`);
+              
+              // Temporarily switch to audio mode for this response
+              openaiWs.send(JSON.stringify({
+                type: "conversation.item.create",
+                item: {
+                  type: "message",
+                  role: "assistant",
+                  content: [{ type: "text", text: fullText }]
+                }
+              }));
+              
+              // Request audio output for this text
+              openaiWs.send(JSON.stringify({
+                type: "response.create",
+                response: { 
+                  modalities: ["audio"],
+                  instructions: `Speak the following text naturally: "${fullText}"`
+                }
+              }));
+            }
+            return;
+          }
+          throw fetchError;
+        }
+        
+        clearTimeout(timeoutId);
         
         if (!response.ok) {
           const errorText = await response.text();
@@ -1391,6 +1441,11 @@ type ResponseTrigger =
         
         const data = await response.json();
         const latency = Date.now() - startTime;
+        
+        // Warn if latency is high but still completed
+        if (latency > 3000) {
+          console.warn(`[ELEVENLABS] ⚠️ HIGH LATENCY: ${latency}ms (threshold: 3000ms)`);
+        }
         
         console.log(`[ELEVENLABS] ✅ Generated ${data.bytes} bytes of μ-law audio in ${latency}ms`);
         
