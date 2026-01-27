@@ -1,93 +1,115 @@
-# Unified Activity Timeline - IMPLEMENTED ✅
 
-## Status: Complete
+# Explicit Error Notification on ElevenLabs Fallback
 
-The unified activity logging system is now implemented across all communication modes.
+## Problem
 
----
+The current fallback mechanism silently switches from ElevenLabs to OpenAI TTS when ElevenLabs times out. This causes confusion because:
+1. You hear a different voice with no explanation
+2. You don't know what went wrong
+3. Debugging later is harder because the "fix" masked the real issue
 
-## What Was Implemented
+## Solution
 
-### 1. Database: `activity_log` table + `debug_timeline` view
-- Captures ALL communication events in one place
-- Tracks: phone_inbound, phone_outbound, voice_webrtc, chat
-- Status tracking: started, connected, completed, failed, error
-- Stage tracking: webhook, token_fetch, webrtc_setup, openai_websocket
-- Error details: error_message, error_code
-- Metrics: duration_seconds, message_count
-- Indexes on user_id, session_id, status for fast queries
+Replace the silent fallback with an explicit spoken error message that tells you what happened, then continues with OpenAI voice.
 
-### 2. WebRTC Voice (`src/utils/RealtimeVoiceAssistant.ts`)
-- Session ID (`WR...`) generated FIRST before any async operations
-- Activity logged at: started (token_fetch), connected (webrtc_ready), error (any stage), completed (disconnect)
-- Message count tracked for session metrics
-- All errors now logged with stage context
+## Changes to `supabase/functions/twilio-realtime-bridge/index.ts`
 
-### 3. Twilio Bridge (`supabase/functions/twilio-realtime-bridge/index.ts`)
-- Activity logged at: started (webhook), connected (session_configured), error (openai_websocket), completed (closeCallSession)
-- Session ID uses stream_sid for correlation
-- Metrics include: greeting_latency, response_create_count, audio_frames
-
-### 4. Query Helper (`src/utils/dbQuery.ts`)
-- `safeQuery<T>()` - distinguishes between query failure and empty results
-- `safeSingleQuery<T>()` - for single row queries
-- `logActivity()` - helper for consistent activity logging
-- All functions log timing and error details
-
----
-
-## Debug Query
-
-Single query to see ALL recent activity across modes:
-
-```sql
-SELECT 
-  timestamp,
-  activity_type,
-  status,
-  stage,
-  session_id,
-  duration_seconds,
-  message_count,
-  error_message
-FROM debug_timeline
-WHERE user_id = 'YOUR_USER_ID'
-ORDER BY timestamp DESC
-LIMIT 20;
+**Current behavior (lines 1401-1427):**
+```typescript
+if (fetchError.name === 'AbortError') {
+  console.warn(`[ELEVENLABS] ⚠️ Request timed out, falling back to OpenAI voice`);
+  // Silently falls back to OpenAI and speaks the original text
+  openaiWs.send(JSON.stringify({
+    type: "response.create",
+    response: { 
+      modalities: ["audio"],
+      instructions: `Speak the following text naturally: "${fullText}"`
+    }
+  }));
+}
 ```
 
----
-
-## Expected Output
-
+**New behavior:**
+```typescript
+if (fetchError.name === 'AbortError') {
+  console.warn(`[ELEVENLABS] ⚠️ Request timed out after ${ELEVENLABS_TIMEOUT_MS}ms`);
+  isProcessingElevenLabsTTS = false;
+  
+  if (openaiWs && openaiWs.readyState === WebSocket.OPEN) {
+    // EXPLICIT ERROR NOTIFICATION - Tell the user what happened
+    const errorNotification = `I apologize, but there was an error with my voice system. ` +
+      `ElevenLabs took too long to respond, so I'm switching to a backup voice. ` +
+      `Here's what I was trying to say: ${fullText}`;
+    
+    console.log(`[ELEVENLABS-ERROR] Notifying user of TTS failure`);
+    
+    openaiWs.send(JSON.stringify({
+      type: "response.create",
+      response: { 
+        modalities: ["audio"],
+        instructions: errorNotification
+      }
+    }));
+  }
+  return;
+}
 ```
-timestamp           | activity_type  | status    | stage           | session_id    | duration | msgs | error
---------------------|----------------|-----------|-----------------|---------------|----------|------|-------
-2026-01-27 18:30:00 | voice_webrtc   | completed | disconnect      | WR4a3b2c1...  | 45       | 8    | NULL
-2026-01-27 18:29:15 | voice_webrtc   | connected | webrtc_ready    | WR4a3b2c1...  | NULL     | 0    | NULL
-2026-01-27 18:29:14 | voice_webrtc   | started   | token_fetch     | WR4a3b2c1...  | NULL     | 0    | NULL
-2026-01-27 17:45:00 | phone_inbound  | completed | NULL            | MZ12345...    | 120      | 15   | NULL
-2026-01-27 17:43:00 | phone_inbound  | started   | webhook         | MZ12345...    | NULL     | 0    | NULL
-2026-01-27 17:30:39 | phone_outbound | completed | legacy          | MZ41ecc...    | 90       | NULL | NULL
+
+## Also Handle Non-Timeout Errors
+
+The same explicit notification should apply when ElevenLabs returns a non-200 response (lines 1435-1439):
+
+**Current behavior:**
+```typescript
+if (!response.ok) {
+  const errorText = await response.text();
+  console.error(`[ELEVENLABS] TTS API error: ${response.status} - ${errorText}`);
+  isProcessingElevenLabsTTS = false;
+  return;  // Silent failure - user hears nothing
+}
 ```
 
----
+**New behavior:**
+```typescript
+if (!response.ok) {
+  const errorText = await response.text();
+  console.error(`[ELEVENLABS] TTS API error: ${response.status} - ${errorText}`);
+  isProcessingElevenLabsTTS = false;
+  
+  // EXPLICIT ERROR NOTIFICATION
+  if (openaiWs && openaiWs.readyState === WebSocket.OPEN) {
+    const errorNotification = `I apologize, but my voice system encountered an error. ` +
+      `ElevenLabs returned status ${response.status}. ` +
+      `Switching to backup voice. Here's what I was saying: ${fullText}`;
+    
+    console.log(`[ELEVENLABS-ERROR] Notifying user of API error: ${response.status}`);
+    
+    openaiWs.send(JSON.stringify({
+      type: "response.create",
+      response: { 
+        modalities: ["audio"],
+        instructions: errorNotification
+      }
+    }));
+  }
+  return;
+}
+```
 
-## Files Modified
+## Files to Modify
 
-| File | Changes |
-|------|---------|
-| Database | Created `activity_log` table + `debug_timeline` view |
-| `src/utils/RealtimeVoiceAssistant.ts` | Added `logActivity()` method, session ID generation FIRST, logging at all stages |
-| `supabase/functions/twilio-realtime-bridge/index.ts` | Added activity logging to createCallSession, closeCallSession, onerror |
-| `src/utils/dbQuery.ts` (NEW) | Helper for safe queries + activity logging |
+| File | Change |
+|------|--------|
+| `supabase/functions/twilio-realtime-bridge/index.ts` | Update timeout fallback (lines ~1401-1428) and API error handler (lines ~1435-1439) to explicitly announce the error before falling back |
 
----
+## Expected Outcome
 
-## Benefits Achieved
+When ElevenLabs fails, you will hear:
+> "I apologize, but there was an error with my voice system. ElevenLabs took too long to respond, so I'm switching to a backup voice. Here's what I was trying to say: [original message]"
 
-1. **Every connection attempt is logged** - Even if token fetch fails, there's a record
-2. **Error visibility** - Know exactly WHERE in the flow something failed
-3. **Single timeline** - Query one table to see all activity across all modes
-4. **No more false negatives** - Distinguish "query failed" from "no data exists"
-5. **Debug with confidence** - Session IDs link to call_sessions, conversation_messages
+This ensures:
+1. You know something went wrong
+2. You know which system failed (ElevenLabs)
+3. You know the specific error (timeout vs API error)
+4. You still get the response content
+5. Debugging is easier because the error is surfaced, not hidden
