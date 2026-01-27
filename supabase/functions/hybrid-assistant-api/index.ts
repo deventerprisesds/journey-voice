@@ -226,6 +226,35 @@ When asked about "today", "tomorrow", "this week", etc., calculate from this anc
         additionalInstructions = instructionParts.filter(Boolean).join('\n\n');
         console.log(`[HYBRID] Time anchor set: ${currentDateTime} (${userTimezone})`);
         console.log('Loaded user-specific AI instructions');
+        
+        // Load agenda status for cross-interface continuity
+        try {
+          const agendaResponse = await fetch(`${supabaseUrl}/functions/v1/agenda-manager`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${supabaseServiceKey}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ operation: 'get_status', threadId, userId })
+          });
+          
+          if (agendaResponse.ok) {
+            const agendaStatus = await agendaResponse.json();
+            if (agendaStatus.items?.length > 0) {
+              const agendaContext = `\n\nCONVERSATION AGENDA:\n${
+                agendaStatus.items.map((i: any) => `- [${i.status}] ${i.item_text}`).join('\n')
+              }`;
+              additionalInstructions += agendaContext;
+              
+              if (agendaStatus.isPaused && agendaStatus.currentItem) {
+                additionalInstructions += `\n\nNote: User went on a tangent. When appropriate, guide back to: "${agendaStatus.currentItem.item_text}"`;
+              }
+              console.log(`[HYBRID] Agenda loaded: ${agendaStatus.completed}/${agendaStatus.total} completed`);
+            }
+          }
+        } catch (agendaErr) {
+          console.warn('[HYBRID] Failed to load agenda:', agendaErr);
+        }
       } else {
         // No prefs found - still add time anchor with default timezone
         const currentDateTime = getCurrentTimeString(userTimezone);

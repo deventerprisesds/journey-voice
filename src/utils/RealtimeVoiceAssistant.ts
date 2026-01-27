@@ -198,6 +198,18 @@ export class RealtimeVoiceAssistant {
   // Activity tracking for unified timeline
   private connectionStartTime: number = 0;
   private messageCount: number = 0;
+  
+  // Agenda tracking for cross-interface conversation continuity
+  private agendaStatus: {
+    items: any[];
+    completed: number;
+    total: number;
+    currentItem: any | null;
+    isPaused: boolean;
+  } | null = null;
+  
+  // Track active ElevenLabs audio elements for cleanup on disconnect
+  private activeElevenLabsAudio: HTMLAudioElement[] = [];
 
   constructor(
     private onMessage: (message: any) => void,
@@ -246,6 +258,82 @@ export class RealtimeVoiceAssistant {
       }
     } catch (err) {
       console.error('[ACTIVITY_LOG] Exception logging activity:', err);
+    }
+  }
+
+  // Load agenda status from shared service for cross-interface continuity
+  private async loadAgendaStatus(): Promise<void> {
+    if (!this.threadId || !this.userId) return;
+    
+    try {
+      const { data, error } = await supabase.functions.invoke('agenda-manager', {
+        body: { 
+          operation: 'get_status', 
+          threadId: this.threadId, 
+          userId: this.userId 
+        }
+      });
+      
+      if (error) {
+        console.warn('[AGENDA] Failed to load agenda status:', error);
+        return;
+      }
+      
+      if (data?.items?.length > 0) {
+        this.agendaStatus = data;
+        console.log(`[AGENDA] Loaded ${data.total} items, ${data.completed} completed, paused=${data.isPaused}`);
+        
+        // Emit event for UI awareness
+        this.onMessage({
+          type: 'agenda.loaded',
+          status: this.agendaStatus
+        });
+      }
+    } catch (err) {
+      console.warn('[AGENDA] Error loading agenda:', err);
+    }
+  }
+
+  // Pause agenda for tangent (e.g., when user asks about something off-topic)
+  async pauseAgendaForTangent(userQuery: string): Promise<void> {
+    if (!this.threadId || !this.userId || !this.agendaStatus) return;
+    
+    try {
+      await supabase.functions.invoke('agenda-manager', {
+        body: { 
+          operation: 'pause_for_tangent', 
+          threadId: this.threadId, 
+          userId: this.userId,
+          userQuery 
+        }
+      });
+      
+      if (this.agendaStatus) {
+        this.agendaStatus.isPaused = true;
+      }
+      console.log('[AGENDA] Paused for tangent:', userQuery.substring(0, 40) + '...');
+    } catch (err) {
+      console.warn('[AGENDA] Error pausing for tangent:', err);
+    }
+  }
+
+  // Get resume hint if agenda is paused
+  async getAgendaResumeHint(): Promise<string | null> {
+    if (!this.threadId || !this.userId) return null;
+    
+    try {
+      const { data } = await supabase.functions.invoke('agenda-manager', {
+        body: { 
+          operation: 'get_resume_hint', 
+          threadId: this.threadId, 
+          userId: this.userId 
+        }
+      });
+      
+      return data?.hint || null;
+    } catch (err) {
+      console.warn('[AGENDA] Error getting resume hint:', err);
+      return null;
     }
   }
 
@@ -363,6 +451,9 @@ export class RealtimeVoiceAssistant {
             .single();
           this.threadId = thread?.id || null;
           console.log('📍 Created voice thread:', this.threadId);
+          
+          // Load agenda status for cross-interface continuity
+          await this.loadAgendaStatus();
         } catch (err) {
           console.warn('Could not create voice thread:', err);
         }
@@ -681,15 +772,24 @@ export class RealtimeVoiceAssistant {
       const audioUrl = URL.createObjectURL(audioBlob);
       const audio = new Audio(audioUrl);
       
+      // Track this audio element for cleanup on disconnect
+      this.activeElevenLabsAudio.push(audio);
+      
       audio.onended = () => {
         this.onSpeakingChange(false);
         URL.revokeObjectURL(audioUrl);
+        // Remove from tracking array
+        const idx = this.activeElevenLabsAudio.indexOf(audio);
+        if (idx > -1) this.activeElevenLabsAudio.splice(idx, 1);
       };
       
       audio.onerror = () => {
         console.error('Audio playback error');
         this.onSpeakingChange(false);
         URL.revokeObjectURL(audioUrl);
+        // Remove from tracking array
+        const idx = this.activeElevenLabsAudio.indexOf(audio);
+        if (idx > -1) this.activeElevenLabsAudio.splice(idx, 1);
       };
       
       await audio.play();
@@ -826,6 +926,27 @@ export class RealtimeVoiceAssistant {
   async disconnect() {
     console.log('Disconnecting voice assistant...');
     
+    // CRITICAL: Stop all audio IMMEDIATELY before any other cleanup
+    // This prevents any audio bleeding through during teardown
+    
+    // 1. Stop and clear WebRTC audio element
+    if (this.audioEl) {
+      this.audioEl.pause();
+      this.audioEl.muted = true;
+      this.audioEl.srcObject = null;
+      console.log('🔴 WebRTC audio element stopped and cleared');
+    }
+    
+    // 2. Stop ALL playing ElevenLabs audio
+    if (this.activeElevenLabsAudio.length > 0) {
+      console.log(`🔴 Stopping ${this.activeElevenLabsAudio.length} active ElevenLabs audio elements`);
+      this.activeElevenLabsAudio.forEach(audio => {
+        audio.pause();
+        audio.src = '';
+      });
+      this.activeElevenLabsAudio = [];
+    }
+    
     // Log completion to activity_log with session metrics
     if (this.userId && this.sessionId) {
       const durationSeconds = Math.floor((Date.now() - this.connectionStartTime) / 1000);
@@ -835,7 +956,11 @@ export class RealtimeVoiceAssistant {
         ended_at: new Date().toISOString(),
         metadata: {
           tts_provider: this.ttsProvider,
-          thread_id: this.threadId
+          thread_id: this.threadId,
+          agenda_status: this.agendaStatus ? {
+            completed: this.agendaStatus.completed,
+            total: this.agendaStatus.total
+          } : null
         }
       });
     }
@@ -859,6 +984,9 @@ export class RealtimeVoiceAssistant {
       this.audioContext.close();
       this.audioContext = null;
     }
+    
+    // Clear agenda status
+    this.agendaStatus = null;
     
     this.onConnectionChange(false);
     this.onListeningChange(false);

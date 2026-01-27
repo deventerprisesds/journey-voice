@@ -1121,6 +1121,65 @@ export type Database = {
           },
         ]
       }
+      conversation_agenda: {
+        Row: {
+          completed_at: string | null
+          created_at: string | null
+          id: string
+          item_index: number
+          item_text: string
+          metadata: Json | null
+          paused_at: string | null
+          paused_for: string | null
+          source: string | null
+          started_at: string | null
+          status: string
+          thread_id: string
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          completed_at?: string | null
+          created_at?: string | null
+          id?: string
+          item_index: number
+          item_text: string
+          metadata?: Json | null
+          paused_at?: string | null
+          paused_for?: string | null
+          source?: string | null
+          started_at?: string | null
+          status?: string
+          thread_id: string
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          completed_at?: string | null
+          created_at?: string | null
+          id?: string
+          item_index?: number
+          item_text?: string
+          metadata?: Json | null
+          paused_at?: string | null
+          paused_for?: string | null
+          source?: string | null
+          started_at?: string | null
+          status?: string
+          thread_id?: string
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "conversation_agenda_thread_id_fkey"
+            columns: ["thread_id"]
+            isOneToOne: false
+            referencedRelation: "ai_threads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       conversation_embeddings: {
         Row: {
           content: string
