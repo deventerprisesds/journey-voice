@@ -14,6 +14,57 @@ export type Database = {
   }
   public: {
     Tables: {
+      activity_log: {
+        Row: {
+          activity_type: string
+          created_at: string | null
+          duration_seconds: number | null
+          ended_at: string | null
+          error_code: string | null
+          error_message: string | null
+          id: string
+          message_count: number | null
+          metadata: Json | null
+          session_id: string | null
+          stage: string | null
+          started_at: string | null
+          status: string
+          user_id: string
+        }
+        Insert: {
+          activity_type: string
+          created_at?: string | null
+          duration_seconds?: number | null
+          ended_at?: string | null
+          error_code?: string | null
+          error_message?: string | null
+          id?: string
+          message_count?: number | null
+          metadata?: Json | null
+          session_id?: string | null
+          stage?: string | null
+          started_at?: string | null
+          status: string
+          user_id: string
+        }
+        Update: {
+          activity_type?: string
+          created_at?: string | null
+          duration_seconds?: number | null
+          ended_at?: string | null
+          error_code?: string | null
+          error_message?: string | null
+          id?: string
+          message_count?: number | null
+          metadata?: Json | null
+          session_id?: string | null
+          stage?: string | null
+          started_at?: string | null
+          status?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       ai_threads: {
         Row: {
           assistant_id: string | null
@@ -3349,7 +3400,20 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      debug_timeline: {
+        Row: {
+          activity_type: string | null
+          duration_seconds: number | null
+          error_message: string | null
+          message_count: number | null
+          session_id: string | null
+          stage: string | null
+          status: string | null
+          timestamp: string | null
+          user_id: string | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
       check_profile_access_rate_limit: {

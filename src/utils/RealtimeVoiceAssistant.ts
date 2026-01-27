@@ -194,6 +194,10 @@ export class RealtimeVoiceAssistant {
   private sessionId: string | null = null;
   private threadId: string | null = null;
   private userId: string | null = null;
+  
+  // Activity tracking for unified timeline
+  private connectionStartTime: number = 0;
+  private messageCount: number = 0;
 
   constructor(
     private onMessage: (message: any) => void,
@@ -205,8 +209,63 @@ export class RealtimeVoiceAssistant {
     this.audioEl.autoplay = true;
   }
 
+  // Activity logging helper for unified timeline
+  private async logActivity(
+    status: 'started' | 'connected' | 'completed' | 'failed' | 'error',
+    stage?: string,
+    extra: Record<string, any> = {}
+  ): Promise<void> {
+    if (!this.userId || !this.sessionId) return;
+    
+    try {
+      const { error } = await supabase.from('activity_log').upsert({
+        user_id: this.userId,
+        activity_type: 'voice_webrtc',
+        session_id: this.sessionId,
+        status,
+        stage,
+        error_message: extra.error_message || null,
+        error_code: extra.error_code || null,
+        duration_seconds: extra.duration_seconds,
+        message_count: extra.message_count,
+        metadata: {
+          tts_provider: this.ttsProvider,
+          connection_time_ms: this.connectionStartTime ? Date.now() - this.connectionStartTime : 0,
+          ...extra.metadata
+        },
+        started_at: new Date(this.connectionStartTime || Date.now()).toISOString(),
+        ended_at: extra.ended_at
+      }, {
+        onConflict: 'session_id'
+      });
+      
+      if (error) {
+        console.error('[ACTIVITY_LOG] Failed to log activity:', error);
+      } else {
+        console.log(`[ACTIVITY_LOG] ✅ voice_webrtc ${status} ${stage || ''} (${this.sessionId})`);
+      }
+    } catch (err) {
+      console.error('[ACTIVITY_LOG] Exception logging activity:', err);
+    }
+  }
+
   async connect() {
     try {
+      // STEP 1: Generate session ID IMMEDIATELY - before any async operations
+      // This ensures even failed connections are logged in activity_log
+      this.sessionId = `WR${Date.now().toString(36)}${Math.random().toString(36).substring(2, 8)}`;
+      this.connectionStartTime = Date.now();
+      this.messageCount = 0;
+      
+      console.log('📍 WebRTC Session ID:', this.sessionId);
+      
+      // STEP 2: Get user ID for logging - needed for activity_log
+      const { data: { user } } = await supabase.auth.getUser();
+      this.userId = user?.id || null;
+      
+      // STEP 3: Log activity start BEFORE any async operations that might fail
+      await this.logActivity('started', 'token_fetch');
+      
       console.log('Getting ephemeral token...');
       
       // Get ephemeral token from our Supabase Edge Function
@@ -240,16 +299,31 @@ export class RealtimeVoiceAssistant {
               errorMessage = details?.message || 'Failed to connect to OpenAI API';
           }
 
+          // Log error to activity_log
+          await this.logActivity('error', 'token_fetch', {
+            error_message: errorMessage,
+            error_code: errorType,
+            metadata: { details }
+          });
+
           const enhancedError = new Error(errorMessage);
           (enhancedError as any).type = errorType;
           (enhancedError as any).details = details;
           throw enhancedError;
         }
         
+        // Log generic error
+        await this.logActivity('error', 'token_fetch', {
+          error_message: error?.message || 'Failed to get ephemeral token'
+        });
+        
         throw new Error(error?.message || 'Failed to get ephemeral token');
       }
 
       if (!data?.client_secret?.value) {
+        await this.logActivity('error', 'token_fetch', {
+          error_message: 'Invalid token response from server'
+        });
         throw new Error('Invalid token response from server');
       }
 
@@ -274,14 +348,6 @@ export class RealtimeVoiceAssistant {
       }
       
       console.log('Ephemeral token received, establishing WebRTC connection...');
-      
-      // Generate WebRTC session ID for transcript tracking (WR prefix for WebRTC)
-      this.sessionId = `WR${Date.now().toString(36)}${Math.random().toString(36).substring(2, 8)}`;
-      console.log('📍 WebRTC Session ID:', this.sessionId);
-      
-      // Get user ID for persistence
-      const { data: { user } } = await supabase.auth.getUser();
-      this.userId = user?.id || null;
       
       // Create thread for this voice session
       if (this.userId) {
@@ -351,8 +417,17 @@ export class RealtimeVoiceAssistant {
       });
 
       // Handle data channel state changes
-      this.dc.addEventListener("open", () => {
+      this.dc.addEventListener("open", async () => {
         console.log("Data channel opened");
+        
+        // Log successful connection to activity_log
+        await this.logActivity('connected', 'webrtc_ready', {
+          metadata: {
+            connection_time_ms: Date.now() - this.connectionStartTime,
+            tts_provider: this.ttsProvider
+          }
+        });
+        
         this.onConnectionChange(true);
       });
 
@@ -391,6 +466,12 @@ export class RealtimeVoiceAssistant {
           errorMessage = 'OpenAI service unavailable. Please try again later.';
         }
         
+        // Log WebRTC error to activity_log
+        await this.logActivity('error', 'webrtc_sdp', {
+          error_message: errorMessage,
+          error_code: `http_${sdpResponse.status}`
+        });
+        
         const connectionError = new Error(errorMessage);
         (connectionError as any).type = 'webrtc_error';
         (connectionError as any).status = sdpResponse.status;
@@ -407,6 +488,15 @@ export class RealtimeVoiceAssistant {
 
     } catch (error) {
       console.error("Error connecting:", error);
+      
+      // Ensure error is logged if not already
+      if (this.userId && this.sessionId) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        await this.logActivity('error', 'connection', {
+          error_message: errorMsg
+        });
+      }
+      
       this.onConnectionChange(false);
       throw error;
     }
@@ -489,6 +579,9 @@ export class RealtimeVoiceAssistant {
   // Save transcript to database via generate-embeddings edge function
   private async saveTranscript(role: 'user' | 'assistant', content: string): Promise<void> {
     if (!this.userId || !content?.trim()) return;
+    
+    // Increment message count for activity tracking
+    this.messageCount++;
 
     try {
       // Call existing generate-embeddings function for unified storage
@@ -730,8 +823,22 @@ export class RealtimeVoiceAssistant {
     this.dc.send(JSON.stringify({type: 'response.create'}));
   }
 
-  disconnect() {
+  async disconnect() {
     console.log('Disconnecting voice assistant...');
+    
+    // Log completion to activity_log with session metrics
+    if (this.userId && this.sessionId) {
+      const durationSeconds = Math.floor((Date.now() - this.connectionStartTime) / 1000);
+      await this.logActivity('completed', 'disconnect', {
+        duration_seconds: durationSeconds,
+        message_count: this.messageCount,
+        ended_at: new Date().toISOString(),
+        metadata: {
+          tts_provider: this.ttsProvider,
+          thread_id: this.threadId
+        }
+      });
+    }
     
     this.stopListening();
     

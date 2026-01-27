@@ -2425,8 +2425,27 @@ CRITICAL INSTRUCTIONS:
         console.log("[OPENAI] Connection closed");
       };
 
-      openaiWs.onerror = (err) => {
+      openaiWs.onerror = async (err) => {
         console.error("[OPENAI] Connection error:", err);
+        
+        // Log error to activity_log
+        if (userId && streamSid) {
+          try {
+            await supabase.from('activity_log').update({
+              status: 'error',
+              stage: 'openai_websocket',
+              error_message: 'OpenAI WebSocket connection error',
+              metadata: {
+                call_direction: callDirection,
+                tts_provider: ttsProvider,
+                session_configured: sessionConfigured
+              }
+            }).eq('session_id', streamSid);
+            console.log(`[ACTIVITY_LOG] ❌ phone_${callDirection} error logged`);
+          } catch (logError) {
+            console.warn('[ACTIVITY_LOG] Failed to log OpenAI error:', logError);
+          }
+        }
       };
     }
 
@@ -2435,6 +2454,25 @@ CRITICAL INSTRUCTIONS:
       if (!userId) return;
       
       try {
+        // Log to activity_log FIRST (unified timeline)
+        await supabase.from('activity_log').insert({
+          user_id: userId,
+          activity_type: callDirection === 'inbound' ? 'phone_inbound' : 'phone_outbound',
+          session_id: streamSid || callSid,
+          status: 'started',
+          stage: 'webhook',
+          metadata: { 
+            call_sid: callSid,
+            direction: callDirection,
+            from_number: fromNumber,
+            to_number: toNumber,
+            tts_provider: ttsProvider
+          },
+          started_at: new Date().toISOString()
+        });
+        console.log(`[ACTIVITY_LOG] ✅ phone_${callDirection} started (${streamSid || callSid})`);
+        
+        // Then create call_sessions for detailed tracking
         const { data, error } = await supabase.from('call_sessions').insert({
           user_id: userId,
           call_sid: callSid,
@@ -2463,6 +2501,26 @@ CRITICAL INSTRUCTIONS:
       
       try {
         const durationSeconds = Math.floor((Date.now() - callStartTime) / 1000);
+        
+        // Update activity_log with completion
+        if (streamSid && userId) {
+          await supabase.from('activity_log').update({
+            status: 'completed',
+            duration_seconds: durationSeconds,
+            message_count: messageIndex,
+            ended_at: new Date().toISOString(),
+            metadata: {
+              greeting_latency_ms: greetingLatencyMs,
+              tts_provider: ttsProvider,
+              response_create_count: responseCreateCount,
+              audio_frames_in: twilioMediaFramesIn,
+              audio_frames_out: twilioMediaFramesOut
+            }
+          }).eq('session_id', streamSid);
+          console.log(`[ACTIVITY_LOG] ✅ phone_${callDirection} completed (${durationSeconds}s)`);
+        }
+        
+        // Update call_sessions for detailed tracking
         await supabase.from('call_sessions').update({
           ended_at: new Date().toISOString(),
           duration_seconds: durationSeconds,
