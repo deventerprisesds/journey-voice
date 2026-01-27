@@ -1,224 +1,294 @@
 
-# Unified Transcript Tracking via Existing Edge Function
 
-## Problem
+# Unified Activity Timeline with Proper Error Handling
 
-Currently, transcript persistence is fragmented:
-- **Twilio Bridge** (server-side): Saves transcripts to `conversation_messages` - **WORKS**
-- **WebRTC Voice** (client-side): Does NOT save transcripts - **MISSING**
-- **Chat**: Uses hybrid-assistant-api - **WORKS**
+## Problem Summary
 
-This creates two problems:
-1. Voice orb sessions have no history/debugging visibility
-2. We'd be creating duplicate code if we add inline saving to `RealtimeVoiceAssistant`
+**Two critical issues are causing debugging confusion:**
 
-## Solution: Reuse `generate-embeddings` Edge Function
+1. **Silent Query Failures**: When database queries fail or return empty results, there's no way to distinguish between "no data exists" and "query failed" - both look the same (empty results)
 
-The `generate-embeddings` edge function already exists and handles both:
-- Storing conversation messages
-- Generating embeddings for RAG
+2. **Fragmented Activity Tracking**: Activity is scattered across 4+ tables with no unified timeline:
+   - `call_sessions` - Phone calls (Twilio)
+   - `ai_threads` - Chat/voice threads
+   - `conversation_messages` - Messages from all modes
+   - WebRTC sessions - **NOT TRACKED AT ALL** (zero records with `WR%` prefix found)
 
-Instead of duplicating the Twilio bridge's inline database code in the WebRTC client, we call this existing edge function from the browser.
-
-## Architecture Comparison
-
-```text
-TWILIO BRIDGE (Server-side):
-┌──────────────────────────┐
-│  twilio-realtime-bridge  │
-│  (Edge Function)         │
-│                          │
-│  transcript event ───────┼──► supabase.from('conversation_messages').insert()
-│                          │    (direct DB call - same process)
-└──────────────────────────┘
-
-WEBRTC VOICE (Client-side - PROPOSED):
-┌──────────────────────────┐     ┌────────────────────────┐
-│  RealtimeVoiceAssistant  │     │  generate-embeddings   │
-│  (Browser)               │     │  (Edge Function)       │
-│                          │     │                        │
-│  transcript event ───────┼────►│  store_conversation    │
-│                          │HTTP │  action                │
-└──────────────────────────┘     └────────────────────────┘
-                                          │
-                                          ▼
-                                 ┌────────────────────┐
-                                 │ conversation_messages │
-                                 │ conversation_embeddings│
-                                 └────────────────────┘
-```
-
-This approach:
-- **Reuses existing code** (no duplication)
-- **Single point of maintenance** for transcript storage logic
-- **Includes embeddings** for RAG continuity automatically
+**The real issue with your midday call**: There is NO inbound call recorded in `call_sessions` today. The last inbound call was yesterday at 16:25:39. This means either:
+- The call never connected to the system
+- The session insert failed silently
+- Twilio webhook didn't fire
 
 ---
 
-## Implementation Details
+## Solution: Unified Activity Log + Error Visibility
 
-### File: `src/utils/RealtimeVoiceAssistant.ts`
+### Phase 1: Create Unified Activity Log Table
 
-#### 1. Add Session Tracking Properties
+A single table that captures ALL communication events with proper error tracking:
 
-```typescript
-// New class properties
-private sessionId: string | null = null;
-private threadId: string | null = null;
-private userId: string | null = null;
+```sql
+CREATE TABLE public.activity_log (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL,
+  
+  -- Activity identification
+  activity_type TEXT NOT NULL,  -- 'phone_inbound', 'phone_outbound', 'voice_webrtc', 'chat'
+  session_id TEXT,              -- WR... for WebRTC, MZ... for Twilio, thread_... for chat
+  
+  -- Status tracking
+  status TEXT NOT NULL,         -- 'started', 'connected', 'completed', 'failed', 'error'
+  stage TEXT,                   -- 'webhook', 'token_fetch', 'webrtc_setup', 'transcript_save'
+  
+  -- Error details
+  error_message TEXT,
+  error_code TEXT,
+  
+  -- Metrics
+  duration_seconds INTEGER,
+  message_count INTEGER DEFAULT 0,
+  
+  -- Rich context
+  metadata JSONB DEFAULT '{}',
+  
+  -- Timestamps
+  started_at TIMESTAMPTZ DEFAULT now(),
+  ended_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- Fast lookup indexes
+CREATE INDEX idx_activity_log_user_time ON activity_log(user_id, created_at DESC);
+CREATE INDEX idx_activity_log_session ON activity_log(session_id);
+CREATE INDEX idx_activity_log_status ON activity_log(status);
+
+-- RLS Policy
+ALTER TABLE activity_log ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users can view their own activity" ON activity_log
+  FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Service role can manage activity" ON activity_log
+  FOR ALL USING (true);
 ```
 
-#### 2. Generate Session ID on Connect
+---
 
-In `connect()`, after getting the ephemeral token:
+### Phase 2: Add Activity Logging to Twilio Bridge
 
+Update `supabase/functions/twilio-realtime-bridge/index.ts` to log at key stages:
+
+**On Webhook Receipt (FIRST thing)**:
 ```typescript
-// Generate WebRTC session ID (WR prefix for WebRTC)
-this.sessionId = `WR${Date.now().toString(36)}${Math.random().toString(36).substring(2, 8)}`;
-
-// Get user ID
-const { data: { user } } = await supabase.auth.getUser();
-this.userId = user?.id || null;
-
-// Create or reuse thread for session
-if (this.userId) {
-  const { data: thread } = await supabase
-    .from('ai_threads')
-    .insert({ 
-      user_id: this.userId, 
-      mode: 'voice',
-      metadata: { session_id: this.sessionId }
-    })
-    .select('id')
-    .single();
-  this.threadId = thread?.id || null;
-}
-```
-
-#### 3. Add Transcript Event Handlers
-
-In `handleMessage()` switch statement, add two new cases:
-
-```typescript
-case 'conversation.item.input_audio_transcription.completed':
-  // User speech transcript
-  console.log('📝 User transcript:', event.transcript);
-  if (event.transcript?.trim()) {
-    this.saveTranscript('user', event.transcript);
+// Log immediately when webhook is received - before any processing
+await supabase.from('activity_log').insert({
+  user_id: userId,
+  activity_type: direction === 'inbound' ? 'phone_inbound' : 'phone_outbound',
+  session_id: streamSid,
+  status: 'started',
+  stage: 'webhook',
+  metadata: { 
+    call_sid: callSid,
+    direction,
+    from_number: fromNumber,
+    to_number: toNumber,
+    raw_webhook: true
   }
-  break;
-
-case 'response.audio_transcript.done':
-  // Assistant speech transcript
-  console.log('📝 Assistant transcript:', event.transcript);
-  if (event.transcript?.trim()) {
-    this.saveTranscript('assistant', event.transcript);
-  }
-  break;
+});
 ```
 
-#### 4. Add Save Method (Calls Existing Edge Function)
-
+**On Successful Connection**:
 ```typescript
-private async saveTranscript(role: 'user' | 'assistant', content: string): Promise<void> {
-  if (!this.userId || !content?.trim()) return;
+await supabase.from('activity_log').upsert({
+  session_id: streamSid,
+  status: 'connected',
+  stage: 'openai_connected'
+}, { onConflict: 'session_id' });
+```
 
+**On Call End**:
+```typescript
+await supabase.from('activity_log').update({
+  status: 'completed',
+  ended_at: new Date().toISOString(),
+  duration_seconds: durationSeconds,
+  message_count: transcriptCount
+}).eq('session_id', streamSid);
+```
+
+**On Any Error**:
+```typescript
+await supabase.from('activity_log').upsert({
+  session_id: streamSid || `error_${Date.now()}`,
+  status: 'error',
+  stage: 'openai_connect',  // or wherever error occurred
+  error_message: error.message,
+  error_code: error.code
+}, { onConflict: 'session_id' });
+```
+
+---
+
+### Phase 3: Add Activity Logging to WebRTC Voice
+
+Update `src/utils/RealtimeVoiceAssistant.ts`:
+
+**Generate Session ID FIRST** (before any async calls):
+```typescript
+async connect() {
+  // STEP 1: Generate session ID IMMEDIATELY
+  this.sessionId = `WR${Date.now().toString(36)}${crypto.randomUUID().substring(0, 8)}`;
+  this.connectionStartTime = Date.now();
+  
+  // Get user for logging
+  const { data: { user } } = await supabase.auth.getUser();
+  this.userId = user?.id || null;
+  
+  // STEP 2: Log activity start BEFORE any async operations
+  await this.logActivity('started', 'token_fetch');
+  
   try {
-    // Call existing generate-embeddings function
-    const { error } = await supabase.functions.invoke('generate-embeddings', {
-      body: {
-        action: 'store_conversation',
-        userId: this.userId,
-        threadId: this.threadId,
-        role: role,
-        content: content,
-        audioTranscript: content,
-        voiceSessionId: this.sessionId,
-        messageType: role,
-        metadata: { 
-          source: 'voice',
-          session_type: 'webrtc',
-          tts_provider: this.ttsProvider
-        }
-      }
-    });
-
-    if (error) {
-      console.warn('Failed to save transcript:', error);
-    } else {
-      console.log(`💾 Saved ${role} transcript via generate-embeddings`);
-    }
-
-    // Emit for UI updates
-    this.onMessage({
-      type: 'transcript.saved',
-      role,
-      content,
-      sessionId: this.sessionId
-    });
+    // ... existing token fetch code ...
+    
+    await this.logActivity('connected', 'webrtc_setup');
+    
   } catch (error) {
-    console.error('Error saving transcript:', error);
+    await this.logActivity('error', 'token_fetch', { 
+      error_message: error.message 
+    });
+    throw error;
+  }
+}
+```
+
+**Add logging helper method**:
+```typescript
+private async logActivity(
+  status: string, 
+  stage: string, 
+  extra: Record<string, any> = {}
+): Promise<void> {
+  if (!this.userId) return;
+  
+  try {
+    const { error } = await supabase.from('activity_log').upsert({
+      user_id: this.userId,
+      activity_type: 'voice_webrtc',
+      session_id: this.sessionId,
+      status,
+      stage,
+      error_message: extra.error_message,
+      metadata: {
+        tts_provider: this.ttsProvider,
+        connection_time_ms: Date.now() - (this.connectionStartTime || Date.now()),
+        ...extra
+      },
+      started_at: new Date(this.connectionStartTime || Date.now()).toISOString()
+    }, {
+      onConflict: 'session_id'
+    });
+    
+    if (error) {
+      console.error('[ACTIVITY_LOG] Failed to log activity:', error);
+    }
+  } catch (err) {
+    console.error('[ACTIVITY_LOG] Exception logging activity:', err);
   }
 }
 ```
 
 ---
 
-### File: `src/contexts/VoiceAssistantContext.tsx`
+### Phase 4: Add Error Visibility to Queries
 
-#### 5. Capture Transcripts for UI
-
-Add state and handler for transcript events:
+Create a helper function for database queries that distinguishes between "no data" and "query failed":
 
 ```typescript
-const [voiceTranscripts, setVoiceTranscripts] = useState<ConversationMessage[]>([]);
-
-// In handleMessage callback:
-if (message.type === 'transcript.saved') {
-  const newMessage: ConversationMessage = {
-    id: `${message.sessionId}-${Date.now()}`,
-    role: message.role,
-    content: message.content,
-    source: 'voice',
-    assistant_id: null,
-    created_at: new Date().toISOString(),
-  };
-  setVoiceTranscripts(prev => [...prev, newMessage]);
+// src/utils/dbQuery.ts
+export interface QueryResult<T> {
+  data: T[] | null;
+  error: Error | null;
+  isEmpty: boolean;
+  isError: boolean;
 }
 
-// Clear on disconnect
-const clearVoiceTranscripts = () => setVoiceTranscripts([]);
-```
-
----
-
-### File: `src/contexts/CommsConsoleContext.tsx`
-
-#### 6. Merge Voice Transcripts with Messages
-
-```typescript
-const { voiceTranscripts } = useVoiceAssistant();
-
-const allMessages = useMemo(() => {
-  if (currentMode === 'voice') {
-    return voiceTranscripts;
+export async function safeQuery<T>(
+  queryFn: () => Promise<{ data: T[] | null; error: any }>
+): Promise<QueryResult<T>> {
+  try {
+    const { data, error } = await queryFn();
+    
+    if (error) {
+      console.error('[DB_QUERY] Query failed:', error);
+      return {
+        data: null,
+        error: error,
+        isEmpty: false,
+        isError: true
+      };
+    }
+    
+    return {
+      data: data,
+      error: null,
+      isEmpty: !data || data.length === 0,
+      isError: false
+    };
+  } catch (err) {
+    console.error('[DB_QUERY] Exception during query:', err);
+    return {
+      data: null,
+      error: err as Error,
+      isEmpty: false,
+      isError: true
+    };
   }
-  return messages; // Chat/phone messages from DB
-}, [currentMode, messages, voiceTranscripts]);
+}
 ```
 
 ---
 
-## Why This Approach is Better
+### Phase 5: Debug Helper View
 
-| Aspect | Inline DB Calls (Duplicate) | Edge Function (Reuse) |
-|--------|----------------------------|----------------------|
-| Code duplication | YES - copy paste from bridge | NO - single source |
-| Embedding generation | Manual add later | Built-in automatically |
-| Maintenance | Two places to update | One place |
-| Error handling | Must duplicate | Already handled |
-| Auth/security | Client needs service key | Edge function handles |
-| RAG continuity | May miss embeddings | Guaranteed |
+Create a database view for easy debugging:
+
+```sql
+CREATE OR REPLACE VIEW debug_timeline AS
+SELECT 
+  created_at as timestamp,
+  activity_type,
+  status,
+  stage,
+  session_id,
+  duration_seconds,
+  message_count,
+  error_message,
+  user_id
+FROM activity_log
+WHERE created_at > NOW() - INTERVAL '24 hours'
+
+UNION ALL
+
+-- Include legacy call_sessions for backward compatibility
+SELECT 
+  started_at as timestamp,
+  CASE direction 
+    WHEN 'inbound' THEN 'phone_inbound'
+    WHEN 'outbound' THEN 'phone_outbound'
+  END as activity_type,
+  CASE 
+    WHEN ended_at IS NOT NULL THEN 'completed'
+    ELSE 'started'
+  END as status,
+  'legacy' as stage,
+  stream_sid as session_id,
+  duration_seconds,
+  NULL as message_count,
+  NULL as error_message,
+  user_id
+FROM call_sessions
+WHERE started_at > NOW() - INTERVAL '24 hours'
+
+ORDER BY timestamp DESC;
+```
 
 ---
 
@@ -226,35 +296,49 @@ const allMessages = useMemo(() => {
 
 | File | Changes |
 |------|---------|
-| `src/utils/RealtimeVoiceAssistant.ts` | Add session tracking, transcript handlers, save method |
-| `src/contexts/VoiceAssistantContext.tsx` | Capture transcripts for UI display |
-| `src/contexts/CommsConsoleContext.tsx` | Merge voice transcripts with other messages |
+| Database | Create `activity_log` table with indexes and RLS |
+| `supabase/functions/twilio-realtime-bridge/index.ts` | Add activity logging at webhook, connect, end, and error stages |
+| `src/utils/RealtimeVoiceAssistant.ts` | Add activity logging before token fetch, on connect, on error |
+| `src/utils/dbQuery.ts` (new) | Helper for distinguishing query failures from empty results |
 
 ---
 
-## Verification
+## Debug Query (After Implementation)
 
-After implementation, you can verify transcripts are being saved:
+A single query to see ALL recent activity:
 
 ```sql
 SELECT 
-  created_at,
-  role,
-  content,
-  voice_session_id,
-  metadata->>'source' as source
-FROM conversation_messages 
-WHERE voice_session_id LIKE 'WR%'
-ORDER BY created_at DESC
+  timestamp,
+  activity_type,
+  status,
+  stage,
+  session_id,
+  duration_seconds,
+  error_message
+FROM debug_timeline
+WHERE user_id = 'YOUR_USER_ID'
+ORDER BY timestamp DESC
 LIMIT 20;
+```
+
+**Expected output shows clear timeline:**
+```
+timestamp           | activity_type  | status    | stage         | session_id    | error
+--------------------|----------------|-----------|---------------|---------------|-------
+2026-01-27 17:45:00 | phone_inbound  | error     | openai_connect| MZ12345...    | WebSocket timeout
+2026-01-27 17:44:58 | phone_inbound  | started   | webhook       | MZ12345...    | NULL
+2026-01-27 17:30:39 | phone_outbound | completed | NULL          | MZ41ecc...    | NULL
+2026-01-27 17:30:18 | phone_outbound | started   | webhook       | MZ41ecc...    | NULL
 ```
 
 ---
 
 ## Expected Outcome
 
-- Voice orb sessions now fully tracked in database
-- Transcripts appear in `TranscriptScroll` UI during voice sessions
-- RAG context retrieval includes voice conversation history
-- Session IDs (`WR...`) allow debugging specific voice sessions
-- Single codebase for transcript storage (no duplication with Twilio bridge)
+1. **Every connection attempt is logged** - Even if it fails at token fetch, there's a record
+2. **Error visibility** - Know exactly WHERE in the flow something failed
+3. **Single timeline** - Query one table to see all activity across all modes
+4. **No more false negatives** - Distinguish "query failed" from "no data exists"
+5. **Debug with confidence** - The session ID from `activity_log` links to `call_sessions`, `conversation_messages`, etc.
+
