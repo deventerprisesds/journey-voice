@@ -1,232 +1,115 @@
 
-# Mobile Responsiveness and Navigation Consistency
+# Fix Dual-Voice Playback with WebRTC Track Muting
 
 ## Summary
 
-Add a consistent back button to the Agenda page and implement mobile-responsive layouts across all pages using the existing shadcn/ui components and Tailwind CSS utilities.
+Prevent OpenAI's native voice from playing when ElevenLabs is the TTS provider by disabling the WebRTC audio track AND muting the audio element.
 
 ---
 
-## Current UI Framework
+## Root Cause
 
-The app uses **shadcn/ui** - a modern React component library built on:
-- Tailwind CSS for styling
-- Radix UI for accessible primitives
-- Lucide React for icons
-
-This is a solid choice that provides clean, customizable components. The issue is not the framework but rather incomplete mobile optimization across pages.
+OpenAI's Realtime API sends audio via the WebRTC media track regardless of the `modalities` setting. Since the `audioEl` has `autoplay: true`, OpenAI's voice plays immediately while ElevenLabs synthesis is still processing - causing dual voices.
 
 ---
 
 ## Changes
 
-### 1. Add Back Button to Agenda Page
+### File: `src/utils/RealtimeVoiceAssistant.ts`
 
-**File**: `src/pages/DailyPriorities.tsx`
+#### 1. Mute Audio Element After TTS Config Load (Lines 254-258)
 
-Add a back button consistent with other pages:
-
-```typescript
-// In the header section (around line 93-101):
-<div className="flex items-center gap-4">
-  <Link to="/">
-    <Button variant="ghost" size="icon">
-      <ArrowLeft className="h-5 w-5" />
-    </Button>
-  </Link>
-  <div>
-    <h1 className="text-2xl font-bold text-primary">
-      Today's Priorities
-    </h1>
-    <p className="text-sm text-muted-foreground hidden sm:block">
-      {format(selectedDate, 'EEEE, MMMM d, yyyy')}
-    </p>
-  </div>
-</div>
-```
-
----
-
-### 2. Make Agenda Page Header Mobile-Responsive
-
-**File**: `src/pages/DailyPriorities.tsx`
-
-Convert the header to stack vertically on mobile with a hamburger menu or dropdown for navigation:
+Add audio muting immediately after storing the TTS configuration:
 
 ```typescript
-// Mobile: Show hamburger menu with nav options
-// Desktop: Show full button row
-<header className="border-b border-border bg-card sticky top-0 z-40">
-  <div className="container mx-auto px-4 py-3">
-    {/* Mobile header */}
-    <div className="flex items-center justify-between md:hidden">
-      <div className="flex items-center gap-2">
-        <Link to="/">
-          <Button variant="ghost" size="icon">
-            <ArrowLeft className="h-5 w-5" />
-          </Button>
-        </Link>
-        <h1 className="text-lg font-bold">Priorities</h1>
-      </div>
-      <DropdownMenu>
-        {/* Navigation options */}
-      </DropdownMenu>
-    </div>
-    
-    {/* Desktop header - existing layout */}
-    <div className="hidden md:flex items-center justify-between">
-      {/* ... existing desktop layout ... */}
-    </div>
-  </div>
-</header>
-```
-
----
-
-### 3. Make Settings Page Tabs Mobile-Responsive
-
-**File**: `src/pages/Settings.tsx`
-
-Replace the 8-column grid with a scrollable tab list or dropdown on mobile:
-
-```typescript
-// Option A: Scrollable tabs on mobile
-<TabsList className="flex w-full overflow-x-auto md:grid md:grid-cols-8 gap-1">
-  {/* Tabs become scrollable horizontally on mobile */}
-</TabsList>
-
-// Option B: Use a Select dropdown on mobile
-{isMobile ? (
-  <Select value={currentTab} onValueChange={setCurrentTab}>
-    {/* Tab options as select items */}
-  </Select>
-) : (
-  <TabsList className="grid grid-cols-8">
-    {/* Desktop tab buttons */}
-  </TabsList>
-)}
-```
-
----
-
-### 4. Create a Shared Mobile Header Component (Optional)
-
-**New File**: `src/components/MobilePageHeader.tsx`
-
-Create a reusable header component for consistent navigation:
-
-```typescript
-interface MobilePageHeaderProps {
-  title: string;
-  subtitle?: string;
-  backTo?: string;
-  actions?: React.ReactNode;
-}
-
-const MobilePageHeader: React.FC<MobilePageHeaderProps> = ({
-  title,
-  subtitle,
-  backTo = '/',
-  actions
-}) => {
-  const isMobile = useIsMobile();
+// Store TTS configuration from token response
+if (data.tts_config) {
+  this.ttsProvider = data.tts_config.provider || 'openai';
+  this.elevenlabsVoiceId = data.tts_config.elevenlabs_voice_id || '';
+  console.log(`TTS Config: provider=${this.ttsProvider}, voice=${this.elevenlabsVoiceId}`);
   
-  return (
-    <header className="sticky top-0 z-40 border-b bg-card/95 backdrop-blur">
-      <div className="container mx-auto px-4 py-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Link to={backTo}>
-              <Button variant="ghost" size="icon">
-                <ArrowLeft className="h-5 w-5" />
-              </Button>
-            </Link>
-            <div>
-              <h1 className="text-lg md:text-2xl font-bold">{title}</h1>
-              {subtitle && (
-                <p className="text-xs md:text-sm text-muted-foreground hidden sm:block">
-                  {subtitle}
-                </p>
-              )}
-            </div>
-          </div>
-          {actions}
-        </div>
-      </div>
-    </header>
-  );
+  // CRITICAL: Mute WebRTC audio when using ElevenLabs TTS
+  // OpenAI still sends audio via RTC track even with modalities: ["text"]
+  if (this.ttsProvider === 'elevenlabs') {
+    this.audioEl.muted = true;
+    console.log('🔇 WebRTC audio muted - using ElevenLabs TTS');
+  } else {
+    this.audioEl.muted = false;
+    console.log('🔊 WebRTC audio enabled - using OpenAI native TTS');
+  }
+}
+```
+
+#### 2. Disable Track + Preserve Mute in ontrack Handler (Lines 275-278)
+
+Update the `ontrack` handler to disable the track at the WebRTC level and preserve mute state:
+
+```typescript
+// Set up remote audio
+this.pc.ontrack = e => {
+  console.log('Received remote audio track');
+  const audioTrack = e.track;
+  this.audioEl.srcObject = e.streams[0];
+  
+  // Preserve mute setting and disable track for ElevenLabs mode
+  // (srcObject assignment may reset muted state in some browsers)
+  if (this.ttsProvider === 'elevenlabs') {
+    this.audioEl.muted = true;
+    audioTrack.enabled = false; // Disables audio at the WebRTC track level
+    console.log('🔇 Remote track attached - muted + track disabled for ElevenLabs');
+  }
 };
 ```
 
 ---
 
-### 5. Apply Mobile Styles to Calendar Page
+## Why Both Approaches?
 
-**File**: `src/pages/Calendar.tsx`
+| Mechanism | Purpose |
+|-----------|---------|
+| `audioEl.muted = true` | Mutes the HTML audio element (browser-level) |
+| `audioTrack.enabled = false` | Disables audio at the WebRTC track level (stops processing) |
 
-Simplify the header on mobile:
+Using both provides defense-in-depth: if one mechanism fails or is reset by browser behavior, the other still prevents audio playback.
 
-```typescript
-<div className="flex items-center justify-between">
-  <div className="flex items-center gap-2 md:gap-4">
-    <Button
-      variant="ghost"
-      size="icon"
-      onClick={handleNavigation}
-    >
-      <ArrowLeft className="h-5 w-5" />
-    </Button>
-    <div>
-      <h1 className="text-lg md:text-2xl font-bold">Calendar</h1>
-      <p className="text-xs md:text-sm text-muted-foreground hidden sm:block">
-        View and manage your tasks
-      </p>
-    </div>
-  </div>
-  {/* Hide Dashboard button on mobile - back button is enough */}
-  <Button
-    variant="secondary"
-    size="sm"
-    onClick={handleNavigation}
-    className="hidden md:flex items-center gap-2"
-  >
-    <Home className="h-4 w-4" />
-    Dashboard
-  </Button>
-</div>
+---
+
+## Audio Flow After Fix
+
+```
+User speaks → OpenAI processes → Response generated
+                                      ↓
+              ┌───────────────────────┴───────────────────────┐
+              ↓                                               ↓
+      [OpenAI Mode]                                  [ElevenLabs Mode]
+              ↓                                               ↓
+   audioEl plays RTC audio                   track.enabled = false
+   (normal behavior)                         audioEl.muted = true
+                                                      ↓
+                                             NO OpenAI audio heard
+                                                      ↓
+                                             response.text.done triggers
+                                                      ↓
+                                             playElevenLabsAudio() → MP3 plays
+                                                      ↓
+                                             ONLY ElevenLabs voice heard
 ```
 
 ---
 
 ## Files to Modify
 
-| File | Changes |
-|------|---------|
-| `src/pages/DailyPriorities.tsx` | Add back button, make header mobile-responsive |
-| `src/pages/Settings.tsx` | Make TabsList mobile-friendly (scrollable or dropdown) |
-| `src/pages/Calendar.tsx` | Simplify mobile header |
-| `src/pages/TasksPage.tsx` | Minor mobile adjustments |
-| `src/components/MobilePageHeader.tsx` (new) | Optional shared header component |
+| File | Lines | Changes |
+|------|-------|---------|
+| `src/utils/RealtimeVoiceAssistant.ts` | 254-258 | Add audioEl.muted logic after TTS config |
+| `src/utils/RealtimeVoiceAssistant.ts` | 275-278 | Add track.enabled = false + preserve mute in ontrack |
 
 ---
 
-## Mobile Breakpoints
+## Expected Outcome
 
-Using Tailwind's default breakpoints:
-- `sm`: 640px (small tablets)
-- `md`: 768px (tablets)
-- `lg`: 1024px (laptops)
-
-Key pattern: `hidden md:flex` to hide on mobile, show on tablet+
-
----
-
-## Why Not Google Material or Another Framework?
-
-shadcn/ui is already a great choice because:
-- Lightweight (only include components you use)
-- Highly customizable (you own the code)
-- Built on accessible Radix primitives
-- Works seamlessly with Tailwind
-
-Switching to Material UI would require significant refactoring and add bundle size. The current setup just needs consistent mobile patterns applied.
+After this fix:
+- Voice Orb: Only ElevenLabs voice heard (correct voice)
+- Phone Dialer (in-app): Single voice playback
+- Disconnect command: Only one farewell message
+- Console logs will show muting status for debugging
