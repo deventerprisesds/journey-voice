@@ -251,10 +251,21 @@ export class RealtimeVoiceAssistant {
       const EPHEMERAL_KEY = data.client_secret.value;
       
       // Store TTS configuration from token response
+      // Store TTS configuration from token response
       if (data.tts_config) {
         this.ttsProvider = data.tts_config.provider || 'openai';
         this.elevenlabsVoiceId = data.tts_config.elevenlabs_voice_id || '';
         console.log(`TTS Config: provider=${this.ttsProvider}, voice=${this.elevenlabsVoiceId}`);
+        
+        // CRITICAL: Mute WebRTC audio when using ElevenLabs TTS
+        // OpenAI still sends audio via RTC track even with modalities: ["text"]
+        if (this.ttsProvider === 'elevenlabs') {
+          this.audioEl.muted = true;
+          console.log('🔇 WebRTC audio muted - using ElevenLabs TTS');
+        } else {
+          this.audioEl.muted = false;
+          console.log('🔊 WebRTC audio enabled - using OpenAI native TTS');
+        }
       }
       
       console.log('Ephemeral token received, establishing WebRTC connection...');
@@ -274,7 +285,16 @@ export class RealtimeVoiceAssistant {
       // Set up remote audio
       this.pc.ontrack = e => {
         console.log('Received remote audio track');
+        const audioTrack = e.track;
         this.audioEl.srcObject = e.streams[0];
+        
+        // Preserve mute setting and disable track for ElevenLabs mode
+        // (srcObject assignment may reset muted state in some browsers)
+        if (this.ttsProvider === 'elevenlabs') {
+          this.audioEl.muted = true;
+          audioTrack.enabled = false; // Disables audio at the WebRTC track level
+          console.log('🔇 Remote track attached - muted + track disabled for ElevenLabs');
+        }
       };
 
       // Add local audio track
