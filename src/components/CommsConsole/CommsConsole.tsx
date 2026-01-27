@@ -29,7 +29,7 @@ const CommsConsole: React.FC<CommsConsoleProps> = ({ className, embedded = false
     selectAssistant,
     currentMode,
     setMode,
-    messages,
+    allMessages,
     isLoading,
     voiceState,
     sendMessage,
@@ -123,7 +123,7 @@ const CommsConsole: React.FC<CommsConsoleProps> = ({ className, embedded = false
           <ConversationPane
             mode={currentMode}
             voiceState={voiceState}
-            messages={messages}
+            messages={allMessages}
             orbColor={orbColor}
             isLoading={isLoading}
             isConnected={isConnected}
@@ -198,7 +198,7 @@ const CommsConsole: React.FC<CommsConsoleProps> = ({ className, embedded = false
           <ConversationPane
             mode={currentMode}
             voiceState={voiceState}
-            messages={messages}
+            messages={allMessages}
             orbColor={orbColor}
             isLoading={isLoading}
             isConnected={isConnected}

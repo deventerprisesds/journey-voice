@@ -11,7 +11,12 @@ import type {
   CommsConsoleState,
 } from '@/components/CommsConsole/types';
 
-interface CommsConsoleContextValue extends CommsConsoleState {
+// Extended state to include allMessages for unified display
+interface ExtendedCommsConsoleState extends CommsConsoleState {
+  allMessages: ConversationMessage[];
+}
+
+interface CommsConsoleContextValue extends ExtendedCommsConsoleState {
   togglePanel: () => void;
   toggleSidebar: () => void;
   selectAssistant: (assistant: Assistant) => void;
@@ -81,6 +86,14 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
   }, [voiceAssistant.isProcessing, voiceAssistant.isSpeaking, voiceAssistant.isListening]);
 
   const userId = user?.id || (isDemoMode ? DEMO_USER_ID : null);
+  
+  // Merge voice transcripts with chat messages based on current mode
+  const allMessages = useMemo(() => {
+    if (currentMode === 'voice') {
+      return voiceAssistant.voiceTranscripts || [];
+    }
+    return messages; // Chat/phone messages
+  }, [currentMode, messages, voiceAssistant.voiceTranscripts]);
 
   // Persist sidebar state
   useEffect(() => {
@@ -287,6 +300,7 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     assistants,
     currentMode,
     messages,
+    allMessages,
     threadId,
     isLoading,
     voiceState,
