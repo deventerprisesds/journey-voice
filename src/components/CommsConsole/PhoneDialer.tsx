@@ -52,7 +52,7 @@ const PhoneDialer: React.FC<PhoneDialerProps> = ({
 }) => {
   const { user } = useAuth();
   const { toast } = useToast();
-  const { currentAssistant, assistants, selectAssistant, connectVoice, disconnectVoice, isConnected } = useCommsConsole();
+  const { currentAssistant, assistants, selectAssistant, connectVoice, disconnectVoice, sendVoiceTextMessage, isConnected } = useCommsConsole();
   
   // Ring tone audio ref
   const ringAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -178,8 +178,14 @@ const PhoneDialer: React.FC<PhoneDialerProps> = ({
     ringAudioRef.current?.pause();
     if (ringAudioRef.current) ringAudioRef.current.currentTime = 0;
     
-    // Disconnect WebRTC voice
-    disconnectVoice();
+    // Use AI hang-up tool if connected, otherwise direct disconnect
+    if (isConnected) {
+      // Send message to AI to trigger the disconnect tool with farewell
+      sendVoiceTextMessage("Please hang up now.");
+    } else {
+      // Direct disconnect if not connected
+      disconnectVoice();
+    }
     
     onCallStateChange('ended');
     setIsMuted(false);
@@ -219,6 +225,21 @@ const PhoneDialer: React.FC<PhoneDialerProps> = ({
             {callState === 'ringing' && 'Ringing...'}
             {callState === 'connected' && formatDuration(callDuration)}
             {callState === 'ended' && 'Call ended'}
+          </div>
+        )}
+        
+        {/* Connection indicator - shows when voice is still connected after call "ends" */}
+        {callState === 'ended' && isConnected && (
+          <div className="mt-2 text-sm text-muted-foreground">
+            Disconnecting...
+          </div>
+        )}
+        
+        {/* Connection indicator - shows when voice is still connected in idle state */}
+        {callState === 'idle' && isConnected && (
+          <div className="mt-2 flex items-center gap-2 text-xs text-amber-500">
+            <div className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+            Voice session active
           </div>
         )}
       </div>

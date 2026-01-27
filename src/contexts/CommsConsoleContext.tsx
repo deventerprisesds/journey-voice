@@ -19,6 +19,7 @@ interface CommsConsoleContextValue extends CommsConsoleState {
   sendMessage: (content: string) => Promise<void>;
   connectVoice: () => Promise<void>;
   disconnectVoice: () => void;
+  sendVoiceTextMessage: (text: string) => void;
   setPhoneCallState: (state: PhoneCallState) => void;
   isMobileSidebarOpen: boolean;
   setMobileSidebarOpen: (open: boolean) => void;
@@ -275,6 +276,10 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     voiceAssistant.disconnectAssistant();
   }, [voiceAssistant]);
 
+  const sendVoiceTextMessage = useCallback((text: string) => {
+    voiceAssistant.sendTextMessage(text);
+  }, [voiceAssistant]);
+
   const value: CommsConsoleContextValue = {
     isPanelOpen,
     isSidebarExpanded,
@@ -295,6 +300,7 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     sendMessage,
     connectVoice,
     disconnectVoice,
+    sendVoiceTextMessage,
     setPhoneCallState,
     isMobileSidebarOpen,
     setMobileSidebarOpen,
