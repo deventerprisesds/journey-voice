@@ -68,3 +68,6 @@ verify_jwt = false
 
 [functions.conversation-relay-handler]
 verify_jwt = false
+
+[functions.agenda-manager]
+verify_jwt = false

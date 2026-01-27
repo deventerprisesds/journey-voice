@@ -766,8 +766,135 @@ async function getPreConnectSession(supabase: any, sessionId: string): Promise<P
   };
 }
 
-// === AGENDA MANAGER ===
-// Tracks conversation progress through agenda items
+// === SHARED AGENDA SERVICE ===
+// Wrapper class that calls the centralized agenda-manager edge function
+// Provides the same interface as the legacy in-memory AgendaManager
+class SharedAgendaManager {
+  private threadId: string | null = null;
+  private userId: string | null = null;
+  private cachedStatus: {
+    items: any[];
+    completed: number;
+    total: number;
+    currentItem: any | null;
+    isPaused: boolean;
+  } | null = null;
+
+  constructor(threadId: string | null, userId: string | null) {
+    this.threadId = threadId;
+    this.userId = userId;
+  }
+
+  private async callService(operation: string, params: Record<string, unknown> = {}): Promise<any> {
+    if (!this.threadId || !this.userId) {
+      console.log(`[SHARED-AGENDA] Skipping ${operation} - no thread/user`);
+      return null;
+    }
+    
+    try {
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/agenda-manager`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          operation,
+          threadId: this.threadId,
+          userId: this.userId,
+          ...params
+        })
+      });
+      
+      if (response.ok) {
+        const result = await response.json();
+        console.log(`[SHARED-AGENDA] ${operation} succeeded`);
+        return result;
+      } else {
+        console.error(`[SHARED-AGENDA] ${operation} failed: ${response.status}`);
+        return null;
+      }
+    } catch (error) {
+      console.error(`[SHARED-AGENDA] ${operation} error:`, error);
+      return null;
+    }
+  }
+
+  async initialize(context: string, agenda?: any[], source: string = 'scheduled_call') {
+    // If legacy agenda array is provided, convert to context format
+    let contextToUse = context;
+    if (agenda && agenda.length > 0) {
+      const agendaText = agenda.map((item, idx) => `${idx + 1}. ${item.text}`).join('\n');
+      contextToUse = context + '\n\nAGENDA:\n' + agendaText;
+    }
+    
+    const result = await this.callService('initialize', { context: contextToUse, source });
+    if (result?.itemCount > 0) {
+      // Auto-start first item
+      await this.startItem(0);
+    }
+    return result;
+  }
+
+  async startItem(index: number) {
+    return this.callService('start_item', { itemIndex: index });
+  }
+
+  async completeCurrentItem() {
+    return this.callService('complete_item', { autoAdvance: true });
+  }
+
+  async pauseForQuery(userQuery: string) {
+    return this.callService('pause_for_tangent', { userQuery });
+  }
+
+  async resume() {
+    return this.callService('resume');
+  }
+
+  async getResumeHint(): Promise<string | null> {
+    const result = await this.callService('get_resume_hint');
+    return result?.hint || null;
+  }
+
+  async getStatus() {
+    const status = await this.callService('get_status');
+    if (status) {
+      this.cachedStatus = status;
+    }
+    return this.cachedStatus;
+  }
+
+  // Synchronous accessors use cached status (call getStatus() first to refresh)
+  get isPaused(): boolean {
+    return this.cachedStatus?.isPaused || false;
+  }
+
+  getCurrentItem(): any | null {
+    return this.cachedStatus?.currentItem || null;
+  }
+
+  getProgress(): { completed: number; total: number; remaining: string[] } {
+    if (!this.cachedStatus) {
+      return { completed: 0, total: 0, remaining: [] };
+    }
+    const remaining = this.cachedStatus.items
+      .filter((i: any) => i.status !== 'completed')
+      .map((i: any) => i.item_text);
+    return {
+      completed: this.cachedStatus.completed,
+      total: this.cachedStatus.total,
+      remaining
+    };
+  }
+
+  isComplete(): boolean {
+    if (!this.cachedStatus) return true;
+    return this.cachedStatus.completed === this.cachedStatus.total;
+  }
+}
+
+// LEGACY: Keep in-memory class as fallback for when thread ID is not available
 class AgendaManager {
   private items: Array<{ index: number; text: string; status: string; startedAt?: number; completedAt?: number }>;
   private currentIndex = 0;
@@ -776,7 +903,7 @@ class AgendaManager {
 
   constructor(parsedAgenda: Array<{ index: number; text: string; status: string }>) {
     this.items = parsedAgenda.map(item => ({ ...item }));
-    console.log(`[AGENDA] Initialized with ${this.items.length} items`);
+    console.log(`[AGENDA-LEGACY] Initialized with ${this.items.length} items`);
   }
 
   startItem(index?: number) {
@@ -785,7 +912,7 @@ class AgendaManager {
       this.items[idx].status = 'in_progress';
       this.items[idx].startedAt = Date.now();
       this.currentIndex = idx;
-      console.log(`[AGENDA] Started item ${idx}: "${this.items[idx].text.substring(0, 40)}..."`);
+      console.log(`[AGENDA-LEGACY] Started item ${idx}: "${this.items[idx].text.substring(0, 40)}..."`);
     }
   }
 
@@ -793,7 +920,7 @@ class AgendaManager {
     if (this.items[this.currentIndex]) {
       this.items[this.currentIndex].status = 'completed';
       this.items[this.currentIndex].completedAt = Date.now();
-      console.log(`[AGENDA] Completed item ${this.currentIndex}`);
+      console.log(`[AGENDA-LEGACY] Completed item ${this.currentIndex}`);
       
       // Find next pending
       const nextIdx = this.items.findIndex(
@@ -810,7 +937,7 @@ class AgendaManager {
       this.items[this.currentIndex].status = 'paused';
       this.isPausedState = true;
       this.pausedForQuery = userQuery;
-      console.log(`[AGENDA] Paused for user query: "${userQuery.substring(0, 40)}..."`);
+      console.log(`[AGENDA-LEGACY] Paused for user query: "${userQuery.substring(0, 40)}..."`);
     }
   }
 
@@ -819,7 +946,7 @@ class AgendaManager {
       this.items[this.currentIndex].status = 'in_progress';
       this.isPausedState = false;
       this.pausedForQuery = undefined;
-      console.log(`[AGENDA] Resumed item ${this.currentIndex}`);
+      console.log(`[AGENDA-LEGACY] Resumed item ${this.currentIndex}`);
     }
   }
 
@@ -1186,6 +1313,9 @@ serve(async (req) => {
     let keepAliveInterval: number | null = null;
     
     // === AGENDA MANAGER INSTANCE ===
+    // Primary: SharedAgendaManager for cross-interface persistence
+    // Fallback: AgendaManager for legacy in-memory mode
+    let sharedAgendaManager: SharedAgendaManager | null = null;
     let agendaManager: AgendaManager | null = null;
     
     // === SMART FILLER MANAGER INSTANCE ===
@@ -1644,7 +1774,15 @@ type ResponseTrigger =
                   threadId = session.threadId;
                   console.log(`[PRE-CONNECT] Voice settings: ttsProvider=${ttsProvider}, openaiVoice=${openaiVoice}, elevenlabsVoice=${elevenlabsVoiceId}`);
                   
-                  if (session.agenda && session.agenda.length > 0) {
+                  // Initialize shared agenda manager for cross-interface persistence
+                  if (threadId && userId) {
+                    sharedAgendaManager = new SharedAgendaManager(threadId, userId);
+                    if (session.agenda && session.agenda.length > 0) {
+                      // Initialize from session agenda
+                      sharedAgendaManager.initialize(session.context || '', session.agenda, 'scheduled_call');
+                    }
+                  } else if (session.agenda && session.agenda.length > 0) {
+                    // Fallback to legacy in-memory manager
                     agendaManager = new AgendaManager(session.agenda);
                     agendaManager.startItem(0);
                   }
