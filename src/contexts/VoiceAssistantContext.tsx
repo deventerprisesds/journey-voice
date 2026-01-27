@@ -20,6 +20,7 @@ interface VoiceAssistantContextType {
   disconnectAssistant: () => void;
   toggleListening: () => Promise<void>;
   testConnection: () => Promise<void>;
+  sendTextMessage: (text: string) => void;
   
   // Callbacks
   onTaskUpdate?: () => void;
@@ -308,6 +309,12 @@ export const VoiceAssistantProvider: React.FC<VoiceAssistantProviderProps> = ({
     }
   };
 
+  const sendTextMessage = (text: string) => {
+    if (assistantRef.current && isConnected) {
+      assistantRef.current.sendTextMessage(text);
+    }
+  };
+
   useEffect(() => {
     return () => {
       if (autoGreetingTimeoutRef.current) {
@@ -332,6 +339,7 @@ export const VoiceAssistantProvider: React.FC<VoiceAssistantProviderProps> = ({
         disconnectAssistant,
         toggleListening,
         testConnection,
+        sendTextMessage,
         onTaskUpdate,
       }}
     >
