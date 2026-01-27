@@ -5,17 +5,19 @@ import { Task } from '@/types/task';
 import CalendarModule from '@/components/CalendarModule';
 import TaskCreationModal from '@/components/TaskCreationModal';
 import TaskDetailModal from '@/components/TaskDetailModal';
+import MobilePageHeader from '@/components/MobilePageHeader';
 import { Button } from '@/components/ui/button';
-import { ArrowLeft, Home } from 'lucide-react';
+import { Home } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { toast } from 'sonner';
 import { useOAuthCallback } from '@/hooks/useOAuthCallback';
-import { AssignmentSelectionProvider } from '@/contexts/AssignmentSelectionContext';
+import { useIsMobile } from '@/hooks/use-mobile';
 
 const Calendar: React.FC = () => {
   const { user, isDemoMode } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const isMobile = useIsMobile();
   useOAuthCallback(); // Handle OAuth callbacks
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
@@ -180,6 +182,17 @@ const Calendar: React.FC = () => {
     }
   };
 
+  const handleNavigation = () => {
+    try {
+      console.log('Navigating back to dashboard...');
+      navigate('/');
+    } catch (error) {
+      console.error('Navigation error:', error);
+      // Fallback navigation
+      window.location.href = '/';
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -188,64 +201,37 @@ const Calendar: React.FC = () => {
     );
   }
 
-  const handleNavigation = () => {
-    try {
-      console.log('Navigating back to dashboard...');
-      navigate('/');
-      toast.success('Returning to dashboard');
-    } catch (error) {
-      console.error('Navigation error:', error);
-      // Fallback navigation
-      window.location.href = '/';
-    }
-  };
-
   return (
     <div className="min-h-screen bg-background">
-        {/* Fixed Navigation Header */}
-        <div className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-          <div className="container mx-auto p-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-4">
-                <Button
-                  variant="default"
-                  size="sm"
-                  onClick={handleNavigation}
-                  className="flex items-center gap-2 bg-primary text-primary-foreground hover:bg-primary/90"
-                >
-                  <ArrowLeft className="h-4 w-4" />
-                  Back to Dashboard
-                </Button>
-                <div>
-                  <h1 className="text-2xl font-bold">Calendar</h1>
-                  <p className="text-sm text-muted-foreground">
-                    View and manage your tasks in calendar format
-                  </p>
-                </div>
-              </div>
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={handleNavigation}
-                className="flex items-center gap-2"
-              >
-                <Home className="h-4 w-4" />
-                Dashboard
-              </Button>
-            </div>
-          </div>
-        </div>
+      {/* Mobile-responsive header */}
+      <MobilePageHeader
+        title="Calendar"
+        subtitle="View and manage your tasks"
+        onBack={handleNavigation}
+        actions={
+          !isMobile ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={handleNavigation}
+              className="flex items-center gap-2"
+            >
+              <Home className="h-4 w-4" />
+              Dashboard
+            </Button>
+          ) : null
+        }
+      />
 
-        {/* Main Content */}
-        <div className="container mx-auto p-6 space-y-6">
-
-            <CalendarModule
-              tasks={tasks}
-              onTaskEdit={handleTaskEdit}
-              onCreateTask={handleCreateTask}
-              onTaskScheduled={loadTasks}
-              onStatusChange={handleStatusChange}
-            />
+      {/* Main Content */}
+      <div className="container mx-auto p-4 md:p-6 space-y-6">
+        <CalendarModule
+          tasks={tasks}
+          onTaskEdit={handleTaskEdit}
+          onCreateTask={handleCreateTask}
+          onTaskScheduled={loadTasks}
+          onStatusChange={handleStatusChange}
+        />
 
         {/* Task Detail Modal */}
         <TaskDetailModal
@@ -272,8 +258,8 @@ const Calendar: React.FC = () => {
           initialHour={selectedHour}
           initialMinute={selectedMinute}
         />
-        </div>
       </div>
+    </div>
   );
 };
 

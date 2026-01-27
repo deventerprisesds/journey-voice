@@ -1,21 +1,23 @@
 import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { VoiceAssistantProvider } from '@/contexts/VoiceAssistantContext';
 import VoiceStatusArea from '@/components/VoiceStatusArea';
 import DailyScheduleView from '@/components/DailyScheduleView';
-import { Button } from '@/components/ui/button';
+import MobilePageHeader from '@/components/MobilePageHeader';
 import { Badge } from '@/components/ui/badge';
-import { LogOut, Settings, Crown, User, Calendar, LayoutGrid } from 'lucide-react';
+import { Calendar, LayoutGrid, Settings, Crown, User, LogOut } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
+import { Button } from '@/components/ui/button';
+import { useIsMobile } from '@/hooks/use-mobile';
 
 const DailyPriorities = () => {
   const [tasks, setTasks] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const { user, signOut, isAdmin, isDemoMode } = useAuth();
   const [selectedDate, setSelectedDate] = useState(new Date());
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     loadTasks();
@@ -85,68 +87,41 @@ const DailyPriorities = () => {
     return null;
   }
 
+  const navActions = [
+    { label: 'Calendar', icon: <Calendar className="h-4 w-4" />, to: '/calendar' },
+    { label: 'All Tasks', icon: <LayoutGrid className="h-4 w-4" />, to: '/' },
+    { label: 'Settings', icon: <Settings className="h-4 w-4" />, to: '/settings' },
+    ...(isAdmin ? [{ label: 'Admin', icon: <Crown className="h-4 w-4" />, to: '/admin' }] : []),
+  ];
+
   return (
     <VoiceAssistantProvider onTaskUpdate={handleTaskUpdate}>
       <div className="min-h-screen bg-background">
-        {/* Header */}
-        <header className="border-b border-border bg-card sticky top-0 z-40">
-          <div className="container mx-auto px-4 py-3 flex items-center justify-between">
-            <div className="flex items-center gap-6">
-              <h1 className="text-2xl font-bold text-primary">
-                Today's Priorities
-              </h1>
-              <p className="text-muted-foreground">
-                {format(selectedDate, 'EEEE, MMMM d, yyyy')}
-              </p>
-            </div>
-
-            <div className="flex items-center gap-4">
-              <Link to="/calendar">
-                <Button variant="outline" size="sm">
-                  <Calendar className="w-4 h-4 mr-2" />
-                  Calendar
-                </Button>
-              </Link>
-              
-              <Link to="/">
-                <Button variant="outline" size="sm">
-                  <LayoutGrid className="w-4 h-4 mr-2" />
-                  All Tasks
-                </Button>
-              </Link>
-
-              <Link to="/settings">
-                <Button variant="outline" size="sm">
-                  <Settings className="w-4 h-4 mr-2" />
-                  Settings
-                </Button>
-              </Link>
-
-              {isAdmin && (
-                <Link to="/admin">
-                  <Button variant="outline" size="sm">
-                    <Crown className="w-4 h-4 mr-2" />
-                    Admin
-                  </Button>
-                </Link>
+        {/* Header with back button and mobile menu */}
+        <MobilePageHeader
+          title="Today's Priorities"
+          subtitle={format(selectedDate, 'EEEE, MMMM d, yyyy')}
+          backTo="/"
+          navActions={navActions}
+          actions={
+            <div className="flex items-center gap-2">
+              {!isMobile && (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <User className="h-4 w-4" />
+                  <span className="hidden lg:inline">{user.email}</span>
+                  {isDemoMode && <Badge variant="outline">Demo</Badge>}
+                </div>
               )}
-
-              <div className="flex items-center gap-2">
-                <User className="w-4 h-4 text-muted-foreground" />
-                <span className="text-sm text-muted-foreground">{user.email}</span>
-                {isDemoMode && <Badge variant="outline">Demo</Badge>}
-              </div>
-
               <Button 
                 variant="ghost" 
-                size="sm"
+                size="icon"
                 onClick={signOut}
               >
-                <LogOut className="w-4 h-4" />
+                <LogOut className="h-4 w-4" />
               </Button>
             </div>
-          </div>
-        </header>
+          }
+        />
 
         {/* Main Content */}
         <main className="container mx-auto px-4 py-6">
