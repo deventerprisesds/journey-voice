@@ -255,6 +255,13 @@ export class RealtimeVoiceAssistant {
         this.ttsProvider = data.tts_config.provider || 'openai';
         this.elevenlabsVoiceId = data.tts_config.elevenlabs_voice_id || '';
         console.log(`TTS Config: provider=${this.ttsProvider}, voice=${this.elevenlabsVoiceId}`);
+        
+        // CRITICAL: Mute the WebRTC audio element when using ElevenLabs
+        // This prevents OpenAI's voice from playing alongside ElevenLabs
+        if (this.ttsProvider === 'elevenlabs') {
+          this.audioEl.muted = true;
+          console.log('🔇 WebRTC audio muted - using ElevenLabs for TTS');
+        }
       }
       
       console.log('Ephemeral token received, establishing WebRTC connection...');
@@ -553,9 +560,12 @@ export class RealtimeVoiceAssistant {
         }));
 
         // CRITICAL: Trigger a response to generate spoken response after function call
-        console.log('🎯 Triggering AI response after function completion');
+        // Use correct modalities based on TTS provider to avoid dual audio
+        const modalities = this.ttsProvider === 'elevenlabs' ? ['text'] : ['text', 'audio'];
+        console.log(`🎯 Triggering AI response after function completion (modalities: ${modalities.join(', ')})`);
         this.dc.send(JSON.stringify({
-          type: 'response.create'
+          type: 'response.create',
+          response: { modalities }
         }));
       }
     } catch (error) {
@@ -616,7 +626,13 @@ export class RealtimeVoiceAssistant {
     };
 
     this.dc.send(JSON.stringify(event));
-    this.dc.send(JSON.stringify({type: 'response.create'}));
+    
+    // Use correct modalities based on TTS provider
+    const modalities = this.ttsProvider === 'elevenlabs' ? ['text'] : ['text', 'audio'];
+    this.dc.send(JSON.stringify({
+      type: 'response.create',
+      response: { modalities }
+    }));
   }
 
   disconnect() {
