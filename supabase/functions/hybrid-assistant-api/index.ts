@@ -180,15 +180,68 @@ async function handleAssistantRequest(
 
   try {
     // Load user's AI instructions and timezone from scheduling preferences
+    // PHASE 3 OPTIMIZATION: Parallelize all pre-processing fetches
     let additionalInstructions = contextualInstructions || '';
     let userTimezone = 'America/New_York';
     
+    // Declare toolsResult at outer scope so it's accessible for tool definitions
+    let toolsResult: Response | null = null;
+    
     try {
-      const { data: prefs } = await supabase
-        .from('user_scheduling_prefs')
-        .select('core_instructions, assistant_extensions, config, timezone')
-        .eq('user_id', userId)
-        .maybeSingle();
+      console.log('[HYBRID] Starting parallel pre-processing...');
+      const parallelStart = Date.now();
+      
+      // Fetch all context in parallel for latency optimization
+      const parallelResults = await Promise.all([
+        // 1. User preferences
+        supabase
+          .from('user_scheduling_prefs')
+          .select('core_instructions, assistant_extensions, config, timezone')
+          .eq('user_id', userId)
+          .maybeSingle(),
+        
+        // 2. RAG context
+        fetch(`${supabaseUrl}/functions/v1/rag-context-retrieval`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${supabaseServiceKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            action: 'get_context',
+            userInput: userInput,
+            userId: userId,
+            threadId: threadId,
+            dbAssistantId: undefined
+          })
+        }).catch(e => { console.warn('[HYBRID] RAG fetch failed:', e); return null; }),
+        
+        // 3. Agenda status
+        fetch(`${supabaseUrl}/functions/v1/agenda-manager`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${supabaseServiceKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ operation: 'get_status', threadId, userId })
+        }).catch(e => { console.warn('[HYBRID] Agenda fetch failed:', e); return null; }),
+        
+        // 4. Tool definitions
+        fetch(`${supabaseUrl}/functions/v1/execute-tool/definitions`, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${supabaseServiceKey}`,
+            'Content-Type': 'application/json'
+          }
+        }).catch(e => { console.warn('[HYBRID] Tools fetch failed:', e); return null; })
+      ]);
+      
+      const [prefsResult, ragResult, agendaResult, toolsResultFromParallel] = parallelResults;
+      toolsResult = toolsResultFromParallel;
+      
+      console.log(`[HYBRID] Parallel pre-processing completed in ${Date.now() - parallelStart}ms`);
+      
+      const prefs = prefsResult.data;
 
       if (prefs) {
         // Get user's timezone for accurate time anchor
@@ -226,35 +279,6 @@ When asked about "today", "tomorrow", "this week", etc., calculate from this anc
         additionalInstructions = instructionParts.filter(Boolean).join('\n\n');
         console.log(`[HYBRID] Time anchor set: ${currentDateTime} (${userTimezone})`);
         console.log('Loaded user-specific AI instructions');
-        
-        // Load agenda status for cross-interface continuity
-        try {
-          const agendaResponse = await fetch(`${supabaseUrl}/functions/v1/agenda-manager`, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${supabaseServiceKey}`,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ operation: 'get_status', threadId, userId })
-          });
-          
-          if (agendaResponse.ok) {
-            const agendaStatus = await agendaResponse.json();
-            if (agendaStatus.items?.length > 0) {
-              const agendaContext = `\n\nCONVERSATION AGENDA:\n${
-                agendaStatus.items.map((i: any) => `- [${i.status}] ${i.item_text}`).join('\n')
-              }`;
-              additionalInstructions += agendaContext;
-              
-              if (agendaStatus.isPaused && agendaStatus.currentItem) {
-                additionalInstructions += `\n\nNote: User went on a tangent. When appropriate, guide back to: "${agendaStatus.currentItem.item_text}"`;
-              }
-              console.log(`[HYBRID] Agenda loaded: ${agendaStatus.completed}/${agendaStatus.total} completed`);
-            }
-          }
-        } catch (agendaErr) {
-          console.warn('[HYBRID] Failed to load agenda:', agendaErr);
-        }
       } else {
         // No prefs found - still add time anchor with default timezone
         const currentDateTime = getCurrentTimeString(userTimezone);
@@ -265,34 +289,39 @@ Use this as your authoritative time reference for ALL date/time operations.
 ${contextualInstructions || ''}`;
       }
       
-      // Fetch RAG context for long-term memory (after loading prefs, before run creation)
-      try {
-        const ragResponse = await fetch(`${supabaseUrl}/functions/v1/rag-context-retrieval`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${supabaseServiceKey}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            action: 'get_context',
-            userInput: userInput,
-            userId: userId,
-            threadId: threadId,
-            dbAssistantId: undefined  // Will be passed from request in future
-          })
-        });
-
-        if (ragResponse.ok) {
-          const ragData = await ragResponse.json();
+      // Process agenda result (already fetched in parallel)
+      if (agendaResult && agendaResult.ok) {
+        try {
+          const agendaStatus = await agendaResult.json();
+          if (agendaStatus.items?.length > 0) {
+            const agendaContext = `\n\nCONVERSATION AGENDA:\n${
+              agendaStatus.items.map((i: any) => `- [${i.status}] ${i.item_text}`).join('\n')
+            }`;
+            additionalInstructions += agendaContext;
+            
+            if (agendaStatus.isPaused && agendaStatus.currentItem) {
+              additionalInstructions += `\n\nNote: User went on a tangent. When appropriate, guide back to: "${agendaStatus.currentItem.item_text}"`;
+            }
+            console.log(`[HYBRID] Agenda loaded: ${agendaStatus.completed}/${agendaStatus.total} completed`);
+          }
+        } catch (agendaErr) {
+          console.warn('[HYBRID] Failed to parse agenda:', agendaErr);
+        }
+      }
+      
+      // Process RAG result (already fetched in parallel)
+      if (ragResult && ragResult.ok) {
+        try {
+          const ragData = await ragResult.json();
           if (ragData.contextualInstructions) {
             additionalInstructions += `\n\n${ragData.contextualInstructions}`;
             console.log(`[HYBRID] Added RAG context (${ragData.context?.conversationContext?.length || 0} matches)`);
           }
+        } catch (ragError) {
+          console.warn('[HYBRID] Failed to parse RAG context:', ragError);
         }
-      } catch (ragError) {
-        console.warn('[HYBRID] Failed to fetch RAG context:', ragError);
-        console.log(`[HYBRID] Time anchor set (default): ${currentDateTime}`);
       }
+      
     } catch (error) {
       console.warn('Failed to load user instructions, adding time anchor anyway:', error);
       const currentDateTime = getCurrentTimeString(userTimezone);
@@ -368,19 +397,11 @@ ${contextualInstructions || ''}`;
       throw new Error(`Failed to add message: ${await messageResponse.text()}`);
     }
 
-    // Fetch tool definitions from centralized execute-tool function
+    // Use tool definitions from parallel fetch (toolsResult from Promise.all above)
     let toolDefinitions: any[] = [];
-    try {
-      const toolsResponse = await fetch(`${supabaseUrl}/functions/v1/execute-tool/definitions`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${supabaseServiceKey}`,
-          'Content-Type': 'application/json'
-        }
-      });
-      
-      if (toolsResponse.ok) {
-        const toolsData = await toolsResponse.json();
+    if (toolsResult && toolsResult.ok) {
+      try {
+        const toolsData = await toolsResult.json();
         toolDefinitions = (toolsData.tools || [])
           .filter((t: any) => !['hang_up', 'initiate_phone_call'].includes(t.name)) // Exclude phone-only tools
           .map((t: any) => ({
@@ -391,10 +412,10 @@ ${contextualInstructions || ''}`;
               parameters: t.parameters
             }
           }));
-        console.log(`[HYBRID] Loaded ${toolDefinitions.length} tool definitions for chat`);
+        console.log(`[HYBRID] Loaded ${toolDefinitions.length} tool definitions for chat (from parallel fetch)`);
+      } catch (error) {
+        console.warn('[HYBRID] Failed to parse tool definitions:', error);
       }
-    } catch (error) {
-      console.warn('[HYBRID] Failed to fetch tool definitions:', error);
     }
 
     // Create run with combined instructions and tool overrides
@@ -432,13 +453,14 @@ ${contextualInstructions || ''}`;
     console.log(`Created run: ${runId}`);
 
     // Wait for completion (with timeout)
+    // PHASE 3 OPTIMIZATION: Reduced polling interval from 1000ms to 500ms
     let attempts = 0;
-    const maxAttempts = 60; // 60 seconds timeout (increased for tool calls)
+    const maxAttempts = 120; // 60 seconds timeout (120 * 500ms)
     let runStatus = 'queued';
     let finalRunData: any = runData;
 
     while (attempts < maxAttempts && !['completed', 'failed', 'cancelled', 'expired'].includes(runStatus)) {
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      await new Promise(resolve => setTimeout(resolve, 500)); // Reduced from 1000ms
       attempts++;
 
       const statusResponse = await fetch(`https://api.openai.com/v1/threads/${openaiThreadId}/runs/${runId}`, {

@@ -20,8 +20,8 @@ interface VoiceAssistantContextType {
   voiceTranscripts: ConversationMessage[];
   clearVoiceTranscripts: () => void;
   
-  // Actions
-  connectToAssistant: () => Promise<void>;
+  // Actions - connectToAssistant now accepts optional unified thread ID
+  connectToAssistant: (unifiedThreadId?: string) => Promise<void>;
   disconnectAssistant: () => void;
   toggleListening: () => Promise<void>;
   testConnection: () => Promise<void>;
@@ -218,7 +218,8 @@ export const VoiceAssistantProvider: React.FC<VoiceAssistantProviderProps> = ({
     setIsSpeaking(speaking);
   };
 
-  const connectToAssistant = async () => {
+  // connectToAssistant now accepts optional unified thread ID for cross-mode memory
+  const connectToAssistant = async (unifiedThreadId?: string) => {
     // Guard against duplicate connections
     if (isConnected || assistantRef.current) {
       console.log('Voice assistant already connected or connecting, skipping');
@@ -233,7 +234,8 @@ export const VoiceAssistantProvider: React.FC<VoiceAssistantProviderProps> = ({
         handleSpeakingChange
       );
       
-      await assistantRef.current.connect();
+      // Pass unified thread ID to enable cross-mode memory
+      await assistantRef.current.connect(unifiedThreadId);
       
       toast({
         title: "Voice Assistant Connected",

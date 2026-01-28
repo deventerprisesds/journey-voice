@@ -362,7 +362,8 @@ export class RealtimeVoiceAssistant {
     }
   }
 
-  async connect() {
+  // Connect now accepts optional unified thread ID for cross-mode memory
+  async connect(unifiedThreadId?: string) {
     try {
       // STEP 1: Generate session ID IMMEDIATELY - before any async operations
       // This ensures even failed connections are logged in activity_log
@@ -464,8 +465,16 @@ export class RealtimeVoiceAssistant {
       
       console.log('Ephemeral token received, establishing WebRTC connection...');
       
-      // Create thread for this voice session
-      if (this.userId) {
+      // UNIFIED THREAD: Use provided thread ID for cross-mode memory, or create new
+      if (unifiedThreadId) {
+        // Use unified thread from CommsConsoleContext (shared with chat)
+        this.threadId = unifiedThreadId;
+        console.log('📍 [UNIFIED_THREAD] Using shared thread for voice:', this.threadId);
+        
+        // Load agenda status for cross-interface continuity
+        await this.loadAgendaStatus();
+      } else if (this.userId) {
+        // Fallback: Create session-specific thread (standalone voice mode)
         try {
           // Fetch user's default assistant for thread association
           const { data: defaultAssistant } = await supabase
@@ -488,7 +497,7 @@ export class RealtimeVoiceAssistant {
             .select('id')
             .single();
           this.threadId = thread?.id || null;
-          console.log('📍 Created voice thread:', this.threadId, 'for assistant:', assistantId);
+          console.log('📍 Created voice thread (standalone):', this.threadId, 'for assistant:', assistantId);
           
           // Load agenda status for cross-interface continuity
           await this.loadAgendaStatus();
