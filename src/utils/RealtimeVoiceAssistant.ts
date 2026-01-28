@@ -226,6 +226,12 @@ export class RealtimeVoiceAssistant {
   
   // Track active ElevenLabs audio elements for cleanup on disconnect
   private activeElevenLabsAudio: HTMLAudioElement[] = [];
+  
+  // Accumulator for streaming assistant transcript display
+  private accumulatedAssistantText: string = '';
+  
+  // Flag to prevent duplicate greetings
+  private hasGreeted: boolean = false;
 
   constructor(
     private onMessage: (message: any) => void,
@@ -714,12 +720,31 @@ export class RealtimeVoiceAssistant {
         }
         break;
         
+      case 'response.audio_transcript.delta':
+        // Stream assistant's words in real-time for live transcript display
+        this.accumulatedAssistantText = (this.accumulatedAssistantText || '') + (event.delta || '');
+        this.onMessage({
+          type: 'transcript.interim',
+          role: 'assistant',
+          content: this.accumulatedAssistantText,
+          isListening: false
+        });
+        break;
+        
       case 'response.audio_transcript.done':
+        // Clear accumulator when done
+        this.accumulatedAssistantText = '';
         // Assistant speech transcript  
         console.log('📝 Assistant transcript:', event.transcript);
         if (event.transcript?.trim()) {
           this.saveTranscript('assistant', event.transcript);
         }
+        break;
+        
+      case 'session.updated':
+        // Session configured - trigger immediate greeting like Twilio does
+        console.log('✅ Session configured, triggering greeting');
+        this.sendGreeting();
         break;
     }
   }
@@ -795,6 +820,55 @@ export class RealtimeVoiceAssistant {
         sessionId: this.sessionId
       });
     }
+  }
+
+  // Trigger immediate greeting after session is configured (matches Twilio behavior)
+  private sendGreeting(): void {
+    // Prevent duplicate greetings
+    if (this.hasGreeted) {
+      console.log('[GREETING] Already greeted, skipping');
+      return;
+    }
+    
+    if (!this.dc || this.dc.readyState !== 'open') {
+      console.warn('[GREETING] Data channel not ready, cannot send greeting');
+      return;
+    }
+    
+    this.hasGreeted = true;
+    
+    const greeting = this.getTimeBasedGreeting();
+    const userName = 'sir'; // Could be loaded from profile
+    
+    console.log(`[GREETING] Sending: "${greeting}! What can I help you with?"`);
+    
+    // Inject greeting context as a system message
+    this.dc.send(JSON.stringify({
+      type: 'conversation.item.create',
+      item: {
+        type: 'message',
+        role: 'user',
+        content: [{
+          type: 'input_text',
+          text: `[System: You just connected to ${userName}. Greet them with "${greeting}! What can I help you with?" Keep it brief and wait for their response.]`
+        }]
+      }
+    }));
+    
+    // Trigger AI response with appropriate modalities
+    this.dc.send(JSON.stringify({
+      type: 'response.create',
+      response: {
+        modalities: this.ttsProvider === 'elevenlabs' ? ['text'] : ['text', 'audio']
+      }
+    }));
+  }
+  
+  private getTimeBasedGreeting(): string {
+    const hour = new Date().getHours();
+    if (hour < 12) return 'Good morning';
+    if (hour < 17) return 'Good afternoon';
+    return 'Good evening';
   }
 
   private async handleAudioDelta(event: any) {

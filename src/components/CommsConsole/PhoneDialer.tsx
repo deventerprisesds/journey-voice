@@ -404,7 +404,7 @@ const endCall = () => {
                           {call.type === 'missed' && '📵 Missed • '}
                           {call.type === 'incoming' && '📲 Incoming • '}
                           {call.type === 'outgoing' && '📞 Outgoing • '}
-                          {call.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          {call.timestamp.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: userTimezone || 'America/New_York' })}
                           {call.duration && ` • ${formatDuration(call.duration)}`}
                         </p>
                       </div>
