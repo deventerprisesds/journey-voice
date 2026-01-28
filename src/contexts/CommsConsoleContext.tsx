@@ -61,19 +61,26 @@ const DEFAULT_IRIS: Omit<Assistant, 'id' | 'user_id' | 'created_at' | 'updated_a
 // ============================================================
 // SSE Streaming Helpers
 // ============================================================
-function parseSSEDelta(chunk: string): { type: string; content?: string; threadId?: string } | null {
+function parseSSEEvents(chunk: string): Array<{ type: string; content?: string; threadId?: string }> {
+  const events: Array<{ type: string; content?: string; threadId?: string }> = [];
   const lines = chunk.split('\n');
+  
   for (const line of lines) {
     if (!line.startsWith('data: ')) continue;
-    const data = line.slice(6);
-    if (data === '[DONE]') return { type: 'done' };
+    const data = line.slice(6).trim();
+    if (!data) continue;
+    if (data === '[DONE]') {
+      events.push({ type: 'done' });
+      continue;
+    }
     try {
-      return JSON.parse(data);
+      events.push(JSON.parse(data));
     } catch {
-      // Skip malformed JSON
+      // Skip malformed JSON (may be split across chunks)
     }
   }
-  return null;
+  
+  return events;
 }
 
 export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -369,9 +376,9 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
             if (done) break;
 
             const chunk = decoder.decode(value, { stream: true });
-            const parsed = parseSSEDelta(chunk);
+            const events = parseSSEEvents(chunk);  // Get ALL events from chunk
 
-            if (parsed) {
+            for (const parsed of events) {  // Process each event
               if (parsed.type === 'delta' && parsed.content) {
                 if (!timeToFirstToken) {
                   timeToFirstToken = Date.now() - requestStartTime;
