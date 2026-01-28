@@ -1167,6 +1167,18 @@ export class RealtimeVoiceAssistant {
     activeInstances.delete(this.instanceId);
     console.log(`[VOICE_INSTANCE] Removed #${this.instanceId}, remaining: ${activeInstances.size}`);
     
+    // CRITICAL FIX: Cancel any in-flight OpenAI response IMMEDIATELY
+    // This must happen while the data channel is still open
+    if (this.dc && this.dc.readyState === 'open') {
+      try {
+        console.log('🔴 Sending response.cancel to stop AI response');
+        this.dc.send(JSON.stringify({ type: 'response.cancel' }));
+        this.dc.send(JSON.stringify({ type: 'input_audio_buffer.clear' }));
+      } catch (e) {
+        console.warn('Could not send cancel commands:', e);
+      }
+    }
+    
     // CRITICAL: Stop all audio IMMEDIATELY before any other cleanup
     // This prevents any audio bleeding through during teardown
     
