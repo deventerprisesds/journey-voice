@@ -2772,12 +2772,14 @@ CRITICAL INSTRUCTIONS:
         }
         
         // Also save to conversation_messages for RAG continuity
+        // CRITICAL: Include source: 'phone' for unified transcript tracking
         if (threadId && role !== 'tool') {
           await supabase.from('conversation_messages').insert({
             user_id: userId,
             thread_id: threadId,
             role: role,
             content: content,
+            source: 'phone',  // FIXED: Explicitly set source for cross-mode visibility
             voice_session_id: streamSid,
             audio_transcript: content,
             metadata: { latency_ms: latencyMs, call_session_id: callSessionId }
