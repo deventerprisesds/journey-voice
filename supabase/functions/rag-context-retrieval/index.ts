@@ -40,6 +40,7 @@ async function getRelevantContext(
   threadId?: string,
   assistantId?: string
 ) {
+  // assistantId is now accepted for future assistant-scoped queries
   console.log(`Getting relevant context from external database for: "${userInput.substring(0, 100)}..."`);
   
   try {
@@ -172,7 +173,8 @@ serve(async (req) => {
       userInput, 
       userId, 
       threadId, 
-      assistantId = 'asst_BcZBxlx9zH8VIPvfJrhPP3EF',
+      assistantId,  // Now optional - used for assistant-scoped RAG queries
+      dbAssistantId,  // Database assistant ID (different from OpenAI assistant ID)
       baseInstructions = 'You are a helpful voice assistant for task management.',
       action = 'get_context'
     } = await req.json();
@@ -180,7 +182,9 @@ serve(async (req) => {
     console.log(`Processing ${action} for user ${userId}`);
 
     if (action === 'get_context') {
-      const context = await getRelevantContext(userInput, userId, threadId, assistantId);
+      // Use dbAssistantId for scoping if provided, otherwise fall back to assistantId
+      const scopedAssistantId = dbAssistantId || assistantId;
+      const context = await getRelevantContext(userInput, userId, threadId, scopedAssistantId);
       const useAssistantAPI = shouldUseAssistantAPI(userInput, context);
       const contextualInstructions = buildContextualInstructions(baseInstructions, context, userInput);
 
