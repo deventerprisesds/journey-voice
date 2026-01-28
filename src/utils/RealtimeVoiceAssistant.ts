@@ -1008,51 +1008,55 @@ export class RealtimeVoiceAssistant {
   }
 
   private async handleFunctionCall(event: any) {
-    console.log('🔧 Function call completed:', event.name, 'with args:', event.arguments);
+    console.log('🔧 Function call received:', event.name, 'with args:', event.arguments);
     
     try {
       const args = JSON.parse(event.arguments);
       const functionName = event.name;
 
       let result;
-      switch (functionName) {
-        case 'create_task':
-          result = await this.createTask(args);
-          break;
-        case 'update_task':  
-          result = await this.updateTask(args);
-          break;
-        case 'get_tasks':
-          result = await this.getTasks(args);
-          break;
-        case 'get_today_tasks':
-          result = await this.getTodayTasks(args);
-          break;
-        case 'reschedule_task':
-          result = await this.rescheduleTask(args);
-          break;
-        case 'schedule_task':
-          result = await this.scheduleTask(args);
-          break;
-        case 'unschedule_task':
-          result = await this.unscheduleTask(args);
-          break;
-        case 'disconnect':
-          result = await this.handleDisconnectTool(args);
-          break;
-        case 'initiate_phone_call':
-          result = await this.initiatePhoneCall(args);
-          break;
-        case 'web_search':
-          result = await this.webSearch(args);
-          break;
-        default:
-          result = { error: `Unknown function: ${functionName}` };
+      
+      // Handle disconnect locally (WebRTC-specific action)
+      if (functionName === 'disconnect') {
+        result = await this.handleDisconnectTool(args);
+      } else {
+        // Route ALL other tools through centralized execute-tool for feature parity
+        // This ensures identical behavior between WebRTC voice, Twilio phone, and chat
+        console.log('🔄 Routing to centralized execute-tool:', functionName);
+        this.onMessage?.({ type: 'client.processing', status: `Processing ${functionName}...` });
+        
+        const { data, error } = await supabase.functions.invoke('execute-tool', {
+          body: {
+            toolName: functionName,
+            args: args,
+            userId: this.userId,
+            context: { 
+              interface: 'webrtc', 
+              timezone: 'America/New_York', // TODO: Get from token response
+              sessionId: this.sessionId,
+              threadId: this.threadId
+            }
+          }
+        });
+        
+        if (error) {
+          console.error('❌ execute-tool error:', error);
+          result = { 
+            success: false, 
+            error: error.message || 'Tool execution failed',
+            message: `I couldn't complete that action. ${error.message}`
+          };
+          this.onMessage?.({ type: 'client.error', message: error.message });
+        } else {
+          console.log('✅ execute-tool result:', data);
+          result = data;
+          this.onMessage?.({ type: 'client.done', status: `${functionName} completed` });
+        }
       }
 
       console.log('🔧 Function result:', result);
 
-      // Send function result back
+      // Send function result back to OpenAI
       if (this.dc && this.dc.readyState === 'open') {
         // Send the function output
         this.dc.send(JSON.stringify({
@@ -1072,6 +1076,31 @@ export class RealtimeVoiceAssistant {
       }
     } catch (error) {
       console.error('Error handling function call:', error);
+      
+      // Log error to database for visibility
+      await this.logError('function_call_failed', error instanceof Error ? error.message : 'Unknown error', {
+        functionName: event.name,
+        arguments: event.arguments
+      });
+      
+      // Send error result back to OpenAI
+      if (this.dc && this.dc.readyState === 'open') {
+        this.dc.send(JSON.stringify({
+          type: 'conversation.item.create',
+          item: {
+            type: 'function_call_output',
+            call_id: event.call_id,
+            output: JSON.stringify({ 
+              success: false, 
+              error: error instanceof Error ? error.message : 'Unknown error' 
+            })
+          }
+        }));
+        
+        this.dc.send(JSON.stringify({
+          type: 'response.create'
+        }));
+      }
     }
   }
 
