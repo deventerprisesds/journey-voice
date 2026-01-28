@@ -10,7 +10,7 @@ import { Switch } from '@/components/ui/switch';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useAuth';
 import { loadUserSchedulingConfig, saveUserSchedulingConfig, type SchedulingConfigWithInstructions, type CustomVoice, type ScheduledCall, type PhoneCallMode } from '@/services/schedulingService';
-import { Loader2, RotateCcw, Save, Plus, Trash2, Volume2, Phone, Clock, AlertCircle, Radio } from 'lucide-react';
+import { Loader2, RotateCcw, Save, Plus, Trash2, Volume2, Phone, Clock, AlertCircle, Radio, Copy, Check } from 'lucide-react';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -126,6 +126,7 @@ const VoiceAssistantSettings: React.FC = () => {
   const [customVoices, setCustomVoices] = useState<CustomVoice[]>([]);
   const [newVoiceName, setNewVoiceName] = useState('');
   const [newVoiceId, setNewVoiceId] = useState('');
+  const [copiedVoiceId, setCopiedVoiceId] = useState<string | null>(null);
 
   // Scheduled calls
   const [scheduledCalls, setScheduledCalls] = useState<ScheduledCall[]>(DEFAULT_SCHEDULED_CALLS);
@@ -266,6 +267,12 @@ const VoiceAssistantSettings: React.FC = () => {
     if (elevenlabsVoiceId === voiceId) {
       setElevenlabsVoiceId('EXAVITQu4vr4xnSDxMaL');
     }
+  };
+
+  const handleCopyVoiceId = async (voiceId: string) => {
+    await navigator.clipboard.writeText(voiceId);
+    setCopiedVoiceId(voiceId);
+    setTimeout(() => setCopiedVoiceId(null), 2000);
   };
 
   const getAllElevenlabsVoices = () => {
@@ -593,9 +600,26 @@ const VoiceAssistantSettings: React.FC = () => {
                           key={voice.id}
                           className="flex items-center justify-between rounded-md border px-3 py-2"
                         >
-                          <div>
+                          <div className="flex-1 min-w-0">
                             <span className="font-medium">{voice.name}</span>
-                            <span className="text-xs text-muted-foreground ml-2">({voice.id.substring(0, 12)}...)</span>
+                            <div className="flex items-center gap-1 mt-0.5">
+                              <code className="text-xs text-muted-foreground font-mono break-all">
+                                {voice.id}
+                              </code>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-5 w-5 shrink-0"
+                                onClick={() => handleCopyVoiceId(voice.id)}
+                                title="Copy voice ID"
+                              >
+                                {copiedVoiceId === voice.id ? (
+                                  <Check className="h-3 w-3 text-green-500" />
+                                ) : (
+                                  <Copy className="h-3 w-3" />
+                                )}
+                              </Button>
+                            </div>
                           </div>
                           <Button
                             variant="ghost"
