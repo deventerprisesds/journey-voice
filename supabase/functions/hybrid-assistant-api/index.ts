@@ -263,6 +263,34 @@ Today is ${currentDateTime} (${userTimezone}).
 Use this as your authoritative time reference for ALL date/time operations.
 
 ${contextualInstructions || ''}`;
+      }
+      
+      // Fetch RAG context for long-term memory (after loading prefs, before run creation)
+      try {
+        const ragResponse = await fetch(`${supabaseUrl}/functions/v1/rag-context-retrieval`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${supabaseServiceKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            action: 'get_context',
+            userInput: userInput,
+            userId: userId,
+            threadId: threadId,
+            dbAssistantId: undefined  // Will be passed from request in future
+          })
+        });
+
+        if (ragResponse.ok) {
+          const ragData = await ragResponse.json();
+          if (ragData.contextualInstructions) {
+            additionalInstructions += `\n\n${ragData.contextualInstructions}`;
+            console.log(`[HYBRID] Added RAG context (${ragData.context?.conversationContext?.length || 0} matches)`);
+          }
+        }
+      } catch (ragError) {
+        console.warn('[HYBRID] Failed to fetch RAG context:', ragError);
         console.log(`[HYBRID] Time anchor set (default): ${currentDateTime}`);
       }
     } catch (error) {
@@ -566,6 +594,7 @@ serve(async (req) => {
       userId, 
       threadId, 
       assistantId = Deno.env.get('OPENAI_ASSISTANT_ID') || 'asst_BcZBxlx9zH8VIPvfJrhPP3EF',
+      dbAssistantId,  // Database assistant ID for RAG scoping
       contextualInstructions
     } = await req.json();
 

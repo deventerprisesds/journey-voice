@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useCallback, useEffect, use
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useVoiceAssistant } from '@/contexts/VoiceAssistantContext';
+import { useUnifiedThread } from '@/hooks/useUnifiedThread';
 import type {
   Assistant,
   ConversationMessage,
@@ -77,6 +78,21 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
   // Phone state
   const [phoneCallState, setPhoneCallState] = useState<PhoneCallState>('idle');
 
+  const userId = user?.id || (isDemoMode ? DEMO_USER_ID : null);
+
+  // Feature flag for unified threads per assistant
+  const USE_UNIFIED_THREADS = true;
+
+  // Unified thread management (parallel to existing threadId state)
+  const { 
+    dbThreadId, 
+    updateOpenaiThreadId,
+  } = useUnifiedThread({
+    userId,
+    assistantId: currentAssistant?.id || null,
+    enabled: USE_UNIFIED_THREADS
+  });
+
   // Derive voice state from voice assistant context
   const voiceState: VoiceState = useMemo(() => {
     if (voiceAssistant.isProcessing) return 'processing';
@@ -85,7 +101,6 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     return 'idle';
   }, [voiceAssistant.isProcessing, voiceAssistant.isSpeaking, voiceAssistant.isListening]);
 
-  const userId = user?.id || (isDemoMode ? DEMO_USER_ID : null);
   
   // Merge voice transcripts with chat messages based on current mode
   const allMessages = useMemo(() => {
@@ -240,12 +255,16 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     setIsLoading(true);
 
     try {
+      // Use unified thread if enabled, otherwise fall back to existing behavior
+      const effectiveThreadId = USE_UNIFIED_THREADS ? dbThreadId : threadId;
+      
       const { data, error } = await supabase.functions.invoke('hybrid-assistant-api', {
         body: {
           userInput: content,
           userId,
-          threadId,
+          threadId: effectiveThreadId,
           assistantId: currentAssistant?.openai_assistant_id || undefined,
+          dbAssistantId: currentAssistant?.id || undefined,  // For RAG scoping
         },
       });
 
