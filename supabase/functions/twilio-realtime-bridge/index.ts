@@ -161,6 +161,34 @@ function getCurrentTimeString(timezone: string = 'America/New_York'): string {
   }
 }
 
+// Error logging helper - persists errors to error_log for unified debugging
+async function logError(
+  supabase: any,
+  errorType: string,
+  errorMessage: string,
+  context: Record<string, any> = {}
+): Promise<void> {
+  try {
+    await supabase.from('error_log').insert({
+      source: 'edge_function',
+      component: 'twilio-realtime-bridge',
+      session_id: context.sessionId || null,
+      user_id: context.userId || null,
+      error_type: errorType,
+      error_message: errorMessage,
+      context: {
+        version: BRIDGE_VERSION,
+        stage: context.stage,
+        stack: context.stack,
+        ...context
+      }
+    });
+    console.log(`[ERROR_LOG] ✅ ${errorType}: ${errorMessage.substring(0, 50)}...`);
+  } catch (e) {
+    console.error('[ERROR_LOG] Failed to persist error:', e, { errorType, errorMessage });
+  }
+}
+
 // Load user profile
 async function loadUserProfile(supabase: any, userId: string): Promise<any> {
   try {
@@ -2950,6 +2978,15 @@ Start speaking IMMEDIATELY with your greeting - the user has just answered the p
         }
         
         console.error("[BRIDGE] Function call error:", error);
+        
+        // Log error for debugging visibility
+        await logError(supabase, 'function_call_failed', String(error), {
+          sessionId: callSessionId,
+          userId,
+          stage: 'function_execution',
+          functionName,
+          stack: error instanceof Error ? error.stack : undefined
+        });
         
         openaiWs.send(JSON.stringify({
           type: "conversation.item.create",

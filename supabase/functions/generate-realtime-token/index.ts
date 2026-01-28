@@ -368,6 +368,30 @@ When the user says goodbye phrases like 'that's all', 'thanks that's it', 'disco
     });
   } catch (error) {
     console.error("Error generating token:", error);
+    
+    // Persist error to error_log for debugging visibility
+    try {
+      const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2');
+      const supabaseAdmin = createClient(
+        Deno.env.get('SUPABASE_URL')!,
+        Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+      );
+      
+      await supabaseAdmin.from('error_log').insert({
+        source: 'edge_function',
+        component: 'generate-realtime-token',
+        user_id: userId || null,
+        error_type: 'token_generation_failed',
+        error_message: error instanceof Error ? error.message : String(error),
+        context: {
+          ttsProvider: ttsProvider || 'unknown',
+          stack: error instanceof Error ? error.stack : undefined
+        }
+      });
+    } catch (logError) {
+      console.error('Failed to log error to database:', logError);
+    }
+    
     return new Response(JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

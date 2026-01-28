@@ -251,6 +251,41 @@ export class RealtimeVoiceAssistant {
     return this.sessionId;
   }
 
+  // Error logging helper - ALWAYS logs, even without userId/sessionId
+  // This ensures errors are captured even during early connection failures
+  private async logError(
+    errorType: string,
+    errorMessage: string,
+    context: Record<string, any> = {}
+  ): Promise<void> {
+    try {
+      const { error } = await supabase.from('error_log').insert({
+        source: 'webrtc',
+        component: 'RealtimeVoiceAssistant',
+        session_id: this.sessionId || null,
+        user_id: this.userId || null,
+        error_type: errorType,
+        error_message: errorMessage,
+        context: {
+          instance_id: this.instanceId,
+          tts_provider: this.ttsProvider,
+          stage: context.stage,
+          stack: context.stack,
+          ...context
+        }
+      });
+      
+      if (error) {
+        console.error('[ERROR_LOG] Failed to persist error:', error, { errorType, errorMessage });
+      } else {
+        console.log(`[ERROR_LOG] ✅ ${errorType}: ${errorMessage.substring(0, 50)}...`);
+      }
+    } catch (e) {
+      // Last resort - at least console log
+      console.error('[ERROR_LOG] Exception persisting error:', e, { errorType, errorMessage });
+    }
+  }
+
   // Activity logging helper for unified timeline
   private async logActivity(
     status: 'started' | 'connected' | 'completed' | 'failed' | 'error',
@@ -643,9 +678,18 @@ export class RealtimeVoiceAssistant {
     } catch (error) {
       console.error("Error connecting:", error);
       
-      // Ensure error is logged if not already
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      const errorStack = error instanceof Error ? error.stack : undefined;
+      
+      // ALWAYS log to error_log (no guards - captures even pre-session failures)
+      await this.logError('connection_failed', errorMsg, {
+        stage: 'connect',
+        stack: errorStack,
+        errorType: (error as any).type || 'unknown'
+      });
+      
+      // Also log to activity_log if we have session info
       if (this.userId && this.sessionId) {
-        const errorMsg = error instanceof Error ? error.message : String(error);
         await this.logActivity('error', 'connection', {
           error_message: errorMsg
         });
