@@ -345,11 +345,11 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     }
   }, [userId, threadId, currentAssistant, currentMode, dbThreadId, updateOpenaiThreadId]);
 
-  // Connect voice with unified thread for cross-mode memory
+  // Connect voice with unified thread and assistant ID for cross-mode memory
   const connectVoice = useCallback(async () => {
-    // Pass unified thread ID to voice assistant for memory persistence
-    await voiceAssistant.connectToAssistant(dbThreadId || undefined);
-  }, [voiceAssistant, dbThreadId]);
+    // Pass unified thread ID and assistant ID to voice assistant for memory persistence
+    await voiceAssistant.connectToAssistant(dbThreadId || undefined, currentAssistant?.id || undefined);
+  }, [voiceAssistant, dbThreadId, currentAssistant?.id]);
 
   const disconnectVoice = useCallback(() => {
     voiceAssistant.disconnectAssistant();

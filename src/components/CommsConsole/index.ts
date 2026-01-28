@@ -3,6 +3,7 @@ export { default as AssistantAvatar } from './AssistantAvatar';
 export { default as AssistantHeader } from './AssistantHeader';
 export { default as AssistantSidebar } from './AssistantSidebar';
 export { default as ConversationPane } from './ConversationPane';
+export { default as LiveTranscriptPanel } from './LiveTranscriptPanel';
 export { default as ModeToggle } from './ModeToggle';
 export { default as NavigationSection } from './NavigationSection';
 export { default as TextInputBar } from './TextInputBar';

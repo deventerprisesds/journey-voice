@@ -6,7 +6,10 @@ import { Phone, PhoneOff, Mic, MicOff, Volume2, VolumeX, Clock, Users, Grid3X3, 
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
 import { useCommsConsole } from '@/contexts/CommsConsoleContext';
+import { useVoiceAssistant } from '@/contexts/VoiceAssistantContext';
+import { loadUserSchedulingConfig } from '@/services/schedulingService';
 import AssistantAvatar from './AssistantAvatar';
+import LiveTranscriptPanel from './LiveTranscriptPanel';
 import type { PhoneCallState } from './types';
 
 interface PhoneDialerProps {
@@ -53,6 +56,19 @@ const PhoneDialer: React.FC<PhoneDialerProps> = ({
   const { user } = useAuth();
   const { toast } = useToast();
   const { currentAssistant, assistants, selectAssistant, connectVoice, disconnectVoice, sendVoiceTextMessage, isConnected } = useCommsConsole();
+  const { liveTranscript } = useVoiceAssistant();
+  
+  // User timezone for live transcript display
+  const [userTimezone, setUserTimezone] = useState('America/New_York');
+  
+  // Load user timezone on mount
+  useEffect(() => {
+    if (user?.id) {
+      loadUserSchedulingConfig(user.id).then(config => {
+        setUserTimezone(config.timezone || 'America/New_York');
+      });
+    }
+  }, [user?.id]);
   
   // Ring tone audio ref
   const ringAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -293,6 +309,15 @@ const endCall = () => {
             >
               <PhoneOff className="h-7 w-7" />
             </Button>
+            
+            {/* Live Transcription Panel - visible during call */}
+            <div className="w-full max-w-sm">
+              <LiveTranscriptPanel
+                liveTranscript={liveTranscript}
+                isConnected={isConnected}
+                userTimezone={userTimezone}
+              />
+            </div>
           </div>
         ) : (
           /* Pre-Call Tabs UI */

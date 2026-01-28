@@ -69,6 +69,8 @@ async function storeConversationMessage(
   content: string,
   audioTranscript?: string,
   voiceSessionId?: string,
+  assistantId?: string,
+  source?: string,
   metadata: any = {}
 ) {
   const { error } = await supabase
@@ -80,6 +82,8 @@ async function storeConversationMessage(
       content,
       audio_transcript: audioTranscript,
       voice_session_id: voiceSessionId,
+      assistant_id: assistantId || null,
+      source: source || 'chat',
       metadata
     });
 
@@ -98,6 +102,8 @@ serve(async (req) => {
     const { 
       userId, 
       threadId, 
+      assistantId,
+      source,
       content, 
       messageType, 
       role, 
@@ -107,13 +113,13 @@ serve(async (req) => {
       action = 'store_conversation'
     } = await req.json();
 
-    console.log(`Processing ${action} for user ${userId}`);
+    console.log(`Processing ${action} for user ${userId}, source=${source || 'chat'}, assistantId=${assistantId || 'none'}`);
 
     if (action === 'store_conversation') {
       // Store both embedding and full message
       await Promise.all([
         storeConversationEmbedding(userId, threadId, content, messageType, voiceSessionId, metadata),
-        storeConversationMessage(userId, threadId, role, content, audioTranscript, voiceSessionId, metadata)
+        storeConversationMessage(userId, threadId, role, content, audioTranscript, voiceSessionId, assistantId, source, metadata)
       ]);
 
       return new Response(JSON.stringify({ success: true }), {
