@@ -46,6 +46,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
   });
   const [isMobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [tasksExpanded, setTasksExpanded] = useState(true);
+  const [kanbanExpanded, setKanbanExpanded] = useState(false);
 
   // Persist sidebar state
   React.useEffect(() => {
@@ -66,21 +67,48 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
     return location.pathname === '/tasks' && searchParams.get('view') === view;
   };
 
+  const getKanbanTabActive = (tab: string) => {
+    const searchParams = new URLSearchParams(location.search);
+    return location.pathname === '/tasks' && 
+           searchParams.get('view') === 'kanban' && 
+           searchParams.get('tab') === tab;
+  };
+
+  interface KanbanTab {
+    label: string;
+    path: string;
+  }
+
+  interface SubItem {
+    icon: React.ElementType;
+    label: string;
+    path: string;
+    kanbanTabs?: KanbanTab[];
+  }
+
   interface NavItem {
     icon: React.ElementType;
     label: string;
     path?: string;
     action?: () => void;
     adminOnly?: boolean;
-    subItems?: { icon: React.ElementType; label: string; path: string }[];
+    subItems?: SubItem[];
   }
+
+  const kanbanTabs: KanbanTab[] = [
+    { label: 'Today', path: '/tasks?view=kanban&tab=today' },
+    { label: 'Career', path: '/tasks?view=kanban&tab=career' },
+    { label: 'Prof. Education', path: '/tasks?view=kanban&tab=prof_education' },
+    { label: 'Ventures', path: '/tasks?view=kanban&tab=ventures' },
+    { label: 'Life', path: '/tasks?view=kanban&tab=life' },
+  ];
 
   const navItems: NavItem[] = [
     {
       icon: LayoutGrid,
       label: 'Tasks',
       subItems: [
-        { icon: Columns3, label: 'Kanban Board', path: '/tasks?view=kanban' },
+        { icon: Columns3, label: 'Kanban Board', path: '/tasks?view=kanban', kanbanTabs },
         { icon: List, label: 'List View', path: '/tasks?view=grid' },
       ],
     },
@@ -181,8 +209,60 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
           <CollapsibleContent className="pl-4 space-y-1 mt-1">
             {item.subItems.map((subItem) => {
               const SubIcon = subItem.icon;
-              const subActive = getTaskViewActive(subItem.path.includes('kanban') ? 'kanban' : 'grid');
+              const isKanban = subItem.path.includes('kanban');
+              const subActive = getTaskViewActive(isKanban ? 'kanban' : 'grid');
 
+              // Kanban Board with nested tabs
+              if (subItem.kanbanTabs && subItem.kanbanTabs.length > 0) {
+                return (
+                  <Collapsible
+                    key={subItem.path}
+                    open={kanbanExpanded}
+                    onOpenChange={setKanbanExpanded}
+                  >
+                    <CollapsibleTrigger asChild>
+                      <button
+                        className={cn(
+                          'w-full flex items-center gap-2 p-2 rounded-lg transition-colors text-sm',
+                          'hover:bg-accent',
+                          subActive && 'bg-accent/50'
+                        )}
+                      >
+                        <SubIcon className="w-4 h-4" />
+                        <span className="flex-1 text-left">{subItem.label}</span>
+                        {kanbanExpanded ? (
+                          <ChevronDown className="w-3 h-3 text-muted-foreground" />
+                        ) : (
+                          <ChevronRight className="w-3 h-3 text-muted-foreground" />
+                        )}
+                      </button>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="pl-6 space-y-0.5 mt-1">
+                      {subItem.kanbanTabs.map((tab) => {
+                        const tabParam = tab.path.split('tab=')[1];
+                        const tabActive = getKanbanTabActive(tabParam);
+                        
+                        return (
+                          <button
+                            key={tab.path}
+                            onClick={() => handleSubItemClick(tab.path)}
+                            className={cn(
+                              'w-full flex items-center gap-2 p-1.5 rounded-md transition-colors text-xs',
+                              'hover:bg-accent',
+                              tabActive && 'bg-accent text-accent-foreground font-medium'
+                            )}
+                          >
+                            <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/50" />
+                            <span>{tab.label}</span>
+                          </button>
+                        );
+                      })}
+                    </CollapsibleContent>
+                  </Collapsible>
+                );
+              }
+
+              // Regular sub-item (List View)
               return (
                 <button
                   key={subItem.path}

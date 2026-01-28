@@ -1,5 +1,5 @@
 import React from 'react';
-import { PanelLeft, ChevronDown, X } from 'lucide-react';
+import { PanelLeft, ChevronDown, PanelRightClose } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -121,10 +121,10 @@ const AssistantHeader: React.FC<AssistantHeaderProps> = ({
           variant="ghost"
           size="icon"
           onClick={onClose}
-          className="h-8 w-8 md:hidden"
-          aria-label="Close"
+          className="h-8 w-8"
+          aria-label="Collapse panel"
         >
-          <X className="w-4 h-4" />
+          <PanelRightClose className="w-4 h-4" />
         </Button>
       )}
     </div>
