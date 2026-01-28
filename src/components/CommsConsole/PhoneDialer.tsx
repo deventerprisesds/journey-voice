@@ -327,12 +327,13 @@ const endCall = () => {
   const isInCall = callState === 'dialing' || callState === 'ringing' || callState === 'connected';
   const orbColor = currentAssistant?.orb_color || '#3B82F6';
 
-  // Format timestamp for transcript display
+  // Format timestamp for transcript display - include seconds for ordering validation
   const formatTimestamp = (dateString: string) => {
     const date = new Date(dateString);
     return date.toLocaleTimeString('en-US', {
       hour: '2-digit',
       minute: '2-digit',
+      second: '2-digit',
       timeZone: userTimezone,
     });
   };
@@ -556,13 +557,13 @@ const endCall = () => {
               )}
             </TabsContent>
 
-            <TabsContent value="recents" className="flex-1 overflow-auto p-0 m-0">
+            <TabsContent value="recents" className="flex-1 flex flex-col overflow-hidden p-0 m-0">
               {historyLoading ? (
-                <div className="flex items-center justify-center h-full">
+                <div className="flex-1 flex items-center justify-center">
                   <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
                 </div>
               ) : callHistory.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-full text-muted-foreground p-4">
+                <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground p-4">
                   <Clock className="h-12 w-12 mb-2 opacity-50" />
                   <p>No recent calls</p>
                   <p className="text-xs mt-1">Start a voice session to see history</p>
@@ -639,41 +640,43 @@ const endCall = () => {
               )}
             </TabsContent>
 
-            <TabsContent value="contacts" className="flex-1 overflow-auto p-4 m-0">
+            <TabsContent value="contacts" className="flex-1 flex flex-col overflow-hidden p-4 m-0">
               <p className="text-sm text-muted-foreground mb-4">Select an assistant to call:</p>
-              <div className="space-y-2">
-                {assistants.map((assistant) => (
-                  <div
-                    key={assistant.id}
-                    className={cn(
-                      'flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-colors',
-                      currentAssistant?.id === assistant.id
-                        ? 'bg-accent ring-2 ring-primary'
-                        : 'hover:bg-accent'
-                    )}
-                    onClick={() => selectAssistant(assistant)}
-                  >
-                    <AssistantAvatar
-                      name={assistant.name}
-                      avatarUrl={assistant.avatar_url}
-                      avatarInitial={assistant.avatar_initial}
-                      orbColor={assistant.orb_color}
-                      size="md"
-                    />
-                    <div className="flex-1">
-                      <p className="font-medium">{assistant.name}</p>
-                      {assistant.description && (
-                        <p className="text-sm text-muted-foreground truncate">
-                          {assistant.description}
-                        </p>
+              <ScrollArea className="flex-1">
+                <div className="space-y-2">
+                  {assistants.map((assistant) => (
+                    <div
+                      key={assistant.id}
+                      className={cn(
+                        'flex items-center gap-3 p-3 rounded-lg cursor-pointer transition-colors',
+                        currentAssistant?.id === assistant.id
+                          ? 'bg-accent ring-2 ring-primary'
+                          : 'hover:bg-accent'
+                      )}
+                      onClick={() => selectAssistant(assistant)}
+                    >
+                      <AssistantAvatar
+                        name={assistant.name}
+                        avatarUrl={assistant.avatar_url}
+                        avatarInitial={assistant.avatar_initial}
+                        orbColor={assistant.orb_color}
+                        size="md"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium truncate">{assistant.name}</p>
+                        {assistant.description && (
+                          <p className="text-sm text-muted-foreground truncate max-w-[200px]">
+                            {assistant.description}
+                          </p>
+                        )}
+                      </div>
+                      {currentAssistant?.id === assistant.id && (
+                        <div className="w-2 h-2 rounded-full bg-green-500" />
                       )}
                     </div>
-                    {currentAssistant?.id === assistant.id && (
-                      <div className="w-2 h-2 rounded-full bg-green-500" />
-                    )}
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              </ScrollArea>
             </TabsContent>
 
             {/* Tab Bar at bottom - 4 columns now */}
