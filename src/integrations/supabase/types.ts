@@ -1638,6 +1638,48 @@ export type Database = {
           },
         ]
       }
+      error_log: {
+        Row: {
+          component: string | null
+          context: Json | null
+          created_at: string | null
+          error_code: string | null
+          error_message: string
+          error_type: string
+          id: string
+          session_id: string | null
+          source: string
+          stack_trace: string | null
+          user_id: string | null
+        }
+        Insert: {
+          component?: string | null
+          context?: Json | null
+          created_at?: string | null
+          error_code?: string | null
+          error_message: string
+          error_type: string
+          id?: string
+          session_id?: string | null
+          source: string
+          stack_trace?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          component?: string | null
+          context?: Json | null
+          created_at?: string | null
+          error_code?: string | null
+          error_message?: string
+          error_type?: string
+          id?: string
+          session_id?: string | null
+          source?: string
+          stack_trace?: string | null
+          user_id?: string | null
+        }
+        Relationships: []
+      }
       external_calendar_events: {
         Row: {
           calendar_id: string
@@ -3485,6 +3527,32 @@ export type Database = {
           status: string | null
           timestamp: string | null
           user_id: string | null
+        }
+        Relationships: []
+      }
+      debug_timeline_full: {
+        Row: {
+          context: string | null
+          error_message: string | null
+          log_type: string | null
+          session_id: string | null
+          source: string | null
+          stage: string | null
+          status: string | null
+          timestamp: string | null
+          user_id: string | null
+        }
+        Relationships: []
+      }
+      recent_errors: {
+        Row: {
+          component: string | null
+          context: Json | null
+          created_at: string | null
+          error_message: string | null
+          error_type: string | null
+          session_id: string | null
+          source: string | null
         }
         Relationships: []
       }
