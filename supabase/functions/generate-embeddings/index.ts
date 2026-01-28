@@ -73,19 +73,35 @@ async function storeConversationMessage(
   source?: string,
   metadata: any = {}
 ) {
+  // CRITICAL: Use client-provided timestamp for correct chronological ordering
+  // User speech transcription completes AFTER AI responds, causing incorrect order
+  // By using the speech start time, we ensure user messages appear before AI responses
+  const clientTimestamp = metadata?.client_timestamp_ms;
+  const createdAt = clientTimestamp 
+    ? new Date(clientTimestamp).toISOString()
+    : undefined;  // Let DB use default now()
+  
+  const insertData: any = {
+    user_id: userId,
+    thread_id: threadId,
+    role,
+    content,
+    audio_transcript: audioTranscript,
+    voice_session_id: voiceSessionId,
+    assistant_id: assistantId || null,
+    source: source || 'chat',
+    metadata
+  };
+  
+  // Only set created_at if we have a client timestamp (for user messages)
+  if (createdAt) {
+    insertData.created_at = createdAt;
+    console.log(`[ORDERING] Using client timestamp for ${role} message: ${createdAt}`);
+  }
+  
   const { error } = await supabase
     .from('conversation_messages')
-    .insert({
-      user_id: userId,
-      thread_id: threadId,
-      role,
-      content,
-      audio_transcript: audioTranscript,
-      voice_session_id: voiceSessionId,
-      assistant_id: assistantId || null,
-      source: source || 'chat',
-      metadata
-    });
+    .insert(insertData);
 
   if (error) {
     console.error('Error storing conversation message:', error);
