@@ -1,135 +1,92 @@
 
 
-# Add Message Persistence to WebRTC Voice Assistant
+# Fix Demo Mode Activity Logging for WebRTC Voice Sessions
 
-## Problem Identified
+## Problem Summary
 
-WebRTC voice transcripts are **not being persisted** to the database despite the code existing in `RealtimeVoiceAssistant.ts`. The root cause:
+The Instance Visibility feature was implemented but **silently fails in demo mode** because:
+1. `logActivity()` requires `this.userId` which is null when not authenticated
+2. `saveTranscript()` has the same guard
+3. The demo user ID is only set in the edge function, not in the client-side class
 
-The `generate-realtime-token` edge function does **NOT** include `input_audio_transcription` in the OpenAI session configuration. Without this setting, OpenAI never fires the `conversation.item.input_audio_transcription.completed` event, so user speech is never transcribed and saved.
+## Root Cause
 
-### Evidence
-
-| Query | Result |
-|-------|--------|
-| `voice_session_id IS NOT NULL` | All 16 results start with `MZ` (Twilio phone calls) |
-| `voice_session_id LIKE 'WR%'` | 0 results (no WebRTC transcripts) |
-| `activity_log WHERE activity_type = 'voice_webrtc'` | 0 results |
-
-### Code Analysis
-
-| Component | Status |
-|-----------|--------|
-| `RealtimeVoiceAssistant.ts` lines 674-688 | Event handlers exist for transcripts |
-| `RealtimeVoiceAssistant.ts` lines 694-735 | `saveTranscript()` method exists, calls `generate-embeddings` |
-| `generate-realtime-token` lines 118-314 | **MISSING** `input_audio_transcription` config |
-
----
+| Component | Current Behavior | Expected Behavior |
+|-----------|------------------|-------------------|
+| `RealtimeVoiceAssistant.userId` | Set from `supabase.auth.getUser()` → null in demo | Should fall back to demo user ID |
+| `logActivity()` | Returns early if no userId | Should log with demo user ID |
+| `saveTranscript()` | Returns early if no userId | Should save with demo user ID |
 
 ## Solution
 
-### Fix 1: Add `input_audio_transcription` to Session Config
+Modify `src/utils/RealtimeVoiceAssistant.ts` to use the demo user ID as a fallback when no authenticated user exists.
 
-Update `supabase/functions/generate-realtime-token/index.ts` to include the transcription model:
+### Change 1: Set Demo User ID Fallback in `connect()`
+
+**Location**: `src/utils/RealtimeVoiceAssistant.ts` around line 374
 
 ```typescript
-// In the session creation request body (around line 126)
-body: JSON.stringify({
-  model: "gpt-4o-realtime-preview-2024-12-17",
-  voice: openaiVoice,
-  modalities: modalities,
-  input_audio_format: "pcm16",
-  output_audio_format: "pcm16",
-  // ADD THIS - enables user speech transcription
-  input_audio_transcription: {
-    model: "whisper-1"
-  },
-  turn_detection: {
-    type: "server_vad",
-    threshold: 0.3,
-    prefix_padding_ms: 400,
-    silence_duration_ms: 1200
-  },
-  // ... rest of config
-})
+// CURRENT:
+const { data: { user } } = await supabase.auth.getUser();
+this.userId = user?.id || null;
+
+// FIXED:
+const { data: { user } } = await supabase.auth.getUser();
+// Use demo user ID as fallback for unauthenticated sessions
+this.userId = user?.id || '00000000-0000-0000-0000-000000000001';
+console.log(`[VOICE] User ID: ${this.userId} (demo=${!user?.id})`);
 ```
 
-### Fix 2: Ensure Activity Logging Works
+This single change enables both activity logging and transcript saving for demo mode because both methods check `this.userId`.
 
-The `activity_log` table shows 0 WebRTC sessions. The `logActivity` method exists but may not be persisting correctly. Verify:
+### Change 2: Add Instance Count to Activity Log Metadata
 
-1. The `activity_log` table has the `session_id` column with a unique constraint
-2. The upsert is working (check for silent failures)
+**Location**: `src/utils/RealtimeVoiceAssistant.ts` in `logActivity()` method
 
-### Fix 3: Add Explicit Error Handling (Per User Preference)
-
-If transcript saving fails, the error is logged via `console.warn` but not surfaced. Add explicit error tracking:
+Add the current instance count to metadata for debugging visibility:
 
 ```typescript
-// In saveTranscript() method
-if (error) {
-  console.error('TRANSCRIPT_SAVE_ERROR:', {
-    role,
-    sessionId: this.sessionId,
-    error: error.message
-  });
-  // Emit error event for visibility
-  this.onMessage({
-    type: 'transcript.error',
-    role,
-    error: error.message,
-    sessionId: this.sessionId
-  });
+metadata: {
+  tts_provider: this.ttsProvider,
+  connection_time_ms: this.connectionStartTime ? Date.now() - this.connectionStartTime : 0,
+  instance_id: this.instanceId,
+  active_instances: activeInstances.size,  // ADD THIS
+  ...extra.metadata
 }
 ```
-
----
 
 ## Files to Modify
 
 | File | Change |
 |------|--------|
-| `supabase/functions/generate-realtime-token/index.ts` | Add `input_audio_transcription: { model: "whisper-1" }` to session config |
-| `src/utils/RealtimeVoiceAssistant.ts` | (Optional) Enhance error handling in `saveTranscript()` |
+| `src/utils/RealtimeVoiceAssistant.ts` | Add demo user fallback + include instance count in metadata |
 
----
+## Expected Results After Fix
 
-## Expected Flow After Fix
+1. **Activity Log Populated**: `SELECT * FROM activity_log WHERE activity_type = 'voice_webrtc'` will return WebRTC sessions
+2. **Instance Count Visible**: Each activity log entry will have `metadata.active_instances` showing how many connections were active
+3. **Transcripts Saved**: `SELECT * FROM conversation_messages WHERE voice_session_id LIKE 'WR%'` will return WebRTC transcripts
 
-```text
-User speaks → OpenAI VAD detects speech end
-    ↓
-OpenAI Whisper transcribes: "conversation.item.input_audio_transcription.completed"
-    ↓
-RealtimeVoiceAssistant.handleMessage() receives event
-    ↓
-saveTranscript('user', event.transcript) called
-    ↓
-supabase.functions.invoke('generate-embeddings', { action: 'store_conversation', ... })
-    ↓
-conversation_messages + conversation_embeddings tables updated
-    ↓
-voice_session_id = "WRxx..." (WebRTC prefix) visible in database
+## Verification Query
+
+```sql
+SELECT 
+  session_id,
+  status,
+  stage,
+  metadata->>'instance_id' as instance_id,
+  metadata->>'active_instances' as active_instances,
+  created_at
+FROM activity_log 
+WHERE activity_type = 'voice_webrtc'
+ORDER BY created_at DESC
+LIMIT 10;
 ```
-
----
-
-## Verification Steps
-
-After deploying:
-
-1. Start a WebRTC voice session
-2. Speak a few sentences
-3. Check console for: `📝 User transcript:` and `💾 Saved user transcript via generate-embeddings`
-4. Query database: `SELECT * FROM conversation_messages WHERE voice_session_id LIKE 'WR%' ORDER BY created_at DESC LIMIT 5`
-5. Confirm both user and assistant messages are persisted
-
----
 
 ## Technical Notes
 
-- The Twilio bridge already handles this correctly (it calls `generate-embeddings` with the same pattern)
-- This follows the memory guideline "code-reuse-over-duplication" - using the existing `generate-embeddings` function
-- The `whisper-1` model is OpenAI's transcription model, same as used in the Twilio bridge
-- No database schema changes required - using existing `conversation_messages` and `conversation_embeddings` tables
+- This mirrors how `generate-realtime-token` already uses demo user ID for unauthenticated requests
+- The demo user ID has RLS policies allowing SELECT, INSERT, UPDATE on relevant tables
+- No database schema changes required
+- Console logging still works independently for immediate debugging
 
