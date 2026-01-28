@@ -50,7 +50,10 @@ interface PreConnectSession {
   user_id: string;
   tts_provider?: 'openai' | 'elevenlabs';
   openai_voice?: string;
+  // Support both DB schema names and legacy names
+  voice_id?: string;
   elevenlabs_voice_id?: string;
+  audio_base64?: string;
   cached_audio_base64?: string;
   instructions?: string;
   greeting_text?: string;
@@ -58,8 +61,19 @@ interface PreConnectSession {
   thread_id?: string;
 }
 
+// ElevenLabs TTS response format
+interface ElevenLabsTTSResponse {
+  audio: string; // base64-encoded μ-law audio
+  format: string;
+  bytes: number;
+  latencyMs: number;
+}
+
 // Sentence detection for ElevenLabs streaming
 const SENTENCE_ENDERS = /[.!?]+[\s"')\]]*$/;
+
+// Worker version for deployment verification
+const WORKER_VERSION = '2026-01-28-cf-v2';
 
 export class TwilioCallSession {
   private state: DurableObjectState;
@@ -69,14 +83,18 @@ export class TwilioCallSession {
   private streamSid: string | null = null;
   private callSid: string | null = null;
   private userId: string | null = null;
+  private direction: 'inbound' | 'outbound' = 'outbound';
   private timezone: string = 'America/New_York';
   private isPlaying: boolean = false;
   private toolDefinitions: any[] = [];
+  private activityLogId: string | null = null;
+  private currentStage: string = 'init';
 
   // Voice preferences
   private ttsProvider: 'openai' | 'elevenlabs' = 'openai';
   private openaiVoice: string = 'alloy';
   private elevenlabsVoiceId: string = 'JBFqnCBsd6RMkjVDRZzb'; // George
+  private elevenlabsFallbackActive: boolean = false;
 
   // Pre-connect session data
   private cachedAudioBase64: string | null = null;
@@ -114,11 +132,129 @@ export class TwilioCallSession {
     server.addEventListener('close', () => this.cleanup());
     server.addEventListener('error', (e) => {
       console.error('[CF] Twilio WebSocket error:', e);
+      this.logErrorToSupabase('websocket_error', 'Twilio WebSocket error', { error: String(e) });
       this.cleanup();
     });
 
     return new Response(null, { status: 101, webSocket: client });
   }
+
+  // ==================== Supabase Logging ====================
+
+  private async logActivityToSupabase(
+    status: 'started' | 'connected' | 'completed' | 'error',
+    stage: string,
+    metadata: Record<string, any> = {}
+  ) {
+    if (!this.callSid) return;
+
+    try {
+      const activity = {
+        user_id: this.userId || '00000000-0000-0000-0000-000000000001',
+        activity_type: this.direction === 'inbound' ? 'phone_inbound' : 'phone_outbound',
+        session_id: this.callSid,
+        status,
+        stage,
+        metadata: {
+          ...metadata,
+          worker_version: WORKER_VERSION,
+          tts_provider: this.ttsProvider,
+          stream_sid: this.streamSid
+        },
+        started_at: status === 'started' ? new Date().toISOString() : undefined,
+        ended_at: status === 'completed' || status === 'error' ? new Date().toISOString() : undefined
+      };
+
+      if (this.activityLogId) {
+        // Update existing record
+        await fetch(
+          `${this.env.SUPABASE_URL}/rest/v1/activity_log?id=eq.${this.activityLogId}`,
+          {
+            method: 'PATCH',
+            headers: {
+              'Authorization': `Bearer ${this.env.SUPABASE_SERVICE_KEY}`,
+              'apikey': this.env.SUPABASE_SERVICE_KEY,
+              'Content-Type': 'application/json',
+              'Prefer': 'return=minimal'
+            },
+            body: JSON.stringify({
+              status,
+              stage,
+              metadata: activity.metadata,
+              ended_at: activity.ended_at
+            })
+          }
+        );
+      } else {
+        // Create new record
+        const response = await fetch(
+          `${this.env.SUPABASE_URL}/rest/v1/activity_log`,
+          {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${this.env.SUPABASE_SERVICE_KEY}`,
+              'apikey': this.env.SUPABASE_SERVICE_KEY,
+              'Content-Type': 'application/json',
+              'Prefer': 'return=representation'
+            },
+            body: JSON.stringify(activity)
+          }
+        );
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data && data.length > 0) {
+            this.activityLogId = data[0].id;
+          }
+        }
+      }
+
+      console.log(`[CF] Activity logged: ${stage} (${status})`);
+    } catch (error) {
+      console.error('[CF] Failed to log activity:', error);
+    }
+  }
+
+  private async logErrorToSupabase(
+    errorType: string,
+    errorMessage: string,
+    context: Record<string, any> = {}
+  ) {
+    try {
+      await fetch(
+        `${this.env.SUPABASE_URL}/rest/v1/error_log`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${this.env.SUPABASE_SERVICE_KEY}`,
+            'apikey': this.env.SUPABASE_SERVICE_KEY,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=minimal'
+          },
+          body: JSON.stringify({
+            user_id: this.userId || '00000000-0000-0000-0000-000000000001',
+            source: 'cloudflare_worker',
+            error_type: errorType,
+            error_message: errorMessage,
+            session_id: this.callSid,
+            component: 'TwilioCallSession',
+            context: {
+              ...context,
+              worker_version: WORKER_VERSION,
+              stage: this.currentStage,
+              tts_provider: this.ttsProvider,
+              stream_sid: this.streamSid
+            }
+          })
+        }
+      );
+      console.log(`[CF] Error logged: ${errorType} - ${errorMessage}`);
+    } catch (error) {
+      console.error('[CF] Failed to log error:', error);
+    }
+  }
+
+  // ==================== Message Handling ====================
 
   private async handleTwilioMessage(event: MessageEvent) {
     try {
@@ -132,15 +268,18 @@ export class TwilioCallSession {
           await this.handleMedia(message);
           break;
         case 'stop':
+          await this.logActivityToSupabase('completed', 'cf_disconnect', { reason: 'stop_event' });
           this.cleanup();
           break;
       }
     } catch (error) {
       console.error('[CF] Error handling Twilio message:', error);
+      await this.logErrorToSupabase('message_handling_error', String(error), { event: 'twilio_message' });
     }
   }
 
   private async handleStart(message: TwilioMessage) {
+    this.currentStage = 'cf_ws_start';
     console.log('[CF] Call started');
     
     this.streamSid = message.start?.streamSid || null;
@@ -149,27 +288,44 @@ export class TwilioCallSession {
     const params = message.start?.customParameters || {};
     this.userId = params.userId || null;
     this.timezone = params.timezone || 'America/New_York';
+    this.direction = (params.direction as 'inbound' | 'outbound') || 'outbound';
     const sessionId = params.sessionId || null;
 
-    console.log(`[CF] Stream: ${this.streamSid}, User: ${this.userId}, TZ: ${this.timezone}, SessionId: ${sessionId}`);
+    console.log(`[CF] Stream: ${this.streamSid}, User: ${this.userId}, TZ: ${this.timezone}, SessionId: ${sessionId}, Direction: ${this.direction}`);
+
+    // Log initial activity
+    await this.logActivityToSupabase('started', 'cf_ws_start', {
+      session_id_param: sessionId,
+      has_session: !!sessionId
+    });
 
     // If we have a pre-connected session, fetch it and use its data
     if (sessionId) {
+      this.currentStage = 'cf_preconnect_fetch';
       const session = await this.fetchPreConnectSession(sessionId);
       if (session) {
         console.log('[CF] Using pre-connect session data');
         
-        // Apply session preferences
+        // Apply session preferences with defensive field mapping
+        // Support both DB schema names (audio_base64, voice_id) and legacy names
         this.ttsProvider = (session.tts_provider as 'openai' | 'elevenlabs') || 'openai';
-        this.elevenlabsVoiceId = session.elevenlabs_voice_id || this.elevenlabsVoiceId;
+        this.elevenlabsVoiceId = session.voice_id || session.elevenlabs_voice_id || this.elevenlabsVoiceId;
         this.openaiVoice = session.openai_voice || 'alloy';
-        this.cachedAudioBase64 = session.cached_audio_base64 || null;
+        this.cachedAudioBase64 = session.audio_base64 || session.cached_audio_base64 || null;
         this.preConnectedInstructions = session.instructions || null;
         this.greetingText = session.greeting_text || null;
         this.ragContext = session.rag_context || null;
         this.threadId = session.thread_id || null;
 
-        console.log(`[CF] Pre-connect: TTS=${this.ttsProvider}, Cached audio=${this.cachedAudioBase64 ? 'yes' : 'no'}, Instructions=${this.preConnectedInstructions ? 'custom' : 'default'}`);
+        console.log(`[CF] Pre-connect: TTS=${this.ttsProvider}, Voice=${this.elevenlabsVoiceId}, Cached audio=${this.cachedAudioBase64 ? `${this.cachedAudioBase64.length} chars` : 'no'}, Instructions=${this.preConnectedInstructions ? 'custom' : 'default'}`);
+
+        await this.logActivityToSupabase('connected', 'cf_preconnect_fetch', {
+          success: true,
+          tts_provider: this.ttsProvider,
+          has_cached_audio: !!this.cachedAudioBase64,
+          has_instructions: !!this.preConnectedInstructions,
+          has_rag_context: !!this.ragContext
+        });
 
         // Fetch tool definitions (still needed)
         await this.fetchToolDefinitions();
@@ -177,6 +333,11 @@ export class TwilioCallSession {
         // Connect to OpenAI with pre-loaded data
         await this.connectToOpenAI();
         return;
+      } else {
+        await this.logActivityToSupabase('connected', 'cf_preconnect_fetch', {
+          success: false,
+          reason: 'session_not_found'
+        });
       }
     }
 
@@ -210,6 +371,7 @@ export class TwilioCallSession {
 
       if (!response.ok) {
         console.error(`[CF] Pre-connect fetch failed: ${response.status}`);
+        await this.logErrorToSupabase('preconnect_fetch_error', `HTTP ${response.status}`, { sessionId });
         return null;
       }
 
@@ -237,6 +399,7 @@ export class TwilioCallSession {
       return null;
     } catch (error) {
       console.error('[CF] Failed to fetch pre-connect session:', error);
+      await this.logErrorToSupabase('preconnect_fetch_exception', String(error), { sessionId });
       return null;
     }
   }
@@ -298,6 +461,8 @@ export class TwilioCallSession {
   }
 
   private async connectToOpenAI() {
+    this.currentStage = 'cf_openai_connect';
+    
     try {
       const url = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01';
       
@@ -307,25 +472,29 @@ export class TwilioCallSession {
         'openai-beta.realtime-v1'
       ]);
 
-      this.openaiWs.addEventListener('open', () => {
+      this.openaiWs.addEventListener('open', async () => {
         console.log('[CF] Connected to OpenAI');
+        await this.logActivityToSupabase('connected', 'cf_openai_connect', { success: true });
       });
 
       this.openaiWs.addEventListener('message', (event) => {
         this.handleOpenAIMessage(event);
       });
 
-      this.openaiWs.addEventListener('close', () => {
+      this.openaiWs.addEventListener('close', async () => {
         console.log('[CF] OpenAI connection closed');
+        await this.logActivityToSupabase('completed', 'cf_openai_disconnect', {});
         this.cleanup();
       });
 
-      this.openaiWs.addEventListener('error', (e) => {
+      this.openaiWs.addEventListener('error', async (e) => {
         console.error('[CF] OpenAI WebSocket error:', e);
+        await this.logErrorToSupabase('openai_websocket_error', 'WebSocket connection error', { error: String(e) });
       });
 
     } catch (error) {
       console.error('[CF] Failed to connect to OpenAI:', error);
+      await this.logErrorToSupabase('openai_connect_error', String(error), {});
     }
   }
 
@@ -339,28 +508,29 @@ export class TwilioCallSession {
           break;
 
         case 'response.audio.delta':
-          // Only handle if using OpenAI TTS
-          if (this.ttsProvider === 'openai') {
+          // Only handle if using OpenAI TTS (or fallback is active)
+          if (this.ttsProvider === 'openai' || this.elevenlabsFallbackActive) {
             this.handleAudioDelta(data);
           }
           break;
 
         case 'response.audio.done':
-          if (this.ttsProvider === 'openai') {
+          if (this.ttsProvider === 'openai' || this.elevenlabsFallbackActive) {
             this.isPlaying = false;
+            this.elevenlabsFallbackActive = false;
           }
           break;
 
         case 'response.text.delta':
-          // Only handle if using ElevenLabs TTS
-          if (this.ttsProvider === 'elevenlabs') {
+          // Only handle if using ElevenLabs TTS and not in fallback mode
+          if (this.ttsProvider === 'elevenlabs' && !this.elevenlabsFallbackActive) {
             await this.handleTextDelta(data);
           }
           break;
 
         case 'response.text.done':
           // Flush remaining text buffer for ElevenLabs
-          if (this.ttsProvider === 'elevenlabs' && this.textBuffer.trim()) {
+          if (this.ttsProvider === 'elevenlabs' && !this.elevenlabsFallbackActive && this.textBuffer.trim()) {
             await this.sendToElevenLabs(this.textBuffer);
             this.textBuffer = '';
           }
@@ -381,6 +551,7 @@ export class TwilioCallSession {
 
         case 'error':
           console.error('[CF] OpenAI error:', data);
+          await this.logErrorToSupabase('openai_api_error', JSON.stringify(data), {});
           break;
       }
     } catch (error) {
@@ -389,6 +560,8 @@ export class TwilioCallSession {
   }
 
   private async configureSession() {
+    this.currentStage = 'cf_session_configured';
+    
     // Use text-only modality for ElevenLabs, text+audio for OpenAI TTS
     const modalities = this.ttsProvider === 'elevenlabs' 
       ? ['text'] 
@@ -423,6 +596,11 @@ export class TwilioCallSession {
 
     this.openaiWs?.send(JSON.stringify(sessionConfig));
     console.log(`[CF] Session configured: ${this.ttsProvider} mode, ${this.toolDefinitions.length} tools`);
+
+    await this.logActivityToSupabase('connected', 'cf_session_configured', {
+      modalities,
+      tools_count: this.toolDefinitions.length
+    });
 
     // Send initial greeting
     await this.sendGreeting();
@@ -470,9 +648,11 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
   }
 
   private async sendGreeting() {
+    this.currentStage = 'cf_greeting_sent';
+    
     // If we have cached ElevenLabs audio, play it immediately (lowest latency)
     if (this.cachedAudioBase64 && this.twilioWs && this.streamSid) {
-      console.log('[CF] Playing cached greeting audio');
+      console.log(`[CF] Playing cached greeting audio (${this.cachedAudioBase64.length} chars base64)`);
       this.isPlaying = true;
       
       try {
@@ -493,15 +673,25 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
         }
         
         console.log(`[CF] Cached greeting sent: ${audioBytes.length} bytes`);
+        await this.logActivityToSupabase('connected', 'cf_greeting_sent', {
+          source: 'cached_audio',
+          bytes: audioBytes.length
+        });
         this.isPlaying = false;
         return;
       } catch (error) {
         console.error('[CF] Failed to play cached audio, falling back:', error);
+        await this.logErrorToSupabase('cached_audio_playback_error', String(error), {});
       }
     }
 
     // Fallback: Use OpenAI to generate greeting
     const greeting = this.greetingText || 'Hi! This is Iris. How can I help you today?';
+    
+    await this.logActivityToSupabase('connected', 'cf_greeting_sent', {
+      source: 'openai_generated',
+      greeting_text: greeting.substring(0, 50)
+    });
     
     const greetingMessage = {
       type: 'conversation.item.create',
@@ -572,6 +762,7 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
   private async sendToElevenLabs(text: string) {
     if (!this.twilioWs || !this.streamSid) return;
 
+    const startTime = Date.now();
     console.log(`[CF] ElevenLabs TTS: "${text.substring(0, 50)}..."`);
     this.isPlaying = true;
     this.audioSentDuringResponse = true;
@@ -588,21 +779,37 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
           body: JSON.stringify({
             text,
             voiceId: this.elevenlabsVoiceId,
-            outputFormat: 'ulaw_8000' // Twilio format
+            format: 'ulaw' // Correct parameter name for our edge function
           })
         }
       );
 
       if (!response.ok) {
-        console.error(`[CF] ElevenLabs error: ${response.status}`);
-        // Fallback to OpenAI TTS
-        await this.fallbackToOpenAI(text);
+        const errorText = await response.text();
+        console.error(`[CF] ElevenLabs error: ${response.status} - ${errorText}`);
+        await this.logErrorToSupabase('elevenlabs_api_error', `HTTP ${response.status}`, { 
+          errorText,
+          text_length: text.length 
+        });
+        // Fallback to OpenAI TTS with explicit notification
+        await this.fallbackToOpenAIWithNotification(text, `ElevenLabs returned ${response.status}`);
         return;
       }
 
-      // Get μ-law audio and send to Twilio
-      const audioBuffer = await response.arrayBuffer();
-      const mulawBytes = new Uint8Array(audioBuffer);
+      // Parse JSON response (our edge function returns JSON with base64 audio)
+      const jsonResponse = await response.json() as ElevenLabsTTSResponse;
+      
+      if (!jsonResponse.audio) {
+        console.error('[CF] ElevenLabs response missing audio field');
+        await this.logErrorToSupabase('elevenlabs_response_error', 'Missing audio field in response', { 
+          response_keys: Object.keys(jsonResponse) 
+        });
+        await this.fallbackToOpenAIWithNotification(text, 'Invalid response from voice service');
+        return;
+      }
+
+      // Decode base64 audio to μ-law bytes
+      const mulawBytes = Uint8Array.from(atob(jsonResponse.audio), c => c.charCodeAt(0));
 
       // Send in chunks to Twilio
       const chunkSize = 640; // 80ms of audio at 8kHz
@@ -618,18 +825,30 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
         this.twilioWs?.send(JSON.stringify(mediaMessage));
       }
 
-      console.log(`[CF] ElevenLabs audio sent: ${mulawBytes.length} bytes`);
+      const latency = Date.now() - startTime;
+      console.log(`[CF] ElevenLabs audio sent: ${mulawBytes.length} bytes in ${latency}ms`);
+
+      await this.logActivityToSupabase('connected', 'cf_elevenlabs_tts', {
+        text_length: text.length,
+        audio_bytes: mulawBytes.length,
+        latency_ms: latency,
+        voice_id: this.elevenlabsVoiceId
+      });
 
     } catch (error) {
       console.error('[CF] ElevenLabs TTS failed:', error);
-      await this.fallbackToOpenAI(text);
+      await this.logErrorToSupabase('elevenlabs_tts_exception', String(error), { text_length: text.length });
+      await this.fallbackToOpenAIWithNotification(text, 'Voice service connection failed');
     }
   }
 
-  private async fallbackToOpenAI(text: string) {
-    console.log('[CF] Falling back to OpenAI TTS');
+  private async fallbackToOpenAIWithNotification(originalText: string, reason: string) {
+    console.log(`[CF] Falling back to OpenAI TTS: ${reason}`);
     
-    // Temporarily switch to OpenAI mode and request audio response
+    // Mark that we're in fallback mode so audio.delta events are processed
+    this.elevenlabsFallbackActive = true;
+    
+    // Switch to OpenAI audio mode
     this.openaiWs?.send(JSON.stringify({
       type: 'session.update',
       session: {
@@ -638,20 +857,46 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
       }
     }));
 
-    // Inject the text as a system message and request response
+    // First, notify the user about the voice change (explicit error notification per user preference)
+    const notificationText = "I'm having trouble with my premium voice right now, switching to a backup voice.";
+    
     this.openaiWs?.send(JSON.stringify({
       type: 'conversation.item.create',
       item: {
         type: 'message',
-        role: 'system',
+        role: 'assistant',
         content: [{
           type: 'input_text',
-          text: `Please say this exact text to the user: "${text}"`
+          text: notificationText
         }]
       }
     }));
 
+    // Request the notification to be spoken
     this.openaiWs?.send(JSON.stringify({ type: 'response.create' }));
+
+    // Log the fallback event
+    await this.logActivityToSupabase('connected', 'cf_elevenlabs_fallback', {
+      reason,
+      original_text_length: originalText.length,
+      notification_sent: true
+    });
+
+    // After a short delay, send the original text
+    setTimeout(() => {
+      this.openaiWs?.send(JSON.stringify({
+        type: 'conversation.item.create',
+        item: {
+          type: 'message',
+          role: 'assistant',
+          content: [{
+            type: 'input_text',
+            text: originalText
+          }]
+        }
+      }));
+      this.openaiWs?.send(JSON.stringify({ type: 'response.create' }));
+    }, 500);
   }
 
   // ==================== Audio Input Handling ====================
@@ -744,6 +989,7 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
 
     } catch (error) {
       console.error(`[CF] Tool execution error:`, error);
+      await this.logErrorToSupabase('tool_execution_error', String(error), { tool_name: name });
       
       this.openaiWs?.send(JSON.stringify({
         type: 'conversation.item.create',
@@ -803,6 +1049,8 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
     // Give time for final audio
     await new Promise(resolve => setTimeout(resolve, 2000));
 
+    await this.logActivityToSupabase('completed', 'cf_hang_up', { initiated_by: 'user' });
+
     // Close connections
     this.cleanup();
   }
@@ -828,5 +1076,7 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
     this.greetingText = null;
     this.ragContext = null;
     this.threadId = null;
+    this.activityLogId = null;
+    this.elevenlabsFallbackActive = false;
   }
 }
