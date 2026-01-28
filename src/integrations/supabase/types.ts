@@ -2398,8 +2398,13 @@ export type Database = {
           expires_at: string | null
           greeting_text: string | null
           id: string
+          instructions: string | null
+          openai_voice: string | null
+          phone_call_mode: string | null
           profile: Json | null
+          rag_context: string | null
           session_id: string
+          thread_id: string | null
           timezone: string | null
           tts_provider: string | null
           user_id: string | null
@@ -2413,8 +2418,13 @@ export type Database = {
           expires_at?: string | null
           greeting_text?: string | null
           id?: string
+          instructions?: string | null
+          openai_voice?: string | null
+          phone_call_mode?: string | null
           profile?: Json | null
+          rag_context?: string | null
           session_id: string
+          thread_id?: string | null
           timezone?: string | null
           tts_provider?: string | null
           user_id?: string | null
@@ -2428,8 +2438,13 @@ export type Database = {
           expires_at?: string | null
           greeting_text?: string | null
           id?: string
+          instructions?: string | null
+          openai_voice?: string | null
+          phone_call_mode?: string | null
           profile?: Json | null
+          rag_context?: string | null
           session_id?: string
+          thread_id?: string | null
           timezone?: string | null
           tts_provider?: string | null
           user_id?: string | null
