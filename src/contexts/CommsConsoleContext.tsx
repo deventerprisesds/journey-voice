@@ -329,6 +329,40 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
       if (data?.threadId && USE_UNIFIED_THREADS && updateOpenaiThreadId) {
         updateOpenaiThreadId(data.threadId);
       }
+
+      // Persist messages to conversation_messages via generate-embeddings (fire-and-forget)
+      const effectiveThreadIdForPersistence = USE_UNIFIED_THREADS ? dbThreadId : threadId;
+      if (effectiveThreadIdForPersistence) {
+        // Persist user message
+        supabase.functions.invoke('generate-embeddings', {
+          body: {
+            action: 'store_conversation',
+            userId,
+            threadId: effectiveThreadIdForPersistence,
+            assistantId: currentAssistant?.id || null,
+            source: 'chat',
+            role: 'user',
+            content,
+            messageType: 'user',
+            metadata: { mode: 'comms_console' }
+          }
+        }).catch(err => console.error('[CommsConsole] Failed to persist user message:', err));
+
+        // Persist assistant message
+        supabase.functions.invoke('generate-embeddings', {
+          body: {
+            action: 'store_conversation',
+            userId,
+            threadId: effectiveThreadIdForPersistence,
+            assistantId: currentAssistant?.id || null,
+            source: 'chat',
+            role: 'assistant',
+            content: data?.response || '',
+            messageType: 'assistant',
+            metadata: { mode: 'comms_console' }
+          }
+        }).catch(err => console.error('[CommsConsole] Failed to persist assistant message:', err));
+      }
     } catch (err) {
       console.error('Error sending message:', err);
       const errorMessage: ConversationMessage = {
