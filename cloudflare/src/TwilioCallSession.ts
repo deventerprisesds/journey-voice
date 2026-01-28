@@ -73,7 +73,7 @@ interface ElevenLabsTTSResponse {
 const SENTENCE_ENDERS = /[.!?]+[\s"')\]]*$/;
 
 // Worker version for deployment verification
-const WORKER_VERSION = '2026-01-28-cf-v2';
+const WORKER_VERSION = '2026-01-28-cf-v3';
 
 export class TwilioCallSession {
   private state: DurableObjectState;
@@ -279,6 +279,7 @@ export class TwilioCallSession {
   }
 
   private async handleStart(message: TwilioMessage) {
+    console.log('[CF] WORKER VERSION:', WORKER_VERSION);
     this.currentStage = 'cf_ws_start';
     console.log('[CF] Call started');
     
