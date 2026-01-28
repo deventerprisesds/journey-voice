@@ -486,14 +486,27 @@ USER: ${userName}`;
     const data = await response.json();
     console.log("Ephemeral token generated successfully");
 
-    // Return token along with TTS config for client
+    // Extract userName for greeting personalization (matches Twilio bridge pattern)
+    // This was already computed earlier as 'userName' variable around line 102
+    const { createClient: createClientForProfile } = await import('https://esm.sh/@supabase/supabase-js@2');
+    const supabaseForProfile = createClientForProfile(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+    const { data: profileData } = await supabaseForProfile
+      .from('profiles')
+      .select('first_name, full_name')
+      .eq('user_id', userId)
+      .maybeSingle();
+    
+    const userNameForGreeting = profileData?.first_name || profileData?.full_name?.split(' ')[0] || 'sir';
+
+    // Return token along with TTS config and userName for client
     return new Response(JSON.stringify({
       ...data,
       tts_config: {
         provider: ttsProvider,
         openai_voice: openaiVoice,
         elevenlabs_voice_id: elevenlabsVoiceId,
-      }
+      },
+      userName: userNameForGreeting,  // For personalized greetings
     }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
