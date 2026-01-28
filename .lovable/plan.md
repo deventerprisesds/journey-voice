@@ -1,124 +1,92 @@
 
 
-# WebRTC Voice App vs Twilio Phone: Feature Parity Analysis
+# Add Missing Calendar Tools to WebRTC Voice
 
-## ✅ IMPLEMENTED - All Gaps Fixed
+## Problem
 
----
+The `generate-realtime-token` edge function is missing two specific calendar tools that exist in both `execute-tool` and the Twilio bridge:
 
-## Feature Comparison Matrix (Updated)
+- `create_outlook_event` - Create events directly in Outlook
+- `create_google_event` - Create events directly in Google Calendar
 
-| Feature | Twilio Phone | WebRTC Voice | Status |
-|---------|--------------|--------------|--------|
-| **User Name in Greeting** | Yes - loads `profiles.first_name` | Yes - now loads profile | ✅ Fixed |
-| **Current Time Context** | Yes - `CURRENT TIME: ${currentTime}` | Yes - now includes | ✅ Fixed |
-| **Timezone Context** | Yes - from `user_scheduling_prefs` | Yes - now includes | ✅ Fixed |
-| **RAG Context** | Yes - calls `loadRAGContext()` | Via execute-tool | ✅ Partial |
-| **Conversation History** | Yes - via RAG retrieval | Via thread tracking | ✅ Partial |
-| **send_email** | Yes (via execute-tool) | Yes - now in tools | ✅ Fixed |
-| **send_slack_message** | Yes (via execute-tool) | Yes - now in tools | ✅ Fixed |
-| **create_calendar_event** | Yes (via execute-tool) | Yes - now in tools | ✅ Fixed |
-| **parse_and_create_tasks** | Yes (via execute-tool) | Yes - now in tools | ✅ Fixed |
-| **Centralized Tools** | Yes - via `execute-tool` | Yes - now routes through | ✅ Fixed |
-| **Tool Execution** | Centralized via `execute-tool` | Centralized via `execute-tool` | ✅ Fixed |
-| **hang_up** | Yes - ends call gracefully | disconnect - similar | ✅ OK |
+The WebRTC voice assistant only has `create_calendar_event` (which requires the user to specify "outlook" or "google"), but users saying "add this to my Outlook calendar" won't trigger the right tool.
 
----
+## Current State
 
-## Changes Made
+```text
+┌─────────────────────────────────────────────────────────────────────┐
+│                        execute-tool (central)                       │
+├─────────────────────────────────────────────────────────────────────┤
+│ create_outlook_event  │ create_google_event  │ create_calendar_event │
+└──────────┬────────────┴──────────┬───────────┴──────────┬───────────┘
+           │                       │                      │
+    ┌──────┴──────┐         ┌──────┴──────┐        ┌──────┴──────┐
+    │ Twilio Phone │         │   WebRTC    │        │   Chat API  │
+    │     ✅       │         │     ❌      │        │     ✅      │
+    └─────────────┘         └─────────────┘        └─────────────┘
+```
 
-### 1. Centralized Tool Execution (RealtimeVoiceAssistant.ts)
+## Solution
 
-Replaced ~500 lines of inline tool implementations with a single centralized call:
+Add the two missing tool definitions to `generate-realtime-token/index.ts`:
+
+**File: `supabase/functions/generate-realtime-token/index.ts`**
+
+Add these tools after `create_calendar_event` (around line 392):
 
 ```typescript
-private async handleFunctionCall(event: any) {
-  // Handle disconnect locally (WebRTC-specific action)
-  if (functionName === 'disconnect') {
-    result = await this.handleDisconnectTool(args);
-  } else {
-    // Route ALL other tools through centralized execute-tool
-    const { data, error } = await supabase.functions.invoke('execute-tool', {
-      body: {
-        toolName: functionName,
-        args: args,
-        userId: this.userId,
-        context: { 
-          interface: 'webrtc', 
-          timezone: 'America/New_York',
-          sessionId: this.sessionId,
-          threadId: this.threadId
-        }
-      }
-    });
-    result = data;
+{
+  type: "function",
+  name: "create_outlook_event",
+  description: "Create an Outlook calendar event.",
+  parameters: {
+    type: "object",
+    properties: {
+      title: { type: "string", description: "Event title" },
+      start_time: { type: "string", description: "Start time in ISO format" },
+      end_time: { type: "string", description: "End time in ISO format" },
+      duration: { type: "number", description: "Duration in minutes (if no end_time)" },
+      description: { type: "string", description: "Event description" },
+      reminder: { type: "string", description: "Reminder minutes before" }
+    },
+    required: ["title", "start_time"]
+  }
+},
+{
+  type: "function",
+  name: "create_google_event",
+  description: "Create a Google Calendar event.",
+  parameters: {
+    type: "object",
+    properties: {
+      title: { type: "string", description: "Event title" },
+      start_time: { type: "string", description: "Start time in ISO format" },
+      end_time: { type: "string", description: "End time in ISO format" },
+      duration: { type: "number", description: "Duration in minutes (if no end_time)" },
+      description: { type: "string", description: "Event description" },
+      reminder: { type: "string", description: "Reminder minutes before" }
+    },
+    required: ["title", "start_time"]
   }
 }
 ```
 
-### 2. Added Missing Communication Tools (generate-realtime-token/index.ts)
+## Technical Details
 
-Added to the tools array:
-- `send_email` - Send emails to user
-- `send_slack_message` - Send Slack messages  
-- `create_calendar_event` - Create Outlook/Google events
-- `parse_and_create_tasks` - Natural language task parsing
+No changes needed to `RealtimeVoiceAssistant.ts` - it already routes all tools (except `disconnect`) through `execute-tool`, which already handles both `create_outlook_event` and `create_google_event`.
 
-### 3. User Name & Time Context (Previously Fixed)
+The only change is adding the tool definitions so OpenAI knows these tools exist during WebRTC sessions.
 
-Already implemented:
-- Loads `profiles.first_name` with fallback to "sir"
-- Includes `CURRENT TIME: ${currentTime}` in instructions
-- Includes `TIMEZONE: ${userTimezone}` in instructions
+## Files to Modify
 
----
-
-## Architecture
-
-```
-┌────────────────────────────────────────────────────────────────┐
-│                     AI Tool Definitions                         │
-│  (Identical across generate-realtime-token & twilio-bridge)    │
-└─────────────────────────────┬──────────────────────────────────┘
-                              │
-         ┌────────────────────┼────────────────────┐
-         │                    │                    │
-         ▼                    ▼                    ▼
-┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
-│  WebRTC Voice   │  │  Twilio Phone   │  │   Text Chat     │
-│  (Browser)      │  │  (Telephony)    │  │   (Hybrid API)  │
-└────────┬────────┘  └────────┬────────┘  └────────┬────────┘
-         │                    │                    │
-         └────────────────────┼────────────────────┘
-                              │
-                              ▼
-                    ┌─────────────────────┐
-                    │    execute-tool     │
-                    │   (Centralized)     │
-                    │                     │
-                    │  • Task CRUD        │
-                    │  • Scheduling       │
-                    │  • Email/Slack      │
-                    │  • Calendar Events  │
-                    │  • Web Search       │
-                    └─────────────────────┘
-```
-
----
-
-## Files Modified
-
-| File | Changes |
-|------|---------|
-| `src/utils/RealtimeVoiceAssistant.ts` | Route tools through execute-tool (lines 1010-1095) |
-| `supabase/functions/generate-realtime-token/index.ts` | Add communication tools (send_email, send_slack_message, create_calendar_event, parse_and_create_tasks) |
-
----
+| File | Change |
+|------|--------|
+| `supabase/functions/generate-realtime-token/index.ts` | Add `create_outlook_event` and `create_google_event` tool definitions |
 
 ## Expected Outcome
 
-1. ✅ WebRTC voice app uses same tool execution as Twilio phone
-2. ✅ Users can send emails, Slack messages, and create calendar events via voice
-3. ✅ Tool behavior is identical across phone, WebRTC voice, and chat
-4. ✅ Greeting uses the correct user name from profile
-5. ✅ Single point of maintenance for all tool logic
+After this fix:
+- WebRTC voice users can say "Add a meeting to my Outlook calendar" → triggers `create_outlook_event`
+- WebRTC voice users can say "Put this on my Google calendar" → triggers `create_google_event`
+- Full feature parity with Twilio phone for calendar operations
+
