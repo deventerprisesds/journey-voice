@@ -1063,8 +1063,8 @@ async function handlePreConnect(params: {
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
-  // 1. Load ALL context in parallel - profile, TTS prefs, RAG, and thread
-  const [profile, ttsPrefs, ragContext, threadResult] = await Promise.all([
+  // 1. Load ALL context in parallel - profile, TTS prefs, RAG, assistant, and existing thread
+  const [profile, ttsPrefs, ragContext, defaultAssistantResult] = await Promise.all([
     loadUserProfile(supabase, userId),
     supabase
       .from('user_scheduling_prefs')
@@ -1073,13 +1073,12 @@ async function handlePreConnect(params: {
       .maybeSingle(),
     // NEW: Pre-load RAG context
     loadRAGContext(supabase, userId),
-    // NEW: Pre-fetch thread ID
+    // Get user's default assistant for thread association
     supabase
-      .from('ai_threads')
+      .from('assistants')
       .select('id')
       .eq('user_id', userId)
-      .order('updated_at', { ascending: false })
-      .limit(1)
+      .eq('is_default', true)
       .maybeSingle()
   ]);
 
@@ -1088,32 +1087,50 @@ async function handlePreConnect(params: {
   const openaiVoice = ttsPrefs.data?.openai_voice || 'alloy';
   const phoneCallMode = ttsPrefs.data?.phone_call_mode || 'media_streams';
   
-  // Get user's default assistant for thread association
-  const { data: defaultAssistant } = await supabase
-    .from('assistants')
-    .select('id')
-    .eq('user_id', userId)
-    .eq('is_default', true)
-    .maybeSingle();
+  const assistantId = defaultAssistantResult.data?.id || null;
   
-  const assistantId = defaultAssistant?.id || null;
+  // PHASE 2: UNIFIED THREAD LOOKUP
+  // Look for existing unified thread for this user + assistant to enable cross-mode memory
+  // This allows phone calls to remember conversations from chat and voice modes
+  let threadId: string | null = null;
   
-  // Get or create thread
-  let threadId: string | null = threadResult.data?.id || null;
+  if (assistantId) {
+    // First try to find a unified thread for this assistant
+    const { data: existingThread } = await supabase
+      .from('ai_threads')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('assistant_id', assistantId)
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    
+    if (existingThread) {
+      threadId = existingThread.id;
+      console.log(`[PRE-CONNECT] [UNIFIED_THREAD] Using existing thread for assistant ${assistantId}: ${threadId}`);
+      
+      // Touch the thread to update last_used timestamp
+      await supabase
+        .from('ai_threads')
+        .update({ updated_at: new Date().toISOString() })
+        .eq('id', threadId);
+    }
+  }
+  
+  // If no existing thread found, create a new one
   if (!threadId) {
     const { data: newThread } = await supabase
       .from('ai_threads')
       .insert({ 
         user_id: userId, 
         assistant_id: assistantId,
-        openai_thread_id: `phone_${Date.now()}` 
+        openai_thread_id: `phone_${Date.now()}`,
+        mode: 'unified' // Mark as unified for cross-mode memory
       })
       .select('id')
       .single();
     threadId = newThread?.id || null;
-    console.log(`[PRE-CONNECT] Created new thread: ${threadId} for assistant: ${assistantId}`);
-  } else {
-    console.log(`[PRE-CONNECT] Using existing thread: ${threadId}`);
+    console.log(`[PRE-CONNECT] [UNIFIED_THREAD] Created new unified thread: ${threadId} for assistant: ${assistantId}`);
   }
 
   console.log(`[PRE-CONNECT] TTS Provider: ${ttsProvider}, Voice ID: ${voiceId}, RAG: ${ragContext.length} chars`);
