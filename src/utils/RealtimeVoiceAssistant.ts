@@ -266,6 +266,8 @@ export class RealtimeVoiceAssistant {
         metadata: {
           tts_provider: this.ttsProvider,
           connection_time_ms: this.connectionStartTime ? Date.now() - this.connectionStartTime : 0,
+          instance_id: this.instanceId,
+          active_instances: activeInstances.size,
           ...extra.metadata
         },
         started_at: new Date(this.connectionStartTime || Date.now()).toISOString(),
@@ -372,7 +374,9 @@ export class RealtimeVoiceAssistant {
       
       // STEP 2: Get user ID for logging - needed for activity_log
       const { data: { user } } = await supabase.auth.getUser();
-      this.userId = user?.id || null;
+      // Use demo user ID as fallback for unauthenticated sessions
+      this.userId = user?.id || '00000000-0000-0000-0000-000000000001';
+      console.log(`[VOICE] User ID: ${this.userId} (demo=${!user?.id})`);
       
       // STEP 3: Log activity start BEFORE any async operations that might fail
       await this.logActivity('started', 'token_fetch');
