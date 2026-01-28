@@ -296,6 +296,10 @@ export class RealtimeVoiceAssistant {
   private lastSpeechStartTime: number = 0;
   private readonly SPEECH_DEBOUNCE_MS = 300;
   
+  // CRITICAL: Track when user speech STARTS for correct transcript ordering
+  // Transcription completes AFTER AI responds, so we capture start time for chronological accuracy
+  private userSpeechStartTime: number | null = null;
+  
   // Accumulator for streaming assistant transcript display
   private accumulatedAssistantText: string = '';
   
@@ -688,6 +692,13 @@ export class RealtimeVoiceAssistant {
       this.dc.addEventListener("open", async () => {
         console.log("Data channel opened");
         
+        // CRITICAL: Ensure audio context is active before any audio operations
+        // This prevents silent greetings when browser audio context is suspended
+        if (this.audioContext?.state === 'suspended') {
+          await this.audioContext.resume();
+          console.log('[GREETING] Audio context resumed before greeting');
+        }
+        
         // Log successful connection to activity_log
         await this.logActivity('connected', 'webrtc_ready', {
           metadata: {
@@ -698,12 +709,12 @@ export class RealtimeVoiceAssistant {
         
         this.onConnectionChange(true);
         
-        // Trigger greeting after a short delay to ensure connection is stable
-        // In WebRTC flow, session is pre-configured via token - no session.updated event fires
+        // Trigger greeting with minimal delay (was 500ms, now 100ms)
+        // Audio context is already resumed above, so greeting should be heard
         setTimeout(() => {
           console.log('[GREETING] Data channel ready, triggering greeting');
           this.sendGreeting();
-        }, 500);
+        }, 100);
       });
 
       this.dc.addEventListener("close", () => {
@@ -830,7 +841,12 @@ export class RealtimeVoiceAssistant {
         }
         this.lastSpeechStartTime = speechNow;
         
-        console.log('🎤 Speech detected!');
+        // CRITICAL: Capture timestamp NOW for correct transcript ordering
+        // Transcription completes several seconds AFTER AI responds
+        // By capturing start time, we ensure user messages appear before AI responses
+        this.userSpeechStartTime = Date.now();
+        console.log('🎤 Speech detected! Captured timestamp for ordering:', this.userSpeechStartTime);
+        
         this.onListeningChange(true);
         
         // CRITICAL: Clear audio queue and stop playback immediately (unified for both PCM and MP3)
@@ -879,7 +895,7 @@ export class RealtimeVoiceAssistant {
         
       // Transcript capture for persistence
       case 'conversation.item.input_audio_transcription.completed':
-        // User speech transcript from Whisper
+        // User speech transcript - use captured start time for correct ordering
         console.log('📝 User transcript:', event.transcript);
         if (event.transcript?.trim()) {
           // CRITICAL: Emit interim for live transcript display BEFORE saving
@@ -890,8 +906,13 @@ export class RealtimeVoiceAssistant {
             isListening: false  // Speech is done, show the text
           });
           
-          // Save to database
-          this.saveTranscript('user', event.transcript);
+          // Use captured speech start time for correct chronological ordering
+          // This ensures user messages appear BEFORE the AI response in history
+          const speechTimestamp = this.userSpeechStartTime;
+          this.userSpeechStartTime = null;  // Reset for next utterance
+          
+          // Save to database with correct timestamp
+          this.saveTranscript('user', event.transcript, speechTimestamp);
         }
         break;
         
@@ -922,7 +943,8 @@ export class RealtimeVoiceAssistant {
   }
   
   // Save transcript to database via generate-embeddings edge function
-  private async saveTranscript(role: 'user' | 'assistant', content: string): Promise<void> {
+  // clientTimestamp: Optional timestamp from when speech started (for correct ordering)
+  private async saveTranscript(role: 'user' | 'assistant', content: string, clientTimestamp?: number | null): Promise<void> {
     if (!this.userId || !content?.trim()) return;
     
     // Increment message count for activity tracking
@@ -944,7 +966,10 @@ export class RealtimeVoiceAssistant {
           messageType: role,
           metadata: { 
             session_type: 'webrtc',
-            tts_provider: this.ttsProvider
+            tts_provider: this.ttsProvider,
+            // CRITICAL: Pass client timestamp for correct chronological ordering
+            // This ensures user messages appear BEFORE AI responses in history
+            client_timestamp_ms: clientTimestamp || undefined
           }
         }
       });
@@ -1012,9 +1037,18 @@ export class RealtimeVoiceAssistant {
     const greeting = this.getTimeBasedGreeting();
     const userName = this.userName;  // Use stored userName from token response
     
-    console.log(`[GREETING] Sending: "${greeting}, ${userName}! What can I help you with?"`);
+    console.log(`[GREETING] Sending: "${greeting}, ${userName}! How can I help you?"`);
     
-    // Inject greeting context as a system message
+    // For ElevenLabs: Play greeting directly without AI interpretation (fastest path)
+    if (this.ttsProvider === 'elevenlabs') {
+      const greetingText = `${greeting}, ${userName}! How can I help you?`;
+      this.playElevenLabsAudio(greetingText);
+      this.saveTranscript('assistant', greetingText);
+      console.log('[GREETING] ElevenLabs: Direct TTS greeting sent');
+      return;
+    }
+    
+    // For OpenAI TTS: Simplified, direct instruction (reduces "thinking" time)
     this.dc.send(JSON.stringify({
       type: 'conversation.item.create',
       item: {
@@ -1022,16 +1056,16 @@ export class RealtimeVoiceAssistant {
         role: 'user',
         content: [{
           type: 'input_text',
-          text: `[System: You just connected to ${userName}. Greet them with "${greeting}! What can I help you with?" Keep it brief and wait for their response.]`
+          text: `Say exactly: "${greeting}, ${userName}! How can I help you?"`
         }]
       }
     }));
     
-    // Trigger AI response with appropriate modalities
+    // Trigger AI response with audio
     this.dc.send(JSON.stringify({
       type: 'response.create',
       response: {
-        modalities: this.ttsProvider === 'elevenlabs' ? ['text'] : ['text', 'audio']
+        modalities: ['text', 'audio']
       }
     }));
   }

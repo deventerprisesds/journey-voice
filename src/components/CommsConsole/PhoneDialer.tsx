@@ -3,12 +3,13 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Phone, PhoneOff, Mic, MicOff, Volume2, VolumeX, Clock, Users, Grid3X3, Delete, Smartphone, MessageSquareText } from 'lucide-react';
+import { Phone, PhoneOff, Mic, MicOff, Volume2, VolumeX, Clock, Users, Grid3X3, Delete, Smartphone, MessageSquareText, ChevronDown, Loader2 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
 import { useCommsConsole } from '@/contexts/CommsConsoleContext';
 import { useVoiceAssistant } from '@/contexts/VoiceAssistantContext';
 import { loadUserSchedulingConfig } from '@/services/schedulingService';
+import { supabase } from '@/integrations/supabase/client';
 import AssistantAvatar from './AssistantAvatar';
 import LiveTranscriptPanel from './LiveTranscriptPanel';
 import type { PhoneCallState } from './types';
@@ -40,13 +41,22 @@ const DIAL_PAD_LETTERS: Record<string, string> = {
 // Twilio number display (could be fetched from env/config)
 const TWILIO_NUMBER = '+1 (866) 585-4827';
 
-interface RecentCall {
+interface CallHistoryItem {
   id: string;
+  sessionId: string;
+  activityType: 'phone_inbound' | 'phone_outbound' | 'voice_webrtc';
   assistantName: string;
   assistantColor: string;
-  timestamp: Date;
-  duration?: number;
-  type: 'outgoing' | 'incoming' | 'missed';
+  startedAt: Date;
+  duration: number | null;
+  status: string;
+}
+
+interface TranscriptMessage {
+  id: string;
+  role: string;
+  content: string;
+  created_at: string;
 }
 
 const PhoneDialer: React.FC<PhoneDialerProps> = ({
@@ -80,17 +90,119 @@ const PhoneDialer: React.FC<PhoneDialerProps> = ({
   const [isMuted, setIsMuted] = useState(false);
   const [isSpeaker, setIsSpeaker] = useState(false);
   const [callDuration, setCallDuration] = useState(0);
-  const [recentCalls] = useState<RecentCall[]>([
-    // Mock data - would come from call_sessions table
-    {
-      id: '1',
-      assistantName: 'Iris Chase',
-      assistantColor: '#3B82F6',
-      timestamp: new Date(Date.now() - 3600000),
-      duration: 245,
-      type: 'outgoing',
-    },
-  ]);
+  
+  // Call history state - fetched from database
+  const [callHistory, setCallHistory] = useState<CallHistoryItem[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const [expandedCallId, setExpandedCallId] = useState<string | null>(null);
+  const [callTranscripts, setCallTranscripts] = useState<Record<string, TranscriptMessage[]>>({});
+  const [transcriptLoading, setTranscriptLoading] = useState<string | null>(null);
+
+  // Fetch call history from database
+  useEffect(() => {
+    const fetchCallHistory = async () => {
+      const userId = user?.id || '00000000-0000-0000-0000-000000000001';
+      setHistoryLoading(true);
+      
+      try {
+        const { data: activityData, error } = await supabase
+          .from('activity_log')
+          .select('*')
+          .eq('user_id', userId)
+          .in('activity_type', ['phone_inbound', 'phone_outbound', 'voice_webrtc'])
+          .in('status', ['completed', 'ended', 'connected'])
+          .order('started_at', { ascending: false })
+          .limit(20);
+        
+        if (error) {
+          console.error('Failed to fetch call history:', error);
+          return;
+        }
+        
+        const history: CallHistoryItem[] = (activityData || []).map(activity => ({
+          id: activity.id,
+          sessionId: activity.session_id || '',
+          activityType: activity.activity_type as CallHistoryItem['activityType'],
+          assistantName: currentAssistant?.name || 'Iris',
+          assistantColor: currentAssistant?.orb_color || '#3B82F6',
+          startedAt: new Date(activity.started_at || activity.created_at),
+          duration: activity.duration_seconds,
+          status: activity.status,
+        }));
+        
+        setCallHistory(history);
+      } catch (err) {
+        console.error('Error fetching call history:', err);
+      } finally {
+        setHistoryLoading(false);
+      }
+    };
+    
+    fetchCallHistory();
+  }, [user?.id, currentAssistant]);
+
+  // Load transcript for a specific call when expanded
+  const loadCallTranscript = async (sessionId: string) => {
+    if (callTranscripts[sessionId] || !sessionId) return;
+    
+    setTranscriptLoading(sessionId);
+    
+    try {
+      const { data: messages, error } = await supabase
+        .from('conversation_messages')
+        .select('id, role, content, created_at')
+        .eq('voice_session_id', sessionId)
+        .order('created_at', { ascending: true });
+      
+      if (error) {
+        console.error('Failed to load transcript:', error);
+        setCallTranscripts(prev => ({ ...prev, [sessionId]: [] }));
+        return;
+      }
+      
+      setCallTranscripts(prev => ({
+        ...prev,
+        [sessionId]: (messages || []) as TranscriptMessage[]
+      }));
+    } catch (err) {
+      console.error('Error loading transcript:', err);
+      setCallTranscripts(prev => ({ ...prev, [sessionId]: [] }));
+    } finally {
+      setTranscriptLoading(null);
+    }
+  };
+
+  const handleCallExpand = (call: CallHistoryItem) => {
+    if (expandedCallId === call.id) {
+      setExpandedCallId(null);
+    } else {
+      setExpandedCallId(call.id);
+      loadCallTranscript(call.sessionId);
+    }
+  };
+
+  const formatRelativeTime = (date: Date): string => {
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+    
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    if (diffDays < 7) return `${diffDays}d ago`;
+    return date.toLocaleDateString();
+  };
+
+  const getCallTypeIcon = (activityType: string) => {
+    switch (activityType) {
+      case 'voice_webrtc': return '🎧';
+      case 'phone_inbound': return '📲';
+      case 'phone_outbound': return '📞';
+      default: return '📞';
+    }
+  };
 
   // Initialize ring audio on mount
   useEffect(() => {
@@ -444,40 +556,86 @@ const endCall = () => {
               )}
             </TabsContent>
 
-            <TabsContent value="recents" className="flex-1 overflow-auto p-4 m-0">
-              {recentCalls.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
+            <TabsContent value="recents" className="flex-1 overflow-auto p-0 m-0">
+              {historyLoading ? (
+                <div className="flex items-center justify-center h-full">
+                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                </div>
+              ) : callHistory.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full text-muted-foreground p-4">
                   <Clock className="h-12 w-12 mb-2 opacity-50" />
                   <p>No recent calls</p>
+                  <p className="text-xs mt-1">Start a voice session to see history</p>
                 </div>
               ) : (
-                <div className="space-y-2">
-                  {recentCalls.map((call) => (
-                    <div
-                      key={call.id}
-                      className="flex items-center gap-3 p-3 rounded-lg hover:bg-accent cursor-pointer"
-                      onClick={initiateCall}
-                    >
-                      <div
-                        className="w-10 h-10 rounded-full flex items-center justify-center text-white font-medium"
-                        style={{ backgroundColor: call.assistantColor }}
+                <ScrollArea className="h-full">
+                  {callHistory.map((call) => (
+                    <div key={call.id} className="border-b last:border-b-0">
+                      {/* Call header - clickable to expand */}
+                      <div 
+                        className="flex items-center gap-3 p-3 hover:bg-accent cursor-pointer"
+                        onClick={() => handleCallExpand(call)}
                       >
-                        {call.assistantName.charAt(0)}
+                        <div
+                          className="w-10 h-10 rounded-full flex items-center justify-center text-lg"
+                          style={{ backgroundColor: call.assistantColor + '20' }}
+                        >
+                          {getCallTypeIcon(call.activityType)}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <p className="font-medium truncate">{call.assistantName}</p>
+                            <span className="text-xs text-muted-foreground capitalize px-1.5 py-0.5 bg-muted rounded">
+                              {call.activityType.replace('voice_', '').replace('phone_', '')}
+                            </span>
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            {formatRelativeTime(call.startedAt)}
+                            {call.duration && ` • ${formatDuration(call.duration)}`}
+                          </p>
+                        </div>
+                        <ChevronDown className={cn(
+                          "h-4 w-4 text-muted-foreground transition-transform",
+                          expandedCallId === call.id && "rotate-180"
+                        )} />
                       </div>
-                      <div className="flex-1">
-                        <p className="font-medium">{call.assistantName}</p>
-                        <p className="text-sm text-muted-foreground">
-                          {call.type === 'missed' && '📵 Missed • '}
-                          {call.type === 'incoming' && '📲 Incoming • '}
-                          {call.type === 'outgoing' && '📞 Outgoing • '}
-                          {call.timestamp.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: userTimezone || 'America/New_York' })}
-                          {call.duration && ` • ${formatDuration(call.duration)}`}
-                        </p>
-                      </div>
-                      <Phone className="h-5 w-5 text-green-600" />
+                      
+                      {/* Expanded transcript section */}
+                      {expandedCallId === call.id && (
+                        <div className="px-3 pb-3 space-y-2 bg-muted/30">
+                          {transcriptLoading === call.sessionId ? (
+                            <div className="flex justify-center py-4">
+                              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                            </div>
+                          ) : !callTranscripts[call.sessionId] || callTranscripts[call.sessionId].length === 0 ? (
+                            <p className="text-xs text-muted-foreground text-center py-3">
+                              No transcript available
+                            </p>
+                          ) : (
+                            <div className="space-y-2 pt-2">
+                              {callTranscripts[call.sessionId].map((msg) => (
+                                <div
+                                  key={msg.id}
+                                  className={cn(
+                                    'text-xs px-2.5 py-1.5 rounded-lg max-w-[90%]',
+                                    msg.role === 'user' 
+                                      ? 'ml-auto bg-primary text-primary-foreground' 
+                                      : 'mr-auto bg-background border'
+                                  )}
+                                >
+                                  <span className="font-medium text-[10px] opacity-70 block mb-0.5">
+                                    {msg.role === 'user' ? 'You' : 'Assistant'}
+                                  </span>
+                                  {msg.content}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   ))}
-                </div>
+                </ScrollArea>
               )}
             </TabsContent>
 
