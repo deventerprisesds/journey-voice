@@ -1,370 +1,190 @@
 
-# Live Transcription Display + Voice Memory Fix Plan
+# Fix WebRTC Voice Issues: VAD, Greeting, and Live Transcription
 
 ## Problem Summary
 
-### Issue 1: Voice Messages Missing `assistant_id` and `source`
-The `saveTranscript` method in `RealtimeVoiceAssistant.ts` (lines 726-742) calls `generate-embeddings` but:
-- **`assistantId` is never passed** - it's fetched on line 487 but not stored as an instance variable
-- **`source` is in metadata** but `generate-embeddings` doesn't extract it to the `source` column
-- **Result**: `conversation_messages` rows have `assistant_id = NULL` and `source = 'chat'` (default) for voice transcripts
+Three interconnected issues with the in-app WebRTC voice assistant:
 
-**Current `saveTranscript` call (line 726-742):**
-```typescript
-await supabase.functions.invoke('generate-embeddings', {
-  body: {
-    action: 'store_conversation',
-    userId: this.userId,
-    threadId: this.threadId,
-    role: role,
-    content: content,
-    audioTranscript: content,
-    voiceSessionId: this.sessionId,
-    messageType: role,
-    metadata: { 
-      source: 'voice',  // <-- IN METADATA, NOT PASSED TO DB COLUMN
-      session_type: 'webrtc',
-      tts_provider: this.ttsProvider
-    }
-    // <-- MISSING: assistantId
-  }
-});
-```
+1. **VAD Too Sensitive**: Uses `server_vad` with threshold `0.3` which picks up background noise as speech
+2. **No Immediate Greeting**: Unlike Twilio which says "Hello" right away, WebRTC waits silently
+3. **Live Transcript Not Streaming**: Only shows "Listening..." but not the assistant's words as they stream
 
-**Current `generate-embeddings` (lines 65-84):**
-```typescript
-await supabase.from('conversation_messages').insert({
-  user_id: userId,
-  thread_id: threadId,
-  role,
-  content,
-  audio_transcript: audioTranscript,
-  voice_session_id: voiceSessionId,
-  metadata
-  // <-- MISSING: assistant_id, source
-});
-```
+## Root Cause Analysis
 
-### Issue 2: No Live Transcription Visibility
-When using Phone Dialer mode, transcription only appears after saved to DB. Users can't verify accuracy in real-time or catch misheard words like "bye".
+The WebRTC path (`generate-realtime-token`) and Twilio path (`twilio-realtime-bridge`) use completely different session configurations:
 
-### Issue 3: Wrong Timezone on Timestamps
-Timestamps show incorrect times (e.g., ~8:14 PM when not NYC time). Display logic isn't converting UTC to user's timezone.
-
----
+| Setting | WebRTC (Current) | Twilio Bridge | Fix |
+|---------|------------------|---------------|-----|
+| VAD Type | `server_vad` | `semantic_vad` | Use semantic_vad |
+| Threshold | `0.3` (too low) | N/A (AI-based) | Remove |
+| Eagerness | Not set | `low` | Add `eagerness: "low"` |
+| Greeting | None | Immediate injection | Add greeting trigger |
+| Transcription | `whisper-1` | `gpt-4o-mini-transcribe` | Align models |
 
 ## Implementation Plan
 
-### Part 1: Fix Voice Memory Persistence (Critical)
+### Part 1: Align VAD Settings with Twilio Bridge
 
-**Goal:** Ensure voice transcripts are stored with correct `assistant_id` and `source: 'voice'`.
+**File:** `supabase/functions/generate-realtime-token/index.ts`
 
-#### 1.1 Store assistantId as Instance Variable
-
-**File:** `src/utils/RealtimeVoiceAssistant.ts`
-
-Add instance variable (around line 207):
+Change the `turn_detection` configuration (lines 135-140) from:
 ```typescript
-private threadId: string | null = null;
-private assistantId: string | null = null;  // <-- NEW
-private userId: string | null = null;
-```
-
-Update where assistantId is set (line 487, in the fallback branch):
-```typescript
-const assistantId = defaultAssistant?.id || null;
-this.assistantId = assistantId;  // <-- Store for later use
-```
-
-Also store when unified thread is used (around line 472-474):
-```typescript
-if (unifiedThreadId) {
-  this.threadId = unifiedThreadId;
-  this.assistantId = unifiedAssistantId || null;  // <-- Accept and store
-  console.log('[VOICE] Using unified thread:', unifiedThreadId);
+turn_detection: {
+  type: "server_vad",
+  threshold: 0.3,
+  prefix_padding_ms: 400,
+  silence_duration_ms: 1200
 }
 ```
 
-Update `connect()` signature to accept assistantId:
+To match Twilio bridge:
 ```typescript
-async connect(
-  instructions: string = '', 
-  ragContext: string = '',
-  unifiedThreadId?: string,
-  unifiedAssistantId?: string  // <-- NEW
-): Promise<boolean>
-```
-
-#### 1.2 Pass assistantId to saveTranscript
-
-**File:** `src/utils/RealtimeVoiceAssistant.ts`
-
-Update `saveTranscript` call (lines 726-742):
-```typescript
-await supabase.functions.invoke('generate-embeddings', {
-  body: {
-    action: 'store_conversation',
-    userId: this.userId,
-    threadId: this.threadId,
-    assistantId: this.assistantId,  // <-- NEW
-    source: 'voice',                 // <-- NEW: top-level, not in metadata
-    role: role,
-    content: content,
-    audioTranscript: content,
-    voiceSessionId: this.sessionId,
-    messageType: role,
-    metadata: { 
-      session_type: 'webrtc',
-      tts_provider: this.ttsProvider
-    }
-  }
-});
-```
-
-#### 1.3 Update generate-embeddings to Accept and Store Fields
-
-**File:** `supabase/functions/generate-embeddings/index.ts`
-
-Update request parsing (lines 98-108):
-```typescript
-const { 
-  userId, 
-  threadId, 
-  assistantId,  // <-- NEW
-  source,       // <-- NEW
-  content, 
-  messageType, 
-  role, 
-  audioTranscript, 
-  voiceSessionId, 
-  metadata,
-  action = 'store_conversation'
-} = await req.json();
-```
-
-Update `storeConversationMessage` function (lines 65-90):
-```typescript
-async function storeConversationMessage(
-  userId: string,
-  threadId: string,
-  role: string,
-  content: string,
-  audioTranscript?: string,
-  voiceSessionId?: string,
-  assistantId?: string,  // <-- NEW
-  source?: string,       // <-- NEW
-  metadata: any = {}
-) {
-  const { error } = await supabase
-    .from('conversation_messages')
-    .insert({
-      user_id: userId,
-      thread_id: threadId,
-      role,
-      content,
-      audio_transcript: audioTranscript,
-      voice_session_id: voiceSessionId,
-      assistant_id: assistantId || null,  // <-- NEW
-      source: source || 'chat',           // <-- NEW with fallback
-      metadata
-    });
-  // ...
+turn_detection: {
+  type: "semantic_vad",      // AI-based detection instead of amplitude
+  eagerness: "low",          // Let user take their time
+  create_response: true,     // Auto-respond when AI thinks user is done
+  interrupt_response: true,  // Still allow barge-in
 }
 ```
 
-Update the function call in serve handler:
+Also update transcription model (line 132-134) from `whisper-1` to `gpt-4o-mini-transcribe`:
 ```typescript
-await Promise.all([
-  storeConversationEmbedding(userId, threadId, content, messageType, voiceSessionId, metadata),
-  storeConversationMessage(userId, threadId, role, content, audioTranscript, voiceSessionId, assistantId, source, metadata)
-]);
+input_audio_transcription: {
+  model: "gpt-4o-mini-transcribe",
+  language: "en",
+  prompt: "tasks, schedule, calendar, reschedule, today, tomorrow, priorities"
+}
 ```
 
-#### 1.4 Update VoiceAssistantContext to Pass AssistantId
-
-**File:** `src/contexts/VoiceAssistantContext.tsx`
-
-Update `connectToAssistant` to pass both thread and assistant IDs:
-```typescript
-const connectToAssistant = useCallback(async (
-  customInstructions?: string, 
-  ragContext?: string,
-  unifiedThreadId?: string,
-  unifiedAssistantId?: string  // <-- NEW
-) => {
-  // ...
-  const success = await voiceAssistant.current.connect(
-    customInstructions, 
-    ragContext,
-    unifiedThreadId,
-    unifiedAssistantId  // <-- Pass through
-  );
-}, []);
-```
-
-#### 1.5 Update CommsConsoleContext to Pass AssistantId
-
-**File:** `src/contexts/CommsConsoleContext.tsx`
-
-When connecting voice, pass both thread ID and assistant ID:
-```typescript
-// When switching to voice mode
-await connectToAssistant(
-  customInstructions,
-  ragContext,
-  dbThreadId,           // from useUnifiedThread
-  currentAssistant?.id  // <-- NEW: pass assistant ID
-);
-```
-
----
-
-### Part 2: Live Transcription Panel (Collapsible)
-
-**Goal:** Add real-time transcription display below keypad to verify accuracy live.
-
-#### 2.1 Emit Live Transcript Events
+### Part 2: Add Immediate Greeting After Connection
 
 **File:** `src/utils/RealtimeVoiceAssistant.ts`
 
-Add handling for speech start and partial transcripts:
+After session is configured (in the `session.updated` event handler), trigger an immediate greeting like Twilio does.
+
+Add handling for `session.updated` event (around line 646 in handleMessage):
 ```typescript
-case 'input_audio_buffer.speech_started':
-  this.onMessage({ 
-    type: 'transcript.interim', 
-    role: 'user', 
-    content: '', 
-    isListening: true 
-  });
+case 'session.updated':
+  console.log('✅ Session configured, triggering greeting');
+  this.sendGreeting();
   break;
+```
 
+Add a new `sendGreeting()` method that:
+1. Loads user profile (name, timezone)
+2. Injects a greeting context message
+3. Triggers a response
+
+```typescript
+private async sendGreeting(): Promise<void> {
+  if (!this.dc || this.dc.readyState !== 'open') return;
+  
+  const greeting = this.getTimeBasedGreeting();
+  const userName = 'sir'; // Could be loaded from profile
+  
+  // Inject greeting context
+  this.dc.send(JSON.stringify({
+    type: 'conversation.item.create',
+    item: {
+      type: 'message',
+      role: 'user',
+      content: [{
+        type: 'input_text',
+        text: `[System: You just connected to ${userName}. Greet them with "${greeting}! What can I help you with?" Keep it brief and wait for their response.]`
+      }]
+    }
+  }));
+  
+  // Trigger AI response
+  this.dc.send(JSON.stringify({
+    type: 'response.create',
+    response: {
+      modalities: this.ttsProvider === 'elevenlabs' ? ['text'] : ['text', 'audio']
+    }
+  }));
+}
+
+private getTimeBasedGreeting(): string {
+  const hour = new Date().getHours();
+  if (hour < 12) return 'Good morning';
+  if (hour < 17) return 'Good afternoon';
+  return 'Good evening';
+}
+```
+
+### Part 3: Stream Assistant Transcript in Real-Time
+
+**File:** `src/utils/RealtimeVoiceAssistant.ts`
+
+Add handling for `response.audio_transcript.delta` events to emit interim transcripts:
+
+```typescript
 case 'response.audio_transcript.delta':
+  // Stream assistant's words as they come
+  this.accumulatedAssistantText = (this.accumulatedAssistantText || '') + (event.delta || '');
   this.onMessage({
     type: 'transcript.interim',
     role: 'assistant',
-    content: event.delta,
-    isPartial: true
+    content: this.accumulatedAssistantText,
+    isListening: false
   });
+  break;
+
+case 'response.audio_transcript.done':
+  // Clear accumulator when done
+  this.accumulatedAssistantText = '';
+  // ... existing code to save transcript
   break;
 ```
 
-#### 2.2 Track Live Transcript State
-
-**File:** `src/contexts/VoiceAssistantContext.tsx`
-
-Add state and handler:
+Add instance variable:
 ```typescript
-const [liveTranscript, setLiveTranscript] = useState<{
-  role: 'user' | 'assistant';
-  content: string;
-  isListening: boolean;
-} | null>(null);
-
-// In handleMessage:
-if (message.type === 'transcript.interim') {
-  setLiveTranscript({
-    role: message.role,
-    content: message.content || '',
-    isListening: message.isListening || false
-  });
-  return;
-}
-
-// Clear on final save
-if (message.type === 'transcript.saved') {
-  setLiveTranscript(null);
-}
+private accumulatedAssistantText: string = '';
 ```
 
-#### 2.3 Create LiveTranscriptPanel Component
-
-**New File:** `src/components/CommsConsole/LiveTranscriptPanel.tsx`
-
-A collapsible panel showing:
-- Current time in user's timezone
-- "Listening..." indicator when speech detected
-- Live user transcription as they speak
-- Live assistant response as it generates
-
-#### 2.4 Integrate into PhoneDialer
+### Part 4: Fix Timestamp Display in PhoneDialer
 
 **File:** `src/components/CommsConsole/PhoneDialer.tsx`
 
-Add `LiveTranscriptPanel` below the in-call controls, loading user's timezone from preferences.
-
----
-
-### Part 3: Fix Timezone Display
-
-**Goal:** Show all timestamps in user's local timezone.
-
-#### 3.1 Create Timezone Formatter Utility
-
-**File:** `src/lib/date.ts`
-
+Update line 407 to use the user's timezone:
 ```typescript
-export function formatTimeInTimezone(
-  isoTimestamp: string, 
-  timezone: string,
-  options?: Intl.DateTimeFormatOptions
-): string {
-  try {
-    const date = new Date(isoTimestamp);
-    return date.toLocaleTimeString('en-US', {
-      timeZone: timezone,
-      hour: '2-digit',
-      minute: '2-digit',
-      ...options
-    });
-  } catch {
-    return new Date(isoTimestamp).toLocaleTimeString();
-  }
-}
+{call.timestamp.toLocaleTimeString('en-US', { 
+  hour: '2-digit', 
+  minute: '2-digit',
+  timeZone: userTimezone || 'America/New_York'
+})}
 ```
-
-#### 3.2 Update Timestamp Displays
-
-**File:** `src/components/CommsConsole/TranscriptScroll.tsx`
-
-Use `formatTimeInTimezone` for all timestamp displays, passing the user's timezone from preferences.
-
----
 
 ## Files to Modify
 
 | File | Changes |
 |------|---------|
-| `src/utils/RealtimeVoiceAssistant.ts` | Store `assistantId` instance var, pass to saveTranscript, emit interim events |
-| `src/contexts/VoiceAssistantContext.tsx` | Accept `assistantId` param, add `liveTranscript` state |
-| `src/contexts/CommsConsoleContext.tsx` | Pass `currentAssistant.id` when connecting voice |
-| `supabase/functions/generate-embeddings/index.ts` | Accept and store `assistantId` and `source` fields |
-| `src/components/CommsConsole/LiveTranscriptPanel.tsx` | **NEW** - Collapsible live transcription UI |
-| `src/components/CommsConsole/PhoneDialer.tsx` | Integrate LiveTranscriptPanel, load timezone |
-| `src/lib/date.ts` | Add `formatTimeInTimezone` utility |
-| `src/components/CommsConsole/TranscriptScroll.tsx` | Use timezone-aware formatting |
+| `supabase/functions/generate-realtime-token/index.ts` | Change VAD from `server_vad` to `semantic_vad`, update transcription model |
+| `src/utils/RealtimeVoiceAssistant.ts` | Add greeting trigger, stream assistant transcript deltas, add accumulator variable |
+| `src/components/CommsConsole/PhoneDialer.tsx` | Fix timezone on Recent Calls timestamp |
 
----
+## Technical Details
 
-## Verification Checklist
+### Why `semantic_vad` is Better
 
-After implementation, run these queries to confirm fixes:
+- **`server_vad`**: Uses simple amplitude thresholds - any noise above threshold = speech
+- **`semantic_vad`**: Uses AI to understand when the user is semantically "done" speaking
+- Result: No more false triggers from background noise, better turn-taking
 
-```sql
--- Verify voice messages have assistant_id populated
-SELECT id, role, source, assistant_id, created_at 
-FROM conversation_messages 
-WHERE voice_session_id IS NOT NULL
-ORDER BY created_at DESC 
-LIMIT 10;
+### Greeting Flow After Fix
 
--- Expected: source = 'voice', assistant_id = UUID (not null)
-```
+1. User clicks "Call" in PhoneDialer
+2. WebRTC connects, session configured
+3. `session.updated` event fires
+4. `sendGreeting()` injects context and triggers response
+5. AI immediately says "Good afternoon! What can I help you with?"
+6. Live transcript shows assistant's words streaming
 
-**Manual verification:**
-- [ ] Voice transcripts show `source = 'voice'` in database
-- [ ] Voice transcripts show `assistant_id = <uuid>` (not NULL)
-- [ ] Live transcript panel appears below keypad in Phone mode
-- [ ] Panel shows "Listening..." when detecting speech
-- [ ] Shows interim transcription as you speak
-- [ ] Current time in panel matches user's timezone (NYC)
-- [ ] Saved transcript timestamps display in correct timezone
+## Verification Steps
+
+After implementation:
+- [ ] Connect via PhoneDialer - AI should greet immediately
+- [ ] Background noise should not trigger speech detection
+- [ ] Live transcript panel shows assistant's words as they stream
+- [ ] Recent calls timestamps show correct timezone
+- [ ] Voice behavior matches Twilio phone calls
