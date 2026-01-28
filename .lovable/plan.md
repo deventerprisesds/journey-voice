@@ -1,72 +1,183 @@
 
+## UI Layout Overhaul: Comms Panel + Kanban Tabs
 
-## Problem Summary
-
-The Cloudflare Worker is running an outdated version (`2026-01-25-cf-v1`) while the Lovable codebase has the correct fixes (`2026-01-28-cf-v2`). This version mismatch means:
-- The old worker still expects raw audio bytes from ElevenLabs TTS (incorrect)
-- The old worker doesn't have the field mapping fixes for `audio_base64` and `voice_id`
-- The old worker doesn't log to `activity_log`/`error_log` in Supabase
-
-The GitHub Actions workflow ran successfully, but against an older commit that didn't include the latest fixes.
+This plan addresses two major UI changes based on your wireframe:
+1. **Comms Panel**: Persistent right-side panel (1/3 width), collapsible, always accessible
+2. **Kanban Tabs**: Reorganize columns into tabbed categories with standardized workflow columns
 
 ---
 
-## Proposed Solution
+## Part 1: Persistent Comms Panel Layout
 
-### Step 1: Force Version Bump to Trigger Fresh Deployment
+### Current State
+- CommsHome at `/` is a **full-page takeover** with embedded CommsConsole
+- Navigating to Tasks, Calendar, etc. completely leaves the comms interface
+- No way to have Kanban and Comms visible simultaneously
 
-Bump the version string to a new value that's guaranteed to be different, ensuring we can verify the deployment actually propagated.
+### Target State
+- **Three-column layout**: Left nav sidebar | Main content (2/3) | Comms panel (1/3)
+- Comms panel is **collapsible** from the right side
+- Toggle button to expand/collapse the panel
+- Works across all routes (Tasks, Calendar, Agenda, etc.)
 
-**File**: `cloudflare/src/index.ts`
-- Change version from `2026-01-28-cf-v2` to `2026-01-28-cf-v3`
+### Implementation
 
-**File**: `cloudflare/src/TwilioCallSession.ts`  
-- Change `WORKER_VERSION` from `2026-01-28-cf-v2` to `2026-01-28-cf-v3`
+#### 1. Create `MainLayout.tsx` (New Component)
 
-**File**: `.github/workflows/deploy-cloudflare.yml`
-- Update `EXPECTED_VERSION` from `2026-01-28-cf-v2` to `2026-01-28-cf-v3`
+A wrapper that provides the persistent three-column structure:
 
-### Step 2: Add Deployment Verification Log
+```text
++----------------+---------------------------+------------------+
+|    Sidebar     |       Main Content        |   Comms Panel    |
+|   (nav menu)   |   (Tasks/Calendar/etc)    |   (voice/chat)   |
+|   ~56-200px    |        flex-1             |   ~1/3 or 400px  |
+|   collapsible  |                           |   collapsible    |
++----------------+---------------------------+------------------+
+```
 
-Add a console log at the very start of the worker to confirm which code is running when the WebSocket connects.
+Key features:
+- Extract NavigationSection from AssistantSidebar to use in the left column
+- Add a collapse/expand toggle for the right Comms panel
+- Store panel open state in `CommsConsoleContext` (already has `isPanelOpen`)
 
-**File**: `cloudflare/src/TwilioCallSession.ts`
-- Add at the start of `handleStart()`: `console.log('[CF] WORKER VERSION:', WORKER_VERSION);`
+#### 2. Update `App.tsx` Routes
 
-### Step 3: Verify Deployment After Push
+Wrap authenticated routes with MainLayout:
+- `/tasks` shows TasksPage in main content + Comms panel on right
+- `/calendar` shows Calendar in main content + Comms panel on right
+- `/` becomes a welcome/dashboard view OR just shows the Tasks route
 
-After the code is pushed and GitHub Actions completes:
-1. Check `/health` endpoint returns version `2026-01-28-cf-v3`
-2. Trigger a test call
-3. Verify `activity_log` shows `worker_version: 2026-01-28-cf-v3` in metadata
-4. Confirm audio plays correctly (no silence)
+#### 3. Add Panel Mode to `CommsConsole.tsx`
+
+Add a `mode="panel"` prop that renders a narrower, right-side version without its own navigation (navigation moves to MainLayout's left sidebar).
+
+#### 4. Mobile Behavior
+- On mobile, hide the right comms panel by default
+- Show a floating button to open it as a full-screen Sheet/drawer
+- Maintain existing Sheet-based navigation for the left sidebar
 
 ---
 
-## Technical Details
+## Part 2: Tabbed Kanban Board
 
-### Why the Workflow Passed But Worker Didn't Update
+### Current State
+- All columns displayed horizontally: Blocked, Backlog, Life, Career, Prof. Education, Ventures, Planning, Ready, Up Next, Doing, Done
+- Very wide, requires horizontal scrolling
+- No way to focus on a specific life domain
 
-GitHub Actions workflow shows commit `4b17be5` ("Improve Cloudflare TTS flow") ran successfully. However, the health check in the workflow expected `2026-01-28-cf-v2` and the live worker shows `2026-01-25-cf-v1`. This suggests:
-- Either the workflow didn't actually check the version properly, OR
-- The workflow passed against cached/stale CDN response, OR
-- The secrets or deployment failed silently
+### Target State (From Your Wireframe)
+Tabs at the top: **Today | Career | Prof. Education | Ventures | Life**
 
-The version bump to `-v3` creates a clear test: if the health check passes with `-v3`, we know for certain the new code deployed.
+Each tab shows **6 standardized columns**:
+| Column | Purpose |
+|--------|---------|
+| Backlog | Items for this category, not yet prioritized |
+| Blocked | Items stuck/waiting on something |
+| Ready | Prioritized and ready to work on |
+| Up Next | Queued for immediate attention |
+| Doing | Currently in progress |
+| Done | Completed items |
 
-### Files Being Changed
+### How Tabs Map to Tasks
 
-| File | Change |
-|------|--------|
-| `cloudflare/src/index.ts` | Version bump in `/health` response |
-| `cloudflare/src/TwilioCallSession.ts` | Version bump + startup log |
-| `.github/workflows/deploy-cloudflare.yml` | Expected version updated |
+- **Today Tab**: Shows tasks where `due_date = today` OR `status = UP_NEXT/DOING`, across ALL categories
+- **Career Tab**: Shows tasks where `category = 'CAREER'`
+- **Prof. Education Tab**: Shows tasks where `category = 'PROF_EDUCATION'` or `'EDUCATION'`
+- **Ventures Tab**: Shows tasks where `category = 'VENTURES'`
+- **Life Tab**: Shows tasks where `category = 'LIFE'`
 
-### Verification Checklist
+The current `status` field maps to the standardized columns:
+- `BACKLOG`/`TODO` to "Backlog"
+- `BLOCKED` to "Blocked"
+- `READY` to "Ready"
+- `UP_NEXT`/`PLANNING` to "Up Next"
+- `DOING` to "Doing"
+- `DONE` to "Done"
 
-After deployment:
-- [ ] `GET /health` returns `{"version":"2026-01-28-cf-v3"}`
-- [ ] Test call plays greeting audio (not silence)
-- [ ] `activity_log` contains records with `worker_version: 2026-01-28-cf-v3`
-- [ ] ElevenLabs TTS responses are parsed correctly (JSON with base64)
+Old category-as-status values (e.g., `status = 'CAREER'`) will be migrated to proper status/category pairs.
 
+### Implementation
+
+#### 1. Create `TabbedKanbanBoard.tsx` (New Component)
+
+Wraps the existing KanbanBoard with tab navigation:
+- Uses `@radix-ui/react-tabs` (already installed via shadcn)
+- Stores active tab in URL query param (`?tab=career`) for bookmarkability
+- Filters tasks by category before passing to column renderer
+
+#### 2. Update `KanbanBoard.tsx`
+
+- Add `categoryFilter` prop to show only tasks of a specific category
+- Add `todayMode` prop to show cross-category tasks due today
+- Reduce default columns to the 6 standardized ones (hide category columns)
+
+#### 3. Standardize Column Configuration
+
+Instead of 11 columns, each tab view uses 6:
+
+```typescript
+const STANDARD_COLUMNS = [
+  { name: 'Backlog', status: 'BACKLOG' },
+  { name: 'Blocked', status: 'BLOCKED' },
+  { name: 'Ready', status: 'READY' },
+  { name: 'Up Next', status: 'UP_NEXT' },
+  { name: 'Doing', status: 'DOING' },
+  { name: 'Done', status: 'DONE' },
+];
+```
+
+#### 4. Data Migration (Optional)
+
+Normalize existing tasks where `status` matches a category name:
+- `status: 'CAREER'` becomes `status: 'BACKLOG', category: 'CAREER'`
+- `status: 'VENTURES'` becomes `status: 'BACKLOG', category: 'VENTURES'`
+- etc.
+
+This can be done via a SQL migration or handled in-app with a mapping function.
+
+---
+
+## Files to Create/Modify
+
+| File | Action | Purpose |
+|------|--------|---------|
+| `src/components/MainLayout.tsx` | **Create** | Three-column layout wrapper with persistent nav + comms panel |
+| `src/components/TabbedKanbanBoard.tsx` | **Create** | Tab navigation wrapper for Kanban |
+| `src/App.tsx` | **Modify** | Wrap routes with MainLayout |
+| `src/components/KanbanBoard.tsx` | **Modify** | Add categoryFilter prop, use standardized columns |
+| `src/components/CommsConsole/CommsConsole.tsx` | **Modify** | Add panel mode for right-side display |
+| `src/pages/TasksPage.tsx` | **Modify** | Use TabbedKanbanBoard instead of KanbanBoard |
+| `src/pages/CommsHome.tsx` | **Modify** or **Delete** | Convert to dashboard or remove (MainLayout handles comms) |
+| `src/contexts/CommsConsoleContext.tsx` | **Modify** | Ensure isPanelOpen defaults to true |
+
+---
+
+## Technical Considerations
+
+1. **Drag-and-drop**: Maintain existing @hello-pangea/dnd functionality within each tab's columns
+
+2. **State persistence**: 
+   - Tab selection persisted in URL (`/tasks?view=kanban&tab=career`)
+   - Comms panel open/closed in localStorage
+
+3. **Responsive breakpoints**:
+   - Desktop (>1024px): Full three-column layout
+   - Tablet (768-1024px): Two columns, comms panel in drawer
+   - Mobile (<768px): Single column, both sidebars in drawers
+
+4. **Task filtering logic**:
+   - "Today" tab: `due_date = today OR status IN ('UP_NEXT', 'DOING')`
+   - Category tabs: `category = 'CAREER'` (etc.)
+
+5. **Column resizing**: Using `react-resizable-panels` (already installed) for user-adjustable widths
+
+---
+
+## Summary
+
+This overhaul transforms the app from a "navigate between separate pages" model to a **unified workspace** where:
+- The Comms panel is always accessible on the right (collapsible)
+- The Kanban board is focused via category tabs instead of horizontal scrolling
+- Each tab presents a clean 6-column workflow
+
+All existing functionality (drag-and-drop, task editing, voice assistant, filters) is preserved.
