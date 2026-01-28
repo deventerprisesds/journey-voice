@@ -1,52 +1,56 @@
 
-# Implementation Complete: Cloudflare Bridge Pre-Connect Support
+# Fix: Remove Foreign Key Constraint from pre_connect_sessions
 
-## Changes Made
+## Problem Identified
 
-Updated `cloudflare/src/TwilioCallSession.ts` to support the pre-connected session architecture:
+The `pre_connect_sessions` table has a foreign key constraint (`pre_connect_sessions_user_id_fkey`) that references `auth.users(id)`. This breaks Cloudflare bridge calls because:
 
-### 1. Added Pre-Connect Session Interface and Properties
-- Added `PreConnectSession` interface with all session fields
-- Added instance properties: `cachedAudioBase64`, `preConnectedInstructions`, `greetingText`, `ragContext`, `threadId`
+1. Pre-connect session is generated with all data (audio, instructions, RAG context)
+2. Insert into `pre_connect_sessions` **fails** because demo user ID doesn't exist in `auth.users`
+3. Cloudflare worker connects, tries to fetch session, finds nothing
+4. Call proceeds with generic/no context - appears "broken"
 
-### 2. Updated handleStart() to Extract sessionId
-- Now reads `sessionId` from `customParameters`
-- If sessionId exists, calls `fetchPreConnectSession()` to retrieve session data
-- Uses session data instead of loading preferences fresh
+## Evidence
 
-### 3. Implemented fetchPreConnectSession()
-- Fetches session from `pre_connect_sessions` table via Supabase REST API
-- Deletes session after retrieval (one-time use)
-- Returns null gracefully on errors
+From logs at 17:46:02:
+```
+ERROR [PRE-CONNECT] Failed to store session in database: {
+  code: "23503",
+  details: 'Key (user_id)=(00000000-0000-0000-0000-000000000001) is not present in table "users".',
+  message: 'insert or update on table "pre_connect_sessions" violates foreign key constraint...'
+}
+```
 
-### 4. Updated buildSystemPrompt()
-- Uses `preConnectedInstructions` if available (includes RAG context, agenda, etc.)
-- Falls back to basic prompt with optional RAG context
+## Solution
 
-### 5. Updated sendGreeting()
-- Plays `cachedAudioBase64` immediately if available (lowest latency)
-- Falls back to OpenAI-generated greeting using `greetingText`
+Remove the foreign key constraint from `pre_connect_sessions`. This table is:
+- Ephemeral (2-minute TTL sessions)
+- Only accessed by edge functions with service key
+- Not user-facing data that needs referential integrity
 
-### 6. Updated executeTool()
-- Now passes `threadId` in context for conversation continuity
+## Migration SQL
 
-### 7. Updated cleanup()
-- Clears all pre-connect session data on call end
+```sql
+-- Drop the foreign key constraint that blocks demo user sessions
+ALTER TABLE pre_connect_sessions 
+  DROP CONSTRAINT IF EXISTS pre_connect_sessions_user_id_fkey;
+```
 
----
+## Why This Works
 
-## Testing Checklist
+- Pre-connect sessions are ephemeral (deleted after use or expire in 2 minutes)
+- Only edge functions access this table (using service key, RLS disabled)
+- The user_id is still stored for context but doesn't need to be a valid auth user
+- Demo mode and real users both work
 
-After deploying via GitHub Actions:
-- [ ] Scheduled call triggers with personalized greeting voice
-- [ ] AI knows the call reason/agenda
-- [ ] RAG context is included in conversation
-- [ ] ElevenLabs voice is used (not OpenAI voice)
-- [ ] Call duration can exceed 6 minutes (Cloudflare benefit)
+## Files Changed
 
----
+None - this is a database-only fix.
 
-## Deployment
+## Testing After Fix
 
-The Cloudflare worker is deployed via GitHub Actions (`.github/workflows/deploy-cloudflare.yml`).
-Push changes to trigger automatic deployment.
+1. Trigger a scheduled call or manual call
+2. Check edge function logs for: `[PRE-CONNECT] ✅ Session stored in database`
+3. Check Cloudflare logs for: `[CF] Pre-connect session found`
+4. Verify personalized greeting plays and AI knows call context
+
