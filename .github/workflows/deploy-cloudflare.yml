@@ -48,7 +48,7 @@ jobs:
           HEALTH_RESPONSE=$(curl -s https://twilio-openai-bridge.purple-bush-495e.workers.dev/health)
           echo "Health response: $HEALTH_RESPONSE"
           
-          EXPECTED_VERSION="2026-01-28-cf-v2"
+          EXPECTED_VERSION="2026-01-28-cf-v3"
           
           if echo "$HEALTH_RESPONSE" | grep -q '"status":"ok"'; then
             echo "✅ Health check passed!"
