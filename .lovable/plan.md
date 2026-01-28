@@ -1,39 +1,144 @@
-# Unified Logging System - IMPLEMENTED ✅
 
-## Summary
-Implemented a three-tier unified logging system for faster debugging:
 
-1. **Fixed `activity_log` RLS** - Added policies for authenticated and demo users to INSERT/UPDATE
-2. **Created `error_log` table** - Dedicated table with permissive INSERT policy for error capture
-3. **Created debug views** - `recent_errors` and `debug_timeline_full` for quick debugging queries
+# Fix Missing "Sir" Salutation in WebRTC Voice App
 
-## What Changed
+## Problem
 
-### Database
-- Added 4 RLS policies to `activity_log` for authenticated/demo user INSERT/UPDATE
-- Created `error_log` table with source, component, session_id, user_id, error_type, error_message, context
-- Created `recent_errors` view (last 24 hours of errors)
-- Created `debug_timeline_full` view (combined activity + errors timeline)
+The Twilio phone app addresses you as "Sir" (e.g., "Good morning, Sir!") but the WebRTC voice app in the browser just says "Good morning" without the salutation. This is because the **instructions sent to OpenAI are different** between the two systems.
 
-### Code Updates
-- `src/utils/RealtimeVoiceAssistant.ts`: Added `logError()` method that always logs (no guards)
-- `supabase/functions/generate-realtime-token/index.ts`: Added error logging to catch block
-- `supabase/functions/twilio-realtime-bridge/index.ts`: Added `logError()` helper and used in function call errors
+## Root Cause
 
-## Debugging Queries
+| System | Loads User Profile? | Includes User Name? |
+|--------|---------------------|---------------------|
+| **Twilio Bridge** | Yes - calls `loadUserProfile()` to get `first_name`, `full_name` | Yes - adds `USER: ${userName}` to instructions |
+| **WebRTC Token** | No - only loads `user_scheduling_prefs` | No - name is not included in session instructions |
 
-```sql
--- Quick error check
-SELECT * FROM recent_errors LIMIT 10;
+### Twilio Bridge (Working)
+```typescript
+// Line 193-204: Loads profile
+async function loadUserProfile(supabase: any, userId: string) {
+  const { data } = await supabase
+    .from('profiles')
+    .select('full_name, first_name, email, phone')
+    .eq('user_id', userId)
+    .maybeSingle();
+  return data || {};
+}
 
--- Full timeline (activities + errors)
-SELECT * FROM debug_timeline_full WHERE session_id LIKE 'WR%' LIMIT 20;
+// Line 296: Extracts name with "sir" fallback
+const userName = userProfile?.first_name || userProfile?.full_name?.split(' ')[0] || 'sir';
 
--- Specific session errors
-SELECT * FROM error_log WHERE session_id = 'YOUR_SESSION_ID' ORDER BY created_at;
+// Line 333: Includes in instructions
+USER: ${userName}
 ```
 
-## Expected Behavior
-- WebRTC connection errors now logged even before session ID is created
-- Edge function errors persist to database (survives log expiration)
-- Demo mode users can log activity (RLS policies allow demo user ID)
+### WebRTC Token Generator (Missing)
+- Only loads `core_instructions`, `realtime_extensions`, `config`, and TTS settings
+- Never queries `profiles` table
+- No user name variable in the instructions
+
+## Solution
+
+Update `supabase/functions/generate-realtime-token/index.ts` to match the Twilio bridge pattern:
+
+### Step 1: Load User Profile
+
+Add profile loading alongside the existing preferences query:
+
+```typescript
+// Load user profile for personalization
+const { data: profile } = await supabase
+  .from('profiles')
+  .select('first_name, full_name')
+  .eq('user_id', userId)
+  .maybeSingle();
+
+const userName = profile?.first_name || profile?.full_name?.split(' ')[0] || 'sir';
+```
+
+### Step 2: Include User Name in Instructions
+
+Add the same `USER:` context that the Twilio bridge includes:
+
+```typescript
+// Build personalization context
+const personalizationContext = `
+CURRENT TIME: ${new Date().toLocaleString('en-US', { 
+  timeZone: prefs?.timezone || 'America/New_York',
+  dateStyle: 'full',
+  timeStyle: 'short'
+})}
+USER: ${userName}
+TIMEZONE: ${prefs?.timezone || 'America/New_York'}
+`;
+
+// Add to full instructions
+const fullInstructions = [
+  coreInstructions,
+  personalizationContext,
+  realtimeExtensions,
+  schedulingPhilosophy
+].filter(Boolean).join('\n\n');
+```
+
+## Implementation Details
+
+### File: `supabase/functions/generate-realtime-token/index.ts`
+
+**Changes Required:**
+
+1. Add profile query in the existing Supabase client block (around line 83)
+2. Extract user name with fallback to "sir"
+3. Add timezone and current time context (matches Twilio bridge)
+4. Include personalization in the instructions sent to OpenAI
+
+**Key Code Addition:**
+```typescript
+// After line 87 (after loading prefs)
+const { data: profile } = await supabase
+  .from('profiles')
+  .select('first_name, full_name')
+  .eq('user_id', userId)
+  .maybeSingle();
+
+const userName = profile?.first_name || profile?.full_name?.split(' ')[0] || 'sir';
+const userTimezone = prefs?.timezone || 'America/New_York';
+const currentTime = new Date().toLocaleString('en-US', { 
+  timeZone: userTimezone,
+  weekday: 'long',
+  year: 'numeric',
+  month: 'long',
+  day: 'numeric',
+  hour: 'numeric',
+  minute: '2-digit'
+});
+```
+
+Then modify the `fullInstructions` to include:
+```typescript
+const personalizationContext = `
+CURRENT TIME: ${currentTime}
+TIMEZONE: ${userTimezone}
+USER: ${userName}`;
+
+const fullInstructions = [
+  coreInstructions,
+  personalizationContext,
+  realtimeExtensions,
+  schedulingPhilosophy
+].filter(Boolean).join('\n\n');
+```
+
+## Expected Result
+
+After this fix, both the Twilio phone calls and the WebRTC voice app will:
+- Address you by name (e.g., "Good morning, Von!") if `first_name` is set in your profile
+- Fall back to "Sir" if no name is configured
+- Include the current time and timezone in the AI's context
+
+## Files to Modify
+
+| File | Changes |
+|------|---------|
+| `supabase/functions/generate-realtime-token/index.ts` | Add profile loading, extract userName, add personalization context to instructions |
+
