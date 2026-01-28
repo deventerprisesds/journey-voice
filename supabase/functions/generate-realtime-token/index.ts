@@ -348,6 +348,70 @@ USER: ${userName}`;
               },
               required: ["query"]
             }
+          },
+          // COMMUNICATION TOOLS - Now supported via centralized execute-tool
+          {
+            type: "function",
+            name: "send_email",
+            description: "Send an email to the user.",
+            parameters: {
+              type: "object",
+              properties: {
+                subject: { type: "string", description: "Email subject" },
+                body: { type: "string", description: "Email body content" }
+              },
+              required: ["subject", "body"]
+            }
+          },
+          {
+            type: "function",
+            name: "send_slack_message",
+            description: "Send a Slack message to the user.",
+            parameters: {
+              type: "object",
+              properties: {
+                message: { type: "string", description: "The message to send" }
+              },
+              required: ["message"]
+            }
+          },
+          {
+            type: "function",
+            name: "create_calendar_event",
+            description: "Create a calendar event in Outlook or Google Calendar.",
+            parameters: {
+              type: "object",
+              properties: {
+                title: { type: "string", description: "Event title" },
+                start_time: { type: "string", description: "Start time in ISO format or HH:MM" },
+                end_time: { type: "string", description: "End time in ISO format or HH:MM" },
+                calendar: { type: "string", enum: ["outlook", "google"], description: "Which calendar to use" }
+              },
+              required: ["title", "start_time"]
+            }
+          },
+          {
+            type: "function",
+            name: "parse_and_create_tasks",
+            description: "Parse natural language into tasks using AI and create them. Handles multiple tasks, date parsing, categories, and priorities. Use when user describes tasks conversationally.",
+            parameters: {
+              type: "object",
+              properties: {
+                text: { 
+                  type: "string", 
+                  description: "Natural language task description" 
+                },
+                target_date: { 
+                  type: "string", 
+                  description: "Target date for tasks. YYYY-MM-DD or 'today', 'tomorrow'" 
+                },
+                auto_schedule: { 
+                  type: "boolean", 
+                  description: "If true, automatically find optimal time slots" 
+                }
+              },
+              required: ["text"]
+            }
           }
         ],
         instructions: fullInstructions
