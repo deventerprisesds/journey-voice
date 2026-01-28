@@ -797,15 +797,12 @@ export class RealtimeVoiceAssistant {
         this.onSpeakingChange(false);
         break;
       case 'response.text.done':
-        // ALWAYS save assistant transcript when text is available (ElevenLabs or fallback)
-        if (event.text) {
-          console.log('📝 Saving assistant transcript (text.done):', event.text.substring(0, 100) + '...');
+        // ElevenLabs mode: text.done contains the response - save and play TTS
+        // OpenAI native mode: DO NOT save here - audio_transcript.done handles it to prevent duplicates
+        if (this.ttsProvider === 'elevenlabs' && event.text) {
+          console.log('📝 Saving assistant transcript (ElevenLabs text.done):', event.text.substring(0, 100) + '...');
           this.saveTranscript('assistant', event.text);
-          
-          // ElevenLabs mode: also send text to TTS for audio playback
-          if (this.ttsProvider === 'elevenlabs') {
-            this.playElevenLabsAudio(event.text);
-          }
+          this.playElevenLabsAudio(event.text);
         }
         break;
       case 'response.function_call_arguments.done':
@@ -869,9 +866,18 @@ export class RealtimeVoiceAssistant {
         
       // Transcript capture for persistence
       case 'conversation.item.input_audio_transcription.completed':
-        // User speech transcript
+        // User speech transcript from Whisper
         console.log('📝 User transcript:', event.transcript);
         if (event.transcript?.trim()) {
+          // CRITICAL: Emit interim for live transcript display BEFORE saving
+          this.onMessage({
+            type: 'transcript.interim',
+            role: 'user',
+            content: event.transcript,
+            isListening: false  // Speech is done, show the text
+          });
+          
+          // Save to database
           this.saveTranscript('user', event.transcript);
         }
         break;
