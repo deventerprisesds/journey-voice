@@ -39,6 +39,9 @@ const DEMO_USER_ID = '00000000-0000-0000-0000-000000000001';
 // Dev user ID - demo mode shares dev's assistants
 const DEV_USER_ID = 'a3378f93-d655-4913-b2fa-ca5b1d8020f1';
 
+// Supabase edge function URL
+const SUPABASE_URL = 'https://wwxgajrtmslzklnyplah.supabase.co';
+
 // Default Iris assistant
 const DEFAULT_IRIS: Omit<Assistant, 'id' | 'user_id' | 'created_at' | 'updated_at'> = {
   name: 'Iris',
@@ -55,8 +58,26 @@ const DEFAULT_IRIS: Omit<Assistant, 'id' | 'user_id' | 'created_at' | 'updated_a
   is_active: true,
 };
 
+// ============================================================
+// SSE Streaming Helpers
+// ============================================================
+function parseSSEDelta(chunk: string): { type: string; content?: string; threadId?: string } | null {
+  const lines = chunk.split('\n');
+  for (const line of lines) {
+    if (!line.startsWith('data: ')) continue;
+    const data = line.slice(6);
+    if (data === '[DONE]') return { type: 'done' };
+    try {
+      return JSON.parse(data);
+    } catch {
+      // Skip malformed JSON
+    }
+  }
+  return null;
+}
+
 export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { user, isDemoMode } = useAuth();
+  const { user, isDemoMode, session } = useAuth();
   const voiceAssistant = useVoiceAssistant();
 
   // Panel state
@@ -83,8 +104,9 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
   const userId = user?.id || (isDemoMode ? DEMO_USER_ID : null);
 
-  // Feature flag for unified threads per assistant
+  // Feature flags
   const USE_UNIFIED_THREADS = true;
+  const USE_STREAMING = true; // Enable SSE streaming
 
   // Unified thread management (parallel to existing threadId state)
   const { 
@@ -245,21 +267,20 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
   const selectAssistant = useCallback((assistant: Assistant) => {
     setCurrentAssistant(assistant);
-    // Clear messages when switching assistants (or keep for continuity - design choice)
-    // setMessages([]);
-    // setThreadId(null);
   }, []);
 
   const setMode = useCallback((mode: CommunicationMode) => {
     setCurrentMode(mode);
     
     // Disconnect voice when leaving voice mode
-    // Connection is handled explicitly by VoiceOrb click
     if (mode !== 'voice' && voiceAssistant.isConnected) {
       voiceAssistant.disconnectAssistant();
     }
   }, [voiceAssistant]);
 
+  // ============================================================
+  // PHASE 2 & 3: Streaming sendMessage with Latency Metrics
+  // ============================================================
   const sendMessage = useCallback(async (content: string) => {
     if (!content.trim() || !userId) return;
 
@@ -290,79 +311,214 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     setMessages((prev) => [...prev, userMessage]);
     setIsLoading(true);
 
+    // Latency metrics
+    const requestStartTime = Date.now();
+    let timeToFirstToken: number | null = null;
+
+    // Use unified thread if enabled
+    const effectiveThreadId = USE_UNIFIED_THREADS ? dbThreadId : threadId;
+    
+    console.log('[CommsConsole] Sending message with threadId:', effectiveThreadId, 'streaming:', USE_STREAMING);
+
     try {
-      // Use unified thread if enabled, otherwise fall back to existing behavior
-      const effectiveThreadId = USE_UNIFIED_THREADS ? dbThreadId : threadId;
-      
-      console.log('[CommsConsole] Sending message with threadId:', effectiveThreadId);
-      
-      const { data, error } = await supabase.functions.invoke('hybrid-assistant-api', {
-        body: {
-          userInput: content,
-          userId,
-          threadId: effectiveThreadId,
-          assistantId: currentAssistant?.openai_assistant_id || undefined,
-          dbAssistantId: currentAssistant?.id || undefined,  // For RAG scoping
-        },
-      });
+      if (USE_STREAMING && session?.access_token) {
+        // ============================================================
+        // STREAMING MODE: SSE with incremental updates
+        // ============================================================
+        const assistantMessageId = `assistant-${Date.now()}`;
+        
+        // Add placeholder assistant message
+        setMessages((prev) => [...prev, {
+          id: assistantMessageId,
+          role: 'assistant',
+          content: '',
+          source: currentMode,
+          assistant_id: currentAssistant?.id || null,
+          created_at: new Date().toISOString(),
+        }]);
 
-      if (error) throw error;
-
-      const assistantMessage: ConversationMessage = {
-        id: `assistant-${Date.now()}`,
-        role: 'assistant',
-        content: data?.response || 'Sorry, I could not process your request.',
-        source: currentMode,
-        assistant_id: currentAssistant?.id || null,
-        created_at: new Date().toISOString(),
-      };
-
-      setMessages((prev) => [...prev, assistantMessage]);
-
-      // In unified mode, don't overwrite threadId with OpenAI thread ID
-      // The dbThreadId from useUnifiedThread is our source of truth
-      if (data?.threadId && !USE_UNIFIED_THREADS) {
-        setThreadId(data.threadId);
-      }
-      
-      // Update OpenAI thread ID in database if returned
-      if (data?.threadId && USE_UNIFIED_THREADS && updateOpenaiThreadId) {
-        updateOpenaiThreadId(data.threadId);
-      }
-
-      // Persist messages to conversation_messages via generate-embeddings (fire-and-forget)
-      const effectiveThreadIdForPersistence = USE_UNIFIED_THREADS ? dbThreadId : threadId;
-      if (effectiveThreadIdForPersistence) {
-        // Persist user message
-        supabase.functions.invoke('generate-embeddings', {
-          body: {
-            action: 'store_conversation',
+        const response = await fetch(`${SUPABASE_URL}/functions/v1/hybrid-assistant-api`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${session.access_token}`,
+            'Content-Type': 'application/json',
+            'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind3eGdhanJ0bXNsemtsbnlwbGFoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg0MDI3MzIsImV4cCI6MjA3Mzk3ODczMn0._M_B3093_wjfFe4vwXmKXVCcw-QG5UhRAT4-H-aGoHE'
+          },
+          body: JSON.stringify({
+            userInput: content,
             userId,
-            threadId: effectiveThreadIdForPersistence,
-            assistantId: currentAssistant?.id || null,
-            source: 'chat',
-            role: 'user',
+            threadId: effectiveThreadId,
+            assistantId: currentAssistant?.openai_assistant_id || undefined,
+            dbAssistantId: currentAssistant?.id || undefined,
+            stream: true
+          })
+        });
+
+        // Check if we got a streaming response or JSON fallback
+        const contentType = response.headers.get('content-type') || '';
+        
+        if (contentType.includes('text/event-stream')) {
+          // Handle SSE stream
+          const reader = response.body?.getReader();
+          const decoder = new TextDecoder();
+          let fullContent = '';
+          let receivedThreadId: string | null = null;
+
+          while (reader) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            const chunk = decoder.decode(value, { stream: true });
+            const parsed = parseSSEDelta(chunk);
+
+            if (parsed) {
+              if (parsed.type === 'delta' && parsed.content) {
+                if (!timeToFirstToken) {
+                  timeToFirstToken = Date.now() - requestStartTime;
+                  console.log(`[CommsConsole] Time to first token: ${timeToFirstToken}ms`);
+                }
+                fullContent += parsed.content;
+                setMessages((prev) => prev.map(m =>
+                  m.id === assistantMessageId
+                    ? { ...m, content: fullContent }
+                    : m
+                ));
+              } else if (parsed.type === 'done') {
+                receivedThreadId = parsed.threadId || null;
+              } else if (parsed.type === 'tool_call') {
+                // Show tool call indicator
+                setMessages((prev) => prev.map(m =>
+                  m.id === assistantMessageId
+                    ? { ...m, content: fullContent + `\n\n_Using ${parsed.content || 'tools'}..._` }
+                    : m
+                ));
+              }
+            }
+          }
+
+          // Update OpenAI thread ID if returned
+          if (receivedThreadId && USE_UNIFIED_THREADS && updateOpenaiThreadId) {
+            updateOpenaiThreadId(receivedThreadId);
+          }
+
+          // Final cleanup - remove tool indicator if present
+          setMessages((prev) => prev.map(m =>
+            m.id === assistantMessageId
+              ? { ...m, content: fullContent }
+              : m
+          ));
+
+          // Persist messages with latency metrics
+          const responseTimeMs = Date.now() - requestStartTime;
+          const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+          
+          persistMessagesWithMetrics(
             content,
-            messageType: 'user',
-            metadata: { mode: 'comms_console' }
-          }
-        }).catch(err => console.error('[CommsConsole] Failed to persist user message:', err));
+            fullContent,
+            effectiveThreadId || '',
+            {
+              response_time_ms: responseTimeMs,
+              time_to_first_token: timeToFirstToken,
+              word_count: fullContent.split(/\s+/).filter(Boolean).length,
+              content_length: fullContent.length,
+              user_timezone: userTimezone,
+              request_timestamp: new Date(requestStartTime).toISOString(),
+              streamed: true
+            }
+          );
 
-        // Persist assistant message
-        supabase.functions.invoke('generate-embeddings', {
-          body: {
-            action: 'store_conversation',
-            userId,
-            threadId: effectiveThreadIdForPersistence,
-            assistantId: currentAssistant?.id || null,
-            source: 'chat',
-            role: 'assistant',
-            content: data?.response || '',
-            messageType: 'assistant',
-            metadata: { mode: 'comms_console' }
+        } else {
+          // JSON response (fast path or fallback)
+          const data = await response.json();
+          
+          if (!response.ok) {
+            throw new Error(data.error || 'Request failed');
           }
-        }).catch(err => console.error('[CommsConsole] Failed to persist assistant message:', err));
+
+          const assistantContent = data.response || 'Sorry, I could not process your request.';
+          
+          setMessages((prev) => prev.map(m =>
+            m.id === assistantMessageId
+              ? { ...m, content: assistantContent }
+              : m
+          ));
+
+          if (data.threadId && USE_UNIFIED_THREADS && updateOpenaiThreadId) {
+            updateOpenaiThreadId(data.threadId);
+          }
+
+          // Persist with metrics
+          const responseTimeMs = Date.now() - requestStartTime;
+          persistMessagesWithMetrics(
+            content,
+            assistantContent,
+            effectiveThreadId || '',
+            {
+              response_time_ms: responseTimeMs,
+              time_to_first_token: responseTimeMs, // For non-streaming, TTFT = total time
+              word_count: assistantContent.split(/\s+/).filter(Boolean).length,
+              content_length: assistantContent.length,
+              user_timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+              request_timestamp: new Date(requestStartTime).toISOString(),
+              streamed: false,
+              fast_path: data.fastPath || false
+            }
+          );
+        }
+
+      } else {
+        // ============================================================
+        // FALLBACK: Original non-streaming mode (via supabase.functions.invoke)
+        // ============================================================
+        const { data, error } = await supabase.functions.invoke('hybrid-assistant-api', {
+          body: {
+            userInput: content,
+            userId,
+            threadId: effectiveThreadId,
+            assistantId: currentAssistant?.openai_assistant_id || undefined,
+            dbAssistantId: currentAssistant?.id || undefined,
+          },
+        });
+
+        if (error) throw error;
+
+        const assistantMessage: ConversationMessage = {
+          id: `assistant-${Date.now()}`,
+          role: 'assistant',
+          content: data?.response || 'Sorry, I could not process your request.',
+          source: currentMode,
+          assistant_id: currentAssistant?.id || null,
+          created_at: new Date().toISOString(),
+        };
+
+        setMessages((prev) => [...prev, assistantMessage]);
+
+        if (data?.threadId && !USE_UNIFIED_THREADS) {
+          setThreadId(data.threadId);
+        }
+        
+        if (data?.threadId && USE_UNIFIED_THREADS && updateOpenaiThreadId) {
+          updateOpenaiThreadId(data.threadId);
+        }
+
+        // Persist messages with metrics
+        const responseTimeMs = Date.now() - requestStartTime;
+        persistMessagesWithMetrics(
+          content,
+          data?.response || '',
+          effectiveThreadId || '',
+          {
+            response_time_ms: responseTimeMs,
+            time_to_first_token: responseTimeMs,
+            word_count: (data?.response || '').split(/\s+/).filter(Boolean).length,
+            content_length: (data?.response || '').length,
+            user_timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+            request_timestamp: new Date(requestStartTime).toISOString(),
+            streamed: false
+          }
+        );
       }
+
     } catch (err) {
       console.error('Error sending message:', err);
       const errorMessage: ConversationMessage = {
@@ -377,11 +533,66 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     } finally {
       setIsLoading(false);
     }
-  }, [userId, threadId, currentAssistant, currentMode, dbThreadId, updateOpenaiThreadId]);
+  }, [userId, threadId, currentAssistant, currentMode, dbThreadId, updateOpenaiThreadId, session]);
+
+  // ============================================================
+  // PHASE 3: Persist Messages with Latency Metrics
+  // ============================================================
+  const persistMessagesWithMetrics = useCallback((
+    userContent: string,
+    assistantContent: string,
+    threadIdForPersistence: string,
+    metrics: {
+      response_time_ms: number;
+      time_to_first_token: number | null;
+      word_count: number;
+      content_length: number;
+      user_timezone: string;
+      request_timestamp: string;
+      streamed: boolean;
+      fast_path?: boolean;
+    }
+  ) => {
+    if (!threadIdForPersistence || !userId) return;
+
+    // Persist user message
+    supabase.functions.invoke('generate-embeddings', {
+      body: {
+        action: 'store_conversation',
+        userId,
+        threadId: threadIdForPersistence,
+        assistantId: currentAssistant?.id || null,
+        source: 'chat',
+        role: 'user',
+        content: userContent,
+        messageType: 'user',
+        metadata: { mode: 'comms_console' }
+      }
+    }).catch(err => console.error('[CommsConsole] Failed to persist user message:', err));
+
+    // Persist assistant message with latency metrics
+    supabase.functions.invoke('generate-embeddings', {
+      body: {
+        action: 'store_conversation',
+        userId,
+        threadId: threadIdForPersistence,
+        assistantId: currentAssistant?.id || null,
+        source: 'chat',
+        role: 'assistant',
+        content: assistantContent,
+        messageType: 'assistant',
+        metadata: {
+          mode: 'comms_console',
+          ...metrics
+        }
+      }
+    }).catch(err => console.error('[CommsConsole] Failed to persist assistant message:', err));
+
+    console.log(`[CommsConsole] Persisted with metrics: response_time=${metrics.response_time_ms}ms, ttft=${metrics.time_to_first_token}ms, streamed=${metrics.streamed}`);
+  }, [userId, currentAssistant?.id]);
 
   // Connect voice with unified thread and assistant ID for cross-mode memory
   const connectVoice = useCallback(async () => {
-    // Pass unified thread ID and assistant ID to voice assistant for memory persistence
     await voiceAssistant.connectToAssistant(dbThreadId || undefined, currentAssistant?.id || undefined);
   }, [voiceAssistant, dbThreadId, currentAssistant?.id]);
 
