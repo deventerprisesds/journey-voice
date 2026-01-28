@@ -128,15 +128,19 @@ When the user says goodbye phrases like 'that's all', 'thanks that's it', 'disco
         modalities: modalities,  // Dynamic based on TTS provider
         input_audio_format: "pcm16",
         output_audio_format: "pcm16",
-        // Enable Whisper transcription for user speech - required for transcript persistence
+        // Enable transcription for user speech - required for transcript persistence
         input_audio_transcription: {
-          model: "whisper-1"
+          model: "gpt-4o-mini-transcribe",
+          language: "en",
+          prompt: "tasks, schedule, calendar, reschedule, today, tomorrow, priorities"
         },
+        // Use semantic VAD (AI-based) instead of server_vad (amplitude-based)
+        // This prevents background noise from triggering false speech detection
         turn_detection: {
-          type: "server_vad",
-          threshold: 0.3,
-          prefix_padding_ms: 400,
-          silence_duration_ms: 1200
+          type: "semantic_vad",
+          eagerness: "low",
+          create_response: true,
+          interrupt_response: true
         },
         tool_choice: "auto",
         tools: [
