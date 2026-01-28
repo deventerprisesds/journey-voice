@@ -301,6 +301,12 @@ export class RealtimeVoiceAssistant {
   
   // Flag to prevent duplicate greetings
   private hasGreeted: boolean = false;
+  
+  // Flag to prevent audio from being queued during/after disconnect
+  private isDisconnecting: boolean = false;
+  
+  // User name for personalized greetings (loaded from token response)
+  private userName: string = 'sir';
 
   constructor(
     private onMessage: (message: any) => void,
@@ -481,6 +487,8 @@ export class RealtimeVoiceAssistant {
       this.sessionId = `WR${Date.now().toString(36)}${Math.random().toString(36).substring(2, 8)}`;
       this.connectionStartTime = Date.now();
       this.messageCount = 0;
+      this.isDisconnecting = false;  // Reset disconnect flag for new connection
+      this.userName = 'sir';  // Reset to default, will be populated from token response
       
       console.log('📍 WebRTC Session ID:', this.sessionId);
       
@@ -557,7 +565,6 @@ export class RealtimeVoiceAssistant {
       const EPHEMERAL_KEY = data.client_secret.value;
       
       // Store TTS configuration from token response
-      // Store TTS configuration from token response
       if (data.tts_config) {
         this.ttsProvider = data.tts_config.provider || 'openai';
         this.elevenlabsVoiceId = data.tts_config.elevenlabs_voice_id || '';
@@ -572,6 +579,12 @@ export class RealtimeVoiceAssistant {
           this.audioEl.muted = false;
           console.log('🔊 WebRTC audio enabled - using OpenAI native TTS');
         }
+      }
+      
+      // Store userName from token response for personalized greetings
+      if (data.userName) {
+        this.userName = data.userName;
+        console.log(`[PERSONALIZATION] User name loaded: ${this.userName}`);
       }
       
       console.log('Ephemeral token received, establishing WebRTC connection...');
@@ -997,9 +1010,9 @@ export class RealtimeVoiceAssistant {
     this.hasGreeted = true;
     
     const greeting = this.getTimeBasedGreeting();
-    const userName = 'sir'; // Could be loaded from profile
+    const userName = this.userName;  // Use stored userName from token response
     
-    console.log(`[GREETING] Sending: "${greeting}! What can I help you with?"`);
+    console.log(`[GREETING] Sending: "${greeting}, ${userName}! What can I help you with?"`);
     
     // Inject greeting context as a system message
     this.dc.send(JSON.stringify({
@@ -1060,6 +1073,12 @@ export class RealtimeVoiceAssistant {
   }
 
   private async playElevenLabsAudio(text: string): Promise<void> {
+    // CRITICAL: Check disconnect flag BEFORE any processing
+    if (this.isDisconnecting) {
+      console.log('[ELEVENLABS] Skipping TTS - disconnect in progress');
+      return;
+    }
+    
     if (!text.trim()) return;
     
     console.log('🎙️ ElevenLabs TTS (queued):', text.substring(0, 50) + '...');
@@ -1082,11 +1101,23 @@ export class RealtimeVoiceAssistant {
         }
       );
       
+      // CRITICAL: Check disconnect flag AGAIN after async fetch completes
+      if (this.isDisconnecting) {
+        console.log('[ELEVENLABS] Discarding audio - disconnect occurred during fetch');
+        return;
+      }
+      
       if (!response.ok) {
         throw new Error(`ElevenLabs TTS error: ${response.status}`);
       }
       
       const audioBlob = await response.blob();
+      
+      // Final check before queuing
+      if (this.isDisconnecting) {
+        console.log('[ELEVENLABS] Discarding audio blob - disconnect in progress');
+        return;
+      }
       
       // Use unified queue for sequential playback (prevents overlap - matches Twilio pattern)
       if (this.unifiedAudioQueue) {
@@ -1262,9 +1293,11 @@ export class RealtimeVoiceAssistant {
   }
 
   async disconnect() {
-    console.log(`[VOICE_INSTANCE] Disconnecting #${this.instanceId}...`);
+    // CRITICAL: Set disconnect flag FIRST to block any in-flight audio
+    this.isDisconnecting = true;
+    console.log(`[VOICE_INSTANCE] Disconnecting #${this.instanceId}... (isDisconnecting=true)`);
     
-    // Remove from global registry FIRST
+    // Remove from global registry
     activeInstances.delete(this.instanceId);
     console.log(`[VOICE_INSTANCE] Removed #${this.instanceId}, remaining: ${activeInstances.size}`);
     

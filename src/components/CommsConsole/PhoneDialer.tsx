@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Phone, PhoneOff, Mic, MicOff, Volume2, VolumeX, Clock, Users, Grid3X3, Delete, Smartphone } from 'lucide-react';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Phone, PhoneOff, Mic, MicOff, Volume2, VolumeX, Clock, Users, Grid3X3, Delete, Smartphone, MessageSquareText } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
 import { useCommsConsole } from '@/contexts/CommsConsoleContext';
@@ -56,7 +57,7 @@ const PhoneDialer: React.FC<PhoneDialerProps> = ({
   const { user } = useAuth();
   const { toast } = useToast();
   const { currentAssistant, assistants, selectAssistant, connectVoice, disconnectVoice, sendVoiceTextMessage, isConnected } = useCommsConsole();
-  const { liveTranscript } = useVoiceAssistant();
+  const { liveTranscript, voiceTranscripts } = useVoiceAssistant();
   
   // User timezone for live transcript display
   const [userTimezone, setUserTimezone] = useState('America/New_York');
@@ -214,6 +215,16 @@ const endCall = () => {
   const isInCall = callState === 'dialing' || callState === 'ringing' || callState === 'connected';
   const orbColor = currentAssistant?.orb_color || '#3B82F6';
 
+  // Format timestamp for transcript display
+  const formatTimestamp = (dateString: string) => {
+    const date = new Date(dateString);
+    return date.toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: userTimezone,
+    });
+  };
+
   return (
     <div className={cn('flex flex-col h-full bg-background', className)}>
       {/* Agent Header - Always visible */}
@@ -357,25 +368,80 @@ const endCall = () => {
                 ))}
               </div>
 
-              {/* Call button */}
-              <Button
-                variant="default"
-                size="icon"
-                className="w-16 h-16 rounded-full bg-green-600 hover:bg-green-700 mt-6"
-                onClick={initiateCall}
-                disabled={isLoading}
-              >
-                <Phone className="h-7 w-7" />
-              </Button>
+              {/* Call mode buttons - Phone (Private) and Speaker (Fast) */}
+              <div className="flex flex-col items-center gap-3 mt-6">
+                <div className="flex gap-4">
+                  {/* Phone mode - Twilio via native dialer (earpiece) */}
+                  <Button
+                    variant="outline"
+                    className="flex flex-col items-center gap-1 h-auto py-4 px-6 rounded-2xl border-2 hover:border-green-600 hover:bg-green-50 dark:hover:bg-green-950"
+                    onClick={callFromPhone}
+                  >
+                    <div className="w-12 h-12 rounded-full bg-green-600 flex items-center justify-center">
+                      <Smartphone className="h-6 w-6 text-white" />
+                    </div>
+                    <span className="font-medium">Phone</span>
+                    <span className="text-xs text-muted-foreground">Private</span>
+                  </Button>
 
-              {/* Native dialer fallback */}
-              <button
-                onClick={callFromPhone}
-                className="text-sm text-muted-foreground mt-4 flex items-center gap-1.5 hover:text-foreground transition-colors"
-              >
-                <Smartphone className="h-4 w-4" />
-                Call from my phone
-              </button>
+                  {/* Speaker mode - In-app WebRTC */}
+                  <Button
+                    variant="outline"
+                    className="flex flex-col items-center gap-1 h-auto py-4 px-6 rounded-2xl border-2 hover:border-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950"
+                    onClick={initiateCall}
+                    disabled={isLoading}
+                  >
+                    <div className="w-12 h-12 rounded-full bg-blue-600 flex items-center justify-center">
+                      <Volume2 className="h-6 w-6 text-white" />
+                    </div>
+                    <span className="font-medium">Speaker</span>
+                    <span className="text-xs text-muted-foreground">Fast</span>
+                  </Button>
+                </div>
+                
+                <p className="text-xs text-muted-foreground text-center max-w-[200px]">
+                  Phone uses earpiece • Speaker uses loudspeaker
+                </p>
+              </div>
+            </TabsContent>
+
+            {/* Transcript History Tab */}
+            <TabsContent value="transcript" className="flex-1 overflow-hidden p-4 m-0">
+              {voiceTranscripts.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
+                  <MessageSquareText className="h-12 w-12 mb-2 opacity-50" />
+                  <p>No conversation history</p>
+                  <p className="text-xs mt-1">Start a call to see transcripts</p>
+                </div>
+              ) : (
+                <ScrollArea className="h-full pr-2">
+                  <div className="space-y-3">
+                    {voiceTranscripts.map((message) => (
+                      <div
+                        key={message.id}
+                        className={cn(
+                          'flex flex-col max-w-[85%] rounded-xl px-3 py-2',
+                          message.role === 'user'
+                            ? 'ml-auto bg-primary text-primary-foreground'
+                            : 'mr-auto bg-muted'
+                        )}
+                      >
+                        <p className="text-sm">{message.content}</p>
+                        <span
+                          className={cn(
+                            'text-[10px] mt-1',
+                            message.role === 'user'
+                              ? 'text-primary-foreground/70'
+                              : 'text-muted-foreground'
+                          )}
+                        >
+                          {message.role === 'user' ? 'You' : 'Assistant'} • {formatTimestamp(message.created_at)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </ScrollArea>
+              )}
             </TabsContent>
 
             <TabsContent value="recents" className="flex-1 overflow-auto p-4 m-0">
@@ -452,11 +518,15 @@ const endCall = () => {
               </div>
             </TabsContent>
 
-            {/* Tab Bar at bottom */}
-            <TabsList className="grid w-full grid-cols-3 h-14 rounded-none border-t bg-background">
+            {/* Tab Bar at bottom - 4 columns now */}
+            <TabsList className="grid w-full grid-cols-4 h-14 rounded-none border-t bg-background">
               <TabsTrigger value="keypad" className="flex flex-col gap-0.5 h-full data-[state=active]:bg-accent">
                 <Grid3X3 className="h-5 w-5" />
                 <span className="text-xs">Keypad</span>
+              </TabsTrigger>
+              <TabsTrigger value="transcript" className="flex flex-col gap-0.5 h-full data-[state=active]:bg-accent">
+                <MessageSquareText className="h-5 w-5" />
+                <span className="text-xs">Transcript</span>
               </TabsTrigger>
               <TabsTrigger value="recents" className="flex flex-col gap-0.5 h-full data-[state=active]:bg-accent">
                 <Clock className="h-5 w-5" />
