@@ -20,8 +20,11 @@ interface VoiceAssistantContextType {
   voiceTranscripts: ConversationMessage[];
   clearVoiceTranscripts: () => void;
   
-  // Actions - connectToAssistant now accepts optional unified thread ID
-  connectToAssistant: (unifiedThreadId?: string) => Promise<void>;
+  // Actions - connectToAssistant now accepts optional unified thread ID and assistant ID
+  connectToAssistant: (unifiedThreadId?: string, unifiedAssistantId?: string) => Promise<void>;
+  
+  // Live transcription for real-time display
+  liveTranscript: { role: 'user' | 'assistant'; content: string; isListening: boolean } | null;
   disconnectAssistant: () => void;
   toggleListening: () => Promise<void>;
   testConnection: () => Promise<void>;
@@ -63,6 +66,7 @@ export const VoiceAssistantProvider: React.FC<VoiceAssistantProviderProps> = ({
   const [retryAttempts, setRetryAttempts] = useState(0);
   const [autoGreetingTimeout, setAutoGreetingTimeout] = useState(5000); // Default 5 seconds
   const [voiceTranscripts, setVoiceTranscripts] = useState<ConversationMessage[]>([]);
+  const [liveTranscript, setLiveTranscript] = useState<{ role: 'user' | 'assistant'; content: string; isListening: boolean } | null>(null);
   const assistantRef = useRef<RealtimeVoiceAssistant | null>(null);
   const autoGreetingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   
@@ -79,6 +83,16 @@ export const VoiceAssistantProvider: React.FC<VoiceAssistantProviderProps> = ({
   const handleMessage = (message: any) => {
     console.log('Voice message:', message);
     setMessages(prev => [...prev, message]);
+
+    // Handle live transcription interim events
+    if (message.type === 'transcript.interim') {
+      setLiveTranscript({
+        role: message.role,
+        content: message.content || '',
+        isListening: message.isListening || false
+      });
+      return;
+    }
 
     // Handle speech detection events
     if (message.type === 'speech.detected') {
@@ -128,8 +142,11 @@ export const VoiceAssistantProvider: React.FC<VoiceAssistantProviderProps> = ({
       return;
     }
     
-    // Capture transcripts for UI display
+    // Capture transcripts for UI display and clear live transcript
     if (message.type === 'transcript.saved') {
+      // Clear live transcript when final is saved
+      setLiveTranscript(null);
+      
       const newMessage: ConversationMessage = {
         id: `${message.sessionId}-${Date.now()}`,
         role: message.role,
@@ -218,8 +235,8 @@ export const VoiceAssistantProvider: React.FC<VoiceAssistantProviderProps> = ({
     setIsSpeaking(speaking);
   };
 
-  // connectToAssistant now accepts optional unified thread ID for cross-mode memory
-  const connectToAssistant = async (unifiedThreadId?: string) => {
+  // connectToAssistant now accepts optional unified thread ID and assistant ID for cross-mode memory
+  const connectToAssistant = async (unifiedThreadId?: string, unifiedAssistantId?: string) => {
     // Guard against duplicate connections
     if (isConnected || assistantRef.current) {
       console.log('Voice assistant already connected or connecting, skipping');
@@ -234,8 +251,8 @@ export const VoiceAssistantProvider: React.FC<VoiceAssistantProviderProps> = ({
         handleSpeakingChange
       );
       
-      // Pass unified thread ID to enable cross-mode memory
-      await assistantRef.current.connect(unifiedThreadId);
+      // Pass unified thread ID and assistant ID to enable cross-mode memory
+      await assistantRef.current.connect(unifiedThreadId, unifiedAssistantId);
       
       toast({
         title: "Voice Assistant Connected",
@@ -363,6 +380,7 @@ export const VoiceAssistantProvider: React.FC<VoiceAssistantProviderProps> = ({
         retryAttempts,
         voiceTranscripts,
         clearVoiceTranscripts,
+        liveTranscript,
         connectToAssistant,
         disconnectAssistant,
         toggleListening,

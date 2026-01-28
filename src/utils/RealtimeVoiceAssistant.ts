@@ -205,6 +205,7 @@ export class RealtimeVoiceAssistant {
   // Session tracking for transcript persistence
   private sessionId: string | null = null;
   private threadId: string | null = null;
+  private assistantId: string | null = null;  // For memory persistence
   private userId: string | null = null;
   
   // Activity tracking for unified timeline
@@ -363,7 +364,7 @@ export class RealtimeVoiceAssistant {
   }
 
   // Connect now accepts optional unified thread ID for cross-mode memory
-  async connect(unifiedThreadId?: string) {
+  async connect(unifiedThreadId?: string, unifiedAssistantId?: string) {
     try {
       // STEP 1: Generate session ID IMMEDIATELY - before any async operations
       // This ensures even failed connections are logged in activity_log
@@ -469,7 +470,8 @@ export class RealtimeVoiceAssistant {
       if (unifiedThreadId) {
         // Use unified thread from CommsConsoleContext (shared with chat)
         this.threadId = unifiedThreadId;
-        console.log('📍 [UNIFIED_THREAD] Using shared thread for voice:', this.threadId);
+        this.assistantId = unifiedAssistantId || null;  // Store for transcript persistence
+        console.log('📍 [UNIFIED_THREAD] Using shared thread for voice:', this.threadId, 'assistant:', this.assistantId);
         
         // Load agenda status for cross-interface continuity
         await this.loadAgendaStatus();
@@ -484,20 +486,21 @@ export class RealtimeVoiceAssistant {
             .eq('is_default', true)
             .maybeSingle();
           
-          const assistantId = defaultAssistant?.id || null;
+          const fallbackAssistantId = defaultAssistant?.id || null;
+          this.assistantId = fallbackAssistantId;  // Store for transcript persistence
           
           const { data: thread } = await supabase
             .from('ai_threads')
             .insert({ 
               user_id: this.userId,
-              assistant_id: assistantId,
+              assistant_id: fallbackAssistantId,
               openai_thread_id: `webrtc_${this.sessionId}`,
               mode: 'voice'
             })
             .select('id')
             .single();
           this.threadId = thread?.id || null;
-          console.log('📍 Created voice thread (standalone):', this.threadId, 'for assistant:', assistantId);
+          console.log('📍 Created voice thread (standalone):', this.threadId, 'for assistant:', fallbackAssistantId);
           
           // Load agenda status for cross-interface continuity
           await this.loadAgendaStatus();
@@ -679,6 +682,13 @@ export class RealtimeVoiceAssistant {
           type: 'speech.detected',
           detected: true
         });
+        // Emit interim event for live transcription UI
+        this.onMessage({
+          type: 'transcript.interim',
+          role: 'user',
+          content: '',
+          isListening: true
+        });
         break;
       case 'input_audio_buffer.speech_stopped':
         console.log('🤐 Speech stopped');
@@ -728,13 +738,14 @@ export class RealtimeVoiceAssistant {
           action: 'store_conversation',
           userId: this.userId,
           threadId: this.threadId,
+          assistantId: this.assistantId,  // Pass for proper memory attribution
+          source: 'voice',                 // Top-level for DB column
           role: role,
           content: content,
           audioTranscript: content,
           voiceSessionId: this.sessionId,
           messageType: role,
           metadata: { 
-            source: 'voice',
             session_type: 'webrtc',
             tts_provider: this.ttsProvider
           }

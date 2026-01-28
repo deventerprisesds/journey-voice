@@ -56,3 +56,46 @@ export function formatDuration(minutes?: number): string {
   const mins = minutes % 60;
   return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
 }
+
+/**
+ * Format a timestamp for display in user's timezone
+ * @param isoTimestamp - ISO timestamp string
+ * @param timezone - IANA timezone string (e.g., 'America/New_York')
+ * @param options - Optional Intl.DateTimeFormat options
+ * @returns Formatted time string in the specified timezone
+ */
+export function formatTimeInTimezone(
+  isoTimestamp: string,
+  timezone: string,
+  options?: Intl.DateTimeFormatOptions
+): string {
+  try {
+    const date = new Date(isoTimestamp);
+    return date.toLocaleTimeString('en-US', {
+      timeZone: timezone,
+      hour: '2-digit',
+      minute: '2-digit',
+      ...options
+    });
+  } catch {
+    return new Date(isoTimestamp).toLocaleTimeString();
+  }
+}
+
+/**
+ * Get current time formatted in user's timezone
+ * @param timezone - IANA timezone string
+ * @returns Current time string formatted as HH:mm:ss
+ */
+export function getCurrentTimeInTimezone(timezone: string): string {
+  try {
+    return new Date().toLocaleTimeString('en-US', {
+      timeZone: timezone,
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+  } catch {
+    return new Date().toLocaleTimeString();
+  }
+}
