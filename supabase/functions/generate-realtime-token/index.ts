@@ -392,6 +392,40 @@ USER: ${userName}`;
           },
           {
             type: "function",
+            name: "create_outlook_event",
+            description: "Create an Outlook calendar event directly.",
+            parameters: {
+              type: "object",
+              properties: {
+                title: { type: "string", description: "Event title" },
+                start_time: { type: "string", description: "Start time in ISO format" },
+                end_time: { type: "string", description: "End time in ISO format" },
+                duration: { type: "number", description: "Duration in minutes (if no end_time)" },
+                description: { type: "string", description: "Event description" },
+                reminder: { type: "string", description: "Reminder minutes before" }
+              },
+              required: ["title", "start_time"]
+            }
+          },
+          {
+            type: "function",
+            name: "create_google_event",
+            description: "Create a Google Calendar event directly.",
+            parameters: {
+              type: "object",
+              properties: {
+                title: { type: "string", description: "Event title" },
+                start_time: { type: "string", description: "Start time in ISO format" },
+                end_time: { type: "string", description: "End time in ISO format" },
+                duration: { type: "number", description: "Duration in minutes (if no end_time)" },
+                description: { type: "string", description: "Event description" },
+                reminder: { type: "string", description: "Reminder minutes before" }
+              },
+              required: ["title", "start_time"]
+            }
+          },
+          {
+            type: "function",
             name: "parse_and_create_tasks",
             description: "Parse natural language into tasks using AI and create them. Handles multiple tasks, date parsing, categories, and priorities. Use when user describes tasks conversationally.",
             parameters: {
