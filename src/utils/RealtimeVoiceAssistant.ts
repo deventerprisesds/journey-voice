@@ -727,6 +727,10 @@ export class RealtimeVoiceAssistant {
         // ElevenLabs mode: send text to TTS and play MP3
         if (this.ttsProvider === 'elevenlabs' && event.text) {
           this.playElevenLabsAudio(event.text);
+          // CRITICAL FIX: Save assistant transcript to database
+          // In text-only mode (ElevenLabs), this event contains the full response
+          console.log('📝 Saving assistant transcript (text mode):', event.text.substring(0, 100) + '...');
+          this.saveTranscript('assistant', event.text);
         }
         break;
       case 'response.function_call_arguments.done':
