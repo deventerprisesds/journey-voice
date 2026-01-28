@@ -15,9 +15,10 @@ import ModeToggle from './ModeToggle';
 interface CommsConsoleProps {
   className?: string;
   embedded?: boolean;
+  mode?: 'embedded' | 'panel' | 'overlay';
 }
 
-const CommsConsole: React.FC<CommsConsoleProps> = ({ className, embedded = false }) => {
+const CommsConsole: React.FC<CommsConsoleProps> = ({ className, embedded = false, mode }) => {
   const isMobile = useIsMobile();
   const {
     isPanelOpen,
@@ -42,8 +43,11 @@ const CommsConsole: React.FC<CommsConsoleProps> = ({ className, embedded = false
     setMobileSidebarOpen,
   } = useCommsConsole();
 
-  // In embedded mode, always show. Otherwise, respect isPanelOpen
-  if (!embedded && !isPanelOpen) {
+  // Derive effective mode
+  const effectiveMode = mode || (embedded ? 'embedded' : 'overlay');
+
+  // In overlay mode without explicit panel mode, respect isPanelOpen
+  if (effectiveMode === 'overlay' && !isPanelOpen) {
     return null;
   }
 
@@ -65,7 +69,7 @@ const CommsConsole: React.FC<CommsConsoleProps> = ({ className, embedded = false
     }
   };
 
-  // Sidebar content component for reuse
+  // Sidebar content component for reuse in mobile drawers
   const SidebarContent = (
     <AssistantSidebar
       assistants={assistants}
@@ -81,8 +85,54 @@ const CommsConsole: React.FC<CommsConsoleProps> = ({ className, embedded = false
     />
   );
 
+  // Panel mode - right-side persistent panel (no sidebar)
+  if (effectiveMode === 'panel') {
+    return (
+      <div className={cn('flex flex-col h-full bg-background', className)}>
+        {/* Header with close button */}
+        <AssistantHeader
+          currentAssistant={currentAssistant}
+          assistants={assistants}
+          onSelectAssistant={selectAssistant}
+          onToggleSidebar={() => {}}
+          onClose={togglePanel}
+          isSidebarExpanded={false}
+          showCloseButton={true}
+          showSidebarToggle={false}
+        />
+
+        {/* Conversation pane */}
+        <ConversationPane
+          mode={currentMode}
+          voiceState={voiceState}
+          messages={allMessages}
+          orbColor={orbColor}
+          isLoading={isLoading}
+          isConnected={isConnected}
+          onVoiceToggle={handleVoiceToggle}
+          phoneCallState={phoneCallState}
+          onPhoneCallStateChange={setPhoneCallState}
+        />
+
+        {/* Text input */}
+        <TextInputBar
+          onSend={sendMessage}
+          mode={currentMode}
+          isLoading={isLoading}
+        />
+
+        {/* Mode toggle */}
+        <ModeToggle
+          currentMode={currentMode}
+          onModeChange={setMode}
+          className="border-t pb-safe"
+        />
+      </div>
+    );
+  }
+
   // Embedded mode - full page layout
-  if (embedded) {
+  if (effectiveMode === 'embedded') {
     return (
       <div className={cn('flex min-h-[100dvh] w-full bg-background', className)} style={{ overscrollBehavior: 'none' }}>
         {/* Desktop sidebar */}

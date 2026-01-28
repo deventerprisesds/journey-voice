@@ -1,12 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
-import KanbanBoard from '@/components/KanbanBoard';
+import TabbedKanbanBoard from '@/components/TabbedKanbanBoard';
 import TaskGridView from '@/components/EnhancedTaskGridView';
 import TaskDetailModal from '@/components/TaskDetailModal';
 import ViewSwitcher, { ViewType } from '@/components/ViewSwitcher';
-import { Button } from '@/components/ui/button';
-import { ArrowLeft } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 
@@ -32,7 +30,9 @@ const TasksPage: React.FC = () => {
   // Update URL when view changes
   const handleViewChange = (view: ViewType) => {
     setCurrentView(view);
-    navigate(`/tasks?view=${view}`, { replace: true });
+    const newParams = new URLSearchParams(searchParams);
+    newParams.set('view', view);
+    navigate(`/tasks?${newParams.toString()}`, { replace: true });
   };
 
   // Load tasks
@@ -81,7 +81,7 @@ const TasksPage: React.FC = () => {
           toast.error('Task not found');
         }
 
-        // Clear the task parameter but keep view
+        // Clear the task parameter but keep view and tab
         const newParams = new URLSearchParams(location.search);
         newParams.delete('task');
         navigate(`${location.pathname}?${newParams.toString()}`, { replace: true });
@@ -160,41 +160,19 @@ const TasksPage: React.FC = () => {
     }
   };
 
-  // Redirect to auth if not logged in
-  if (!user) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-background via-background to-primary/5 flex items-center justify-center">
-        <div className="text-center space-y-4">
-          <h1 className="text-2xl font-bold">Please Sign In</h1>
-          <p className="text-muted-foreground">You need to be logged in to access tasks.</p>
-          <Link to="/auth">
-            <Button>Go to Sign In</Button>
-          </Link>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className="min-h-screen bg-gradient-to-br from-background via-background to-primary/5">
+    <div className="h-full flex flex-col">
       {/* Header */}
-      <header className="border-b border-border bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/60 sticky top-0 z-10">
-        <div className="container mx-auto px-4 py-3 md:py-4">
+      <header className="border-b border-border bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/60 sticky top-0 z-10 flex-shrink-0">
+        <div className="px-4 py-3 md:py-4">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 md:gap-4">
-              <Link to="/">
-                <Button variant="ghost" size="icon">
-                  <ArrowLeft className="h-5 w-5" />
-                </Button>
-              </Link>
-              <div>
-                <h1 className="text-lg md:text-2xl font-bold bg-gradient-to-r from-primary to-productivity bg-clip-text text-transparent">
-                  Tasks
-                </h1>
-                <p className="text-xs md:text-sm text-muted-foreground hidden sm:block">
-                  {currentView === 'kanban' ? 'Kanban Board' : 'List View'}
-                </p>
-              </div>
+            <div>
+              <h1 className="text-lg md:text-2xl font-bold bg-gradient-to-r from-primary to-productivity bg-clip-text text-transparent">
+                Tasks
+              </h1>
+              <p className="text-xs md:text-sm text-muted-foreground hidden sm:block">
+                {currentView === 'kanban' ? 'Kanban Board' : 'List View'}
+              </p>
             </div>
             <ViewSwitcher currentView={currentView} onViewChange={handleViewChange} />
           </div>
@@ -202,7 +180,7 @@ const TasksPage: React.FC = () => {
       </header>
 
       {/* Main Content */}
-      <main className="container mx-auto px-4 py-8">
+      <main className="flex-1 overflow-auto px-4 py-4">
         {loading ? (
           <div className="flex items-center justify-center py-12">
             <div className="text-center">
@@ -213,7 +191,7 @@ const TasksPage: React.FC = () => {
         ) : (
           <>
             {currentView === 'kanban' && (
-              <KanbanBoard
+              <TabbedKanbanBoard
                 tasks={tasks}
                 onTaskUpdate={handleTaskUpdate}
                 onTaskEdit={handleTaskEdit}
@@ -240,12 +218,6 @@ const TasksPage: React.FC = () => {
           allTasks={tasks}
         />
       )}
-
-      {/* Background Elements */}
-      <div className="fixed inset-0 -z-10 overflow-hidden pointer-events-none">
-        <div className="absolute top-0 right-0 w-72 h-72 bg-gradient-to-br from-primary/10 to-productivity/10 rounded-full blur-3xl"></div>
-        <div className="absolute bottom-0 left-0 w-96 h-96 bg-gradient-to-tr from-success/10 to-focus/10 rounded-full blur-3xl"></div>
-      </div>
     </div>
   );
 };

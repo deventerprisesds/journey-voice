@@ -34,6 +34,8 @@ interface KanbanBoardProps {
   tasks: Task[];
   onTaskUpdate?: () => void;
   onTaskEdit?: (task: Task) => void;
+  categoryFilter?: string;
+  useStandardColumns?: boolean;
 }
 
 const statusLabels = {
@@ -68,8 +70,18 @@ const statusColors = {
   TODO: 'border-blue-500 bg-blue-50',
 };
 
-const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEdit }) => {
-  console.log('KanbanBoard component rendering'); // Debug log
+// Standard workflow columns for tabbed view
+const STANDARD_COLUMNS: Column[] = [
+  { id: 'std-backlog', name: 'Backlog', status: 'BACKLOG', position: 0, board_id: 'std' },
+  { id: 'std-blocked', name: 'Blocked', status: 'BLOCKED', position: 1, board_id: 'std' },
+  { id: 'std-ready', name: 'Ready', status: 'READY', position: 2, board_id: 'std' },
+  { id: 'std-upnext', name: 'Up Next', status: 'UP_NEXT', position: 3, board_id: 'std' },
+  { id: 'std-doing', name: 'Doing', status: 'DOING', position: 4, board_id: 'std' },
+  { id: 'std-done', name: 'Done', status: 'DONE', position: 5, board_id: 'std' },
+];
+
+const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEdit, categoryFilter, useStandardColumns = false }) => {
+  console.log('KanbanBoard component rendering', { categoryFilter, useStandardColumns }); // Debug log
   const { toast } = useToast();
   const { user, isDemoMode } = useAuth();
   const [loading, setLoading] = useState(true);
@@ -525,11 +537,12 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
 
   // Map a task to a visible column status, even if the task's status doesn't have a matching column
   const mapTaskStatusForColumns = (task: Task): Task['status'] => {
-    const hasColumnFor = (s: Task['status']) => columns.some(col => col.status === s);
+    const columnsToCheck = useStandardColumns ? STANDARD_COLUMNS : columns;
+    const hasColumnFor = (s: Task['status']) => columnsToCheck.some(col => col.status === s);
     if (hasColumnFor(task.status)) return task.status as any;
     if ((task.category as any) === 'EDUCATION' && hasColumnFor('PROF_EDUCATION' as any)) return 'PROF_EDUCATION' as any;
     if (hasColumnFor('BACKLOG' as any)) return 'BACKLOG' as any;
-    return (columns[0]?.status as any) || 'BACKLOG';
+    return (columnsToCheck[0]?.status as any) || 'BACKLOG';
   };
 
   const getTasksByStatus = (status: Task['status']) => {
@@ -882,10 +895,18 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
   };
 
   useEffect(() => {
+    // Skip fetching board if using standard columns
+    if (useStandardColumns) {
+      setLoading(false);
+      return;
+    }
     fetchBoardColumns();
-  }, [user, isDemoMode]);
+  }, [user, isDemoMode, useStandardColumns]);
 
-  if (loading) {
+  // Derive effective columns - use STANDARD_COLUMNS when in tabbed mode
+  const effectiveColumns = useStandardColumns ? STANDARD_COLUMNS : columns;
+
+  if (loading && !useStandardColumns) {
     return (
       <div className="flex items-center justify-center min-h-96">
         <div className="text-center">
@@ -896,7 +917,7 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
     );
   }
 
-  if (!board || columns.length === 0) {
+  if (!useStandardColumns && (!board || columns.length === 0)) {
     return (
       <div className="flex items-center justify-center min-h-96">
         <div className="text-center space-y-4">
@@ -913,82 +934,84 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
   }
 
   return (
-    <div className="space-y-6">
-      {/* Board Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-bold tracking-tight text-foreground">
-            {board.name}
-          </h2>
-          <p className="text-muted-foreground">
-            {board.description}
-          </p>
+    <div className="space-y-4">
+      {/* Board Header - hide in standard columns mode (tabbed view) */}
+      {!useStandardColumns && board && (
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-2xl font-bold tracking-tight text-foreground">
+              {board.name}
+            </h2>
+            <p className="text-muted-foreground">
+              {board.description}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <VoiceAssistantButton />
+            <Button
+              variant={isSelectMode ? "default" : "outline"}
+              size="sm"
+              onClick={() => {
+                setIsSelectMode(!isSelectMode);
+                if (isSelectMode) setSelectedTasks(new Set());
+              }}
+              title="Select multiple tasks for bulk actions"
+            >
+              <CheckCircle2 className="h-4 w-4 mr-2" />
+              {isSelectMode ? 'Cancel' : 'Select'}
+            </Button>
+            <Button
+              variant={showCompletedTasks ? "default" : "outline"}
+              size="sm"
+              onClick={toggleShowCompletedTasks}
+              title={showCompletedTasks ? "Hide completed tasks" : "Show completed tasks"}
+            >
+              {showCompletedTasks ? (
+                <><Eye className="h-4 w-4 mr-2" />Hide Completed</>
+              ) : (
+                <><EyeOff className="h-4 w-4 mr-2" />Show Completed</>
+              )}
+            </Button>
+            <AddColumnModal
+              boardId={board.id} 
+              onColumnCreated={fetchBoardColumns}
+              isDemo={isDemoMode}
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowFilters(!showFilters)}
+            >
+              <Filter className="h-4 w-4 mr-2" />
+              Filters
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setIsCreationModalOpen(true)}
+            >
+              <Wand2 className="h-4 w-4 mr-2" />
+              AI Create
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={generateDailySchedule}
+              disabled={isGeneratingSchedule}
+            >
+              <Calendar className="h-4 w-4 mr-2" />
+              {isGeneratingSchedule ? 'Generating...' : 'Schedule'}
+            </Button>
+            <Button
+              size="sm"
+              onClick={addSampleTask}
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              Add Sample
+            </Button>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <VoiceAssistantButton />
-          <Button
-            variant={isSelectMode ? "default" : "outline"}
-            size="sm"
-            onClick={() => {
-              setIsSelectMode(!isSelectMode);
-              if (isSelectMode) setSelectedTasks(new Set());
-            }}
-            title="Select multiple tasks for bulk actions"
-          >
-            <CheckCircle2 className="h-4 w-4 mr-2" />
-            {isSelectMode ? 'Cancel' : 'Select'}
-          </Button>
-          <Button
-            variant={showCompletedTasks ? "default" : "outline"}
-            size="sm"
-            onClick={toggleShowCompletedTasks}
-            title={showCompletedTasks ? "Hide completed tasks" : "Show completed tasks"}
-          >
-            {showCompletedTasks ? (
-              <><Eye className="h-4 w-4 mr-2" />Hide Completed</>
-            ) : (
-              <><EyeOff className="h-4 w-4 mr-2" />Show Completed</>
-            )}
-          </Button>
-          <AddColumnModal
-            boardId={board.id} 
-            onColumnCreated={fetchBoardColumns}
-            isDemo={isDemoMode}
-          />
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setShowFilters(!showFilters)}
-          >
-            <Filter className="h-4 w-4 mr-2" />
-            Filters
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setIsCreationModalOpen(true)}
-          >
-            <Wand2 className="h-4 w-4 mr-2" />
-            AI Create
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={generateDailySchedule}
-            disabled={isGeneratingSchedule}
-          >
-            <Calendar className="h-4 w-4 mr-2" />
-            {isGeneratingSchedule ? 'Generating...' : 'Schedule'}
-          </Button>
-          <Button
-            size="sm"
-            onClick={addSampleTask}
-          >
-            <Plus className="h-4 w-4 mr-2" />
-            Add Sample
-          </Button>
-        </div>
-      </div>
+      )}
 
       {/* Filters */}
       {showFilters && (
@@ -1080,7 +1103,7 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
                 onMouseUp={handleMouseUp}
                 onMouseLeave={handleMouseLeave}
               >
-                {columns.map((column, index) => {
+                {effectiveColumns.map((column, index) => {
                   const columnTasks = getTasksByStatus(column.status);
                   return (
                      <Draggable key={column.id} draggableId={column.id} index={index}>

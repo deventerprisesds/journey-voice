@@ -87,8 +87,11 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const { user, isDemoMode, session } = useAuth();
   const voiceAssistant = useVoiceAssistant();
 
-  // Panel state
-  const [isPanelOpen, setIsPanelOpen] = useState(false);
+  // Panel state - default to open on desktop
+  const [isPanelOpen, setIsPanelOpen] = useState(() => {
+    const stored = localStorage.getItem('comms-panel-open');
+    return stored ? JSON.parse(stored) : true;
+  });
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(() => {
     const stored = localStorage.getItem('comms-sidebar-expanded');
     return stored ? JSON.parse(stored) : true;
@@ -142,10 +145,14 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     return messages; // Chat/phone messages
   }, [currentMode, messages, voiceAssistant.voiceTranscripts]);
 
-  // Persist sidebar state
+  // Persist sidebar and panel state
   useEffect(() => {
     localStorage.setItem('comms-sidebar-expanded', JSON.stringify(isSidebarExpanded));
   }, [isSidebarExpanded]);
+
+  useEffect(() => {
+    localStorage.setItem('comms-panel-open', JSON.stringify(isPanelOpen));
+  }, [isPanelOpen]);
 
   // Fetch assistants on mount
   useEffect(() => {
