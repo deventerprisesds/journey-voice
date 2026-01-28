@@ -36,6 +36,9 @@ const CommsConsoleContext = createContext<CommsConsoleContextValue | null>(null)
 // Demo user ID for preview mode
 const DEMO_USER_ID = '00000000-0000-0000-0000-000000000001';
 
+// Dev user ID - demo mode shares dev's assistants
+const DEV_USER_ID = 'a3378f93-d655-4913-b2fa-ca5b1d8020f1';
+
 // Default Iris assistant
 const DEFAULT_IRIS: Omit<Assistant, 'id' | 'user_id' | 'created_at' | 'updated_at'> = {
   name: 'Iris',
@@ -121,10 +124,13 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
     const fetchAssistants = async () => {
       try {
+        // For demo mode, fetch dev user's assistants (shared Iris approach)
+        const targetUserId = isDemoMode ? DEV_USER_ID : userId;
+        
         const { data, error } = await supabase
           .from('assistants')
           .select('*')
-          .eq('user_id', userId)
+          .eq('user_id', targetUserId)
           .eq('is_active', true)
           .order('is_default', { ascending: false })
           .order('created_at', { ascending: true });
@@ -154,7 +160,22 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
           setAssistants(mapped);
           setCurrentAssistant(mapped[0]);
         } else {
-          // Create default Iris assistant
+          // In demo mode, don't create a new assistant - dev's Iris should exist
+          if (isDemoMode) {
+            console.error('Demo mode: Dev Iris assistant not found. Expected it to exist.');
+            const mockIris: Assistant = {
+              id: 'mock-iris-id',
+              user_id: userId,
+              ...DEFAULT_IRIS,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            };
+            setAssistants([mockIris]);
+            setCurrentAssistant(mockIris);
+            return;
+          }
+          
+          // Create default Iris assistant for authenticated users
           const { data: newAssistant, error: createError } = await supabase
             .from('assistants')
             .insert({ ...DEFAULT_IRIS, user_id: userId })
@@ -163,7 +184,7 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
           if (createError) {
             console.error('Failed to create default assistant:', createError);
-            // Use a mock assistant for demo
+            // Use a mock assistant as fallback
             const mockIris: Assistant = {
               id: 'mock-iris-id',
               user_id: userId,
@@ -242,6 +263,21 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const sendMessage = useCallback(async (content: string) => {
     if (!content.trim() || !userId) return;
 
+    // Guard: In unified mode, wait for dbThreadId to be ready
+    if (USE_UNIFIED_THREADS && !dbThreadId) {
+      console.log('[CommsConsole] Waiting for thread initialization...');
+      const systemMessage: ConversationMessage = {
+        id: `system-${Date.now()}`,
+        role: 'system',
+        content: 'Initializing conversation... Please wait a moment.',
+        source: currentMode,
+        assistant_id: null,
+        created_at: new Date().toISOString(),
+      };
+      setMessages((prev) => [...prev, systemMessage]);
+      return;
+    }
+
     const userMessage: ConversationMessage = {
       id: `user-${Date.now()}`,
       role: 'user',
@@ -257,6 +293,8 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     try {
       // Use unified thread if enabled, otherwise fall back to existing behavior
       const effectiveThreadId = USE_UNIFIED_THREADS ? dbThreadId : threadId;
+      
+      console.log('[CommsConsole] Sending message with threadId:', effectiveThreadId);
       
       const { data, error } = await supabase.functions.invoke('hybrid-assistant-api', {
         body: {
@@ -281,8 +319,15 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
       setMessages((prev) => [...prev, assistantMessage]);
 
-      if (data?.threadId) {
+      // In unified mode, don't overwrite threadId with OpenAI thread ID
+      // The dbThreadId from useUnifiedThread is our source of truth
+      if (data?.threadId && !USE_UNIFIED_THREADS) {
         setThreadId(data.threadId);
+      }
+      
+      // Update OpenAI thread ID in database if returned
+      if (data?.threadId && USE_UNIFIED_THREADS && updateOpenaiThreadId) {
+        updateOpenaiThreadId(data.threadId);
       }
     } catch (err) {
       console.error('Error sending message:', err);
@@ -298,7 +343,7 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     } finally {
       setIsLoading(false);
     }
-  }, [userId, threadId, currentAssistant, currentMode]);
+  }, [userId, threadId, currentAssistant, currentMode, dbThreadId, updateOpenaiThreadId]);
 
   const connectVoice = useCallback(async () => {
     await voiceAssistant.connectToAssistant();
