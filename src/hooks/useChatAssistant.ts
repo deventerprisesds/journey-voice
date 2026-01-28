@@ -158,7 +158,8 @@ export function useChatAssistant(): UseChatAssistantReturn {
         thread_id: threadId,
         user_id: user.id,
         role: 'user',
-        content: userMessage.content
+        content: userMessage.content,
+        source: 'chat'
       });
 
       // Call the hybrid assistant API (uses OPENAI_ASSISTANT_ID secret on server)
@@ -179,7 +180,8 @@ export function useChatAssistant(): UseChatAssistantReturn {
         thread_id: threadId,
         user_id: user.id,
         role: 'assistant',
-        content: assistantContent
+        content: assistantContent,
+        source: 'chat'
       }).select().single();
 
       // Replace loading message with actual response
