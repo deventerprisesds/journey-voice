@@ -2,12 +2,12 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "@/hooks/useAuth";
 import { AssignmentSelectionProvider } from "@/contexts/AssignmentSelectionContext";
 import { VoiceAssistantProvider } from "@/contexts/VoiceAssistantContext";
 import { CommsConsoleProvider } from "@/contexts/CommsConsoleContext";
-import CommsHome from "./pages/CommsHome";
+import MainLayout from "./components/MainLayout";
 import TasksPage from "./pages/TasksPage";
 import DailyPriorities from "./pages/DailyPriorities";
 import Auth from "./pages/Auth";
@@ -78,15 +78,21 @@ const App = () => {
                   <DemoModeBadge />
                   <ErrorBoundary>
                     <Routes>
-                      <Route path="/" element={<CommsHome />} />
-                      <Route path="/tasks" element={<TasksPage />} />
-                      <Route path="/agenda" element={<DailyPriorities />} />
                       <Route path="/auth" element={<Auth />} />
-                      <Route path="/admin" element={<Admin />} />
-                      <Route path="/settings" element={<Settings />} />
-                      <Route path="/calendar" element={<Calendar />} />
-                      {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
-                      <Route path="*" element={<NotFound />} />
+                      {/* All authenticated routes wrapped in MainLayout */}
+                      <Route path="/*" element={
+                        <MainLayout>
+                          <Routes>
+                            <Route path="/" element={<Navigate to="/tasks?view=kanban" replace />} />
+                            <Route path="/tasks" element={<TasksPage />} />
+                            <Route path="/agenda" element={<DailyPriorities />} />
+                            <Route path="/admin" element={<Admin />} />
+                            <Route path="/settings" element={<Settings />} />
+                            <Route path="/calendar" element={<Calendar />} />
+                            <Route path="*" element={<NotFound />} />
+                          </Routes>
+                        </MainLayout>
+                      } />
                     </Routes>
                   </ErrorBoundary>
                 </AssignmentSelectionProvider>
