@@ -1088,16 +1088,30 @@ async function handlePreConnect(params: {
   const openaiVoice = ttsPrefs.data?.openai_voice || 'alloy';
   const phoneCallMode = ttsPrefs.data?.phone_call_mode || 'media_streams';
   
+  // Get user's default assistant for thread association
+  const { data: defaultAssistant } = await supabase
+    .from('assistants')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('is_default', true)
+    .maybeSingle();
+  
+  const assistantId = defaultAssistant?.id || null;
+  
   // Get or create thread
   let threadId: string | null = threadResult.data?.id || null;
   if (!threadId) {
     const { data: newThread } = await supabase
       .from('ai_threads')
-      .insert({ user_id: userId, openai_thread_id: `phone_${Date.now()}` })
+      .insert({ 
+        user_id: userId, 
+        assistant_id: assistantId,
+        openai_thread_id: `phone_${Date.now()}` 
+      })
       .select('id')
       .single();
     threadId = newThread?.id || null;
-    console.log(`[PRE-CONNECT] Created new thread: ${threadId}`);
+    console.log(`[PRE-CONNECT] Created new thread: ${threadId} for assistant: ${assistantId}`);
   } else {
     console.log(`[PRE-CONNECT] Using existing thread: ${threadId}`);
   }
@@ -2080,16 +2094,27 @@ type ResponseTrigger =
               threadId = existingThread.id;
               console.log('[BRIDGE] Using existing thread:', threadId);
             } else {
+              // Get user's default assistant for thread association
+              const { data: defaultAssistant } = await supabase
+                .from('assistants')
+                .select('id')
+                .eq('user_id', userId)
+                .eq('is_default', true)
+                .maybeSingle();
+              
+              const assistantId = defaultAssistant?.id || null;
+              
               const { data: newThread } = await supabase
                 .from('ai_threads')
                 .insert({ 
-                  user_id: userId, 
+                  user_id: userId,
+                  assistant_id: assistantId,
                   openai_thread_id: `phone_${Date.now()}` 
                 })
                 .select('id')
                 .single();
               threadId = newThread?.id || null;
-              console.log('[BRIDGE] Created new thread:', threadId);
+              console.log('[BRIDGE] Created new thread:', threadId, 'for assistant:', assistantId);
             }
           } catch (error) {
             console.warn('[BRIDGE] Thread management error:', error);
