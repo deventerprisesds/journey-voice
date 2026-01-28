@@ -1,73 +1,183 @@
 
 
-# Fix Call Connection and Transcription Persistence
+# Fix WebRTC Voice Selection and Add Instance Visibility
 
-## Problem Identified
+## Overview
 
-Your scheduled call at 00:00 UTC failed to connect because of a **database schema mismatch**. The `pre_connect_sessions` table is missing 5 columns that the code expects:
+Two core changes:
+1. **Fix ElevenLabs URL** - Export constants from the Supabase client file and import them where needed (proper DRY approach)
+2. **Add Instance Visibility** - Global registry to log and track active voice instances
 
-| Column | Purpose |
-|--------|---------|
-| `openai_voice` | User's selected OpenAI voice for fallback |
-| `phone_call_mode` | Call mode (media_streams vs direct) |
-| `rag_context` | Pre-cached RAG context to skip queries during call |
-| `instructions` | Pre-generated system instructions |
-| `thread_id` | Pre-resolved thread ID for conversation continuity |
-
-When the pre-connect step fails, the entire call fails before any audio can be exchanged - that's why there's no transcript.
-
----
-
-## Solution: Add Missing Columns
-
-### Database Migration
-
-Add the 5 missing columns to `pre_connect_sessions`:
-
-```sql
--- Add missing columns for enhanced pre-connect caching
-ALTER TABLE pre_connect_sessions 
-  ADD COLUMN IF NOT EXISTS openai_voice TEXT,
-  ADD COLUMN IF NOT EXISTS phone_call_mode TEXT DEFAULT 'media_streams',
-  ADD COLUMN IF NOT EXISTS rag_context TEXT,
-  ADD COLUMN IF NOT EXISTS instructions TEXT,
-  ADD COLUMN IF NOT EXISTS thread_id UUID;
-
--- Index on thread_id for fast lookups
-CREATE INDEX IF NOT EXISTS idx_pre_connect_thread 
-  ON pre_connect_sessions(thread_id);
-```
-
----
-
-## Why This Works
-
-Once the columns exist:
-
-1. **Pre-connect succeeds** - Session data stores correctly
-2. **Call connects** - Twilio media stream establishes
-3. **Audio flows** - User speech reaches OpenAI
-4. **Transcripts save** - `call_messages` and `conversation_messages` get populated
-
-The transcription logic itself is working (as evidenced by your 17:30 call having messages). The failure happens earlier in the pipeline.
-
----
-
-## Implementation Steps
-
-| Step | Action |
-|------|--------|
-| 1 | Create database migration to add 5 missing columns |
-| 2 | Wait for migration to apply |
-| 3 | Test next scheduled call - should connect and save transcripts |
+Note: The audio queue persistence issue is deferred until we have instance visibility to confirm if it's actually contributing to problems.
 
 ---
 
 ## Files to Modify
 
-| File | Change |
-|------|--------|
-| `supabase/migrations/[new].sql` | Add missing columns to `pre_connect_sessions` |
+| File | Changes |
+|------|---------|
+| `src/integrations/supabase/client.ts` | Export `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` as named exports |
+| `src/utils/RealtimeVoiceAssistant.ts` | Import URL/key from client, add global instance registry with logging |
+| `src/components/CommsConsole/PhoneDialer.tsx` | Call `disconnectVoice()` directly for immediate hang-up |
 
-No edge function changes needed - the code is already correct, it's just the database that's behind.
+---
+
+## Technical Implementation
+
+### Step 1: Export URL Constants from Client
+
+**File: `src/integrations/supabase/client.ts`**
+
+Change from:
+```typescript
+const SUPABASE_URL = "https://...";
+const SUPABASE_PUBLISHABLE_KEY = "eyJ...";
+```
+
+To:
+```typescript
+export const SUPABASE_URL = "https://...";
+export const SUPABASE_PUBLISHABLE_KEY = "eyJ...";
+```
+
+Now any file can import these:
+```typescript
+import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from "@/integrations/supabase/client";
+```
+
+---
+
+### Step 2: Fix ElevenLabs TTS Fetch
+
+**File: `src/utils/RealtimeVoiceAssistant.ts`**
+
+Import the constants:
+```typescript
+import { supabase, SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from "@/integrations/supabase/client";
+```
+
+Update `playElevenLabsAudio`:
+```typescript
+const response = await fetch(
+  `${SUPABASE_URL}/functions/v1/elevenlabs-tts`,
+  {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'apikey': SUPABASE_PUBLISHABLE_KEY,
+      'Authorization': `Bearer ${SUPABASE_PUBLISHABLE_KEY}`,
+    },
+    body: JSON.stringify({
+      text,
+      voiceId: this.elevenlabsVoiceId,
+      format: 'mp3'
+    })
+  }
+);
+```
+
+---
+
+### Step 3: Add Global Instance Registry
+
+**File: `src/utils/RealtimeVoiceAssistant.ts`**
+
+Add at module level:
+```typescript
+// Global instance tracking for debugging visibility
+let globalInstanceCounter = 0;
+const activeInstances = new Map<number, RealtimeVoiceAssistant>();
+
+export const getActiveVoiceInstanceCount = () => activeInstances.size;
+export const logActiveInstances = () => {
+  console.log(`[VOICE_INSTANCES] Active count: ${activeInstances.size}`);
+  activeInstances.forEach((instance, id) => {
+    console.log(`  - Instance #${id}, sessionId: ${instance.getSessionId()}`);
+  });
+};
+```
+
+Add instance ID property:
+```typescript
+private instanceId: number = 0;
+
+getSessionId(): string | null {
+  return this.sessionId;
+}
+```
+
+Update constructor:
+```typescript
+constructor(...) {
+  this.instanceId = ++globalInstanceCounter;
+  activeInstances.set(this.instanceId, this);
+  console.log(`[VOICE_INSTANCE] Created #${this.instanceId}, total active: ${activeInstances.size}`);
+  // ... existing code
+}
+```
+
+Update disconnect:
+```typescript
+async disconnect() {
+  console.log(`[VOICE_INSTANCE] Disconnecting #${this.instanceId}...`);
+  activeInstances.delete(this.instanceId);
+  console.log(`[VOICE_INSTANCE] Removed #${this.instanceId}, remaining: ${activeInstances.size}`);
+  // ... existing cleanup code
+}
+```
+
+---
+
+### Step 4: Immediate Hang-Up
+
+**File: `src/components/CommsConsole/PhoneDialer.tsx`**
+
+Update `endCall` function:
+```typescript
+const endCall = () => {
+  ringAudioRef.current?.pause();
+  if (ringAudioRef.current) ringAudioRef.current.currentTime = 0;
+  
+  // IMMEDIATE disconnect - like a real phone hang-up
+  disconnectVoice();
+  
+  onCallStateChange('ended');
+  setIsMuted(false);
+  setIsSpeaker(false);
+  toast({
+    title: 'Call Ended',
+    description: `Duration: ${formatDuration(callDuration)}`,
+  });
+
+  setTimeout(() => {
+    onCallStateChange('idle');
+  }, 2000);
+};
+```
+
+---
+
+## Expected Console Output
+
+When connecting:
+```
+[VOICE_INSTANCE] Created #1, total active: 1
+```
+
+When disconnecting:
+```
+[VOICE_INSTANCE] Disconnecting #1...
+[VOICE_INSTANCE] Removed #1, remaining: 0
+```
+
+If multiple instances exist:
+```
+[VOICE_INSTANCE] Created #2, total active: 2   ← VISIBLE PROBLEM
+```
+
+---
+
+## Deferred Items
+
+The audio queue persistence issue will be revisited after instance visibility is implemented. If we observe "total active: 2" scenarios, we can then determine if the queue is contributing to the problem.
 
