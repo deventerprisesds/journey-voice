@@ -41,17 +41,27 @@ jobs:
           echo "${{ secrets.CF_SUPABASE_SERVICE_KEY }}" | npx wrangler secret put SUPABASE_SERVICE_KEY
 
       - name: Wait for deployment propagation
-        run: sleep 10
+        run: sleep 15
 
-      - name: Verify Health Endpoint
+      - name: Verify Health Endpoint and Version
         run: |
           HEALTH_RESPONSE=$(curl -s https://twilio-openai-bridge.purple-bush-495e.workers.dev/health)
           echo "Health response: $HEALTH_RESPONSE"
+          
+          EXPECTED_VERSION="2026-01-28-cf-v2"
           
           if echo "$HEALTH_RESPONSE" | grep -q '"status":"ok"'; then
             echo "✅ Health check passed!"
           else
             echo "❌ Health check failed!"
+            exit 1
+          fi
+          
+          if echo "$HEALTH_RESPONSE" | grep -q "\"version\":\"$EXPECTED_VERSION\""; then
+            echo "✅ Version check passed: $EXPECTED_VERSION"
+          else
+            echo "❌ Version mismatch! Expected: $EXPECTED_VERSION"
+            echo "   Got: $HEALTH_RESPONSE"
             exit 1
           fi
 
