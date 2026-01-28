@@ -1,92 +1,72 @@
 
-
-# Add Missing Calendar Tools to WebRTC Voice
+# Fix: Hard Hangup for End Call Button
 
 ## Problem
 
-The `generate-realtime-token` edge function is missing two specific calendar tools that exist in both `execute-tool` and the Twilio bridge:
+When clicking "End Call", the AI still speaks because:
+1. OpenAI's Realtime API has already started generating a response
+2. The current `disconnect()` method closes the data channel **without** first telling OpenAI to stop
+3. Any queued or in-progress response continues until the connection fully closes
 
-- `create_outlook_event` - Create events directly in Outlook
-- `create_google_event` - Create events directly in Google Calendar
+## Current Code Issue
 
-The WebRTC voice assistant only has `create_calendar_event` (which requires the user to specify "outlook" or "google"), but users saying "add this to my Outlook calendar" won't trigger the right tool.
-
-## Current State
-
-```text
-┌─────────────────────────────────────────────────────────────────────┐
-│                        execute-tool (central)                       │
-├─────────────────────────────────────────────────────────────────────┤
-│ create_outlook_event  │ create_google_event  │ create_calendar_event │
-└──────────┬────────────┴──────────┬───────────┴──────────┬───────────┘
-           │                       │                      │
-    ┌──────┴──────┐         ┌──────┴──────┐        ┌──────┴──────┐
-    │ Twilio Phone │         │   WebRTC    │        │   Chat API  │
-    │     ✅       │         │     ❌      │        │     ✅      │
-    └─────────────┘         └─────────────┘        └─────────────┘
+```typescript
+// Lines 1214-1217 - Data channel is closed without canceling response first
+if (this.dc) {
+  this.dc.close();  // ← Closes connection but doesn't cancel in-flight response
+  this.dc = null;
+}
 ```
 
 ## Solution
 
-Add the two missing tool definitions to `generate-realtime-token/index.ts`:
+Add `response.cancel` and `input_audio_buffer.clear` commands **before** closing the data channel.
 
-**File: `supabase/functions/generate-realtime-token/index.ts`**
+## File to Modify
 
-Add these tools after `create_calendar_event` (around line 392):
+**`src/utils/RealtimeVoiceAssistant.ts`** - Update `disconnect()` method
+
+## Technical Changes
+
+Insert cancellation commands right after removing from registry (after line 1168) and before audio cleanup:
 
 ```typescript
-{
-  type: "function",
-  name: "create_outlook_event",
-  description: "Create an Outlook calendar event.",
-  parameters: {
-    type: "object",
-    properties: {
-      title: { type: "string", description: "Event title" },
-      start_time: { type: "string", description: "Start time in ISO format" },
-      end_time: { type: "string", description: "End time in ISO format" },
-      duration: { type: "number", description: "Duration in minutes (if no end_time)" },
-      description: { type: "string", description: "Event description" },
-      reminder: { type: "string", description: "Reminder minutes before" }
-    },
-    required: ["title", "start_time"]
+async disconnect() {
+  console.log(`[VOICE_INSTANCE] Disconnecting #${this.instanceId}...`);
+  
+  // Remove from global registry FIRST
+  activeInstances.delete(this.instanceId);
+  console.log(`[VOICE_INSTANCE] Removed #${this.instanceId}, remaining: ${activeInstances.size}`);
+  
+  // NEW: Cancel any in-flight OpenAI response IMMEDIATELY
+  // This must happen while the data channel is still open
+  if (this.dc && this.dc.readyState === 'open') {
+    try {
+      console.log('🔴 Sending response.cancel to stop AI response');
+      this.dc.send(JSON.stringify({ type: 'response.cancel' }));
+      this.dc.send(JSON.stringify({ type: 'input_audio_buffer.clear' }));
+    } catch (e) {
+      console.warn('Could not send cancel commands:', e);
+    }
   }
-},
-{
-  type: "function",
-  name: "create_google_event",
-  description: "Create a Google Calendar event.",
-  parameters: {
-    type: "object",
-    properties: {
-      title: { type: "string", description: "Event title" },
-      start_time: { type: "string", description: "Start time in ISO format" },
-      end_time: { type: "string", description: "End time in ISO format" },
-      duration: { type: "number", description: "Duration in minutes (if no end_time)" },
-      description: { type: "string", description: "Event description" },
-      reminder: { type: "string", description: "Reminder minutes before" }
-    },
-    required: ["title", "start_time"]
-  }
+  
+  // ... rest of existing cleanup continues unchanged
 }
 ```
 
-## Technical Details
+## Why This Works
 
-No changes needed to `RealtimeVoiceAssistant.ts` - it already routes all tools (except `disconnect`) through `execute-tool`, which already handles both `create_outlook_event` and `create_google_event`.
+The OpenAI Realtime API `response.cancel` event:
+- Immediately stops the current response generation
+- Prevents any further audio/text from being sent on this response
+- Is the official way to abort an in-progress response
 
-The only change is adding the tool definitions so OpenAI knows these tools exist during WebRTC sessions.
-
-## Files to Modify
-
-| File | Change |
-|------|--------|
-| `supabase/functions/generate-realtime-token/index.ts` | Add `create_outlook_event` and `create_google_event` tool definitions |
+This is separate from the graceful `disconnect` tool (which the AI calls when the user says "goodbye") - that tool intentionally lets the AI say a farewell before hanging up.
 
 ## Expected Outcome
 
-After this fix:
-- WebRTC voice users can say "Add a meeting to my Outlook calendar" → triggers `create_outlook_event`
-- WebRTC voice users can say "Put this on my Google calendar" → triggers `create_google_event`
-- Full feature parity with Twilio phone for calendar operations
-
+| Before | After |
+|--------|-------|
+| User clicks End Call → AI continues speaking | User clicks End Call → immediate silence |
+| Response plays to completion | Response canceled instantly |
+| Feels like putting phone on speaker then walking away | Feels like hanging up a real phone |
