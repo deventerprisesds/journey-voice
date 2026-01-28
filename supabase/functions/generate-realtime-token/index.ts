@@ -71,6 +71,7 @@ When the user says goodbye phrases like 'that's all', 'thanks that's it', 'disco
 
     let realtimeExtensions = '';
     let schedulingPhilosophy = '';
+    let personalizationContext = '';  // Will be populated from profile
     let ttsProvider: 'openai' | 'elevenlabs' = 'openai';
     let openaiVoice = 'alloy';
     let elevenlabsVoiceId = 'EXAVITQu4vr4xnSDxMaL';
@@ -80,11 +81,41 @@ When the user says goodbye phrases like 'that's all', 'thanks that's it', 'disco
         const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2');
         const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
         
-        const { data: prefs } = await supabase
-          .from('user_scheduling_prefs')
-          .select('core_instructions, realtime_extensions, config, tts_provider, openai_voice, elevenlabs_voice_id')
-          .eq('user_id', userId)
-          .maybeSingle();
+        // Load user preferences and profile in parallel
+        const [prefsResult, profileResult] = await Promise.all([
+          supabase
+            .from('user_scheduling_prefs')
+            .select('core_instructions, realtime_extensions, config, tts_provider, openai_voice, elevenlabs_voice_id, timezone')
+            .eq('user_id', userId)
+            .maybeSingle(),
+          supabase
+            .from('profiles')
+            .select('first_name, full_name')
+            .eq('user_id', userId)
+            .maybeSingle()
+        ]);
+
+        const prefs = prefsResult.data;
+        const profile = profileResult.data;
+
+        // Extract user name with fallback to "sir" (matches Twilio bridge pattern)
+        const userName = profile?.first_name || profile?.full_name?.split(' ')[0] || 'sir';
+        const userTimezone = prefs?.timezone || 'America/New_York';
+        const currentTime = new Date().toLocaleString('en-US', {
+          timeZone: userTimezone,
+          weekday: 'long',
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit'
+        });
+
+        // Build personalization context (matches Twilio bridge)
+        const personalizationContext = `
+CURRENT TIME: ${currentTime}
+TIMEZONE: ${userTimezone}
+USER: ${userName}`;
 
         if (prefs) {
           if (prefs.core_instructions) coreInstructions = prefs.core_instructions;
@@ -101,9 +132,10 @@ When the user says goodbye phrases like 'that's all', 'thanks that's it', 'disco
       }
     }
 
-    // Combine instructions
+    // Combine instructions with personalization context
     const fullInstructions = [
       coreInstructions,
+      personalizationContext,
       realtimeExtensions,
       schedulingPhilosophy
     ].filter(Boolean).join('\n\n');
