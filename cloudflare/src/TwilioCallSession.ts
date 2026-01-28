@@ -45,6 +45,19 @@ interface UserVoicePrefs {
   elevenlabs_voice_id: string;
 }
 
+interface PreConnectSession {
+  session_id: string;
+  user_id: string;
+  tts_provider?: 'openai' | 'elevenlabs';
+  openai_voice?: string;
+  elevenlabs_voice_id?: string;
+  cached_audio_base64?: string;
+  instructions?: string;
+  greeting_text?: string;
+  rag_context?: string;
+  thread_id?: string;
+}
+
 // Sentence detection for ElevenLabs streaming
 const SENTENCE_ENDERS = /[.!?]+[\s"')\]]*$/;
 
@@ -64,6 +77,13 @@ export class TwilioCallSession {
   private ttsProvider: 'openai' | 'elevenlabs' = 'openai';
   private openaiVoice: string = 'alloy';
   private elevenlabsVoiceId: string = 'JBFqnCBsd6RMkjVDRZzb'; // George
+
+  // Pre-connect session data
+  private cachedAudioBase64: string | null = null;
+  private preConnectedInstructions: string | null = null;
+  private greetingText: string | null = null;
+  private ragContext: string | null = null;
+  private threadId: string | null = null;
 
   // ElevenLabs text buffering
   private textBuffer: string = '';
@@ -129,10 +149,39 @@ export class TwilioCallSession {
     const params = message.start?.customParameters || {};
     this.userId = params.userId || null;
     this.timezone = params.timezone || 'America/New_York';
+    const sessionId = params.sessionId || null;
 
-    console.log(`[CF] Stream: ${this.streamSid}, User: ${this.userId}, TZ: ${this.timezone}`);
+    console.log(`[CF] Stream: ${this.streamSid}, User: ${this.userId}, TZ: ${this.timezone}, SessionId: ${sessionId}`);
 
-    // Load user voice preferences and tool definitions in parallel
+    // If we have a pre-connected session, fetch it and use its data
+    if (sessionId) {
+      const session = await this.fetchPreConnectSession(sessionId);
+      if (session) {
+        console.log('[CF] Using pre-connect session data');
+        
+        // Apply session preferences
+        this.ttsProvider = (session.tts_provider as 'openai' | 'elevenlabs') || 'openai';
+        this.elevenlabsVoiceId = session.elevenlabs_voice_id || this.elevenlabsVoiceId;
+        this.openaiVoice = session.openai_voice || 'alloy';
+        this.cachedAudioBase64 = session.cached_audio_base64 || null;
+        this.preConnectedInstructions = session.instructions || null;
+        this.greetingText = session.greeting_text || null;
+        this.ragContext = session.rag_context || null;
+        this.threadId = session.thread_id || null;
+
+        console.log(`[CF] Pre-connect: TTS=${this.ttsProvider}, Cached audio=${this.cachedAudioBase64 ? 'yes' : 'no'}, Instructions=${this.preConnectedInstructions ? 'custom' : 'default'}`);
+
+        // Fetch tool definitions (still needed)
+        await this.fetchToolDefinitions();
+        
+        // Connect to OpenAI with pre-loaded data
+        await this.connectToOpenAI();
+        return;
+      }
+    }
+
+    // Fallback: Load user preferences fresh (no pre-connect session)
+    console.log('[CF] No pre-connect session, loading preferences fresh');
     await Promise.all([
       this.loadUserVoicePrefs(),
       this.fetchToolDefinitions()
@@ -142,6 +191,54 @@ export class TwilioCallSession {
 
     // Connect to OpenAI
     await this.connectToOpenAI();
+  }
+
+  private async fetchPreConnectSession(sessionId: string): Promise<PreConnectSession | null> {
+    try {
+      console.log(`[CF] Fetching pre-connect session: ${sessionId}`);
+      
+      const response = await fetch(
+        `${this.env.SUPABASE_URL}/rest/v1/pre_connect_sessions?session_id=eq.${sessionId}&select=*`,
+        {
+          headers: {
+            'Authorization': `Bearer ${this.env.SUPABASE_SERVICE_KEY}`,
+            'apikey': this.env.SUPABASE_SERVICE_KEY,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      if (!response.ok) {
+        console.error(`[CF] Pre-connect fetch failed: ${response.status}`);
+        return null;
+      }
+
+      const data = await response.json();
+      
+      if (data && data.length > 0) {
+        console.log('[CF] Pre-connect session found, deleting after retrieval');
+        
+        // Delete after retrieval (one-time use)
+        await fetch(
+          `${this.env.SUPABASE_URL}/rest/v1/pre_connect_sessions?session_id=eq.${sessionId}`,
+          {
+            method: 'DELETE',
+            headers: {
+              'Authorization': `Bearer ${this.env.SUPABASE_SERVICE_KEY}`,
+              'apikey': this.env.SUPABASE_SERVICE_KEY
+            }
+          }
+        );
+
+        return data[0] as PreConnectSession;
+      }
+
+      console.log('[CF] No pre-connect session found for id:', sessionId);
+      return null;
+    } catch (error) {
+      console.error('[CF] Failed to fetch pre-connect session:', error);
+      return null;
+    }
   }
 
   private async loadUserVoicePrefs() {
@@ -328,13 +425,20 @@ export class TwilioCallSession {
     console.log(`[CF] Session configured: ${this.ttsProvider} mode, ${this.toolDefinitions.length} tools`);
 
     // Send initial greeting
-    this.sendGreeting();
+    await this.sendGreeting();
   }
 
   private buildSystemPrompt(): string {
+    // If we have pre-connected instructions, use them (includes RAG context, agenda, etc.)
+    if (this.preConnectedInstructions) {
+      console.log('[CF] Using pre-connected instructions');
+      return this.preConnectedInstructions;
+    }
+
+    // Fallback to basic prompt
     const now = new Date().toLocaleString('en-US', { timeZone: this.timezone });
     
-    return `You are Iris, a voice assistant helping users manage their tasks and schedule.
+    let prompt = `You are Iris, a voice assistant helping users manage their tasks and schedule.
 
 Current time: ${now} (${this.timezone})
 User ID: ${this.userId || 'unknown'}
@@ -356,22 +460,62 @@ You can help with:
 - Ending the call when the user is done
 
 When the user says goodbye or wants to end the call, use the hang_up tool.`;
+
+    // Include RAG context if available
+    if (this.ragContext) {
+      prompt += `\n\n## Knowledge Base Context\n${this.ragContext}`;
+    }
+
+    return prompt;
   }
 
-  private sendGreeting() {
-    const greeting = {
+  private async sendGreeting() {
+    // If we have cached ElevenLabs audio, play it immediately (lowest latency)
+    if (this.cachedAudioBase64 && this.twilioWs && this.streamSid) {
+      console.log('[CF] Playing cached greeting audio');
+      this.isPlaying = true;
+      
+      try {
+        // Decode base64 to bytes
+        const audioBytes = Uint8Array.from(atob(this.cachedAudioBase64), c => c.charCodeAt(0));
+        
+        // Send in chunks to Twilio (80ms chunks for μ-law at 8kHz)
+        const chunkSize = 640;
+        for (let i = 0; i < audioBytes.length; i += chunkSize) {
+          const chunk = audioBytes.slice(i, i + chunkSize);
+          this.twilioWs.send(JSON.stringify({
+            event: 'media',
+            streamSid: this.streamSid,
+            media: {
+              payload: btoa(String.fromCharCode(...chunk))
+            }
+          }));
+        }
+        
+        console.log(`[CF] Cached greeting sent: ${audioBytes.length} bytes`);
+        this.isPlaying = false;
+        return;
+      } catch (error) {
+        console.error('[CF] Failed to play cached audio, falling back:', error);
+      }
+    }
+
+    // Fallback: Use OpenAI to generate greeting
+    const greeting = this.greetingText || 'Hi! This is Iris. How can I help you today?';
+    
+    const greetingMessage = {
       type: 'conversation.item.create',
       item: {
         type: 'message',
         role: 'assistant',
         content: [{
           type: 'input_text',
-          text: 'Hi! This is Iris. How can I help you today?'
+          text: greeting
         }]
       }
     };
 
-    this.openaiWs?.send(JSON.stringify(greeting));
+    this.openaiWs?.send(JSON.stringify(greetingMessage));
     this.openaiWs?.send(JSON.stringify({ type: 'response.create' }));
   }
 
@@ -629,7 +773,8 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
           userId: this.userId,
           context: {
             interface: 'phone',
-            timezone: this.timezone
+            timezone: this.timezone,
+            threadId: this.threadId
           }
         })
       }
@@ -678,5 +823,10 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
     this.streamSid = null;
     this.callSid = null;
     this.textBuffer = '';
+    this.cachedAudioBase64 = null;
+    this.preConnectedInstructions = null;
+    this.greetingText = null;
+    this.ragContext = null;
+    this.threadId = null;
   }
 }
