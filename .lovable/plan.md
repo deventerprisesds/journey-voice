@@ -1,109 +1,91 @@
 
-# Fix: Trigger Greeting When Data Channel Opens (WebRTC Flow)
 
-## Root Cause Analysis
+# Fix: Display Full ElevenLabs Voice ID in Settings
 
-The greeting is never triggered because the WebRTC flow is different from the Twilio WebSocket flow:
+## Problem
 
-| Flow | Session Configuration | `session.updated` Event |
-|------|----------------------|-------------------------|
-| Twilio (WebSocket) | Sent via `session.update` message after `session.created` | Received after config is applied |
-| WebRTC (Token-based) | Pre-configured during ephemeral token generation | Never sent - session is already configured |
+The custom voice list in VoiceAssistantSettings.tsx truncates voice IDs to only 12 characters using `voice.id.substring(0, 12)`, making it impossible to see or copy the full ID.
 
-The current code waits for `session.updated` which never fires in WebRTC mode.
+**Current display:** `T720RsqorTx4...`  
+**Full ID:** `T720RsqorTx4ZZWohrNN`
 
 ## Solution
 
-Move the greeting trigger from the `session.updated` event handler to the **data channel `open` event**, with a small delay to ensure the connection is fully established.
+Update the custom voice list to show the full voice ID and add a copy-to-clipboard button for convenience.
 
 ## Implementation
 
-### File: `src/utils/RealtimeVoiceAssistant.ts`
+### File: `src/components/VoiceAssistantSettings.tsx`
 
-**Change 1: Move greeting trigger to data channel open event**
+**Change 1: Add clipboard import (line 13)**
+Add `Copy, Check` to the existing lucide-react import.
 
-Update lines 567-579 (data channel open handler):
-
+**Change 2: Add copy state (around line 126)**
+Add state to track which voice ID was copied:
 ```typescript
-this.dc.addEventListener("open", async () => {
-  console.log("Data channel opened");
-  
-  // Log successful connection to activity_log
-  await this.logActivity('connected', 'webrtc_ready', {
-    metadata: {
-      connection_time_ms: Date.now() - this.connectionStartTime,
-      tts_provider: this.ttsProvider
-    }
-  });
-  
-  this.onConnectionChange(true);
-  
-  // Trigger greeting after a short delay to ensure connection is stable
-  // This replaces the session.updated event which doesn't fire in WebRTC flow
-  setTimeout(() => {
-    console.log('[GREETING] Data channel ready, triggering greeting');
-    this.sendGreeting();
-  }, 500);  // 500ms delay for connection stability
-});
+const [copiedVoiceId, setCopiedVoiceId] = useState<string | null>(null);
 ```
 
-**Change 2: Remove the session.updated case (now unnecessary)**
-
-Remove or comment out lines 744-748:
+**Change 3: Add copy handler function**
 ```typescript
-// case 'session.updated':
-//   console.log('✅ Session configured, triggering greeting');
-//   this.sendGreeting();
-//   break;
+const handleCopyVoiceId = async (voiceId: string) => {
+  await navigator.clipboard.writeText(voiceId);
+  setCopiedVoiceId(voiceId);
+  setTimeout(() => setCopiedVoiceId(null), 2000);
+};
 ```
 
-**Change 3: Improve greeting logging for debugging**
+**Change 4: Update custom voice display (lines 591-607)**
 
-Update `sendGreeting()` to add more detailed logging:
+Replace the truncated display with the full ID and a copy button:
 
 ```typescript
-private sendGreeting(): void {
-  if (this.hasGreeted) {
-    console.log('[GREETING] Already greeted, skipping');
-    return;
-  }
-  
-  if (!this.dc) {
-    console.warn('[GREETING] Data channel is null');
-    return;
-  }
-  
-  if (this.dc.readyState !== 'open') {
-    console.warn(`[GREETING] Data channel not ready: ${this.dc.readyState}`);
-    return;
-  }
-  
-  this.hasGreeted = true;
-  
-  const greeting = this.getTimeBasedGreeting();
-  const userName = 'sir';
-  
-  console.log(`[GREETING] Sending greeting via data channel...`);
-  
-  // ... rest of implementation
+{customVoices.map((voice) => (
+  <div
+    key={voice.id}
+    className="flex items-center justify-between rounded-md border px-3 py-2"
+  >
+    <div className="flex-1 min-w-0">
+      <span className="font-medium">{voice.name}</span>
+      <div className="flex items-center gap-1 mt-0.5">
+        <code className="text-xs text-muted-foreground font-mono break-all">
+          {voice.id}
+        </code>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-5 w-5 shrink-0"
+          onClick={() => handleCopyVoiceId(voice.id)}
+          title="Copy voice ID"
+        >
+          {copiedVoiceId === voice.id ? (
+            <Check className="h-3 w-3 text-green-500" />
+          ) : (
+            <Copy className="h-3 w-3" />
+          )}
+        </Button>
+      </div>
+    </div>
+    <Button
+      variant="ghost"
+      size="icon"
+      onClick={() => handleRemoveCustomVoice(voice.id)}
+    >
+      <Trash2 className="h-4 w-4 text-destructive" />
+    </Button>
+  </div>
+))}
 ```
 
-## Why This Works
+## Result
 
-1. **Data channel open = Connection ready**: When the data channel opens, the WebRTC connection is established and ready to receive messages
-2. **500ms delay**: Ensures all connection handshakes are complete before sending the greeting
-3. **Pre-configured session**: The session is already configured with VAD, tools, and instructions via the ephemeral token - no need to wait for `session.updated`
+| Before | After |
+|--------|-------|
+| `T720RsqorTx4...` (truncated, not copyable) | `T720RsqorTx4ZZWohrNN` (full ID with copy button) |
 
 ## Files to Modify
 
 | File | Changes |
 |------|---------|
-| `src/utils/RealtimeVoiceAssistant.ts` | Move greeting trigger to data channel open handler, remove session.updated handler, improve logging |
+| `src/components/VoiceAssistantSettings.tsx` | Add Copy/Check icons, copy state, copy handler, and update custom voice display to show full ID |
 
-## Verification
-
-After implementation:
-- [ ] Console shows `[GREETING] Data channel ready, triggering greeting`
-- [ ] Console shows `[GREETING] Sending greeting via data channel...`
-- [ ] AI immediately speaks greeting without waiting for user input
-- [ ] Greeting matches time of day (Good morning/afternoon/evening)
