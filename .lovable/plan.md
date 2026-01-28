@@ -1,338 +1,121 @@
 
-# Fix Plan: Unified Audio Queue and Barge-In (Matching Twilio Patterns)
+# Fix Plan: Transcription Display, Duplicate Saves, and Audio Routing
 
-## Twilio Implementation Analysis
+## Issues Identified
 
-The Twilio bridge has these key patterns we should reuse:
+### 1. Duplicate Assistant Transcripts (Repeated Answers)
+**Root Cause:** Two separate events both call `saveTranscript('assistant', ...)`:
+- `response.text.done` (line 799-810) - used for ElevenLabs text-only mode
+- `response.audio_transcript.done` (line 890-898) - used for OpenAI native audio mode
 
-### 1. ElevenLabs TTS Queuing (lines 1549-1698)
-```typescript
-// Twilio uses a flag + buffer approach:
-if (isProcessingElevenLabsTTS) {
-  console.log('[ELEVENLABS] Already processing TTS, queueing text');
-  pendingTextBuffer += ' ' + text;
-  return;
-}
-// ... after TTS completes:
-if (pendingTextBuffer.trim()) {
-  const queuedText = pendingTextBuffer;
-  pendingTextBuffer = '';
-  setTimeout(() => sendElevenLabsTTS(queuedText), 50);
-}
-```
+When using OpenAI native audio (non-ElevenLabs), BOTH events fire, causing duplicate DB saves and repeated answers in UI.
 
-### 2. Barge-In Detection (lines 2488-2553)
-```typescript
-case "input_audio_buffer.speech_started":
-  // Debounce rapid speech events
-  const now = Date.now();
-  if (now - lastSpeechStartTime < SPEECH_DEBOUNCE_MS) break;
-  
-  // ElevenLabs mode: Clear Twilio buffer + sentence buffer
-  if (ttsProvider === 'elevenlabs') {
-    twilioWs.send(JSON.stringify({ event: "clear", streamSid }));
-    sentenceBuffer = '';
-    isAiSpeaking = false;
-    break;
-  }
-  
-  // OpenAI mode: Truncate response
-  if (isAiSpeaking && currentResponseItemId) {
-    openaiWs.send(JSON.stringify({
-      type: "conversation.item.truncate",
-      item_id: currentResponseItemId,
-      content_index: 0,
-      audio_end_ms: Math.floor(audioSamplesPlayed / 24)
-    }));
-  }
-```
+### 2. Out of Order Responses
+**Root Cause:** Same as above - duplicate saves arrive at different times, causing interleaving.
 
-### 3. SharedAgendaManager (lines 798-920)
-- Wrapper class that calls centralized `agenda-manager` edge function
-- Methods: `pauseForQuery(userQuery)`, `resume()`, `getResumeHint()`
-- Used for cross-interface agenda persistence
+### 3. User Speech Not Showing in Live Transcript Panel
+**Root Cause:** The `conversation.item.input_audio_transcription.completed` event (line 871-877) saves to database but does NOT emit a `transcript.interim` event for the UI. The LiveTranscriptPanel only receives an empty `content: ''` when speech starts.
+
+### 4. Ear Mode (Earpiece) Not Working
+**Root Cause:** Browser limitation - HTML5 Audio API and AudioContext cannot route audio to earpiece vs speaker. Mobile browsers don't support `setSinkId()`. The only way to get earpiece routing is through:
+- Native phone call (Twilio mode) - OS handles routing
+- WebRTC audio track connected directly to `<audio>` element (not via AudioContext)
 
 ---
 
-## Implementation Plan for WebRTC
+## Technical Fixes
 
 ### File: `src/utils/RealtimeVoiceAssistant.ts`
 
-**1. Extend AudioQueue to Support Both PCM and MP3 (around line 97)**
+**Fix 1: Prevent Duplicate Assistant Transcript Saves**
 
-Current queue only handles PCM. Extend it:
-
+Update `response.text.done` handler to ONLY save when using ElevenLabs:
 ```typescript
-type QueueItem = 
-  | { type: 'pcm'; data: Uint8Array }
-  | { type: 'mp3'; blob: Blob; text: string };
-
-class AudioQueue {
-  private queue: QueueItem[] = [];
-  private isPlaying = false;
-  private audioContext: AudioContext;
-  private currentAudio: HTMLAudioElement | null = null;
-  private onSpeakingChange: (speaking: boolean) => void;
-
-  constructor(audioContext: AudioContext, onSpeakingChange: (s: boolean) => void) {
-    this.audioContext = audioContext;
-    this.onSpeakingChange = onSpeakingChange;
+case 'response.text.done':
+  // ElevenLabs mode: text.done contains the response - save and play TTS
+  if (this.ttsProvider === 'elevenlabs' && event.text) {
+    console.log('📝 Saving assistant transcript (ElevenLabs text.done):', event.text.substring(0, 100) + '...');
+    this.saveTranscript('assistant', event.text);
+    this.playElevenLabsAudio(event.text);
   }
-
-  async addPCM(audioData: Uint8Array) {
-    this.queue.push({ type: 'pcm', data: audioData });
-    if (!this.isPlaying) await this.playNext();
-  }
-
-  async addMP3(blob: Blob, text: string) {
-    console.log('[AUDIO_QUEUE] Adding MP3 to queue:', text.substring(0, 30) + '...');
-    this.queue.push({ type: 'mp3', blob, text });
-    if (!this.isPlaying) await this.playNext();
-  }
-
-  // CRITICAL: Called on barge-in - stop everything immediately
-  clearAndStop() {
-    console.log('[AUDIO_QUEUE] clearAndStop called - clearing queue and stopping playback');
-    this.queue = [];
-    if (this.currentAudio) {
-      this.currentAudio.pause();
-      this.currentAudio.src = '';
-      this.currentAudio = null;
-    }
-    this.isPlaying = false;
-    this.onSpeakingChange(false);
-  }
-
-  private async playNext() {
-    if (this.queue.length === 0) {
-      this.isPlaying = false;
-      this.onSpeakingChange(false);
-      return;
-    }
-
-    this.isPlaying = true;
-    this.onSpeakingChange(true);
-    const item = this.queue.shift()!;
-
-    if (item.type === 'pcm') {
-      await this.playPCM(item.data);
-    } else {
-      await this.playMP3(item.blob);
-    }
-  }
-
-  private async playMP3(blob: Blob): Promise<void> {
-    const audioUrl = URL.createObjectURL(blob);
-    const audio = new Audio(audioUrl);
-    this.currentAudio = audio;
-
-    return new Promise((resolve) => {
-      audio.onended = () => {
-        URL.revokeObjectURL(audioUrl);
-        this.currentAudio = null;
-        this.playNext();
-        resolve();
-      };
-      audio.onerror = () => {
-        URL.revokeObjectURL(audioUrl);
-        this.currentAudio = null;
-        this.playNext();
-        resolve();
-      };
-      audio.play().catch(() => {
-        this.currentAudio = null;
-        this.playNext();
-        resolve();
-      });
-    });
-  }
-
-  // ... existing playPCM with createWavFromPCM (unchanged)
-}
-```
-
-**2. Add Class Properties for Agenda and Debounce (around line 228)**
-
-```typescript
-// Speech debounce (matches Twilio's 300ms)
-private lastSpeechStartTime: number = 0;
-private readonly SPEECH_DEBOUNCE_MS = 300;
-
-// Unified AudioQueue with speaking callback
-private audioQueue: AudioQueue | null = null;
-```
-
-**3. Initialize AudioQueue with Speaking Callback (in connect method, around line 510)**
-
-```typescript
-// Initialize unified audio queue for both PCM (OpenAI) and MP3 (ElevenLabs)
-this.audioQueue = new AudioQueue(this.audioContext, this.onSpeakingChange.bind(this));
-```
-
-**4. Update playElevenLabsAudio to Use Queue (line 955)**
-
-Replace immediate playback with queue:
-
-```typescript
-private async playElevenLabsAudio(text: string): Promise<void> {
-  if (!text.trim()) return;
-  
-  console.log('🎙️ ElevenLabs TTS (queued):', text.substring(0, 50) + '...');
-  
-  try {
-    const response = await fetch(
-      `${SUPABASE_URL}/functions/v1/elevenlabs-tts`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'apikey': SUPABASE_PUBLISHABLE_KEY,
-          'Authorization': `Bearer ${SUPABASE_PUBLISHABLE_KEY}`,
-        },
-        body: JSON.stringify({
-          text,
-          voiceId: this.elevenlabsVoiceId,
-          format: 'mp3'
-        })
-      }
-    );
-    
-    if (!response.ok) {
-      throw new Error(`ElevenLabs TTS error: ${response.status}`);
-    }
-    
-    const audioBlob = await response.blob();
-    
-    // Use unified queue for sequential playback (prevents overlap)
-    if (this.audioQueue) {
-      await this.audioQueue.addMP3(audioBlob, text);
-    }
-  } catch (error) {
-    console.error('ElevenLabs TTS error:', error);
-    this.onSpeakingChange(false);
-  }
-}
-```
-
-**5. Update Barge-In Handling in speech_started (line 739)**
-
-Add Twilio-style barge-in logic:
-
-```typescript
-case 'input_audio_buffer.speech_started':
-  // Debounce rapid speech events (matches Twilio pattern)
-  const now = Date.now();
-  if (now - this.lastSpeechStartTime < this.SPEECH_DEBOUNCE_MS) {
-    console.log('[BARGE-IN] Debounced rapid speech event');
-    break;
-  }
-  this.lastSpeechStartTime = now;
-  
-  console.log('🎤 Speech detected!');
-  this.onListeningChange(true);
-  
-  // Clear audio queue and stop playback (unified for both PCM and MP3)
-  if (this.audioQueue) {
-    this.audioQueue.clearAndStop();
-    console.log('[BARGE-IN] Cleared audio queue');
-  }
-  
-  // Cancel any in-flight OpenAI response
-  if (this.dc && this.dc.readyState === 'open') {
-    this.dc.send(JSON.stringify({ type: 'response.cancel' }));
-    console.log('[BARGE-IN] Sent response.cancel to OpenAI');
-  }
-  
-  // Pause agenda for tangent (reuses existing agenda-manager)
-  if (this.threadId && this.userId) {
-    this.pauseAgendaForTangent('user interrupted');
-  }
-  
-  // Emit events for UI
-  this.onMessage({ type: 'speech.detected', detected: true });
-  this.onMessage({
-    type: 'transcript.interim',
-    role: 'user',
-    content: '',
-    isListening: true
-  });
+  // OpenAI native mode: DO NOT save here - audio_transcript.done handles it
   break;
 ```
 
-**6. Add Agenda Pause Method (new method around line 880)**
+The `response.audio_transcript.done` handler (line 890-898) already correctly saves for OpenAI native mode - leave it unchanged.
 
+**Fix 2: Show User Speech in Live Transcript Panel**
+
+Update `conversation.item.input_audio_transcription.completed` handler to emit interim transcript:
 ```typescript
-private async pauseAgendaForTangent(userQuery: string): Promise<void> {
-  if (!this.threadId || !this.userId) return;
-  
-  try {
-    const response = await fetch(
-      `${SUPABASE_URL}/functions/v1/agenda-manager`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'apikey': SUPABASE_PUBLISHABLE_KEY,
-          'Authorization': `Bearer ${SUPABASE_PUBLISHABLE_KEY}`,
-        },
-        body: JSON.stringify({
-          operation: 'pause_for_tangent',
-          threadId: this.threadId,
-          userId: this.userId,
-          userQuery
-        })
-      }
-    );
+case 'conversation.item.input_audio_transcription.completed':
+  // User speech transcript from Whisper
+  console.log('📝 User transcript:', event.transcript);
+  if (event.transcript?.trim()) {
+    // CRITICAL: Emit interim for live transcript display BEFORE saving
+    this.onMessage({
+      type: 'transcript.interim',
+      role: 'user',
+      content: event.transcript,
+      isListening: false  // Speech is done, show the text
+    });
     
-    if (response.ok) {
-      console.log('[AGENDA] Paused for tangent:', userQuery);
-    }
-  } catch (error) {
-    console.error('[AGENDA] Failed to pause:', error);
+    // Save to database
+    this.saveTranscript('user', event.transcript);
   }
+  break;
+```
+
+**Fix 3: Audio Routing for Earpiece Mode**
+
+The WebRTC audio arrives on a `MediaStreamTrack`. Currently we're using AudioContext for OpenAI native audio and HTMLAudioElement for ElevenLabs. To enable earpiece routing on mobile:
+
+Option A (Recommended): Use the existing `audioEl` (`<audio>` element) that's already connected to the WebRTC track:
+```typescript
+// In connect method, around line 620
+// The audio element already receives WebRTC track - just ensure it's not muted
+if (this.audioEl && !this.ttsProvider !== 'elevenlabs') {
+  this.audioEl.muted = false; // Use WebRTC native audio path
 }
 ```
 
-**7. Remove Duplicate Tracking (cleanup)**
+Option B: For ElevenLabs MP3 playback, attempt `setSinkId` if available:
+```typescript
+private async playMP3(blob: Blob): Promise<void> {
+  const audioUrl = URL.createObjectURL(blob);
+  const audio = new Audio(audioUrl);
+  this.currentAudio = audio;
+  
+  // Attempt earpiece routing if browser supports it (most mobile don't)
+  if ('setSinkId' in audio && this.preferredAudioOutput) {
+    try {
+      await (audio as any).setSinkId(this.preferredAudioOutput);
+    } catch (e) {
+      console.log('setSinkId not supported on this device');
+    }
+  }
+  // ... rest unchanged
+}
+```
 
-Remove `activeElevenLabsAudio[]` array and related cleanup code since the AudioQueue now manages this:
-- Remove line 228: `private activeElevenLabsAudio: HTMLAudioElement[] = [];`
-- Remove cleanup in disconnect method (lines ~1197-1205)
+**Note:** True earpiece-only routing on mobile requires using the Twilio phone mode, which goes through the OS phone stack.
 
 ---
 
 ## Summary of Changes
 
-| Component | Before | After |
-|-----------|--------|-------|
-| AudioQueue | PCM only | PCM + MP3 unified |
-| ElevenLabs playback | Immediate (causes overlap) | Sequential via queue |
-| Barge-in handling | Logs only | Debounce + clearAndStop + response.cancel + agenda pause |
-| Audio tracking | Separate `activeElevenLabsAudio[]` | Unified in AudioQueue |
-| Agenda integration | Missing | Uses existing `agenda-manager` edge function |
-
----
-
-## Key Pattern Reuse
-
-| Pattern | Twilio Source | WebRTC Implementation |
-|---------|---------------|----------------------|
-| Speech debounce | `SPEECH_DEBOUNCE_MS = 300` | Same constant |
-| Queue-based TTS | `isProcessingElevenLabsTTS` + `pendingTextBuffer` | Extended AudioQueue class |
-| Barge-in clear | `sentenceBuffer = ''` + Twilio clear | `audioQueue.clearAndStop()` |
-| Response cancel | `response.cancel` via WebSocket | Same via data channel |
-| Agenda pause | `sharedAgendaManager.pauseForQuery()` | Direct call to `agenda-manager` edge function |
+| Issue | Fix | Location |
+|-------|-----|----------|
+| Duplicate transcripts | Only save in `text.done` for ElevenLabs mode | Line 799-810 |
+| Out of order | Same fix - prevents duplicate race conditions | Line 799-810 |
+| User speech not shown | Emit `transcript.interim` in `input_audio_transcription.completed` | Line 871-877 |
+| Earpiece audio | Document limitation; ensure `audioEl` not muted for WebRTC track | Line 620, Line 175-200 |
 
 ---
 
 ## Testing Plan
 
-1. **Sequential playback test**: Ask a question requiring tool call (e.g., "What's on my calendar?")
-   - Verify "Let me check" and answer play in sequence, not overlapping
-   
-2. **Barge-in test**: Start speaking while AI is talking
-   - Verify audio stops immediately
-   - Verify agenda pauses (check `conversation_agenda` table)
-   
-3. **Resume hint test**: After barge-in resolves, check if AI references original topic
-   - Query `agenda-manager` with `get_resume_hint` operation
+1. **Duplicate transcript test**: Ask a question, verify only ONE entry appears in `conversation_messages` for the assistant response
+2. **User transcript display**: Speak and verify your words appear in the Live Transcription panel
+3. **Order test**: Ask multiple questions rapidly, verify responses are in correct sequence
+4. **Audio output**: Test with speakerphone toggle - note that earpiece may not work due to browser limitations (suggest using Twilio phone mode for earpiece)
