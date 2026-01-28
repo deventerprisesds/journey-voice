@@ -173,19 +173,14 @@ const PhoneDialer: React.FC<PhoneDialerProps> = ({
     window.location.href = 'tel:+18665854827';
   };
 
-  const endCall = () => {
+const endCall = () => {
     // Stop ring audio if still playing
     ringAudioRef.current?.pause();
     if (ringAudioRef.current) ringAudioRef.current.currentTime = 0;
     
-    // Use AI hang-up tool if connected, otherwise direct disconnect
-    if (isConnected) {
-      // Send message to AI to trigger the disconnect tool with farewell
-      sendVoiceTextMessage("Please hang up now.");
-    } else {
-      // Direct disconnect if not connected
-      disconnectVoice();
-    }
+    // IMMEDIATE disconnect - like a real phone hang-up
+    // No AI farewell needed - if user said goodbye verbally, AI already responded
+    disconnectVoice();
     
     onCallStateChange('ended');
     setIsMuted(false);

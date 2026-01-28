@@ -1,4 +1,16 @@
-import { supabase } from '@/integrations/supabase/client';
+import { supabase, SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from '@/integrations/supabase/client';
+
+// Global instance tracking for debugging visibility
+let globalInstanceCounter = 0;
+const activeInstances = new Map<number, RealtimeVoiceAssistant>();
+
+export const getActiveVoiceInstanceCount = () => activeInstances.size;
+export const logActiveInstances = () => {
+  console.log(`[VOICE_INSTANCES] Active count: ${activeInstances.size}`);
+  activeInstances.forEach((instance, id) => {
+    console.log(`  - Instance #${id}, sessionId: ${instance.getSessionId()}`);
+  });
+};
 
 export class AudioRecorder {
   private stream: MediaStream | null = null;
@@ -199,6 +211,9 @@ export class RealtimeVoiceAssistant {
   private connectionStartTime: number = 0;
   private messageCount: number = 0;
   
+  // Instance tracking for debugging visibility
+  private instanceId: number = 0;
+  
   // Agenda tracking for cross-interface conversation continuity
   private agendaStatus: {
     items: any[];
@@ -217,8 +232,16 @@ export class RealtimeVoiceAssistant {
     private onListeningChange: (listening: boolean) => void,
     private onSpeakingChange: (speaking: boolean) => void
   ) {
+    this.instanceId = ++globalInstanceCounter;
+    activeInstances.set(this.instanceId, this);
+    console.log(`[VOICE_INSTANCE] Created #${this.instanceId}, total active: ${activeInstances.size}`);
+    
     this.audioEl = document.createElement("audio");
     this.audioEl.autoplay = true;
+  }
+  
+  getSessionId(): string | null {
+    return this.sessionId;
   }
 
   // Activity logging helper for unified timeline
@@ -749,12 +772,13 @@ export class RealtimeVoiceAssistant {
     
     try {
       const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/elevenlabs-tts`,
+        `${SUPABASE_URL}/functions/v1/elevenlabs-tts`,
         {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+            'apikey': SUPABASE_PUBLISHABLE_KEY,
+            'Authorization': `Bearer ${SUPABASE_PUBLISHABLE_KEY}`,
           },
           body: JSON.stringify({
             text,
@@ -924,7 +948,11 @@ export class RealtimeVoiceAssistant {
   }
 
   async disconnect() {
-    console.log('Disconnecting voice assistant...');
+    console.log(`[VOICE_INSTANCE] Disconnecting #${this.instanceId}...`);
+    
+    // Remove from global registry FIRST
+    activeInstances.delete(this.instanceId);
+    console.log(`[VOICE_INSTANCE] Removed #${this.instanceId}, remaining: ${activeInstances.size}`);
     
     // CRITICAL: Stop all audio IMMEDIATELY before any other cleanup
     // This prevents any audio bleeding through during teardown
