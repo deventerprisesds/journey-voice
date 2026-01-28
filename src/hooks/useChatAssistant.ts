@@ -36,11 +36,22 @@ export function useChatAssistant(): UseChatAssistantReturn {
     if (!user) return;
 
     try {
-      // Try to find existing thread
+      // Get user's default assistant
+      const { data: defaultAssistant } = await supabase
+        .from('assistants')
+        .select('id')
+        .eq('user_id', user.id)
+        .eq('is_default', true)
+        .maybeSingle();
+      
+      const assistantId = defaultAssistant?.id || null;
+
+      // Try to find existing thread for this assistant
       const { data: existingThread } = await supabase
         .from('ai_threads')
         .select('id, openai_thread_id')
         .eq('user_id', user.id)
+        .eq('assistant_id', assistantId)
         .order('updated_at', { ascending: false })
         .limit(1)
         .maybeSingle();
@@ -49,7 +60,7 @@ export function useChatAssistant(): UseChatAssistantReturn {
         setThreadId(existingThread.id);
         await loadMessages(existingThread.id);
       } else {
-        await createNewThread();
+        await createNewThread(assistantId);
       }
     } catch (error) {
       console.error('Error loading thread:', error);
@@ -77,14 +88,27 @@ export function useChatAssistant(): UseChatAssistantReturn {
     }
   };
 
-  const createNewThread = useCallback(async () => {
+  const createNewThread = useCallback(async (assistantId?: string | null) => {
     if (!user) return;
 
     try {
+      // Get assistant ID if not provided
+      let finalAssistantId = assistantId;
+      if (finalAssistantId === undefined) {
+        const { data: defaultAssistant } = await supabase
+          .from('assistants')
+          .select('id')
+          .eq('user_id', user.id)
+          .eq('is_default', true)
+          .maybeSingle();
+        finalAssistantId = defaultAssistant?.id || null;
+      }
+
       const { data: newThread, error } = await supabase
         .from('ai_threads')
         .insert({
           user_id: user.id,
+          assistant_id: finalAssistantId,
           openai_thread_id: '' // Will be set by the API
         })
         .select()

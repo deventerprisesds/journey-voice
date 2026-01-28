@@ -467,17 +467,28 @@ export class RealtimeVoiceAssistant {
       // Create thread for this voice session
       if (this.userId) {
         try {
+          // Fetch user's default assistant for thread association
+          const { data: defaultAssistant } = await supabase
+            .from('assistants')
+            .select('id')
+            .eq('user_id', this.userId)
+            .eq('is_default', true)
+            .maybeSingle();
+          
+          const assistantId = defaultAssistant?.id || null;
+          
           const { data: thread } = await supabase
             .from('ai_threads')
             .insert({ 
-              user_id: this.userId, 
+              user_id: this.userId,
+              assistant_id: assistantId,
               openai_thread_id: `webrtc_${this.sessionId}`,
               mode: 'voice'
             })
             .select('id')
             .single();
           this.threadId = thread?.id || null;
-          console.log('📍 Created voice thread:', this.threadId);
+          console.log('📍 Created voice thread:', this.threadId, 'for assistant:', assistantId);
           
           // Load agenda status for cross-interface continuity
           await this.loadAgendaStatus();
