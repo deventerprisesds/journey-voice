@@ -254,6 +254,47 @@ export class TwilioCallSession {
     }
   }
 
+  // ==================== Structured Attempt Logging ====================
+  // Tracks greeting/tts/tool_call attempts with explicit success/fail status
+  // to enable systematic debugging and prevent repeat issues
+
+  private async logAttempt(
+    attemptType: 'greeting' | 'tts' | 'tool_call' | 'session_config',
+    status: 'attempted' | 'success' | 'failed',
+    context: Record<string, any> = {}
+  ) {
+    const timestamp = new Date().toISOString();
+    const logEntry = {
+      attempt_type: attemptType,
+      status,
+      timestamp,
+      latency_ms: context.latency_ms,
+      ...context
+    };
+
+    // Always log to console for debugging visibility
+    console.log(`[ATTEMPT] ${attemptType}: ${status}`, JSON.stringify(logEntry));
+
+    // Persist to database for historical analysis
+    try {
+      if (status === 'failed') {
+        await this.logErrorToSupabase(
+          `${attemptType}_failed`,
+          context.error || 'Unknown error',
+          logEntry
+        );
+      } else {
+        await this.logActivityToSupabase(
+          status === 'attempted' ? 'started' : 'connected',
+          `cf_${attemptType}_${status}`,
+          logEntry
+        );
+      }
+    } catch (e) {
+      console.error(`[ATTEMPT] Failed to persist ${attemptType} ${status}:`, e);
+    }
+  }
+
   // ==================== Message Handling ====================
 
   private async handleTwilioMessage(event: MessageEvent) {
@@ -650,6 +691,13 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
 
   private async sendGreeting() {
     this.currentStage = 'cf_greeting_sent';
+    const greetingStartTime = Date.now();
+    
+    // Log attempt for debugging visibility
+    await this.logAttempt('greeting', 'attempted', {
+      has_cached_audio: !!this.cachedAudioBase64,
+      tts_provider: this.ttsProvider
+    });
     
     // If we have cached ElevenLabs audio, play it immediately (lowest latency)
     if (this.cachedAudioBase64 && this.twilioWs && this.streamSid) {
@@ -674,40 +722,72 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
         }
         
         console.log(`[CF] Cached greeting sent: ${audioBytes.length} bytes`);
-        await this.logActivityToSupabase('connected', 'cf_greeting_sent', {
+        await this.logAttempt('greeting', 'success', {
           source: 'cached_audio',
-          bytes: audioBytes.length
+          bytes: audioBytes.length,
+          latency_ms: Date.now() - greetingStartTime
         });
         this.isPlaying = false;
         return;
       } catch (error) {
         console.error('[CF] Failed to play cached audio, falling back:', error);
-        await this.logErrorToSupabase('cached_audio_playback_error', String(error), {});
+        await this.logAttempt('greeting', 'failed', {
+          source: 'cached_audio',
+          error: String(error),
+          latency_ms: Date.now() - greetingStartTime
+        });
       }
     }
 
     // Fallback: Use OpenAI to generate greeting
     const greeting = this.greetingText || 'Hi! This is Iris. How can I help you today?';
     
-    await this.logActivityToSupabase('connected', 'cf_greeting_sent', {
-      source: 'openai_generated',
-      greeting_text: greeting.substring(0, 50)
-    });
-    
-    const greetingMessage = {
-      type: 'conversation.item.create',
-      item: {
-        type: 'message',
-        role: 'assistant',
-        content: [{
-          type: 'input_text',
-          text: greeting
-        }]
-      }
-    };
+    try {
+      // FIXED: Use 'text' type for assistant role (not 'input_text' which is only for user role)
+      // This matches the working Supabase bridge implementation
+      this.openaiWs?.send(JSON.stringify({
+        type: 'conversation.item.create',
+        item: {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'text', text: greeting }]  // CORRECT: 'text' for assistant role
+        }
+      }));
 
-    this.openaiWs?.send(JSON.stringify(greetingMessage));
-    this.openaiWs?.send(JSON.stringify({ type: 'response.create' }));
+      // Inject context for AI to continue the conversation naturally
+      this.openaiWs?.send(JSON.stringify({
+        type: 'conversation.item.create',
+        item: {
+          type: 'message',
+          role: 'user',
+          content: [{
+            type: 'input_text',  // 'input_text' is correct for user role
+            text: `[System: You just greeted the user with "${greeting}". Wait for them to respond.]`
+          }]
+        }
+      }));
+
+      // Trigger response with explicit modalities (text for ElevenLabs, text+audio for OpenAI TTS)
+      const modalities = this.ttsProvider === 'elevenlabs' ? ['text'] : ['text', 'audio'];
+      this.openaiWs?.send(JSON.stringify({
+        type: 'response.create',
+        response: { modalities }
+      }));
+      
+      console.log(`[CF] Greeting injected with modalities=${modalities.join(',')}`);
+      await this.logAttempt('greeting', 'success', {
+        source: 'openai_generated',
+        greeting_text: greeting.substring(0, 50),
+        modalities,
+        latency_ms: Date.now() - greetingStartTime
+      });
+    } catch (error) {
+      await this.logAttempt('greeting', 'failed', {
+        source: 'openai_generated',
+        error: String(error),
+        latency_ms: Date.now() - greetingStartTime
+      });
+    }
   }
 
   // ==================== OpenAI TTS Handling ====================

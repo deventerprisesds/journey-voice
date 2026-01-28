@@ -147,15 +147,27 @@ export const VoiceAssistantProvider: React.FC<VoiceAssistantProviderProps> = ({
       // Clear live transcript when final is saved
       setLiveTranscript(null);
       
+      // Use the authoritative timestamp from the event (when speech STARTED)
+      // This ensures correct chronological ordering even though user transcription
+      // completes AFTER the AI has already responded
+      const timestamp = message.created_at || new Date().toISOString();
+      
       const newMessage: ConversationMessage = {
         id: `${message.sessionId}-${Date.now()}`,
         role: message.role,
         content: message.content,
         source: 'voice',
         assistant_id: null,
-        created_at: new Date().toISOString(),
+        created_at: timestamp,
       };
-      setVoiceTranscripts(prev => [...prev, newMessage]);
+      
+      // Insert and sort by timestamp to maintain correct chronological order
+      setVoiceTranscripts(prev => {
+        const updated = [...prev, newMessage];
+        return updated.sort((a, b) => 
+          new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+        );
+      });
       return;
     }
 

@@ -992,12 +992,17 @@ export class RealtimeVoiceAssistant {
       } else {
         console.log(`💾 Saved ${role} transcript via generate-embeddings`);
         
-        // Emit success for UI updates
+        // Emit success for UI updates with authoritative timestamp
+        // clientTimestamp is when speech STARTED, ensuring correct chronological ordering
+        // even though transcription completes AFTER the AI has already responded
         this.onMessage({
           type: 'transcript.saved',
           role,
           content,
-          sessionId: this.sessionId
+          sessionId: this.sessionId,
+          created_at: clientTimestamp 
+            ? new Date(clientTimestamp).toISOString() 
+            : new Date().toISOString()
         });
       }
     } catch (error) {
