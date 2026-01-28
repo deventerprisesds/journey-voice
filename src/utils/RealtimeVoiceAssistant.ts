@@ -576,6 +576,13 @@ export class RealtimeVoiceAssistant {
         });
         
         this.onConnectionChange(true);
+        
+        // Trigger greeting after a short delay to ensure connection is stable
+        // In WebRTC flow, session is pre-configured via token - no session.updated event fires
+        setTimeout(() => {
+          console.log('[GREETING] Data channel ready, triggering greeting');
+          this.sendGreeting();
+        }, 500);
       });
 
       this.dc.addEventListener("close", () => {
@@ -741,11 +748,8 @@ export class RealtimeVoiceAssistant {
         }
         break;
         
-      case 'session.updated':
-        // Session configured - trigger immediate greeting like Twilio does
-        console.log('✅ Session configured, triggering greeting');
-        this.sendGreeting();
-        break;
+      // session.updated event doesn't fire in WebRTC flow (session pre-configured via token)
+      // Greeting is now triggered in data channel 'open' event instead
     }
   }
   
