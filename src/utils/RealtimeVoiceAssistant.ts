@@ -718,20 +718,47 @@ export class RealtimeVoiceAssistant {
       });
 
       if (error) {
-        console.warn('Failed to save transcript:', error);
+        // Explicit error notification per user preference
+        console.error('TRANSCRIPT_SAVE_ERROR:', {
+          role,
+          sessionId: this.sessionId,
+          error: error.message || error
+        });
+        
+        // Emit error event for visibility
+        this.onMessage({
+          type: 'transcript.error',
+          role,
+          error: error.message || 'Failed to save transcript',
+          sessionId: this.sessionId
+        });
       } else {
         console.log(`💾 Saved ${role} transcript via generate-embeddings`);
+        
+        // Emit success for UI updates
+        this.onMessage({
+          type: 'transcript.saved',
+          role,
+          content,
+          sessionId: this.sessionId
+        });
       }
-
-      // Emit for UI updates
-      this.onMessage({
-        type: 'transcript.saved',
+    } catch (error) {
+      // Explicit error notification for exceptions
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error saving transcript';
+      console.error('TRANSCRIPT_SAVE_ERROR:', {
         role,
-        content,
+        sessionId: this.sessionId,
+        error: errorMsg
+      });
+      
+      // Emit error event for visibility
+      this.onMessage({
+        type: 'transcript.error',
+        role,
+        error: errorMsg,
         sessionId: this.sessionId
       });
-    } catch (error) {
-      console.error('Error saving transcript:', error);
     }
   }
 

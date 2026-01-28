@@ -128,6 +128,10 @@ When the user says goodbye phrases like 'that's all', 'thanks that's it', 'disco
         modalities: modalities,  // Dynamic based on TTS provider
         input_audio_format: "pcm16",
         output_audio_format: "pcm16",
+        // Enable Whisper transcription for user speech - required for transcript persistence
+        input_audio_transcription: {
+          model: "whisper-1"
+        },
         turn_detection: {
           type: "server_vad",
           threshold: 0.3,
