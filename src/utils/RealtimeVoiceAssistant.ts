@@ -92,33 +92,70 @@ export const encodeAudioForAPI = (float32Array: Float32Array): string => {
   return btoa(binary);
 };
 
-// Audio queue for sequential playback
+// Audio queue for sequential playback - unified for both PCM (OpenAI) and MP3 (ElevenLabs)
+type QueueItem = 
+  | { type: 'pcm'; data: Uint8Array }
+  | { type: 'mp3'; blob: Blob; text: string };
 
 class AudioQueue {
-  private queue: Uint8Array[] = [];
+  private queue: QueueItem[] = [];
   private isPlaying = false;
   private audioContext: AudioContext;
+  private currentAudio: HTMLAudioElement | null = null;
+  private onSpeakingChange: (speaking: boolean) => void;
 
-  constructor(audioContext: AudioContext) {
+  constructor(audioContext: AudioContext, onSpeakingChange: (speaking: boolean) => void) {
     this.audioContext = audioContext;
+    this.onSpeakingChange = onSpeakingChange;
   }
 
-  async addToQueue(audioData: Uint8Array) {
-    this.queue.push(audioData);
+  async addPCM(audioData: Uint8Array) {
+    this.queue.push({ type: 'pcm', data: audioData });
     if (!this.isPlaying) {
       await this.playNext();
     }
   }
 
+  async addMP3(blob: Blob, text: string) {
+    console.log('[AUDIO_QUEUE] Adding MP3 to queue:', text.substring(0, 30) + '...');
+    this.queue.push({ type: 'mp3', blob, text });
+    if (!this.isPlaying) {
+      await this.playNext();
+    }
+  }
+
+  // CRITICAL: Called on barge-in - stop everything immediately (matches Twilio pattern)
+  clearAndStop() {
+    console.log('[AUDIO_QUEUE] clearAndStop called - clearing', this.queue.length, 'items and stopping playback');
+    this.queue = [];
+    if (this.currentAudio) {
+      this.currentAudio.pause();
+      this.currentAudio.src = '';
+      this.currentAudio = null;
+    }
+    this.isPlaying = false;
+    this.onSpeakingChange(false);
+  }
+
   private async playNext() {
     if (this.queue.length === 0) {
       this.isPlaying = false;
+      this.onSpeakingChange(false);
       return;
     }
 
     this.isPlaying = true;
-    const audioData = this.queue.shift()!;
+    this.onSpeakingChange(true);
+    const item = this.queue.shift()!;
 
+    if (item.type === 'pcm') {
+      await this.playPCM(item.data);
+    } else {
+      await this.playMP3(item.blob);
+    }
+  }
+
+  private async playPCM(audioData: Uint8Array): Promise<void> {
     try {
       const wavData = this.createWavFromPCM(audioData);
       const audioBuffer = await this.audioContext.decodeAudioData(wavData.buffer as ArrayBuffer);
@@ -130,9 +167,37 @@ class AudioQueue {
       source.onended = () => this.playNext();
       source.start(0);
     } catch (error) {
-      console.error('Error playing audio:', error);
+      console.error('Error playing PCM audio:', error);
       this.playNext(); // Continue with next segment even if current fails
     }
+  }
+
+  private async playMP3(blob: Blob): Promise<void> {
+    const audioUrl = URL.createObjectURL(blob);
+    const audio = new Audio(audioUrl);
+    this.currentAudio = audio;
+
+    return new Promise((resolve) => {
+      audio.onended = () => {
+        URL.revokeObjectURL(audioUrl);
+        this.currentAudio = null;
+        this.playNext();
+        resolve();
+      };
+      audio.onerror = () => {
+        console.error('MP3 playback error');
+        URL.revokeObjectURL(audioUrl);
+        this.currentAudio = null;
+        this.playNext();
+        resolve();
+      };
+      audio.play().catch((err) => {
+        console.error('MP3 play() failed:', err);
+        this.currentAudio = null;
+        this.playNext();
+        resolve();
+      });
+    });
   }
 
   private createWavFromPCM(pcmData: Uint8Array): Uint8Array {
@@ -183,13 +248,13 @@ class AudioQueue {
   }
 }
 
-let audioQueueInstance: AudioQueue | null = null;
-
-export const playAudioData = async (audioContext: AudioContext, audioData: Uint8Array) => {
-  if (!audioQueueInstance) {
-    audioQueueInstance = new AudioQueue(audioContext);
+// Legacy export for backward compatibility (creates instance-scoped queue)
+let legacyAudioQueue: AudioQueue | null = null;
+export const playAudioData = async (audioContext: AudioContext, audioData: Uint8Array, onSpeakingChange?: (speaking: boolean) => void) => {
+  if (!legacyAudioQueue) {
+    legacyAudioQueue = new AudioQueue(audioContext, onSpeakingChange || (() => {}));
   }
-  await audioQueueInstance.addToQueue(audioData);
+  await legacyAudioQueue.addPCM(audioData);
 };
 
 export class RealtimeVoiceAssistant {
@@ -224,8 +289,12 @@ export class RealtimeVoiceAssistant {
     isPaused: boolean;
   } | null = null;
   
-  // Track active ElevenLabs audio elements for cleanup on disconnect
-  private activeElevenLabsAudio: HTMLAudioElement[] = [];
+  // Unified AudioQueue for both PCM (OpenAI) and MP3 (ElevenLabs) - sequential playback
+  private unifiedAudioQueue: AudioQueue | null = null;
+  
+  // Speech debounce (matches Twilio's 300ms pattern)
+  private lastSpeechStartTime: number = 0;
+  private readonly SPEECH_DEBOUNCE_MS = 300;
   
   // Accumulator for streaming assistant transcript display
   private accumulatedAssistantText: string = '';
@@ -361,9 +430,9 @@ export class RealtimeVoiceAssistant {
     }
   }
 
-  // Pause agenda for tangent (e.g., when user asks about something off-topic)
+  // Pause agenda for tangent (e.g., when user interrupts or asks about something off-topic)
   async pauseAgendaForTangent(userQuery: string): Promise<void> {
-    if (!this.threadId || !this.userId || !this.agendaStatus) return;
+    if (!this.threadId || !this.userId) return;
     
     try {
       await supabase.functions.invoke('agenda-manager', {
@@ -558,6 +627,10 @@ export class RealtimeVoiceAssistant {
         await this.audioContext.resume();
         console.log('Audio context resumed');
       }
+      
+      // Initialize unified audio queue for both PCM (OpenAI) and MP3 (ElevenLabs) - sequential playback
+      this.unifiedAudioQueue = new AudioQueue(this.audioContext, this.onSpeakingChange.bind(this));
+      console.log('[AUDIO_QUEUE] Unified audio queue initialized');
 
       // Create peer connection
       this.pc = new RTCPeerConnection();
@@ -737,8 +810,34 @@ export class RealtimeVoiceAssistant {
         this.handleFunctionCall(event);
         break;
       case 'input_audio_buffer.speech_started':
+        // Debounce rapid speech events (matches Twilio pattern)
+        const speechNow = Date.now();
+        if (speechNow - this.lastSpeechStartTime < this.SPEECH_DEBOUNCE_MS) {
+          console.log('[BARGE-IN] Debounced rapid speech event');
+          break;
+        }
+        this.lastSpeechStartTime = speechNow;
+        
         console.log('🎤 Speech detected!');
         this.onListeningChange(true);
+        
+        // CRITICAL: Clear audio queue and stop playback immediately (unified for both PCM and MP3)
+        if (this.unifiedAudioQueue) {
+          this.unifiedAudioQueue.clearAndStop();
+          console.log('[BARGE-IN] Cleared unified audio queue');
+        }
+        
+        // Cancel any in-flight OpenAI response (matches Twilio pattern)
+        if (this.dc && this.dc.readyState === 'open') {
+          this.dc.send(JSON.stringify({ type: 'response.cancel' }));
+          console.log('[BARGE-IN] Sent response.cancel to OpenAI');
+        }
+        
+        // Pause agenda for tangent (reuses existing agenda-manager edge function)
+        if (this.threadId && this.userId) {
+          this.pauseAgendaForTangent('user interrupted');
+        }
+        
         this.onMessage({
           type: 'speech.detected',
           detected: true
@@ -955,8 +1054,7 @@ export class RealtimeVoiceAssistant {
   private async playElevenLabsAudio(text: string): Promise<void> {
     if (!text.trim()) return;
     
-    console.log('🎙️ ElevenLabs TTS:', text.substring(0, 50) + '...');
-    this.onSpeakingChange(true);
+    console.log('🎙️ ElevenLabs TTS (queued):', text.substring(0, 50) + '...');
     
     try {
       const response = await fetch(
@@ -981,30 +1079,21 @@ export class RealtimeVoiceAssistant {
       }
       
       const audioBlob = await response.blob();
-      const audioUrl = URL.createObjectURL(audioBlob);
-      const audio = new Audio(audioUrl);
       
-      // Track this audio element for cleanup on disconnect
-      this.activeElevenLabsAudio.push(audio);
-      
-      audio.onended = () => {
-        this.onSpeakingChange(false);
-        URL.revokeObjectURL(audioUrl);
-        // Remove from tracking array
-        const idx = this.activeElevenLabsAudio.indexOf(audio);
-        if (idx > -1) this.activeElevenLabsAudio.splice(idx, 1);
-      };
-      
-      audio.onerror = () => {
-        console.error('Audio playback error');
-        this.onSpeakingChange(false);
-        URL.revokeObjectURL(audioUrl);
-        // Remove from tracking array
-        const idx = this.activeElevenLabsAudio.indexOf(audio);
-        if (idx > -1) this.activeElevenLabsAudio.splice(idx, 1);
-      };
-      
-      await audio.play();
+      // Use unified queue for sequential playback (prevents overlap - matches Twilio pattern)
+      if (this.unifiedAudioQueue) {
+        await this.unifiedAudioQueue.addMP3(audioBlob, text);
+      } else {
+        console.warn('[ELEVENLABS] No unified audio queue - playing immediately (fallback)');
+        const audioUrl = URL.createObjectURL(audioBlob);
+        const audio = new Audio(audioUrl);
+        this.onSpeakingChange(true);
+        audio.onended = () => {
+          this.onSpeakingChange(false);
+          URL.revokeObjectURL(audioUrl);
+        };
+        await audio.play();
+      }
     } catch (error) {
       console.error('ElevenLabs TTS error:', error);
       this.onSpeakingChange(false);
@@ -1194,14 +1283,10 @@ export class RealtimeVoiceAssistant {
       console.log('🔴 WebRTC audio element stopped and cleared');
     }
     
-    // 2. Stop ALL playing ElevenLabs audio
-    if (this.activeElevenLabsAudio.length > 0) {
-      console.log(`🔴 Stopping ${this.activeElevenLabsAudio.length} active ElevenLabs audio elements`);
-      this.activeElevenLabsAudio.forEach(audio => {
-        audio.pause();
-        audio.src = '';
-      });
-      this.activeElevenLabsAudio = [];
+    // 2. Stop unified audio queue (handles both ElevenLabs MP3 and OpenAI PCM)
+    if (this.unifiedAudioQueue) {
+      console.log('🔴 Stopping unified audio queue');
+      this.unifiedAudioQueue.clearAndStop();
     }
     
     // Log completion to activity_log with session metrics
