@@ -1,192 +1,185 @@
 
+# Investigation Results: Cloudflare Bridge Missing Pre-Connect Support
 
-# Fix Plan: Audio Cleanup, Personalization, Transcript Tab, and Call Mode Toggle
+## Root Cause Identified
 
-## Approved Fixes (1-3)
+The Cloudflare Durable Objects bridge (`cloudflare/src/TwilioCallSession.ts`) is **incomplete** - it was never updated to support the pre-connected session architecture that the Supabase bridge uses.
 
-### Fix 1: Prevent Audio After Disconnect
-**File:** `src/utils/RealtimeVoiceAssistant.ts`
+## What's Happening
 
-Add `isDisconnecting` flag to prevent in-flight ElevenLabs TTS from queuing audio after disconnect:
+When you switched to `phone_call_mode: cloudflare`, calls route through the Cloudflare Worker instead of the Supabase Edge Function. However:
 
-```typescript
-// Add property (around line 303)
-private isDisconnecting = false;
+| Feature | Supabase Bridge | Cloudflare Bridge |
+|---------|-----------------|-------------------|
+| Reads sessionId from TwiML | ✅ Yes | ❌ No |
+| Fetches pre_connect_sessions | ✅ Yes | ❌ No |
+| Plays cached ElevenLabs greeting | ✅ Yes | ❌ No |
+| Uses personalized instructions | ✅ Yes | ❌ Generic only |
+| Has call agenda/context | ✅ Yes | ❌ No |
+| Uses RAG context | ✅ Yes | ❌ No |
 
-// Reset in connect() (around line 480)
-this.isDisconnecting = false;
+## Evidence from Logs
 
-// Set FIRST in disconnect() (line 1264)
-async disconnect() {
-  this.isDisconnecting = true;  // Block new audio immediately
-  // ... existing cleanup
-}
+The call at 17:30:07 shows:
+- Pre-connect session **was created** with `cloudflare` mode
+- Session had 33KB of cached audio and personalized greeting
+- Session **expired unused** after 2 minutes (Cloudflare never fetched it)
+- Call completed (59 seconds) but with generic/broken experience
 
-// Check in playElevenLabsAudio() (line 1062)
-private async playElevenLabsAudio(text: string): Promise<void> {
-  if (this.isDisconnecting) return;
-  // ... fetch ...
-  if (this.isDisconnecting) return;  // Check again after async fetch
-  // ... queue audio
-}
-```
+## Current Cloudflare Behavior
 
-### Fix 2: Return and Use userName for Greeting
-**File:** `supabase/functions/generate-realtime-token/index.ts`
+When a call connects, the Cloudflare worker:
+1. Ignores the `sessionId` parameter in TwiML
+2. Uses a hardcoded greeting: "Hi! This is Iris. How can I help you today?"
+3. Uses a minimal 8-line system prompt
+4. Has no knowledge of why the call was scheduled
 
-Return `userName` in response (line ~490):
-```typescript
-return new Response(JSON.stringify({
-  ...data,
-  tts_config: { ... },
-  userName: userName,  // ADD THIS
-}), { ... });
-```
+## Fix Required
 
-**File:** `src/utils/RealtimeVoiceAssistant.ts`
-
-Store and use userName:
-```typescript
-private userName: string = 'sir';
-
-// In connect(), after tts_config
-if (data.userName) {
-  this.userName = data.userName;
-}
-
-// In sendGreeting() - use this.userName instead of hardcoded 'sir'
-```
-
-### Fix 3: Add Transcript History Tab
-**File:** `src/components/CommsConsole/PhoneDialer.tsx`
-
-Add fourth tab "Transcript" with full conversation history:
-- Change TabsList to 4 columns
-- Add Transcript tab with `MessageSquareText` icon
-- ScrollArea showing `voiceTranscripts` from context
-- User messages: right-aligned, primary background
-- Assistant messages: left-aligned, muted background
-- Timestamps below each message
-- Empty state when no history
+The Cloudflare worker needs to be updated to:
+1. Extract `sessionId` from custom parameters
+2. Fetch pre-connect session from Supabase
+3. Use the cached audio, instructions, RAG context, and agenda
+4. Match feature parity with the Supabase bridge
 
 ---
 
-## Updated Fix 4: Call Mode Toggle UI
+## Technical Changes Needed
 
-**Current UI:**
-- Single green call button (in-app WebRTC)
-- Small "Call from my phone" text link below
+### File: `cloudflare/src/TwilioCallSession.ts`
 
-**New UI - Two Button Layout:**
-
-Replace the single call button area with a side-by-side button group:
-
-```
-┌─────────────────────────────────────┐
-│           [ Dial Pad ]              │
-│                                     │
-│     ┌─────────┐   ┌─────────┐       │
-│     │  📱    │   │  🔊    │       │
-│     │ Phone  │   │ Speaker │       │
-│     │(Private)│   │ (Fast) │       │
-│     └─────────┘   └─────────┘       │
-│                                     │
-└─────────────────────────────────────┘
-```
-
-**Implementation:**
-
-```tsx
-{/* Call mode buttons - replace lines 360-378 */}
-<div className="flex flex-col items-center gap-3 mt-6">
-  <div className="flex gap-4">
-    {/* Phone mode - Twilio via native dialer (earpiece) */}
-    <Button
-      variant="outline"
-      className="flex flex-col items-center gap-1 h-auto py-4 px-6 rounded-2xl border-2 hover:border-green-600 hover:bg-green-50 dark:hover:bg-green-950"
-      onClick={callFromPhone}
-    >
-      <div className="w-12 h-12 rounded-full bg-green-600 flex items-center justify-center">
-        <Smartphone className="h-6 w-6 text-white" />
-      </div>
-      <span className="font-medium">Phone</span>
-      <span className="text-xs text-muted-foreground">Private</span>
-    </Button>
-
-    {/* Speaker mode - In-app WebRTC */}
-    <Button
-      variant="outline"
-      className="flex flex-col items-center gap-1 h-auto py-4 px-6 rounded-2xl border-2 hover:border-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950"
-      onClick={initiateCall}
-      disabled={isLoading}
-    >
-      <div className="w-12 h-12 rounded-full bg-blue-600 flex items-center justify-center">
-        <Volume2 className="h-6 w-6 text-white" />
-      </div>
-      <span className="font-medium">Speaker</span>
-      <span className="text-xs text-muted-foreground">Fast</span>
-    </Button>
-  </div>
+**1. Add sessionId handling in handleStart()** (around line 123):
+```typescript
+private async handleStart(message: TwilioMessage) {
+  // ... existing code ...
+  const params = message.start?.customParameters || {};
+  this.userId = params.userId || null;
+  this.timezone = params.timezone || 'America/New_York';
+  const sessionId = params.sessionId || null;  // ADD THIS
   
-  <p className="text-xs text-muted-foreground text-center max-w-[200px]">
-    Phone uses earpiece • Speaker uses loudspeaker
-  </p>
-</div>
+  // If we have a pre-connected session, fetch it
+  if (sessionId) {
+    const session = await this.fetchPreConnectSession(sessionId);
+    if (session) {
+      // Use session data instead of loading fresh
+      this.ttsProvider = session.ttsProvider || 'openai';
+      this.elevenlabsVoiceId = session.voiceId || this.elevenlabsVoiceId;
+      this.openaiVoice = session.openaiVoice || 'alloy';
+      this.cachedAudioBase64 = session.audioBase64;
+      this.preConnectedInstructions = session.instructions;
+      this.greetingText = session.greetingText;
+      this.ragContext = session.ragContext;
+      // Skip loading prefs fresh - we have everything
+      await this.connectToOpenAI();
+      return;
+    }
+  }
+  
+  // Fallback: Load fresh preferences
+  await Promise.all([
+    this.loadUserVoicePrefs(),
+    this.fetchToolDefinitions()
+  ]);
+  await this.connectToOpenAI();
+}
 ```
 
-**Visual Preview:**
+**2. Add fetchPreConnectSession method**:
+```typescript
+private async fetchPreConnectSession(sessionId: string): Promise<any | null> {
+  try {
+    const response = await fetch(
+      `${this.env.SUPABASE_URL}/rest/v1/pre_connect_sessions?session_id=eq.${sessionId}&select=*`,
+      {
+        headers: {
+          'Authorization': `Bearer ${this.env.SUPABASE_SERVICE_KEY}`,
+          'apikey': this.env.SUPABASE_SERVICE_KEY,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+    
+    if (response.ok) {
+      const data = await response.json();
+      if (data && data.length > 0) {
+        // Delete after retrieval (one-time use)
+        await fetch(
+          `${this.env.SUPABASE_URL}/rest/v1/pre_connect_sessions?session_id=eq.${sessionId}`,
+          {
+            method: 'DELETE',
+            headers: {
+              'Authorization': `Bearer ${this.env.SUPABASE_SERVICE_KEY}`,
+              'apikey': this.env.SUPABASE_SERVICE_KEY
+            }
+          }
+        );
+        return data[0];
+      }
+    }
+    return null;
+  } catch (error) {
+    console.error('[CF] Failed to fetch pre-connect session:', error);
+    return null;
+  }
+}
+```
 
-```text
-┌────────────────────────────────────────┐
-│                                        │
-│              ┌─────┐                   │
-│              │     │ Dialed digits     │
-│              └─────┘                   │
-│                                        │
-│         ┌───┐  ┌───┐  ┌───┐            │
-│         │ 1 │  │ 2 │  │ 3 │            │
-│         └───┘  └───┘  └───┘            │
-│         ┌───┐  ┌───┐  ┌───┐            │
-│         │ 4 │  │ 5 │  │ 6 │            │
-│         └───┘  └───┘  └───┘            │
-│         ┌───┐  ┌───┐  ┌───┐            │
-│         │ 7 │  │ 8 │  │ 9 │            │
-│         └───┘  └───┘  └───┘            │
-│         ┌───┐  ┌───┐  ┌───┐            │
-│         │ * │  │ 0 │  │ # │            │
-│         └───┘  └───┘  └───┘            │
-│                                        │
-│    ┌──────────┐    ┌──────────┐        │
-│    │    📱    │    │    🔊    │        │
-│    │  Phone   │    │ Speaker  │        │
-│    │ Private  │    │   Fast   │        │
-│    └──────────┘    └──────────┘        │
-│                                        │
-│   Phone uses earpiece • Speaker uses   │
-│            loudspeaker                 │
-│                                        │
-├────────────────────────────────────────┤
-│ [Keypad] [Transcript] [Recents] [☎️]  │
-└────────────────────────────────────────┘
+**3. Update buildSystemPrompt() to use pre-connected instructions**:
+```typescript
+private buildSystemPrompt(): string {
+  // If we have pre-connected instructions, use them
+  if (this.preConnectedInstructions) {
+    return this.preConnectedInstructions;
+  }
+  
+  // Fallback to basic prompt
+  const now = new Date().toLocaleString('en-US', { timeZone: this.timezone });
+  return `You are Iris...`; // existing fallback
+}
+```
+
+**4. Play cached audio greeting**:
+```typescript
+private async sendGreeting() {
+  // If we have cached ElevenLabs audio, play it immediately
+  if (this.cachedAudioBase64 && this.twilioWs && this.streamSid) {
+    console.log('[CF] Playing cached greeting audio');
+    const audioBytes = Uint8Array.from(atob(this.cachedAudioBase64), c => c.charCodeAt(0));
+    const chunkSize = 640;
+    for (let i = 0; i < audioBytes.length; i += chunkSize) {
+      const chunk = audioBytes.slice(i, i + chunkSize);
+      this.twilioWs.send(JSON.stringify({
+        event: 'media',
+        streamSid: this.streamSid,
+        media: { payload: btoa(String.fromCharCode(...chunk)) }
+      }));
+    }
+    return;
+  }
+  
+  // Fallback: OpenAI generates greeting
+  const greeting = this.greetingText || 'Hi! This is Iris. How can I help you today?';
+  // ... existing OpenAI greeting code
+}
 ```
 
 ---
 
-## Files to Modify
+## Temporary Workaround
 
-| File | Changes |
-|------|---------|
-| `src/utils/RealtimeVoiceAssistant.ts` | Add `isDisconnecting` flag, store/use `userName` |
-| `supabase/functions/generate-realtime-token/index.ts` | Return `userName` in response |
-| `src/components/CommsConsole/PhoneDialer.tsx` | Add Transcript tab, replace call button with Phone/Speaker buttons |
+Until the Cloudflare worker is fixed, you can switch back to the Supabase bridge:
+
+1. Go to Settings
+2. Change `phone_call_mode` from `cloudflare` to `media_streams`
+3. Calls will use the working Supabase bridge (with 6-minute limit)
 
 ---
 
 ## Testing Checklist
 
-- [ ] Start Speaker call, end mid-response - verify audio stops immediately
-- [ ] Start call - verify greeting uses your name (or "sir" fallback)
-- [ ] Tap Phone button - verify native dialer opens with Twilio number
-- [ ] Tap Speaker button - verify in-app WebRTC call starts
-- [ ] Have conversation - verify Transcript tab shows full history
-
+After implementing the fix:
+- [ ] Scheduled call triggers with personalized greeting voice
+- [ ] AI knows the call reason/agenda
+- [ ] RAG context is included in conversation
+- [ ] ElevenLabs voice is used (not OpenAI voice)
+- [ ] Call duration can exceed 6 minutes (Cloudflare benefit)
