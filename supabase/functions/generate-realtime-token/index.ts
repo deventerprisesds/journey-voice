@@ -112,7 +112,8 @@ When the user says goodbye phrases like 'that's all', 'thanks that's it', 'disco
         });
 
         // Build personalization context (matches Twilio bridge)
-        const personalizationContext = `
+        // NOTE: Assigning to outer 'let' variable, not declaring new const
+        personalizationContext = `
 CURRENT TIME: ${currentTime}
 TIMEZONE: ${userTimezone}
 USER: ${userName}`;
