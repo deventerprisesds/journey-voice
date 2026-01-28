@@ -1,190 +1,109 @@
 
-# Fix WebRTC Voice Issues: VAD, Greeting, and Live Transcription
-
-## Problem Summary
-
-Three interconnected issues with the in-app WebRTC voice assistant:
-
-1. **VAD Too Sensitive**: Uses `server_vad` with threshold `0.3` which picks up background noise as speech
-2. **No Immediate Greeting**: Unlike Twilio which says "Hello" right away, WebRTC waits silently
-3. **Live Transcript Not Streaming**: Only shows "Listening..." but not the assistant's words as they stream
+# Fix: Trigger Greeting When Data Channel Opens (WebRTC Flow)
 
 ## Root Cause Analysis
 
-The WebRTC path (`generate-realtime-token`) and Twilio path (`twilio-realtime-bridge`) use completely different session configurations:
+The greeting is never triggered because the WebRTC flow is different from the Twilio WebSocket flow:
 
-| Setting | WebRTC (Current) | Twilio Bridge | Fix |
-|---------|------------------|---------------|-----|
-| VAD Type | `server_vad` | `semantic_vad` | Use semantic_vad |
-| Threshold | `0.3` (too low) | N/A (AI-based) | Remove |
-| Eagerness | Not set | `low` | Add `eagerness: "low"` |
-| Greeting | None | Immediate injection | Add greeting trigger |
-| Transcription | `whisper-1` | `gpt-4o-mini-transcribe` | Align models |
+| Flow | Session Configuration | `session.updated` Event |
+|------|----------------------|-------------------------|
+| Twilio (WebSocket) | Sent via `session.update` message after `session.created` | Received after config is applied |
+| WebRTC (Token-based) | Pre-configured during ephemeral token generation | Never sent - session is already configured |
 
-## Implementation Plan
+The current code waits for `session.updated` which never fires in WebRTC mode.
 
-### Part 1: Align VAD Settings with Twilio Bridge
+## Solution
 
-**File:** `supabase/functions/generate-realtime-token/index.ts`
+Move the greeting trigger from the `session.updated` event handler to the **data channel `open` event**, with a small delay to ensure the connection is fully established.
 
-Change the `turn_detection` configuration (lines 135-140) from:
+## Implementation
+
+### File: `src/utils/RealtimeVoiceAssistant.ts`
+
+**Change 1: Move greeting trigger to data channel open event**
+
+Update lines 567-579 (data channel open handler):
+
 ```typescript
-turn_detection: {
-  type: "server_vad",
-  threshold: 0.3,
-  prefix_padding_ms: 400,
-  silence_duration_ms: 1200
-}
+this.dc.addEventListener("open", async () => {
+  console.log("Data channel opened");
+  
+  // Log successful connection to activity_log
+  await this.logActivity('connected', 'webrtc_ready', {
+    metadata: {
+      connection_time_ms: Date.now() - this.connectionStartTime,
+      tts_provider: this.ttsProvider
+    }
+  });
+  
+  this.onConnectionChange(true);
+  
+  // Trigger greeting after a short delay to ensure connection is stable
+  // This replaces the session.updated event which doesn't fire in WebRTC flow
+  setTimeout(() => {
+    console.log('[GREETING] Data channel ready, triggering greeting');
+    this.sendGreeting();
+  }, 500);  // 500ms delay for connection stability
+});
 ```
 
-To match Twilio bridge:
+**Change 2: Remove the session.updated case (now unnecessary)**
+
+Remove or comment out lines 744-748:
 ```typescript
-turn_detection: {
-  type: "semantic_vad",      // AI-based detection instead of amplitude
-  eagerness: "low",          // Let user take their time
-  create_response: true,     // Auto-respond when AI thinks user is done
-  interrupt_response: true,  // Still allow barge-in
-}
+// case 'session.updated':
+//   console.log('✅ Session configured, triggering greeting');
+//   this.sendGreeting();
+//   break;
 ```
 
-Also update transcription model (line 132-134) from `whisper-1` to `gpt-4o-mini-transcribe`:
-```typescript
-input_audio_transcription: {
-  model: "gpt-4o-mini-transcribe",
-  language: "en",
-  prompt: "tasks, schedule, calendar, reschedule, today, tomorrow, priorities"
-}
-```
+**Change 3: Improve greeting logging for debugging**
 
-### Part 2: Add Immediate Greeting After Connection
-
-**File:** `src/utils/RealtimeVoiceAssistant.ts`
-
-After session is configured (in the `session.updated` event handler), trigger an immediate greeting like Twilio does.
-
-Add handling for `session.updated` event (around line 646 in handleMessage):
-```typescript
-case 'session.updated':
-  console.log('✅ Session configured, triggering greeting');
-  this.sendGreeting();
-  break;
-```
-
-Add a new `sendGreeting()` method that:
-1. Loads user profile (name, timezone)
-2. Injects a greeting context message
-3. Triggers a response
+Update `sendGreeting()` to add more detailed logging:
 
 ```typescript
-private async sendGreeting(): Promise<void> {
-  if (!this.dc || this.dc.readyState !== 'open') return;
+private sendGreeting(): void {
+  if (this.hasGreeted) {
+    console.log('[GREETING] Already greeted, skipping');
+    return;
+  }
+  
+  if (!this.dc) {
+    console.warn('[GREETING] Data channel is null');
+    return;
+  }
+  
+  if (this.dc.readyState !== 'open') {
+    console.warn(`[GREETING] Data channel not ready: ${this.dc.readyState}`);
+    return;
+  }
+  
+  this.hasGreeted = true;
   
   const greeting = this.getTimeBasedGreeting();
-  const userName = 'sir'; // Could be loaded from profile
+  const userName = 'sir';
   
-  // Inject greeting context
-  this.dc.send(JSON.stringify({
-    type: 'conversation.item.create',
-    item: {
-      type: 'message',
-      role: 'user',
-      content: [{
-        type: 'input_text',
-        text: `[System: You just connected to ${userName}. Greet them with "${greeting}! What can I help you with?" Keep it brief and wait for their response.]`
-      }]
-    }
-  }));
+  console.log(`[GREETING] Sending greeting via data channel...`);
   
-  // Trigger AI response
-  this.dc.send(JSON.stringify({
-    type: 'response.create',
-    response: {
-      modalities: this.ttsProvider === 'elevenlabs' ? ['text'] : ['text', 'audio']
-    }
-  }));
-}
-
-private getTimeBasedGreeting(): string {
-  const hour = new Date().getHours();
-  if (hour < 12) return 'Good morning';
-  if (hour < 17) return 'Good afternoon';
-  return 'Good evening';
-}
+  // ... rest of implementation
 ```
 
-### Part 3: Stream Assistant Transcript in Real-Time
+## Why This Works
 
-**File:** `src/utils/RealtimeVoiceAssistant.ts`
-
-Add handling for `response.audio_transcript.delta` events to emit interim transcripts:
-
-```typescript
-case 'response.audio_transcript.delta':
-  // Stream assistant's words as they come
-  this.accumulatedAssistantText = (this.accumulatedAssistantText || '') + (event.delta || '');
-  this.onMessage({
-    type: 'transcript.interim',
-    role: 'assistant',
-    content: this.accumulatedAssistantText,
-    isListening: false
-  });
-  break;
-
-case 'response.audio_transcript.done':
-  // Clear accumulator when done
-  this.accumulatedAssistantText = '';
-  // ... existing code to save transcript
-  break;
-```
-
-Add instance variable:
-```typescript
-private accumulatedAssistantText: string = '';
-```
-
-### Part 4: Fix Timestamp Display in PhoneDialer
-
-**File:** `src/components/CommsConsole/PhoneDialer.tsx`
-
-Update line 407 to use the user's timezone:
-```typescript
-{call.timestamp.toLocaleTimeString('en-US', { 
-  hour: '2-digit', 
-  minute: '2-digit',
-  timeZone: userTimezone || 'America/New_York'
-})}
-```
+1. **Data channel open = Connection ready**: When the data channel opens, the WebRTC connection is established and ready to receive messages
+2. **500ms delay**: Ensures all connection handshakes are complete before sending the greeting
+3. **Pre-configured session**: The session is already configured with VAD, tools, and instructions via the ephemeral token - no need to wait for `session.updated`
 
 ## Files to Modify
 
 | File | Changes |
 |------|---------|
-| `supabase/functions/generate-realtime-token/index.ts` | Change VAD from `server_vad` to `semantic_vad`, update transcription model |
-| `src/utils/RealtimeVoiceAssistant.ts` | Add greeting trigger, stream assistant transcript deltas, add accumulator variable |
-| `src/components/CommsConsole/PhoneDialer.tsx` | Fix timezone on Recent Calls timestamp |
+| `src/utils/RealtimeVoiceAssistant.ts` | Move greeting trigger to data channel open handler, remove session.updated handler, improve logging |
 
-## Technical Details
-
-### Why `semantic_vad` is Better
-
-- **`server_vad`**: Uses simple amplitude thresholds - any noise above threshold = speech
-- **`semantic_vad`**: Uses AI to understand when the user is semantically "done" speaking
-- Result: No more false triggers from background noise, better turn-taking
-
-### Greeting Flow After Fix
-
-1. User clicks "Call" in PhoneDialer
-2. WebRTC connects, session configured
-3. `session.updated` event fires
-4. `sendGreeting()` injects context and triggers response
-5. AI immediately says "Good afternoon! What can I help you with?"
-6. Live transcript shows assistant's words streaming
-
-## Verification Steps
+## Verification
 
 After implementation:
-- [ ] Connect via PhoneDialer - AI should greet immediately
-- [ ] Background noise should not trigger speech detection
-- [ ] Live transcript panel shows assistant's words as they stream
-- [ ] Recent calls timestamps show correct timezone
-- [ ] Voice behavior matches Twilio phone calls
+- [ ] Console shows `[GREETING] Data channel ready, triggering greeting`
+- [ ] Console shows `[GREETING] Sending greeting via data channel...`
+- [ ] AI immediately speaks greeting without waiting for user input
+- [ ] Greeting matches time of day (Good morning/afternoon/evening)
