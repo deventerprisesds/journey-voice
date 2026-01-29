@@ -28,6 +28,15 @@ const TasksPage: React.FC = () => {
     }
   }, [viewParam]);
 
+  // Set default view to focus if no view param exists
+  useEffect(() => {
+    if (!viewParam) {
+      const newParams = new URLSearchParams(searchParams);
+      newParams.set('view', 'focus');
+      navigate(`/tasks?${newParams.toString()}`, { replace: true });
+    }
+  }, [viewParam, searchParams, navigate]);
+
   // Update URL when view changes
   const handleViewChange = (view: ViewType) => {
     setCurrentView(view);
