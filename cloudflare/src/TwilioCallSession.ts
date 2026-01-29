@@ -74,7 +74,7 @@ interface ElevenLabsTTSResponse {
 const SENTENCE_ENDERS = /[.!?]+[\s"')\]]*$/;
 
 // Worker version for deployment verification
-const WORKER_VERSION = '2026-01-29-cf-v4';
+const WORKER_VERSION = '2026-01-29-cf-v5';
 
 // Smart filler phrases for tool call acknowledgments (Phase 5)
 const FILLER_PHRASES = [
@@ -158,6 +158,12 @@ export class TwilioCallSession {
   private twilioMediaFramesIn: number = 0;
   private openaiAppendCount: number = 0;
   private twilioMediaFramesOut: number = 0;
+
+  // Phase 7: Agenda Manager state
+  private agendaItems: Array<{ index: number; text: string; status: 'pending' | 'in_progress' | 'paused' | 'completed' }> = [];
+  private currentAgendaIndex: number = 0;
+  private agendaPaused: boolean = false;
+  private pausedForQuery: string | null = null;
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
@@ -777,6 +783,11 @@ export class TwilioCallSession {
       tools_count: this.toolDefinitions.length
     });
 
+    // Phase 7: Initialize agenda manager if we have pre-connected instructions with agenda
+    if (this.preConnectedInstructions) {
+      await this.initializeAgenda(this.preConnectedInstructions);
+    }
+
     // Phase 6: For outbound calls, wait for user pickup confirmation before greeting
     if (this.direction === 'outbound' && !this.cachedAudioBase64) {
       this.setupHelloWait();
@@ -790,8 +801,8 @@ export class TwilioCallSession {
     // If we have pre-connected instructions, use them (includes RAG context, agenda, etc.)
     if (this.preConnectedInstructions) {
       console.log('[CF] Using pre-connected instructions');
-      // Append conversational responsiveness to pre-connected instructions
-      return this.preConnectedInstructions + '\n\n' + this.getConversationalResponsivenessPrompt();
+      // Append agenda context and conversational responsiveness to pre-connected instructions
+      return this.preConnectedInstructions + this.getAgendaContextForPrompt() + '\n\n' + this.getConversationalResponsivenessPrompt();
     }
 
     // Fallback to basic prompt
@@ -1416,8 +1427,9 @@ You: "Looking that up..." [then call web_search tool]`;
       this.helloFallbackTimer = null;
     }
     
-    // Log call summary with telemetry (Phase 2)
+    // Log call summary with telemetry (Phase 2 + Phase 7 agenda metrics)
     const callDurationS = Math.floor((Date.now() - this.callStartTime) / 1000);
+    const agendaProgress = this.getAgendaProgress();
     await this.logActivityToSupabase('completed', 'cf_call_summary', {
       duration_s: callDurationS,
       messages_persisted: this.messageIndex,
@@ -1427,7 +1439,11 @@ You: "Looking that up..." [then call web_search tool]`;
       openai_appends: this.openaiAppendCount,
       twilio_frames_out: this.twilioMediaFramesOut,
       first_media_logged: this.firstMediaLogged,
-      greeting_triggered: this.pendingGreetingTriggered
+      greeting_triggered: this.pendingGreetingTriggered,
+      // Phase 7: Agenda metrics
+      agenda_items_total: this.agendaItems.length,
+      agenda_items_completed: agendaProgress.completed,
+      agenda_complete: this.isAgendaComplete()
     });
     
     if (this.openaiWs) {
@@ -1464,6 +1480,11 @@ You: "Looking that up..." [then call web_search tool]`;
     this.pendingGreetingTriggered = false;
     this.fillerIndex = 0;
     this.lastFillerPhrase = '';
+    // Phase 7: Reset agenda state
+    this.agendaItems = [];
+    this.currentAgendaIndex = 0;
+    this.agendaPaused = false;
+    this.pausedForQuery = null;
   }
 
   // ==================== Phase 5: Smart Filler Manager ====================
@@ -1561,5 +1582,133 @@ You: "Looking that up..." [then call web_search tool]`;
     
     // Now send the greeting
     await this.sendGreeting();
+  }
+
+  // ==================== Phase 7: Agenda Manager ====================
+
+  private parseAgendaFromContext(context: string): Array<{ index: number; text: string; status: 'pending' | 'in_progress' | 'paused' | 'completed' }> {
+    // Look for AGENDA: or numbered list patterns
+    const agendaMatch = context.match(/AGENDA:\n([\s\S]*?)(\n\n|$)/i);
+    const numberedListMatch = context.match(/(?:Today['']s agenda|Call agenda|Discussion points):\n([\s\S]*?)(\n\n|$)/i);
+    
+    const matchedContent = agendaMatch?.[1] || numberedListMatch?.[1];
+    if (!matchedContent) return [];
+    
+    const lines = matchedContent.split('\n');
+    return lines
+      .filter(line => /^\d+[\.\)]/.test(line.trim()))
+      .map((line, index) => ({
+        index,
+        text: line.replace(/^\d+[\.\)]\s*/, '').trim(),
+        status: 'pending' as const
+      }));
+  }
+
+  private async initializeAgenda(context: string) {
+    this.agendaItems = this.parseAgendaFromContext(context);
+    if (this.agendaItems.length > 0) {
+      console.log(`[CF] Parsed ${this.agendaItems.length} agenda items`);
+      await this.logActivityToSupabase('connected', 'cf_agenda_initialized', {
+        item_count: this.agendaItems.length,
+        items: this.agendaItems.map(i => i.text.substring(0, 50))
+      });
+      // Start first item
+      await this.startAgendaItem(0);
+    }
+  }
+
+  private async startAgendaItem(index: number) {
+    if (this.agendaItems[index]) {
+      this.agendaItems[index].status = 'in_progress';
+      this.currentAgendaIndex = index;
+      console.log(`[CF] Started agenda item ${index}: "${this.agendaItems[index].text.substring(0, 40)}..."`);
+      await this.logActivityToSupabase('connected', 'cf_agenda_item_started', {
+        index,
+        text: this.agendaItems[index].text.substring(0, 100)
+      });
+    }
+  }
+
+  private async completeCurrentAgendaItem() {
+    if (this.agendaItems[this.currentAgendaIndex]) {
+      this.agendaItems[this.currentAgendaIndex].status = 'completed';
+      console.log(`[CF] Completed agenda item ${this.currentAgendaIndex}`);
+      await this.logActivityToSupabase('connected', 'cf_agenda_item_completed', {
+        index: this.currentAgendaIndex,
+        text: this.agendaItems[this.currentAgendaIndex].text.substring(0, 100)
+      });
+      
+      // Find next pending item
+      const nextIndex = this.agendaItems.findIndex(
+        (item, idx) => idx > this.currentAgendaIndex && item.status === 'pending'
+      );
+      if (nextIndex !== -1) {
+        await this.startAgendaItem(nextIndex);
+      }
+    }
+  }
+
+  private async pauseAgendaForTangent(userQuery: string) {
+    if (this.agendaItems[this.currentAgendaIndex]?.status === 'in_progress') {
+      this.agendaItems[this.currentAgendaIndex].status = 'paused';
+      this.agendaPaused = true;
+      this.pausedForQuery = userQuery;
+      console.log(`[CF] Paused agenda for tangent: "${userQuery.substring(0, 40)}..."`);
+      await this.logActivityToSupabase('connected', 'cf_agenda_paused', {
+        paused_item_index: this.currentAgendaIndex,
+        tangent_query: userQuery.substring(0, 100)
+      });
+    }
+  }
+
+  private async resumeAgenda() {
+    if (this.agendaPaused && this.agendaItems[this.currentAgendaIndex]) {
+      this.agendaItems[this.currentAgendaIndex].status = 'in_progress';
+      this.agendaPaused = false;
+      this.pausedForQuery = null;
+      console.log(`[CF] Resumed agenda item ${this.currentAgendaIndex}`);
+      await this.logActivityToSupabase('connected', 'cf_agenda_resumed', {
+        resumed_item_index: this.currentAgendaIndex
+      });
+    }
+  }
+
+  private getAgendaResumeHint(): string | null {
+    if (!this.agendaPaused) return null;
+    const item = this.agendaItems[this.currentAgendaIndex];
+    return item ? `Getting back to: ${item.text}` : null;
+  }
+
+  private getAgendaProgress(): { completed: number; total: number; remaining: string[] } {
+    const completed = this.agendaItems.filter(i => i.status === 'completed').length;
+    const remaining = this.agendaItems.filter(i => i.status !== 'completed').map(i => i.text);
+    return { completed, total: this.agendaItems.length, remaining };
+  }
+
+  private isAgendaComplete(): boolean {
+    return this.agendaItems.length > 0 && this.agendaItems.every(i => i.status === 'completed');
+  }
+
+  private getAgendaContextForPrompt(): string {
+    if (this.agendaItems.length === 0) return '';
+    
+    const progress = this.getAgendaProgress();
+    let context = `\n\n## Current Agenda Status
+Progress: ${progress.completed}/${progress.total} items completed
+Remaining items: ${progress.remaining.map((r, i) => `${i + 1}. ${r}`).join('\n')}
+
+AGENDA GUIDELINES:
+- Cover each agenda item naturally in conversation
+- If user asks something unrelated, answer briefly then guide back
+- After completing an item, naturally transition to the next
+- When all items covered, ask if there's anything else before ending`;
+
+    // Add resume hint if paused
+    const resumeHint = this.getAgendaResumeHint();
+    if (resumeHint) {
+      context += `\n\n[SYSTEM: ${resumeHint}]`;
+    }
+
+    return context;
   }
 }
