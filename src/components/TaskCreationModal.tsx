@@ -35,6 +35,8 @@ import { useAssignmentSelection } from '@/contexts/AssignmentSelectionContext';
 import TimeSlotGrid from '@/components/TimeSlotGrid';
 import { useBatchScheduling } from '@/hooks/useBatchScheduling';
 
+const DEMO_BOARD_ID = 'demo-board-1';
+
 interface ParsedTask {
   title: string;
   description?: string;
@@ -502,11 +504,22 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
       const userConfig = await loadUserSchedulingConfig(userId);
       
       // Load existing tasks for preview scheduling context
-      const { data: existingTasks } = await supabase
-        .from('tasks')
-        .select('*')
-        .eq('user_id', userId)
-        .eq('board_id', boardId);
+      // In demo mode, skip Supabase query and use localStorage
+      const isDemoContext = !boardId || boardId.startsWith('demo-');
+      let existingTasks: any[] = [];
+
+      if (isDemoContext) {
+        // Load existing demo tasks from localStorage
+        const demoTasks = localStorage.getItem('kanban-demo-tasks');
+        existingTasks = demoTasks ? JSON.parse(demoTasks) : [];
+      } else {
+        const { data } = await supabase
+          .from('tasks')
+          .select('*')
+          .eq('user_id', userId)
+          .eq('board_id', boardId);
+        existingTasks = data || [];
+      }
       
       const { data, error } = await supabase.functions.invoke('ai-task-parser', {
         body: { 
@@ -643,8 +656,9 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
   const handleCreateTasks = async (tasksToCreate: ParsedTask[]) => {
     setIsCreating(true);
     try {
-      // Check if this is demo mode (board ID starts with 'demo-')
-      const isDemoMode = boardId.startsWith('demo-');
+      // Check if this is demo mode (board ID is empty or starts with 'demo-')
+      const isDemoMode = !boardId || boardId.startsWith('demo-');
+      const effectiveBoardId = isDemoMode ? DEMO_BOARD_ID : boardId;
       
       const tasksWithMeta = tasksToCreate.map(task => {
         // Build scheduling_context for assignment-sourced tasks
@@ -660,7 +674,7 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
         return {
           title: task.title,
           description: task.description || null,
-          board_id: boardId,
+          board_id: effectiveBoardId,
           user_id: userId,
           priority: task.priority,
           category: (task.category === 'PROF_EDUCATION' ? 'EDUCATION' : task.category) as any,
