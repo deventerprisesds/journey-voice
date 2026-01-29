@@ -1,23 +1,20 @@
 
-# Plan: Fix "New Task" Button on Agenda Page
+# Plan: Reduce 15-Minute Grid Height by 75%
 
-## Problem Identified
+## Summary
 
-The "New Task" button on the Agenda page (`/agenda`) opens the `TaskCreationModal`, but task creation fails because:
-
-1. `DailyScheduleView` fetches `defaultBoardId` asynchronously (lines 56-85)
-2. Before the fetch completes, `defaultBoardId` is `null`
-3. After my previous fix, the modal renders with `boardId={defaultBoardId || ''}` (empty string)
-4. When the user tries to create a task, line 663 in `TaskCreationModal` inserts `board_id: boardId` (empty string)
-5. This causes a Supabase error because an empty string is not a valid UUID
-
-The modal opens fine, but task creation silently fails.
+The 15-minute time slot grid on the Agenda page is too tall, making hour-long tasks take up excessive vertical space. This change reduces the grid height to 25% of its current size (a 75% reduction).
 
 ---
 
-## Solution
+## Current Values → New Values
 
-Prevent opening the modal until `defaultBoardId` is available, and disable the button with visual feedback while loading.
+| Constant | Current | New (25% of original) |
+|----------|---------|----------------------|
+| Slot height (CSS) | `h-16` (64px) | `h-4` (16px) |
+| PX_PER_MINUTE | 64/15 ≈ 4.27 | 16/15 ≈ 1.07 |
+| Min task height | 48px | 12px |
+| Height per slot | 64px | 16px |
 
 ---
 
@@ -25,119 +22,76 @@ Prevent opening the modal until `defaultBoardId` is available, and disable the b
 
 | File | Change |
 |------|--------|
-| `src/components/DailyScheduleView.tsx` | Disable "New Task" button until `defaultBoardId` is loaded |
+| `src/components/TimeSlotGrid.tsx` | Update all height-related constants |
 
 ---
 
-## Implementation Details
+## Technical Implementation Details
 
-### DailyScheduleView.tsx
+### TimeSlotGrid.tsx Changes
 
-**Change 1: Add loading state for board ID (around line 35)**
-
-Track whether the board fetch is still in progress:
+**Change 1: Update PX_PER_MINUTE constant (line 201)**
 ```typescript
-const [isBoardLoading, setIsBoardLoading] = useState(true);
+// Before
+const PX_PER_MINUTE = 64 / 15;
+
+// After
+const PX_PER_MINUTE = 16 / 15; // Reduced from 64px to 16px per 15-min slot
 ```
 
-**Change 2: Update fetchDefaultBoard to manage loading state (lines 56-85)**
-
+**Change 2: Update task height calculation (line 169)**
 ```typescript
-const fetchDefaultBoard = async () => {
-  if (!user) {
-    setIsBoardLoading(false);
-    return;
-  }
-  
-  setIsBoardLoading(true);
-  
-  const { data, error } = await supabase
-    .from('boards')
-    .select('id')
-    .eq('user_id', user.id)
-    .eq('is_default', true)
-    .single();
+// Before
+height: Math.max(48, durationIn15MinSlots * 64 - 4)
 
-  if (data) {
-    setDefaultBoardId(data.id);
-  } else if (error) {
-    // If no default board, get the first board
-    const { data: firstBoard } = await supabase
-      .from('boards')
-      .select('id')
-      .eq('user_id', user.id)
-      .limit(1)
-      .single();
-    
-    if (firstBoard) {
-      setDefaultBoardId(firstBoard.id);
-    }
-  }
-  
-  setIsBoardLoading(false);
-};
+// After
+height: Math.max(12, durationIn15MinSlots * 16 - 2)
 ```
 
-**Change 3: Disable button while loading (lines 276-285)**
-
-```tsx
-<Button 
-  size="sm"
-  disabled={isBoardLoading || !defaultBoardId}
-  onClick={() => {
-    setCreateAtTime(null);
-    setIsCreating(true);
-  }}
->
-  <Plus className="w-4 h-4 mr-2" />
-  {isBoardLoading ? 'Loading...' : 'New Task'}
-</Button>
-```
-
-**Change 4: Only render modal with valid boardId (lines 439-449)**
-
-Revert to the safer conditional that requires `defaultBoardId`:
-```tsx
-{defaultBoardId && user && (
-  <TaskCreationModal
-    isOpen={isCreating}
-    onClose={() => setIsCreating(false)}
-    onTasksCreated={onTaskUpdate}
-    boardId={defaultBoardId}
-    userId={user.id}
-    targetDate={selectedDate}
-  />
-)}
-```
-
----
-
-## Why This Works
-
-1. The button is disabled until `defaultBoardId` is available
-2. Users get visual feedback ("Loading..." text) while waiting
-3. The modal only renders when there's a valid board ID
-4. No silent failures - the button simply won't work until ready
-5. No new functions needed - uses existing state patterns
-
----
-
-## Edge Case: No Boards Exist
-
-If a user has no boards at all, `defaultBoardId` will remain null and the button stays disabled. This is a rare edge case (boards are typically created on signup), but we could add a toast message if needed:
-
+**Change 3: Update time slot row height CSS class (line 377)**
 ```typescript
-if (!data && !firstBoard) {
-  toast.error('No task boards found. Please create one in Settings.');
-}
+// Before
+className="relative border-r h-16 hover:bg-muted/30 ..."
+
+// After
+className="relative border-r h-4 hover:bg-muted/30 ..."
+```
+
+**Change 4: Update overlay container height (line 405)**
+```typescript
+// Before
+height: `${timeSlots.length * 64}px`
+
+// After
+height: `${timeSlots.length * 16}px`
+```
+
+**Change 5: Update task height in overlay (line 418)**
+```typescript
+// Before
+const height = Math.max(48, (item.endMin - item.startMin) * PX_PER_MINUTE - 4);
+
+// After
+const height = Math.max(12, (item.endMin - item.startMin) * PX_PER_MINUTE - 2);
 ```
 
 ---
 
-## Expected Result
+## Visual Impact
 
-After this change:
-- "New Task" button shows "Loading..." briefly on page load
-- Button becomes clickable once board is fetched
-- Task creation works correctly with valid board ID
-- No silent failures or console errors
+| Duration | Current Height | New Height |
+|----------|---------------|------------|
+| 15 min | ~60px | ~14px |
+| 30 min | ~124px | ~30px |
+| 1 hour | ~252px | ~62px |
+| 2 hours | ~508px | ~126px |
+
+The entire day view (6 AM - 10 PM = 64 slots) will shrink from **4096px** to **1024px** - much more scrollable on a single screen.
+
+---
+
+## Additional Considerations
+
+- The time labels and add-task buttons may need font/padding adjustments if they appear cramped at the new height
+- Task text content may need smaller font sizes or truncation at reduced heights
+- The minimum task height (12px) ensures even short tasks remain clickable
