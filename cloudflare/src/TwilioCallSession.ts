@@ -74,7 +74,7 @@ interface ElevenLabsTTSResponse {
 const SENTENCE_ENDERS = /[.!?]+[\s"')\]]*$/;
 
 // Worker version for deployment verification
-const WORKER_VERSION = '2026-01-29-cf-v5';
+const WORKER_VERSION = '2026-01-29-cf-v6';
 
 // Smart filler phrases for tool call acknowledgments (Phase 5)
 const FILLER_PHRASES = [
@@ -153,6 +153,11 @@ export class TwilioCallSession {
   private helloFallbackTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly HELLO_FALLBACK_MS = 2000;
   private pendingGreetingTriggered: boolean = false;
+
+  // Phase 8: VAD barge-in guards (parity with Supabase bridge)
+  private lastSpeechStartTime: number = 0;
+  private readonly SPEECH_DEBOUNCE_MS = 300;
+  private isAiSpeaking: boolean = false;
 
   // Audio pipeline telemetry
   private twilioMediaFramesIn: number = 0;
@@ -677,17 +682,57 @@ export class TwilioCallSession {
             this.textBuffer = '';
           }
           this.audioSentDuringResponse = false;
+          // Phase 8: Clear isAiSpeaking after text generation done (ElevenLabs mode)
+          this.isAiSpeaking = false;
           break;
 
         case 'response.done':
           this.isPlaying = false;
+          // Phase 8: Clear isAiSpeaking flag
+          this.isAiSpeaking = false;
           break;
 
-        // Phase 1B: Add missing message handlers for audio pipeline visibility
+        // Phase 1B + Phase 8: Speech started with VAD barge-in guards (parity with Supabase bridge)
         case 'input_audio_buffer.speech_started':
-          console.log('[CF] User started speaking');
-          await this.logActivityToSupabase('connected', 'cf_user_speech_started', {});
-          this.handleBargeIn();
+          {
+            // 1. Debounce rapid speech events
+            const now = Date.now();
+            if (now - this.lastSpeechStartTime < this.SPEECH_DEBOUNCE_MS) {
+              console.log('[CF] Debounced rapid speech event');
+              break;
+            }
+            this.lastSpeechStartTime = now;
+            
+            console.log('[CF] User started speaking');
+            await this.logActivityToSupabase('connected', 'cf_user_speech_started', {});
+            
+            // 2. Hello-wait: Trigger greeting, don't barge-in
+            if (this.waitingForUserHello && !this.pendingGreetingTriggered) {
+              console.log('[CF] User speech detected - triggering pending greeting');
+              await this.triggerPendingGreeting('vad');
+              break; // Don't treat as barge-in
+            }
+            
+            // 3. ElevenLabs mode: Only clear Twilio buffer, no response.cancel
+            if (this.ttsProvider === 'elevenlabs' && !this.elevenlabsFallbackActive) {
+              if (this.isAiSpeaking) {
+                console.log('[CF] BARGE-IN: ElevenLabs mode - clearing Twilio buffer only');
+                this.twilioWs?.send(JSON.stringify({
+                  event: 'clear',
+                  streamSid: this.streamSid
+                }));
+                this.textBuffer = '';
+                this.isAiSpeaking = false;
+              }
+              break; // NO response.cancel for ElevenLabs - preserves OpenAI VAD state
+            }
+            
+            // 4. OpenAI TTS mode: Cancel only if AI is speaking
+            if (this.isAiSpeaking) {
+              console.log('[CF] BARGE-IN: OpenAI mode - cancelling response');
+              this.handleBargeIn();
+            }
+          }
           break;
 
         case 'input_audio_buffer.speech_stopped':
@@ -707,6 +752,8 @@ export class TwilioCallSession {
 
         case 'response.created':
           console.log('[CF] AI response started');
+          // Phase 8: Set isAiSpeaking flag for barge-in guards
+          this.isAiSpeaking = true;
           // Phase 5: Clear any pending filler timers when response starts
           this.clearFillerTimers();
           await this.logActivityToSupabase('connected', 'cf_response_started', {});
