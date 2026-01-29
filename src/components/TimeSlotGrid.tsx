@@ -5,7 +5,8 @@ import { Task, ExternalCalendarEvent } from '@/types/task';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Plus, Clock, Calendar } from 'lucide-react';
+import { Plus, Clock, Calendar, Sunrise, Sun, Sunset, Moon, Coffee } from 'lucide-react';
+import { SchedulingConfig, DEFAULT_SCHEDULING_CONFIG } from '@/config/schedulingRules';
 
 interface TimeSlotGridProps {
   dates: Date[];
@@ -14,6 +15,7 @@ interface TimeSlotGridProps {
   onTimeSlotClick?: (date: Date, hour: number, minute: number) => void;
   onTaskClick?: (task: Task) => void;
   onStatusChange?: (taskId: string, newStatus: Task['status']) => void;
+  schedulingConfig?: SchedulingConfig;
   className?: string;
 }
 
@@ -24,8 +26,80 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
   onTimeSlotClick,
   onTaskClick,
   onStatusChange,
+  schedulingConfig = DEFAULT_SCHEDULING_CONFIG,
   className
 }) => {
+  // Time window visual config
+  const timeWindowStyles: Record<string, { icon: React.ReactNode; label: string; bgClass: string; borderClass: string }> = {
+    morning: { 
+      icon: <Sunrise className="h-3 w-3" />, 
+      label: 'Morning', 
+      bgClass: 'bg-amber-50 dark:bg-amber-950/20',
+      borderClass: 'border-l-4 border-l-amber-400'
+    },
+    business_hours: { 
+      icon: <Coffee className="h-3 w-3" />, 
+      label: 'Business Hours', 
+      bgClass: 'bg-blue-50 dark:bg-blue-950/20',
+      borderClass: 'border-l-4 border-l-blue-400'
+    },
+    after_work: { 
+      icon: <Sunset className="h-3 w-3" />, 
+      label: 'After Work', 
+      bgClass: 'bg-orange-50 dark:bg-orange-950/20',
+      borderClass: 'border-l-4 border-l-orange-400'
+    },
+    evening: { 
+      icon: <Moon className="h-3 w-3" />, 
+      label: 'Evening', 
+      bgClass: 'bg-purple-50 dark:bg-purple-950/20',
+      borderClass: 'border-l-4 border-l-purple-400'
+    },
+    weekends: { 
+      icon: <Sun className="h-3 w-3" />, 
+      label: 'Weekend', 
+      bgClass: 'bg-green-50 dark:bg-green-950/20',
+      borderClass: 'border-l-4 border-l-green-400'
+    },
+    flexible: { 
+      icon: <Clock className="h-3 w-3" />, 
+      label: 'Flexible', 
+      bgClass: 'bg-gray-50 dark:bg-gray-950/20',
+      borderClass: 'border-l-4 border-l-gray-400'
+    },
+  };
+
+  // Determine which time window an hour falls into
+  const getTimeWindowForHour = (hour: number, dayOfWeek: number): string | null => {
+    const windows = schedulingConfig.timeWindows;
+    
+    // Check each window in priority order (more specific first)
+    const windowPriority = ['morning', 'business_hours', 'after_work', 'evening', 'weekends', 'flexible'] as const;
+    
+    for (const windowName of windowPriority) {
+      const window = windows[windowName];
+      if (window.days.includes(dayOfWeek) && hour >= window.start && hour < window.end) {
+        // Skip 'flexible' as it's too broad - only show if nothing else matches
+        if (windowName === 'flexible') continue;
+        return windowName;
+      }
+    }
+    
+    return null;
+  };
+
+  // Check if this hour is the start of a new time window
+  const isTimeWindowStart = (hour: number, dayOfWeek: number): string | null => {
+    const windows = schedulingConfig.timeWindows;
+    
+    for (const [windowName, window] of Object.entries(windows)) {
+      if (windowName === 'flexible') continue; // Skip flexible
+      if (window.days.includes(dayOfWeek) && window.start === hour) {
+        return windowName;
+      }
+    }
+    return null;
+  };
   // Generate 15-minute interval time slots from 6 AM to 11 PM
   const timeSlots: { hour: number; minute: number; label: string }[] = [];
   for (let hour = 6; hour <= 22; hour++) {
@@ -238,38 +312,91 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
 
       {/* Time slots grid (background and click targets) */}
       <div className="relative">
-        {timeSlots.map(slot => (
-          <div key={`${slot.hour}-${slot.minute}`} className="grid gap-0 border-b border-border/50" style={{gridTemplateColumns: `80px repeat(${dates.length}, 1fr)`}}>
-            {/* Time label */}
-            <div className="p-2 border-r bg-muted/10 flex items-start justify-end">
-              <span className="text-xs text-muted-foreground">
-                {slot.label}
-              </span>
-            </div>
-            
-            {/* Date columns with click and quick-add only (tasks are rendered in overlay) */}
-            {dates.map((date, dateIndex) => (
-              <div
-                key={`${slot.hour}-${slot.minute}-${dateIndex}`}
-                className="relative border-r h-16 hover:bg-muted/30 transition-colors group cursor-pointer"
-                onClick={() => onTimeSlotClick?.(date, slot.hour, slot.minute)}
-              >
-                {/* Add task button */}
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity h-6 w-6 p-0"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onTimeSlotClick?.(date, slot.hour, slot.minute);
-                  }}
+        {timeSlots.map((slot, slotIndex) => {
+          // Check if this is a :00 minute slot (for time window headers)
+          const isHourStart = slot.minute === 0;
+          const dayOfWeek = dates[0]?.getDay() ?? 1;
+          const windowStart = isHourStart ? isTimeWindowStart(slot.hour, dayOfWeek) : null;
+          const currentWindow = getTimeWindowForHour(slot.hour, dayOfWeek);
+          const windowStyle = currentWindow ? timeWindowStyles[currentWindow] : null;
+          
+          return (
+            <React.Fragment key={`${slot.hour}-${slot.minute}`}>
+              {/* Time Window Header - show at start of each window */}
+              {windowStart && timeWindowStyles[windowStart] && (
+                <div 
+                  className={cn(
+                    "grid gap-0 border-b-2",
+                    timeWindowStyles[windowStart].borderClass.replace('border-l-4', 'border-b')
+                  )} 
+                  style={{gridTemplateColumns: `80px repeat(${dates.length}, 1fr)`}}
                 >
-                  <Plus className="h-3 w-3" />
-                </Button>
+                  <div className={cn(
+                    "p-2 border-r flex items-center gap-2",
+                    timeWindowStyles[windowStart].bgClass
+                  )}>
+                    {timeWindowStyles[windowStart].icon}
+                    <span className="text-xs font-medium text-foreground">
+                      {timeWindowStyles[windowStart].label}
+                    </span>
+                  </div>
+                  {dates.map((_, dateIndex) => (
+                    <div 
+                      key={`window-header-${windowStart}-${dateIndex}`} 
+                      className={cn(
+                        "p-1 border-r text-xs text-muted-foreground",
+                        timeWindowStyles[windowStart].bgClass
+                      )}
+                    >
+                      <span className="text-[10px]">
+                        {schedulingConfig.timeWindows[windowStart as keyof typeof schedulingConfig.timeWindows]?.start}:00 - {schedulingConfig.timeWindows[windowStart as keyof typeof schedulingConfig.timeWindows]?.end}:00
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              
+              {/* Regular time slot row */}
+              <div className="grid gap-0 border-b border-border/50" style={{gridTemplateColumns: `80px repeat(${dates.length}, 1fr)`}}>
+                {/* Time label with window indicator */}
+                <div className={cn(
+                  "p-2 border-r flex items-start justify-end",
+                  windowStyle ? windowStyle.bgClass : 'bg-muted/10',
+                  windowStyle ? windowStyle.borderClass : ''
+                )}>
+                  <span className="text-xs text-muted-foreground">
+                    {slot.label}
+                  </span>
+                </div>
+                
+                {/* Date columns with click and quick-add only (tasks are rendered in overlay) */}
+                {dates.map((date, dateIndex) => (
+                  <div
+                    key={`${slot.hour}-${slot.minute}-${dateIndex}`}
+                    className={cn(
+                      "relative border-r h-16 hover:bg-muted/30 transition-colors group cursor-pointer",
+                      windowStyle ? windowStyle.bgClass : ''
+                    )}
+                    onClick={() => onTimeSlotClick?.(date, slot.hour, slot.minute)}
+                  >
+                    {/* Add task button */}
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity h-6 w-6 p-0"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onTimeSlotClick?.(date, slot.hour, slot.minute);
+                      }}
+                    >
+                      <Plus className="h-3 w-3" />
+                    </Button>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        ))}
+            </React.Fragment>
+          );
+        })}
 
         {/* Overlay: render tasks/events across the full day to avoid overlap issues */}
         <div
