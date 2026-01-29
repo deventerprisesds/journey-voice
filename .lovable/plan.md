@@ -1,168 +1,121 @@
 
+# Plan: Fix Default View to Focus + Clean Up Toolbar Layout
 
-# Plan: Add Demo Mode RLS Policies for Notification Tables
+## Issues Identified
 
-## Problem
+### 1. Default View Goes to Kanban Instead of Focus
+**Location**: `src/components/MainLayout.tsx` line 171
 
-When demo users (running in the Lovable preview without auth) try to create tasks, they encounter the error:
-> "new row violates row-level security policy for table 'scheduled_notifications'"
+When the sidebar is collapsed (or on mobile), clicking the Tasks icon navigates to:
+```
+/tasks?view=kanban
+```
 
-This happens because several notification-related tables are missing RLS policies for the demo user ID (`00000000-0000-0000-0000-000000000001`).
+Should be:
+```
+/tasks?view=focus
+```
+
+### 2. Toolbar Buttons Wrapping to New Lines
+**Location**: `src/components/KanbanBoard.tsx` lines 1023-1091
+
+The current toolbar uses `flex-wrap` which causes buttons to break onto multiple rows on narrow screens. World-class apps use horizontal scrolling or condensed layouts instead.
+
+**Current state** (from screenshot):
+- Voice button + Select + Show Completed on row 1
+- Filters + AI Create + Schedule on row 2
+- Looks cluttered and unprofessional
 
 ---
 
-## Tables Requiring Demo Mode Policies
+## Proposed Changes
 
-| Table | Current Policies | Demo Policies Needed |
-|-------|-----------------|---------------------|
-| `scheduled_notifications` | Only `auth.uid() = user_id` | SELECT, INSERT, UPDATE, DELETE |
-| `notification_prefs` | Only `auth.uid() = user_id` | SELECT, INSERT, UPDATE |
-| `profiles` | Only `auth.uid() = user_id` | SELECT, INSERT, UPDATE |
-| `delivery_logs` | SELECT via join to `scheduled_notifications` | SELECT with demo check |
+### Fix 1: Change Default View to Focus
 
----
+**File**: `src/components/MainLayout.tsx`
 
-## Implementation: SQL Migration
+**Line 171**: Change navigation target
+```typescript
+// Before
+onClick={() => navigate('/tasks?view=kanban')}
 
-Create a migration file to add demo mode RLS policies following the existing pattern from tables like `tasks`, `boards`, `conversation_messages`.
-
-### Policies to Add
-
-```sql
--- ============================================
--- scheduled_notifications demo mode policies
--- ============================================
-
--- SELECT: Demo user can view their scheduled notifications
-CREATE POLICY "Demo user can view scheduled_notifications"
-  ON public.scheduled_notifications
-  FOR SELECT
-  USING (user_id = '00000000-0000-0000-0000-000000000001'::uuid);
-
--- INSERT: Demo user can insert scheduled notifications  
-CREATE POLICY "Demo user can insert scheduled_notifications"
-  ON public.scheduled_notifications
-  FOR INSERT
-  WITH CHECK (user_id = '00000000-0000-0000-0000-000000000001'::uuid);
-
--- UPDATE: Demo user can update their scheduled notifications
-CREATE POLICY "Demo user can update scheduled_notifications"
-  ON public.scheduled_notifications
-  FOR UPDATE
-  USING (user_id = '00000000-0000-0000-0000-000000000001'::uuid)
-  WITH CHECK (user_id = '00000000-0000-0000-0000-000000000001'::uuid);
-
--- DELETE: Demo user can delete their scheduled notifications
-CREATE POLICY "Demo user can delete scheduled_notifications"
-  ON public.scheduled_notifications
-  FOR DELETE
-  USING (user_id = '00000000-0000-0000-0000-000000000001'::uuid);
-
--- ============================================
--- notification_prefs demo mode policies
--- ============================================
-
--- SELECT: Demo user can view their notification preferences
-CREATE POLICY "Demo user can view notification_prefs"
-  ON public.notification_prefs
-  FOR SELECT
-  USING (user_id = '00000000-0000-0000-0000-000000000001'::uuid);
-
--- INSERT: Demo user can insert notification preferences
-CREATE POLICY "Demo user can insert notification_prefs"
-  ON public.notification_prefs
-  FOR INSERT
-  WITH CHECK (user_id = '00000000-0000-0000-0000-000000000001'::uuid);
-
--- UPDATE: Demo user can update their notification preferences
-CREATE POLICY "Demo user can update notification_prefs"
-  ON public.notification_prefs
-  FOR UPDATE
-  USING (user_id = '00000000-0000-0000-0000-000000000001'::uuid)
-  WITH CHECK (user_id = '00000000-0000-0000-0000-000000000001'::uuid);
-
--- ============================================
--- profiles demo mode policies
--- ============================================
-
--- SELECT: Demo user can view their profile
-CREATE POLICY "Demo user can view profiles"
-  ON public.profiles
-  FOR SELECT
-  USING (user_id = '00000000-0000-0000-0000-000000000001'::uuid);
-
--- INSERT: Demo user can insert their profile
-CREATE POLICY "Demo user can insert profiles"
-  ON public.profiles
-  FOR INSERT
-  WITH CHECK (user_id = '00000000-0000-0000-0000-000000000001'::uuid);
-
--- UPDATE: Demo user can update their profile
-CREATE POLICY "Demo user can update profiles"
-  ON public.profiles
-  FOR UPDATE
-  USING (user_id = '00000000-0000-0000-0000-000000000001'::uuid)
-  WITH CHECK (user_id = '00000000-0000-0000-0000-000000000001'::uuid);
-
--- ============================================
--- delivery_logs demo mode policy
--- ============================================
-
--- SELECT: Demo user can view delivery logs for their notifications
-CREATE POLICY "Demo user can view delivery_logs"
-  ON public.delivery_logs
-  FOR SELECT
-  USING (
-    EXISTS (
-      SELECT 1 FROM scheduled_notifications sn
-      WHERE sn.id = delivery_logs.notification_id
-      AND sn.user_id = '00000000-0000-0000-0000-000000000001'::uuid
-    )
-  );
+// After  
+onClick={() => navigate('/tasks?view=focus')}
 ```
 
 ---
 
-## Files to Create
+### Fix 2: Make Toolbar Horizontally Scrollable (No Wrap)
 
-| File | Purpose |
-|------|---------|
-| `supabase/migrations/[timestamp]_add_demo_mode_notification_policies.sql` | SQL migration with all demo policies |
+**File**: `src/components/KanbanBoard.tsx`
+
+**Strategy**: Replace `flex-wrap` with horizontal scroll container on mobile. On desktop, keep normal flex layout.
+
+**Changes to lines 1022-1092**:
+
+1. Remove `flex-wrap` from toolbar container
+2. Add horizontal scroll container with `overflow-x-auto` and `scrollbar-thin`
+3. Add `flex-nowrap` to prevent wrapping
+4. Condense button labels on mobile (show only icons)
+
+```typescript
+{/* Toolbar - always visible */}
+<div className="flex items-center justify-end gap-2">
+  <div className="flex items-center gap-2 overflow-x-auto scrollbar-thin pb-1">
+    <VoiceAssistantButton />
+    <Button variant={isSelectMode ? "default" : "outline"} size="sm" ...>
+      <CheckCircle2 className="h-4 w-4" />
+      <span className="hidden sm:inline ml-2">
+        {isSelectMode ? 'Cancel' : 'Select'}
+      </span>
+    </Button>
+    {/* Similar pattern for other buttons */}
+  </div>
+</div>
+```
+
+**Key changes**:
+- Remove `flex-wrap` from both containers
+- Add `overflow-x-auto scrollbar-thin` for horizontal scrolling
+- Hide button text on mobile with `hidden sm:inline`
+- Keep icons always visible
+- Add `flex-shrink-0` to buttons to prevent squishing
 
 ---
 
-## Technical Details
+## Files to Modify
 
-### Policy Pattern
-Following the existing demo mode policy pattern used in `tasks`, `boards`, `ai_threads`, etc:
-- **SELECT/UPDATE/DELETE**: Use `USING (user_id = '00000000-0000-0000-0000-000000000001'::uuid)`
-- **INSERT**: Use `WITH CHECK (user_id = '00000000-0000-0000-0000-000000000001'::uuid)`
-- **UPDATE** also needs `WITH CHECK` for the new row values
-
-### Why These Tables?
-
-1. **scheduled_notifications**: Client-side code in `UpcomingReminders.tsx` directly inserts/updates/deletes notifications
-2. **notification_prefs**: Edge functions query this to get user preferences
-3. **profiles**: Edge functions query for user email/phone for notifications
-4. **delivery_logs**: Logs are queried to show notification status in dashboard
+| File | Change |
+|------|--------|
+| `src/components/MainLayout.tsx` | Line 171: Change kanban to focus |
+| `src/components/KanbanBoard.tsx` | Lines 1023-1091: Refactor toolbar for scroll/condense |
 
 ---
 
 ## Expected Outcome
 
-After the migration:
-1. Demo users can create tasks with AI parsing without RLS errors
-2. Task reminders/notifications will be properly scheduled
-3. The UpcomingReminders component will work in demo mode
-4. NotificationStatusDashboard will display correctly
+1. Collapsed sidebar Tasks icon navigates to Focus view
+2. Mobile comms panel close returns to Focus view
+3. Toolbar stays on single line with horizontal scroll
+4. Icons always visible, text hidden on mobile
+5. Professional single-row toolbar layout
 
 ---
 
-## Summary
+## Technical Details
 
-| Change | Complexity |
-|--------|------------|
-| Add 1 migration file with ~60 lines of SQL | Low |
+### Mobile Toolbar Pattern
+```text
++--------------------------------------------------+
+| [Mic] [✓] [Eye] [Filter] [AI] [Calendar]     →   |
++--------------------------------------------------+
+        (horizontally scrollable, no wrap)
+```
 
-**Total estimated effort: Low**
-
+### Desktop Toolbar Pattern  
+```text
++------------------------------------------------------------------------+
+| [Mic] [✓ Select] [Eye Show Completed] [Filters] [AI Create] [Schedule] |
++------------------------------------------------------------------------+
+        (all buttons visible with labels)
+```
