@@ -74,7 +74,21 @@ interface ElevenLabsTTSResponse {
 const SENTENCE_ENDERS = /[.!?]+[\s"')\]]*$/;
 
 // Worker version for deployment verification
-const WORKER_VERSION = '2026-01-29-cf-v3';
+const WORKER_VERSION = '2026-01-29-cf-v4';
+
+// Smart filler phrases for tool call acknowledgments (Phase 5)
+const FILLER_PHRASES = [
+  "One moment...",
+  "Let me check...",
+  "Looking into that...",
+  "Just a sec...",
+  "Checking that now...",
+  "Still working on it...",
+  "Almost there..."
+];
+
+// Filler timing intervals (ms)
+const FILLER_INTERVALS = [1500, 3500, 6000];
 
 export class TwilioCallSession {
   private state: DurableObjectState;
@@ -119,6 +133,31 @@ export class TwilioCallSession {
 
   // Message index for transcript persistence
   private messageIndex: number = 0;
+
+  // Phase 2: First-event tracking for audio pipeline visibility
+  private firstMediaLogged: boolean = false;
+  private firstTextDeltaLogged: boolean = false;
+  private firstAudioDeltaLogged: boolean = false;
+  private callStartTime: number = Date.now();
+
+  // Phase 3: Echo suppression statistics
+  private echoFilteredCount: number = 0;
+
+  // Phase 5: Smart filler manager state
+  private fillerTimers: ReturnType<typeof setTimeout>[] = [];
+  private fillerIndex: number = 0;
+  private lastFillerPhrase: string = '';
+
+  // Phase 6: Hello-wait logic for outbound calls
+  private waitingForUserHello: boolean = false;
+  private helloFallbackTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly HELLO_FALLBACK_MS = 2000;
+  private pendingGreetingTriggered: boolean = false;
+
+  // Audio pipeline telemetry
+  private twilioMediaFramesIn: number = 0;
+  private openaiAppendCount: number = 0;
+  private twilioMediaFramesOut: number = 0;
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
@@ -284,7 +323,7 @@ export class TwilioCallSession {
     try {
       this.messageIndex++;
       
-      await fetch(`${this.env.SUPABASE_URL}/rest/v1/conversation_messages`, {
+      const response = await fetch(`${this.env.SUPABASE_URL}/rest/v1/conversation_messages`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${this.env.SUPABASE_SERVICE_KEY}`,
@@ -307,8 +346,21 @@ export class TwilioCallSession {
       });
       
       console.log(`[CF] Saved ${role} message: "${content.substring(0, 50)}..."`);
+      
+      // Phase 4: Log message persistence for visibility
+      if (response.ok) {
+        await this.logActivityToSupabase('connected', 'cf_message_persisted', {
+          role,
+          message_index: this.messageIndex,
+          content_length: content.length
+        });
+      }
     } catch (error) {
       console.error('[CF] Failed to save conversation message:', error);
+      await this.logErrorToSupabase('message_persistence_error', String(error), {
+        role,
+        message_index: this.messageIndex
+      });
     }
   }
 
@@ -327,7 +379,7 @@ export class TwilioCallSession {
           break;
         case 'stop':
           await this.logActivityToSupabase('completed', 'cf_disconnect', { reason: 'stop_event' });
-          this.cleanup();
+          await this.cleanup();
           break;
       }
     } catch (error) {
@@ -570,6 +622,15 @@ export class TwilioCallSession {
         case 'response.audio.delta':
           // Only handle if using OpenAI TTS (or fallback is active)
           if (this.ttsProvider === 'openai' || this.elevenlabsFallbackActive) {
+            // Phase 2: Track first audio delta for pipeline visibility
+            if (!this.firstAudioDeltaLogged) {
+              this.firstAudioDeltaLogged = true;
+              console.log('[CF] First audio delta received from OpenAI');
+              this.logActivityToSupabase('connected', 'cf_first_audio_delta', {
+                timestamp: Date.now(),
+                call_duration_ms: Date.now() - this.callStartTime
+              });
+            }
             this.handleAudioDelta(data);
           }
           break;
@@ -584,6 +645,15 @@ export class TwilioCallSession {
         case 'response.text.delta':
           // Only handle if using ElevenLabs TTS and not in fallback mode
           if (this.ttsProvider === 'elevenlabs' && !this.elevenlabsFallbackActive) {
+            // Phase 2: Track first text delta for pipeline visibility
+            if (!this.firstTextDeltaLogged) {
+              this.firstTextDeltaLogged = true;
+              console.log('[CF] First text delta received from OpenAI');
+              this.logActivityToSupabase('connected', 'cf_text_delta_first', {
+                timestamp: Date.now(),
+                preview: (data.delta || '').substring(0, 50)
+              });
+            }
             await this.handleTextDelta(data);
           }
           break;
@@ -631,6 +701,8 @@ export class TwilioCallSession {
 
         case 'response.created':
           console.log('[CF] AI response started');
+          // Phase 5: Clear any pending filler timers when response starts
+          this.clearFillerTimers();
           await this.logActivityToSupabase('connected', 'cf_response_started', {});
           break;
 
@@ -644,6 +716,8 @@ export class TwilioCallSession {
           break;
 
         case 'response.function_call_arguments.done':
+          // Phase 5: Start filler timers for tool execution
+          this.startFillerTimers();
           await this.handleFunctionCall(data);
           break;
 
@@ -703,8 +777,13 @@ export class TwilioCallSession {
       tools_count: this.toolDefinitions.length
     });
 
-    // Send initial greeting
-    await this.sendGreeting();
+    // Phase 6: For outbound calls, wait for user pickup confirmation before greeting
+    if (this.direction === 'outbound' && !this.cachedAudioBase64) {
+      this.setupHelloWait();
+    } else {
+      // Send initial greeting immediately for inbound or cached audio
+      await this.sendGreeting();
+    }
   }
 
   private buildSystemPrompt(): string {
@@ -1133,6 +1212,17 @@ You: "Looking that up..." [then call web_search tool]`;
   private async handleMedia(message: TwilioMessage) {
     if (!message.media?.payload || !this.openaiWs) return;
 
+    // Phase 2: Track first media frame for debugging visibility
+    this.twilioMediaFramesIn++;
+    if (!this.firstMediaLogged) {
+      this.firstMediaLogged = true;
+      console.log('[CF] First media frame received from Twilio');
+      await this.logActivityToSupabase('connected', 'cf_first_media_in', {
+        timestamp: Date.now(),
+        call_duration_ms: Date.now() - this.callStartTime
+      });
+    }
+
     try {
       // Decode μ-law from Twilio
       const mulawBytes = Uint8Array.from(atob(message.media.payload), c => c.charCodeAt(0));
@@ -1146,12 +1236,27 @@ You: "Looking that up..." [then call web_search tool]`;
       
       // Skip if echo (low amplitude during playback or in echo window)
       if ((this.isPlaying || inEchoWindow) && rms < this.ECHO_THRESHOLD) {
+        // Phase 3: Track echo filtering stats (log every 50th for visibility)
+        this.echoFilteredCount++;
+        if (this.echoFilteredCount % 50 === 0) {
+          console.log(`[CF] Echo filtered: ${this.echoFilteredCount} frames total`);
+        }
         return;
       }
 
       // Barge-in detection: high amplitude during playback
       if (this.isPlaying && rms > this.BARGE_IN_THRESHOLD) {
+        await this.logActivityToSupabase('connected', 'cf_barge_in_detected', {
+          rms_amplitude: Math.round(rms),
+          echo_filtered_before: this.echoFilteredCount
+        });
         this.handleBargeIn();
+      }
+
+      // Phase 6: Hello-wait logic - detect user speech on outbound calls
+      if (this.waitingForUserHello && rms > this.BARGE_IN_THRESHOLD && !this.pendingGreetingTriggered) {
+        console.log('[CF] User speech detected - triggering pending greeting');
+        await this.triggerPendingGreeting('user_speech');
       }
 
       // Upsample to 24kHz for OpenAI
@@ -1164,6 +1269,7 @@ You: "Looking that up..." [then call web_search tool]`;
       };
 
       this.openaiWs.send(JSON.stringify(audioEvent));
+      this.openaiAppendCount++;
     } catch (error) {
       console.error('[CF] Error processing Twilio audio:', error);
     }
@@ -1298,8 +1404,31 @@ You: "Looking that up..." [then call web_search tool]`;
     this.cleanup();
   }
 
-  private cleanup() {
+  private async cleanup() {
     console.log('[CF] Cleaning up call session');
+    
+    // Phase 5: Clear filler timers
+    this.clearFillerTimers();
+    
+    // Phase 6: Clear hello-wait timer
+    if (this.helloFallbackTimer) {
+      clearTimeout(this.helloFallbackTimer);
+      this.helloFallbackTimer = null;
+    }
+    
+    // Log call summary with telemetry (Phase 2)
+    const callDurationS = Math.floor((Date.now() - this.callStartTime) / 1000);
+    await this.logActivityToSupabase('completed', 'cf_call_summary', {
+      duration_s: callDurationS,
+      messages_persisted: this.messageIndex,
+      tts_provider: this.ttsProvider,
+      echo_filtered_count: this.echoFilteredCount,
+      twilio_frames_in: this.twilioMediaFramesIn,
+      openai_appends: this.openaiAppendCount,
+      twilio_frames_out: this.twilioMediaFramesOut,
+      first_media_logged: this.firstMediaLogged,
+      greeting_triggered: this.pendingGreetingTriggered
+    });
     
     if (this.openaiWs) {
       this.openaiWs.close();
@@ -1324,5 +1453,113 @@ You: "Looking that up..." [then call web_search tool]`;
     this.isSendingTtsAudio = false;
     this.ttsAudioEndTime = 0;
     this.messageIndex = 0;
+    this.firstMediaLogged = false;
+    this.firstTextDeltaLogged = false;
+    this.firstAudioDeltaLogged = false;
+    this.echoFilteredCount = 0;
+    this.twilioMediaFramesIn = 0;
+    this.openaiAppendCount = 0;
+    this.twilioMediaFramesOut = 0;
+    this.waitingForUserHello = false;
+    this.pendingGreetingTriggered = false;
+    this.fillerIndex = 0;
+    this.lastFillerPhrase = '';
+  }
+
+  // ==================== Phase 5: Smart Filler Manager ====================
+
+  private startFillerTimers() {
+    // Clear any existing timers first
+    this.clearFillerTimers();
+    
+    console.log('[CF] Starting filler timers for tool execution');
+    
+    // Schedule fillers at increasing intervals
+    FILLER_INTERVALS.forEach((interval, index) => {
+      const timer = setTimeout(() => {
+        this.speakFiller();
+      }, interval);
+      this.fillerTimers.push(timer);
+    });
+  }
+
+  private clearFillerTimers() {
+    this.fillerTimers.forEach(timer => clearTimeout(timer));
+    this.fillerTimers = [];
+  }
+
+  private async speakFiller() {
+    // Select a filler phrase that's different from the last one
+    let phrase: string;
+    do {
+      phrase = FILLER_PHRASES[this.fillerIndex % FILLER_PHRASES.length];
+      this.fillerIndex++;
+    } while (phrase === this.lastFillerPhrase && FILLER_PHRASES.length > 1);
+    
+    this.lastFillerPhrase = phrase;
+    
+    console.log(`[CF] Speaking filler: "${phrase}"`);
+    await this.logActivityToSupabase('connected', 'cf_filler_spoken', {
+      phrase,
+      filler_index: this.fillerIndex
+    });
+    
+    // Synthesize and play the filler
+    if (this.ttsProvider === 'elevenlabs' && !this.elevenlabsFallbackActive) {
+      await this.sendToElevenLabs(phrase);
+    } else {
+      // OpenAI TTS path
+      this.openaiWs?.send(JSON.stringify({
+        type: 'conversation.item.create',
+        item: {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'text', text: phrase }]
+        }
+      }));
+      this.openaiWs?.send(JSON.stringify({
+        type: 'response.create',
+        response: { modalities: ['text', 'audio'] }
+      }));
+    }
+  }
+
+  // ==================== Phase 6: Hello-Wait Logic (Outbound Calls) ====================
+
+  private setupHelloWait() {
+    if (this.direction !== 'outbound') return;
+    
+    console.log('[CF] Setting up hello-wait for outbound call');
+    this.waitingForUserHello = true;
+    
+    // Set fallback timer in case user doesn't speak
+    this.helloFallbackTimer = setTimeout(() => {
+      if (this.waitingForUserHello && !this.pendingGreetingTriggered) {
+        console.log('[CF] Hello-wait fallback timer triggered');
+        this.triggerPendingGreeting('fallback_timer');
+      }
+    }, this.HELLO_FALLBACK_MS);
+  }
+
+  private async triggerPendingGreeting(source: string) {
+    if (this.pendingGreetingTriggered) return;
+    
+    this.pendingGreetingTriggered = true;
+    this.waitingForUserHello = false;
+    
+    // Clear the fallback timer
+    if (this.helloFallbackTimer) {
+      clearTimeout(this.helloFallbackTimer);
+      this.helloFallbackTimer = null;
+    }
+    
+    console.log(`[CF] Triggering greeting from: ${source}`);
+    await this.logActivityToSupabase('connected', 'cf_hello_trigger', {
+      source,
+      wait_duration_ms: Date.now() - this.callStartTime
+    });
+    
+    // Now send the greeting
+    await this.sendGreeting();
   }
 }
