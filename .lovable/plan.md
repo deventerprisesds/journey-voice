@@ -1,54 +1,52 @@
 
-
-# Plan: Complete the Default Focus View Fix
+# Plan: Allow Typing While Processing
 
 ## Problem
-The Tasks page still loads with Kanban instead of Focus because there are **2 remaining places** still navigating to `view=kanban` that weren't updated in the previous change.
+When you send a chat message, both the text input AND the send button become disabled. You want to be able to type your next message while waiting for the AI response.
+
+## Solution
+Remove the `isLoading` check from the text input's `disabled` prop, while keeping it on the send button. This way:
+- You can type your next message while waiting
+- You can't accidentally send until the current response finishes
+- Enter key submission is already blocked by the `handleSubmit` logic
 
 ## Files to Update
 
-### 1. Root Route Redirect
-**File**: `src/App.tsx`  
-**Line 86**
+### 1. TextInputBar.tsx (CommsConsole)
+**Line 69** - Remove `isLoading` from textarea disabled prop
 
-The app's root route (`/`) currently redirects to Kanban:
-```typescript
-<Route path="/" element={<Navigate to="/tasks?view=kanban" replace />} />
+Current:
+```tsx
+disabled={disabled || isLoading}
 ```
 
 Change to:
-```typescript
-<Route path="/" element={<Navigate to="/tasks?view=focus" replace />} />
+```tsx
+disabled={disabled}
 ```
 
-### 2. CommsConsole Navigation (Tasks Icon)
-**File**: `src/components/CommsConsole/NavigationSection.tsx`  
-**Line 126**
+### 2. ChatInterface.tsx (Sheet Chat)
+**Line 172** - Remove `disabled` entirely from input
 
-When the Tasks icon is clicked inside the CommsConsole (collapsed sidebar mode), it navigates to Kanban:
-```typescript
-onClick={() => navigate('/tasks?view=kanban')}
+Current:
+```tsx
+disabled={isLoading}
 ```
 
 Change to:
-```typescript
-onClick={() => navigate('/tasks?view=focus')}
+```tsx
+// Remove disabled prop entirely
 ```
 
 ## Summary
 
 | File | Line | Change |
 |------|------|--------|
-| `src/App.tsx` | 86 | Root redirect: kanban → focus |
-| `src/components/CommsConsole/NavigationSection.tsx` | 126 | Tasks icon click: kanban → focus |
+| `src/components/CommsConsole/TextInputBar.tsx` | 69 | Remove `isLoading` from disabled |
+| `src/components/ChatInterface.tsx` | 172 | Remove `disabled={isLoading}` |
 
-## What Was Already Fixed
-- `src/components/MainLayout.tsx` line 171 ✓ (updated in previous change)
-
-## Expected Result
-After these 2 simple line changes:
-- Opening the app goes to Focus view
-- Clicking Tasks from CommsConsole goes to Focus view
-- Clicking Tasks from collapsed main sidebar goes to Focus view
-- All navigation defaults to Focus as the primary task view
-
+## Result
+- Text input stays enabled while AI responds
+- Send button remains disabled during processing (prevents double-send)
+- Enter key won't send while processing (existing logic handles this)
+- Better UX for preparing follow-up messages
