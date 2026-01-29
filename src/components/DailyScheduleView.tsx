@@ -33,6 +33,7 @@ const DailyScheduleView: React.FC<DailyScheduleViewProps> = ({
   const { user } = useAuth();
   const [isCreating, setIsCreating] = useState(false);
   const [defaultBoardId, setDefaultBoardId] = useState<string | null>(null);
+  const [isBoardLoading, setIsBoardLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [createAtTime, setCreateAtTime] = useState<{ hour: number; minute: number } | null>(null);
   const [schedulingConfig, setSchedulingConfig] = useState<SchedulingConfig>(DEFAULT_SCHEDULING_CONFIG);
@@ -55,7 +56,12 @@ const DailyScheduleView: React.FC<DailyScheduleViewProps> = ({
   // Get default board for task creation
   useEffect(() => {
     const fetchDefaultBoard = async () => {
-      if (!user) return;
+      if (!user) {
+        setIsBoardLoading(false);
+        return;
+      }
+      
+      setIsBoardLoading(true);
       
       const { data, error } = await supabase
         .from('boards')
@@ -77,8 +83,12 @@ const DailyScheduleView: React.FC<DailyScheduleViewProps> = ({
         
         if (firstBoard) {
           setDefaultBoardId(firstBoard.id);
+        } else {
+          toast.error('No task boards found. Please create one first.');
         }
       }
+      
+      setIsBoardLoading(false);
     };
 
     fetchDefaultBoard();
@@ -275,13 +285,14 @@ const DailyScheduleView: React.FC<DailyScheduleViewProps> = ({
                   </div>
                   <Button 
                     size="sm"
+                    disabled={isBoardLoading || !defaultBoardId}
                     onClick={() => {
                       setCreateAtTime(null);
                       setIsCreating(true);
                     }}
                   >
                     <Plus className="w-4 h-4 mr-2" />
-                    New Task
+                    {isBoardLoading ? 'Loading...' : 'New Task'}
                   </Button>
                 </div>
               </div>
@@ -437,12 +448,12 @@ const DailyScheduleView: React.FC<DailyScheduleViewProps> = ({
       </DragDropContext>
 
       {/* Task Creation Modal */}
-      {user && (
+      {defaultBoardId && user && (
         <TaskCreationModal
           isOpen={isCreating}
           onClose={() => setIsCreating(false)}
           onTasksCreated={onTaskUpdate}
-          boardId={defaultBoardId || ''}
+          boardId={defaultBoardId}
           userId={user.id}
           targetDate={selectedDate}
         />
