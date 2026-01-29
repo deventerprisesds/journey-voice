@@ -74,7 +74,7 @@ interface ElevenLabsTTSResponse {
 // NOTE: VOICE_CONFIG, FILLER_CONFIG, SENTENCE_ENDERS imported from ./config.ts
 
 // Worker version for deployment verification
-const WORKER_VERSION = '2026-01-29-cf-v7d';
+const WORKER_VERSION = '2026-01-29-cf-v7e';
 
 export class TwilioCallSession {
   private state: DurableObjectState;
@@ -1045,10 +1045,13 @@ You: "Looking that up..." [then call web_search tool]`;
           }));
         }
         
-        // Clear echo suppression after audio duration
+        // v7e: Clear ALL echo suppression flags after audio duration (critical fix)
         setTimeout(() => {
           if (this.isSendingTtsAudio && Date.now() >= this.ttsAudioEndTime - 50) {
             this.isSendingTtsAudio = false;
+            this.isAiSpeaking = false;
+            this.isPlaying = false;  // CRITICAL: Clear isPlaying to allow user audio through
+            console.log('[CF] Echo suppression cleared after cached greeting playback');
           }
         }, estimatedDurationMs + this.TTS_ECHO_GRACE_PERIOD_MS);
         
@@ -1260,13 +1263,15 @@ You: "Looking that up..." [then call web_search tool]`;
           }
         };
         this.twilioWs?.send(JSON.stringify(mediaMessage));
+        this.twilioMediaFramesOut++;  // v7e: Track outbound frames for telemetry
       }
 
-      // v7: Clear BOTH echo suppression flags after audio duration (critical fix)
+      // v7e: Clear ALL echo suppression flags after audio duration (critical fix)
       setTimeout(() => {
         if (this.isSendingTtsAudio && Date.now() >= this.ttsAudioEndTime - 50) {
           this.isSendingTtsAudio = false;
-          this.isAiSpeaking = false;  // CRITICAL: Also clear this flag for direct ElevenLabs greetings
+          this.isAiSpeaking = false;
+          this.isPlaying = false;  // CRITICAL: Clear isPlaying to allow user audio through
           console.log('[CF] Echo suppression cleared after ElevenLabs playback');
         }
       }, estimatedDurationMs + this.TTS_ECHO_GRACE_PERIOD_MS);
