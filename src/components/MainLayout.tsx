@@ -168,7 +168,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
           <Tooltip key={item.label}>
             <TooltipTrigger asChild>
               <button
-                onClick={() => navigate('/tasks?view=kanban')}
+                onClick={() => navigate('/tasks?view=focus')}
                 className={cn(
                   'w-full flex items-center justify-center p-2 rounded-lg transition-colors',
                   'hover:bg-accent',

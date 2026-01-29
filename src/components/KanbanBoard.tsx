@@ -1019,9 +1019,9 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
         </div>
       )}
 
-      {/* Toolbar - always visible */}
-      <div className="flex items-center justify-end gap-2 flex-wrap">
-        <div className="flex items-center gap-2 flex-wrap">
+      {/* Toolbar - always visible, horizontal scroll on mobile */}
+      <div className="flex items-center justify-end">
+        <div className="flex items-center gap-2 overflow-x-auto flex-nowrap pb-1 scrollbar-thin">
           <VoiceAssistantButton />
           <Button
             variant={isSelectMode ? "default" : "outline"}
@@ -1031,21 +1031,24 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
               if (isSelectMode) setSelectedTasks(new Set());
             }}
             title="Select multiple tasks for bulk actions"
+            className="flex-shrink-0"
           >
-            <CheckCircle2 className="h-4 w-4 mr-2" />
-            {isSelectMode ? 'Cancel' : 'Select'}
+            <CheckCircle2 className="h-4 w-4" />
+            <span className="hidden sm:inline ml-2">{isSelectMode ? 'Cancel' : 'Select'}</span>
           </Button>
           <Button
             variant={showCompletedTasks ? "default" : "outline"}
             size="sm"
             onClick={toggleShowCompletedTasks}
             title={showCompletedTasks ? "Hide completed tasks" : "Show completed tasks"}
+            className="flex-shrink-0"
           >
             {showCompletedTasks ? (
-              <><Eye className="h-4 w-4 mr-2" />Hide Completed</>
+              <Eye className="h-4 w-4" />
             ) : (
-              <><EyeOff className="h-4 w-4 mr-2" />Show Completed</>
+              <EyeOff className="h-4 w-4" />
             )}
+            <span className="hidden sm:inline ml-2">{showCompletedTasks ? 'Hide' : 'Show'}</span>
           </Button>
           {!useStandardColumns && board && (
             <AddColumnModal
@@ -1058,34 +1061,38 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
             variant="outline"
             size="sm"
             onClick={() => setShowFilters(!showFilters)}
+            className="flex-shrink-0"
           >
-            <Filter className="h-4 w-4 mr-2" />
-            Filters
+            <Filter className="h-4 w-4" />
+            <span className="hidden sm:inline ml-2">Filters</span>
           </Button>
           <Button
             variant="outline"
             size="sm"
             onClick={() => setIsCreationModalOpen(true)}
+            className="flex-shrink-0"
           >
-            <Wand2 className="h-4 w-4 mr-2" />
-            AI Create
+            <Wand2 className="h-4 w-4" />
+            <span className="hidden sm:inline ml-2">AI Create</span>
           </Button>
           <Button
             variant="outline"
             size="sm"
             onClick={generateDailySchedule}
             disabled={isGeneratingSchedule}
+            className="flex-shrink-0"
           >
-            <Calendar className="h-4 w-4 mr-2" />
-            {isGeneratingSchedule ? 'Generating...' : 'Schedule'}
+            <Calendar className="h-4 w-4" />
+            <span className="hidden sm:inline ml-2">{isGeneratingSchedule ? 'Generating...' : 'Schedule'}</span>
           </Button>
           {!useStandardColumns && (
             <Button
               size="sm"
               onClick={addSampleTask}
+              className="flex-shrink-0"
             >
-              <Plus className="h-4 w-4 mr-2" />
-              Add Sample
+              <Plus className="h-4 w-4" />
+              <span className="hidden sm:inline ml-2">Add Sample</span>
             </Button>
           )}
         </div>
