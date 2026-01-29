@@ -1,132 +1,254 @@
 
 
-# Cloudflare v7b: Complete Missing Fixes + Pre-Flight Checklist
+# Decentralization Gap Audit & Consolidation Plan
 
-## Immediate Fix: Version Mismatch
+## Executive Summary
 
-The screenshot shows the deployment failed because:
-- **Expected:** `2026-01-29-cf-v1` (hardcoded in workflow line 51)
-- **Got:** `2026-01-29-cf-v7` (current code version)
-
-This version must be updated to `2026-01-29-cf-v7b` after we apply the remaining v7b fixes.
+After thorough codebase analysis, I've identified **8 major categories** of duplicated configuration across the three communication modes (Supabase Phone, Cloudflare Phone, WebRTC In-App). This violates the "code-reuse-over-duplication" memory principle and creates maintenance headaches.
 
 ---
 
-## Part 1: Pre-Flight Checklist Document
+## Gap Analysis
 
-Create a new markdown file that I (and future AI iterations) must reference before making changes to the Cloudflare bridge. This will prevent recurring mistakes.
+### 1. Timing Constants (HIGH PRIORITY)
 
-### File: `cloudflare/PREFLIGHT_CHECKLIST.md`
+| Constant | Supabase Bridge | Cloudflare Bridge | WebRTC App |
+|----------|-----------------|-------------------|------------|
+| `FAREWELL_DELAY_MS` | 3000ms | 5000ms | 2000ms |
+| `SPEECH_DEBOUNCE_MS` | 300ms | 300ms | 300ms |
+| `OUTBOUND_HELLO_WAIT_MS` | in config | hardcoded | N/A |
+
+**Current State**: Hardcoded in 3 separate files with inconsistent values
+**Source of Truth**: `supabase/functions/_shared/config.ts`
+
+---
+
+### 2. Filler Phrases & Intervals
+
+| Location | Phrases | Intervals |
+|----------|---------|-----------|
+| `cloudflare/src/TwilioCallSession.ts` | 8 phrases | `[1500, 3500, 6000]` |
+| `supabase/functions/twilio-realtime-bridge/index.ts` | SmartFillerManager class | Different structure |
+| `src/utils/RealtimeVoiceAssistant.ts` | N/A (relies on OpenAI instructions) | N/A |
+
+**Issue**: Different filler implementations could cause inconsistent UX across phone modes
+
+---
+
+### 3. Sentence Detection Regex
+
+| Location | Pattern |
+|----------|---------|
+| `cloudflare/src/TwilioCallSession.ts` | `/[.!?]+[\s"')\]]*$/` |
+| `supabase/functions/twilio-realtime-bridge/index.ts` | `/[.!?]\s*$/` |
+
+**Issue**: Different regex could cause different sentence boundary detection for ElevenLabs streaming
+
+---
+
+### 4. Default Iris Persona
+
+| Location | Length | Status |
+|----------|--------|--------|
+| `supabase/functions/twilio-realtime-bridge/index.ts` | ~40 lines | Full persona |
+| `supabase/functions/generate-realtime-token/index.ts` | ~15 lines | Abbreviated |
+| `cloudflare/src/TwilioCallSession.ts` | Generated dynamically | No hardcoded default |
+
+**Issue**: Persona definition duplicated, could diverge over time
+
+---
+
+### 5. Audio Processing Functions
+
+| Function | Supabase | Cloudflare | WebRTC |
+|----------|----------|------------|--------|
+| `decodeMulaw` / `encodeMulaw` | ✅ inline | ✅ `audio.ts` | N/A (no μ-law) |
+| `upsample8to24` / `downsample24to8` | ✅ inline | ✅ `audio.ts` | N/A |
+| `base64ToInt16` / `int16ToBase64` | ✅ inline | ✅ inline | ✅ inline |
+
+**Status**: Cloudflare properly extracted to `audio.ts`, Supabase still inline (duplicate)
+
+---
+
+### 6. Tool Definitions
+
+| Location | Source | Status |
+|----------|--------|--------|
+| `supabase/functions/execute-tool/index.ts` | Source of truth | ✅ Centralized |
+| All other functions | Fetch from `/definitions` endpoint | ✅ Good pattern |
+| `cloudflare/src/TwilioCallSession.ts` | Inline copy | ⚠️ Potential drift |
+
+**Issue**: Cloudflare can't fetch from Supabase at runtime, has inline tool definitions
+
+---
+
+### 7. Time-Based Greeting Function
+
+| Location | Implementation |
+|----------|----------------|
+| `supabase/functions/twilio-realtime-bridge/index.ts` | Full timezone-aware (~20 lines) |
+| `cloudflare/src/TwilioCallSession.ts` | Copy of Supabase version |
+| `src/utils/RealtimeVoiceAssistant.ts` | Simplified (no timezone) (~5 lines) |
+
+**Issue**: Three implementations, WebRTC one is simpler
+
+---
+
+### 8. ElevenLabs Default Voice ID
+
+| Location | Value |
+|----------|-------|
+| `supabase/functions/twilio-realtime-bridge/index.ts` | `'EXAVITQu4vr4xnSDxMaL'` |
+| `cloudflare/src/TwilioCallSession.ts` | `'EXAVITQu4vr4xnSDxMaL'` |
+| `src/utils/RealtimeVoiceAssistant.ts` | N/A (uses settings) |
+
+**Issue**: Magic string duplicated, no centralized default
+
+---
+
+## Proposed Solution Architecture
+
+Since the three runtimes (Deno, Cloudflare Workers, Browser) can't share imports, we use a **"Source of Truth + Documented Copies"** pattern:
 
 ```text
-# Cloudflare Worker Pre-Flight Checklist
-
-## MANDATORY: Check Before Every Deployment
-
-### 1. Version String Synchronization
-When changing the worker version, ALL THREE files must be updated:
-- [ ] `cloudflare/src/index.ts` (line ~21) - health endpoint version
-- [ ] `cloudflare/src/TwilioCallSession.ts` (line ~77) - WORKER_VERSION constant
-- [ ] `.github/workflows/deploy-cloudflare.yml` (line ~51) - EXPECTED_VERSION
-
-### 2. State Management Parity
-When adding new features, verify Supabase bridge equivalents:
-- [ ] All state variables from Supabase exist in Cloudflare
-- [ ] State initialization matches Supabase
-- [ ] State cleanup in response.done/cleanup matches
-
-### 3. Function Parity
-Before claiming feature parity, verify these functions exist:
-- [ ] getTimeBasedGreeting() - time-aware greetings
-- [ ] loadUserProfile() - user personalization
-- [ ] generateGreetingForCallType() - context-based greetings
-- [ ] handleBargeIn() uses truncate, not cancel
-
-### 4. Echo Suppression
-- [ ] isAiSpeaking flag cleared after TTS completes
-- [ ] isSendingTtsAudio flag cleared after audio duration
-- [ ] Both flags cleared for direct ElevenLabs greetings
-
-### 5. VAD/Barge-In
-- [ ] Uses conversation.item.truncate (NOT response.cancel)
-- [ ] Tracks currentResponseItemId
-- [ ] Tracks audioSamplesPlayed for truncation point
-
-### 6. Common Mistakes Log
-
-| Date | Mistake | Files Affected | Resolution |
-|------|---------|----------------|------------|
-| 2026-01-29 | Version mismatch v1 vs v7 | workflow + index.ts + TwilioCallSession.ts | Always update all 3 files |
-| 2026-01-29 | Missing loadUserProfile() | TwilioCallSession.ts | Port from Supabase |
-| 2026-01-29 | Missing getTimeBasedGreeting() | TwilioCallSession.ts | Port from Supabase |
-| 2026-01-29 | Echo flags not cleared after ElevenLabs | TwilioCallSession.ts | Add explicit clearing |
-| 2026-01-29 | Used response.cancel instead of truncate | TwilioCallSession.ts | Use conversation.item.truncate |
+┌─────────────────────────────────────────────────────────────────┐
+│                   SOURCE OF TRUTH (Deno/Supabase)                │
+│                                                                  │
+│  supabase/functions/_shared/config.ts                           │
+│  ├── VOICE_CONFIG (timing constants)                            │
+│  ├── FILLER_CONFIG (phrases, intervals)                         │
+│  ├── AUDIO_CONFIG (sample rates, formats)                       │
+│  └── DEFAULT_PERSONA (Iris base instructions)                   │
+└──────────────────────────┬───────────────────────────────────────┘
+                           │
+          ┌────────────────┼────────────────┐
+          ▼                ▼                ▼
+┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
+│ Cloudflare Copy │ │ Frontend Copy   │ │ Supabase Uses   │
+│ constants.ts    │ │ voiceConfig.ts  │ │ Direct Import   │
+│ // SYNC WITH... │ │ // SYNC WITH... │ │ from _shared    │
+└─────────────────┘ └─────────────────┘ └─────────────────┘
 ```
 
 ---
 
-## Part 2: Remaining v7b Technical Fixes
+## Implementation Plan
 
-These fixes were identified in the previous plan but NOT implemented in v7:
+### Phase 1: Expand Shared Config (Source of Truth)
 
-### 2a. Add Missing State Variables
+Update `supabase/functions/_shared/config.ts`:
 
 ```typescript
-// Add around line 170 (after userProfile)
-private currentResponseItemId: string | null = null;
-private audioSamplesPlayed: number = 0;
+export const VOICE_CONFIG = {
+  // Timing
+  OUTBOUND_HELLO_WAIT_MS: 2000,
+  FAREWELL_DELAY_MS: 5000,
+  SPEECH_DEBOUNCE_MS: 300,
+  
+  // Audio
+  SAMPLE_RATE_OPENAI: 24000,
+  SAMPLE_RATE_TWILIO: 8000,
+  
+  // ElevenLabs defaults
+  DEFAULT_ELEVENLABS_VOICE_ID: 'EXAVITQu4vr4xnSDxMaL',
+  ELEVENLABS_MODEL_ID: 'eleven_multilingual_v2',
+};
+
+export const FILLER_CONFIG = {
+  PHRASES: [
+    "One moment...",
+    "Let me check...",
+    "Checking that...",
+    "Just a sec...",
+    "Looking into it...",
+    "Hmm, let me see...",
+    "Working on that...",
+    "Almost there...",
+  ],
+  INTERVALS_MS: [1500, 3500, 6000],
+};
+
+export const SENTENCE_ENDERS = /[.!?]+[\s"')\]]*$/;
 ```
 
-### 2b. Add `response.output_item.added` Handler
+### Phase 2: Update Supabase Bridge
 
-Track the response item ID so truncation knows which item to truncate.
+- Import from `_shared/config.ts`
+- Remove inline duplicates
 
-### 2c. Track Audio Samples in `response.audio.delta`
+### Phase 3: Create Frontend Config
 
-Count PCM samples to calculate exact truncation milliseconds.
+Create `src/config/voiceConfig.ts`:
+```typescript
+// SYNC WITH: supabase/functions/_shared/config.ts
+// Last synced: YYYY-MM-DD
+export const VOICE_CONFIG = {
+  FAREWELL_DELAY_MS: 5000,
+  SPEECH_DEBOUNCE_MS: 300,
+  // ... other values
+};
+```
 
-### 2d. Replace `response.cancel` with `conversation.item.truncate`
+### Phase 4: Create Cloudflare Config
 
-Update `handleBargeIn()` to use the proper truncation approach that preserves VAD state.
+Create `cloudflare/src/config.ts`:
+```typescript
+// SYNC WITH: supabase/functions/_shared/config.ts
+// Last synced: YYYY-MM-DD
+export const VOICE_CONFIG = { ... };
+export const FILLER_PHRASES = [ ... ];
+export const SENTENCE_ENDERS = /[.!?]+[\s"')\]]*$/;
+```
 
-### 2e. Update `response.done` to Reset State
+### Phase 5: Update Pre-Flight Checklist
 
-Clear `currentResponseItemId` and `audioSamplesPlayed` when response completes.
+Add to `cloudflare/PREFLIGHT_CHECKLIST.md`:
 
----
+```markdown
+### 7. Timing & Voice Constants Synchronization
+When changing voice/timing values, sync across:
+- [ ] `supabase/functions/_shared/config.ts` (SOURCE OF TRUTH)
+- [ ] `cloudflare/src/config.ts` (Cloudflare copy)
+- [ ] `src/config/voiceConfig.ts` (Frontend copy)
 
-## Part 3: Version Synchronization
-
-Update version to `2026-01-29-cf-v7b` in all three files:
-
-1. `cloudflare/src/index.ts` line 21
-2. `cloudflare/src/TwilioCallSession.ts` line 77
-3. `.github/workflows/deploy-cloudflare.yml` line 51
+Sync checklist:
+- FAREWELL_DELAY_MS
+- SPEECH_DEBOUNCE_MS  
+- FILLER_PHRASES
+- SENTENCE_ENDERS regex
+- DEFAULT_ELEVENLABS_VOICE_ID
+```
 
 ---
 
 ## Files to Create/Modify
 
-| File | Action | Changes |
+| File | Action | Purpose |
 |------|--------|---------|
-| `cloudflare/PREFLIGHT_CHECKLIST.md` | CREATE | New pre-flight checklist document |
-| `cloudflare/src/TwilioCallSession.ts` | MODIFY | Add state vars, output_item handler, sample tracking, fix handleBargeIn, fix response.done, version bump |
-| `cloudflare/src/index.ts` | MODIFY | Version bump to v7b |
-| `.github/workflows/deploy-cloudflare.yml` | MODIFY | Update EXPECTED_VERSION to v7b |
+| `supabase/functions/_shared/config.ts` | MODIFY | Add all voice/timing constants |
+| `supabase/functions/twilio-realtime-bridge/index.ts` | MODIFY | Import from shared, remove duplicates |
+| `src/config/voiceConfig.ts` | CREATE | Frontend-accessible copy |
+| `src/utils/RealtimeVoiceAssistant.ts` | MODIFY | Import from voiceConfig |
+| `cloudflare/src/config.ts` | CREATE | Cloudflare-accessible copy |
+| `cloudflare/src/TwilioCallSession.ts` | MODIFY | Import from config.ts |
+| `cloudflare/PREFLIGHT_CHECKLIST.md` | MODIFY | Add sync documentation |
 
 ---
 
-## Verification After Deployment
+## Expected Outcomes
 
-GitHub Actions should show:
-```
-Health response: {"status":"ok","version":"2026-01-29-cf-v7b",...}
-✅ Health check passed!
-✅ Version check passed: 2026-01-29-cf-v7b
-```
+1. **Single source of truth** for all voice configuration
+2. **Explicit sync documentation** prevents silent drift
+3. **Pre-flight checklist** catches missed updates
+4. **Consistent UX** across all three modes
+5. **Easier maintenance** - change in one place, copy to others
 
-Test call should show:
-- `cf_user_speech_stopped` fires (VAD working)
-- `cf_transcription` fires (transcription working)
-- `messages_persisted: 2+` (conversation recorded)
+---
+
+## Technical Notes
+
+- Version bump to `2026-01-29-cf-v7d` after implementation
+- All three locations will use identical values
+- Comments in copied files reference source of truth
+- Pre-flight checklist enforces human verification
 
