@@ -4,13 +4,16 @@ import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { ChevronLeft, ChevronRight, Clock, Calendar as CalendarIcon, Plus } from 'lucide-react';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { ChevronLeft, ChevronRight, Clock, Calendar as CalendarIcon, Plus, List, LayoutGrid } from 'lucide-react';
 import { Task } from '@/types/task';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
 import TaskCard from '@/components/TaskCard';
 import TaskCreationModal from '@/components/TaskCreationModal';
+import TimeSlotGrid from '@/components/TimeSlotGrid';
+import { useIsMobile } from '@/hooks/use-mobile';
 
 interface DailyScheduleViewProps {
   tasks: Task[];
@@ -28,6 +31,9 @@ const DailyScheduleView: React.FC<DailyScheduleViewProps> = ({
   const { user } = useAuth();
   const [isCreating, setIsCreating] = useState(false);
   const [defaultBoardId, setDefaultBoardId] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  const [createAtTime, setCreateAtTime] = useState<{ hour: number; minute: number } | null>(null);
+  const isMobile = useIsMobile();
 
   // Get default board for task creation
   useEffect(() => {
@@ -151,6 +157,39 @@ const DailyScheduleView: React.FC<DailyScheduleViewProps> = ({
     return format(parseISO(dateString), 'h:mm a');
   };
 
+  const handleTimeSlotClick = (date: Date, hour: number, minute: number) => {
+    setCreateAtTime({ hour, minute });
+    setIsCreating(true);
+  };
+
+  const handleTaskStatusChange = async (taskId: string, newStatus: Task['status']) => {
+    try {
+      const { error } = await supabase
+        .from('tasks')
+        .update({ 
+          status: newStatus,
+          completed_at: newStatus === 'DONE' ? new Date().toISOString() : null
+        })
+        .eq('id', taskId);
+
+      if (error) throw error;
+      toast.success(newStatus === 'DONE' ? 'Task completed!' : 'Task updated');
+      onTaskUpdate();
+    } catch (error) {
+      console.error('Error updating task status:', error);
+      toast.error('Failed to update task');
+    }
+  };
+
+  // Category colors for badges in list view
+  const categoryColors: Record<string, string> = {
+    LIFE: 'bg-[hsl(var(--category-life))] text-white',
+    CAREER: 'bg-[hsl(var(--category-career))] text-white',
+    VENTURES: 'bg-[hsl(var(--category-ventures))] text-white',
+    EDUCATION: 'bg-[hsl(var(--category-education))] text-white',
+    PROF_EDUCATION: 'bg-[hsl(var(--category-education))] text-white',
+  };
+
   return (
     <div className="space-y-6">
       {/* Date Navigation */}
@@ -187,146 +226,191 @@ const DailyScheduleView: React.FC<DailyScheduleViewProps> = ({
       </Card>
 
       <DragDropContext onDragEnd={handleDragEnd}>
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Scheduled Tasks */}
-          <div className="lg:col-span-2">
-            <Card className="p-6">
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+          {/* Scheduled Tasks - Time Grid */}
+          <div className="lg:col-span-3">
+            <Card className="p-4 md:p-6">
               <div className="flex items-center justify-between mb-4">
-                <h2 className="text-xl font-semibold flex items-center gap-2">
+                <h2 className="text-lg md:text-xl font-semibold flex items-center gap-2">
                   <Clock className="w-5 h-5" />
                   Scheduled Tasks
                   <Badge variant="secondary">{scheduledTasks.length}</Badge>
                 </h2>
-                <Button 
-                  size="sm"
-                  onClick={() => setIsCreating(true)}
-                >
-                  <Plus className="w-4 h-4 mr-2" />
-                  New Task
-                </Button>
+                <div className="flex items-center gap-2">
+                  {/* View Toggle */}
+                  <div className="flex items-center border rounded-md">
+                    <Button
+                      variant={viewMode === 'grid' ? 'default' : 'ghost'}
+                      size="sm"
+                      className="h-8 px-2"
+                      onClick={() => setViewMode('grid')}
+                    >
+                      <LayoutGrid className="w-4 h-4" />
+                    </Button>
+                    <Button
+                      variant={viewMode === 'list' ? 'default' : 'ghost'}
+                      size="sm"
+                      className="h-8 px-2"
+                      onClick={() => setViewMode('list')}
+                    >
+                      <List className="w-4 h-4" />
+                    </Button>
+                  </div>
+                  <Button 
+                    size="sm"
+                    onClick={() => {
+                      setCreateAtTime(null);
+                      setIsCreating(true);
+                    }}
+                  >
+                    <Plus className="w-4 h-4 mr-2" />
+                    New Task
+                  </Button>
+                </div>
               </div>
 
-              <Droppable droppableId="scheduled">
-                {(provided, snapshot) => (
-                  <div
-                    ref={provided.innerRef}
-                    {...provided.droppableProps}
-                    className={`space-y-3 min-h-[400px] p-4 rounded-lg border-2 border-dashed transition-colors ${
-                      snapshot.isDraggingOver ? 'border-primary bg-accent/50' : 'border-border'
-                    }`}
-                  >
-                    {scheduledTasks.length === 0 ? (
-                      <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
-                        <Clock className="w-12 h-12 mb-2 opacity-50" />
-                        <p>No scheduled tasks for this day</p>
-                        <p className="text-sm">Drag tasks here to schedule them</p>
-                      </div>
-                    ) : (
-                      scheduledTasks.map((task, index) => (
-                        <Draggable key={task.id} draggableId={task.id} index={index}>
-                          {(provided, snapshot) => (
-                            <div
-                              ref={provided.innerRef}
-                              {...provided.draggableProps}
-                              {...provided.dragHandleProps}
-                              className={snapshot.isDragging ? 'opacity-50' : ''}
-                            >
-                              <Card className="p-4 hover:shadow-md transition-shadow">
-                                <div className="flex items-start justify-between">
-                                  <div className="flex-1">
-                                    <div className="flex items-center gap-2 mb-2">
-                                      <Badge variant={getPriorityColor(task.priority)}>
-                                        {task.priority}
-                                      </Badge>
-                                      {task.category && (
-                                        <Badge variant="outline">{task.category}</Badge>
+              {viewMode === 'grid' ? (
+                /* Time Grid View */
+                <ScrollArea className="h-[500px] md:h-[600px] rounded-lg border">
+                  <TimeSlotGrid
+                    dates={[selectedDate]}
+                    tasks={scheduledTasks}
+                    onTimeSlotClick={handleTimeSlotClick}
+                    onTaskClick={(task) => console.log('Task clicked:', task)}
+                    onStatusChange={handleTaskStatusChange}
+                    className="min-w-[300px]"
+                  />
+                </ScrollArea>
+              ) : (
+                /* List View (original Droppable) */
+                <Droppable droppableId="scheduled">
+                  {(provided, snapshot) => (
+                    <div
+                      ref={provided.innerRef}
+                      {...provided.droppableProps}
+                      className={`space-y-3 min-h-[400px] p-4 rounded-lg border-2 border-dashed transition-colors ${
+                        snapshot.isDraggingOver ? 'border-primary bg-accent/50' : 'border-border'
+                      }`}
+                    >
+                      {scheduledTasks.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
+                          <Clock className="w-12 h-12 mb-2 opacity-50" />
+                          <p>No scheduled tasks for this day</p>
+                          <p className="text-sm">Drag tasks here to schedule them</p>
+                        </div>
+                      ) : (
+                        scheduledTasks.map((task, index) => (
+                          <Draggable key={task.id} draggableId={task.id} index={index}>
+                            {(provided, snapshot) => (
+                              <div
+                                ref={provided.innerRef}
+                                {...provided.draggableProps}
+                                {...provided.dragHandleProps}
+                                className={snapshot.isDragging ? 'opacity-50' : ''}
+                              >
+                                <Card className="p-4 hover:shadow-md transition-shadow">
+                                  <div className="flex items-start justify-between">
+                                    <div className="flex-1">
+                                      <div className="flex items-center gap-2 mb-2 flex-wrap">
+                                        <Badge variant={getPriorityColor(task.priority)}>
+                                          {task.priority}
+                                        </Badge>
+                                        {task.category && (
+                                          <Badge className={categoryColors[task.category] || 'bg-secondary'}>
+                                            {task.category}
+                                          </Badge>
+                                        )}
+                                        <span className="text-sm text-muted-foreground">
+                                          {task.start_time && task.end_time && 
+                                            `${formatTime(task.start_time)} - ${formatTime(task.end_time)}`
+                                          }
+                                        </span>
+                                      </div>
+                                      <h3 className="font-semibold mb-1">{task.title}</h3>
+                                      {task.description && (
+                                        <p className="text-sm text-muted-foreground line-clamp-2">
+                                          {task.description}
+                                        </p>
                                       )}
-                                      <span className="text-sm text-muted-foreground">
-                                        {task.start_time && task.end_time && 
-                                          `${formatTime(task.start_time)} - ${formatTime(task.end_time)}`
-                                        }
-                                      </span>
                                     </div>
-                                    <h3 className="font-semibold mb-1">{task.title}</h3>
-                                    {task.description && (
-                                      <p className="text-sm text-muted-foreground line-clamp-2">
-                                        {task.description}
-                                      </p>
-                                    )}
                                   </div>
-                                </div>
-                              </Card>
-                            </div>
-                          )}
-                        </Draggable>
-                      ))
-                    )}
-                    {provided.placeholder}
-                  </div>
-                )}
-              </Droppable>
+                                </Card>
+                              </div>
+                            )}
+                          </Draggable>
+                        ))
+                      )}
+                      {provided.placeholder}
+                    </div>
+                  )}
+                </Droppable>
+              )}
             </Card>
           </div>
 
           {/* Unscheduled Tasks */}
-          <div>
-            <Card className="p-6">
-              <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
+          <div className="lg:col-span-1">
+            <Card className="p-4 md:p-6">
+              <h2 className="text-lg md:text-xl font-semibold mb-4 flex items-center gap-2">
                 Unscheduled
                 <Badge variant="secondary">{unscheduledTasks.length}</Badge>
               </h2>
 
               <Droppable droppableId="unscheduled">
                 {(provided, snapshot) => (
-                  <div
-                    ref={provided.innerRef}
-                    {...provided.droppableProps}
-                    className={`space-y-3 min-h-[400px] p-4 rounded-lg border-2 border-dashed transition-colors ${
-                      snapshot.isDraggingOver ? 'border-primary bg-accent/50' : 'border-border'
-                    }`}
-                  >
-                    {unscheduledTasks.length === 0 ? (
-                      <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
-                        <CalendarIcon className="w-12 h-12 mb-2 opacity-50" />
-                        <p className="text-center">All tasks are scheduled!</p>
-                      </div>
-                    ) : (
-                      unscheduledTasks.map((task, index) => (
-                        <Draggable key={task.id} draggableId={task.id} index={index}>
-                          {(provided, snapshot) => (
-                            <div
-                              ref={provided.innerRef}
-                              {...provided.draggableProps}
-                              {...provided.dragHandleProps}
-                              className={snapshot.isDragging ? 'opacity-50' : ''}
-                            >
-                              <Card className="p-4 hover:shadow-md transition-shadow cursor-move">
-                                <div className="flex items-start justify-between">
-                                  <div className="flex-1">
-                                    <div className="flex items-center gap-2 mb-2">
-                                      <Badge variant={getPriorityColor(task.priority)}>
-                                        {task.priority}
-                                      </Badge>
-                                      {task.category && (
-                                        <Badge variant="outline">{task.category}</Badge>
+                  <ScrollArea className="h-[400px] md:h-[500px]">
+                    <div
+                      ref={provided.innerRef}
+                      {...provided.droppableProps}
+                      className={`space-y-3 min-h-[400px] p-2 rounded-lg border-2 border-dashed transition-colors ${
+                        snapshot.isDraggingOver ? 'border-primary bg-accent/50' : 'border-border'
+                      }`}
+                    >
+                      {unscheduledTasks.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
+                          <CalendarIcon className="w-12 h-12 mb-2 opacity-50" />
+                          <p className="text-center text-sm">All tasks are scheduled!</p>
+                        </div>
+                      ) : (
+                        unscheduledTasks.map((task, index) => (
+                          <Draggable key={task.id} draggableId={task.id} index={index}>
+                            {(provided, snapshot) => (
+                              <div
+                                ref={provided.innerRef}
+                                {...provided.draggableProps}
+                                {...provided.dragHandleProps}
+                                className={snapshot.isDragging ? 'opacity-50' : ''}
+                              >
+                                <Card className="p-3 hover:shadow-md transition-shadow cursor-move">
+                                  <div className="flex items-start justify-between">
+                                    <div className="flex-1">
+                                      <div className="flex items-center gap-1 mb-1 flex-wrap">
+                                        <Badge variant={getPriorityColor(task.priority)} className="text-[10px] px-1">
+                                          {task.priority}
+                                        </Badge>
+                                        {task.category && (
+                                          <Badge className={`text-[10px] px-1 ${categoryColors[task.category] || 'bg-secondary'}`}>
+                                            {task.category}
+                                          </Badge>
+                                        )}
+                                      </div>
+                                      <h3 className="font-semibold text-sm mb-1">{task.title}</h3>
+                                      {task.description && (
+                                        <p className="text-xs text-muted-foreground line-clamp-2">
+                                          {task.description}
+                                        </p>
                                       )}
                                     </div>
-                                    <h3 className="font-semibold mb-1">{task.title}</h3>
-                                    {task.description && (
-                                      <p className="text-sm text-muted-foreground line-clamp-2">
-                                        {task.description}
-                                      </p>
-                                    )}
                                   </div>
-                                </div>
-                              </Card>
-                            </div>
-                          )}
-                        </Draggable>
-                      ))
-                    )}
-                    {provided.placeholder}
-                  </div>
+                                </Card>
+                              </div>
+                            )}
+                          </Draggable>
+                        ))
+                      )}
+                      {provided.placeholder}
+                    </div>
+                  </ScrollArea>
                 )}
               </Droppable>
             </Card>
