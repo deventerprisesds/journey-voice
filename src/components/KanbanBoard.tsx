@@ -14,7 +14,9 @@ import {
   Eye, 
   EyeOff,
   CheckCircle2,
-  Trash2
+  Trash2,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
@@ -27,6 +29,16 @@ import ColumnManager from './ColumnManager';
 import { AddColumnModal } from './AddColumnModal';
 import { itineraryEngine } from '@/utils/ItineraryEngine';
 import VoiceAssistantButton from './VoiceAssistantButton';
+import { useIsMobile } from '@/hooks/use-mobile';
+import { 
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Badge } from '@/components/ui/badge';
+import { startOfWeek, endOfWeek, startOfMonth, endOfMonth, addWeeks, isWithinInterval, parseISO } from 'date-fns';
 
 import { Task, Board, Column } from '@/types/task';
 
@@ -80,10 +92,22 @@ const STANDARD_COLUMNS: Column[] = [
   { id: 'std-done', name: 'Done', status: 'DONE', position: 5, board_id: 'std' },
 ];
 
+// Time period filter options
+type TimePeriod = 'all' | 'this-week' | 'next-week' | 'this-month';
+
+const CATEGORY_COLORS: Record<string, { bg: string; border: string; text: string }> = {
+  LIFE: { bg: 'bg-pink-50', border: 'border-pink-300', text: 'text-pink-700' },
+  CAREER: { bg: 'bg-blue-50', border: 'border-blue-300', text: 'text-blue-700' },
+  PROF_EDUCATION: { bg: 'bg-purple-50', border: 'border-purple-300', text: 'text-purple-700' },
+  VENTURES: { bg: 'bg-green-50', border: 'border-green-300', text: 'text-green-700' },
+  EDUCATION: { bg: 'bg-orange-50', border: 'border-orange-300', text: 'text-orange-700' },
+};
+
 const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEdit, categoryFilter, useStandardColumns = false }) => {
   console.log('KanbanBoard component rendering', { categoryFilter, useStandardColumns }); // Debug log
   const { toast } = useToast();
   const { user, isDemoMode } = useAuth();
+  const isMobile = useIsMobile();
   const [loading, setLoading] = useState(true);
   const [board, setBoard] = useState<Board | null>(null);
   const [columns, setColumns] = useState<Column[]>([]);
@@ -101,6 +125,16 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
   });
   const [isSelectMode, setIsSelectMode] = useState(false);
   const [selectedTasks, setSelectedTasks] = useState<Set<string>>(new Set());
+  
+  // Time period filter
+  const [timePeriod, setTimePeriod] = useState<TimePeriod>('all');
+  
+  // Category bins - track which are collapsed
+  const [collapsedCategories, setCollapsedCategories] = useState<Record<string, Set<string>>>({});
+  
+  // Touch drag delay - for mobile
+  const [touchStartTime, setTouchStartTime] = useState<number | null>(null);
+  const TOUCH_DELAY_MS = 200; // Hold for 200ms before drag initiates
   
   // Drag-to-pan state
   const [isDragging, setIsDragging] = useState(false);
@@ -545,10 +579,50 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
     return (columnsToCheck[0]?.status as any) || 'BACKLOG';
   };
 
+  // Filter tasks by time period
+  const filterByTimePeriod = (taskList: Task[]): Task[] => {
+    if (timePeriod === 'all') return taskList;
+    
+    const now = new Date();
+    let start: Date;
+    let end: Date;
+    
+    switch (timePeriod) {
+      case 'this-week':
+        start = startOfWeek(now, { weekStartsOn: 1 });
+        end = endOfWeek(now, { weekStartsOn: 1 });
+        break;
+      case 'next-week':
+        const nextWeek = addWeeks(now, 1);
+        start = startOfWeek(nextWeek, { weekStartsOn: 1 });
+        end = endOfWeek(nextWeek, { weekStartsOn: 1 });
+        break;
+      case 'this-month':
+        start = startOfMonth(now);
+        end = endOfMonth(now);
+        break;
+      default:
+        return taskList;
+    }
+    
+    return taskList.filter(task => {
+      if (!task.due_date) return false; // Tasks without due date are excluded from week/month filters
+      try {
+        const dueDate = parseISO(task.due_date);
+        return isWithinInterval(dueDate, { start, end });
+      } catch {
+        return false;
+      }
+    });
+  };
+
   const getTasksByStatus = (status: Task['status']) => {
     // Use filtered tasks if filters are active, otherwise use all tasks
     const tasksToFilter = filteredTasks.length > 0 ? filteredTasks : tasks;
     let filtered = tasksToFilter.filter(task => mapTaskStatusForColumns(task) === status);
+    
+    // Apply time period filter
+    filtered = filterByTimePeriod(filtered);
     
     // Hide completed tasks if toggle is off
     if (!showCompletedTasks) {
@@ -556,6 +630,48 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
     }
     
     return filtered;
+  };
+
+  // Group tasks by category for bin display
+  const getTasksByStatusGroupedByCategory = (status: Task['status']) => {
+    const columnTasks = getTasksByStatus(status);
+    const grouped: Record<string, Task[]> = {};
+    const uncategorized: Task[] = [];
+    
+    columnTasks.forEach(task => {
+      const cat = task.category || 'UNCATEGORIZED';
+      if (cat === 'UNCATEGORIZED' || !CATEGORY_COLORS[cat]) {
+        uncategorized.push(task);
+      } else {
+        if (!grouped[cat]) grouped[cat] = [];
+        grouped[cat].push(task);
+      }
+    });
+    
+    // Add uncategorized at the end
+    if (uncategorized.length > 0) {
+      grouped['UNCATEGORIZED'] = uncategorized;
+    }
+    
+    return grouped;
+  };
+
+  // Toggle category collapse for a column
+  const toggleCategoryCollapse = (columnId: string, category: string) => {
+    setCollapsedCategories(prev => {
+      const columnCollapsed = prev[columnId] || new Set();
+      const newSet = new Set(columnCollapsed);
+      if (newSet.has(category)) {
+        newSet.delete(category);
+      } else {
+        newSet.add(category);
+      }
+      return { ...prev, [columnId]: newSet };
+    });
+  };
+
+  const isCategoryCollapsed = (columnId: string, category: string) => {
+    return collapsedCategories[columnId]?.has(category) || false;
   };
 
   const toggleShowCompletedTasks = () => {
@@ -948,73 +1064,96 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
       )}
 
       {/* Toolbar - always visible */}
-      <div className="flex items-center justify-end gap-2 flex-wrap">
-        <VoiceAssistantButton />
-        <Button
-          variant={isSelectMode ? "default" : "outline"}
-          size="sm"
-          onClick={() => {
-            setIsSelectMode(!isSelectMode);
-            if (isSelectMode) setSelectedTasks(new Set());
-          }}
-          title="Select multiple tasks for bulk actions"
-        >
-          <CheckCircle2 className="h-4 w-4 mr-2" />
-          {isSelectMode ? 'Cancel' : 'Select'}
-        </Button>
-        <Button
-          variant={showCompletedTasks ? "default" : "outline"}
-          size="sm"
-          onClick={toggleShowCompletedTasks}
-          title={showCompletedTasks ? "Hide completed tasks" : "Show completed tasks"}
-        >
-          {showCompletedTasks ? (
-            <><Eye className="h-4 w-4 mr-2" />Hide Completed</>
-          ) : (
-            <><EyeOff className="h-4 w-4 mr-2" />Show Completed</>
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        {/* Time Period Filter */}
+        <div className="flex items-center gap-2">
+          <Select value={timePeriod} onValueChange={(value: TimePeriod) => setTimePeriod(value)}>
+            <SelectTrigger className="w-[140px] h-9 bg-background">
+              <Calendar className="h-4 w-4 mr-2" />
+              <SelectValue placeholder="Time Period" />
+            </SelectTrigger>
+            <SelectContent className="bg-background z-50">
+              <SelectItem value="all">All Time</SelectItem>
+              <SelectItem value="this-week">This Week</SelectItem>
+              <SelectItem value="next-week">Next Week</SelectItem>
+              <SelectItem value="this-month">This Month</SelectItem>
+            </SelectContent>
+          </Select>
+          {timePeriod !== 'all' && (
+            <Badge variant="secondary" className="text-xs">
+              {timePeriod === 'this-week' ? 'This Week' : timePeriod === 'next-week' ? 'Next Week' : 'This Month'}
+            </Badge>
           )}
-        </Button>
-        {!useStandardColumns && board && (
-          <AddColumnModal
-            boardId={board.id} 
-            onColumnCreated={fetchBoardColumns}
-            isDemo={isDemoMode}
-          />
-        )}
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => setShowFilters(!showFilters)}
-        >
-          <Filter className="h-4 w-4 mr-2" />
-          Filters
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => setIsCreationModalOpen(true)}
-        >
-          <Wand2 className="h-4 w-4 mr-2" />
-          AI Create
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={generateDailySchedule}
-          disabled={isGeneratingSchedule}
-        >
-          <Calendar className="h-4 w-4 mr-2" />
-          {isGeneratingSchedule ? 'Generating...' : 'Schedule'}
-        </Button>
-        {!useStandardColumns && (
+        </div>
+
+        <div className="flex items-center gap-2 flex-wrap">
+          <VoiceAssistantButton />
           <Button
+            variant={isSelectMode ? "default" : "outline"}
             size="sm"
-            onClick={addSampleTask}
+            onClick={() => {
+              setIsSelectMode(!isSelectMode);
+              if (isSelectMode) setSelectedTasks(new Set());
+            }}
+            title="Select multiple tasks for bulk actions"
           >
-            <Plus className="h-4 w-4 mr-2" />
-            Add Sample
+            <CheckCircle2 className="h-4 w-4 mr-2" />
+            {isSelectMode ? 'Cancel' : 'Select'}
           </Button>
-        )}
+          <Button
+            variant={showCompletedTasks ? "default" : "outline"}
+            size="sm"
+            onClick={toggleShowCompletedTasks}
+            title={showCompletedTasks ? "Hide completed tasks" : "Show completed tasks"}
+          >
+            {showCompletedTasks ? (
+              <><Eye className="h-4 w-4 mr-2" />Hide Completed</>
+            ) : (
+              <><EyeOff className="h-4 w-4 mr-2" />Show Completed</>
+            )}
+          </Button>
+          {!useStandardColumns && board && (
+            <AddColumnModal
+              boardId={board.id} 
+              onColumnCreated={fetchBoardColumns}
+              isDemo={isDemoMode}
+            />
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowFilters(!showFilters)}
+          >
+            <Filter className="h-4 w-4 mr-2" />
+            Filters
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setIsCreationModalOpen(true)}
+          >
+            <Wand2 className="h-4 w-4 mr-2" />
+            AI Create
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={generateDailySchedule}
+            disabled={isGeneratingSchedule}
+          >
+            <Calendar className="h-4 w-4 mr-2" />
+            {isGeneratingSchedule ? 'Generating...' : 'Schedule'}
+          </Button>
+          {!useStandardColumns && (
+            <Button
+              size="sm"
+              onClick={addSampleTask}
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              Add Sample
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Filters */}
@@ -1096,16 +1235,16 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
                   provided.innerRef(el);
                 }}
                 {...provided.droppableProps}
-                className="flex gap-4 min-h-[600px] overflow-x-auto pb-4 px-12 scroll-smooth"
+                className="flex gap-4 min-h-[600px] overflow-x-auto pb-4 px-12 scroll-smooth kanban-scroll-container"
                 style={{ 
                   scrollbarWidth: 'thin',
-                  cursor: isDragging ? 'grabbing' : 'grab',
+                  cursor: isMobile ? 'auto' : (isDragging ? 'grabbing' : 'grab'),
                   userSelect: isDragging ? 'none' : 'auto'
                 }}
-                onMouseDown={handleMouseDown}
-                onMouseMove={handleMouseMove}
-                onMouseUp={handleMouseUp}
-                onMouseLeave={handleMouseLeave}
+                onMouseDown={!isMobile ? handleMouseDown : undefined}
+                onMouseMove={!isMobile ? handleMouseMove : undefined}
+                onMouseUp={!isMobile ? handleMouseUp : undefined}
+                onMouseLeave={!isMobile ? handleMouseLeave : undefined}
               >
                 {effectiveColumns.map((column, index) => {
                   const columnTasks = getTasksByStatus(column.status);
@@ -1131,57 +1270,100 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
 
                           {/* Tasks Container */}
                           <Droppable droppableId={column.id} type="task">
-                             {(provided, snapshot) => (
-                               <div
-                                 {...provided.droppableProps}
-                                 ref={provided.innerRef}
-                                 className={`
-                                  flex-1 space-y-2 p-2 rounded-lg border-2 border-dashed transition-colors min-h-32 mt-2
-                                  ${snapshot.isDraggingOver 
-                                    ? 'border-primary bg-primary/5' 
-                                    : 'border-muted-foreground/20 bg-muted/10'
-                                  }
-                                  ${statusColors[column.status as keyof typeof statusColors]}
-                                `}
-                              >
-                                {columnTasks.map((task, index) => (
-                                  <Draggable
-                                    key={task.id}
-                                    draggableId={task.id}
-                                    index={index}
-                                  >
-                                     {(provided, snapshot) => (
-                                       <div
-                                         {...provided.draggableProps}
-                                         {...provided.dragHandleProps}
-                                         ref={provided.innerRef}
-                                         className={snapshot.isDragging ? 'rotate-2 scale-105' : ''}
+                             {(provided, snapshot) => {
+                               const groupedTasks = getTasksByStatusGroupedByCategory(column.status);
+                               const categories = Object.keys(groupedTasks);
+                               let globalIndex = 0;
+                               
+                               return (
+                                <div
+                                  {...provided.droppableProps}
+                                  ref={provided.innerRef}
+                                  className={`
+                                   flex-1 space-y-2 p-2 rounded-lg border-2 border-dashed transition-colors min-h-32 mt-2
+                                   ${snapshot.isDraggingOver 
+                                     ? 'border-primary bg-primary/5' 
+                                     : 'border-muted-foreground/20 bg-muted/10'
+                                   }
+                                   ${statusColors[column.status as keyof typeof statusColors]}
+                                 `}
+                               >
+                                 {categories.length === 0 && (
+                                   <div className="text-center py-8 text-muted-foreground">
+                                     <Clock className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                                     <p className="text-sm">No tasks</p>
+                                   </div>
+                                 )}
+                                 
+                                 {categories.map((category) => {
+                                   const categoryTasks = groupedTasks[category];
+                                   const categoryStyle = CATEGORY_COLORS[category] || { bg: 'bg-gray-50', border: 'border-gray-300', text: 'text-gray-700' };
+                                   const isCollapsed = isCategoryCollapsed(column.id, category);
+                                   const startIndex = globalIndex;
+                                   globalIndex += categoryTasks.length;
+                                   
+                                   return (
+                                     <div key={category} className={`rounded-md ${categoryStyle.border} border ${categoryStyle.bg} overflow-hidden`}>
+                                       {/* Category Header - collapsible */}
+                                       <button
+                                         onClick={() => toggleCategoryCollapse(column.id, category)}
+                                         className={`w-full flex items-center justify-between p-2 ${categoryStyle.text} hover:bg-black/5 transition-colors`}
                                        >
-                                          <TaskCard
-                                            task={task}
-                                            onEdit={handleTaskEdit}
-                                            onStatusChange={handleStatusChange}
-                                            onSchedule={handleTaskSchedule}
-                                            onDelete={handleTaskDelete}
-                                            isSelectMode={isSelectMode}
-                                            isSelected={selectedTasks.has(task.id)}
-                                            onSelect={handleSelectTask}
-                                          />
-                                      </div>
-                                    )}
-                                  </Draggable>
-                                ))}
-                                {provided.placeholder}
-                                
-                                {/* Empty State */}
-                                {columnTasks.length === 0 && (
-                                  <div className="text-center py-8 text-muted-foreground">
-                                    <Clock className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                                    <p className="text-sm">No tasks</p>
-                                  </div>
-                                )}
-                              </div>
-                            )}
+                                         <div className="flex items-center gap-2">
+                                           {isCollapsed ? (
+                                             <ChevronRight className="h-4 w-4" />
+                                           ) : (
+                                             <ChevronDown className="h-4 w-4" />
+                                           )}
+                                           <span className="font-medium text-sm">
+                                             {category === 'UNCATEGORIZED' ? 'Uncategorized' : category.replace('_', ' ')}
+                                           </span>
+                                         </div>
+                                         <Badge variant="secondary" className="text-xs">
+                                           {categoryTasks.length}
+                                         </Badge>
+                                       </button>
+                                       
+                                       {/* Category Tasks */}
+                                       {!isCollapsed && (
+                                         <div className="p-2 space-y-2 bg-background/50">
+                                           {categoryTasks.map((task, idx) => (
+                                             <Draggable
+                                               key={task.id}
+                                               draggableId={task.id}
+                                               index={startIndex + idx}
+                                             >
+                                               {(provided, snapshot) => (
+                                                 <div
+                                                   {...provided.draggableProps}
+                                                   {...provided.dragHandleProps}
+                                                   ref={provided.innerRef}
+                                                   className={`kanban-draggable ${snapshot.isDragging ? 'rotate-2 scale-105' : ''}`}
+                                                   data-is-dragging={snapshot.isDragging}
+                                                 >
+                                                   <TaskCard
+                                                     task={task}
+                                                     onEdit={handleTaskEdit}
+                                                     onStatusChange={handleStatusChange}
+                                                     onSchedule={handleTaskSchedule}
+                                                     onDelete={handleTaskDelete}
+                                                     isSelectMode={isSelectMode}
+                                                     isSelected={selectedTasks.has(task.id)}
+                                                     onSelect={handleSelectTask}
+                                                   />
+                                                 </div>
+                                               )}
+                                             </Draggable>
+                                           ))}
+                                         </div>
+                                       )}
+                                     </div>
+                                   );
+                                 })}
+                                 {provided.placeholder}
+                               </div>
+                             );
+                            }}
                           </Droppable>
                         </div>
                       )}

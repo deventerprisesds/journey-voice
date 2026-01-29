@@ -204,4 +204,30 @@ All colors MUST be HSL.
   .shadow-glow {
     box-shadow: 0 0 20px hsl(var(--primary) / 0.5);
   }
+
+  /* Mobile drag delay - requires hold before drag initiates */
+  @media (pointer: coarse) {
+    .kanban-draggable {
+      touch-action: pan-y;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    
+    .kanban-draggable[data-is-dragging="true"] {
+      touch-action: none;
+    }
+  }
+
+  /* Kanban column scrolling on mobile */
+  .kanban-scroll-container {
+    -webkit-overflow-scrolling: touch;
+    scroll-behavior: smooth;
+  }
+
+  @media (pointer: coarse) {
+    .kanban-scroll-container {
+      touch-action: pan-x pan-y;
+    }
+  }
 }
