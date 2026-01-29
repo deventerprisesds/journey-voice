@@ -74,7 +74,7 @@ interface ElevenLabsTTSResponse {
 const SENTENCE_ENDERS = /[.!?]+[\s"')\]]*$/;
 
 // Worker version for deployment verification
-const WORKER_VERSION = '2026-01-29-cf-v7b';
+const WORKER_VERSION = '2026-01-29-cf-v7c';
 
 // Smart filler phrases for tool call acknowledgments (Phase 5)
 const FILLER_PHRASES = [
@@ -1566,12 +1566,18 @@ You: "Looking that up..." [then call web_search tool]`;
       item: {
         type: 'function_call_output',
         call_id: callId,
-        output: JSON.stringify({ status: 'call_ended' })
+        output: JSON.stringify({ status: 'call_ended', message: 'User requested hang up' })
       }
     }));
 
-    // Give time for final audio
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    // Trigger OpenAI to generate farewell response
+    this.openaiWs?.send(JSON.stringify({
+      type: 'response.create'
+    }));
+
+    // Give time for farewell audio to generate and play completely
+    // Typical farewell is 2-4 seconds of audio, plus TTS latency
+    await new Promise(resolve => setTimeout(resolve, 5000));
 
     await this.logActivityToSupabase('completed', 'cf_hang_up', { initiated_by: 'user' });
 
