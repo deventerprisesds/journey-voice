@@ -937,81 +937,85 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
     <div className="space-y-4">
       {/* Board Header - hide in standard columns mode (tabbed view) */}
       {!useStandardColumns && board && (
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-2xl font-bold tracking-tight text-foreground">
-              {board.name}
-            </h2>
-            <p className="text-muted-foreground">
-              {board.description}
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <VoiceAssistantButton />
-            <Button
-              variant={isSelectMode ? "default" : "outline"}
-              size="sm"
-              onClick={() => {
-                setIsSelectMode(!isSelectMode);
-                if (isSelectMode) setSelectedTasks(new Set());
-              }}
-              title="Select multiple tasks for bulk actions"
-            >
-              <CheckCircle2 className="h-4 w-4 mr-2" />
-              {isSelectMode ? 'Cancel' : 'Select'}
-            </Button>
-            <Button
-              variant={showCompletedTasks ? "default" : "outline"}
-              size="sm"
-              onClick={toggleShowCompletedTasks}
-              title={showCompletedTasks ? "Hide completed tasks" : "Show completed tasks"}
-            >
-              {showCompletedTasks ? (
-                <><Eye className="h-4 w-4 mr-2" />Hide Completed</>
-              ) : (
-                <><EyeOff className="h-4 w-4 mr-2" />Show Completed</>
-              )}
-            </Button>
-            <AddColumnModal
-              boardId={board.id} 
-              onColumnCreated={fetchBoardColumns}
-              isDemo={isDemoMode}
-            />
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setShowFilters(!showFilters)}
-            >
-              <Filter className="h-4 w-4 mr-2" />
-              Filters
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setIsCreationModalOpen(true)}
-            >
-              <Wand2 className="h-4 w-4 mr-2" />
-              AI Create
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={generateDailySchedule}
-              disabled={isGeneratingSchedule}
-            >
-              <Calendar className="h-4 w-4 mr-2" />
-              {isGeneratingSchedule ? 'Generating...' : 'Schedule'}
-            </Button>
-            <Button
-              size="sm"
-              onClick={addSampleTask}
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              Add Sample
-            </Button>
-          </div>
+        <div>
+          <h2 className="text-2xl font-bold tracking-tight text-foreground">
+            {board.name}
+          </h2>
+          <p className="text-muted-foreground">
+            {board.description}
+          </p>
         </div>
       )}
+
+      {/* Toolbar - always visible */}
+      <div className="flex items-center justify-end gap-2 flex-wrap">
+        <VoiceAssistantButton />
+        <Button
+          variant={isSelectMode ? "default" : "outline"}
+          size="sm"
+          onClick={() => {
+            setIsSelectMode(!isSelectMode);
+            if (isSelectMode) setSelectedTasks(new Set());
+          }}
+          title="Select multiple tasks for bulk actions"
+        >
+          <CheckCircle2 className="h-4 w-4 mr-2" />
+          {isSelectMode ? 'Cancel' : 'Select'}
+        </Button>
+        <Button
+          variant={showCompletedTasks ? "default" : "outline"}
+          size="sm"
+          onClick={toggleShowCompletedTasks}
+          title={showCompletedTasks ? "Hide completed tasks" : "Show completed tasks"}
+        >
+          {showCompletedTasks ? (
+            <><Eye className="h-4 w-4 mr-2" />Hide Completed</>
+          ) : (
+            <><EyeOff className="h-4 w-4 mr-2" />Show Completed</>
+          )}
+        </Button>
+        {!useStandardColumns && board && (
+          <AddColumnModal
+            boardId={board.id} 
+            onColumnCreated={fetchBoardColumns}
+            isDemo={isDemoMode}
+          />
+        )}
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setShowFilters(!showFilters)}
+        >
+          <Filter className="h-4 w-4 mr-2" />
+          Filters
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setIsCreationModalOpen(true)}
+        >
+          <Wand2 className="h-4 w-4 mr-2" />
+          AI Create
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={generateDailySchedule}
+          disabled={isGeneratingSchedule}
+        >
+          <Calendar className="h-4 w-4 mr-2" />
+          {isGeneratingSchedule ? 'Generating...' : 'Schedule'}
+        </Button>
+        {!useStandardColumns && (
+          <Button
+            size="sm"
+            onClick={addSampleTask}
+          >
+            <Plus className="h-4 w-4 mr-2" />
+            Add Sample
+          </Button>
+        )}
+      </div>
 
       {/* Filters */}
       {showFilters && (
