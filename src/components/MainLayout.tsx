@@ -27,6 +27,7 @@ import {
   PanelRightClose,
   PanelRightOpen,
   MessageSquare,
+  Target,
 } from 'lucide-react';
 
 interface MainLayoutProps {
@@ -108,6 +109,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
       icon: LayoutGrid,
       label: 'Tasks',
       subItems: [
+        { icon: Target, label: "Today's Focus", path: '/tasks?view=focus' },
         { icon: Columns3, label: 'Kanban Board', path: '/tasks?view=kanban', kanbanTabs },
         { icon: List, label: 'List View', path: '/tasks?view=grid' },
       ],
@@ -207,10 +209,11 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
             </button>
           </CollapsibleTrigger>
           <CollapsibleContent className="pl-4 space-y-1 mt-1">
-            {item.subItems.map((subItem) => {
-              const SubIcon = subItem.icon;
-              const isKanban = subItem.path.includes('kanban');
-              const subActive = getTaskViewActive(isKanban ? 'kanban' : 'grid');
+          {item.subItems.map((subItem) => {
+            const SubIcon = subItem.icon;
+            const isKanban = subItem.path.includes('kanban');
+            const isFocus = subItem.path.includes('focus');
+            const subActive = getTaskViewActive(isFocus ? 'focus' : isKanban ? 'kanban' : 'grid');
 
               // Kanban Board with nested tabs
               if (subItem.kanbanTabs && subItem.kanbanTabs.length > 0) {

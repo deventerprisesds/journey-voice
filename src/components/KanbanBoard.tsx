@@ -92,8 +92,6 @@ const STANDARD_COLUMNS: Column[] = [
   { id: 'std-done', name: 'Done', status: 'DONE', position: 5, board_id: 'std' },
 ];
 
-// Time period filter options
-type TimePeriod = 'all' | 'this-week' | 'next-week' | 'this-month';
 
 const CATEGORY_COLORS: Record<string, { bg: string; border: string; text: string }> = {
   LIFE: { bg: 'bg-pink-50', border: 'border-pink-300', text: 'text-pink-700' },
@@ -126,8 +124,6 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
   const [isSelectMode, setIsSelectMode] = useState(false);
   const [selectedTasks, setSelectedTasks] = useState<Set<string>>(new Set());
   
-  // Time period filter
-  const [timePeriod, setTimePeriod] = useState<TimePeriod>('all');
   
   // Category bins - track which are collapsed
   const [collapsedCategories, setCollapsedCategories] = useState<Record<string, Set<string>>>({});
@@ -579,50 +575,10 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
     return (columnsToCheck[0]?.status as any) || 'BACKLOG';
   };
 
-  // Filter tasks by time period
-  const filterByTimePeriod = (taskList: Task[]): Task[] => {
-    if (timePeriod === 'all') return taskList;
-    
-    const now = new Date();
-    let start: Date;
-    let end: Date;
-    
-    switch (timePeriod) {
-      case 'this-week':
-        start = startOfWeek(now, { weekStartsOn: 1 });
-        end = endOfWeek(now, { weekStartsOn: 1 });
-        break;
-      case 'next-week':
-        const nextWeek = addWeeks(now, 1);
-        start = startOfWeek(nextWeek, { weekStartsOn: 1 });
-        end = endOfWeek(nextWeek, { weekStartsOn: 1 });
-        break;
-      case 'this-month':
-        start = startOfMonth(now);
-        end = endOfMonth(now);
-        break;
-      default:
-        return taskList;
-    }
-    
-    return taskList.filter(task => {
-      if (!task.due_date) return false; // Tasks without due date are excluded from week/month filters
-      try {
-        const dueDate = parseISO(task.due_date);
-        return isWithinInterval(dueDate, { start, end });
-      } catch {
-        return false;
-      }
-    });
-  };
-
   const getTasksByStatus = (status: Task['status']) => {
     // Use filtered tasks if filters are active, otherwise use all tasks
     const tasksToFilter = filteredTasks.length > 0 ? filteredTasks : tasks;
     let filtered = tasksToFilter.filter(task => mapTaskStatusForColumns(task) === status);
-    
-    // Apply time period filter
-    filtered = filterByTimePeriod(filtered);
     
     // Hide completed tasks if toggle is off
     if (!showCompletedTasks) {
@@ -1064,28 +1020,7 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
       )}
 
       {/* Toolbar - always visible */}
-      <div className="flex items-center justify-between gap-2 flex-wrap">
-        {/* Time Period Filter */}
-        <div className="flex items-center gap-2">
-          <Select value={timePeriod} onValueChange={(value: TimePeriod) => setTimePeriod(value)}>
-            <SelectTrigger className="w-[140px] h-9 bg-background">
-              <Calendar className="h-4 w-4 mr-2" />
-              <SelectValue placeholder="Time Period" />
-            </SelectTrigger>
-            <SelectContent className="bg-background z-50">
-              <SelectItem value="all">All Time</SelectItem>
-              <SelectItem value="this-week">This Week</SelectItem>
-              <SelectItem value="next-week">Next Week</SelectItem>
-              <SelectItem value="this-month">This Month</SelectItem>
-            </SelectContent>
-          </Select>
-          {timePeriod !== 'all' && (
-            <Badge variant="secondary" className="text-xs">
-              {timePeriod === 'this-week' ? 'This Week' : timePeriod === 'next-week' ? 'Next Week' : 'This Month'}
-            </Badge>
-          )}
-        </div>
-
+      <div className="flex items-center justify-end gap-2 flex-wrap">
         <div className="flex items-center gap-2 flex-wrap">
           <VoiceAssistantButton />
           <Button
