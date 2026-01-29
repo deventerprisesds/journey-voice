@@ -1,43 +1,102 @@
 
-# Fix Phone Call Silence: OpenAI Session State After ElevenLabs Greeting
+# Plan: Unhide Kanban Toolbar in Tabbed View
 
-## ✅ IMPLEMENTED (v7f)
+## Summary
 
-### Changes Made
+The toolbar buttons (AI Create, Filters, Select mode, Schedule, etc.) are hidden in the tabbed Kanban view because they're wrapped inside the conditional block `{!useStandardColumns && board && (...)}`. The fix is to move the toolbar outside this conditional so it's always visible.
 
-1. **System Context Injection** (`TwilioCallSession.ts:1083-1116`)
-   - After ElevenLabs greeting, inject a system message telling OpenAI what was said and to wait for user response
-   - Includes timestamp and RAG context if available
+No new functions are needed - the existing `setIsCreationModalOpen(true)` pattern already handles task creation correctly.
 
-2. **Explicit Buffer Commit** (`TwilioCallSession.ts:817-831`)
-   - On `input_audio_buffer.speech_stopped`, explicitly send `input_audio_buffer.commit`
-   - Ensures transcription triggers even if semantic_vad doesn't auto-trigger
+---
 
-3. **Diagnostic Event** (`TwilioCallSession.ts:833-836`)
-   - Added `input_audio_buffer.committed` handler
-   - Logs `cf_buffer_committed` for debugging visibility
+## Current Problem
 
-4. **Version Bump**
-   - `cloudflare/src/index.ts`: v7f
-   - `cloudflare/src/TwilioCallSession.ts`: v7f
-   - `.github/workflows/deploy-cloudflare.yml`: v7f
+**File: `src/components/KanbanBoard.tsx` (lines 936-1014)**
 
-## Expected Event Flow After Fix
-
-```text
-cf_greeting_attempted → cf_greeting_success → cf_user_speech_started → 
-cf_user_speech_stopped (buffer_committed: true) → cf_buffer_committed → 
-cf_transcription → cf_response_started → cf_text_delta_first → User hears AI
+The entire toolbar is inside a conditional block:
+```tsx
+{!useStandardColumns && board && (
+  <div className="flex items-center justify-between">
+    <div>{/* Board title */}</div>
+    <div className="flex items-center gap-2">
+      <VoiceAssistantButton />
+      <Button>Select</Button>
+      <Button>Show/Hide Completed</Button>
+      <AddColumnModal />
+      <Button>Filters</Button>
+      <Button onClick={() => setIsCreationModalOpen(true)}>AI Create</Button>  ← HIDDEN in tabbed mode!
+      <Button>Schedule</Button>
+      <Button>Add Sample</Button>
+    </div>
+  </div>
+)}
 ```
 
-## Testing Plan
+When `useStandardColumns=true` (tabbed view), this entire block is skipped, hiding all toolbar buttons.
 
-1. Push to main to trigger GitHub Actions deployment
-2. Make a phone call
-3. Speak after greeting
-4. Check `activity_log` for:
-   - `cf_buffer_committed` (confirms audio was committed)
-   - `cf_transcription` (confirms OpenAI transcribed user speech)
-   - `cf_response_started` (confirms OpenAI is responding)
+---
 
-If `cf_buffer_committed` appears but `cf_transcription` doesn't, the issue is deeper in OpenAI's text-only mode handling.
+## Solution
+
+Split the conditional into two parts:
+
+1. **Board header (title/description)** - stays conditional (hidden in tabbed mode, as intended)
+2. **Toolbar buttons** - moved outside the conditional (always visible)
+
+Some buttons like "Add Column" and "Add Sample" only make sense in full board mode, so they remain conditional.
+
+---
+
+## Files to Modify
+
+| File | Change |
+|------|--------|
+| `src/components/KanbanBoard.tsx` | Restructure lines 936-1014 to separate board header from toolbar |
+
+---
+
+## Implementation Details
+
+**New structure:**
+```tsx
+{/* Board Header - hide in tabbed mode */}
+{!useStandardColumns && board && (
+  <div>
+    <h2>{board.name}</h2>
+    <p>{board.description}</p>
+  </div>
+)}
+
+{/* Toolbar - ALWAYS visible */}
+<div className="flex items-center justify-end gap-2 flex-wrap">
+  <VoiceAssistantButton />
+  <Button onClick={toggleSelectMode}>Select</Button>
+  <Button onClick={toggleShowCompletedTasks}>Show/Hide Completed</Button>
+  {!useStandardColumns && board && <AddColumnModal />}  {/* Only in full board */}
+  <Button onClick={() => setShowFilters(!showFilters)}>Filters</Button>
+  <Button onClick={() => setIsCreationModalOpen(true)}>AI Create</Button>
+  <Button onClick={generateDailySchedule}>Schedule</Button>
+  {!useStandardColumns && <Button onClick={addSampleTask}>Add Sample</Button>}  {/* Only in full board */}
+</div>
+```
+
+---
+
+## DailyScheduleView Status
+
+The "New Task" button already follows the correct pattern:
+```tsx
+<Button onClick={() => { setCreateAtTime(null); setIsCreating(true); }}>
+  New Task
+</Button>
+```
+
+This is equivalent to the Kanban's `setIsCreationModalOpen(true)` - both open `TaskCreationModal` with appropriate props. No changes needed here since the pattern is already consistent and reusable.
+
+---
+
+## Expected Result
+
+After this change:
+- The AI Create button, Filters, Select mode, Show Completed, Schedule, and Voice Assistant buttons will be visible in both the standard Kanban view AND the tabbed category view (Today, Career, Prof. Education, Ventures, Life)
+- Add Column and Add Sample remain hidden in tabbed mode (as they require the full board context)
