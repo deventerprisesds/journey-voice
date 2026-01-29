@@ -3,6 +3,7 @@ import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import TabbedKanbanBoard from '@/components/TabbedKanbanBoard';
 import TaskGridView from '@/components/EnhancedTaskGridView';
+import FocusView from '@/components/FocusView';
 import TaskDetailModal from '@/components/TaskDetailModal';
 import ViewSwitcher, { ViewType } from '@/components/ViewSwitcher';
 import { supabase } from '@/integrations/supabase/client';
@@ -22,7 +23,7 @@ const TasksPage: React.FC = () => {
 
   // Sync view with URL param
   useEffect(() => {
-    if (viewParam && ['kanban', 'grid'].includes(viewParam)) {
+    if (viewParam && ['kanban', 'grid', 'focus'].includes(viewParam)) {
       setCurrentView(viewParam);
     }
   }, [viewParam]);
@@ -171,7 +172,9 @@ const TasksPage: React.FC = () => {
                 Tasks
               </h1>
               <p className="text-xs md:text-sm text-muted-foreground hidden sm:block">
-                {currentView === 'kanban' ? 'Kanban Board' : 'List View'}
+                {currentView === 'kanban' ? 'Kanban Board' : 
+                 currentView === 'grid' ? 'List View' : 
+                 "Today's Command Center"}
               </p>
             </div>
             <ViewSwitcher currentView={currentView} onViewChange={handleViewChange} />
@@ -202,6 +205,14 @@ const TasksPage: React.FC = () => {
                 tasks={tasks}
                 onTaskEdit={handleTaskEdit}
                 onStatusChange={handleStatusChange}
+              />
+            )}
+            {currentView === 'focus' && (
+              <FocusView
+                tasks={tasks}
+                onTaskEdit={handleTaskEdit}
+                onStatusChange={handleStatusChange}
+                onTaskUpdate={handleTaskUpdate}
               />
             )}
           </>
