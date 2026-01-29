@@ -437,12 +437,12 @@ const DailyScheduleView: React.FC<DailyScheduleViewProps> = ({
       </DragDropContext>
 
       {/* Task Creation Modal */}
-      {defaultBoardId && user && (
+      {user && (
         <TaskCreationModal
           isOpen={isCreating}
           onClose={() => setIsCreating(false)}
           onTasksCreated={onTaskUpdate}
-          boardId={defaultBoardId}
+          boardId={defaultBoardId || ''}
           userId={user.id}
           targetDate={selectedDate}
         />
