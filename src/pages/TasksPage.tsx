@@ -12,7 +12,7 @@ import { toast } from 'sonner';
 const TasksPage: React.FC = () => {
   const [searchParams] = useSearchParams();
   const viewParam = searchParams.get('view') as ViewType | null;
-  const [currentView, setCurrentView] = useState<ViewType>(viewParam || 'kanban');
+  const [currentView, setCurrentView] = useState<ViewType>(viewParam || 'focus');
   const [tasks, setTasks] = useState<any[]>([]);
   const [selectedTask, setSelectedTask] = useState<any>(null);
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
