@@ -165,8 +165,8 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
     const durationIn15MinSlots = Math.ceil(durationMinutes / 15);
     
     return {
-      top: 2,
-      height: Math.max(48, durationIn15MinSlots * 64 - 4) // 64px per 15-min slot, subtract spacing
+      top: 1,
+      height: Math.max(12, durationIn15MinSlots * 16 - 2) // 16px per 15-min slot (75% reduction)
     };
   };
 
@@ -198,7 +198,7 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
   const DAY_START_HOUR = 6; // 6 AM
   const DAY_END_HOUR = 22;  // 10 PM
   const MINUTES_PER_DAY = (DAY_END_HOUR - DAY_START_HOUR) * 60;
-  const PX_PER_MINUTE = 64 / 15; // Matches h-16 per 15-min slot
+  const PX_PER_MINUTE = 16 / 15; // Reduced from 64px to 16px per 15-min slot (75% reduction)
 
   // Build laid out items for a given date (side-by-side without overlap)
   type LaidOutItem = {
@@ -374,7 +374,7 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
                   <div
                     key={`${slot.hour}-${slot.minute}-${dateIndex}`}
                     className={cn(
-                      "relative border-r h-16 hover:bg-muted/30 transition-colors group cursor-pointer",
+                      "relative border-r h-4 hover:bg-muted/30 transition-colors group cursor-pointer",
                       windowStyle ? windowStyle.bgClass : ''
                     )}
                     onClick={() => onTimeSlotClick?.(date, slot.hour, slot.minute)}
@@ -402,7 +402,7 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
         <div
           className="absolute inset-0 z-30 pointer-events-none"
           style={{
-            height: `${timeSlots.length * 64}px`,
+            height: `${timeSlots.length * 16}px`,
             display: 'grid',
             gridTemplateColumns: `80px repeat(${dates.length}, 1fr)`
           }}
@@ -414,8 +414,8 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
             return (
               <div key={`overlay-${dateIndex}`} className="relative border-r">
                 {items.map((item, idx) => {
-                  const top = item.startMin * PX_PER_MINUTE + 2;
-                  const height = Math.max(48, (item.endMin - item.startMin) * PX_PER_MINUTE - 4);
+                  const top = item.startMin * PX_PER_MINUTE + 1;
+                  const height = Math.max(12, (item.endMin - item.startMin) * PX_PER_MINUTE - 2);
                   const width = 100 / item.columnsInGroup;
                   const left = item.column * width;
 
