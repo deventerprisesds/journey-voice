@@ -1,4 +1,5 @@
 import { supabase, SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from '@/integrations/supabase/client';
+import { VOICE_CONFIG } from '@/config/voiceConfig';
 
 // Global instance tracking for debugging visibility
 let globalInstanceCounter = 0;
@@ -292,9 +293,9 @@ export class RealtimeVoiceAssistant {
   // Unified AudioQueue for both PCM (OpenAI) and MP3 (ElevenLabs) - sequential playback
   private unifiedAudioQueue: AudioQueue | null = null;
   
-  // Speech debounce (matches Twilio's 300ms pattern)
+  // Speech debounce (from centralized config)
   private lastSpeechStartTime: number = 0;
-  private readonly SPEECH_DEBOUNCE_MS = 300;
+  private readonly SPEECH_DEBOUNCE_MS = VOICE_CONFIG.SPEECH_DEBOUNCE_MS;
   
   // CRITICAL: Track when user speech STARTS for correct transcript ordering
   // Transcription completes AFTER AI responds, so we capture start time for chronological accuracy

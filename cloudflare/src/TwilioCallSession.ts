@@ -7,6 +7,7 @@ import {
   base64ToInt16,
   calculateRMSAmplitude
 } from './audio';
+import { VOICE_CONFIG, FILLER_CONFIG, SENTENCE_ENDERS } from './config';
 
 interface Env {
   SUPABASE_URL: string;
@@ -70,25 +71,10 @@ interface ElevenLabsTTSResponse {
   latencyMs: number;
 }
 
-// Sentence detection for ElevenLabs streaming
-const SENTENCE_ENDERS = /[.!?]+[\s"')\]]*$/;
+// NOTE: VOICE_CONFIG, FILLER_CONFIG, SENTENCE_ENDERS imported from ./config.ts
 
 // Worker version for deployment verification
-const WORKER_VERSION = '2026-01-29-cf-v7c';
-
-// Smart filler phrases for tool call acknowledgments (Phase 5)
-const FILLER_PHRASES = [
-  "One moment...",
-  "Let me check...",
-  "Looking into that...",
-  "Just a sec...",
-  "Checking that now...",
-  "Still working on it...",
-  "Almost there..."
-];
-
-// Filler timing intervals (ms)
-const FILLER_INTERVALS = [1500, 3500, 6000];
+const WORKER_VERSION = '2026-01-29-cf-v7d';
 
 export class TwilioCallSession {
   private state: DurableObjectState;
@@ -148,15 +134,15 @@ export class TwilioCallSession {
   private fillerIndex: number = 0;
   private lastFillerPhrase: string = '';
 
-  // Phase 6: Hello-wait logic for outbound calls
+  // Phase 6: Hello-wait logic for outbound calls (from centralized config)
   private waitingForUserHello: boolean = false;
   private helloFallbackTimer: ReturnType<typeof setTimeout> | null = null;
-  private readonly HELLO_FALLBACK_MS = 2000;
+  private readonly HELLO_FALLBACK_MS = VOICE_CONFIG.OUTBOUND_HELLO_WAIT_MS;
   private pendingGreetingTriggered: boolean = false;
 
-  // Phase 8: VAD barge-in guards (parity with Supabase bridge)
+  // Phase 8: VAD barge-in guards (from centralized config)
   private lastSpeechStartTime: number = 0;
-  private readonly SPEECH_DEBOUNCE_MS = 300;
+  private readonly SPEECH_DEBOUNCE_MS = VOICE_CONFIG.SPEECH_DEBOUNCE_MS;
   private isAiSpeaking: boolean = false;
 
   // v7: User profile for personalization (parity with Supabase)
@@ -1575,9 +1561,9 @@ You: "Looking that up..." [then call web_search tool]`;
       type: 'response.create'
     }));
 
-    // Give time for farewell audio to generate and play completely
+    // Give time for farewell audio to generate and play completely (from centralized config)
     // Typical farewell is 2-4 seconds of audio, plus TTS latency
-    await new Promise(resolve => setTimeout(resolve, 5000));
+    await new Promise(resolve => setTimeout(resolve, VOICE_CONFIG.FAREWELL_DELAY_MS));
 
     await this.logActivityToSupabase('completed', 'cf_hang_up', { initiated_by: 'user' });
 
@@ -1665,8 +1651,8 @@ You: "Looking that up..." [then call web_search tool]`;
     
     console.log('[CF] Starting filler timers for tool execution');
     
-    // Schedule fillers at increasing intervals
-    FILLER_INTERVALS.forEach((interval, index) => {
+    // Schedule fillers at increasing intervals (from centralized config)
+    FILLER_CONFIG.INTERVALS_MS.forEach((interval, index) => {
       const timer = setTimeout(() => {
         this.speakFiller();
       }, interval);
@@ -1680,12 +1666,12 @@ You: "Looking that up..." [then call web_search tool]`;
   }
 
   private async speakFiller() {
-    // Select a filler phrase that's different from the last one
+    // Select a filler phrase that's different from the last one (from centralized config)
     let phrase: string;
     do {
-      phrase = FILLER_PHRASES[this.fillerIndex % FILLER_PHRASES.length];
+      phrase = FILLER_CONFIG.PHRASES[this.fillerIndex % FILLER_CONFIG.PHRASES.length];
       this.fillerIndex++;
-    } while (phrase === this.lastFillerPhrase && FILLER_PHRASES.length > 1);
+    } while (phrase === this.lastFillerPhrase && FILLER_CONFIG.PHRASES.length > 1);
     
     this.lastFillerPhrase = phrase;
     
