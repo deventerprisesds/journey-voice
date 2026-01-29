@@ -66,7 +66,7 @@ const TextInputBar: React.FC<TextInputBarProps> = ({
         onChange={(e) => setMessage(e.target.value)}
         onKeyDown={handleKeyDown}
         placeholder={placeholders[mode]}
-        disabled={disabled || isLoading}
+        disabled={disabled}
         className="min-h-[40px] max-h-[120px] resize-none flex-1"
         rows={1}
       />

@@ -169,7 +169,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ isOpen, onClose, onTaskUp
               onChange={(e) => setInputValue(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="Type a message..."
-              disabled={isLoading}
+              
               className="flex-1"
             />
             <Button
