@@ -831,10 +831,13 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
         { id: 'demo-col-11', name: 'Done', status: 'DONE' as const, position: 10, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
       ];
 
-      // Save to localStorage
+      // Save board/columns to localStorage (do NOT overwrite tasks - they come from Supabase)
       localStorage.setItem('kanban-demo-board', JSON.stringify(demoBoard));
       localStorage.setItem('kanban-demo-columns', JSON.stringify(demoColumns));
-      localStorage.setItem('kanban-demo-tasks', JSON.stringify([]));
+      // Only initialize tasks if not already present (don't wipe existing demo tasks)
+      if (!localStorage.getItem('kanban-demo-tasks')) {
+        localStorage.setItem('kanban-demo-tasks', JSON.stringify([]));
+      }
 
       return { board: demoBoard, columns: demoColumns };
     }
