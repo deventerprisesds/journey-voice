@@ -1,49 +1,23 @@
 
-# Plan: Unhide Kanban Toolbar in Tabbed View
+# Plan: Fix "New Task" Button on Agenda Page
 
-## Summary
+## Problem Identified
 
-The toolbar buttons (AI Create, Filters, Select mode, Schedule, etc.) are hidden in the tabbed Kanban view because they're wrapped inside the conditional block `{!useStandardColumns && board && (...)}`. The fix is to move the toolbar outside this conditional so it's always visible.
+The "New Task" button on the Agenda page (`/agenda`) opens the `TaskCreationModal`, but task creation fails because:
 
-No new functions are needed - the existing `setIsCreationModalOpen(true)` pattern already handles task creation correctly.
+1. `DailyScheduleView` fetches `defaultBoardId` asynchronously (lines 56-85)
+2. Before the fetch completes, `defaultBoardId` is `null`
+3. After my previous fix, the modal renders with `boardId={defaultBoardId || ''}` (empty string)
+4. When the user tries to create a task, line 663 in `TaskCreationModal` inserts `board_id: boardId` (empty string)
+5. This causes a Supabase error because an empty string is not a valid UUID
 
----
-
-## Current Problem
-
-**File: `src/components/KanbanBoard.tsx` (lines 936-1014)**
-
-The entire toolbar is inside a conditional block:
-```tsx
-{!useStandardColumns && board && (
-  <div className="flex items-center justify-between">
-    <div>{/* Board title */}</div>
-    <div className="flex items-center gap-2">
-      <VoiceAssistantButton />
-      <Button>Select</Button>
-      <Button>Show/Hide Completed</Button>
-      <AddColumnModal />
-      <Button>Filters</Button>
-      <Button onClick={() => setIsCreationModalOpen(true)}>AI Create</Button>  ← HIDDEN in tabbed mode!
-      <Button>Schedule</Button>
-      <Button>Add Sample</Button>
-    </div>
-  </div>
-)}
-```
-
-When `useStandardColumns=true` (tabbed view), this entire block is skipped, hiding all toolbar buttons.
+The modal opens fine, but task creation silently fails.
 
 ---
 
 ## Solution
 
-Split the conditional into two parts:
-
-1. **Board header (title/description)** - stays conditional (hidden in tabbed mode, as intended)
-2. **Toolbar buttons** - moved outside the conditional (always visible)
-
-Some buttons like "Add Column" and "Add Sample" only make sense in full board mode, so they remain conditional.
+Prevent opening the modal until `defaultBoardId` is available, and disable the button with visual feedback while loading.
 
 ---
 
@@ -51,52 +25,119 @@ Some buttons like "Add Column" and "Add Sample" only make sense in full board mo
 
 | File | Change |
 |------|--------|
-| `src/components/KanbanBoard.tsx` | Restructure lines 936-1014 to separate board header from toolbar |
+| `src/components/DailyScheduleView.tsx` | Disable "New Task" button until `defaultBoardId` is loaded |
 
 ---
 
 ## Implementation Details
 
-**New structure:**
-```tsx
-{/* Board Header - hide in tabbed mode */}
-{!useStandardColumns && board && (
-  <div>
-    <h2>{board.name}</h2>
-    <p>{board.description}</p>
-  </div>
-)}
+### DailyScheduleView.tsx
 
-{/* Toolbar - ALWAYS visible */}
-<div className="flex items-center justify-end gap-2 flex-wrap">
-  <VoiceAssistantButton />
-  <Button onClick={toggleSelectMode}>Select</Button>
-  <Button onClick={toggleShowCompletedTasks}>Show/Hide Completed</Button>
-  {!useStandardColumns && board && <AddColumnModal />}  {/* Only in full board */}
-  <Button onClick={() => setShowFilters(!showFilters)}>Filters</Button>
-  <Button onClick={() => setIsCreationModalOpen(true)}>AI Create</Button>
-  <Button onClick={generateDailySchedule}>Schedule</Button>
-  {!useStandardColumns && <Button onClick={addSampleTask}>Add Sample</Button>}  {/* Only in full board */}
-</div>
+**Change 1: Add loading state for board ID (around line 35)**
+
+Track whether the board fetch is still in progress:
+```typescript
+const [isBoardLoading, setIsBoardLoading] = useState(true);
+```
+
+**Change 2: Update fetchDefaultBoard to manage loading state (lines 56-85)**
+
+```typescript
+const fetchDefaultBoard = async () => {
+  if (!user) {
+    setIsBoardLoading(false);
+    return;
+  }
+  
+  setIsBoardLoading(true);
+  
+  const { data, error } = await supabase
+    .from('boards')
+    .select('id')
+    .eq('user_id', user.id)
+    .eq('is_default', true)
+    .single();
+
+  if (data) {
+    setDefaultBoardId(data.id);
+  } else if (error) {
+    // If no default board, get the first board
+    const { data: firstBoard } = await supabase
+      .from('boards')
+      .select('id')
+      .eq('user_id', user.id)
+      .limit(1)
+      .single();
+    
+    if (firstBoard) {
+      setDefaultBoardId(firstBoard.id);
+    }
+  }
+  
+  setIsBoardLoading(false);
+};
+```
+
+**Change 3: Disable button while loading (lines 276-285)**
+
+```tsx
+<Button 
+  size="sm"
+  disabled={isBoardLoading || !defaultBoardId}
+  onClick={() => {
+    setCreateAtTime(null);
+    setIsCreating(true);
+  }}
+>
+  <Plus className="w-4 h-4 mr-2" />
+  {isBoardLoading ? 'Loading...' : 'New Task'}
+</Button>
+```
+
+**Change 4: Only render modal with valid boardId (lines 439-449)**
+
+Revert to the safer conditional that requires `defaultBoardId`:
+```tsx
+{defaultBoardId && user && (
+  <TaskCreationModal
+    isOpen={isCreating}
+    onClose={() => setIsCreating(false)}
+    onTasksCreated={onTaskUpdate}
+    boardId={defaultBoardId}
+    userId={user.id}
+    targetDate={selectedDate}
+  />
+)}
 ```
 
 ---
 
-## DailyScheduleView Status
+## Why This Works
 
-The "New Task" button already follows the correct pattern:
-```tsx
-<Button onClick={() => { setCreateAtTime(null); setIsCreating(true); }}>
-  New Task
-</Button>
+1. The button is disabled until `defaultBoardId` is available
+2. Users get visual feedback ("Loading..." text) while waiting
+3. The modal only renders when there's a valid board ID
+4. No silent failures - the button simply won't work until ready
+5. No new functions needed - uses existing state patterns
+
+---
+
+## Edge Case: No Boards Exist
+
+If a user has no boards at all, `defaultBoardId` will remain null and the button stays disabled. This is a rare edge case (boards are typically created on signup), but we could add a toast message if needed:
+
+```typescript
+if (!data && !firstBoard) {
+  toast.error('No task boards found. Please create one in Settings.');
+}
 ```
-
-This is equivalent to the Kanban's `setIsCreationModalOpen(true)` - both open `TaskCreationModal` with appropriate props. No changes needed here since the pattern is already consistent and reusable.
 
 ---
 
 ## Expected Result
 
 After this change:
-- The AI Create button, Filters, Select mode, Show Completed, Schedule, and Voice Assistant buttons will be visible in both the standard Kanban view AND the tabbed category view (Today, Career, Prof. Education, Ventures, Life)
-- Add Column and Add Sample remain hidden in tabbed mode (as they require the full board context)
+- "New Task" button shows "Loading..." briefly on page load
+- Button becomes clickable once board is fetched
+- Task creation works correctly with valid board ID
+- No silent failures or console errors
