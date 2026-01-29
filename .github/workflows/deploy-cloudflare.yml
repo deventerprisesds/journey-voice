@@ -48,6 +48,8 @@ jobs:
           HEALTH_RESPONSE=$(curl -s https://twilio-openai-bridge.purple-bush-495e.workers.dev/health)
           echo "Health response: $HEALTH_RESPONSE"
           
+          # IMPORTANT: Update this when changing version in cloudflare/src/index.ts and TwilioCallSession.ts
+          # See cloudflare/PREFLIGHT_CHECKLIST.md for version sync requirements
           EXPECTED_VERSION="2026-01-29-cf-v7b"
           
           if echo "$HEALTH_RESPONSE" | grep -q '"status":"ok"'; then
