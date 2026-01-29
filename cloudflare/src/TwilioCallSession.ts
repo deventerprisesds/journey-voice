@@ -74,7 +74,7 @@ interface ElevenLabsTTSResponse {
 const SENTENCE_ENDERS = /[.!?]+[\s"')\]]*$/;
 
 // Worker version for deployment verification
-const WORKER_VERSION = '2026-01-29-cf-v6';
+const WORKER_VERSION = '2026-01-29-cf-v7';
 
 // Smart filler phrases for tool call acknowledgments (Phase 5)
 const FILLER_PHRASES = [
@@ -158,6 +158,9 @@ export class TwilioCallSession {
   private lastSpeechStartTime: number = 0;
   private readonly SPEECH_DEBOUNCE_MS = 300;
   private isAiSpeaking: boolean = false;
+
+  // v7: User profile for personalization (parity with Supabase)
+  private userProfile: { first_name?: string; full_name?: string } = {};
 
   // Audio pipeline telemetry
   private twilioMediaFramesIn: number = 0;
@@ -467,6 +470,7 @@ export class TwilioCallSession {
     console.log('[CF] No pre-connect session, loading preferences fresh');
     await Promise.all([
       this.loadUserVoicePrefs(),
+      this.loadUserProfile().then(p => this.userProfile = p),
       this.fetchToolDefinitions()
     ]);
 
@@ -553,6 +557,69 @@ export class TwilioCallSession {
     } catch (error) {
       console.error('[CF] Failed to load voice preferences:', error);
     }
+  }
+
+  // ==================== v7: Core Functions for Personalization (parity with Supabase) ====================
+
+  // Copy from Supabase lines 122-143
+  private getTimeBasedGreeting(): string {
+    try {
+      const now = new Date();
+      const timeStr = now.toLocaleString('en-US', { 
+        timeZone: this.timezone, 
+        hour: 'numeric', 
+        hour12: false 
+      });
+      const hour = parseInt(timeStr, 10);
+      
+      if (hour < 12) return "Good morning";
+      if (hour < 17) return "Good afternoon";
+      return "Good evening";
+    } catch {
+      const hour = new Date().getUTCHours();
+      if (hour < 12) return "Good morning";
+      if (hour < 17) return "Good afternoon";
+      return "Good evening";
+    }
+  }
+
+  // Copy from Supabase lines 192-205
+  private async loadUserProfile(): Promise<{ first_name?: string; full_name?: string }> {
+    if (!this.userId) return {};
+    
+    try {
+      const response = await fetch(
+        `${this.env.SUPABASE_URL}/rest/v1/profiles?user_id=eq.${this.userId}&select=first_name,full_name`,
+        {
+          headers: {
+            'Authorization': `Bearer ${this.env.SUPABASE_SERVICE_KEY}`,
+            'apikey': this.env.SUPABASE_SERVICE_KEY
+          }
+        }
+      );
+      
+      if (response.ok) {
+        const data = await response.json();
+        return data?.[0] || {};
+      }
+    } catch (error) {
+      console.warn('[CF] Failed to load user profile:', error);
+    }
+    return {};
+  }
+
+  // Copy from Supabase lines 1063-1077
+  private generateGreetingForCallType(context: string, timeGreeting: string, userName: string): string {
+    if (context.includes('Morning Stand-up')) {
+      return `${timeGreeting}, ${userName}. This is your morning check-in.`;
+    } else if (context.includes('Midday Check-in')) {
+      return `${timeGreeting}, ${userName}. Just checking in on how your day is going.`;
+    } else if (context.includes('End of Day Wrap-up')) {
+      return `${timeGreeting}, ${userName}. Let's wrap up the day.`;
+    } else if (context.includes('Task reminder')) {
+      return `${timeGreeting}, ${userName}. Quick reminder about an upcoming task.`;
+    }
+    return `${timeGreeting}, ${userName}. This is Iris.`;
   }
 
   private async fetchToolDefinitions() {
@@ -713,17 +780,18 @@ export class TwilioCallSession {
               break; // Don't treat as barge-in
             }
             
-            // 3. ElevenLabs mode: Only clear Twilio buffer, no response.cancel
+            // 3. ElevenLabs mode: Always clear buffer and break (match Supabase lines 2508-2520)
+            // v7: Removed isAiSpeaking guard - Supabase doesn't have it
             if (this.ttsProvider === 'elevenlabs' && !this.elevenlabsFallbackActive) {
-              if (this.isAiSpeaking) {
-                console.log('[CF] BARGE-IN: ElevenLabs mode - clearing Twilio buffer only');
-                this.twilioWs?.send(JSON.stringify({
+              console.log('[CF] BARGE-IN: ElevenLabs mode - clearing Twilio buffer only');
+              if (this.streamSid && this.twilioWs?.readyState === WebSocket.OPEN) {
+                this.twilioWs.send(JSON.stringify({
                   event: 'clear',
                   streamSid: this.streamSid
                 }));
-                this.textBuffer = '';
-                this.isAiSpeaking = false;
               }
+              this.textBuffer = '';
+              this.isAiSpeaking = false;
               break; // NO response.cancel for ElevenLabs - preserves OpenAI VAD state
             }
             
@@ -991,8 +1059,11 @@ You: "Looking that up..." [then call web_search tool]`;
       }
     }
 
-    // Generate greeting - use ElevenLabs directly or OpenAI TTS
-    const greeting = this.greetingText || 'Hi! This is Iris. How can I help you today?';
+    // v7: Generate dynamic personalized greeting (parity with Supabase)
+    const timeGreeting = this.getTimeBasedGreeting();
+    const userName = this.userProfile?.first_name || 'sir';
+    const callContext = this.ragContext || '';
+    const greeting = this.greetingText || this.generateGreetingForCallType(callContext, timeGreeting, userName);
     
     try {
       if (this.ttsProvider === 'elevenlabs') {
@@ -1180,10 +1251,12 @@ You: "Looking that up..." [then call web_search tool]`;
         this.twilioWs?.send(JSON.stringify(mediaMessage));
       }
 
-      // Phase 2: Clear echo suppression after audio duration
+      // v7: Clear BOTH echo suppression flags after audio duration (critical fix)
       setTimeout(() => {
         if (this.isSendingTtsAudio && Date.now() >= this.ttsAudioEndTime - 50) {
           this.isSendingTtsAudio = false;
+          this.isAiSpeaking = false;  // CRITICAL: Also clear this flag for direct ElevenLabs greetings
+          console.log('[CF] Echo suppression cleared after ElevenLabs playback');
         }
       }, estimatedDurationMs + this.TTS_ECHO_GRACE_PERIOD_MS);
 
