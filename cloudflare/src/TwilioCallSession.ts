@@ -73,7 +73,7 @@ interface ElevenLabsTTSResponse {
 const SENTENCE_ENDERS = /[.!?]+[\s"')\]]*$/;
 
 // Worker version for deployment verification
-const WORKER_VERSION = '2026-01-28-cf-v3';
+const WORKER_VERSION = '2026-01-29-cf-v1';
 
 export class TwilioCallSession {
   private state: DurableObjectState;
@@ -159,55 +159,27 @@ export class TwilioCallSession {
           ...metadata,
           worker_version: WORKER_VERSION,
           tts_provider: this.ttsProvider,
-          stream_sid: this.streamSid
+          stream_sid: this.streamSid,
+          sequence: Date.now() // For ordering multiple entries
         },
-        started_at: status === 'started' ? new Date().toISOString() : undefined,
+        started_at: new Date().toISOString(),
         ended_at: status === 'completed' || status === 'error' ? new Date().toISOString() : undefined
       };
 
-      if (this.activityLogId) {
-        // Update existing record
-        await fetch(
-          `${this.env.SUPABASE_URL}/rest/v1/activity_log?id=eq.${this.activityLogId}`,
-          {
-            method: 'PATCH',
-            headers: {
-              'Authorization': `Bearer ${this.env.SUPABASE_SERVICE_KEY}`,
-              'apikey': this.env.SUPABASE_SERVICE_KEY,
-              'Content-Type': 'application/json',
-              'Prefer': 'return=minimal'
-            },
-            body: JSON.stringify({
-              status,
-              stage,
-              metadata: activity.metadata,
-              ended_at: activity.ended_at
-            })
-          }
-        );
-      } else {
-        // Create new record
-        const response = await fetch(
-          `${this.env.SUPABASE_URL}/rest/v1/activity_log`,
-          {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${this.env.SUPABASE_SERVICE_KEY}`,
-              'apikey': this.env.SUPABASE_SERVICE_KEY,
-              'Content-Type': 'application/json',
-              'Prefer': 'return=representation'
-            },
-            body: JSON.stringify(activity)
-          }
-        );
-
-        if (response.ok) {
-          const data = await response.json();
-          if (data && data.length > 0) {
-            this.activityLogId = data[0].id;
-          }
+      // Always INSERT - each stage gets its own record for full debugging visibility
+      await fetch(
+        `${this.env.SUPABASE_URL}/rest/v1/activity_log`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${this.env.SUPABASE_SERVICE_KEY}`,
+            'apikey': this.env.SUPABASE_SERVICE_KEY,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=minimal'
+          },
+          body: JSON.stringify(activity)
         }
-      }
+      );
 
       console.log(`[CF] Activity logged: ${stage} (${status})`);
     } catch (error) {
@@ -845,6 +817,14 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
 
     const startTime = Date.now();
     console.log(`[CF] ElevenLabs TTS: "${text.substring(0, 50)}..."`);
+    
+    // Log attempt for debugging visibility
+    await this.logAttempt('tts', 'attempted', {
+      text_preview: text.substring(0, 50),
+      text_length: text.length,
+      voice_id: this.elevenlabsVoiceId
+    });
+    
     this.isPlaying = true;
     this.audioSentDuringResponse = true;
 
@@ -855,6 +835,7 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${this.env.SUPABASE_SERVICE_KEY}`,
+            'apikey': this.env.SUPABASE_SERVICE_KEY,
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
@@ -868,9 +849,10 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
       if (!response.ok) {
         const errorText = await response.text();
         console.error(`[CF] ElevenLabs error: ${response.status} - ${errorText}`);
-        await this.logErrorToSupabase('elevenlabs_api_error', `HTTP ${response.status}`, { 
-          errorText,
-          text_length: text.length 
+        await this.logAttempt('tts', 'failed', {
+          error: `HTTP ${response.status}: ${errorText}`,
+          text_length: text.length,
+          latency_ms: Date.now() - startTime
         });
         // Fallback to OpenAI TTS with explicit notification
         await this.fallbackToOpenAIWithNotification(text, `ElevenLabs returned ${response.status}`);
@@ -882,8 +864,10 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
       
       if (!jsonResponse.audio) {
         console.error('[CF] ElevenLabs response missing audio field');
-        await this.logErrorToSupabase('elevenlabs_response_error', 'Missing audio field in response', { 
-          response_keys: Object.keys(jsonResponse) 
+        await this.logAttempt('tts', 'failed', {
+          error: 'Missing audio field in response',
+          response_keys: Object.keys(jsonResponse),
+          latency_ms: Date.now() - startTime
         });
         await this.fallbackToOpenAIWithNotification(text, 'Invalid response from voice service');
         return;
@@ -909,7 +893,7 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
       const latency = Date.now() - startTime;
       console.log(`[CF] ElevenLabs audio sent: ${mulawBytes.length} bytes in ${latency}ms`);
 
-      await this.logActivityToSupabase('connected', 'cf_elevenlabs_tts', {
+      await this.logAttempt('tts', 'success', {
         text_length: text.length,
         audio_bytes: mulawBytes.length,
         latency_ms: latency,
@@ -918,7 +902,11 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
 
     } catch (error) {
       console.error('[CF] ElevenLabs TTS failed:', error);
-      await this.logErrorToSupabase('elevenlabs_tts_exception', String(error), { text_length: text.length });
+      await this.logAttempt('tts', 'failed', {
+        error: String(error),
+        text_length: text.length,
+        latency_ms: Date.now() - startTime
+      });
       await this.fallbackToOpenAIWithNotification(text, 'Voice service connection failed');
     }
   }
@@ -947,7 +935,7 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
         type: 'message',
         role: 'assistant',
         content: [{
-          type: 'input_text',
+          type: 'text',
           text: notificationText
         }]
       }
@@ -971,7 +959,7 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
           type: 'message',
           role: 'assistant',
           content: [{
-            type: 'input_text',
+            type: 'text',
             text: originalText
           }]
         }
