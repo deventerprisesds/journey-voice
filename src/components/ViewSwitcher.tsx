@@ -3,13 +3,12 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { 
   LayoutGrid, 
-  BarChart3, 
-  Calendar,
-  List
+  List,
+  Target
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-export type ViewType = 'kanban' | 'grid';
+export type ViewType = 'kanban' | 'grid' | 'focus';
 
 interface ViewSwitcherProps {
   currentView: ViewType;
@@ -29,6 +28,12 @@ const viewOptions = [
     label: 'Grid',
     icon: List,
     description: 'Structured table view'
+  },
+  {
+    value: 'focus' as ViewType,
+    label: 'Focus',
+    icon: Target,
+    description: "Today's command center"
   }
 ];
 
