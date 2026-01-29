@@ -83,7 +83,7 @@ const App = () => {
                       <Route path="/*" element={
                         <MainLayout>
                           <Routes>
-                            <Route path="/" element={<Navigate to="/tasks?view=kanban" replace />} />
+                            <Route path="/" element={<Navigate to="/tasks?view=focus" replace />} />
                             <Route path="/tasks" element={<TasksPage />} />
                             <Route path="/agenda" element={<DailyPriorities />} />
                             <Route path="/admin" element={<Admin />} />
