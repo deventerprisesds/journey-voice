@@ -74,7 +74,7 @@ interface ElevenLabsTTSResponse {
 // NOTE: VOICE_CONFIG, FILLER_CONFIG, SENTENCE_ENDERS imported from ./config.ts
 
 // Worker version for deployment verification
-const WORKER_VERSION = '2026-01-29-cf-v7e';
+const WORKER_VERSION = '2026-01-29-cf-v7f';
 
 export class TwilioCallSession {
   private state: DurableObjectState;
@@ -815,8 +815,20 @@ export class TwilioCallSession {
           break;
 
         case 'input_audio_buffer.speech_stopped':
-          console.log('[CF] User stopped speaking - auto-response will trigger');
-          await this.logActivityToSupabase('connected', 'cf_user_speech_stopped', {});
+          console.log('[CF] User stopped speaking - committing buffer');
+          // v7f: Explicitly commit the buffer to trigger transcription/response
+          this.openaiWs?.send(JSON.stringify({
+            type: 'input_audio_buffer.commit'
+          }));
+          await this.logActivityToSupabase('connected', 'cf_user_speech_stopped', {
+            buffer_committed: true
+          });
+          break;
+
+        // v7f: Track buffer commit acknowledgment for diagnostic visibility
+        case 'input_audio_buffer.committed':
+          console.log('[CF] Audio buffer committed - transcription should follow');
+          await this.logActivityToSupabase('connected', 'cf_buffer_committed', {});
           break;
 
         case 'conversation.item.input_audio_transcription.completed':
@@ -1085,7 +1097,7 @@ You: "Looking that up..." [then call web_search tool]`;
         console.log('[CF] Synthesizing greeting via ElevenLabs');
         await this.sendToElevenLabs(greeting);
         
-        // Inject into OpenAI's conversation history so it "knows" what was said
+        // v7f: Inject assistant message into OpenAI's conversation history
         this.openaiWs?.send(JSON.stringify({
           type: 'conversation.item.create',
           item: {
@@ -1094,10 +1106,29 @@ You: "Looking that up..." [then call web_search tool]`;
             content: [{ type: 'text', text: greeting }]
           }
         }));
+
+        // v7f: Inject system context explaining the state (critical for OpenAI to respond)
+        const now = new Date().toLocaleString('en-US', { timeZone: this.timezone });
+        const contextMsg = `[System: You just spoke the greeting: "${greeting}"
+The user is now listening and may respond. Current time: ${now}.
+Wait for the user's response, then continue the conversation naturally.
+${this.ragContext ? `Context: ${this.ragContext}` : ''}]`;
+
+        this.openaiWs?.send(JSON.stringify({
+          type: 'conversation.item.create',
+          item: {
+            type: 'message',
+            role: 'system',
+            content: [{ type: 'input_text', text: contextMsg }]
+          }
+        }));
+
+        console.log('[CF] Injected post-greeting system context for OpenAI');
         
         await this.logAttempt('greeting', 'success', {
           source: 'elevenlabs_direct',
           greeting_text: greeting.substring(0, 50),
+          system_context_injected: true,
           latency_ms: Date.now() - greetingStartTime
         });
       } else {
