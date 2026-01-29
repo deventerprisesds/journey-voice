@@ -103,6 +103,23 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
     LOW: 'bg-blue-500 text-white',
   };
 
+  // Category colors using semantic tokens from design system
+  const categoryColors: Record<string, string> = {
+    LIFE: 'bg-[hsl(var(--category-life))] text-white',
+    CAREER: 'bg-[hsl(var(--category-career))] text-white',
+    VENTURES: 'bg-[hsl(var(--category-ventures))] text-white',
+    EDUCATION: 'bg-[hsl(var(--category-education))] text-white',
+    PROF_EDUCATION: 'bg-[hsl(var(--category-education))] text-white',
+  };
+
+  const categoryBorderColors: Record<string, string> = {
+    LIFE: 'border-l-[hsl(var(--category-life))]',
+    CAREER: 'border-l-[hsl(var(--category-career))]',
+    VENTURES: 'border-l-[hsl(var(--category-ventures))]',
+    EDUCATION: 'border-l-[hsl(var(--category-education))]',
+    PROF_EDUCATION: 'border-l-[hsl(var(--category-education))]',
+  };
+
   // Layout constants for full-day overlay rendering
   const DAY_START_HOUR = 6; // 6 AM
   const DAY_END_HOUR = 22;  // 10 PM
@@ -297,12 +314,14 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
                   }
 
                   const t = item.raw as Task;
+                  const categoryBorder = t.category ? categoryBorderColors[t.category] : '';
                   return (
                     <div
                       key={`task-${t.id}-${idx}`}
                       className={cn(
-                        "absolute rounded text-xs group cursor-pointer hover:opacity-90 transition-opacity z-20 flex flex-col pointer-events-auto",
-                        priorityColors[t.priority as keyof typeof priorityColors]
+                        "absolute rounded text-xs group cursor-pointer hover:opacity-90 transition-opacity z-20 flex flex-col pointer-events-auto border-l-4",
+                        priorityColors[t.priority as keyof typeof priorityColors],
+                        categoryBorder
                       )}
                       style={{ top, height, left: `${left}%`, width: `calc(${width}% - 2px)`, padding: '4px' }}
                       onClick={(e) => { e.stopPropagation(); onTaskClick?.(t); }}
@@ -322,14 +341,26 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
                         </div>
                       )}
 
+                      {/* Category badge */}
+                      {t.category && (
+                        <Badge 
+                          className={cn(
+                            "absolute top-0.5 right-0.5 text-[9px] px-1 py-0 h-4 font-medium",
+                            categoryColors[t.category]
+                          )}
+                        >
+                          {t.category}
+                        </Badge>
+                      )}
+
                       <div className={cn(
-                        "font-medium leading-tight break-words",
+                        "font-medium leading-tight break-words pr-12",
                         t.status === 'DONE' && "line-through opacity-60"
                       )}>
                         {t.title}
                       </div>
                       {t.start_time && t.end_time && (
-                        <div className="text-xs opacity-90 flex items-center gap-1">
+                        <div className="text-xs opacity-90 flex items-center gap-1 mt-auto">
                           <Clock className="h-2 w-2" />
                           {format(parseISO(t.start_time), 'h:mm')} - {format(parseISO(t.end_time), 'h:mm')}
                         </div>
