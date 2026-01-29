@@ -1,137 +1,273 @@
-# Cloudflare Bridge v4 - Complete Logging Coverage Implementation
 
-## Status: ✅ IMPLEMENTED
+# Cloudflare Bridge: Complete Feature Parity Implementation
 
-Version `2026-01-29-cf-v4` now implements all 8 phases with full logging coverage.
+## Current Status Assessment
 
----
+After thorough code analysis, **7 of 8 phases are implemented** in the current v4 Cloudflare bridge. The only major missing feature is **Phase 7: Agenda Manager** for scheduled calls.
 
-## Implementation Summary
+### Implemented Phases (✅)
+| Phase | Feature | Status |
+|-------|---------|--------|
+| 1 | Turn Detection | `semantic_vad` + `create_response: true` |
+| 2 | Audio Pipeline Logging | First-media, first-delta tracking |
+| 3 | Echo Suppression | Time-based window + amplitude filtering |
+| 4 | Transcript Persistence | `saveConversationMessage()` with logging |
+| 5 | Smart Filler Manager | Timer-based acknowledgments at 1.5s/3.5s/6s |
+| 6 | Hello-Wait Logic | Outbound call pickup detection |
+| 8 | Conversational Responsiveness | Full prompt engineering |
 
-### PHASE 1: TURN DETECTION ✅
-- `semantic_vad` with `create_response: true`, `interrupt_response: true`
-- `cf_session_configured` logs VAD type and tools count
-- `cf_user_speech_started` / `cf_user_speech_stopped` events
-
-### PHASE 2: AUDIO PIPELINE ✅
-- `cf_first_media_in` - First Twilio frame received (confirms audio flowing)
-- `cf_text_delta_first` - First text delta from OpenAI (ElevenLabs path)
-- `cf_first_audio_delta` - First audio delta from OpenAI (OpenAI TTS path)
-- Echo filtering stats logged every 50 frames
-- `cf_barge_in_detected` - User interruption logged
-
-### PHASE 3: ECHO SUPPRESSION ✅
-- `isSendingTtsAudio` flag with time-based window
-- `TTS_ECHO_GRACE_PERIOD_MS` = 500ms
-- `echoFilteredCount` tracked and logged
-- Console logs every 50th filtered frame
-
-### PHASE 4: TRANSCRIPT PERSISTENCE ✅
-- `saveConversationMessage()` with message_index
-- `cf_message_persisted` logged on success
-- Error logging on failure
-
-### PHASE 5: SMART FILLER MANAGER ✅
-- `FILLER_PHRASES` array with 7 natural phrases
-- `FILLER_INTERVALS` at 1.5s, 3.5s, 6s
-- `startFillerTimers()` / `clearFillerTimers()` methods
-- `speakFiller()` with phrase rotation (no repeats)
-- `cf_filler_spoken` logged with phrase and index
-
-### PHASE 6: HELLO-WAIT LOGIC ✅
-- `waitingForUserHello` flag for outbound calls
-- `HELLO_FALLBACK_MS` = 2000ms timer
-- `setupHelloWait()` / `triggerPendingGreeting()` methods
-- Speech detection in `handleMedia()` triggers greeting
-- `cf_hello_trigger` logged with source (user_speech | fallback_timer)
-
-### PHASE 7: AGENDA MANAGER ⏳
-- Deferred to future version (not MVP-critical)
-
-### PHASE 8: CONVERSATIONAL RESPONSIVENESS ✅
-- Full prompt with BEFORE ANY TOOL CALL instructions
-- TIME-AWARE FEEDBACK guidelines
-- NATURAL VARIATION rules
+### Missing Phase (❌)
+| Phase | Feature | Impact |
+|-------|---------|--------|
+| 7 | Agenda Manager | Scheduled calls won't track agenda progress or handle tangents |
 
 ---
 
-## Complete Activity Log Flow
+## Implementation Plan
 
-```
-CONNECTION PHASE
-├── cf_ws_start              → Twilio WebSocket connected
-├── cf_preconnect_fetch      → Pre-connect session loaded
-├── cf_openai_connect        → OpenAI WebSocket ready
-└── cf_session_configured    → semantic_vad, create_response:true
+### Phase 7: Agenda Manager Integration
 
-GREETING PHASE
-├── cf_greeting_attempted    → source, has_cached_audio
-├── cf_hello_trigger         → (outbound) source: user_speech | fallback
-└── cf_greeting_success      → source, latency_ms, bytes
+Port the `SharedAgendaManager` integration from Supabase bridge to enable:
+- Agenda item tracking for scheduled calls
+- Tangent detection and pause/resume
+- Cross-mode persistence (phone ↔ chat ↔ voice)
 
-AUDIO PIPELINE
-├── cf_first_media_in        → First Twilio frame (audio flowing)
-├── cf_text_delta_first      → First OpenAI text (ElevenLabs path)
-└── cf_first_audio_delta     → First OpenAI audio (native path)
+#### Changes Required
 
-USER SPEECH
-├── cf_user_speech_started   → VAD detected speech
-├── cf_user_speech_stopped   → VAD detected end
-├── cf_transcription         → transcript text
-└── cf_barge_in_detected     → User interrupted AI
+**1. Add Agenda State Variables**
+Location: `cloudflare/src/TwilioCallSession.ts` (~line 156)
 
-AI RESPONSE
-├── cf_response_started      → response.created received
-├── cf_filler_spoken         → phrase, filler_index (during tool calls)
-└── cf_tool_call             → tool_name, args_preview
-
-TTS SYNTHESIS
-├── cf_tts_attempted         → text_preview, voice_id
-├── cf_tts_success           → audio_bytes, latency_ms
-├── cf_tts_failed            → error details
-└── cf_elevenlabs_fallback   → reason, notification_sent
-
-TRANSCRIPT PERSISTENCE
-└── cf_message_persisted     → role, message_index, content_length
-
-CALL END
-├── cf_hang_up               → initiated_by: user|ai
-├── cf_disconnect            → reason: stop_event|hang_up
-└── cf_call_summary          → duration_s, messages, echo_stats, frames
+```typescript
+// Phase 7: Agenda Manager state
+private agendaItems: Array<{ index: number; text: string; status: string }> = [];
+private currentAgendaIndex: number = 0;
+private agendaPaused: boolean = false;
+private pausedForQuery: string | null = null;
 ```
 
+**2. Add Agenda Manager Methods**
+Location: After `triggerPendingGreeting()` method (~line 1565)
+
+```typescript
+// ==================== Phase 7: Agenda Manager ====================
+
+private parseAgendaFromContext(context: string): Array<{ index: number; text: string; status: string }> {
+  const agendaMatch = context.match(/AGENDA:\n([\s\S]*?)(\n\n|$)/);
+  if (!agendaMatch) return [];
+  
+  const lines = agendaMatch[1].split('\n');
+  return lines
+    .filter(line => /^\d+\./.test(line.trim()))
+    .map((line, index) => ({
+      index,
+      text: line.replace(/^\d+\.\s*/, '').trim(),
+      status: 'pending'
+    }));
+}
+
+private async initializeAgenda(context: string) {
+  this.agendaItems = this.parseAgendaFromContext(context);
+  if (this.agendaItems.length > 0) {
+    console.log(`[CF] Parsed ${this.agendaItems.length} agenda items`);
+    await this.logActivityToSupabase('connected', 'cf_agenda_initialized', {
+      item_count: this.agendaItems.length,
+      items: this.agendaItems.map(i => i.text.substring(0, 50))
+    });
+    // Start first item
+    this.startAgendaItem(0);
+  }
+}
+
+private startAgendaItem(index: number) {
+  if (this.agendaItems[index]) {
+    this.agendaItems[index].status = 'in_progress';
+    this.currentAgendaIndex = index;
+    console.log(`[CF] Started agenda item ${index}: "${this.agendaItems[index].text.substring(0, 40)}..."`);
+  }
+}
+
+private completeCurrentAgendaItem() {
+  if (this.agendaItems[this.currentAgendaIndex]) {
+    this.agendaItems[this.currentAgendaIndex].status = 'completed';
+    console.log(`[CF] Completed agenda item ${this.currentAgendaIndex}`);
+    
+    // Find next pending item
+    const nextIndex = this.agendaItems.findIndex(
+      (item, idx) => idx > this.currentAgendaIndex && item.status === 'pending'
+    );
+    if (nextIndex !== -1) {
+      this.startAgendaItem(nextIndex);
+    }
+  }
+}
+
+private pauseAgendaForTangent(userQuery: string) {
+  if (this.agendaItems[this.currentAgendaIndex]?.status === 'in_progress') {
+    this.agendaItems[this.currentAgendaIndex].status = 'paused';
+    this.agendaPaused = true;
+    this.pausedForQuery = userQuery;
+    console.log(`[CF] Paused agenda for tangent: "${userQuery.substring(0, 40)}..."`);
+  }
+}
+
+private resumeAgenda() {
+  if (this.agendaPaused && this.agendaItems[this.currentAgendaIndex]) {
+    this.agendaItems[this.currentAgendaIndex].status = 'in_progress';
+    this.agendaPaused = false;
+    this.pausedForQuery = null;
+    console.log(`[CF] Resumed agenda item ${this.currentAgendaIndex}`);
+  }
+}
+
+private getAgendaResumeHint(): string | null {
+  if (!this.agendaPaused) return null;
+  const item = this.agendaItems[this.currentAgendaIndex];
+  return item ? `Getting back to: ${item.text}` : null;
+}
+
+private getAgendaProgress(): { completed: number; total: number; remaining: string[] } {
+  const completed = this.agendaItems.filter(i => i.status === 'completed').length;
+  const remaining = this.agendaItems.filter(i => i.status !== 'completed').map(i => i.text);
+  return { completed, total: this.agendaItems.length, remaining };
+}
+
+private isAgendaComplete(): boolean {
+  return this.agendaItems.every(i => i.status === 'completed');
+}
+```
+
+**3. Initialize Agenda in configureSession()**
+Location: `configureSession()` method, after sending session.update (~line 785)
+
+```typescript
+// Phase 7: Initialize agenda manager if we have pre-connected instructions with agenda
+if (this.preConnectedInstructions) {
+  await this.initializeAgenda(this.preConnectedInstructions);
+}
+```
+
+**4. Add Agenda Context to System Prompt**
+Location: `buildSystemPrompt()` method (~line 820)
+
+```typescript
+// Add agenda progress context if available
+if (this.agendaItems.length > 0) {
+  const progress = this.getAgendaProgress();
+  prompt += `\n\n## Current Agenda Status
+Progress: ${progress.completed}/${progress.total} items completed
+Remaining items: ${progress.remaining.map((r, i) => `${i + 1}. ${r}`).join('\n')}
+
+AGENDA GUIDELINES:
+- Cover each agenda item naturally in conversation
+- If user asks something unrelated, answer briefly then guide back
+- After completing an item, naturally transition to the next
+- When all items covered, ask if there's anything else before ending`;
+}
+
+// Add resume hint if paused
+const resumeHint = this.getAgendaResumeHint();
+if (resumeHint) {
+  prompt += `\n\n[SYSTEM: ${resumeHint}]`;
+}
+```
+
+**5. Log Agenda in Call Summary**
+Location: `cleanup()` method, update `cf_call_summary` (~line 1421)
+
+```typescript
+await this.logActivityToSupabase('completed', 'cf_call_summary', {
+  duration_s: callDurationS,
+  messages_persisted: this.messageIndex,
+  tts_provider: this.ttsProvider,
+  echo_filtered_count: this.echoFilteredCount,
+  twilio_frames_in: this.twilioMediaFramesIn,
+  openai_appends: this.openaiAppendCount,
+  twilio_frames_out: this.twilioMediaFramesOut,
+  first_media_logged: this.firstMediaLogged,
+  greeting_triggered: this.pendingGreetingTriggered,
+  // Phase 7: Agenda metrics
+  agenda_items_total: this.agendaItems.length,
+  agenda_items_completed: this.agendaItems.filter(i => i.status === 'completed').length
+});
+```
+
+**6. Version Bump**
+Update to `2026-01-29-cf-v5` in both files.
+
 ---
 
-## Testing Checklist
+## Enhanced Logging Verification
 
-| # | Log | Confirms | Status |
-|---|-----|----------|--------|
-| 1 | `cf_ws_start` | Twilio connected | Ready |
-| 2 | `cf_openai_connect` | OpenAI connected | Ready |
-| 3 | `cf_session_configured` | VAD config applied | Ready |
-| 4 | `cf_greeting_success` | Greeting sent | Ready |
-| 5 | `cf_first_media_in` | User audio arriving | Ready |
-| 6 | `cf_user_speech_stopped` | VAD working | Ready |
-| 7 | `cf_transcription` | Whisper working | Ready |
-| 8 | `cf_response_started` | Auto-response triggered | Ready |
-| 9 | `cf_text_delta_first` | OpenAI generating | Ready |
-| 10 | `cf_tts_success` | TTS working | Ready |
-| 11 | `cf_call_summary` | Telemetry captured | Ready |
+Add these additional activity log entries for complete traceability:
+
+| Log Entry | When | Confirms |
+|-----------|------|----------|
+| `cf_agenda_initialized` | After parsing agenda | Agenda tracking active |
+| `cf_agenda_item_started` | When item begins | Item progression |
+| `cf_agenda_item_completed` | When item finishes | Item completion |
+| `cf_agenda_paused` | When tangent detected | Pause/resume working |
+| `cf_agenda_resumed` | When returning to agenda | Resume logic working |
 
 ---
 
-## Files Modified
+## Verification Checklist
+
+After deployment, verify the complete activity log flow:
+
+```
+TEST 1: Basic Call (No Agenda)
+├── cf_ws_start              → Twilio connected
+├── cf_openai_connect        → OpenAI ready
+├── cf_session_configured    → semantic_vad, create_response:true
+├── cf_greeting_success      → Greeting sent
+├── cf_first_media_in        → User audio arriving
+├── cf_user_speech_stopped   → VAD working
+├── cf_transcription         → "Hello"
+├── cf_response_started      → Auto-response triggered
+├── cf_text_delta_first      → Text generation started
+├── cf_tts_success           → ElevenLabs audio sent
+└── cf_call_summary          → Full metrics
+
+TEST 2: Scheduled Call (With Agenda)
+├── [All basic call logs above]
+├── cf_agenda_initialized    → item_count: 3
+├── cf_agenda_item_started   → index: 0
+├── cf_tool_call             → get_tasks
+├── cf_filler_spoken         → "One moment..."
+├── cf_tool_result           → success
+├── cf_agenda_item_completed → index: 0
+├── cf_agenda_item_started   → index: 1
+└── cf_call_summary          → agenda_completed: 2/3
+
+TEST 3: Outbound Call (Hello-Wait)
+├── cf_ws_start              → Twilio connected
+├── cf_session_configured    → direction: outbound
+├── cf_first_media_in        → User audio arriving
+├── cf_hello_trigger         → source: user_speech
+├── cf_greeting_success      → Greeting sent
+└── [Rest of normal flow]
+```
+
+---
+
+## Files to Modify
 
 | File | Changes |
 |------|---------|
-| `cloudflare/src/TwilioCallSession.ts` | Full v4 implementation |
-| `cloudflare/src/index.ts` | Version bump to v4 |
+| `cloudflare/src/TwilioCallSession.ts` | Add agenda state, methods, and logging |
+| `cloudflare/src/index.ts` | Version bump to v5 |
+| `.lovable/plan.md` | Update Phase 7 status to ✅ |
 
 ---
 
-## Next Steps
+## Summary
 
-1. **Deploy**: Push to trigger GitHub Actions deployment
-2. **Test**: Make inbound and outbound test calls
-3. **Verify**: Check activity_log for complete flow
-4. **Debug**: Use stage sequence to identify any breaks
+The Cloudflare bridge v4 already has **7 of 8 phases complete**. This plan adds:
+
+1. **Phase 7: Agenda Manager** - Local in-memory agenda tracking for scheduled calls
+2. **Enhanced Logging** - Agenda-specific activity log entries
+3. **Version Bump** - v5 for deployment verification
+
+The agenda manager is implemented as a local state machine (not calling the external `agenda-manager` edge function) to minimize latency during calls. For cross-session persistence, the agenda state is logged to `activity_log` and can be reconstructed from `conversation_messages`.
+
+After implementation, the Cloudflare bridge will have **100% feature parity** with the Supabase bridge for all critical call flows.
