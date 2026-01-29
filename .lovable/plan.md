@@ -1,90 +1,87 @@
 
+<context>
+You’re in Lovable preview (editor) and see “Demo Mode” (so `isDemoMode === true`), but the Kanban tabs show 0 tasks even though the demo user has tasks. This happens because the app currently loads demo-mode tasks exclusively from `localStorage` (`kanban-demo-tasks`). In Lovable preview (an iframe + mobile browser), `localStorage` is frequently empty/partitioned and not where the demo data actually lives.
 
-## Fix: UUID Error in Demo Mode Task Creation
+I verified in the Test Supabase DB that the demo user `00000000-0000-0000-0000-000000000001` already has tasks (count > 0). The UI just isn’t querying Supabase in demo mode, so it renders an empty board.
+</context>
 
-### Problem
-When creating tasks via the AI modal in demo mode on the tabbed Kanban view, an "invalid input syntax for type uuid" error appears. This happens because:
+<root-cause>
+1) `TasksPage.loadTasks()` branches:
+   - demo mode => `localStorage.getItem('kanban-demo-tasks')`
+   - authenticated => Supabase query
 
-1. `TabbedKanbanBoard` uses `useStandardColumns={true}` which skips board loading
-2. `board` stays `null`, so `boardId=""` gets passed to `TaskCreationModal`
-3. The modal tries to query Supabase with an empty string as a UUID
+2) In Lovable preview, `localStorage` for the app can be empty or not persistent due to iframe/storage partitioning, so demo mode always “loads” an empty array.
 
-### Solution
-Add demo mode handling directly in `TaskCreationModal` to use a fallback demo board ID when no valid `boardId` is provided. This is consistent with the existing demo mode pattern already used in the file.
+3) Separately, the DB already contains demo tasks (and RLS policies exist to allow anon/public access to demo-user rows), so the correct source of truth in preview should be Supabase, not `localStorage`.
+</root-cause>
 
----
+<solution-overview>
+Switch Demo Mode task loading to be Supabase-backed (with optional `localStorage` caching as a fallback), so:
+- Opening Lovable preview shows the demo tasks immediately
+- Refreshing doesn’t wipe the task list
+- Creating tasks in demo mode uses a real UUID `board_id` from Supabase (avoids invalid UUID / “fake board id” issues)
 
-### File Changes
+We will not change authenticated behavior.
+</solution-overview>
 
-#### 1. TaskCreationModal.tsx - Add demo fallback constant and helper
+<implementation-steps>
+1) Update demo-mode task loading in `src/pages/TasksPage.tsx`
+   - Replace the demo branch that reads `localStorage` with a Supabase query:
+     - `supabase.from('tasks').select('*').eq('user_id', user.id).order('created_at')`
+   - Add clear error vs empty-result logging (optionally using the existing `safeQuery` utility from `src/utils/dbQuery.ts`) so we can distinguish “no tasks” from “query failed”.
+   - (Optional but recommended) Keep a small fallback:
+     - If Supabase errors, fall back to `localStorage` so preview remains usable even if Supabase is temporarily unavailable.
 
-**Near the top of the file (after imports, around line 36):**
-```tsx
-const DEMO_BOARD_ID = 'demo-board-1';
-```
+2) Fix demo-mode creation to persist to Supabase in `src/components/TaskCreationModal.tsx`
+   - Today, demo mode creation writes to `localStorage` with `board_id = 'demo-board-1'` (not a UUID), which can’t be persisted in the DB and also doesn’t help preview reload.
+   - Implement `getOrCreateDefaultBoardId(userId)` inside this file (or a shared util) that:
+     - queries `boards` for `user_id=userId` and `is_default=true`
+     - uses `.order('created_at', { ascending: false }).limit(1).maybeSingle()` to safely handle duplicates
+     - if none exists, inserts a default board and returns its UUID
+   - In `handleCreateTasks` when `isDemoMode`:
+     - compute `effectiveBoardId` using the helper above (ignoring empty `boardId`)
+     - insert tasks into Supabase (`.insert(tasksWithMeta).select()`)
+     - remove the demo-only fake `id: demo-task-...` assignment (let DB generate UUIDs)
+   - Keep the earlier UUID crash fix:
+     - avoid any `.eq('board_id', boardId)` queries when `boardId` is empty/non-UUID
+     - for AI parse “existingTasks”, in demo mode pull existing tasks from Supabase by `user_id` (not `board_id`) so it remains safe and accurate.
 
-#### 2. TaskCreationModal.tsx - Fix `handleAIParseTask` function
+3) (Optional but recommended) Prevent demo initialization code from wiping tasks
+   - In `src/components/KanbanBoard.tsx`, demo `createDefaultBoardAndColumns()` currently does:
+     - `localStorage.setItem('kanban-demo-tasks', JSON.stringify([]))`
+   - Change this to “only initialize tasks if missing” (do not overwrite) to prevent accidental task resets for any remaining localStorage demo flows.
 
-**Around line 505-509** - Change the existing tasks query to handle demo mode:
+4) Verification checklist (what you’ll test in Lovable preview)
+   - Navigate to `/tasks?view=kanban`
+     - Confirm at least one tab shows a non-zero count (based on demo DB tasks).
+   - Use AI Create to add a Career task
+     - Confirm it appears immediately under the Career tab without refresh.
+   - Refresh the preview
+     - Confirm the task remains visible (proves DB-backed demo persistence).
+   - Confirm authenticated mode still loads tasks as before.
 
-Current code:
-```tsx
-const { data: existingTasks } = await supabase
-  .from('tasks')
-  .select('*')
-  .eq('user_id', userId)
-  .eq('board_id', boardId);
-```
+</implementation-steps>
 
-Updated code:
-```tsx
-// In demo mode, skip Supabase query and use localStorage
-const isDemoContext = !boardId || boardId.startsWith('demo-');
-let existingTasks: any[] = [];
+<expected-result>
+- In Lovable preview demo mode, the Kanban board will show the demo user’s tasks (no more “0 tasks” due to empty localStorage).
+- New demo tasks created via AI will persist and continue to appear after refresh.
+- The earlier “invalid UUID” issue remains fixed because we avoid querying with empty `boardId` and we use a real Supabase board UUID for inserts.
+</expected-result>
 
-if (isDemoContext) {
-  // Load existing demo tasks from localStorage
-  const demoTasks = localStorage.getItem('kanban-demo-tasks');
-  existingTasks = demoTasks ? JSON.parse(demoTasks) : [];
-} else {
-  const { data } = await supabase
-    .from('tasks')
-    .select('*')
-    .eq('user_id', userId)
-    .eq('board_id', boardId);
-  existingTasks = data || [];
-}
-```
+<files-to-change>
+- `src/pages/TasksPage.tsx`
+- `src/components/TaskCreationModal.tsx`
+- (Optional) `src/components/KanbanBoard.tsx`
+- (Optional) create a small shared helper file (e.g., `src/utils/demoData.ts`) if we want to reuse the “get default board id” logic cleanly across components.
+</files-to-change>
 
-#### 3. TaskCreationModal.tsx - Fix `handleCreateTasks` function
+<notes-for-non-technical>
+Right now “Demo Mode” is looking in the browser’s temporary storage for tasks, but in the Lovable preview that storage can be empty. The demo tasks actually exist in the project’s database, so we’ll switch demo mode to load them from the database instead—so they show up reliably every time you open Preview.
+</notes-for-non-technical>
 
-**Around line 647** - Update the demo mode check to handle empty boardId:
-
-Current code:
-```tsx
-const isDemoMode = boardId.startsWith('demo-');
-```
-
-Updated code:
-```tsx
-const isDemoMode = !boardId || boardId.startsWith('demo-');
-const effectiveBoardId = isDemoMode ? DEMO_BOARD_ID : boardId;
-```
-
-Then update lines that reference `boardId` in the task creation to use `effectiveBoardId` instead.
-
----
-
-### Summary
-
-| File | Change |
-|------|--------|
-| `TaskCreationModal.tsx` | Add `DEMO_BOARD_ID` constant |
-| `TaskCreationModal.tsx` | Update `handleAIParseTask` to skip Supabase query in demo mode |
-| `TaskCreationModal.tsx` | Update `handleCreateTasks` to use fallback board ID |
-
-### Result
-- No more UUID errors when creating tasks in demo mode
-- Tasks are properly stored in localStorage with consistent `demo-board-1` ID
-- Existing non-demo mode behavior remains unchanged
-
+<technical-risks-and-mitigations>
+- Risk: demo user has multiple default boards, and `.single()`-style queries can error.
+  - Mitigation: use `.order(...).limit(1).maybeSingle()` consistently.
+- Risk: RLS might block anon reads/writes.
+  - Mitigation: confirmed migrations include demo user policies on `boards` and `tasks` (`TO public`).
+</technical-risks-and-mitigations>
