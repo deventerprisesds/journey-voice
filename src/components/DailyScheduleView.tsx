@@ -14,6 +14,8 @@ import TaskCard from '@/components/TaskCard';
 import TaskCreationModal from '@/components/TaskCreationModal';
 import TimeSlotGrid from '@/components/TimeSlotGrid';
 import { useIsMobile } from '@/hooks/use-mobile';
+import { loadUserSchedulingConfig, type SchedulingConfig } from '@/services/schedulingService';
+import { DEFAULT_SCHEDULING_CONFIG } from '@/config/schedulingRules';
 
 interface DailyScheduleViewProps {
   tasks: Task[];
@@ -33,7 +35,22 @@ const DailyScheduleView: React.FC<DailyScheduleViewProps> = ({
   const [defaultBoardId, setDefaultBoardId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [createAtTime, setCreateAtTime] = useState<{ hour: number; minute: number } | null>(null);
+  const [schedulingConfig, setSchedulingConfig] = useState<SchedulingConfig>(DEFAULT_SCHEDULING_CONFIG);
   const isMobile = useIsMobile();
+
+  // Load user's scheduling config for time windows
+  useEffect(() => {
+    const loadConfig = async () => {
+      if (!user?.id) return;
+      try {
+        const config = await loadUserSchedulingConfig(user.id);
+        setSchedulingConfig(config);
+      } catch (error) {
+        console.error('Failed to load scheduling config:', error);
+      }
+    };
+    loadConfig();
+  }, [user?.id]);
 
   // Get default board for task creation
   useEffect(() => {
@@ -278,6 +295,7 @@ const DailyScheduleView: React.FC<DailyScheduleViewProps> = ({
                     onTimeSlotClick={handleTimeSlotClick}
                     onTaskClick={(task) => console.log('Task clicked:', task)}
                     onStatusChange={handleTaskStatusChange}
+                    schedulingConfig={schedulingConfig}
                     className="min-w-[300px]"
                   />
                 </ScrollArea>
