@@ -74,7 +74,7 @@ interface ElevenLabsTTSResponse {
 const SENTENCE_ENDERS = /[.!?]+[\s"')\]]*$/;
 
 // Worker version for deployment verification
-const WORKER_VERSION = '2026-01-29-cf-v7';
+const WORKER_VERSION = '2026-01-29-cf-v7b';
 
 // Smart filler phrases for tool call acknowledgments (Phase 5)
 const FILLER_PHRASES = [
@@ -161,6 +161,10 @@ export class TwilioCallSession {
 
   // v7: User profile for personalization (parity with Supabase)
   private userProfile: { first_name?: string; full_name?: string } = {};
+
+  // v7b: State tracking for proper truncation (parity with Supabase)
+  private currentResponseItemId: string | null = null;
+  private audioSamplesPlayed: number = 0;
 
   // Audio pipeline telemetry
   private twilioMediaFramesIn: number = 0;
@@ -709,7 +713,25 @@ export class TwilioCallSession {
                 call_duration_ms: Date.now() - this.callStartTime
               });
             }
+            // v7b: Track audio samples for truncation calculation (parity with Supabase)
+            if (data.delta) {
+              try {
+                const pcm24k = base64ToInt16(data.delta);
+                this.audioSamplesPlayed += pcm24k.length;
+              } catch (e) {
+                // Ignore decode errors for sample counting
+              }
+            }
             this.handleAudioDelta(data);
+          }
+          break;
+
+        // v7b: Track response item ID for proper truncation (parity with Supabase)
+        case 'response.output_item.added':
+          if (data.item?.type === 'message') {
+            this.currentResponseItemId = data.item.id;
+            this.audioSamplesPlayed = 0;
+            console.log('[CF] Tracking response item:', this.currentResponseItemId);
           }
           break;
 
@@ -757,6 +779,9 @@ export class TwilioCallSession {
           this.isPlaying = false;
           // Phase 8: Clear isAiSpeaking flag
           this.isAiSpeaking = false;
+          // v7b: Reset truncation tracking state (parity with Supabase)
+          this.currentResponseItemId = null;
+          this.audioSamplesPlayed = 0;
           break;
 
         // Phase 1B + Phase 8: Speech started with VAD barge-in guards (parity with Supabase bridge)
@@ -1420,8 +1445,27 @@ You: "Looking that up..." [then call web_search tool]`;
       }));
     }
 
-    // Cancel OpenAI response
-    this.openaiWs?.send(JSON.stringify({ type: 'response.cancel' }));
+    // v7b: Use truncation instead of cancel (preserves VAD state - parity with Supabase)
+    if (this.currentResponseItemId && this.openaiWs?.readyState === WebSocket.OPEN) {
+      const audioEndMs = Math.floor(this.audioSamplesPlayed / 24); // 24kHz samples to ms
+      console.log(`[CF] Truncating response item ${this.currentResponseItemId} at ${audioEndMs}ms`);
+      
+      this.openaiWs.send(JSON.stringify({
+        type: 'conversation.item.truncate',
+        item_id: this.currentResponseItemId,
+        content_index: 0,
+        audio_end_ms: audioEndMs
+      }));
+    } else {
+      // Fallback to cancel if no item ID available
+      console.log('[CF] No item ID for truncation, using cancel');
+      this.openaiWs?.send(JSON.stringify({ type: 'response.cancel' }));
+    }
+
+    // Reset tracking state
+    this.isAiSpeaking = false;
+    this.currentResponseItemId = null;
+    this.audioSamplesPlayed = 0;
   }
 
   // ==================== Tool Handling ====================
