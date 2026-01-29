@@ -37,6 +37,7 @@ interface OpenAIEvent {
   name?: string;
   arguments?: string;
   text?: string;
+  transcript?: string;
 }
 
 interface UserVoicePrefs {
@@ -73,7 +74,7 @@ interface ElevenLabsTTSResponse {
 const SENTENCE_ENDERS = /[.!?]+[\s"')\]]*$/;
 
 // Worker version for deployment verification
-const WORKER_VERSION = '2026-01-29-cf-v2';
+const WORKER_VERSION = '2026-01-29-cf-v3';
 
 export class TwilioCallSession {
   private state: DurableObjectState;
@@ -110,6 +111,14 @@ export class TwilioCallSession {
   // Echo suppression thresholds
   private readonly ECHO_THRESHOLD = 1500;
   private readonly BARGE_IN_THRESHOLD = 3000;
+
+  // Phase 2: Enhanced echo suppression (parity with Supabase bridge)
+  private isSendingTtsAudio: boolean = false;
+  private ttsAudioEndTime: number = 0;
+  private readonly TTS_ECHO_GRACE_PERIOD_MS = 500;
+
+  // Message index for transcript persistence
+  private messageIndex: number = 0;
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
@@ -264,6 +273,42 @@ export class TwilioCallSession {
       }
     } catch (e) {
       console.error(`[ATTEMPT] Failed to persist ${attemptType} ${status}:`, e);
+    }
+  }
+
+  // ==================== Phase 3: Transcript Persistence ====================
+
+  private async saveConversationMessage(role: 'user' | 'assistant', content: string) {
+    if (!this.callSid || !content.trim()) return;
+
+    try {
+      this.messageIndex++;
+      
+      await fetch(`${this.env.SUPABASE_URL}/rest/v1/conversation_messages`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.env.SUPABASE_SERVICE_KEY}`,
+          'apikey': this.env.SUPABASE_SERVICE_KEY,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal'
+        },
+        body: JSON.stringify({
+          user_id: this.userId || '00000000-0000-0000-0000-000000000001',
+          role,
+          content,
+          source: 'cloudflare_phone',
+          metadata: {
+            call_sid: this.callSid,
+            message_index: this.messageIndex,
+            tts_provider: this.ttsProvider,
+            worker_version: WORKER_VERSION
+          }
+        })
+      });
+      
+      console.log(`[CF] Saved ${role} message: "${content.substring(0, 50)}..."`);
+    } catch (error) {
+      console.error('[CF] Failed to save conversation message:', error);
     }
   }
 
@@ -544,9 +589,15 @@ export class TwilioCallSession {
           break;
 
         case 'response.text.done':
-          // Flush remaining text buffer for ElevenLabs
-          if (this.ttsProvider === 'elevenlabs' && !this.elevenlabsFallbackActive && this.textBuffer.trim()) {
-            await this.sendToElevenLabs(this.textBuffer);
+          // Flush remaining text buffer for ElevenLabs and save transcript
+          if (this.ttsProvider === 'elevenlabs' && !this.elevenlabsFallbackActive) {
+            if (this.textBuffer.trim()) {
+              await this.sendToElevenLabs(this.textBuffer);
+            }
+            // Save full AI response (text.done gives us complete text)
+            if (data.text) {
+              await this.saveConversationMessage('assistant', data.text);
+            }
             this.textBuffer = '';
           }
           this.audioSentDuringResponse = false;
@@ -556,8 +607,40 @@ export class TwilioCallSession {
           this.isPlaying = false;
           break;
 
+        // Phase 1B: Add missing message handlers for audio pipeline visibility
         case 'input_audio_buffer.speech_started':
+          console.log('[CF] User started speaking');
+          await this.logActivityToSupabase('connected', 'cf_user_speech_started', {});
           this.handleBargeIn();
+          break;
+
+        case 'input_audio_buffer.speech_stopped':
+          console.log('[CF] User stopped speaking - auto-response will trigger');
+          await this.logActivityToSupabase('connected', 'cf_user_speech_stopped', {});
+          break;
+
+        case 'conversation.item.input_audio_transcription.completed':
+          const transcript = data.transcript || '';
+          console.log(`[CF] User said: "${transcript}"`);
+          await this.logActivityToSupabase('connected', 'cf_transcription', {
+            transcript: transcript.substring(0, 200)
+          });
+          // Phase 3: Save user transcript
+          await this.saveConversationMessage('user', transcript);
+          break;
+
+        case 'response.created':
+          console.log('[CF] AI response started');
+          await this.logActivityToSupabase('connected', 'cf_response_started', {});
+          break;
+
+        case 'response.audio_transcript.done':
+          // Save AI transcript for OpenAI TTS mode
+          if (this.ttsProvider === 'openai' || this.elevenlabsFallbackActive) {
+            const aiTranscript = data.transcript || '';
+            console.log(`[CF] AI said (OpenAI TTS): "${aiTranscript.substring(0, 50)}..."`);
+            await this.saveConversationMessage('assistant', aiTranscript);
+          }
           break;
 
         case 'response.function_call_arguments.done':
@@ -592,11 +675,12 @@ export class TwilioCallSession {
         input_audio_transcription: {
           model: 'gpt-4o-mini-transcribe'
         },
+        // Phase 1A: Use semantic_vad with create_response: true (parity with Supabase bridge)
         turn_detection: {
-          type: 'server_vad',
-          threshold: 0.5,
-          prefix_padding_ms: 500,
-          silence_duration_ms: 1500
+          type: 'semantic_vad',
+          eagerness: 'low',
+          create_response: true,
+          interrupt_response: true,
         },
         tools: this.toolDefinitions,
         tool_choice: 'auto',
@@ -610,10 +694,12 @@ export class TwilioCallSession {
     }
 
     this.openaiWs?.send(JSON.stringify(sessionConfig));
-    console.log(`[CF] Session configured: ${this.ttsProvider} mode, ${this.toolDefinitions.length} tools`);
+    console.log(`[CF] Session configured: ${this.ttsProvider} mode, semantic_vad, create_response:true, ${this.toolDefinitions.length} tools`);
 
     await this.logActivityToSupabase('connected', 'cf_session_configured', {
       modalities,
+      vad_type: 'semantic_vad',
+      create_response: true,
       tools_count: this.toolDefinitions.length
     });
 
@@ -625,7 +711,8 @@ export class TwilioCallSession {
     // If we have pre-connected instructions, use them (includes RAG context, agenda, etc.)
     if (this.preConnectedInstructions) {
       console.log('[CF] Using pre-connected instructions');
-      return this.preConnectedInstructions;
+      // Append conversational responsiveness to pre-connected instructions
+      return this.preConnectedInstructions + '\n\n' + this.getConversationalResponsivenessPrompt();
     }
 
     // Fallback to basic prompt
@@ -659,7 +746,50 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
       prompt += `\n\n## Knowledge Base Context\n${this.ragContext}`;
     }
 
+    // Phase 4: Add conversational responsiveness instructions
+    prompt += '\n\n' + this.getConversationalResponsivenessPrompt();
+
     return prompt;
+  }
+
+  // Phase 4: Conversational responsiveness instructions (parity with Supabase bridge)
+  private getConversationalResponsivenessPrompt(): string {
+    return `## CONVERSATIONAL RESPONSIVENESS (CRITICAL)
+You are having a real-time voice conversation. Silence feels awkward and breaks trust.
+
+### 1. BEFORE ANY TOOL CALL - Speak a brief acknowledgment:
+- Task queries: "Let me check...", "One moment...", "Checking that now..."
+- Web searches: "Let me look that up...", "Searching for that..."
+- Creating/updating: "Got it, on it...", "Sure, creating that now..."
+- Calendar: "Let me check your calendar...", "Looking at your schedule..."
+- Email/Slack: "I'll send that now...", "Sending that message..."
+
+### 2. TIME-AWARE FEEDBACK - If processing feels slow:
+- After ~2 seconds of silence: "Still looking..."
+- After ~3 more seconds: "Almost there...", "Just a moment longer..."
+- After a tool returns: Summarize what you found or did
+
+### 3. NATURAL VARIATION:
+- Never repeat the same filler phrase twice in a row
+- Keep acknowledgments SHORT (2-4 words)
+- Match your energy to the user's energy
+- If they sound rushed, be more concise
+
+### 4. CRITICAL RULES:
+- NEVER stay silent while processing a request
+- NEVER start a tool call without first speaking
+- If you're about to use a tool, SAY something first
+- Always acknowledge what the user asked before executing
+
+### 5. EXAMPLES:
+User: "What tasks do I have today?"
+You: "Let me check..." [then call get_tasks tool]
+
+User: "Send an email to John about the meeting"
+You: "Got it, sending that now..." [then call send_email tool]
+
+User: "Search for the latest news on AI"
+You: "Looking that up..." [then call web_search tool]`;
   }
 
   private async sendGreeting() {
@@ -681,6 +811,11 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
         // Decode base64 to bytes
         const audioBytes = Uint8Array.from(atob(this.cachedAudioBase64), c => c.charCodeAt(0));
         
+        // Set echo suppression window for cached audio
+        this.isSendingTtsAudio = true;
+        const estimatedDurationMs = Math.ceil(audioBytes.length / 160) * 20; // 160 bytes per 20ms at 8kHz μ-law
+        this.ttsAudioEndTime = Date.now() + estimatedDurationMs + this.TTS_ECHO_GRACE_PERIOD_MS;
+        
         // Send in chunks to Twilio (80ms chunks for μ-law at 8kHz)
         const chunkSize = 640;
         for (let i = 0; i < audioBytes.length; i += chunkSize) {
@@ -693,6 +828,13 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
             }
           }));
         }
+        
+        // Clear echo suppression after audio duration
+        setTimeout(() => {
+          if (this.isSendingTtsAudio && Date.now() >= this.ttsAudioEndTime - 50) {
+            this.isSendingTtsAudio = false;
+          }
+        }, estimatedDurationMs + this.TTS_ECHO_GRACE_PERIOD_MS);
         
         console.log(`[CF] Cached greeting sent: ${audioBytes.length} bytes`);
         await this.logAttempt('greeting', 'success', {
@@ -882,6 +1024,11 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
       // Decode base64 audio to μ-law bytes
       const mulawBytes = Uint8Array.from(atob(jsonResponse.audio), c => c.charCodeAt(0));
 
+      // Phase 2: Set echo suppression window
+      this.isSendingTtsAudio = true;
+      const estimatedDurationMs = Math.ceil(mulawBytes.length / 160) * 20; // 160 bytes per 20ms at 8kHz μ-law
+      this.ttsAudioEndTime = Date.now() + estimatedDurationMs + this.TTS_ECHO_GRACE_PERIOD_MS;
+
       // Send in chunks to Twilio
       const chunkSize = 640; // 80ms of audio at 8kHz
       for (let i = 0; i < mulawBytes.length; i += chunkSize) {
@@ -895,6 +1042,13 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
         };
         this.twilioWs?.send(JSON.stringify(mediaMessage));
       }
+
+      // Phase 2: Clear echo suppression after audio duration
+      setTimeout(() => {
+        if (this.isSendingTtsAudio && Date.now() >= this.ttsAudioEndTime - 50) {
+          this.isSendingTtsAudio = false;
+        }
+      }, estimatedDurationMs + this.TTS_ECHO_GRACE_PERIOD_MS);
 
       const latency = Date.now() - startTime;
       console.log(`[CF] ElevenLabs audio sent: ${mulawBytes.length} bytes in ${latency}ms`);
@@ -987,8 +1141,11 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
       const pcm8k = decodeMulaw(mulawBytes);
       const rms = calculateRMSAmplitude(pcm8k);
 
-      // Skip if echo (low amplitude during playback)
-      if (this.isPlaying && rms < this.ECHO_THRESHOLD) {
+      // Phase 2: Enhanced echo suppression with time-based window
+      const inEchoWindow = this.isSendingTtsAudio || Date.now() < this.ttsAudioEndTime;
+      
+      // Skip if echo (low amplitude during playback or in echo window)
+      if ((this.isPlaying || inEchoWindow) && rms < this.ECHO_THRESHOLD) {
         return;
       }
 
@@ -1015,6 +1172,7 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
   private handleBargeIn() {
     console.log('[CF] Barge-in detected');
     this.isPlaying = false;
+    this.isSendingTtsAudio = false; // Clear echo suppression
     this.textBuffer = ''; // Clear pending text
 
     // Clear Twilio audio buffer
@@ -1036,6 +1194,11 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
     if (!name || !call_id) return;
 
     console.log(`[CF] Tool call: ${name}`, args);
+    
+    await this.logActivityToSupabase('connected', 'cf_tool_call', {
+      tool_name: name,
+      args_preview: (args || '').substring(0, 100)
+    });
 
     try {
       const parsedArgs = JSON.parse(args || '{}');
@@ -1061,6 +1224,11 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
 
       // Trigger response
       this.openaiWs?.send(JSON.stringify({ type: 'response.create' }));
+      
+      await this.logActivityToSupabase('connected', 'cf_tool_result', {
+        tool_name: name,
+        success: true
+      });
 
     } catch (error) {
       console.error(`[CF] Tool execution error:`, error);
@@ -1153,5 +1321,8 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
     this.threadId = null;
     this.activityLogId = null;
     this.elevenlabsFallbackActive = false;
+    this.isSendingTtsAudio = false;
+    this.ttsAudioEndTime = 0;
+    this.messageIndex = 0;
   }
 }
