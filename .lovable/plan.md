@@ -1,199 +1,129 @@
 
 
-# Enhanced Agenda Page with Time Grid Bins
+# Fix Phone Call Silence: OpenAI Session State After ElevenLabs Greeting
 
-## Overview
+## Root Cause Analysis
 
-Transform the current `DailyScheduleView` from a simple list-based layout into a visual time-block schedule with:
-1. **Time Window Bins**: Scheduled tasks displayed in a vertical time grid
-2. **15-Minute Snap Grid**: Task durations visually span their actual time slots
-3. **Category Lanes/Tags**: Color-coded visual grouping by category (LIFE, CAREER, VENTURES, PROF_EDUCATION)
+The Cloudflare bridge sends the ElevenLabs greeting directly (bypassing OpenAI) but doesn't properly prepare OpenAI's session to receive and respond to user audio afterward.
 
----
+**Critical Gaps Identified:**
 
-## Current vs Proposed Layout
+| Behavior | Supabase Bridge | Cloudflare Bridge |
+|----------|-----------------|-------------------|
+| Greeting injection to OpenAI | conversation.item.create | conversation.item.create |
+| System context injection | injectSystemMessage explaining state | MISSING |
+| Post-greeting guidance | "You just said X, wait for response" | MISSING |
+| Echo suppression clearing | setTimeout clears flags | setTimeout clears flags |
+| Audio buffer commitment | Explicit commit in some flows | MISSING |
+
+## The Fix: Three-Part Post-Greeting Setup
+
+### Fix 1: Inject System Context After ElevenLabs Greeting
+
+After sending the ElevenLabs greeting, tell OpenAI what happened and what to expect:
+
+```typescript
+// In sendGreeting(), after ElevenLabs TTS completes:
+
+// 1. Inject the assistant message (already exists)
+this.openaiWs?.send(JSON.stringify({
+  type: 'conversation.item.create',
+  item: {
+    type: 'message',
+    role: 'assistant',
+    content: [{ type: 'text', text: greeting }]
+  }
+}));
+
+// 2. NEW: Inject system context explaining the state
+const contextMsg = `[System: You just spoke the greeting: "${greeting}"
+The user is now listening and may respond. Current time: ${new Date().toLocaleString('en-US', { timeZone: this.timezone })}.
+Wait for the user's response, then continue the conversation naturally.
+${this.ragContext ? `Context: ${this.ragContext}` : ''}]`;
+
+this.openaiWs?.send(JSON.stringify({
+  type: 'conversation.item.create',
+  item: {
+    type: 'message',
+    role: 'system',
+    content: [{ type: 'input_text', text: contextMsg }]
+  }
+}));
+```
+
+### Fix 2: Explicit Buffer Commit on speech_stopped
+
+When user speech stops, explicitly commit the audio buffer to ensure transcription triggers:
+
+```typescript
+case 'input_audio_buffer.speech_stopped':
+  console.log('[CF] User stopped speaking');
+  
+  // Explicitly commit the buffer to trigger transcription
+  this.openaiWs?.send(JSON.stringify({
+    type: 'input_audio_buffer.commit'
+  }));
+  
+  await this.logActivityToSupabase('connected', 'cf_user_speech_stopped', {
+    buffer_committed: true
+  });
+  break;
+```
+
+### Fix 3: Add Diagnostic Events for Debugging Visibility
+
+Track the full transcription pipeline to identify exactly where silence occurs:
+
+```typescript
+case 'input_audio_buffer.committed':
+  console.log('[CF] Audio buffer committed - transcription should follow');
+  await this.logActivityToSupabase('connected', 'cf_buffer_committed', {});
+  break;
+```
+
+## Files to Modify
+
+| File | Changes |
+|------|---------|
+| `cloudflare/src/TwilioCallSession.ts` | Add system context injection after ElevenLabs greeting, add buffer commit on speech_stopped, add committed event logging |
+| `cloudflare/src/index.ts` | Version bump to v7f |
+| `.github/workflows/deploy-cloudflare.yml` | Update expected version |
+
+## Technical Details
+
+### Why This Should Work
+
+1. **System context** tells OpenAI what state the conversation is in (greeting already spoken, waiting for user)
+2. **Buffer commit** ensures OpenAI's transcription pipeline is triggered even if semantic_vad doesn't auto-trigger
+3. **Diagnostic events** will confirm exactly where the pipeline is failing
+
+### Expected Event Flow After Fix
 
 ```text
-CURRENT                              PROPOSED
-+-----------------+                  +--------------------------------------+
-| Scheduled Tasks |                  |  09:00 | [CAREER] Review PRs    |  |
-|   - Task 1      |                  |  09:15 |         (30 min)       |  |
-|   - Task 2      |                  |  09:30 |------------------------|  |
-+-----------------+                  |  09:45 |                        |  |
-                                     |  10:00 | [LIFE] Gym workout     |  |
-| Unscheduled     |                  |  10:15 |      (60 min)          |  |
-|   - Task 3      |                  |  10:30 |                        |  |
-|   - Task 4      |                  |  10:45 |                        |  |
-+-----------------+                  +--------------------------------------+
-                                     | UNSCHEDULED: 14 tasks               |
-                                     +--------------------------------------+
+cf_greeting_attempted → cf_greeting_success → cf_user_speech_started → 
+cf_user_speech_stopped → cf_buffer_committed → cf_transcription → 
+cf_response_started → cf_text_delta_first → (ElevenLabs TTS) → User hears AI
 ```
 
----
-
-## Technical Approach
-
-### Option A: Reuse TimeSlotGrid Component (Recommended)
-
-The existing `TimeSlotGrid.tsx` already provides:
-- 15-minute interval grid (6 AM - 10 PM)
-- Task positioning with duration spanning
-- Side-by-side overlap handling
-- Click-to-create functionality
-
-**Changes needed:**
-1. Import `TimeSlotGrid` into `DailyScheduleView`
-2. Add category color badges to task rendering
-3. Configure for single-day view optimized for agenda
-
-### Option B: Build Custom AgendaTimeGrid Component
-
-Create a simpler, agenda-focused grid that:
-- Only shows hours with scheduled tasks (compact mode)
-- Groups tasks by time window "bins" (morning/afternoon/evening)
-- Has horizontal category lanes
-
----
-
-## Implementation Plan
-
-### Phase 1: Core Time Grid Integration
-
-**File: `src/components/DailyScheduleView.tsx`**
-
-Replace the simple Droppable list with an enhanced layout:
+### Version Bump
 
 ```typescript
-// New imports
-import TimeSlotGrid from './TimeSlotGrid';
-import { ScrollArea } from '@/components/ui/scroll-area';
+// cloudflare/src/index.ts
+const WORKER_VERSION = '2026-01-29-cf-v7f';
 
-// Scheduled section becomes:
-<ScrollArea className="h-[500px]">
-  <TimeSlotGrid
-    dates={[selectedDate]}
-    tasks={scheduledTasks}
-    onTimeSlotClick={(date, hour, minute) => {
-      // Open task creation modal at this time
-    }}
-    onTaskClick={(task) => onTaskEdit(task)}
-    onStatusChange={handleStatusChange}
-    className="border rounded-lg"
-  />
-</ScrollArea>
+// cloudflare/src/TwilioCallSession.ts  
+const WORKER_VERSION = '2026-01-29-cf-v7f';
 ```
 
-### Phase 2: Add Category Visual Indicators
+## Testing Plan
 
-**File: `src/components/TimeSlotGrid.tsx`**
+1. Deploy v7f
+2. Make a phone call
+3. Speak after greeting
+4. Check activity_log for new events:
+   - `cf_buffer_committed` (confirms audio was committed)
+   - `cf_transcription` (confirms OpenAI transcribed user speech)
+   - `cf_response_started` (confirms OpenAI is responding)
 
-Enhance the task rendering to show prominent category badges:
-
-```typescript
-// Add category color mapping
-const categoryColors = {
-  LIFE: 'bg-category-life text-white',
-  CAREER: 'bg-category-career text-white',
-  VENTURES: 'bg-category-ventures text-white',
-  EDUCATION: 'bg-category-education text-white',
-  PROF_EDUCATION: 'bg-category-education text-white',
-};
-
-// In task rendering, add category badge:
-<Badge className={cn("text-[10px] absolute top-0 right-0", categoryColors[t.category])}>
-  {t.category}
-</Badge>
-```
-
-### Phase 3: Smart Time Window Grouping (Optional Enhancement)
-
-**File: `src/components/DailyScheduleView.tsx`**
-
-Add collapsible time window groups:
-
-```typescript
-const timeWindows = [
-  { label: 'Morning', range: [6, 12], icon: Sunrise },
-  { label: 'Afternoon', range: [12, 17], icon: Sun },
-  { label: 'Evening', range: [17, 22], icon: Sunset },
-];
-
-// Group tasks by time window for summary view
-const getTasksForWindow = (start: number, end: number) => {
-  return scheduledTasks.filter(task => {
-    const hour = parseISO(task.start_time).getHours();
-    return hour >= start && hour < end;
-  });
-};
-```
-
-### Phase 4: Mobile-Optimized Compact View
-
-For mobile, show a more compact list with visible time blocks:
-
-```typescript
-{isMobile ? (
-  <MobileAgendaList tasks={scheduledTasks} />
-) : (
-  <TimeSlotGrid ... />
-)}
-```
-
----
-
-## Files to Create/Modify
-
-| File | Action | Purpose |
-|------|--------|---------|
-| `src/components/DailyScheduleView.tsx` | MODIFY | Integrate TimeSlotGrid, add category indicators |
-| `src/components/TimeSlotGrid.tsx` | MODIFY | Add category badges to task blocks |
-| `src/components/AgendaTaskBin.tsx` | CREATE (optional) | Reusable task bin component for compact view |
-
----
-
-## Visual Design Details
-
-### Task Block Styling
-- **Height**: Calculated from duration (4px per minute, snapped to 15-min = 60px minimum)
-- **Width**: 90% of column (leaves room for time labels)
-- **Border**: Left border colored by category (4px solid)
-- **Background**: Priority-based gradient (URGENT = red, HIGH = orange, etc.)
-- **Badge**: Category tag positioned top-right
-
-### Category Color Reference (from existing CSS)
-| Category | Color Variable | Hex Equivalent |
-|----------|---------------|----------------|
-| LIFE | `--category-life` | Teal (~#28B67A) |
-| CAREER | `--category-career` | Purple (~#6D4C9F) |
-| VENTURES | `--category-ventures` | Orange (~#F97316) |
-| EDUCATION | `--category-education` | Blue (~#3B82F6) |
-
-### 15-Minute Grid Snapping
-- Grid lines every 15 minutes
-- Task blocks snap to nearest 15-minute boundary
-- Minimum visible height = 1 slot (15 min = 60px)
-
----
-
-## Integration with Existing Features
-
-1. **Drag-Drop**: Preserve existing drag between scheduled/unscheduled
-2. **Real-time Updates**: Keep Supabase subscription for live updates
-3. **Task Creation**: "New Task" button pre-fills selected date
-4. **Status Toggle**: Checkbox overlay on hover to mark complete
-
----
-
-## Expected User Experience
-
-1. User navigates to Agenda page
-2. Sees vertical time grid with current day's tasks as blocks
-3. Each block shows:
-   - Task title
-   - Time range (e.g., "9:00 AM - 10:30 AM")
-   - Category badge (e.g., "CAREER")
-   - Duration indicator (visual height)
-4. Unscheduled tasks remain in sidebar/bottom panel
-5. Clicking empty slot opens task creation at that time
-6. Clicking task opens detail modal
+If `cf_buffer_committed` appears but `cf_transcription` doesn't, the issue is deeper in OpenAI's text-only mode handling and may require switching modalities after greeting.
 
