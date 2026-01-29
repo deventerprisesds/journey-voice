@@ -34,8 +34,7 @@ import { extractSchedulingContext, loadUserSchedulingConfig } from '@/services/s
 import { useAssignmentSelection } from '@/contexts/AssignmentSelectionContext';
 import TimeSlotGrid from '@/components/TimeSlotGrid';
 import { useBatchScheduling } from '@/hooks/useBatchScheduling';
-
-const DEMO_BOARD_ID = 'demo-board-1';
+import { getOrCreateDefaultBoardId, loadExistingTasksForContext, insertDemoTasks, DEMO_USER_ID } from '@/utils/demoData';
 
 interface ParsedTask {
   title: string;
@@ -504,22 +503,9 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
       const userConfig = await loadUserSchedulingConfig(userId);
       
       // Load existing tasks for preview scheduling context
-      // In demo mode, skip Supabase query and use localStorage
-      const isDemoContext = !boardId || boardId.startsWith('demo-');
-      let existingTasks: any[] = [];
-
-      if (isDemoContext) {
-        // Load existing demo tasks from localStorage
-        const demoTasks = localStorage.getItem('kanban-demo-tasks');
-        existingTasks = demoTasks ? JSON.parse(demoTasks) : [];
-      } else {
-        const { data } = await supabase
-          .from('tasks')
-          .select('*')
-          .eq('user_id', userId)
-          .eq('board_id', boardId);
-        existingTasks = data || [];
-      }
+      // Both demo mode and authenticated mode load from Supabase
+      // Use loadExistingTasksForContext which handles fallback to localStorage
+      const existingTasks = await loadExistingTasksForContext(userId);
       
       const { data, error } = await supabase.functions.invoke('ai-task-parser', {
         body: { 
@@ -656,9 +642,23 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
   const handleCreateTasks = async (tasksToCreate: ParsedTask[]) => {
     setIsCreating(true);
     try {
-      // Check if this is demo mode (board ID is empty or starts with 'demo-')
-      const isDemoMode = !boardId || boardId.startsWith('demo-');
-      const effectiveBoardId = isDemoMode ? DEMO_BOARD_ID : boardId;
+      // Both demo mode and authenticated mode now persist to Supabase
+      // Demo mode uses demo user ID with RLS policies allowing access
+      const isDemoMode = !boardId || boardId.startsWith('demo-') || userId === DEMO_USER_ID;
+      
+      // Get a real board ID from Supabase (creates one if needed)
+      let effectiveBoardId: string;
+      if (isDemoMode || !boardId || boardId.startsWith('demo-')) {
+        try {
+          effectiveBoardId = await getOrCreateDefaultBoardId(userId);
+          console.log('[TaskCreationModal] Got effective board ID:', effectiveBoardId);
+        } catch (e) {
+          console.error('[TaskCreationModal] Failed to get board ID:', e);
+          throw new Error('Failed to initialize task board');
+        }
+      } else {
+        effectiveBoardId = boardId;
+      }
       
       const tasksWithMeta = tasksToCreate.map(task => {
         // Build scheduling_context for assignment-sourced tasks
@@ -688,29 +688,35 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
           ...(schedulingContext && { scheduling_context: schedulingContext }),
-          ...(isDemoMode ? { id: `demo-task-${Date.now()}-${Math.random().toString(36).substr(2, 9)}` } : {})
+          // Don't generate fake IDs - let Supabase generate real UUIDs
         };
       });
 
       let createdTasks;
       
-      if (isDemoMode) {
-        // For demo mode, store in localStorage
-        const demoTasks = JSON.parse(localStorage.getItem('kanban-demo-tasks') || '[]');
-        createdTasks = tasksWithMeta;
-        demoTasks.push(...createdTasks);
-        localStorage.setItem('kanban-demo-tasks', JSON.stringify(demoTasks));
-      } else {
-        // For real mode, use Supabase
-        const { data, error } = await supabase
-          .from('tasks')
-          .insert(tasksWithMeta)
-          .select();
+      // Always persist to Supabase (both demo and authenticated modes)
+      const { data, error } = await supabase
+        .from('tasks')
+        .insert(tasksWithMeta as any)
+        .select();
 
-        if (error) {
-          throw new Error(error.message);
+      if (error) {
+        console.error('[TaskCreationModal] Supabase insert error:', error);
+        throw new Error(error.message);
+      }
+      
+      createdTasks = data;
+      console.log('[TaskCreationModal] Created', createdTasks?.length || 0, 'tasks in Supabase');
+      
+      // Cache to localStorage for fallback
+      if (createdTasks && createdTasks.length > 0) {
+        try {
+          const existing = localStorage.getItem('kanban-demo-tasks');
+          const existingTasks = existing ? JSON.parse(existing) : [];
+          localStorage.setItem('kanban-demo-tasks', JSON.stringify([...existingTasks, ...createdTasks]));
+        } catch (e) {
+          console.warn('[TaskCreationModal] Could not cache to localStorage:', e);
         }
-        createdTasks = data;
       }
 
       // Log which tasks have times vs. need scheduling

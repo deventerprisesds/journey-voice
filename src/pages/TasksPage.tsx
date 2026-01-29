@@ -50,9 +50,9 @@ const TasksPage: React.FC = () => {
     loadTasks();
   }, [user, isDemoMode]);
 
-  // Set up real-time subscription for task changes
+  // Set up real-time subscription for task changes (both authenticated and demo modes)
   useEffect(() => {
-    if (!user || isDemoMode) return;
+    if (!user) return;
 
     const channel = supabase
       .channel('task-changes-tasks-page')
@@ -65,6 +65,7 @@ const TasksPage: React.FC = () => {
           filter: `user_id=eq.${user.id}`,
         },
         (payload) => {
+          console.log('[TasksPage] Real-time task insert:', payload.new);
           toast.success(`Task Created: "${payload.new.title}" has been added`);
           loadTasks();
         }
@@ -74,7 +75,7 @@ const TasksPage: React.FC = () => {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [user, isDemoMode]);
+  }, [user]);
 
   // Handle deep linking to specific tasks
   useEffect(() => {
@@ -104,25 +105,40 @@ const TasksPage: React.FC = () => {
 
     setLoading(true);
     try {
-      if (isDemoMode) {
-        const demoTasks = localStorage.getItem('kanban-demo-tasks');
-        setTasks(demoTasks ? JSON.parse(demoTasks) : []);
-      } else {
-        const { data, error } = await supabase
-          .from('tasks')
-          .select('*')
-          .eq('user_id', user.id)
-          .order('created_at');
+      // Both demo mode and authenticated mode now load from Supabase
+      // Demo mode has RLS policies that allow access to demo user data
+      const { data, error } = await supabase
+        .from('tasks')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at');
 
-        if (error) {
-          console.error('Error loading tasks:', error);
-          setTasks([]);
+      if (error) {
+        console.error('[TasksPage] Error loading tasks from Supabase:', error);
+        
+        // Fallback to localStorage only if Supabase fails in demo mode
+        if (isDemoMode) {
+          console.log('[TasksPage] Falling back to localStorage for demo mode');
+          const demoTasks = localStorage.getItem('kanban-demo-tasks');
+          setTasks(demoTasks ? JSON.parse(demoTasks) : []);
         } else {
-          setTasks(data || []);
+          setTasks([]);
+        }
+      } else {
+        console.log(`[TasksPage] Loaded ${data?.length || 0} tasks from Supabase`);
+        setTasks(data || []);
+        
+        // Cache to localStorage in demo mode for fallback
+        if (isDemoMode && data && data.length > 0) {
+          try {
+            localStorage.setItem('kanban-demo-tasks', JSON.stringify(data));
+          } catch (e) {
+            console.warn('[TasksPage] Could not cache demo tasks:', e);
+          }
         }
       }
     } catch (error) {
-      console.error('Error in loadTasks:', error);
+      console.error('[TasksPage] Error in loadTasks:', error);
       setTasks([]);
     } finally {
       setLoading(false);
