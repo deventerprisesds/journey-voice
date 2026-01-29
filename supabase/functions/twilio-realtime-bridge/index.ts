@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { GLOBAL_VERSION, FUNCTION_IDS, corsHeaders, createHealthResponse, VOICE_CONFIG } from "../_shared/config.ts";
+import { GLOBAL_VERSION, FUNCTION_IDS, corsHeaders, createHealthResponse, VOICE_CONFIG, FILLER_CONFIG, SENTENCE_ENDERS } from "../_shared/config.ts";
 
 // Version derived from centralized config
 const BRIDGE_VERSION = `${GLOBAL_VERSION}-${FUNCTION_IDS.BRIDGE}`;
@@ -653,12 +653,13 @@ async function executeTool(
     console.log('[BRIDGE] Hang up requested:', args.farewell_message);
     
     // Give time for the farewell message to play, then close
+    // Uses centralized VOICE_CONFIG.FAREWELL_DELAY_MS
     if (context.twilioWs) {
       setTimeout(() => {
         if (context.twilioWs && context.twilioWs.readyState === WebSocket.OPEN) {
           context.twilioWs.close();
         }
-      }, 3000);
+      }, VOICE_CONFIG.FAREWELL_DELAY_MS);
     }
 
     return {

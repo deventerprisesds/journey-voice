@@ -43,6 +43,27 @@ Before claiming feature parity, verify these functions exist:
 
 ---
 
+### 7. Timing & Voice Constants Synchronization
+
+When changing voice/timing values, sync across all locations:
+
+| Constant | Source of Truth | Cloudflare Copy | Frontend Copy |
+|----------|-----------------|-----------------|---------------|
+| `FAREWELL_DELAY_MS` | `supabase/functions/_shared/config.ts` | `cloudflare/src/config.ts` | `src/config/voiceConfig.ts` |
+| `SPEECH_DEBOUNCE_MS` | `supabase/functions/_shared/config.ts` | `cloudflare/src/config.ts` | `src/config/voiceConfig.ts` |
+| `OUTBOUND_HELLO_WAIT_MS` | `supabase/functions/_shared/config.ts` | `cloudflare/src/config.ts` | `src/config/voiceConfig.ts` |
+| `FILLER_CONFIG.PHRASES` | `supabase/functions/_shared/config.ts` | `cloudflare/src/config.ts` | `src/config/voiceConfig.ts` |
+| `FILLER_CONFIG.INTERVALS_MS` | `supabase/functions/_shared/config.ts` | `cloudflare/src/config.ts` | `src/config/voiceConfig.ts` |
+| `SENTENCE_ENDERS` | `supabase/functions/_shared/config.ts` | `cloudflare/src/config.ts` | `src/config/voiceConfig.ts` |
+| `DEFAULT_ELEVENLABS_VOICE_ID` | `supabase/functions/_shared/config.ts` | `cloudflare/src/config.ts` | `src/config/voiceConfig.ts` |
+
+**Sync checklist:**
+- [ ] `supabase/functions/_shared/config.ts` (SOURCE OF TRUTH)
+- [ ] `cloudflare/src/config.ts` (Cloudflare copy)
+- [ ] `src/config/voiceConfig.ts` (Frontend copy)
+
+---
+
 ## How to Use This Checklist
 
 1. Before making ANY changes to the Cloudflare bridge, read this document
