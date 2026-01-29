@@ -1,118 +1,199 @@
 
-# Root Cause Analysis: Call Silence After Greeting
 
-## Problem Identified
+# Enhanced Agenda Page with Time Grid Bins
 
-The user reported that Twilio calls work for the greeting but then go silent - the AI doesn't respond after the user speaks.
+## Overview
 
-## Investigation Findings
-
-### Timeline Analysis (Call CAe156a725ca523ace5eabae5a9d17bc16)
-```text
-15:08:59.073  cf_ws_start - WebSocket connected
-15:09:00.444  cf_greeting_success - ElevenLabs greeting played (15233 bytes)
-15:09:05.401  cf_user_speech_started - User started speaking
-15:09:16.973  cf_disconnect - Call ended (18 seconds total)
-```
-
-**Missing Events:**
-- No `cf_response_started` (OpenAI never started responding)
-- No `cf_text_delta_first` (no text generation occurred)
-- No `cf_transcription` (user speech wasn't transcribed)
-
-### Key Metrics from Call Summary
-| Metric | Value | Problem |
-|--------|-------|---------|
-| `twilio_frames_in` | 880 | Audio came in from phone |
-| `echo_filtered_count` | 807 | 92% was filtered as "echo"! |
-| `openai_appends` | 47 | Only 5% reached OpenAI |
-| `twilio_frames_out` | 0 | No response audio sent |
-
-### Root Cause: `isPlaying` Flag Never Cleared
-
-In `cloudflare/src/TwilioCallSession.ts`:
-
-1. **Line 1195**: `sendToElevenLabs()` sets `this.isPlaying = true`
-
-2. **Line 1266-1272**: The setTimeout only clears `isSendingTtsAudio` and `isAiSpeaking`:
-   ```typescript
-   setTimeout(() => {
-     this.isSendingTtsAudio = false;
-     this.isAiSpeaking = false;
-     // BUG: isPlaying is NOT cleared here!
-   }, estimatedDurationMs + this.TTS_ECHO_GRACE_PERIOD_MS);
-   ```
-
-3. **Line 1380**: Echo suppression filter uses `isPlaying`:
-   ```typescript
-   if ((this.isPlaying || inEchoWindow) && rms < this.ECHO_THRESHOLD) {
-     this.echoFilteredCount++;  // Filters out user audio!
-     return;
-   }
-   ```
-
-4. **Result**: Since `isPlaying` stays `true` forever, 92% of user audio is filtered as "echo" and never reaches OpenAI, so no response is generated.
+Transform the current `DailyScheduleView` from a simple list-based layout into a visual time-block schedule with:
+1. **Time Window Bins**: Scheduled tasks displayed in a vertical time grid
+2. **15-Minute Snap Grid**: Task durations visually span their actual time slots
+3. **Category Lanes/Tags**: Color-coded visual grouping by category (LIFE, CAREER, VENTURES, PROF_EDUCATION)
 
 ---
 
-## Solution
+## Current vs Proposed Layout
 
-Add `this.isPlaying = false` to the setTimeout cleanup in `sendToElevenLabs()`:
+```text
+CURRENT                              PROPOSED
++-----------------+                  +--------------------------------------+
+| Scheduled Tasks |                  |  09:00 | [CAREER] Review PRs    |  |
+|   - Task 1      |                  |  09:15 |         (30 min)       |  |
+|   - Task 2      |                  |  09:30 |------------------------|  |
++-----------------+                  |  09:45 |                        |  |
+                                     |  10:00 | [LIFE] Gym workout     |  |
+| Unscheduled     |                  |  10:15 |      (60 min)          |  |
+|   - Task 3      |                  |  10:30 |                        |  |
+|   - Task 4      |                  |  10:45 |                        |  |
++-----------------+                  +--------------------------------------+
+                                     | UNSCHEDULED: 14 tasks               |
+                                     +--------------------------------------+
+```
+
+---
+
+## Technical Approach
+
+### Option A: Reuse TimeSlotGrid Component (Recommended)
+
+The existing `TimeSlotGrid.tsx` already provides:
+- 15-minute interval grid (6 AM - 10 PM)
+- Task positioning with duration spanning
+- Side-by-side overlap handling
+- Click-to-create functionality
+
+**Changes needed:**
+1. Import `TimeSlotGrid` into `DailyScheduleView`
+2. Add category color badges to task rendering
+3. Configure for single-day view optimized for agenda
+
+### Option B: Build Custom AgendaTimeGrid Component
+
+Create a simpler, agenda-focused grid that:
+- Only shows hours with scheduled tasks (compact mode)
+- Groups tasks by time window "bins" (morning/afternoon/evening)
+- Has horizontal category lanes
+
+---
+
+## Implementation Plan
+
+### Phase 1: Core Time Grid Integration
+
+**File: `src/components/DailyScheduleView.tsx`**
+
+Replace the simple Droppable list with an enhanced layout:
 
 ```typescript
-// v7: Clear ALL echo suppression flags after audio duration
-setTimeout(() => {
-  if (this.isSendingTtsAudio && Date.now() >= this.ttsAudioEndTime - 50) {
-    this.isSendingTtsAudio = false;
-    this.isAiSpeaking = false;
-    this.isPlaying = false;  // CRITICAL: Clear this too!
-    console.log('[CF] Echo suppression cleared after ElevenLabs playback');
-  }
-}, estimatedDurationMs + this.TTS_ECHO_GRACE_PERIOD_MS);
+// New imports
+import TimeSlotGrid from './TimeSlotGrid';
+import { ScrollArea } from '@/components/ui/scroll-area';
+
+// Scheduled section becomes:
+<ScrollArea className="h-[500px]">
+  <TimeSlotGrid
+    dates={[selectedDate]}
+    tasks={scheduledTasks}
+    onTimeSlotClick={(date, hour, minute) => {
+      // Open task creation modal at this time
+    }}
+    onTaskClick={(task) => onTaskEdit(task)}
+    onStatusChange={handleStatusChange}
+    className="border rounded-lg"
+  />
+</ScrollArea>
 ```
 
-Also need to add the same fix to the cached greeting path (line 1048-1053).
+### Phase 2: Add Category Visual Indicators
 
----
+**File: `src/components/TimeSlotGrid.tsx`**
 
-## Files to Modify
+Enhance the task rendering to show prominent category badges:
 
-| File | Change |
-|------|--------|
-| `cloudflare/src/TwilioCallSession.ts` | Add `this.isPlaying = false` in both setTimeout callbacks for ElevenLabs audio cleanup |
-| `cloudflare/src/index.ts` | Version bump to v7e |
-| `.github/workflows/deploy-cloudflare.yml` | Update EXPECTED_VERSION to v7e |
+```typescript
+// Add category color mapping
+const categoryColors = {
+  LIFE: 'bg-category-life text-white',
+  CAREER: 'bg-category-career text-white',
+  VENTURES: 'bg-category-ventures text-white',
+  EDUCATION: 'bg-category-education text-white',
+  PROF_EDUCATION: 'bg-category-education text-white',
+};
 
----
-
-## Additional Fix: Track `twilioMediaFramesOut`
-
-While investigating, I noticed `twilio_frames_out` is always 0 because the counter is never incremented. This is a telemetry bug that should also be fixed for debugging visibility.
-
----
-
-## Expected Result After Fix
-
-1. ElevenLabs greeting plays normally
-2. `isPlaying` clears after greeting audio duration + 500ms grace period
-3. User audio is no longer filtered as echo
-4. OpenAI receives the full audio, generates transcription, and responds
-5. ElevenLabs synthesizes and streams the response back to Twilio
-
----
-
-## Technical Details
-
-### Echo Suppression Flow (Current - Broken)
-```text
-sendToElevenLabs() → isPlaying = true
-setTimeout() → clears isSendingTtsAudio, isAiSpeaking (NOT isPlaying)
-handleMedia() → (isPlaying=true) && (rms < 1500) → FILTER as echo forever
+// In task rendering, add category badge:
+<Badge className={cn("text-[10px] absolute top-0 right-0", categoryColors[t.category])}>
+  {t.category}
+</Badge>
 ```
 
-### Echo Suppression Flow (Fixed)
-```text
-sendToElevenLabs() → isPlaying = true
-setTimeout() → clears isSendingTtsAudio, isAiSpeaking, AND isPlaying
-handleMedia() → (isPlaying=false) → audio passes through to OpenAI
+### Phase 3: Smart Time Window Grouping (Optional Enhancement)
+
+**File: `src/components/DailyScheduleView.tsx`**
+
+Add collapsible time window groups:
+
+```typescript
+const timeWindows = [
+  { label: 'Morning', range: [6, 12], icon: Sunrise },
+  { label: 'Afternoon', range: [12, 17], icon: Sun },
+  { label: 'Evening', range: [17, 22], icon: Sunset },
+];
+
+// Group tasks by time window for summary view
+const getTasksForWindow = (start: number, end: number) => {
+  return scheduledTasks.filter(task => {
+    const hour = parseISO(task.start_time).getHours();
+    return hour >= start && hour < end;
+  });
+};
 ```
+
+### Phase 4: Mobile-Optimized Compact View
+
+For mobile, show a more compact list with visible time blocks:
+
+```typescript
+{isMobile ? (
+  <MobileAgendaList tasks={scheduledTasks} />
+) : (
+  <TimeSlotGrid ... />
+)}
+```
+
+---
+
+## Files to Create/Modify
+
+| File | Action | Purpose |
+|------|--------|---------|
+| `src/components/DailyScheduleView.tsx` | MODIFY | Integrate TimeSlotGrid, add category indicators |
+| `src/components/TimeSlotGrid.tsx` | MODIFY | Add category badges to task blocks |
+| `src/components/AgendaTaskBin.tsx` | CREATE (optional) | Reusable task bin component for compact view |
+
+---
+
+## Visual Design Details
+
+### Task Block Styling
+- **Height**: Calculated from duration (4px per minute, snapped to 15-min = 60px minimum)
+- **Width**: 90% of column (leaves room for time labels)
+- **Border**: Left border colored by category (4px solid)
+- **Background**: Priority-based gradient (URGENT = red, HIGH = orange, etc.)
+- **Badge**: Category tag positioned top-right
+
+### Category Color Reference (from existing CSS)
+| Category | Color Variable | Hex Equivalent |
+|----------|---------------|----------------|
+| LIFE | `--category-life` | Teal (~#28B67A) |
+| CAREER | `--category-career` | Purple (~#6D4C9F) |
+| VENTURES | `--category-ventures` | Orange (~#F97316) |
+| EDUCATION | `--category-education` | Blue (~#3B82F6) |
+
+### 15-Minute Grid Snapping
+- Grid lines every 15 minutes
+- Task blocks snap to nearest 15-minute boundary
+- Minimum visible height = 1 slot (15 min = 60px)
+
+---
+
+## Integration with Existing Features
+
+1. **Drag-Drop**: Preserve existing drag between scheduled/unscheduled
+2. **Real-time Updates**: Keep Supabase subscription for live updates
+3. **Task Creation**: "New Task" button pre-fills selected date
+4. **Status Toggle**: Checkbox overlay on hover to mark complete
+
+---
+
+## Expected User Experience
+
+1. User navigates to Agenda page
+2. Sees vertical time grid with current day's tasks as blocks
+3. Each block shows:
+   - Task title
+   - Time range (e.g., "9:00 AM - 10:30 AM")
+   - Category badge (e.g., "CAREER")
+   - Duration indicator (visual height)
+4. Unscheduled tasks remain in sidebar/bottom panel
+5. Clicking empty slot opens task creation at that time
+6. Clicking task opens detail modal
+
