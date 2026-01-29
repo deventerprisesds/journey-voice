@@ -1,97 +1,106 @@
 
-# Plan: Reduce 15-Minute Grid Height by 75%
+# Plan: Fix Demo Mode Task Creation
 
-## Summary
+## Problem
 
-The 15-minute time slot grid on the Agenda page is too tall, making hour-long tasks take up excessive vertical space. This change reduces the grid height to 25% of its current size (a 75% reduction).
+Task creation doesn't work in demo mode because the `boards` and `tasks` tables lack RLS policies for the demo user. The existing policies only allow access via `auth.uid() = user_id`, but demo mode uses a mock session that doesn't set `auth.uid()`.
 
----
-
-## Current Values → New Values
-
-| Constant | Current | New (25% of original) |
-|----------|---------|----------------------|
-| Slot height (CSS) | `h-16` (64px) | `h-4` (16px) |
-| PX_PER_MINUTE | 64/15 ≈ 4.27 | 16/15 ≈ 1.07 |
-| Min task height | 48px | 12px |
-| Height per slot | 64px | 16px |
+**Evidence:**
+- Boards exist in DB for demo user (`5b5de64e-...` and `4c987563-...`)
+- 6 tasks exist for demo user in DB
+- But queries return empty results because `auth.uid()` is `null` in demo mode
+- Other tables (ai_threads, conversation_messages, assignments, etc.) work because they have explicit demo user policies
 
 ---
 
-## Files to Modify
+## Solution
 
-| File | Change |
-|------|--------|
-| `src/components/TimeSlotGrid.tsx` | Update all height-related constants |
+Add RLS policies for the demo user ID (`00000000-0000-0000-0000-000000000001`) to the `boards` and `tasks` tables, following the same pattern used for other demo-enabled tables.
 
 ---
 
-## Technical Implementation Details
+## Database Migration
 
-### TimeSlotGrid.tsx Changes
+Create RLS policies for demo mode access:
 
-**Change 1: Update PX_PER_MINUTE constant (line 201)**
-```typescript
-// Before
-const PX_PER_MINUTE = 64 / 15;
+```sql
+-- Boards table: Demo mode policies
+CREATE POLICY "Demo user can view boards"
+  ON boards
+  FOR SELECT
+  TO public
+  USING (user_id = '00000000-0000-0000-0000-000000000001'::uuid);
 
-// After
-const PX_PER_MINUTE = 16 / 15; // Reduced from 64px to 16px per 15-min slot
-```
+CREATE POLICY "Demo user can insert boards"
+  ON boards
+  FOR INSERT
+  TO public
+  WITH CHECK (user_id = '00000000-0000-0000-0000-000000000001'::uuid);
 
-**Change 2: Update task height calculation (line 169)**
-```typescript
-// Before
-height: Math.max(48, durationIn15MinSlots * 64 - 4)
+CREATE POLICY "Demo user can update boards"
+  ON boards
+  FOR UPDATE
+  TO public
+  USING (user_id = '00000000-0000-0000-0000-000000000001'::uuid)
+  WITH CHECK (user_id = '00000000-0000-0000-0000-000000000001'::uuid);
 
-// After
-height: Math.max(12, durationIn15MinSlots * 16 - 2)
-```
+CREATE POLICY "Demo user can delete boards"
+  ON boards
+  FOR DELETE
+  TO public
+  USING (user_id = '00000000-0000-0000-0000-000000000001'::uuid);
 
-**Change 3: Update time slot row height CSS class (line 377)**
-```typescript
-// Before
-className="relative border-r h-16 hover:bg-muted/30 ..."
+-- Tasks table: Demo mode policies
+CREATE POLICY "Demo user can view tasks"
+  ON tasks
+  FOR SELECT
+  TO public
+  USING (user_id = '00000000-0000-0000-0000-000000000001'::uuid);
 
-// After
-className="relative border-r h-4 hover:bg-muted/30 ..."
-```
+CREATE POLICY "Demo user can insert tasks"
+  ON tasks
+  FOR INSERT
+  TO public
+  WITH CHECK (user_id = '00000000-0000-0000-0000-000000000001'::uuid);
 
-**Change 4: Update overlay container height (line 405)**
-```typescript
-// Before
-height: `${timeSlots.length * 64}px`
+CREATE POLICY "Demo user can update tasks"
+  ON tasks
+  FOR UPDATE
+  TO public
+  USING (user_id = '00000000-0000-0000-0000-000000000001'::uuid)
+  WITH CHECK (user_id = '00000000-0000-0000-0000-000000000001'::uuid);
 
-// After
-height: `${timeSlots.length * 16}px`
-```
-
-**Change 5: Update task height in overlay (line 418)**
-```typescript
-// Before
-const height = Math.max(48, (item.endMin - item.startMin) * PX_PER_MINUTE - 4);
-
-// After
-const height = Math.max(12, (item.endMin - item.startMin) * PX_PER_MINUTE - 2);
+CREATE POLICY "Demo user can delete tasks"
+  ON tasks
+  FOR DELETE
+  TO public
+  USING (user_id = '00000000-0000-0000-0000-000000000001'::uuid);
 ```
 
 ---
 
-## Visual Impact
+## Why This Works
 
-| Duration | Current Height | New Height |
-|----------|---------------|------------|
-| 15 min | ~60px | ~14px |
-| 30 min | ~124px | ~30px |
-| 1 hour | ~252px | ~62px |
-| 2 hours | ~508px | ~126px |
-
-The entire day view (6 AM - 10 PM = 64 slots) will shrink from **4096px** to **1024px** - much more scrollable on a single screen.
+1. The `public` role applies to all connections (including unauthenticated/mock sessions)
+2. Policies explicitly check for the hardcoded demo user ID
+3. Follows the existing pattern used for `ai_threads`, `conversation_messages`, `assignments`, etc.
+4. Normal authenticated users are unaffected (their existing policies remain)
 
 ---
 
-## Additional Considerations
+## Files Changed
 
-- The time labels and add-task buttons may need font/padding adjustments if they appear cramped at the new height
-- Task text content may need smaller font sizes or truncation at reduced heights
-- The minimum task height (12px) ensures even short tasks remain clickable
+| Type | Location | Change |
+|------|----------|--------|
+| Database | New migration | Add 8 RLS policies (4 for boards, 4 for tasks) |
+
+---
+
+## Expected Result
+
+After this change:
+- Demo user can fetch their boards (defaultBoardId will be populated)
+- "New Task" button becomes clickable
+- Task creation saves to Supabase instead of localStorage
+- Demo tasks persist across page refreshes
+- Voice/chat assistant tools can see and manage demo tasks
