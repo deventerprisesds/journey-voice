@@ -73,7 +73,7 @@ interface ElevenLabsTTSResponse {
 const SENTENCE_ENDERS = /[.!?]+[\s"')\]]*$/;
 
 // Worker version for deployment verification
-const WORKER_VERSION = '2026-01-29-cf-v1';
+const WORKER_VERSION = '2026-01-29-cf-v2';
 
 export class TwilioCallSession {
   private state: DurableObjectState;
@@ -461,7 +461,8 @@ export class TwilioCallSession {
 
       if (response.ok) {
         const data = await response.json();
-        this.toolDefinitions = (data.definitions || []).map((def: any) => ({
+        // Fixed: endpoint returns { tools, count }, not { definitions }
+        this.toolDefinitions = (data.tools || []).map((def: any) => ({
           type: 'function',
           name: def.name,
           description: def.description,
@@ -711,51 +712,56 @@ When the user says goodbye or wants to end the call, use the hang_up tool.`;
       }
     }
 
-    // Fallback: Use OpenAI to generate greeting
+    // Generate greeting - use ElevenLabs directly or OpenAI TTS
     const greeting = this.greetingText || 'Hi! This is Iris. How can I help you today?';
     
     try {
-      // FIXED: Use 'text' type for assistant role (not 'input_text' which is only for user role)
-      // This matches the working Supabase bridge implementation
-      this.openaiWs?.send(JSON.stringify({
-        type: 'conversation.item.create',
-        item: {
-          type: 'message',
-          role: 'assistant',
-          content: [{ type: 'text', text: greeting }]  // CORRECT: 'text' for assistant role
-        }
-      }));
-
-      // Inject context for AI to continue the conversation naturally
-      this.openaiWs?.send(JSON.stringify({
-        type: 'conversation.item.create',
-        item: {
-          type: 'message',
-          role: 'user',
-          content: [{
-            type: 'input_text',  // 'input_text' is correct for user role
-            text: `[System: You just greeted the user with "${greeting}". Wait for them to respond.]`
-          }]
-        }
-      }));
-
-      // Trigger response with explicit modalities (text for ElevenLabs, text+audio for OpenAI TTS)
-      const modalities = this.ttsProvider === 'elevenlabs' ? ['text'] : ['text', 'audio'];
-      this.openaiWs?.send(JSON.stringify({
-        type: 'response.create',
-        response: { modalities }
-      }));
-      
-      console.log(`[CF] Greeting injected with modalities=${modalities.join(',')}`);
-      await this.logAttempt('greeting', 'success', {
-        source: 'openai_generated',
-        greeting_text: greeting.substring(0, 50),
-        modalities,
-        latency_ms: Date.now() - greetingStartTime
-      });
+      if (this.ttsProvider === 'elevenlabs') {
+        // ElevenLabs mode: Synthesize and stream greeting directly
+        console.log('[CF] Synthesizing greeting via ElevenLabs');
+        await this.sendToElevenLabs(greeting);
+        
+        // Inject into OpenAI's conversation history so it "knows" what was said
+        this.openaiWs?.send(JSON.stringify({
+          type: 'conversation.item.create',
+          item: {
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'text', text: greeting }]
+          }
+        }));
+        
+        await this.logAttempt('greeting', 'success', {
+          source: 'elevenlabs_direct',
+          greeting_text: greeting.substring(0, 50),
+          latency_ms: Date.now() - greetingStartTime
+        });
+      } else {
+        // OpenAI TTS mode: Use response.create to generate audio
+        this.openaiWs?.send(JSON.stringify({
+          type: 'conversation.item.create',
+          item: {
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'text', text: greeting }]
+          }
+        }));
+        
+        this.openaiWs?.send(JSON.stringify({
+          type: 'response.create',
+          response: { modalities: ['text', 'audio'] }
+        }));
+        
+        console.log('[CF] Greeting via OpenAI TTS');
+        await this.logAttempt('greeting', 'success', {
+          source: 'openai_tts',
+          greeting_text: greeting.substring(0, 50),
+          latency_ms: Date.now() - greetingStartTime
+        });
+      }
     } catch (error) {
       await this.logAttempt('greeting', 'failed', {
-        source: 'openai_generated',
+        source: this.ttsProvider === 'elevenlabs' ? 'elevenlabs_direct' : 'openai_tts',
         error: String(error),
         latency_ms: Date.now() - greetingStartTime
       });
