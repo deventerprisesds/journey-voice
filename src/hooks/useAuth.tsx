@@ -13,11 +13,13 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Check if running in Lovable iframe preview
+// Check if running in Lovable iframe preview or preview URL
 const isDevelopmentMode = () => {
+  const hostname = window.location.hostname;
   return window !== window.top || 
-         window.location.hostname.includes('lovableproject.com') ||
-         window.location.hostname === 'localhost';
+         hostname.includes('lovableproject.com') ||
+         hostname.includes('lovable.app') && hostname.includes('preview') ||
+         hostname === 'localhost';
 };
 
 // Create consistent mock user for preview mode
