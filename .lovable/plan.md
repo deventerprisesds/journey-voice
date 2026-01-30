@@ -1,60 +1,65 @@
 
 
-## Fix Missing Status Options in Task Detail Modal
+## Add Play Button to Today's Schedule Tasks
 
 ### Problem
-The status dropdown is missing `UP_NEXT`, `READY`, `BLOCKED`, and `PLANNING` workflow statuses.
+Tasks in the "Today's Schedule" section don't have a Play button to quickly start working on them. Users have to either open the task detail modal or manually change the status.
 
 ### Solution
-Add all workflow statuses and fix the labels for category backlogs.
+Add a Play button to each scheduled task in Today's Schedule, matching the pattern used in the "Up Next" section.
 
-#### File: `src/components/TaskDetailModal.tsx` (lines 495-505)
+---
 
-**Current:**
+### Implementation
+
+#### File: `src/components/FocusView.tsx`
+
+**Location: Lines 352-389** (the task rendering inside Today's Schedule)
+
+**Current structure:**
 ```tsx
-<SelectContent>
-  <SelectItem value="BACKLOG">Backlog</SelectItem>
-  <SelectItem value="TODO">To Do</SelectItem>
-  <SelectItem value="DOING">In Progress</SelectItem>
-  <SelectItem value="DONE">Done</SelectItem>
-  <SelectItem value="LIFE">Life Lane</SelectItem>
-  <SelectItem value="CAREER">Career Lane</SelectItem>
-  <SelectItem value="VENTURES">Ventures Lane</SelectItem>
-  <SelectItem value="EDUCATION">Education Lane</SelectItem>
-  <SelectItem value="PROF_EDUCATION">Prof Education Lane</SelectItem>
-</SelectContent>
+<div className="flex items-center gap-2">
+  <Checkbox ... />
+  <div className="flex-1 min-w-0">
+    {/* time, title, category, duration */}
+  </div>
+</div>
 ```
 
-**Updated:**
+**Updated structure:**
 ```tsx
-<SelectContent>
-  {/* Workflow statuses */}
-  <SelectItem value="BACKLOG">Backlog</SelectItem>
-  <SelectItem value="TODO">To Do</SelectItem>
-  <SelectItem value="READY">Ready</SelectItem>
-  <SelectItem value="UP_NEXT">Up Next</SelectItem>
-  <SelectItem value="DOING">Doing</SelectItem>
-  <SelectItem value="DONE">Done</SelectItem>
-  <SelectItem value="BLOCKED">Blocked</SelectItem>
-  <SelectItem value="PLANNING">Planning</SelectItem>
-  {/* Category backlogs */}
-  <SelectItem value="LIFE">Life Backlog</SelectItem>
-  <SelectItem value="CAREER">Career Backlog</SelectItem>
-  <SelectItem value="VENTURES">Ventures Backlog</SelectItem>
-  <SelectItem value="EDUCATION">Education Backlog</SelectItem>
-  <SelectItem value="PROF_EDUCATION">Prof Education Backlog</SelectItem>
-</SelectContent>
+<div className="flex items-center gap-2">
+  <Checkbox ... />
+  <div className="flex-1 min-w-0">
+    {/* time, title, category, duration */}
+  </div>
+  {/* NEW: Play button (only show if not already DOING) */}
+  {task.status !== 'DOING' && (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="h-7 px-2 hover:bg-green-100 dark:hover:bg-green-900 flex-shrink-0"
+      onClick={(e) => {
+        e.stopPropagation();
+        handleStartTask(task.id);
+      }}
+      title="Start working on this task"
+    >
+      <Play className="h-3 w-3 text-green-600" />
+    </Button>
+  )}
+</div>
 ```
 
 ---
 
-### Status Categories
+### Behavior
 
-| Type | Statuses |
-|------|----------|
-| **Workflow** | BACKLOG → TODO → READY → UP_NEXT → DOING → DONE |
-| **States** | BLOCKED, PLANNING |
-| **Category Backlogs** | LIFE, CAREER, VENTURES, EDUCATION, PROF_EDUCATION |
+| Task Status | Button Shown |
+|-------------|--------------|
+| TODO, READY, UP_NEXT | Play button visible |
+| DOING | No play button (already in progress) |
+| DONE | No play button (completed) |
 
 ---
 
@@ -62,5 +67,5 @@ Add all workflow statuses and fix the labels for category backlogs.
 
 | File | Change |
 |------|--------|
-| `src/components/TaskDetailModal.tsx` | Add missing workflow statuses, rename "Lane" → "Backlog" |
+| `src/components/FocusView.tsx` | Add Play button to scheduled task items |
 
