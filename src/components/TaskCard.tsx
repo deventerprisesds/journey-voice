@@ -280,7 +280,7 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onStatusChange, onEdit, onSch
                 className="mt-0.5"
               />
             )}
-            {task.status !== 'UP_NEXT' && task.status !== 'DOING' && task.status !== 'DONE' && (
+            {task.status !== 'UP_NEXT' && task.status !== 'DONE' && (
               <Button
                 variant="ghost"
                 size="sm"

@@ -29,7 +29,8 @@ import {
   CheckCircle2,
   ExternalLink,
   Eye,
-  EyeOff
+  EyeOff,
+  Play
 } from 'lucide-react';
 import { Checkbox } from '@/components/ui/checkbox';
 import { format } from 'date-fns';
@@ -924,12 +925,28 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
                                   </Button>
                                 </TableCell>
                                 <TableCell>
-                                  {onStatusChange && (
-                                    <Checkbox
-                                      checked={task.status === 'DONE'}
-                                      onCheckedChange={(checked) => handleCheckboxChange(task.id, !!checked)}
-                                    />
-                                  )}
+                                  <div className="flex items-center gap-1">
+                                    {onStatusChange && (
+                                      <Checkbox
+                                        checked={task.status === 'DONE'}
+                                        onCheckedChange={(checked) => handleCheckboxChange(task.id, !!checked)}
+                                      />
+                                    )}
+                                    {onStatusChange && task.status !== 'UP_NEXT' && task.status !== 'DONE' && (
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="p-1 h-6 w-6 rounded-full bg-orange-500 hover:bg-orange-600 text-white"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          onStatusChange(task.id, 'UP_NEXT');
+                                        }}
+                                        title="Move to Up Next"
+                                      >
+                                        <Play className="h-3 w-3" />
+                                      </Button>
+                                    )}
+                                  </div>
                                 </TableCell>
                                 <TableCell>
                                   <div className="space-y-1">
