@@ -1,12 +1,9 @@
 
 
-## Add Play Button to Today's Schedule Tasks
+## Auto-Schedule Button for Up Next Section
 
-### Problem
-Tasks in the "Today's Schedule" section don't have a Play button to quickly start working on them. Users have to either open the task detail modal or manually change the status.
-
-### Solution
-Add a Play button to each scheduled task in Today's Schedule, matching the pattern used in the "Up Next" section.
+### Summary
+Add an "Auto Schedule" button to the Up Next header that fills remaining time slots for today with queued tasks, reusing the existing `useBatchScheduling` hook as-is.
 
 ---
 
@@ -14,52 +11,91 @@ Add a Play button to each scheduled task in Today's Schedule, matching the patte
 
 #### File: `src/components/FocusView.tsx`
 
-**Location: Lines 352-389** (the task rendering inside Today's Schedule)
+**1. Add imports (around line 27)**
 
-**Current structure:**
 ```tsx
-<div className="flex items-center gap-2">
-  <Checkbox ... />
-  <div className="flex-1 min-w-0">
-    {/* time, title, category, duration */}
-  </div>
-</div>
+import { useAuth } from '@/hooks/useAuth';
+import { useBatchScheduling } from '@/hooks/useBatchScheduling';
 ```
 
-**Updated structure:**
+**2. Add hooks inside component (after existing hooks ~line 111)**
+
 ```tsx
-<div className="flex items-center gap-2">
-  <Checkbox ... />
-  <div className="flex-1 min-w-0">
-    {/* time, title, category, duration */}
-  </div>
-  {/* NEW: Play button (only show if not already DOING) */}
-  {task.status !== 'DOING' && (
-    <Button
-      variant="ghost"
-      size="sm"
-      className="h-7 px-2 hover:bg-green-100 dark:hover:bg-green-900 flex-shrink-0"
-      onClick={(e) => {
-        e.stopPropagation();
-        handleStartTask(task.id);
-      }}
-      title="Start working on this task"
-    >
-      <Play className="h-3 w-3 text-green-600" />
-    </Button>
-  )}
-</div>
+const { user } = useAuth();
+const { scheduleBatch, updateTasksWithSchedule, isScheduling } = useBatchScheduling();
 ```
 
----
+**3. Add handler function (after handleCompleteTask ~line 280)**
 
-### Behavior
+```tsx
+const handleAutoSchedule = async () => {
+  if (!user?.id || upNextTasks.length === 0) return;
+  
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  
+  const result = await scheduleBatch(
+    upNextTasks.map(task => ({
+      id: task.id,
+      title: task.title,
+      category: task.category,
+      priority: task.priority,
+      estimate_minutes: task.estimate_minutes || 60,
+      due_date: task.due_date
+    })),
+    user.id,
+    timezone,
+    new Date() // Target today
+  );
+  
+  if (result.scheduled.length > 0) {
+    await updateTasksWithSchedule(
+      result.scheduled,
+      upNextTasks.map(t => t.id)
+    );
+    onTaskUpdate();
+  }
+};
+```
 
-| Task Status | Button Shown |
-|-------------|--------------|
-| TODO, READY, UP_NEXT | Play button visible |
-| DOING | No play button (already in progress) |
-| DONE | No play button (completed) |
+**4. Update Up Next CardHeader (around lines 507-516)**
+
+Add a Schedule button next to the badge:
+
+```tsx
+<CardHeader className="pb-3">
+  <div className="flex items-center justify-between">
+    <div className="flex items-center gap-2">
+      <ListOrdered className="h-5 w-5 text-blue-500" />
+      <h2 className="text-lg font-semibold">Up Next</h2>
+      <Badge variant="secondary">{upNextTasks.length}</Badge>
+    </div>
+    {upNextTasks.length > 0 && (
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={handleAutoSchedule}
+        disabled={isScheduling}
+        className="text-xs h-7"
+      >
+        {isScheduling ? (
+          <>
+            <Clock className="h-3 w-3 mr-1 animate-spin" />
+            Scheduling...
+          </>
+        ) : (
+          <>
+            <Calendar className="h-3 w-3 mr-1" />
+            Schedule
+          </>
+        )}
+      </Button>
+    )}
+  </div>
+  <p className="text-xs text-muted-foreground">
+    Drag to schedule or click Start
+  </p>
+</CardHeader>
+```
 
 ---
 
@@ -67,5 +103,7 @@ Add a Play button to each scheduled task in Today's Schedule, matching the patte
 
 | File | Change |
 |------|--------|
-| `src/components/FocusView.tsx` | Add Play button to scheduled task items |
+| `src/components/FocusView.tsx` | Add useAuth + useBatchScheduling hooks, handler, and Schedule button |
+
+No modifications to edge function or hook - uses existing infrastructure as-is.
 
