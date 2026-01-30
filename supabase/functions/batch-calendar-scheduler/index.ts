@@ -1,6 +1,7 @@
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { normalizeDateTime } from "../_shared/timezone.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -194,14 +195,21 @@ CATEGORY TIME WINDOWS:
 - VENTURES: 5pm-10pm weekdays (after_work)
 - LIFE: 9am-10pm any day (flexible)
 
+CRITICAL TIME FORMAT REQUIREMENTS:
+- Return ALL times as ISO 8601 strings WITH EXPLICIT TIMEZONE OFFSET
+- Example for ${timezone}: "2026-01-30T12:00:00-05:00" (noon Eastern with offset)
+- Or use UTC with Z suffix: "2026-01-30T17:00:00Z" (same moment as noon Eastern)
+- NEVER return naive timestamps like "2026-01-30T12:00:00" without offset
+- The offset must reflect the actual timezone (${timezone})
+
 Return a JSON array with one entry per task in order:
 [
-  { "taskIndex": 0, "start_time": "ISO string", "end_time": "ISO string", "reasoning": "brief reason" },
-  { "taskIndex": 1, "start_time": "ISO string", "end_time": "ISO string", "reasoning": "brief reason" },
+  { "taskIndex": 0, "start_time": "2026-01-30T10:00:00-05:00", "end_time": "2026-01-30T11:00:00-05:00", "reasoning": "brief reason" },
+  { "taskIndex": 1, "start_time": "2026-01-30T14:00:00-05:00", "end_time": "2026-01-30T15:00:00-05:00", "reasoning": "brief reason" },
   ...
 ]
 
-IMPORTANT: Return ONLY the JSON array, no other text.`;
+IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include timezone offset or Z suffix.`;
 
     console.log('🤖 Calling AI for batch scheduling...');
     const aiStartTime = Date.now();
@@ -285,14 +293,24 @@ IMPORTANT: Return ONLY the JSON array, no other text.`;
       });
     }
 
-    // Map results back to task IDs
+    // Map results back to task IDs, normalizing times as a safety net
+    // This catches any naive timestamps the AI might return despite prompt instructions
     const scheduledTasks = scheduledResults.map(result => {
       const originalTask = tasks[result.taskIndex];
+      
+      // Normalize times - if AI returned naive ISO, treat as local to user's timezone
+      const normalizedStart = normalizeDateTime(result.start_time, timezone);
+      const normalizedEnd = normalizeDateTime(result.end_time, timezone);
+      
+      if (result.start_time !== normalizedStart) {
+        console.log(`⚠️ Normalized start_time: ${result.start_time} → ${normalizedStart}`);
+      }
+      
       return {
         taskId: originalTask?.id,
         taskIndex: result.taskIndex,
-        start_time: result.start_time,
-        end_time: result.end_time,
+        start_time: normalizedStart,
+        end_time: normalizedEnd,
         reasoning: result.reasoning,
       };
     });
