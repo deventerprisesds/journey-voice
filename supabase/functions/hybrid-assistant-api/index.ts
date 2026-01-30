@@ -316,10 +316,16 @@ async function executeToolCall(
 }
 
 // Get current date/time string in user's timezone - CENTRAL TIME ANCHOR
+// Enhanced with explicit day-of-week context for accurate relative date parsing
 function getCurrentTimeString(timezone: string = 'America/New_York'): string {
   try {
     const now = new Date();
-    return now.toLocaleString('en-US', { 
+    
+    // Get the current weekday name
+    const dayName = now.toLocaleString('en-US', { timeZone: timezone, weekday: 'long' });
+    
+    // Get full formatted date/time
+    const fullDateTime = now.toLocaleString('en-US', { 
       timeZone: timezone, 
       weekday: 'long',
       month: 'long',
@@ -329,6 +335,24 @@ function getCurrentTimeString(timezone: string = 'America/New_York'): string {
       minute: '2-digit',
       hour12: true
     });
+    
+    // Calculate next occurrences of weekdays for AI reference
+    const dayOfWeek = now.toLocaleDateString('en-US', { timeZone: timezone, weekday: 'short' });
+    const currentDayIndex = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(dayOfWeek);
+    
+    // Calculate next Tuesday (day index 2)
+    const daysUntilTuesday = (2 - currentDayIndex + 7) % 7 || 7; // If today is Tuesday, next Tuesday is 7 days away
+    const nextTuesday = new Date(now);
+    nextTuesday.setDate(now.getDate() + daysUntilTuesday);
+    const nextTuesdayStr = nextTuesday.toLocaleDateString('en-CA', { timeZone: timezone });
+    
+    // Calculate tomorrow
+    const tomorrow = new Date(now);
+    tomorrow.setDate(now.getDate() + 1);
+    const tomorrowStr = tomorrow.toLocaleDateString('en-CA', { timeZone: timezone });
+    
+    // Return enhanced context
+    return `${fullDateTime}. Day-of-week context: Today is ${dayName}. Tomorrow = ${tomorrowStr}. Next Tuesday = ${nextTuesdayStr}.`;
   } catch (error) {
     return new Date().toISOString();
   }
@@ -602,6 +626,16 @@ async function handleStreamingRequest(
   
   // Start background processing
   (async () => {
+    // Set up heartbeat to keep SSE connection alive during long tool executions
+    const heartbeatInterval = setInterval(async () => {
+      try {
+        await writer.write(encoder.encode(`: heartbeat\n\n`));
+      } catch {
+        // Writer closed, stop heartbeat
+        clearInterval(heartbeatInterval);
+      }
+    }, 15000); // Every 15 seconds
+    
     try {
       let fullContent = '';
       let currentRunId = '';
@@ -700,6 +734,8 @@ async function handleStreamingRequest(
       const escapedError = errorMessage.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
       await writer.write(encoder.encode(`data: {"type":"error","message":"${escapedError}"}\n\n`));
     } finally {
+      // Clear heartbeat interval
+      clearInterval(heartbeatInterval);
       try {
         await writer.close();
       } catch (e) {
