@@ -390,7 +390,7 @@ const FocusView: React.FC<FocusViewProps> = ({
                                     className="bg-card rounded-md p-3 shadow-sm border cursor-pointer hover:shadow-md transition-shadow"
                                     onClick={() => onTaskEdit(task)}
                                   >
-                                    <div className="flex items-center gap-2">
+                                    <div className="flex items-start gap-2">
                                       <Checkbox
                                         checked={task.status === 'DONE'}
                                         onCheckedChange={(checked) => {
@@ -398,22 +398,23 @@ const FocusView: React.FC<FocusViewProps> = ({
                                           else onStatusChange(task.id, 'TODO');
                                         }}
                                         onClick={(e) => e.stopPropagation()}
+                                        className="mt-0.5 flex-shrink-0"
                                       />
-                                      <div className="flex-1 min-w-0">
+                                      <div className="flex-1 min-w-0 overflow-hidden">
                                         <div className="flex items-center gap-2">
-                                          <span className="text-xs text-muted-foreground">
+                                          <span className="text-xs text-muted-foreground flex-shrink-0">
                                             {task.start_time && format(parseISO(task.start_time), 'h:mm a')}
                                           </span>
                                           <span className={cn("font-medium text-sm truncate", task.status === 'DONE' && 'line-through text-muted-foreground')}>
                                             {task.title}
                                           </span>
                                         </div>
-                                        <div className="flex items-center gap-2 mt-1">
-                                          <Badge variant="outline" className={cn("text-xs", categoryColors[task.category])}>
+                                        <div className="flex items-center gap-2 mt-1 flex-wrap">
+                                          <Badge variant="outline" className={cn("text-xs flex-shrink-0", categoryColors[task.category])}>
                                             {task.category.toLowerCase()}
                                           </Badge>
                                           {task.estimate_minutes && (
-                                            <span className="text-xs text-muted-foreground flex items-center gap-1">
+                                            <span className="text-xs text-muted-foreground flex items-center gap-1 flex-shrink-0">
                                               <Clock className="h-3 w-3" />
                                               {task.estimate_minutes}m
                                             </span>
@@ -423,15 +424,15 @@ const FocusView: React.FC<FocusViewProps> = ({
                                       {task.status !== 'DOING' && task.status !== 'DONE' && (
                                         <Button
                                           variant="ghost"
-                                          size="sm"
-                                          className="h-7 px-2 hover:bg-green-100 dark:hover:bg-green-900 flex-shrink-0"
+                                          size="icon"
+                                          className="h-8 w-8 flex-shrink-0 hover:bg-green-100 dark:hover:bg-green-900"
                                           onClick={(e) => {
                                             e.stopPropagation();
                                             handleStartTask(task.id);
                                           }}
                                           title="Start working on this task"
                                         >
-                                          <Play className="h-3 w-3 text-green-600" />
+                                          <Play className="h-4 w-4 text-green-600" />
                                         </Button>
                                       )}
                                     </div>
