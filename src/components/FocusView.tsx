@@ -341,7 +341,7 @@ const FocusView: React.FC<FocusViewProps> = ({
     <DragDropContext onDragEnd={handleDragEnd}>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Timeline - 2/3 width on desktop */}
-        <div className="lg:col-span-2 order-2 lg:order-1">
+        <div className="lg:col-span-2 order-1">
           <Card>
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
@@ -371,7 +371,7 @@ const FocusView: React.FC<FocusViewProps> = ({
                         const dropSlots = getDropSlotsForWindow(windowName);
                         
                         return (
-                          <div key={windowName} className={cn("rounded-lg overflow-hidden", style.bgClass)}>
+                          <div key={windowName} className={cn("rounded-lg", style.bgClass)}>
                             {/* Window Header */}
                             <div className={cn("p-3 flex items-center gap-2", style.borderClass)}>
                               <span className={style.textClass}>{style.icon}</span>
@@ -470,7 +470,7 @@ const FocusView: React.FC<FocusViewProps> = ({
         </div>
         
         {/* Sidebar - 1/3 width */}
-        <div className="space-y-6 order-1 lg:order-2">
+        <div className="space-y-6 order-2">
           {/* Currently Doing Section */}
           <Card>
             <CardHeader className="pb-3">
