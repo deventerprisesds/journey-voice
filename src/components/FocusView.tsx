@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
-import { format, parseISO, isToday, formatDistanceToNow, setHours, setMinutes, addMinutes } from 'date-fns';
+import { format, parseISO, isToday, formatDistanceToNow, addMinutes } from 'date-fns';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -31,6 +31,7 @@ import { DEFAULT_SCHEDULING_CONFIG } from '@/config/schedulingRules';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { useAuth } from '@/hooks/useAuth';
 import { useBatchScheduling } from '@/hooks/useBatchScheduling';
+import { getTimePartsInTimezone, localTimeToUtcISO, getDefaultTimezone } from '@/lib/date';
 
 interface FocusViewProps {
   tasks: Task[];
@@ -115,6 +116,9 @@ const FocusView: React.FC<FocusViewProps> = ({
   
   const { user } = useAuth();
   const { scheduleBatch, updateTasksWithSchedule, isScheduling } = useBatchScheduling();
+  
+  // Get user timezone - use browser default as fallback
+  const userTimezone = getDefaultTimezone();
 
   // Filter task groups
   const doingTasks = tasks.filter(t => t.status === 'DOING');
@@ -145,10 +149,12 @@ const FocusView: React.FC<FocusViewProps> = ({
     return new Date(a.start_time).getTime() - new Date(b.start_time).getTime();
   });
 
-  // Group scheduled tasks by time window
+  // Group scheduled tasks by time window using timezone-aware time extraction
   const getTimeWindowForTask = (task: Task): string | null => {
     if (!task.start_time) return null;
-    const taskHour = parseISO(task.start_time).getHours();
+    
+    // Use timezone-aware time extraction
+    const { hour: taskHour } = getTimePartsInTimezone(task.start_time, userTimezone);
     const dayOfWeek = today.getDay();
     
     const windows = config.timeWindows;
@@ -181,20 +187,24 @@ const FocusView: React.FC<FocusViewProps> = ({
     }
   });
 
-  // Schedule task at specific time
+  // Schedule task at specific time using timezone-aware conversion
   const scheduleTaskAtTime = async (taskId: string, hour: number, minute: number) => {
     const task = tasks.find(t => t.id === taskId);
     if (!task) return;
 
-    const startTime = setMinutes(setHours(today, hour), minute);
+    // Use timezone-aware conversion to UTC
+    const dateStr = format(today, 'yyyy-MM-dd');
+    const timeStr = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
+    const startTimeISO = localTimeToUtcISO(dateStr, timeStr, userTimezone);
+    
     const estimatedMinutes = task.estimate_minutes || 60;
-    const endTime = addMinutes(startTime, estimatedMinutes);
+    const endTime = addMinutes(new Date(startTimeISO), estimatedMinutes);
 
     try {
       const { error } = await supabase
         .from('tasks')
         .update({
-          start_time: startTime.toISOString(),
+          start_time: startTimeISO,
           end_time: endTime.toISOString(),
           status: task.status === 'UP_NEXT' ? 'TODO' : task.status,
           updated_at: new Date().toISOString()
@@ -203,7 +213,14 @@ const FocusView: React.FC<FocusViewProps> = ({
 
       if (error) throw error;
       
-      toast.success(`Scheduled "${task.title}" for ${format(startTime, 'h:mm a')}`);
+      // Format the display time using timezone
+      const displayTime = new Date(startTimeISO).toLocaleTimeString('en-US', {
+        timeZone: userTimezone,
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      });
+      toast.success(`Scheduled "${task.title}" for ${displayTime}`);
       onTaskUpdate();
     } catch (error) {
       console.error('Error scheduling task:', error);
@@ -325,11 +342,17 @@ const FocusView: React.FC<FocusViewProps> = ({
     const slots: { hour: number; minute: number; label: string }[] = [];
     for (let hour = window.start; hour < window.end; hour++) {
       for (const minute of [0, 30]) {
-        slots.push({
-          hour,
-          minute,
-          label: format(setMinutes(setHours(today, hour), minute), 'h:mm a')
+        // Format time label using timezone-aware formatting
+        const timeStr = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
+        const dateStr = format(today, 'yyyy-MM-dd');
+        const isoTime = localTimeToUtcISO(dateStr, timeStr, userTimezone);
+        const label = new Date(isoTime).toLocaleTimeString('en-US', {
+          timeZone: userTimezone,
+          hour: 'numeric',
+          minute: '2-digit',
+          hour12: true
         });
+        slots.push({ hour, minute, label });
       }
     }
     return slots;

@@ -1,12 +1,14 @@
-import React from 'react';
-import { format, parseISO, isSameDay, addMinutes, differenceInMinutes } from 'date-fns';
+import React, { useState, useCallback } from 'react';
+import { format, parseISO, differenceInMinutes } from 'date-fns';
+import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import { cn } from '@/lib/utils';
 import { Task, ExternalCalendarEvent } from '@/types/task';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Plus, Clock, Calendar, Sunrise, Sun, Sunset, Moon, Coffee } from 'lucide-react';
+import { Plus, Clock, Calendar, Sunrise, Sun, Sunset, Moon, Coffee, GripVertical } from 'lucide-react';
 import { SchedulingConfig, DEFAULT_SCHEDULING_CONFIG } from '@/config/schedulingRules';
+import { getTimePartsInTimezone, formatTimeInTimezone, getDateInTimezone, localTimeToUtcISO, getDefaultTimezone } from '@/lib/date';
 
 interface TimeSlotGridProps {
   dates: Date[];
@@ -15,7 +17,9 @@ interface TimeSlotGridProps {
   onTimeSlotClick?: (date: Date, hour: number, minute: number) => void;
   onTaskClick?: (task: Task) => void;
   onStatusChange?: (taskId: string, newStatus: Task['status']) => void;
+  onTaskReschedule?: (taskId: string, newStartTime: string, newEndTime: string) => Promise<void>;
   schedulingConfig?: SchedulingConfig;
+  userTimezone?: string;
   className?: string;
 }
 
@@ -26,9 +30,13 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
   onTimeSlotClick,
   onTaskClick,
   onStatusChange,
+  onTaskReschedule,
   schedulingConfig = DEFAULT_SCHEDULING_CONFIG,
+  userTimezone,
   className
 }) => {
+  const timezone = userTimezone || getDefaultTimezone();
+  const [isDragging, setIsDragging] = useState(false);
   // Time window visual config
   const timeWindowStyles: Record<string, { icon: React.ReactNode; label: string; bgClass: string; borderClass: string }> = {
     morning: { 
@@ -113,28 +121,30 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
   }
 
   const getTasksForTimeSlot = (date: Date, hour: number, minute: number) => {
+    const dateStr = format(date, 'yyyy-MM-dd');
     return tasks.filter(task => {
       if (!task.start_time || !task.end_time) return false;
       
-      const taskStart = parseISO(task.start_time);
-      const taskEnd = parseISO(task.end_time);
+      // Use timezone-aware date check
+      const taskDateStr = getDateInTimezone(task.start_time, timezone);
+      if (taskDateStr !== dateStr) return false;
       
-      if (!isSameDay(taskStart, date)) return false;
-      
-      // Only show task in the slot where it actually starts
-      const taskStartHour = taskStart.getHours();
-      const taskStartMinute = taskStart.getMinutes();
+      // Use timezone-aware time extraction
+      const { hour: taskStartHour, minute: taskStartMinute } = getTimePartsInTimezone(task.start_time, timezone);
       
       return taskStartHour === hour && Math.floor(taskStartMinute / 15) * 15 === minute;
     });
   };
 
   const getEventsForTimeSlot = (date: Date, hour: number, minute: number) => {
+    const dateStr = format(date, 'yyyy-MM-dd');
     return externalEvents.filter(event => {
       const eventStart = parseISO(event.start_time);
       const eventEnd = parseISO(event.end_time);
       
-      if (!isSameDay(eventStart, date)) return false;
+      // Use timezone-aware date check
+      const eventDateStr = getDateInTimezone(event.start_time, timezone);
+      if (eventDateStr !== dateStr) return false;
       
       const slotStart = new Date(date);
       slotStart.setHours(hour, minute, 0, 0);
@@ -219,19 +229,27 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
   };
 
   function layoutItemsForDate(date: Date) {
-    // Collect tasks for this date
-    const dayTasks = tasks.filter(t => t.start_time && isSameDay(parseISO(t.start_time), date));
-    const dayEvents = externalEvents.filter(e => isSameDay(parseISO(e.start_time), date));
+    const dateStr = format(date, 'yyyy-MM-dd');
+    
+    // Collect tasks for this date using timezone-aware filtering
+    const dayTasks = tasks.filter(t => {
+      if (!t.start_time) return false;
+      return getDateInTimezone(t.start_time, timezone) === dateStr;
+    });
+    const dayEvents = externalEvents.filter(e => {
+      return getDateInTimezone(e.start_time, timezone) === dateStr;
+    });
 
     const items: LaidOutItem[] = [
       ...dayTasks.map(t => {
-        const s = parseISO(t.start_time!);
-        const e = parseISO(t.end_time!);
+        // Use timezone-aware time extraction
+        const { hour: startHour, minute: startMinute } = getTimePartsInTimezone(t.start_time!, timezone);
+        const { hour: endHour, minute: endMinute } = getTimePartsInTimezone(t.end_time!, timezone);
         return {
           id: t.id,
           title: t.title,
-          startMin: clampToDay(s.getHours() * 60 + s.getMinutes()),
-          endMin: clampToDay(e.getHours() * 60 + e.getMinutes()),
+          startMin: clampToDay(startHour * 60 + startMinute),
+          endMin: clampToDay(endHour * 60 + endMinute),
           column: 0,
           columnsInGroup: 1,
           raw: t,
@@ -239,13 +257,14 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
         };
       }),
       ...dayEvents.map(ev => {
-        const s = parseISO(ev.start_time);
-        const e = parseISO(ev.end_time);
+        // Use timezone-aware time extraction for events too
+        const { hour: startHour, minute: startMinute } = getTimePartsInTimezone(ev.start_time, timezone);
+        const { hour: endHour, minute: endMinute } = getTimePartsInTimezone(ev.end_time, timezone);
         return {
           id: ev.id,
           title: ev.title,
-          startMin: clampToDay(s.getHours() * 60 + s.getMinutes()),
-          endMin: clampToDay(e.getHours() * 60 + e.getMinutes()),
+          startMin: clampToDay(startHour * 60 + startMinute),
+          endMin: clampToDay(endHour * 60 + endMinute),
           column: 0,
           columnsInGroup: 1,
           raw: ev,
@@ -295,20 +314,58 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
     return items;
   }
 
+  // Handle drag end for task rescheduling
+  const handleDragEnd = useCallback(async (result: DropResult) => {
+    setIsDragging(false);
+    if (!result.destination || !onTaskReschedule) return;
+    
+    const { draggableId, destination } = result;
+    const task = tasks.find(t => t.id === draggableId);
+    if (!task || !task.start_time || !task.end_time) return;
+    
+    // Parse the drop target ID: "slot-{dateIndex}-{hour}-{minute}"
+    const parts = destination.droppableId.split('-');
+    if (parts[0] !== 'slot' || parts.length !== 4) return;
+    
+    const [, dateIndexStr, hourStr, minuteStr] = parts;
+    const dateIndex = parseInt(dateIndexStr);
+    const newHour = parseInt(hourStr);
+    const newMinute = parseInt(minuteStr);
+    
+    const targetDate = dates[dateIndex];
+    if (!targetDate) return;
+    
+    // Calculate task duration
+    const durationMs = new Date(task.end_time).getTime() - new Date(task.start_time).getTime();
+    
+    // Create new start and end times in UTC using the user's timezone
+    const dateStr = format(targetDate, 'yyyy-MM-dd');
+    const newStartTime = localTimeToUtcISO(dateStr, `${newHour.toString().padStart(2, '0')}:${newMinute.toString().padStart(2, '0')}`, timezone);
+    const newEndDate = new Date(new Date(newStartTime).getTime() + durationMs);
+    const newEndTime = newEndDate.toISOString();
+    
+    await onTaskReschedule(task.id, newStartTime, newEndTime);
+  }, [tasks, dates, timezone, onTaskReschedule]);
+
+  const handleDragStart = useCallback(() => {
+    setIsDragging(true);
+  }, []);
+
   return (
-    <div className={cn("bg-background", className)}>
-      {/* Header with dates */}
-      <div className="grid gap-0 border-b" style={{gridTemplateColumns: `80px repeat(${dates.length}, 1fr)`}}>
-        <div className="p-3 border-r bg-muted/30">
-          <span className="text-xs text-muted-foreground">Time</span>
-        </div>
-        {dates.map((date, index) => (
-          <div key={index} className="p-3 text-center border-r bg-muted/30">
-            <div className="text-sm font-medium">{format(date, 'EEE')}</div>
-            <div className="text-xs text-muted-foreground">{format(date, 'MMM d')}</div>
+    <DragDropContext onDragEnd={handleDragEnd} onDragStart={handleDragStart}>
+      <div className={cn("bg-background", className)}>
+        {/* Header with dates */}
+        <div className="grid gap-0 border-b" style={{gridTemplateColumns: `80px repeat(${dates.length}, 1fr)`}}>
+          <div className="p-3 border-r bg-muted/30">
+            <span className="text-xs text-muted-foreground">Time</span>
           </div>
-        ))}
-      </div>
+          {dates.map((date, index) => (
+            <div key={index} className="p-3 text-center border-r bg-muted/30">
+              <div className="text-sm font-medium">{format(date, 'EEE')}</div>
+              <div className="text-xs text-muted-foreground">{format(date, 'MMM d')}</div>
+            </div>
+          ))}
+        </div>
 
       {/* Time slots grid (background and click targets) */}
       <div className="relative">
@@ -369,29 +426,39 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
                   </span>
                 </div>
                 
-                {/* Date columns with click and quick-add only (tasks are rendered in overlay) */}
+                {/* Date columns with droppable zones for rescheduling */}
                 {dates.map((date, dateIndex) => (
-                  <div
+                  <Droppable 
+                    droppableId={`slot-${dateIndex}-${slot.hour}-${slot.minute}`} 
                     key={`${slot.hour}-${slot.minute}-${dateIndex}`}
-                    className={cn(
-                      "relative border-r h-4 hover:bg-muted/30 transition-colors group cursor-pointer",
-                      windowStyle ? windowStyle.bgClass : ''
-                    )}
-                    onClick={() => onTimeSlotClick?.(date, slot.hour, slot.minute)}
                   >
-                    {/* Add task button */}
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity h-6 w-6 p-0"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onTimeSlotClick?.(date, slot.hour, slot.minute);
-                      }}
-                    >
-                      <Plus className="h-3 w-3" />
-                    </Button>
-                  </div>
+                    {(provided, snapshot) => (
+                      <div
+                        ref={provided.innerRef}
+                        {...provided.droppableProps}
+                        className={cn(
+                          "relative border-r h-4 transition-colors group cursor-pointer",
+                          windowStyle ? windowStyle.bgClass : '',
+                          snapshot.isDraggingOver ? 'bg-primary/20' : 'hover:bg-muted/30'
+                        )}
+                        onClick={() => !isDragging && onTimeSlotClick?.(date, slot.hour, slot.minute)}
+                      >
+                        {/* Add task button */}
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity h-6 w-6 p-0"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onTimeSlotClick?.(date, slot.hour, slot.minute);
+                          }}
+                        >
+                          <Plus className="h-3 w-3" />
+                        </Button>
+                        {provided.placeholder}
+                      </div>
+                    )}
+                  </Droppable>
                 ))}
               </div>
             </React.Fragment>
@@ -434,7 +501,7 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
                         </div>
                         <div className="text-purple-700 text-xs flex items-center gap-1">
                           <Clock className="h-2 w-2" />
-                          {format(parseISO(ev.start_time), 'h:mm a')} - {format(parseISO(ev.end_time), 'h:mm a')}
+                          {formatTimeInTimezone(ev.start_time, timezone)} - {formatTimeInTimezone(ev.end_time, timezone)}
                         </div>
                       </div>
                     );
@@ -442,57 +509,83 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
 
                   const t = item.raw as Task;
                   const categoryBorder = t.category ? categoryBorderColors[t.category] : '';
+                  
+                  // Make tasks draggable for rescheduling
                   return (
-                    <div
-                      key={`task-${t.id}-${idx}`}
-                      className={cn(
-                        "absolute rounded text-xs group cursor-pointer hover:opacity-90 transition-opacity z-20 flex flex-col pointer-events-auto border-l-4",
-                        priorityColors[t.priority as keyof typeof priorityColors],
-                        categoryBorder
-                      )}
-                      style={{ top, height, left: `${left}%`, width: `calc(${width}% - 2px)`, padding: '4px' }}
-                      onClick={(e) => { e.stopPropagation(); onTaskClick?.(t); }}
-                      title={t.title}
-                    >
-                      {/* Checkbox overlay - visible on hover */}
-                      {onStatusChange && (
-                        <div 
-                          className="absolute left-1 top-1 opacity-0 group-hover:opacity-100 transition-opacity z-30"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <Checkbox
-                            checked={t.status === 'DONE'}
-                            onCheckedChange={(checked) => handleCheckboxChange(t.id, !!checked)}
-                            className="h-3 w-3 bg-white border-2"
-                          />
-                        </div>
-                      )}
-
-                      {/* Category badge */}
-                      {t.category && (
-                        <Badge 
+                    <Draggable key={t.id} draggableId={t.id} index={idx}>
+                      {(provided, snapshot) => (
+                        <div
+                          ref={provided.innerRef}
+                          {...provided.draggableProps}
                           className={cn(
-                            "absolute top-0.5 right-0.5 text-[9px] px-1 py-0 h-4 font-medium",
-                            categoryColors[t.category]
+                            "absolute rounded text-xs group cursor-pointer transition-opacity z-20 flex flex-col pointer-events-auto border-l-4",
+                            priorityColors[t.priority as keyof typeof priorityColors],
+                            categoryBorder,
+                            snapshot.isDragging ? 'opacity-70 shadow-lg' : 'hover:opacity-90'
                           )}
+                          style={{ 
+                            top: snapshot.isDragging ? undefined : top, 
+                            height, 
+                            left: snapshot.isDragging ? undefined : `${left}%`, 
+                            width: `calc(${width}% - 2px)`, 
+                            padding: '4px',
+                            ...provided.draggableProps.style
+                          }}
+                          onClick={(e) => { e.stopPropagation(); if (!snapshot.isDragging) onTaskClick?.(t); }}
+                          title={t.title}
                         >
-                          {t.category}
-                        </Badge>
-                      )}
+                          {/* Drag handle - visible on hover */}
+                          {onTaskReschedule && (
+                            <div 
+                              {...provided.dragHandleProps}
+                              className="absolute right-1 top-1 opacity-0 group-hover:opacity-100 transition-opacity z-30 cursor-grab active:cursor-grabbing touch-none"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <GripVertical className="h-3 w-3 text-white/70" />
+                            </div>
+                          )}
+                          
+                          {/* Checkbox overlay - visible on hover */}
+                          {onStatusChange && (
+                            <div 
+                              className="absolute left-1 top-1 opacity-0 group-hover:opacity-100 transition-opacity z-30"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <Checkbox
+                                checked={t.status === 'DONE'}
+                                onCheckedChange={(checked) => handleCheckboxChange(t.id, !!checked)}
+                                className="h-3 w-3 bg-white border-2"
+                              />
+                            </div>
+                          )}
 
-                      <div className={cn(
-                        "font-medium leading-tight break-words pr-12",
-                        t.status === 'DONE' && "line-through opacity-60"
-                      )}>
-                        {t.title}
-                      </div>
-                      {t.start_time && t.end_time && (
-                        <div className="text-xs opacity-90 flex items-center gap-1 mt-auto">
-                          <Clock className="h-2 w-2" />
-                          {format(parseISO(t.start_time), 'h:mm')} - {format(parseISO(t.end_time), 'h:mm')}
+                          {/* Category badge */}
+                          {t.category && (
+                            <Badge 
+                              className={cn(
+                                "absolute top-0.5 right-4 text-[9px] px-1 py-0 h-4 font-medium",
+                                categoryColors[t.category]
+                              )}
+                            >
+                              {t.category}
+                            </Badge>
+                          )}
+
+                          <div className={cn(
+                            "font-medium leading-tight break-words pr-12",
+                            t.status === 'DONE' && "line-through opacity-60"
+                          )}>
+                            {t.title}
+                          </div>
+                          {t.start_time && t.end_time && (
+                            <div className="text-xs opacity-90 flex items-center gap-1 mt-auto">
+                              <Clock className="h-2 w-2" />
+                              {formatTimeInTimezone(t.start_time, timezone, { hour: 'numeric', minute: '2-digit' })} - {formatTimeInTimezone(t.end_time, timezone, { hour: 'numeric', minute: '2-digit' })}
+                            </div>
+                          )}
                         </div>
                       )}
-                    </div>
+                    </Draggable>
                   );
                 })}
               </div>
@@ -501,6 +594,7 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
         </div>
       </div>
     </div>
+    </DragDropContext>
   );
 };
 
