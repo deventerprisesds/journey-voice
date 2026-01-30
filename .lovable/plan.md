@@ -1,88 +1,69 @@
 
 
-## Move Demo Badge to Center + Create Debug Tracker
+## Enable Horizontal Scrolling in Today's Schedule (Stopgap Fix for CLIP-01)
 
-### Changes
+### Problem
+The Today's Schedule section clips content on the right side. While previous attempts restructured flex layouts, the underlying issue is that the `ScrollArea` only scrolls vertically, preventing users from reaching content that extends beyond the viewport width.
 
-#### 1. Move Demo Badge to Center
-
-**File: `src/components/DemoModeBadge.tsx`** (Line 9)
-
-| Before | After |
-|--------|-------|
-| `fixed top-4 right-4 z-50` | `fixed top-4 left-1/2 -translate-x-1/2 z-50` |
+### Solution
+Enable horizontal scrolling so users can pan right to see all content - a practical stopgap while the card width optimization is addressed separately.
 
 ---
 
-#### 2. Create Master Debug Tracking Document
+### Technical Changes
 
-**New File: `docs/DEBUG_TRACKER.md`**
+**File: `src/components/FocusView.tsx`**
 
-```markdown
-# Master Debug Tracking Sheet
+#### Change 1: Add horizontal ScrollBar to ScrollArea (Line 367)
 
-## Purpose
-Track all issues, attempted fixes, outcomes, and lessons learned to ensure progressive debugging and avoid repeating failed approaches.
+The current `ScrollArea` only includes a vertical scrollbar. Add a horizontal scrollbar to enable side-to-side panning:
 
----
+```tsx
+// Before (line 367-368)
+<ScrollArea className="h-[400px] lg:h-[500px]">
+  <div className="space-y-4">
 
-## Active Issues
-
-| ID | Problem | Status | Root Cause |
-|----|---------|--------|------------|
-| CLIP-01 | Time ranges cut off in Today's Schedule ("6:00 -" instead of "6:00 - 9:00") | OPEN | ScrollArea enforces overflow-hidden at root; internal flex layouts overflow horizontally |
-| NAV-01 | Top-right assistant button hidden | FIXED | Demo badge positioned at same location (top-4 right-4) |
-| NAV-02 | No floating assistant button | REGRESSED | Was removed when refactoring desktop toggle button |
-
----
-
-## Attempted Fixes Log
-
-| Issue ID | Attempt | Date | Outcome | Why It Failed/Succeeded |
-|----------|---------|------|---------|-------------------------|
-| CLIP-01 | Remove `overflow-hidden` from time window container (line 374) | 2026-01-29 | FAILED | ScrollArea component has `overflow-hidden` baked into its root element - cannot be overridden from children |
-| NAV-01 | Add assistant button to top header | 2026-01-29 | PARTIAL | Button added but Demo badge covered it |
-| NAV-01 | Move Demo badge to center | 2026-01-30 | PENDING | - |
-
----
-
-## Lessons Learned
-
-1. **ScrollArea overflow-hidden is immutable**: The Radix ScrollArea component applies `overflow-hidden` at the root level. Fix must be internal layout changes, not CSS overrides.
-
-2. **Fixed position conflicts**: Multiple fixed-position elements at the same coordinates (top-4 right-4) will overlap. Always check for existing fixed elements before adding new ones.
-
-3. **Flex overflow prevention pattern**: Use `min-w-0` on flex containers that should shrink, `truncate` on text that can be cut, and `flex-shrink-0` on elements that must remain visible.
-
----
-
-## Pending Solutions
-
-### CLIP-01: Time Range Clipping
-
-**Correct approach**: Restructure time window header so content never exceeds container width:
-
-- Wrap in `justify-between` layout
-- Left group: `min-w-0` (can shrink) with `truncate` on label
-- Right group (time range): `flex-shrink-0 whitespace-nowrap` (never shrinks)
-
-This prioritizes time visibility over label length.
-
-### NAV-02: Floating Button
-
-Re-add the floating button that was accidentally removed:
-
-- Position: `fixed right-4 bottom-4 z-50`
-- Size: `h-12 w-12 rounded-full`
-- Behavior: Opens Comms panel on click
+// After
+<ScrollArea className="h-[400px] lg:h-[500px]" type="always">
+  <div className="space-y-4 min-w-max">
 ```
+
+Then at the closing of the ScrollArea, add the horizontal scrollbar component:
+
+```tsx
+// Before (around line ~465)
+</ScrollArea>
+
+// After - need to import ScrollBar and add it
+import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
+
+// Inside ScrollArea, after the content div closes:
+<ScrollBar orientation="horizontal" />
+</ScrollArea>
+```
+
+#### Change 2: Ensure content can expand horizontally
+
+Add `min-w-max` to the content container so it can grow beyond the viewport width, making horizontal scroll meaningful.
+
+---
+
+### Update Debug Tracker
+
+**File: `docs/DEBUG_TRACKER.md`**
+
+Add to Attempted Fixes Log:
+
+| Issue ID | Attempt | Date | Outcome |
+|----------|---------|------|---------|
+| CLIP-01 | Enable horizontal scrolling with ScrollBar orientation="horizontal" | 2026-01-30 | PENDING |
 
 ---
 
 ### Files Changed
 
-| File | Action | Change |
-|------|--------|--------|
-| `src/components/DemoModeBadge.tsx` | MODIFY | Move from right to center |
-| `docs/DEBUG_TRACKER.md` | CREATE | Master tracking document |
+| File | Action |
+|------|--------|
+| `src/components/FocusView.tsx` | Add horizontal ScrollBar and `min-w-max` to content |
+| `docs/DEBUG_TRACKER.md` | Log attempt |
 
