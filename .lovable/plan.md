@@ -1,99 +1,88 @@
 
 
-## Fix Today's Schedule Section - Ordering and Content Clipping
+## Move Demo Badge to Center + Create Debug Tracker
 
-### Problems Identified from Screenshot
+### Changes
 
-| Issue | Evidence | Root Cause |
-|-------|----------|------------|
-| **Section ordering wrong** | "Up Next" appears above "Today's Schedule" on mobile | Line 344: `order-2`, Line 473: `order-1` |
-| **All right-side content clipped** | Time windows show "6:00 -", "9:00 - 1", "17:00 - 2" - cut off | Line 374: `overflow-hidden` on time window container |
+#### 1. Move Demo Badge to Center
 
-The `overflow-hidden` class on line 374 is clipping the ENTIRE right side of children content - not just time ranges, but also any Play buttons that would appear on the right.
+**File: `src/components/DemoModeBadge.tsx`** (Line 9)
 
----
-
-### Implementation
-
-#### File: `src/components/FocusView.tsx`
-
-**Change 1: Fix section ordering (lines 344 and 473)**
-
-```tsx
-// Line 344 - Today's Schedule container
-// Before
-<div className="lg:col-span-2 order-2 lg:order-1">
-
-// After
-<div className="lg:col-span-2 order-1">
-```
-
-```tsx
-// Line 473 - Sidebar container  
-// Before
-<div className="space-y-6 order-1 lg:order-2">
-
-// After
-<div className="space-y-6 order-2">
-```
-
-**Change 2: Remove overflow-hidden from time window containers (line 374)**
-
-```tsx
-// Before
-<div key={windowName} className={cn("rounded-lg overflow-hidden", style.bgClass)}>
-
-// After
-<div key={windowName} className={cn("rounded-lg", style.bgClass)}>
-```
+| Before | After |
+|--------|-------|
+| `fixed top-4 right-4 z-50` | `fixed top-4 left-1/2 -translate-x-1/2 z-50` |
 
 ---
 
-### Technical Details
+#### 2. Create Master Debug Tracking Document
 
-The `overflow-hidden` was likely added for visual styling (to clip rounded corners), but it has the side effect of clipping all child content that extends to the right edge. Removing it will:
+**New File: `docs/DEBUG_TRACKER.md`**
 
-- Allow time range text to display fully (e.g., "6:00 - 9:00" instead of "6:00 -")
-- Allow Play buttons on task cards to remain visible
-- Allow all badge content to display without clipping
+```markdown
+# Master Debug Tracking Sheet
 
-If rounded corner clipping is needed, it can be applied only to specific child elements rather than the entire container.
+## Purpose
+Track all issues, attempted fixes, outcomes, and lessons learned to ensure progressive debugging and avoid repeating failed approaches.
+
+---
+
+## Active Issues
+
+| ID | Problem | Status | Root Cause |
+|----|---------|--------|------------|
+| CLIP-01 | Time ranges cut off in Today's Schedule ("6:00 -" instead of "6:00 - 9:00") | OPEN | ScrollArea enforces overflow-hidden at root; internal flex layouts overflow horizontally |
+| NAV-01 | Top-right assistant button hidden | FIXED | Demo badge positioned at same location (top-4 right-4) |
+| NAV-02 | No floating assistant button | REGRESSED | Was removed when refactoring desktop toggle button |
+
+---
+
+## Attempted Fixes Log
+
+| Issue ID | Attempt | Date | Outcome | Why It Failed/Succeeded |
+|----------|---------|------|---------|-------------------------|
+| CLIP-01 | Remove `overflow-hidden` from time window container (line 374) | 2026-01-29 | FAILED | ScrollArea component has `overflow-hidden` baked into its root element - cannot be overridden from children |
+| NAV-01 | Add assistant button to top header | 2026-01-29 | PARTIAL | Button added but Demo badge covered it |
+| NAV-01 | Move Demo badge to center | 2026-01-30 | PENDING | - |
+
+---
+
+## Lessons Learned
+
+1. **ScrollArea overflow-hidden is immutable**: The Radix ScrollArea component applies `overflow-hidden` at the root level. Fix must be internal layout changes, not CSS overrides.
+
+2. **Fixed position conflicts**: Multiple fixed-position elements at the same coordinates (top-4 right-4) will overlap. Always check for existing fixed elements before adding new ones.
+
+3. **Flex overflow prevention pattern**: Use `min-w-0` on flex containers that should shrink, `truncate` on text that can be cut, and `flex-shrink-0` on elements that must remain visible.
+
+---
+
+## Pending Solutions
+
+### CLIP-01: Time Range Clipping
+
+**Correct approach**: Restructure time window header so content never exceeds container width:
+
+- Wrap in `justify-between` layout
+- Left group: `min-w-0` (can shrink) with `truncate` on label
+- Right group (time range): `flex-shrink-0 whitespace-nowrap` (never shrinks)
+
+This prioritizes time visibility over label length.
+
+### NAV-02: Floating Button
+
+Re-add the floating button that was accidentally removed:
+
+- Position: `fixed right-4 bottom-4 z-50`
+- Size: `h-12 w-12 rounded-full`
+- Behavior: Opens Comms panel on click
+```
 
 ---
 
 ### Files Changed
 
-| File | Line | Change |
-|------|------|--------|
-| `src/components/FocusView.tsx` | 344 | Change `order-2 lg:order-1` to `order-1` |
-| `src/components/FocusView.tsx` | 473 | Change `order-1 lg:order-2` to `order-2` |
-| `src/components/FocusView.tsx` | 374 | Remove `overflow-hidden` from time window container |
-
----
-
-### Expected Result
-
-**Before (mobile):**
-```
-┌────────────────────────┐
-│ Up Next          Sch   │  ← Wrong order
-├────────────────────────┤
-│ Today's Schedule       │
-│ Morning        6:00 -  │  ← Clipped
-│ Business Hours 9:00 -  │  ← Clipped
-└────────────────────────┘
-```
-
-**After (mobile):**
-```
-┌────────────────────────┐
-│ Today's Schedule       │  ← First
-│ Morning    6:00 - 9:00 │  ← Full content
-│ Business   9:00 - 17:00│  ← Full content
-├────────────────────────┤
-│ Currently Doing        │
-├────────────────────────┤
-│ Up Next          Sch   │
-└────────────────────────┘
-```
+| File | Action | Change |
+|------|--------|--------|
+| `src/components/DemoModeBadge.tsx` | MODIFY | Move from right to center |
+| `docs/DEBUG_TRACKER.md` | CREATE | Master tracking document |
 
