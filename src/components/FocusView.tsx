@@ -385,6 +385,20 @@ const FocusView: React.FC<FocusViewProps> = ({
                                           )}
                                         </div>
                                       </div>
+                                      {task.status !== 'DOING' && task.status !== 'DONE' && (
+                                        <Button
+                                          variant="ghost"
+                                          size="sm"
+                                          className="h-7 px-2 hover:bg-green-100 dark:hover:bg-green-900 flex-shrink-0"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleStartTask(task.id);
+                                          }}
+                                          title="Start working on this task"
+                                        >
+                                          <Play className="h-3 w-3 text-green-600" />
+                                        </Button>
+                                      )}
                                     </div>
                                   </div>
                                 ))
