@@ -1,62 +1,67 @@
 
 
-## Enable Horizontal Scrolling in Today's Schedule (Stopgap Fix for CLIP-01)
+## Add "GO" Quick Action Button to Kanban Cards
 
-### Problem
-The Today's Schedule section clips content on the right side. While previous attempts restructured flex layouts, the underlying issue is that the `ScrollArea` only scrolls vertically, preventing users from reaching content that extends beyond the viewport width.
-
-### Solution
-Enable horizontal scrolling so users can pan right to see all content - a practical stopgap while the card width optimization is addressed separately.
+### Overview
+Add a "GO" button to TaskCard that quickly moves tasks to "UP_NEXT" status, complementing the existing checkbox that marks tasks as "DONE".
 
 ---
 
 ### Technical Changes
 
-**File: `src/components/FocusView.tsx`**
+**File: `src/components/TaskCard.tsx`**
 
-#### Change 1: Add horizontal ScrollBar to ScrollArea (Line 367)
+#### Change 1: Add a new handler function for "GO" action (after line 228)
 
-The current `ScrollArea` only includes a vertical scrollbar. Add a horizontal scrollbar to enable side-to-side panning:
-
-```tsx
-// Before (line 367-368)
-<ScrollArea className="h-[400px] lg:h-[500px]">
-  <div className="space-y-4">
-
-// After
-<ScrollArea className="h-[400px] lg:h-[500px]" type="always">
-  <div className="space-y-4 min-w-max">
-```
-
-Then at the closing of the ScrollArea, add the horizontal scrollbar component:
+Add a handler function that sets the task status to UP_NEXT:
 
 ```tsx
-// Before (around line ~465)
-</ScrollArea>
-
-// After - need to import ScrollBar and add it
-import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
-
-// Inside ScrollArea, after the content div closes:
-<ScrollBar orientation="horizontal" />
-</ScrollArea>
+const handleGoAction = () => {
+  if (!onStatusChange) return;
+  onStatusChange(task.id, 'UP_NEXT');
+};
 ```
 
-#### Change 2: Ensure content can expand horizontally
+#### Change 2: Add the "GO" button next to the checkbox (after line 276)
 
-Add `min-w-max` to the content container so it can grow beyond the viewport width, making horizontal scroll meaningful.
+Insert a new button between the checkbox and the status icon button:
+
+| Location | Current | New |
+|----------|---------|-----|
+| After checkbox (line 276-277) | `)}` then `<Button variant="ghost"...` | Add GO button before status icon button |
+
+```tsx
+{task.status !== 'UP_NEXT' && task.status !== 'DOING' && task.status !== 'DONE' && (
+  <Button
+    variant="ghost"
+    size="sm"
+    className="p-1 h-6 w-6 rounded-full bg-orange-500 hover:bg-orange-600 text-white"
+    onClick={(e) => {
+      e.stopPropagation();
+      handleGoAction();
+    }}
+    title="Move to Up Next"
+  >
+    <Play className="h-3 w-3" />
+  </Button>
+)}
+```
+
+The button:
+- Uses the `Play` icon (already imported) with orange styling to match "UP_NEXT" status color
+- Only shows when the task is NOT already in UP_NEXT, DOING, or DONE status (no point showing GO for tasks already in progress)
+- Calls `handleGoAction` which sets status to "UP_NEXT"
 
 ---
 
-### Update Debug Tracker
+### Visual Layout
 
-**File: `docs/DEBUG_TRACKER.md`**
+After implementation, the card header will show:
 
-Add to Attempted Fixes Log:
-
-| Issue ID | Attempt | Date | Outcome |
-|----------|---------|------|---------|
-| CLIP-01 | Enable horizontal scrolling with ScrollBar orientation="horizontal" | 2026-01-30 | PENDING |
+```text
+[Checkbox] [GO Button*] [Status Icon] Task Title...
+```
+*GO button only visible when task is in BACKLOG, READY, BLOCKED, etc.
 
 ---
 
@@ -64,6 +69,5 @@ Add to Attempted Fixes Log:
 
 | File | Action |
 |------|--------|
-| `src/components/FocusView.tsx` | Add horizontal ScrollBar and `min-w-max` to content |
-| `docs/DEBUG_TRACKER.md` | Log attempt |
+| `src/components/TaskCard.tsx` | Add handleGoAction function and GO button |
 
