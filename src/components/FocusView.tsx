@@ -20,7 +20,8 @@ import {
   Calendar,
   ListOrdered,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  CalendarPlus
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Task } from '@/types/task';
@@ -28,6 +29,8 @@ import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { DEFAULT_SCHEDULING_CONFIG } from '@/config/schedulingRules';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { useAuth } from '@/hooks/useAuth';
+import { useBatchScheduling } from '@/hooks/useBatchScheduling';
 
 interface FocusViewProps {
   tasks: Task[];
@@ -109,6 +112,9 @@ const FocusView: React.FC<FocusViewProps> = ({
   const [isTimelineExpanded, setIsTimelineExpanded] = useState(true);
   const today = new Date();
   const config = DEFAULT_SCHEDULING_CONFIG;
+  
+  const { user } = useAuth();
+  const { scheduleBatch, updateTasksWithSchedule, isScheduling } = useBatchScheduling();
 
   // Filter task groups
   const doingTasks = tasks.filter(t => t.status === 'DOING');
@@ -279,6 +285,35 @@ const FocusView: React.FC<FocusViewProps> = ({
     } catch (error) {
       console.error('Error completing task:', error);
       toast.error('Failed to complete task');
+    }
+  };
+
+  // Auto-schedule Up Next tasks into remaining day slots
+  const handleAutoSchedule = async () => {
+    if (!user?.id || upNextTasks.length === 0) return;
+    
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    
+    const result = await scheduleBatch(
+      upNextTasks.map(task => ({
+        id: task.id,
+        title: task.title,
+        category: task.category,
+        priority: task.priority,
+        estimate_minutes: task.estimate_minutes || 60,
+        due_date: task.due_date
+      })),
+      user.id,
+      timezone,
+      new Date()
+    );
+    
+    if (result.scheduled.length > 0) {
+      await updateTasksWithSchedule(
+        result.scheduled,
+        upNextTasks.map(t => t.id)
+      );
+      onTaskUpdate();
     }
   };
 
@@ -505,10 +540,33 @@ const FocusView: React.FC<FocusViewProps> = ({
           {/* Up Next Queue */}
           <Card>
             <CardHeader className="pb-3">
-              <div className="flex items-center gap-2">
-                <ListOrdered className="h-5 w-5 text-blue-500" />
-                <h2 className="text-lg font-semibold">Up Next</h2>
-                <Badge variant="secondary">{upNextTasks.length}</Badge>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <ListOrdered className="h-5 w-5 text-blue-500" />
+                  <h2 className="text-lg font-semibold">Up Next</h2>
+                  <Badge variant="secondary">{upNextTasks.length}</Badge>
+                </div>
+                {upNextTasks.length > 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleAutoSchedule}
+                    disabled={isScheduling}
+                    className="text-xs h-7"
+                  >
+                    {isScheduling ? (
+                      <>
+                        <Clock className="h-3 w-3 mr-1 animate-spin" />
+                        Scheduling...
+                      </>
+                    ) : (
+                      <>
+                        <CalendarPlus className="h-3 w-3 mr-1" />
+                        Schedule
+                      </>
+                    )}
+                  </Button>
+                )}
               </div>
               <p className="text-xs text-muted-foreground">
                 Drag to schedule or click Start
