@@ -1,128 +1,97 @@
 
-## Fix Layout Layering and Button Overlap in Phone Mode
 
-### Problem Summary
+## Fix Chat Thread Concurrency - Active Run Conflict
 
-Based on analysis of the screenshot and code structure:
+### Problem Identified
 
-1. **Vertical Space Competition**: The `TextInputBar` and `ModeToggle` are siblings of `ConversationPane` in `CommsConsole.tsx`. When in phone mode, `PhoneDialer` renders inside `ConversationPane` with its own full-height layout including a bottom TabsList. But `TextInputBar` still renders below, stealing vertical space and causing content to be pushed off-screen.
+The error "Can't add messages to thread while a run is active" occurs due to a race condition:
 
-2. **Stacking vs Scrolling**: Elements that should be in the same scrollable plane are instead stacking on top of each other, making it impossible to scroll to see all controls (like the disconnect button).
-
-3. **Header Button Overlap**: The collapse panel button (`PanelRightClose`) and sidebar toggle (`PanelLeft`) can appear in positions where they overlap with other UI elements.
-
----
+1. **User sends a message** - streaming mode starts, creates a run on OpenAI thread
+2. **Streaming returns no content** (AI wants to use tools, which streaming doesn't fully support)
+3. **Frontend fallback triggers** - calls `hybrid-assistant-api` with `stream: false`
+4. **Polling handler tries to add message to same thread** - but the streaming run is still active
+5. **OpenAI rejects the request** - can't add messages while a run is in progress
 
 ### Root Cause
 
-The layout doesn't properly account for phone mode's unique requirements. The `PhoneDialer` component is self-contained with its own bottom navigation (TabsList), but the parent `CommsConsole` still renders `TextInputBar` and `ModeToggle` below it, creating a layout where:
-
-- PhoneDialer expects to fill available height with its own internal scroll
-- TextInputBar + ModeToggle take ~100px of fixed height below
-- On small screens, this pushes PhoneDialer content (including call controls) out of view
+Neither `handleStreamingRequest` nor `handleAssistantRequest` in `hybrid-assistant-api` checks for or cancels existing active runs before adding a new message. The memory mentions this should exist, but it doesn't.
 
 ---
 
 ### Solution
 
-#### Fix 1: Conditional Layout in Phone Mode
+#### Fix 1: Add Run Cancellation Before Message Addition
 
-In `CommsConsole.tsx`, when `currentMode === 'phone'`, do NOT render `TextInputBar` and `ModeToggle` outside the ConversationPane. Instead, the PhoneDialer's internal TabsList serves as the mode selector (users can tap mode toggle from within). 
+**File: `supabase/functions/hybrid-assistant-api/index.ts`**
 
-However, per the user's feedback, the correct fix is NOT to hide elements but to ensure proper **scrolling and z-order**. All content should flow in a single scrollable plane.
+Create a helper function to check for and cancel active runs on a thread before proceeding:
 
-**File: `src/components/CommsConsole/ConversationPane.tsx`**
-
-Change the PhoneDialer container from `flex-shrink-0` to allow it to participate in natural document flow:
-
-| Line | Current | Change To |
-|------|---------|-----------|
-| 53 | `<div className="flex items-center justify-center py-4 flex-shrink-0">` | `<div className="flex items-center justify-center py-4">` |
-
-Additionally, wrap the entire ConversationPane content in a ScrollArea for phone mode to allow scrolling when content exceeds viewport:
-
-```tsx
-{mode === 'phone' && onPhoneCallStateChange && (
-  <ScrollArea className="flex-1">
-    <div className="flex flex-col items-center py-4">
-      <PhoneDialer
-        callState={phoneCallState}
-        onCallStateChange={onPhoneCallStateChange}
-      />
-    </div>
-  </ScrollArea>
-)}
+```typescript
+async function cancelActiveRuns(openaiThreadId: string): Promise<void> {
+  try {
+    // List all runs on the thread
+    const runsResponse = await fetch(
+      `https://api.openai.com/v1/threads/${openaiThreadId}/runs`,
+      {
+        headers: {
+          'Authorization': `Bearer ${openaiApiKey}`,
+          'OpenAI-Beta': 'assistants=v2'
+        }
+      }
+    );
+    
+    if (!runsResponse.ok) {
+      console.warn('[HYBRID] Failed to list runs:', await runsResponse.text());
+      return;
+    }
+    
+    const runsData = await runsResponse.json();
+    const activeRuns = runsData.data?.filter(
+      (run: any) => ['queued', 'in_progress', 'requires_action'].includes(run.status)
+    ) || [];
+    
+    if (activeRuns.length > 0) {
+      console.log(`[HYBRID] Found ${activeRuns.length} active run(s), cancelling...`);
+      
+      for (const run of activeRuns) {
+        const cancelResponse = await fetch(
+          `https://api.openai.com/v1/threads/${openaiThreadId}/runs/${run.id}/cancel`,
+          {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${openaiApiKey}`,
+              'OpenAI-Beta': 'assistants=v2'
+            }
+          }
+        );
+        
+        if (cancelResponse.ok) {
+          console.log(`[HYBRID] Cancelled run ${run.id}`);
+        } else {
+          console.warn(`[HYBRID] Failed to cancel run ${run.id}`);
+        }
+      }
+      
+      // Wait briefly for cancellation to propagate
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  } catch (error) {
+    console.warn('[HYBRID] Error checking/cancelling runs:', error);
+  }
+}
 ```
 
-#### Fix 2: Remove Fixed Positioning from TextInputBar in Phone Mode
+**Integrate into `handleAssistantRequest`** - Call `cancelActiveRuns` after getting the OpenAI thread ID but before adding the user message:
 
-**File: `src/components/CommsConsole/CommsConsole.tsx`**
+| Location | Change |
+|----------|--------|
+| After line 699 (thread creation/retrieval) | Add: `await cancelActiveRuns(openaiThreadId);` |
 
-Ensure `TextInputBar` and `ModeToggle` don't have any sticky/fixed positioning. Currently they don't have explicit fixed positioning, but they participate in a flex layout that treats them as fixed-height elements.
+**Integrate into `handleStreamingRequest`** - Same pattern:
 
-The solution is to wrap the entire content area (ConversationPane + TextInputBar + ModeToggle) in a single scrollable container when in phone mode, ensuring users can scroll to reach all controls.
-
-For all three layout modes (panel, embedded, overlay), wrap the main content in a ScrollArea when in phone mode:
-
-```tsx
-// In embedded mode (line ~159):
-<div className="flex-1 flex flex-col min-h-0 min-w-0">
-  {currentMode === 'phone' ? (
-    <ScrollArea className="flex-1">
-      <div className="flex flex-col min-h-full">
-        <AssistantHeader ... />
-        <ConversationPane ... />
-        <TextInputBar ... />
-        <ModeToggle ... />
-      </div>
-    </ScrollArea>
-  ) : (
-    <>
-      <AssistantHeader ... />
-      <ConversationPane ... />
-      <TextInputBar ... />
-      <ModeToggle ... />
-    </>
-  )}
-</div>
-```
-
-#### Fix 3: Header Button Position Correction
-
-**File: `src/components/CommsConsole/AssistantHeader.tsx`**
-
-The sidebar toggle button should remain on the LEFT side. The close button should be on the RIGHT side. Currently both are correctly positioned in separate div groups (left vs right). 
-
-The issue is likely that on mobile in certain modes, both `showSidebarToggle` and `showCloseButton` might be set in a way that causes UI clutter. Looking at the code:
-
-- Line 50-60: Sidebar toggle is in the LEFT group
-- Line 119-128: Close button is in a separate div on the RIGHT
-
-These are in separate containers so shouldn't overlap. However, reviewing the props passed in `CommsConsole.tsx`:
-
-| Mode | showSidebarToggle | showCloseButton |
-|------|-------------------|-----------------|
-| Panel | false | true |
-| Embedded mobile | true | false |
-| Overlay mobile | true | true |
-
-In overlay mode on mobile, BOTH are shown - sidebar toggle on left, close on right. This shouldn't cause overlap. 
-
-Check if the close button container needs z-index to ensure it renders above sibling elements:
-
-```tsx
-{showCloseButton && (
-  <Button
-    variant="ghost"
-    size="icon"
-    onClick={onClose}
-    className="h-8 w-8 z-10" // Add z-10 to ensure button is above other elements
-    aria-label="Collapse panel"
-  >
-    <PanelRightClose className="w-4 h-4" />
-  </Button>
-)}
-```
+| Location | Change |
+|----------|--------|
+| After line 395 (thread update) | Add: `await cancelActiveRuns(openaiThreadId);` |
 
 ---
 
@@ -130,20 +99,28 @@ Check if the close button container needs z-index to ensure it renders above sib
 
 | File | Changes |
 |------|---------|
-| `src/components/CommsConsole/ConversationPane.tsx` | Remove `flex-shrink-0` from phone dialer container; add ScrollArea wrapper for phone mode |
-| `src/components/CommsConsole/CommsConsole.tsx` | Wrap main content in ScrollArea for phone mode to enable vertical scrolling |
-| `src/components/CommsConsole/AssistantHeader.tsx` | Add `z-10` to close button to prevent overlap issues |
+| `supabase/functions/hybrid-assistant-api/index.ts` | Add `cancelActiveRuns()` helper function; call it before adding messages in both streaming and polling handlers |
+
+---
+
+### Why This Fixes the Issue
+
+1. **Before any message is added**, we check if there are active runs on the thread
+2. **If active runs exist**, we cancel them and wait briefly for cancellation to complete
+3. **Only then do we add the new message** - preventing the "thread has active run" error
+4. This handles:
+   - Streaming fallback to polling (same session)
+   - User rapidly sending messages
+   - Previous session that was interrupted/timed out
 
 ---
 
 ### Technical Notes
 
-**Scroll Behavior**
-- The PhoneDialer already has internal ScrollArea for its tabs (recents, contacts, etc.)
-- The outer scroll ensures the entire phone interface can be scrolled on small screens
-- `overscroll-behavior: contain` should be added to prevent scroll chaining
+**OpenAI Run States:**
+- `queued`, `in_progress`, `requires_action` = Active (must cancel)
+- `completed`, `failed`, `cancelled`, `expired` = Inactive (safe to proceed)
 
-**Z-Order Clarification**
-- All interactive elements remain in the same stacking context
-- Floating action buttons (if any) should use `z-50` for consistent elevation
-- Standard content should not use z-index to avoid stacking context conflicts
+**Cancellation Timing:**
+The 500ms delay after cancellation is conservative to ensure OpenAI's backend has processed the state change. This adds minimal latency since it only triggers when there's actually an active run.
+
