@@ -61,11 +61,14 @@ const DEFAULT_IRIS: Omit<Assistant, 'id' | 'user_id' | 'created_at' | 'updated_a
 // ============================================================
 // SSE Streaming Helpers
 // ============================================================
-function parseSSEEvents(chunk: string): Array<{ type: string; content?: string; threadId?: string }> {
-  const events: Array<{ type: string; content?: string; threadId?: string }> = [];
+function parseSSEEvents(chunk: string): Array<{ type: string; content?: string; threadId?: string; message?: string }> {
+  const events: Array<{ type: string; content?: string; threadId?: string; message?: string }> = [];
   const lines = chunk.split('\n');
   
   for (const line of lines) {
+    // Skip heartbeat comments (SSE keep-alive)
+    if (line.startsWith(':')) continue;
+    
     if (!line.startsWith('data: ')) continue;
     const data = line.slice(6).trim();
     if (!data) continue;
@@ -406,6 +409,9 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
                     ? { ...m, content: fullContent + `\n\n_Using ${parsed.content || 'tools'}..._` }
                     : m
                 ));
+              } else if (parsed.type === 'error') {
+                // Handle server-sent error events
+                throw new Error(parsed.message || 'Server error occurred');
               }
             }
           }
@@ -591,10 +597,15 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
     } catch (err) {
       console.error('Error sending message:', err);
+      const errorText = err instanceof Error ? err.message : 'Unknown error';
+      const isConnectionError = errorText.includes('connection') || errorText.includes('network') || errorText.includes('fetch');
+      
       const errorMessage: ConversationMessage = {
         id: `error-${Date.now()}`,
         role: 'system',
-        content: 'Failed to send message. Please try again.',
+        content: isConnectionError 
+          ? 'Connection interrupted. Please try again.'
+          : `Request failed: ${errorText}. Please try again.`,
         source: currentMode,
         assistant_id: null,
         created_at: new Date().toISOString(),

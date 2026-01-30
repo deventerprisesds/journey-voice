@@ -2,6 +2,22 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { normalizeDueDate, normalizeDateTime, getTodayInTimezone } from "../_shared/timezone.ts";
 
+// ============================================================================
+// UTILITY: Proper error message extraction
+// ============================================================================
+function extractErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === 'object' && error !== null && 'message' in error) {
+    return String((error as { message: unknown }).message);
+  }
+  if (typeof error === 'string') {
+    return error;
+  }
+  return JSON.stringify(error);
+}
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -765,7 +781,7 @@ async function getTasks(supabase: any, userId: string, args: any, timezone: stri
     };
   } catch (error) {
     console.error('[GET_TASKS] Error:', error);
-    return { success: false, error: String(error) };
+    return { success: false, error: extractErrorMessage(error) };
   }
 }
 
@@ -890,7 +906,7 @@ async function getTodayTasks(supabase: any, userId: string, timezone?: string): 
     };
   } catch (error) {
     console.error('[GET_TODAY_TASKS] Error:', error);
-    return { success: false, error: String(error) };
+    return { success: false, error: extractErrorMessage(error) };
   }
 }
 
@@ -931,7 +947,7 @@ async function createTask(supabase: any, userId: string, args: any): Promise<Exe
       message: `Created task "${data.title}" with ${data.priority} priority`
     };
   } catch (error) {
-    return { success: false, error: String(error) };
+    return { success: false, error: extractErrorMessage(error) };
   }
 }
 
@@ -961,7 +977,7 @@ async function updateTask(supabase: any, args: any): Promise<ExecuteToolResponse
       message: `Updated task "${data.title}"`
     };
   } catch (error) {
-    return { success: false, error: String(error) };
+    return { success: false, error: extractErrorMessage(error) };
   }
 }
 
@@ -1010,7 +1026,7 @@ async function rescheduleTask(supabase: any, args: any, timezone?: string): Prom
       message: `Rescheduled "${data.title}" to ${normalizedStartTime}`
     };
   } catch (error) {
-    return { success: false, error: String(error) };
+    return { success: false, error: extractErrorMessage(error) };
   }
 }
 
@@ -1065,7 +1081,7 @@ async function scheduleTask(supabase: any, args: any, timezone?: string): Promis
       message: `Scheduled "${data.title}" for ${normalizedStartTime}`
     };
   } catch (error) {
-    return { success: false, error: String(error) };
+    return { success: false, error: extractErrorMessage(error) };
   }
 }
 
@@ -1093,7 +1109,7 @@ async function unscheduleTask(supabase: any, args: any): Promise<ExecuteToolResp
       message: `Unscheduled "${data.title}" and moved to backlog`
     };
   } catch (error) {
-    return { success: false, error: String(error) };
+    return { success: false, error: extractErrorMessage(error) };
   }
 }
 
@@ -1356,7 +1372,7 @@ async function parseAndCreateTasks(
     };
   } catch (error) {
     console.error('[PARSE_AND_CREATE] Error:', error);
-    return { success: false, error: String(error) };
+    return { success: false, error: extractErrorMessage(error) };
   }
 }
 
@@ -1402,7 +1418,7 @@ async function sendEmail(supabase: any, userId: string, args: any, userProfile?:
       };
     }
   } catch (error) {
-    return { success: false, error: String(error) };
+    return { success: false, error: extractErrorMessage(error) };
   }
 }
 
@@ -1434,7 +1450,7 @@ async function sendSlackMessage(supabase: any, userId: string, args: any, userPr
       };
     }
   } catch (error) {
-    return { success: false, error: String(error) };
+    return { success: false, error: extractErrorMessage(error) };
   }
 }
 
@@ -1489,7 +1505,7 @@ async function createOutlookEvent(supabase: any, userId: string, args: any, user
       };
     }
   } catch (error) {
-    return { success: false, error: String(error) };
+    return { success: false, error: extractErrorMessage(error) };
   }
 }
 
@@ -1544,7 +1560,7 @@ async function createGoogleEvent(supabase: any, userId: string, args: any, userP
       };
     }
   } catch (error) {
-    return { success: false, error: String(error) };
+    return { success: false, error: extractErrorMessage(error) };
   }
 }
 
@@ -1616,7 +1632,7 @@ async function initiatePhoneCall(supabase: any, userId: string, args: any, inter
       };
     }
   } catch (error) {
-    return { success: false, error: String(error) };
+    return { success: false, error: extractErrorMessage(error) };
   }
 }
 
@@ -1768,7 +1784,7 @@ async function webSearch(args: WebSearchArgs, timezone?: string): Promise<Execut
     console.log('[WEB-SEARCH] ==================== END (ERROR) ====================');
     return { 
       success: false, 
-      error: String(error),
+      error: extractErrorMessage(error),
       message: "I encountered an error while searching."
     };
   }
