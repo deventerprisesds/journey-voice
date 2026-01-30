@@ -6,6 +6,7 @@ import {
   type TimeWindow,
 } from "@/config/schedulingRules";
 import { getBrowserTimezone } from "@/lib/timezone";
+import { getTimePartsInTimezone } from "@/lib/date";
 
 export type { SchedulingConfig, TimeWindow };
 
@@ -394,11 +395,13 @@ export function getWorkloadBalanceConfig(
 /**
  * Check if a time slot is within allowed time window(s)
  * Supports both single window (backward compatibility) and array of windows
+ * Now supports optional timezone parameter for timezone-aware matching
  */
 export function isTimeSlotAllowed(
   date: Date,
   timeWindow: keyof SchedulingConfig['timeWindows'] | string[],
-  config: SchedulingConfig = DEFAULT_SCHEDULING_CONFIG
+  config: SchedulingConfig = DEFAULT_SCHEDULING_CONFIG,
+  timezone?: string
 ): boolean {
   // Support both single window (backward compatibility) and array
   const windows = Array.isArray(timeWindow) ? timeWindow : [timeWindow];
@@ -409,7 +412,15 @@ export function isTimeSlotAllowed(
     if (!window) return false;
     
     const day = date.getDay();
-    const hour = date.getHours();
+    
+    // Use timezone-aware time extraction if timezone is provided
+    let hour: number;
+    if (timezone) {
+      const { hour: tzHour } = getTimePartsInTimezone(date.toISOString(), timezone);
+      hour = tzHour;
+    } else {
+      hour = date.getHours();
+    }
     
     return window.days.includes(day) && hour >= window.start && hour < window.end;
   });
@@ -418,12 +429,14 @@ export function isTimeSlotAllowed(
 /**
  * Get available time slots for a given day and time window(s)
  * Supports both single window (backward compatibility) and array of windows
+ * Now supports optional timezone parameter for timezone-aware slot generation
  */
 export function getAvailableTimeSlots(
   date: Date,
   timeWindow: keyof SchedulingConfig['timeWindows'] | string[],
   busySlots: { start: Date; end: Date }[],
-  config: SchedulingConfig = DEFAULT_SCHEDULING_CONFIG
+  config: SchedulingConfig = DEFAULT_SCHEDULING_CONFIG,
+  timezone?: string
 ): { start: Date; end: Date }[] {
   const windows = Array.isArray(timeWindow) ? timeWindow : [timeWindow];
   const allSlots: { start: Date; end: Date }[] = [];

@@ -181,12 +181,45 @@ const DailyScheduleView: React.FC<DailyScheduleViewProps> = ({
   };
 
   const formatTime = (dateString: string) => {
-    return format(parseISO(dateString), 'h:mm a');
+    // Use timezone-aware formatting if available
+    const tz = schedulingConfig?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+    try {
+      return new Date(dateString).toLocaleTimeString('en-US', {
+        timeZone: tz,
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      });
+    } catch {
+      return format(parseISO(dateString), 'h:mm a');
+    }
   };
 
   const handleTimeSlotClick = (date: Date, hour: number, minute: number) => {
     setCreateAtTime({ hour, minute });
     setIsCreating(true);
+  };
+
+  // Handle task rescheduling from drag-and-drop
+  const handleTaskReschedule = async (taskId: string, newStartTime: string, newEndTime: string) => {
+    try {
+      const { error } = await supabase
+        .from('tasks')
+        .update({ 
+          start_time: newStartTime,
+          end_time: newEndTime,
+          is_scheduled: true,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', taskId);
+
+      if (error) throw error;
+      toast.success('Task rescheduled');
+      onTaskUpdate();
+    } catch (error) {
+      console.error('Error rescheduling task:', error);
+      toast.error('Failed to reschedule task');
+    }
   };
 
   const handleTaskStatusChange = async (taskId: string, newStatus: Task['status']) => {
@@ -306,7 +339,9 @@ const DailyScheduleView: React.FC<DailyScheduleViewProps> = ({
                     onTimeSlotClick={handleTimeSlotClick}
                     onTaskClick={(task) => console.log('Task clicked:', task)}
                     onStatusChange={handleTaskStatusChange}
+                    onTaskReschedule={handleTaskReschedule}
                     schedulingConfig={schedulingConfig}
+                    userTimezone={schedulingConfig?.timezone}
                     className="min-w-[300px]"
                   />
                 </ScrollArea>
