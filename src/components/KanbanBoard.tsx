@@ -112,6 +112,7 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
   const [isGeneratingSchedule, setIsGeneratingSchedule] = useState(false);
   const [isCreationModalOpen, setIsCreationModalOpen] = useState(false);
   const [filteredTasks, setFilteredTasks] = useState<Task[]>([]);
+  const [isFiltering, setIsFiltering] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   const [quickAddColumnId, setQuickAddColumnId] = useState<string | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -576,8 +577,8 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
   };
 
   const getTasksByStatus = (status: Task['status']) => {
-    // Use filtered tasks if filters are active, otherwise use all tasks
-    const tasksToFilter = filteredTasks.length > 0 ? filteredTasks : tasks;
+    // Use filtered tasks if filtering is active, otherwise use all tasks
+    const tasksToFilter = isFiltering ? filteredTasks : tasks;
     let filtered = tasksToFilter.filter(task => mapTaskStatusForColumns(task) === status);
     
     // Hide completed tasks if toggle is off
@@ -643,8 +644,9 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
     }
   };
 
-  const handleFilteredTasksChange = (filtered: Task[]) => {
+  const handleFilteredTasksChange = (filtered: Task[], isActive: boolean) => {
     setFilteredTasks(filtered);
+    setIsFiltering(isActive);
   };
 
   const handleColumnUpdate = (updatedColumn: Column) => {
