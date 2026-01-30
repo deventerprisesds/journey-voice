@@ -62,11 +62,12 @@ const TabbedKanbanBoard: React.FC<TabbedKanbanBoardProps> = ({
   // Filter tasks by category tab
   const getFilteredTasks = (tab: CategoryTab): Task[] => {
     if (tab === 'today') {
-      // Today tab: tasks due today OR in active workflow (UP_NEXT, DOING)
+      // Today tab: tasks due today OR scheduled today OR in active workflow (UP_NEXT, DOING)
       return normalizedTasks.filter(task => {
         const isDueToday = task.due_date && isToday(parseISO(task.due_date));
+        const isScheduledToday = task.start_time && isToday(parseISO(task.start_time));
         const isActive = ['UP_NEXT', 'DOING'].includes(task.status);
-        return isDueToday || isActive;
+        return isDueToday || isScheduledToday || isActive;
       });
     }
 

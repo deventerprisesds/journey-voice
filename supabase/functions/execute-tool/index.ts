@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { normalizeDueDate, normalizeDateTime, getTodayInTimezone } from "../_shared/timezone.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -951,25 +952,34 @@ async function updateTask(supabase: any, args: any): Promise<ExecuteToolResponse
   }
 }
 
-async function rescheduleTask(supabase: any, args: any): Promise<ExecuteToolResponse> {
+async function rescheduleTask(supabase: any, args: any, timezone?: string): Promise<ExecuteToolResponse> {
   if (!args.task_id) return { success: false, error: "Task ID is required" };
   if (!args.new_date) return { success: false, error: "New date is required" };
 
+  const tz = timezone || 'America/New_York';
+
   try {
-    // Parse the new date and optional time
-    let startTime = args.new_date;
+    // Parse the new date and optional time, normalizing to UTC
+    let startTimeRaw = args.new_date;
     if (args.new_start_time) {
-      startTime = `${args.new_date}T${args.new_start_time}`;
+      startTimeRaw = `${args.new_date}T${args.new_start_time}`;
     }
     
+    // Normalize the datetime to proper UTC (treats naive datetime as local to user's tz)
+    const normalizedStartTime = normalizeDateTime(startTimeRaw, tz);
+    console.log(`[RESCHEDULE] Raw: ${startTimeRaw} → Normalized: ${normalizedStartTime} (tz: ${tz})`);
+    
     const updateData: any = {
-      start_time: startTime,
+      start_time: normalizedStartTime,
       is_scheduled: true
     };
     
-    // Optionally update due_date if requested
-    if (args.update_due_date) {
-      updateData.due_date = args.new_date;
+    // Always sync due_date with scheduled date (unless explicitly disabled)
+    // This ensures "scheduled for tomorrow" shows as tomorrow's due date
+    if (args.update_due_date !== false) {
+      const normalizedDueDate = normalizeDueDate(args.new_date, tz);
+      updateData.due_date = normalizedDueDate;
+      console.log(`[RESCHEDULE] Due date normalized: ${args.new_date} → ${normalizedDueDate}`);
     }
 
     const { data, error } = await supabase
@@ -984,36 +994,44 @@ async function rescheduleTask(supabase: any, args: any): Promise<ExecuteToolResp
     return { 
       success: true, 
       result: { task: data },
-      message: `Rescheduled "${data.title}" to ${startTime}`
+      message: `Rescheduled "${data.title}" to ${normalizedStartTime}`
     };
   } catch (error) {
     return { success: false, error: String(error) };
   }
 }
 
-async function scheduleTask(supabase: any, args: any): Promise<ExecuteToolResponse> {
+async function scheduleTask(supabase: any, args: any, timezone?: string): Promise<ExecuteToolResponse> {
   if (!args.task_id) return { success: false, error: "Task ID is required" };
 
+  const tz = timezone || 'America/New_York';
+
   try {
-    const today = new Date().toISOString().split('T')[0];
+    const today = getTodayInTimezone(tz);
     const dateStr = args.date || today;
     
-    let startTime = dateStr;
+    let startTimeRaw = dateStr;
     if (args.start_time) {
-      startTime = `${dateStr}T${args.start_time}`;
+      startTimeRaw = `${dateStr}T${args.start_time}`;
     }
     
+    // Normalize to proper UTC
+    const normalizedStartTime = normalizeDateTime(startTimeRaw, tz);
+    console.log(`[SCHEDULE_TASK] Raw: ${startTimeRaw} → Normalized: ${normalizedStartTime} (tz: ${tz})`);
+    
     const updateData: any = {
-      start_time: startTime,
+      start_time: normalizedStartTime,
       is_scheduled: true,
-      status: 'TODO'
+      status: 'TODO',
+      // Sync due_date to the scheduled date
+      due_date: normalizeDueDate(dateStr, tz)
     };
     
     if (args.duration_minutes) {
       updateData.estimate_minutes = args.duration_minutes;
       // Calculate end_time if start_time and duration provided
-      if (args.start_time) {
-        const start = new Date(startTime);
+      if (args.start_time && normalizedStartTime) {
+        const start = new Date(normalizedStartTime);
         const end = new Date(start.getTime() + args.duration_minutes * 60000);
         updateData.end_time = end.toISOString();
       }
@@ -1031,7 +1049,7 @@ async function scheduleTask(supabase: any, args: any): Promise<ExecuteToolRespon
     return { 
       success: true, 
       result: { task: data },
-      message: `Scheduled "${data.title}" for ${startTime}`
+      message: `Scheduled "${data.title}" for ${normalizedStartTime}`
     };
   } catch (error) {
     return { success: false, error: String(error) };
@@ -1160,20 +1178,30 @@ async function parseAndCreateTasks(
       return { success: false, error: "No tasks could be parsed from the input. Please try rephrasing." };
     }
 
-    // 5. Create tasks in database
+    // 5. Create tasks in database with normalized dates
     const createdTasks: any[] = [];
     for (const task of tasks) {
+      // Normalize due_date to end-of-day in user's timezone
+      const rawDueDate = task.due_date || targetDate || null;
+      const normalizedDueDate = rawDueDate ? normalizeDueDate(rawDueDate, tz) : null;
+      
+      // Normalize start_time/end_time if provided (treat as local to user's timezone)
+      const normalizedStartTime = task.start_time ? normalizeDateTime(task.start_time, tz) : null;
+      const normalizedEndTime = task.end_time ? normalizeDateTime(task.end_time, tz) : null;
+      
+      console.log(`[PARSE_AND_CREATE] Task "${task.title}" dates: raw_due=${rawDueDate} → ${normalizedDueDate}, start=${task.start_time} → ${normalizedStartTime}`);
+      
       const taskData = {
         title: task.title,
         description: task.description || null,
         priority: (task.priority || 'MEDIUM').toUpperCase(),
         category: (task.category || 'LIFE').toUpperCase(),
         status: task.status || 'BACKLOG',
-        due_date: task.due_date || (targetDate ? `${targetDate}T23:59:59` : null),
-        start_time: task.start_time || null,
-        end_time: task.end_time || null,
+        due_date: normalizedDueDate,
+        start_time: normalizedStartTime,
+        end_time: normalizedEndTime,
         estimate_minutes: task.estimate_minutes || task.estimatedDuration || 60,
-        is_scheduled: !!(task.start_time && task.end_time),
+        is_scheduled: !!(normalizedStartTime && normalizedEndTime),
         board_id: board.id,
         user_id: userId
       };
@@ -1234,15 +1262,23 @@ async function parseAndCreateTasks(
           const batchResult = await batchResponse.json();
           console.log('[PARSE_AND_CREATE] Batch scheduler result:', batchResult);
           
-          // Apply scheduled times to tasks
+          // Apply scheduled times to tasks (already normalized by batch-calendar-scheduler)
           for (const slot of batchResult.scheduled || []) {
             const task = unscheduledTasks[slot.taskIndex];
             if (task && slot.start_time && slot.end_time) {
+              // The batch scheduler now returns properly normalized UTC times
+              // Also sync due_date to match the scheduled date
+              const scheduledDate = slot.start_time.split('T')[0];
+              const syncedDueDate = normalizeDueDate(scheduledDate, tz);
+              
+              console.log(`[PARSE_AND_CREATE] Applying schedule: task="${task.title}", start=${slot.start_time}, synced_due=${syncedDueDate}`);
+              
               const { error: updateError } = await supabase
                 .from('tasks')
                 .update({
                   start_time: slot.start_time,
                   end_time: slot.end_time,
+                  due_date: syncedDueDate, // Sync due_date with scheduled date
                   is_scheduled: true,
                   status: 'TODO'
                 })
