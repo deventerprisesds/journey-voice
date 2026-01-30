@@ -335,8 +335,16 @@ function getCurrentTimeString(timezone: string = 'America/New_York'): string {
 }
 
 // ============================================================
-// PHASE 2 OPTIMIZATION: SSE Streaming Support
+// PHASE 2 OPTIMIZATION: SSE Streaming with Tool Execution
 // ============================================================
+
+interface StreamProcessingResult {
+  content: string;
+  requiresAction: boolean;
+  toolCalls: ToolCall[];
+  runId: string;
+}
+
 async function handleStreamingRequest(
   userInput: string,
   userId: string,
@@ -478,7 +486,7 @@ async function handleStreamingRequest(
     runPayload.tools = toolDefinitions;
   }
   
-  const runResponse = await fetch(`https://api.openai.com/v1/threads/${openaiThreadId}/runs`, {
+  const initialRunResponse = await fetch(`https://api.openai.com/v1/threads/${openaiThreadId}/runs`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${openaiApiKey}`,
@@ -488,73 +496,219 @@ async function handleStreamingRequest(
     body: JSON.stringify(runPayload)
   });
   
-  if (!runResponse.ok) {
-    throw new Error(`Failed to create streaming run: ${await runResponse.text()}`);
+  if (!initialRunResponse.ok) {
+    throw new Error(`Failed to create streaming run: ${await initialRunResponse.text()}`);
   }
   
-  // Create a transform stream to process OpenAI events and forward to client
+  // Create manual stream to client
+  const { readable, writable } = new TransformStream();
+  const writer = writable.getWriter();
   const encoder = new TextEncoder();
-  const decoder = new TextDecoder();
   
-  let fullContent = '';
-  let currentRunId = '';
-  let requiresAction = false;
-  let pendingToolCalls: ToolCall[] = [];
-  
-  const transformStream = new TransformStream({
-    async transform(chunk, controller) {
-      const text = decoder.decode(chunk);
-      const lines = text.split('\n');
+  // Helper function to process a streaming run response
+  async function processStreamingRun(
+    runResponse: Response,
+    writer: WritableStreamDefaultWriter<Uint8Array>,
+    encoder: TextEncoder
+  ): Promise<StreamProcessingResult> {
+    const decoder = new TextDecoder();
+    const reader = runResponse.body?.getReader();
+    
+    let content = '';
+    let requiresAction = false;
+    let toolCalls: ToolCall[] = [];
+    let runId = '';
+    let buffer = '';
+    
+    if (!reader) {
+      console.error('[HYBRID-STREAM] No reader available');
+      return { content, requiresAction, toolCalls, runId };
+    }
+    
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      
+      // Append new data to buffer and process complete lines
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      
+      // Keep the last potentially incomplete line in the buffer
+      buffer = lines.pop() || '';
       
       for (const line of lines) {
         if (!line.startsWith('data: ')) continue;
         
-        const data = line.slice(6);
-        if (data === '[DONE]') {
-          controller.enqueue(encoder.encode(`data: {"type":"done","content":"${fullContent.replace(/"/g, '\\"').replace(/\n/g, '\\n')}","threadId":"${openaiThreadId}"}\n\n`));
-          continue;
-        }
+        const data = line.slice(6).trim();
+        if (data === '[DONE]') continue;
+        if (!data) continue;
         
         try {
           const event = JSON.parse(data);
           
-          // Handle different event types
+          // Capture run ID and status
           if (event.object === 'thread.run') {
-            currentRunId = event.id;
+            runId = event.id;
+            console.log(`[HYBRID-STREAM] Run ${runId} status: ${event.status}`);
+            
             if (event.status === 'requires_action') {
               requiresAction = true;
-              pendingToolCalls = event.required_action?.submit_tool_outputs?.tool_calls || [];
+              toolCalls = event.required_action?.submit_tool_outputs?.tool_calls || [];
+              console.log(`[HYBRID-STREAM] Requires action: ${toolCalls.length} tool call(s)`);
             }
           }
           
+          // Stream text deltas to client immediately
           if (event.object === 'thread.message.delta') {
             const delta = event.delta?.content?.[0]?.text?.value || '';
             if (delta) {
-              fullContent += delta;
-              controller.enqueue(encoder.encode(`data: {"type":"delta","content":"${delta.replace(/"/g, '\\"').replace(/\n/g, '\\n')}"}\n\n`));
+              content += delta;
+              const escapedDelta = delta.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t');
+              await writer.write(encoder.encode(`data: {"type":"delta","content":"${escapedDelta}"}\n\n`));
             }
           }
           
+          // Notify client about tool calls in progress
           if (event.object === 'thread.run.step.delta') {
-            // Tool call streaming - inform frontend
             const toolDelta = event.delta?.step_details?.tool_calls?.[0];
-            if (toolDelta) {
-              controller.enqueue(encoder.encode(`data: {"type":"tool_call","name":"${toolDelta.function?.name || 'unknown'}"}\n\n`));
+            if (toolDelta?.function?.name) {
+              await writer.write(encoder.encode(`data: {"type":"tool_call","name":"${toolDelta.function.name}"}\n\n`));
             }
           }
           
         } catch (e) {
-          // Skip malformed JSON
+          // Skip malformed JSON - common during streaming
         }
       }
     }
-  });
+    
+    // Process any remaining buffer
+    if (buffer.startsWith('data: ')) {
+      const data = buffer.slice(6).trim();
+      if (data && data !== '[DONE]') {
+        try {
+          const event = JSON.parse(data);
+          if (event.object === 'thread.run' && event.status === 'requires_action') {
+            requiresAction = true;
+            toolCalls = event.required_action?.submit_tool_outputs?.tool_calls || [];
+            runId = event.id;
+          }
+        } catch (e) {}
+      }
+    }
+    
+    return { content, requiresAction, toolCalls, runId };
+  }
   
-  // Note: For tool calls, we need to handle them synchronously. 
-  // This initial implementation streams text-only responses.
-  // Tool calls will fall back to polling mode for now.
+  // Start background processing
+  (async () => {
+    try {
+      let fullContent = '';
+      let currentRunId = '';
+      let toolExecutionCount = 0;
+      const maxToolIterations = 10; // Prevent infinite tool loops
+      
+      // Process the initial streaming run
+      console.log('[HYBRID-STREAM] Processing initial streaming run...');
+      let result = await processStreamingRun(initialRunResponse, writer, encoder);
+      fullContent += result.content;
+      currentRunId = result.runId;
+      
+      // Tool execution loop - handle requires_action within the stream
+      while (result.requiresAction && result.toolCalls.length > 0 && toolExecutionCount < maxToolIterations) {
+        toolExecutionCount++;
+        console.log(`[HYBRID-STREAM] Tool iteration ${toolExecutionCount}: Processing ${result.toolCalls.length} tool call(s)`);
+        
+        // Notify client that we're executing tools
+        await writer.write(encoder.encode(`data: {"type":"tool_execution","count":${result.toolCalls.length}}\n\n`));
+        
+        // Execute all tool calls in parallel
+        const toolOutputs = await Promise.all(
+          result.toolCalls.map(async (toolCall) => {
+            // Override web_search query with verbatim user input (same as polling mode)
+            if (toolCall.function.name === 'web_search') {
+              const originalArgs = JSON.parse(toolCall.function.arguments || '{}');
+              console.log(`[HYBRID-STREAM] web_search - overriding query with userInput`);
+              const modifiedToolCall = {
+                ...toolCall,
+                function: {
+                  ...toolCall.function,
+                  arguments: JSON.stringify({ ...originalArgs, query: userInput })
+                }
+              };
+              return {
+                tool_call_id: toolCall.id,
+                output: await executeToolCall(modifiedToolCall, userId, undefined, userTimezone)
+              };
+            }
+            
+            return {
+              tool_call_id: toolCall.id,
+              output: await executeToolCall(toolCall, userId, undefined, userTimezone)
+            };
+          })
+        );
+        
+        console.log(`[HYBRID-STREAM] Submitting ${toolOutputs.length} tool output(s) with streaming...`);
+        
+        // Submit tool outputs WITH streaming enabled to continue the response
+        const submitResponse = await fetch(
+          `https://api.openai.com/v1/threads/${openaiThreadId}/runs/${currentRunId}/submit_tool_outputs`,
+          {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${openaiApiKey}`,
+              'Content-Type': 'application/json',
+              'OpenAI-Beta': 'assistants=v2'
+            },
+            body: JSON.stringify({
+              tool_outputs: toolOutputs,
+              stream: true  // Continue streaming after tool submission
+            })
+          }
+        );
+        
+        if (!submitResponse.ok) {
+          const errorText = await submitResponse.text();
+          console.error('[HYBRID-STREAM] Failed to submit tool outputs:', errorText);
+          throw new Error(`Failed to submit tool outputs: ${errorText}`);
+        }
+        
+        // Process the continued stream from tool output submission
+        result = await processStreamingRun(submitResponse, writer, encoder);
+        fullContent += result.content;
+        
+        // Update run ID if a new one was provided
+        if (result.runId) {
+          currentRunId = result.runId;
+        }
+      }
+      
+      if (toolExecutionCount >= maxToolIterations) {
+        console.warn('[HYBRID-STREAM] Max tool iterations reached, stopping loop');
+      }
+      
+      // Send final done event with complete content
+      const escapedContent = fullContent.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t');
+      await writer.write(encoder.encode(`data: {"type":"done","content":"${escapedContent}","threadId":"${openaiThreadId}"}\n\n`));
+      
+      console.log(`[HYBRID-STREAM] Completed. Total content length: ${fullContent.length}, Tool iterations: ${toolExecutionCount}`);
+      
+    } catch (error) {
+      console.error('[HYBRID-STREAM] Error:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const escapedError = errorMessage.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
+      await writer.write(encoder.encode(`data: {"type":"error","message":"${escapedError}"}\n\n`));
+    } finally {
+      try {
+        await writer.close();
+      } catch (e) {
+        console.warn('[HYBRID-STREAM] Error closing writer:', e);
+      }
+    }
+  })();
   
-  return new Response(runResponse.body?.pipeThrough(transformStream), {
+  return new Response(readable, {
     headers: {
       ...corsHeaders,
       'Content-Type': 'text/event-stream',
