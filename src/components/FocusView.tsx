@@ -400,41 +400,43 @@ const FocusView: React.FC<FocusViewProps> = ({
                                         onClick={(e) => e.stopPropagation()}
                                         className="mt-0.5 flex-shrink-0"
                                       />
-                                      <div className="flex-1 min-w-0 overflow-hidden">
-                                        <div className="flex items-center gap-2">
-                                          <span className="text-xs text-muted-foreground flex-shrink-0">
-                                            {task.start_time && format(parseISO(task.start_time), 'h:mm a')}
-                                          </span>
-                                          <span className={cn("font-medium text-sm truncate", task.status === 'DONE' && 'line-through text-muted-foreground')}>
-                                            {task.title}
-                                          </span>
+                                      <div className="flex-1 min-w-0">
+                                        <div className="flex items-center justify-between gap-2">
+                                          <div className="flex items-center gap-2 min-w-0 flex-1">
+                                            <span className="text-xs text-muted-foreground flex-shrink-0">
+                                              {task.start_time && format(parseISO(task.start_time), 'h:mm a')}
+                                            </span>
+                                            <span className={cn("font-medium text-sm truncate", task.status === 'DONE' && 'line-through text-muted-foreground')}>
+                                              {task.title}
+                                            </span>
+                                          </div>
+                                          {task.status !== 'DOING' && task.status !== 'DONE' && (
+                                            <Button
+                                              variant="ghost"
+                                              size="icon"
+                                              className="h-7 w-7 flex-shrink-0 hover:bg-green-100 dark:hover:bg-green-900"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleStartTask(task.id);
+                                              }}
+                                              title="Start working on this task"
+                                            >
+                                              <Play className="h-4 w-4 text-green-600" />
+                                            </Button>
+                                          )}
                                         </div>
                                         <div className="flex items-center gap-2 mt-1 flex-wrap">
-                                          <Badge variant="outline" className={cn("text-xs flex-shrink-0", categoryColors[task.category])}>
+                                          <Badge variant="outline" className={cn("text-xs", categoryColors[task.category])}>
                                             {task.category.toLowerCase()}
                                           </Badge>
                                           {task.estimate_minutes && (
-                                            <span className="text-xs text-muted-foreground flex items-center gap-1 flex-shrink-0">
+                                            <span className="text-xs text-muted-foreground flex items-center gap-1">
                                               <Clock className="h-3 w-3" />
                                               {task.estimate_minutes}m
                                             </span>
                                           )}
                                         </div>
                                       </div>
-                                      {task.status !== 'DOING' && task.status !== 'DONE' && (
-                                        <Button
-                                          variant="ghost"
-                                          size="icon"
-                                          className="h-8 w-8 flex-shrink-0 hover:bg-green-100 dark:hover:bg-green-900"
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            handleStartTask(task.id);
-                                          }}
-                                          title="Start working on this task"
-                                        >
-                                          <Play className="h-4 w-4 text-green-600" />
-                                        </Button>
-                                      )}
                                     </div>
                                   </div>
                                 ))
@@ -547,27 +549,25 @@ const FocusView: React.FC<FocusViewProps> = ({
                   <h2 className="text-lg font-semibold">Up Next</h2>
                   <Badge variant="secondary">{upNextTasks.length}</Badge>
                 </div>
-                {upNextTasks.length > 0 && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleAutoSchedule}
-                    disabled={isScheduling}
-                    className="text-xs h-7"
-                  >
-                    {isScheduling ? (
-                      <>
-                        <Clock className="h-3 w-3 mr-1 animate-spin" />
-                        Scheduling...
-                      </>
-                    ) : (
-                      <>
-                        <CalendarPlus className="h-3 w-3 mr-1" />
-                        Schedule
-                      </>
-                    )}
-                  </Button>
-                )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleAutoSchedule}
+                  disabled={isScheduling || upNextTasks.length === 0}
+                  className="text-xs h-7"
+                >
+                  {isScheduling ? (
+                    <>
+                      <Clock className="h-3 w-3 mr-1 animate-spin" />
+                      Scheduling...
+                    </>
+                  ) : (
+                    <>
+                      <CalendarPlus className="h-3 w-3 mr-1" />
+                      Schedule
+                    </>
+                  )}
+                </Button>
               </div>
               <p className="text-xs text-muted-foreground">
                 Drag to schedule or click Start
