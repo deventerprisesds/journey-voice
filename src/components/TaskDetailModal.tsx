@@ -493,15 +493,21 @@ const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
                   <SelectValue />
                 </SelectTrigger>
                     <SelectContent>
+                      {/* Workflow statuses */}
                       <SelectItem value="BACKLOG">Backlog</SelectItem>
                       <SelectItem value="TODO">To Do</SelectItem>
-                      <SelectItem value="DOING">In Progress</SelectItem>
+                      <SelectItem value="READY">Ready</SelectItem>
+                      <SelectItem value="UP_NEXT">Up Next</SelectItem>
+                      <SelectItem value="DOING">Doing</SelectItem>
                       <SelectItem value="DONE">Done</SelectItem>
-                      <SelectItem value="LIFE">Life Lane</SelectItem>
-                      <SelectItem value="CAREER">Career Lane</SelectItem>
-                      <SelectItem value="VENTURES">Ventures Lane</SelectItem>
-                      <SelectItem value="EDUCATION">Education Lane</SelectItem>
-                      <SelectItem value="PROF_EDUCATION">Prof Education Lane</SelectItem>
+                      <SelectItem value="BLOCKED">Blocked</SelectItem>
+                      <SelectItem value="PLANNING">Planning</SelectItem>
+                      {/* Category backlogs */}
+                      <SelectItem value="LIFE">Life Backlog</SelectItem>
+                      <SelectItem value="CAREER">Career Backlog</SelectItem>
+                      <SelectItem value="VENTURES">Ventures Backlog</SelectItem>
+                      <SelectItem value="EDUCATION">Education Backlog</SelectItem>
+                      <SelectItem value="PROF_EDUCATION">Prof Education Backlog</SelectItem>
                     </SelectContent>
               </Select>
             </div>
