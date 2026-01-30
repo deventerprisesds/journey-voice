@@ -36,7 +36,7 @@ interface FilterState {
 
 interface TaskFiltersProps {
   tasks: Task[];
-  onFilteredTasksChange: (filteredTasks: Task[]) => void;
+  onFilteredTasksChange: (filteredTasks: Task[], isActive: boolean) => void;
   className?: string;
 }
 
@@ -88,8 +88,9 @@ const TaskFilters: React.FC<TaskFiltersProps> = ({
 
   // Apply filters whenever filters or tasks change
   useEffect(() => {
+    const isActive = getActiveFiltersCount() > 0;
     const filteredTasks = applyFilters(tasks, filters);
-    onFilteredTasksChange(filteredTasks);
+    onFilteredTasksChange(filteredTasks, isActive);
   }, [tasks, filters, onFilteredTasksChange]);
 
   const applyFilters = (tasks: Task[], filters: FilterState): Task[] => {
