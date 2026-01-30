@@ -25,7 +25,11 @@ export const toolDefinitions = [
       properties: {
         query: { type: "string", description: "Search query or keywords" },
         time_filter: { type: "string", description: "Time period like 'past week', 'yesterday'" },
-        status: { type: "string", enum: ["BACKLOG", "TODO", "DOING", "DONE"] }
+        status: { 
+          type: "string", 
+          enum: ["BACKLOG", "TODO", "READY", "UP_NEXT", "DOING", "DONE", "BLOCKED", "PLANNING"],
+          description: "Task workflow status. BACKLOG=not yet planned, TODO=planned but not started, READY=ready to work on, UP_NEXT=queued to start soon, DOING=in progress, DONE=completed, BLOCKED=waiting on something, PLANNING=needs more detail"
+        }
       }
     }
   },
@@ -45,7 +49,12 @@ export const toolDefinitions = [
         title: { type: "string", description: "Task title" },
         description: { type: "string", description: "Task description" },
         priority: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "URGENT"] },
-        category: { type: "string", enum: ["LIFE", "CAREER", "VENTURES", "EDUCATION"] }
+        category: { type: "string", enum: ["LIFE", "CAREER", "VENTURES", "EDUCATION"] },
+        status: { 
+          type: "string", 
+          enum: ["BACKLOG", "TODO", "READY", "UP_NEXT", "DOING", "DONE", "BLOCKED", "PLANNING"],
+          description: "Task workflow status. BACKLOG=not yet planned, TODO=planned but not started, READY=ready to work on, UP_NEXT=queued to start soon, DOING=in progress, DONE=completed, BLOCKED=waiting on something, PLANNING=needs more detail. Defaults to BACKLOG."
+        }
       },
       required: ["title"]
     }
@@ -60,7 +69,11 @@ export const toolDefinitions = [
         task_id: { type: "string", description: "ID of the task to update" },
         title: { type: "string" },
         description: { type: "string" },
-        status: { type: "string", enum: ["BACKLOG", "TODO", "DOING", "DONE"] },
+        status: { 
+          type: "string", 
+          enum: ["BACKLOG", "TODO", "READY", "UP_NEXT", "DOING", "DONE", "BLOCKED", "PLANNING"],
+          description: "Task workflow status. BACKLOG=not yet planned, TODO=planned but not started, READY=ready to work on, UP_NEXT=queued to start soon, DOING=in progress, DONE=completed, BLOCKED=waiting on something, PLANNING=needs more detail"
+        },
         priority: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "URGENT"] },
         category: { type: "string", enum: ["LIFE", "CAREER", "VENTURES", "EDUCATION"] }
       },
