@@ -1,5 +1,6 @@
 import React from 'react';
 import { cn } from '@/lib/utils';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import VoiceOrb from './VoiceOrb';
 import PhoneDialer from './PhoneDialer';
 import TranscriptScroll from './TranscriptScroll';
@@ -48,22 +49,26 @@ const ConversationPane: React.FC<ConversationPaneProps> = ({
         </div>
       )}
 
-      {/* Phone dialer area */}
+      {/* Phone dialer area - wrapped in ScrollArea for proper scrolling */}
       {mode === 'phone' && onPhoneCallStateChange && (
-        <div className="flex items-center justify-center py-4 flex-shrink-0">
-          <PhoneDialer
-            callState={phoneCallState}
-            onCallStateChange={onPhoneCallStateChange}
-          />
-        </div>
+        <ScrollArea className="flex-1 min-h-0">
+          <div className="flex flex-col items-center py-4">
+            <PhoneDialer
+              callState={phoneCallState}
+              onCallStateChange={onPhoneCallStateChange}
+            />
+          </div>
+        </ScrollArea>
       )}
 
-      {/* Transcript area */}
-      <TranscriptScroll
-        messages={messages}
-        isLoading={isLoading}
-        className="flex-1 min-h-0"
-      />
+      {/* Transcript area - only show when not in phone mode */}
+      {mode !== 'phone' && (
+        <TranscriptScroll
+          messages={messages}
+          isLoading={isLoading}
+          className="flex-1 min-h-0"
+        />
+      )}
     </div>
   );
 };

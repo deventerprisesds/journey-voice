@@ -121,7 +121,7 @@ const AssistantHeader: React.FC<AssistantHeaderProps> = ({
           variant="ghost"
           size="icon"
           onClick={onClose}
-          className="h-8 w-8"
+          className="h-8 w-8 z-10 relative"
           aria-label="Collapse panel"
         >
           <PanelRightClose className="w-4 h-4" />
