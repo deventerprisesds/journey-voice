@@ -9,7 +9,7 @@ Track all issues, attempted fixes, outcomes, and lessons learned to ensure progr
 
 | ID | Problem | Status | Root Cause |
 |----|---------|--------|------------|
-| CLIP-01 | Time ranges cut off in Today's Schedule ("6:00 -" instead of "6:00 - 9:00") | OPEN | ScrollArea enforces overflow-hidden at root; internal flex layouts overflow horizontally |
+| CLIP-01 | Time ranges cut off in Today's Schedule ("6:00 -" instead of "6:00 - 9:00") | FIXED | ScrollArea enforces overflow-hidden at root; internal flex layouts overflow horizontally |
 | NAV-01 | Top-right assistant button hidden | FIXED | Demo badge positioned at same location (top-4 right-4) |
 | NAV-02 | No floating assistant button | REGRESSED | Was removed when refactoring desktop toggle button |
 

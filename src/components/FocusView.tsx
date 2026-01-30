@@ -373,10 +373,12 @@ const FocusView: React.FC<FocusViewProps> = ({
                         return (
                           <div key={windowName} className={cn("rounded-lg", style.bgClass)}>
                             {/* Window Header */}
-                            <div className={cn("p-3 flex items-center gap-2", style.borderClass)}>
-                              <span className={style.textClass}>{style.icon}</span>
-                              <span className={cn("font-medium text-sm", style.textClass)}>{style.label}</span>
-                              <span className="text-xs text-muted-foreground ml-auto">
+                            <div className={cn("p-3 flex items-center justify-between gap-2", style.borderClass)}>
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span className={cn("flex-shrink-0", style.textClass)}>{style.icon}</span>
+                                <span className={cn("font-medium text-sm truncate", style.textClass)}>{style.label}</span>
+                              </div>
+                              <span className="text-xs text-muted-foreground flex-shrink-0 whitespace-nowrap">
                                 {config.timeWindows[windowName as keyof typeof config.timeWindows]?.start}:00 - {config.timeWindows[windowName as keyof typeof config.timeWindows]?.end}:00
                               </span>
                             </div>
