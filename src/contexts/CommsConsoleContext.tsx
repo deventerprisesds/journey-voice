@@ -422,24 +422,80 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
               : m
           ));
 
-          // Persist messages with latency metrics
-          const responseTimeMs = Date.now() - requestStartTime;
-          const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-          
-          persistMessagesWithMetrics(
-            content,
-            fullContent,
-            effectiveThreadId || '',
-            {
-              response_time_ms: responseTimeMs,
-              time_to_first_token: timeToFirstToken,
-              word_count: fullContent.split(/\s+/).filter(Boolean).length,
-              content_length: fullContent.length,
-              user_timezone: userTimezone,
-              request_timestamp: new Date(requestStartTime).toISOString(),
-              streamed: true
+          // Check if streaming produced no content (tool call scenario) - fallback to polling
+          if (!fullContent) {
+            console.log('[CommsConsole] Streaming produced no content, falling back to polling...');
+            // Remove the empty placeholder
+            setMessages((prev) => prev.filter(m => m.id !== assistantMessageId));
+            
+            // Call again without streaming
+            const fallbackResponse = await supabase.functions.invoke('hybrid-assistant-api', {
+              body: {
+                userInput: content,
+                userId,
+                threadId: effectiveThreadId,
+                assistantId: currentAssistant?.openai_assistant_id || undefined,
+                dbAssistantId: currentAssistant?.id || undefined,
+                stream: false
+              },
+            });
+            
+            if (fallbackResponse.error) {
+              throw fallbackResponse.error;
             }
-          );
+            
+            const fallbackContent = fallbackResponse.data?.response || 'Sorry, I could not process your request.';
+            
+            setMessages((prev) => [...prev, {
+              id: `assistant-${Date.now()}`,
+              role: 'assistant',
+              content: fallbackContent,
+              source: currentMode,
+              assistant_id: currentAssistant?.id || null,
+              created_at: new Date().toISOString(),
+            }]);
+            
+            if (fallbackResponse.data?.threadId && USE_UNIFIED_THREADS && updateOpenaiThreadId) {
+              updateOpenaiThreadId(fallbackResponse.data.threadId);
+              receivedThreadId = fallbackResponse.data.threadId;
+            }
+            
+            // Persist fallback response
+            const responseTimeMs = Date.now() - requestStartTime;
+            persistMessagesWithMetrics(
+              content,
+              fallbackContent,
+              effectiveThreadId || '',
+              {
+                response_time_ms: responseTimeMs,
+                time_to_first_token: null,
+                word_count: fallbackContent.split(/\s+/).filter(Boolean).length,
+                content_length: fallbackContent.length,
+                user_timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                request_timestamp: new Date(requestStartTime).toISOString(),
+                streamed: false
+              }
+            );
+          } else {
+            // Persist messages with latency metrics
+            const responseTimeMs = Date.now() - requestStartTime;
+            const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+            
+            persistMessagesWithMetrics(
+              content,
+              fullContent,
+              effectiveThreadId || '',
+              {
+                response_time_ms: responseTimeMs,
+                time_to_first_token: timeToFirstToken,
+                word_count: fullContent.split(/\s+/).filter(Boolean).length,
+                content_length: fullContent.length,
+                user_timezone: userTimezone,
+                request_timestamp: new Date(requestStartTime).toISOString(),
+                streamed: true
+              }
+            );
+          }
 
         } else {
           // JSON response (fast path or fallback)
