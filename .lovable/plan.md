@@ -1,9 +1,15 @@
 
 
-## Auto-Schedule Button for Up Next Section
+## Fix Today's Schedule Section - Ordering and Content Clipping
 
-### Summary
-Add an "Auto Schedule" button to the Up Next header that fills remaining time slots for today with queued tasks, reusing the existing `useBatchScheduling` hook as-is.
+### Problems Identified from Screenshot
+
+| Issue | Evidence | Root Cause |
+|-------|----------|------------|
+| **Section ordering wrong** | "Up Next" appears above "Today's Schedule" on mobile | Line 344: `order-2`, Line 473: `order-1` |
+| **All right-side content clipped** | Time windows show "6:00 -", "9:00 - 1", "17:00 - 2" - cut off | Line 374: `overflow-hidden` on time window container |
+
+The `overflow-hidden` class on line 374 is clipping the ENTIRE right side of children content - not just time ranges, but also any Play buttons that would appear on the right.
 
 ---
 
@@ -11,99 +17,83 @@ Add an "Auto Schedule" button to the Up Next header that fills remaining time sl
 
 #### File: `src/components/FocusView.tsx`
 
-**1. Add imports (around line 27)**
+**Change 1: Fix section ordering (lines 344 and 473)**
 
 ```tsx
-import { useAuth } from '@/hooks/useAuth';
-import { useBatchScheduling } from '@/hooks/useBatchScheduling';
-```
+// Line 344 - Today's Schedule container
+// Before
+<div className="lg:col-span-2 order-2 lg:order-1">
 
-**2. Add hooks inside component (after existing hooks ~line 111)**
+// After
+<div className="lg:col-span-2 order-1">
+```
 
 ```tsx
-const { user } = useAuth();
-const { scheduleBatch, updateTasksWithSchedule, isScheduling } = useBatchScheduling();
+// Line 473 - Sidebar container  
+// Before
+<div className="space-y-6 order-1 lg:order-2">
+
+// After
+<div className="space-y-6 order-2">
 ```
 
-**3. Add handler function (after handleCompleteTask ~line 280)**
+**Change 2: Remove overflow-hidden from time window containers (line 374)**
 
 ```tsx
-const handleAutoSchedule = async () => {
-  if (!user?.id || upNextTasks.length === 0) return;
-  
-  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  
-  const result = await scheduleBatch(
-    upNextTasks.map(task => ({
-      id: task.id,
-      title: task.title,
-      category: task.category,
-      priority: task.priority,
-      estimate_minutes: task.estimate_minutes || 60,
-      due_date: task.due_date
-    })),
-    user.id,
-    timezone,
-    new Date() // Target today
-  );
-  
-  if (result.scheduled.length > 0) {
-    await updateTasksWithSchedule(
-      result.scheduled,
-      upNextTasks.map(t => t.id)
-    );
-    onTaskUpdate();
-  }
-};
+// Before
+<div key={windowName} className={cn("rounded-lg overflow-hidden", style.bgClass)}>
+
+// After
+<div key={windowName} className={cn("rounded-lg", style.bgClass)}>
 ```
 
-**4. Update Up Next CardHeader (around lines 507-516)**
+---
 
-Add a Schedule button next to the badge:
+### Technical Details
 
-```tsx
-<CardHeader className="pb-3">
-  <div className="flex items-center justify-between">
-    <div className="flex items-center gap-2">
-      <ListOrdered className="h-5 w-5 text-blue-500" />
-      <h2 className="text-lg font-semibold">Up Next</h2>
-      <Badge variant="secondary">{upNextTasks.length}</Badge>
-    </div>
-    {upNextTasks.length > 0 && (
-      <Button
-        variant="outline"
-        size="sm"
-        onClick={handleAutoSchedule}
-        disabled={isScheduling}
-        className="text-xs h-7"
-      >
-        {isScheduling ? (
-          <>
-            <Clock className="h-3 w-3 mr-1 animate-spin" />
-            Scheduling...
-          </>
-        ) : (
-          <>
-            <Calendar className="h-3 w-3 mr-1" />
-            Schedule
-          </>
-        )}
-      </Button>
-    )}
-  </div>
-  <p className="text-xs text-muted-foreground">
-    Drag to schedule or click Start
-  </p>
-</CardHeader>
-```
+The `overflow-hidden` was likely added for visual styling (to clip rounded corners), but it has the side effect of clipping all child content that extends to the right edge. Removing it will:
+
+- Allow time range text to display fully (e.g., "6:00 - 9:00" instead of "6:00 -")
+- Allow Play buttons on task cards to remain visible
+- Allow all badge content to display without clipping
+
+If rounded corner clipping is needed, it can be applied only to specific child elements rather than the entire container.
 
 ---
 
 ### Files Changed
 
-| File | Change |
-|------|--------|
-| `src/components/FocusView.tsx` | Add useAuth + useBatchScheduling hooks, handler, and Schedule button |
+| File | Line | Change |
+|------|------|--------|
+| `src/components/FocusView.tsx` | 344 | Change `order-2 lg:order-1` to `order-1` |
+| `src/components/FocusView.tsx` | 473 | Change `order-1 lg:order-2` to `order-2` |
+| `src/components/FocusView.tsx` | 374 | Remove `overflow-hidden` from time window container |
 
-No modifications to edge function or hook - uses existing infrastructure as-is.
+---
+
+### Expected Result
+
+**Before (mobile):**
+```
+┌────────────────────────┐
+│ Up Next          Sch   │  ← Wrong order
+├────────────────────────┤
+│ Today's Schedule       │
+│ Morning        6:00 -  │  ← Clipped
+│ Business Hours 9:00 -  │  ← Clipped
+└────────────────────────┘
+```
+
+**After (mobile):**
+```
+┌────────────────────────┐
+│ Today's Schedule       │  ← First
+│ Morning    6:00 - 9:00 │  ← Full content
+│ Business   9:00 - 17:00│  ← Full content
+├────────────────────────┤
+│ Currently Doing        │
+├────────────────────────┤
+│ Up Next          Sch   │
+└────────────────────────┘
+```
 
