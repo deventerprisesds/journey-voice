@@ -57,6 +57,62 @@ async function getToolDefinitions(): Promise<any[]> {
 }
 
 // ============================================================
+// Run Concurrency Management - Cancel Active Runs
+// ============================================================
+async function cancelActiveRuns(openaiThreadId: string): Promise<void> {
+  try {
+    // List all runs on the thread
+    const runsResponse = await fetch(
+      `https://api.openai.com/v1/threads/${openaiThreadId}/runs`,
+      {
+        headers: {
+          'Authorization': `Bearer ${openaiApiKey}`,
+          'OpenAI-Beta': 'assistants=v2'
+        }
+      }
+    );
+    
+    if (!runsResponse.ok) {
+      console.warn('[HYBRID] Failed to list runs:', await runsResponse.text());
+      return;
+    }
+    
+    const runsData = await runsResponse.json();
+    const activeRuns = runsData.data?.filter(
+      (run: any) => ['queued', 'in_progress', 'requires_action'].includes(run.status)
+    ) || [];
+    
+    if (activeRuns.length > 0) {
+      console.log(`[HYBRID] Found ${activeRuns.length} active run(s), cancelling...`);
+      
+      for (const run of activeRuns) {
+        const cancelResponse = await fetch(
+          `https://api.openai.com/v1/threads/${openaiThreadId}/runs/${run.id}/cancel`,
+          {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${openaiApiKey}`,
+              'OpenAI-Beta': 'assistants=v2'
+            }
+          }
+        );
+        
+        if (cancelResponse.ok) {
+          console.log(`[HYBRID] Cancelled run ${run.id}`);
+        } else {
+          console.warn(`[HYBRID] Failed to cancel run ${run.id}:`, await cancelResponse.text());
+        }
+      }
+      
+      // Wait briefly for cancellation to propagate
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  } catch (error) {
+    console.warn('[HYBRID] Error checking/cancelling runs:', error);
+  }
+}
+
+// ============================================================
 // PHASE 4 OPTIMIZATION: Smart Routing for Simple Queries
 // ============================================================
 const TRIVIAL_PATTERNS = [
@@ -394,6 +450,9 @@ async function handleStreamingRequest(
       .eq('user_id', userId);
   }
   
+  // Cancel any active runs before adding message (prevents concurrency errors)
+  await cancelActiveRuns(openaiThreadId);
+  
   // Add user message to thread
   await fetch(`https://api.openai.com/v1/threads/${openaiThreadId}/messages`, {
     method: 'POST',
@@ -697,6 +756,9 @@ ${contextualInstructions || ''}`;
 
         console.log(`Created new OpenAI thread: ${openaiThreadId}`);
       }
+
+      // Cancel any active runs before adding message (prevents concurrency errors)
+      await cancelActiveRuns(openaiThreadId);
 
       // Add message to thread
       const messageResponse = await fetch(`https://api.openai.com/v1/threads/${openaiThreadId}/messages`, {
