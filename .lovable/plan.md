@@ -1,87 +1,170 @@
 
-<context>
-You’re in Lovable preview (editor) and see “Demo Mode” (so `isDemoMode === true`), but the Kanban tabs show 0 tasks even though the demo user has tasks. This happens because the app currently loads demo-mode tasks exclusively from `localStorage` (`kanban-demo-tasks`). In Lovable preview (an iframe + mobile browser), `localStorage` is frequently empty/partitioned and not where the demo data actually lives.
 
-I verified in the Test Supabase DB that the demo user `00000000-0000-0000-0000-000000000001` already has tasks (count > 0). The UI just isn’t querying Supabase in demo mode, so it renders an empty board.
-</context>
+## Central Timezone Fix for Task Scheduling
 
-<root-cause>
-1) `TasksPage.loadTasks()` branches:
-   - demo mode => `localStorage.getItem('kanban-demo-tasks')`
-   - authenticated => Supabase query
+### Problem Summary
+You're experiencing two issues:
+1. **Scheduled date shows as yesterday** - Tasks set for "today" display with yesterday's date
+2. **Wrong time slots** - "Eat lunch" was scheduled at 6am instead of noon
 
-2) In Lovable preview, `localStorage` for the app can be empty or not persistent due to iframe/storage partitioning, so demo mode always “loads” an empty array.
+### Root Cause Analysis
 
-3) Separately, the DB already contains demo tasks (and RLS policies exist to allow anon/public access to demo-user rows), so the correct source of truth in preview should be Supabase, not `localStorage`.
-</root-cause>
+After inspecting the database and code, here's what's happening:
 
-<solution-overview>
-Switch Demo Mode task loading to be Supabase-backed (with optional `localStorage` caching as a fallback), so:
-- Opening Lovable preview shows the demo tasks immediately
-- Refreshing doesn’t wipe the task list
-- Creating tasks in demo mode uses a real UUID `board_id` from Supabase (avoids invalid UUID / “fake board id” issues)
+**Why dates appear as "yesterday":**
+- The system stores `due_date` as a date-only string like `"2026-01-29"`
+- Postgres interprets this as midnight UTC (`2026-01-29 00:00:00+00`)
+- For US Eastern timezone (UTC-5), midnight UTC is actually 7pm the previous evening
+- Result: January 29 UTC displays as January 28 in your local time
 
-We will not change authenticated behavior.
-</solution-overview>
+**Why "Eat lunch" was at 6am:**
+- The AI scheduler returned `"2026-01-30T11:00:00"` meaning "11am local"
+- Without a timezone offset, the system stored it as 11:00 UTC
+- 11:00 UTC = 6:00 AM Eastern Time
 
-<implementation-steps>
-1) Update demo-mode task loading in `src/pages/TasksPage.tsx`
-   - Replace the demo branch that reads `localStorage` with a Supabase query:
-     - `supabase.from('tasks').select('*').eq('user_id', user.id).order('created_at')`
-   - Add clear error vs empty-result logging (optionally using the existing `safeQuery` utility from `src/utils/dbQuery.ts`) so we can distinguish “no tasks” from “query failed”.
-   - (Optional but recommended) Keep a small fallback:
-     - If Supabase errors, fall back to `localStorage` so preview remains usable even if Supabase is temporarily unavailable.
+**Database evidence:**
+```
+Transfer $40,000 → due_date: 2026-01-29 00:00:00+00 (displays as Jan 28 in ET)
+Eat lunch → start_time: 2026-01-30 11:00:00+00 (displays as 6am in ET)
+```
 
-2) Fix demo-mode creation to persist to Supabase in `src/components/TaskCreationModal.tsx`
-   - Today, demo mode creation writes to `localStorage` with `board_id = 'demo-board-1'` (not a UUID), which can’t be persisted in the DB and also doesn’t help preview reload.
-   - Implement `getOrCreateDefaultBoardId(userId)` inside this file (or a shared util) that:
-     - queries `boards` for `user_id=userId` and `is_default=true`
-     - uses `.order('created_at', { ascending: false }).limit(1).maybeSingle()` to safely handle duplicates
-     - if none exists, inserts a default board and returns its UUID
-   - In `handleCreateTasks` when `isDemoMode`:
-     - compute `effectiveBoardId` using the helper above (ignoring empty `boardId`)
-     - insert tasks into Supabase (`.insert(tasksWithMeta).select()`)
-     - remove the demo-only fake `id: demo-task-...` assignment (let DB generate UUIDs)
-   - Keep the earlier UUID crash fix:
-     - avoid any `.eq('board_id', boardId)` queries when `boardId` is empty/non-UUID
-     - for AI parse “existingTasks”, in demo mode pull existing tasks from Supabase by `user_id` (not `board_id`) so it remains safe and accurate.
+---
 
-3) (Optional but recommended) Prevent demo initialization code from wiping tasks
-   - In `src/components/KanbanBoard.tsx`, demo `createDefaultBoardAndColumns()` currently does:
-     - `localStorage.setItem('kanban-demo-tasks', JSON.stringify([]))`
-   - Change this to “only initialize tasks if missing” (do not overwrite) to prevent accidental task resets for any remaining localStorage demo flows.
+### Solution: Central Timezone Normalization
 
-4) Verification checklist (what you’ll test in Lovable preview)
-   - Navigate to `/tasks?view=kanban`
-     - Confirm at least one tab shows a non-zero count (based on demo DB tasks).
-   - Use AI Create to add a Career task
-     - Confirm it appears immediately under the Career tab without refresh.
-   - Refresh the preview
-     - Confirm the task remains visible (proves DB-backed demo persistence).
-   - Confirm authenticated mode still loads tasks as before.
+We'll create a single timezone utility that ALL scheduling code uses, ensuring consistent behavior everywhere.
 
-</implementation-steps>
+---
 
-<expected-result>
-- In Lovable preview demo mode, the Kanban board will show the demo user’s tasks (no more “0 tasks” due to empty localStorage).
-- New demo tasks created via AI will persist and continue to appear after refresh.
-- The earlier “invalid UUID” issue remains fixed because we avoid querying with empty `boardId` and we use a real Supabase board UUID for inserts.
-</expected-result>
+### Implementation Steps
 
-<files-to-change>
-- `src/pages/TasksPage.tsx`
-- `src/components/TaskCreationModal.tsx`
-- (Optional) `src/components/KanbanBoard.tsx`
-- (Optional) create a small shared helper file (e.g., `src/utils/demoData.ts`) if we want to reuse the “get default board id” logic cleanly across components.
-</files-to-change>
+#### Step 1: Create Shared Timezone Utility
+**File:** `supabase/functions/_shared/timezone.ts` (new)
 
-<notes-for-non-technical>
-Right now “Demo Mode” is looking in the browser’s temporary storage for tasks, but in the Lovable preview that storage can be empty. The demo tasks actually exist in the project’s database, so we’ll switch demo mode to load them from the database instead—so they show up reliably every time you open Preview.
-</notes-for-non-technical>
+```text
+┌─────────────────────────────────────────────────────────────┐
+│  Timezone Normalization Functions                           │
+├─────────────────────────────────────────────────────────────┤
+│  normalizeDueDate(input, tz)                                │
+│    - "2026-01-29" → end-of-day in user's tz → UTC ISO       │
+│    - Returns: "2026-01-30T04:59:59.999Z" (for ET)           │
+│                                                             │
+│  normalizeDateTime(input, tz)                               │
+│    - "2026-01-29T12:00:00" → treat as local → UTC ISO       │
+│    - Returns: "2026-01-29T17:00:00Z" (for ET noon)          │
+│                                                             │
+│  getTzOffsetMinutesAt(date, tz)                             │
+│    - Gets offset for specific timezone at specific moment   │
+│    - Handles DST automatically                              │
+└─────────────────────────────────────────────────────────────┘
+```
 
-<technical-risks-and-mitigations>
-- Risk: demo user has multiple default boards, and `.single()`-style queries can error.
-  - Mitigation: use `.order(...).limit(1).maybeSingle()` consistently.
-- Risk: RLS might block anon reads/writes.
-  - Mitigation: confirmed migrations include demo user policies on `boards` and `tasks` (`TO public`).
-</technical-risks-and-mitigations>
+#### Step 2: Fix Task Creation (execute-tool)
+**File:** `supabase/functions/execute-tool/index.ts`
+
+**Changes:**
+- Import shared timezone utility
+- In `parseAndCreateTasks`:
+  - Normalize `due_date` through `normalizeDueDate(task.due_date, userTimezone)`
+  - Normalize scheduled `start_time`/`end_time` through `normalizeDateTime()`
+- Add rule: If `due_date` was auto-inferred (not explicitly set by user), sync it to match scheduled date
+
+**Before:**
+```typescript
+due_date: task.due_date  // "2026-01-29" stored as midnight UTC
+```
+
+**After:**
+```typescript
+due_date: normalizeDueDate(task.due_date, userTimezone)  
+// "2026-01-29" → "2026-01-30T04:59:59.999Z" (end of Jan 29 in ET)
+```
+
+#### Step 3: Fix Batch Calendar Scheduler
+**File:** `supabase/functions/batch-calendar-scheduler/index.ts`
+
+**Changes:**
+A) **Harden the AI prompt** - Require explicit timezone offsets:
+```
+Return ISO 8601 with timezone offset. Examples:
+- "2026-01-30T12:00:00-05:00" (noon Eastern)
+- "2026-01-30T17:00:00Z" (noon Eastern as UTC)
+```
+
+B) **Add post-processing safety net** - Normalize ALL times from AI:
+```typescript
+// After parsing AI response
+result.start_time = normalizeDateTime(result.start_time, timezone);
+result.end_time = normalizeDateTime(result.end_time, timezone);
+```
+
+This ensures "11:00" is correctly interpreted as 11am local → stored as UTC.
+
+#### Step 4: Fix Reschedule Tool Path
+**File:** `supabase/functions/execute-tool/index.ts`
+
+In `rescheduleTask`:
+- Currently sets `start_time = "${new_date}T${new_start_time}"` (naive)
+- Change to use `normalizeDateTime()` before storing
+- Ensure `due_date` updates also go through `normalizeDueDate()`
+
+#### Step 5: Fix "Today" Tab Filter
+**File:** `src/components/TabbedKanbanBoard.tsx`
+
+**Current logic:**
+```typescript
+// Only checks due_date
+task.due_date && isToday(parseISO(task.due_date))
+```
+
+**Updated logic:**
+```typescript
+// Check BOTH due_date AND scheduled date
+const isDueToday = task.due_date && isToday(parseISO(task.due_date));
+const isScheduledToday = task.start_time && isToday(parseISO(task.start_time));
+return isDueToday || isScheduledToday || isActiveStatus;
+```
+
+This ensures tasks scheduled for today appear in the Today tab even if due_date differs.
+
+---
+
+### Files to Change
+
+| File | Change |
+|------|--------|
+| `supabase/functions/_shared/timezone.ts` | **New** - Central timezone utilities |
+| `supabase/functions/execute-tool/index.ts` | Normalize dates in task creation/update |
+| `supabase/functions/batch-calendar-scheduler/index.ts` | Normalize AI-returned times |
+| `src/components/TabbedKanbanBoard.tsx` | Include scheduled-today tasks in Today tab |
+
+---
+
+### Expected Results After Fix
+
+| User Input | Due Date (stored) | Displays As |
+|------------|-------------------|-------------|
+| "Today I need to email Craig" | 2026-01-30T04:59:59Z | Jan 29 ✅ |
+| "Tomorrow call financial aid" | 2026-01-31T04:59:59Z | Jan 30 ✅ |
+| "Eat lunch" (auto-scheduled) | start_time: noon local → correct UTC | 12:00 PM ✅ |
+
+---
+
+### Why This is the "Central Fix"
+
+Instead of patching individual components:
+- **One utility** handles all timezone conversions
+- **All edge functions** use the same normalization
+- **All date-only values** become end-of-day in user's timezone
+- **All naive timestamps** are treated as local and converted properly
+
+This prevents timezone bugs across the entire application, not just in one place.
+
+---
+
+### Non-Technical Summary
+
+Right now, when you say "do this today," the system saves midnight in London time (UTC). But you're in a US timezone, so midnight London is still yesterday evening for you - that's why it shows as yesterday.
+
+The fix makes the system always think in YOUR timezone first, then convert to the universal format for storage. This way "today" always means YOUR today, and "noon" always means YOUR noon.
+
