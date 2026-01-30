@@ -227,6 +227,11 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onStatusChange, onEdit, onSch
     }
   };
 
+  const handleGoAction = () => {
+    if (!onStatusChange) return;
+    onStatusChange(task.id, 'UP_NEXT');
+  };
+
   const handleScheduleTask = async () => {
     if (!onSchedule || isScheduling) return;
     
@@ -274,6 +279,20 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onStatusChange, onEdit, onSch
                 onCheckedChange={handleCheckboxChange}
                 className="mt-0.5"
               />
+            )}
+            {task.status !== 'UP_NEXT' && task.status !== 'DOING' && task.status !== 'DONE' && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="p-1 h-6 w-6 rounded-full bg-orange-500 hover:bg-orange-600 text-white"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleGoAction();
+                }}
+                title="Move to Up Next"
+              >
+                <Play className="h-3 w-3" />
+              </Button>
             )}
             <Button
               variant="ghost"
