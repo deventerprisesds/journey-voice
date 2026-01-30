@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
-import { ScrollArea } from '@/components/ui/scroll-area';
+import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
 import { 
   Target, 
   Play, 
@@ -364,8 +364,8 @@ const FocusView: React.FC<FocusViewProps> = ({
             <Collapsible open={isTimelineExpanded} onOpenChange={setIsTimelineExpanded}>
               <CollapsibleContent>
                 <CardContent className="pt-0">
-                  <ScrollArea className="h-[400px] lg:h-[500px]">
-                    <div className="space-y-4">
+                  <ScrollArea className="h-[400px] lg:h-[500px]" type="always">
+                    <div className="space-y-4 min-w-max">
                       {Object.entries(timeWindowStyles).map(([windowName, style]) => {
                         const windowTasks = tasksByWindow[windowName] || [];
                         const dropSlots = getDropSlotsForWindow(windowName);
@@ -464,6 +464,7 @@ const FocusView: React.FC<FocusViewProps> = ({
                         );
                       })}
                     </div>
+                    <ScrollBar orientation="horizontal" />
                   </ScrollArea>
                 </CardContent>
               </CollapsibleContent>
