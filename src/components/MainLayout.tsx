@@ -425,9 +425,10 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0 min-h-0">
-        {/* Mobile Header */}
-        {isMobile && (
-          <header className="h-14 border-b border-border bg-card/95 backdrop-blur flex items-center px-4 gap-3 flex-shrink-0">
+        {/* Top Header - Shows on both mobile and desktop */}
+        <header className="h-14 border-b border-border bg-card/95 backdrop-blur flex items-center px-4 gap-3 flex-shrink-0">
+          {/* Mobile: Hamburger menu */}
+          {isMobile && (
             <Button
               variant="ghost"
               size="icon"
@@ -435,19 +436,41 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
             >
               <Menu className="h-5 w-5" />
             </Button>
+          )}
+          
+          {/* Title - only on mobile since desktop has sidebar */}
+          {isMobile && (
             <h1 className="font-bold text-lg bg-gradient-to-r from-primary to-productivity bg-clip-text text-transparent">
               Journey
             </h1>
-            <div className="flex-1" />
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={togglePanel}
-            >
-              <MessageSquare className="h-5 w-5" />
-            </Button>
-          </header>
-        )}
+          )}
+          
+          <div className="flex-1" />
+          
+          {/* Assistant toggle button - always visible */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant={isPanelOpen ? "secondary" : "ghost"}
+                size="icon"
+                onClick={togglePanel}
+                className={cn(
+                  "transition-colors",
+                  isPanelOpen && "bg-primary/10 text-primary"
+                )}
+              >
+                {isPanelOpen ? (
+                  <PanelRightClose className="h-5 w-5" />
+                ) : (
+                  <MessageSquare className="h-5 w-5" />
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>{isPanelOpen ? "Close Assistant" : "Open Assistant"}</p>
+            </TooltipContent>
+          </Tooltip>
+        </header>
 
         {/* Page Content */}
         <main className="flex-1 overflow-auto">
@@ -460,18 +483,6 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
         <aside className="w-[400px] border-l border-border bg-card/50 flex-shrink-0 flex flex-col">
           <CommsConsole mode="panel" />
         </aside>
-      )}
-
-      {/* Desktop Comms Panel Toggle Button (when closed) */}
-      {!isMobile && !isPanelOpen && (
-        <Button
-          variant="outline"
-          size="icon"
-          onClick={togglePanel}
-          className="fixed right-4 bottom-4 z-50 h-12 w-12 rounded-full shadow-lg bg-primary text-primary-foreground hover:bg-primary/90"
-        >
-          <MessageSquare className="h-5 w-5" />
-        </Button>
       )}
 
       {/* Mobile Comms Panel Sheet */}
