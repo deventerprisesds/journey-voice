@@ -1,114 +1,121 @@
 
 
-## Add Quick "Up Next" Button to List View
+## Fix: Cached Audio Path Missing OpenAI Context Injection
 
-### Overview
+### Root Cause Identified
 
-Add an orange Play button next to the Done checkbox in the list view table, matching the Kanban card's pattern. Also update the visibility condition to allow tasks in `DOING` status to be moved back to `UP_NEXT`.
+When a phone call uses **pre-cached audio** for the greeting (for lowest latency), the Cloudflare worker plays the audio to Twilio but **never injects the conversation context into OpenAI**. This causes:
 
-### Design Approach
+1. OpenAI has no record of the greeting being spoken
+2. OpenAI has no system context about the call state
+3. Semantic VAD cannot properly detect turn boundaries
+4. `input_audio_buffer.speech_stopped` never fires
+5. No transcription → No AI response → AI "fabricates" or stays silent
 
-**Reuse existing infrastructure** - The component already has `onStatusChange` prop that handles status updates. We'll use this same callback rather than creating a duplicate handler.
+### Evidence from Debug Logs
+
+| Metric | Value | Problem |
+|--------|-------|---------|
+| `cf_user_speech_started` | 7 events | User spoke 7 times |
+| `cf_user_speech_stopped` | 0 events | Speech never "ended" |
+| `cf_transcription` | 0 events | No text was generated |
+| `cf_response_started` | 0 events | No AI response |
+| `twilio_frames_out` | 0 | No audio sent back to user |
+
+### The Bug (Line 1077)
+
+In `cloudflare/src/TwilioCallSession.ts`, the cached audio path returns early:
+
+```typescript
+// Line 1033-1077: Cached audio path
+if (this.cachedAudioBase64 && this.twilioWs && this.streamSid) {
+  // ... send audio to Twilio ...
+  this.isPlaying = false;
+  return;  // <-- BUG: Returns before context injection!
+}
+
+// Line 1100-1126: Context injection (NEVER REACHED for cached audio)
+this.openaiWs?.send(JSON.stringify({
+  type: 'conversation.item.create',
+  item: { role: 'assistant', content: [...] }
+}));
+```
+
+### Fix Required
+
+After playing cached audio, inject the same conversation context that the non-cached path does:
+
+1. Inject an `assistant` message with the greeting text
+2. Inject a `system` message explaining the conversation state
 
 ---
 
-### Technical Implementation
+### Technical Changes
 
-**File: `src/components/EnhancedTaskGridView.tsx`**
+**File: `cloudflare/src/TwilioCallSession.ts`**
 
-#### 1. Add Play icon to imports (line 33)
+Update the cached audio path (around lines 1070-1077) to inject context before returning:
 
-Add `Play` to the existing lucide-react imports.
+```typescript
+// After playing cached audio, inject context into OpenAI
+const greeting = this.greetingText || 'Hello';
 
-#### 2. Update the Done column cell (lines 926-933)
+// Inject assistant message with what was just spoken
+this.openaiWs?.send(JSON.stringify({
+  type: 'conversation.item.create',
+  item: {
+    type: 'message',
+    role: 'assistant',
+    content: [{ type: 'text', text: greeting }]
+  }
+}));
 
-Wrap the checkbox in a flex container and add the Play button that:
-- Only shows when `task.status !== 'UP_NEXT' && task.status !== 'DONE'` (allows `DOING` to be pushed back)
-- Calls `onStatusChange?.(task.id, 'UP_NEXT')` directly - same pattern as checkbox handler
-- Uses orange styling matching the Kanban card
+// Inject system context for OpenAI to understand the state
+const now = new Date().toLocaleString('en-US', { timeZone: this.timezone });
+const contextMsg = `[System: You just spoke the greeting: "${greeting}"
+The user is now listening and may respond. Current time: ${now}.
+Wait for the user's response, then continue the conversation naturally.
+${this.ragContext ? `Context: ${this.ragContext}` : ''}]`;
 
-**Current code:**
-```tsx
-<TableCell>
-  {onStatusChange && (
-    <Checkbox
-      checked={task.status === 'DONE'}
-      onCheckedChange={(checked) => handleCheckboxChange(task.id, !!checked)}
-    />
-  )}
-</TableCell>
-```
+this.openaiWs?.send(JSON.stringify({
+  type: 'conversation.item.create',
+  item: {
+    type: 'message',
+    role: 'system',
+    content: [{ type: 'input_text', text: contextMsg }]
+  }
+}));
 
-**New code:**
-```tsx
-<TableCell>
-  <div className="flex items-center gap-1">
-    {onStatusChange && (
-      <Checkbox
-        checked={task.status === 'DONE'}
-        onCheckedChange={(checked) => handleCheckboxChange(task.id, !!checked)}
-      />
-    )}
-    {onStatusChange && task.status !== 'UP_NEXT' && task.status !== 'DONE' && (
-      <Button
-        variant="ghost"
-        size="sm"
-        className="p-1 h-6 w-6 rounded-full bg-orange-500 hover:bg-orange-600 text-white"
-        onClick={(e) => {
-          e.stopPropagation();
-          onStatusChange(task.id, 'UP_NEXT');
-        }}
-        title="Move to Up Next"
-      >
-        <Play className="h-3 w-3" />
-      </Button>
-    )}
-  </div>
-</TableCell>
+console.log('[CF] Injected post-greeting context for cached audio path');
+this.isPlaying = false;
+return;
 ```
 
 ---
 
-### Key Decisions
+### Why This Fixes the Problem
 
-| Decision | Rationale |
-|----------|-----------|
-| Reuse `onStatusChange` | Avoids duplicating update logic; status changes are handled in parent |
-| Allow `DOING` → `UP_NEXT` | User explicitly requested this - tasks can be deprioritized |
-| Same styling as TaskCard | Consistent UX with orange rounded button |
-
----
-
-### Consistency Update for TaskCard
-
-To keep both views consistent, the **TaskCard.tsx** button condition (line 283) should also allow `DOING` tasks to be moved back:
-
-**Current (line 283):**
-```tsx
-{task.status !== 'UP_NEXT' && task.status !== 'DOING' && task.status !== 'DONE' && (
-```
-
-**Updated:**
-```tsx
-{task.status !== 'UP_NEXT' && task.status !== 'DONE' && (
-```
-
----
-
-### Visual Result
-
-| Before (List View) | After |
-|--------------------|-------|
-| `[checkbox]` | `[checkbox] [▶]` |
-
-The Play button appears for all tasks except those already in `UP_NEXT` or `DONE`.
+| Before | After |
+|--------|-------|
+| OpenAI has empty conversation | OpenAI knows greeting was spoken |
+| Semantic VAD confused by context-less audio | VAD has proper turn-taking context |
+| No `speech_stopped` → No transcription | Normal turn detection → Transcription works |
+| AI stays silent or fabricates | AI responds normally with tool calls |
 
 ---
 
 ### Files Changed
 
-| File | Changes |
-|------|---------|
-| `src/components/EnhancedTaskGridView.tsx` | Add `Play` icon import; update Done column to include Up Next button using existing `onStatusChange` |
-| `src/components/TaskCard.tsx` | Update button condition to allow `DOING` → `UP_NEXT` |
+| File | Change |
+|------|--------|
+| `cloudflare/src/TwilioCallSession.ts` | Add OpenAI context injection to cached audio greeting path (before the `return` on line 1077) |
+
+---
+
+### Deployment
+
+After fixing, redeploy the Cloudflare worker:
+```bash
+cd cloudflare && npm run deploy
+```
 
