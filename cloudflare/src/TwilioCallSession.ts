@@ -1073,6 +1073,37 @@ You: "Looking that up..." [then call web_search tool]`;
           bytes: audioBytes.length,
           latency_ms: Date.now() - greetingStartTime
         });
+        
+        // FIX: Inject context into OpenAI after playing cached audio (was missing!)
+        const greeting = this.greetingText || 'Hello';
+        
+        // Inject assistant message with what was just spoken
+        this.openaiWs?.send(JSON.stringify({
+          type: 'conversation.item.create',
+          item: {
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'text', text: greeting }]
+          }
+        }));
+        
+        // Inject system context for OpenAI to understand the state
+        const now = new Date().toLocaleString('en-US', { timeZone: this.timezone });
+        const contextMsg = `[System: You just spoke the greeting: "${greeting}"
+The user is now listening and may respond. Current time: ${now}.
+Wait for the user's response, then continue the conversation naturally.
+${this.ragContext ? `Context: ${this.ragContext}` : ''}]`;
+        
+        this.openaiWs?.send(JSON.stringify({
+          type: 'conversation.item.create',
+          item: {
+            type: 'message',
+            role: 'system',
+            content: [{ type: 'input_text', text: contextMsg }]
+          }
+        }));
+        
+        console.log('[CF] Injected post-greeting context for cached audio path');
         this.isPlaying = false;
         return;
       } catch (error) {
