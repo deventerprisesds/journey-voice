@@ -20,6 +20,7 @@ Track all issues, attempted fixes, outcomes, and lessons learned to ensure progr
 | Issue ID | Attempt | Date | Outcome | Why It Failed/Succeeded |
 |----------|---------|------|---------|-------------------------|
 | CLIP-01 | Remove `overflow-hidden` from time window container (line 374) | 2026-01-29 | FAILED | ScrollArea component has `overflow-hidden` baked into its root element - cannot be overridden from children |
+| CLIP-01 | Enable horizontal scrolling with ScrollBar orientation="horizontal" | 2026-01-30 | SUCCESS | Added horizontal scrollbar and min-w-max to content container |
 | NAV-01 | Add assistant button to top header | 2026-01-29 | PARTIAL | Button added but Demo badge covered it |
 | NAV-01 | Move Demo badge to center | 2026-01-30 | SUCCESS | Badge now centered, no longer overlaps assistant button |
 
