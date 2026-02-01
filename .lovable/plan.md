@@ -1,112 +1,110 @@
 
-# Plan: Add Outlook OAuth Connection & Improve Error Feedback in Notification Settings
+# Fix: Batch Task Scheduling + Chat UX Enhancements
 
 ## Problem Summary
 
-From the screenshots and investigation:
+Two distinct issues reported:
 
-1. **"Not connected" for Outlook** - Your Outlook connections exist but have expired tokens (expired Jan 6, 2026). The UI shows "Not connected - add in Calendar settings" but there's no way to connect directly from the Notification Settings page.
+### Issue 1: Batch Task Scheduling Not Working
+When the user said: *"Create tasks: Go to Arundel Mills mall at 2; Transfer $40k at 3; Go to gym at 945; Plan the week at 430; Go to church at 11; Drop off my daughter at 230"*
 
-2. **No OAuth setup path** - Clicking through to "Calendar settings" doesn't exist - you'd need to go to the Calendar page and find the connection modal there, which is not intuitive.
+**What happened:**
+- AI called `create_task` 6 times individually
+- Tasks created with `start_time: null`, `is_scheduled: false`
+- Time slots ("at 2", "at 3", "at 945") were NOT extracted
+- "Today's Schedule" shows "0 scheduled"
 
-3. **Test Email failed silently** - The test button showed a success toast saying "Check your unified webhook" but gave no indication if the email was actually delivered or if there was an issue.
+**Root cause:**
+The assistant's `core_instructions` list `create_task` but NOT `parse_and_create_tasks`. The AI doesn't know the more powerful tool exists that handles:
+- Natural language time parsing ("at 2", "at 3pm", "at 945")
+- Batch creation of multiple tasks
+- Auto-scheduling to time slots
+
+### Issue 2: Chat UX Missing Features
+- No timestamps on messages (SMS-like experience requested)
+- No easy way to copy message content
 
 ---
 
 ## Solution
 
-### Part 1: Add "Connect Outlook" Button Directly in Notification Settings
+### Part 1: Update Assistant Instructions to Use parse_and_create_tasks
 
-Allow users to initiate the OAuth flow right from the Notification Settings page instead of having to navigate elsewhere.
+**Database update** - Add `parse_and_create_tasks` to the assistant's tool list and instructions:
 
-**Changes to `src/components/NotificationSettings.tsx`:**
+```sql
+UPDATE user_scheduling_prefs 
+SET core_instructions = core_instructions || '
 
-```typescript
-// Import the OAuth component
-import { CalendarOAuthManager } from './CalendarOAuthManager';
+TASK CREATION - CRITICAL:
+- For MULTIPLE tasks or tasks with times, ALWAYS use parse_and_create_tasks
+- parse_and_create_tasks handles: "Go to gym at 9am, meeting at 2pm, dinner at 7" → creates all with scheduled times
+- ONLY use create_task for single tasks without specific times
+- parse_and_create_tasks auto-schedules tasks and extracts time slots from natural language
 
-// In the Outlook section, when not connected:
-{!outlookConnection ? (
-  <div className="mt-2">
-    <CalendarOAuthManager
-      provider="outlook"
-      onSuccess={() => {
-        loadCalendarConnections();
-        toast({ title: "Outlook Connected", description: "Your Outlook calendar is now connected." });
-      }}
-      onError={(err) => toast({ title: "Connection Failed", description: err, variant: "destructive" })}
-    />
-  </div>
-) : null}
+Available functions (add to list):
+- parse_and_create_tasks: Parse natural language into multiple tasks with auto-scheduling. Use this for: multiple tasks, tasks with times, bulk task creation'
+WHERE user_id = 'a3378f93-d655-4913-b2fa-ca5b1d8020f1';
 ```
 
-### Part 2: Show Connection Status with Expiry Warning
+### Part 2: Add Message Timestamps (SMS-like)
 
-Indicate when a connection exists but tokens are expired, with a reconnect option.
+**File:** `src/components/CommsConsole/TranscriptScroll.tsx`
 
-```typescript
-// Add state for tracking expired status
-const [outlookExpired, setOutlookExpired] = useState(false);
-
-// In loadCalendarConnections, check expiry:
-if (outlook) {
-  const isExpired = outlook.expires_at && new Date(outlook.expires_at) < new Date();
-  setOutlookConnection({...});
-  setOutlookExpired(isExpired);
-}
-
-// In UI:
-{outlookConnection && outlookExpired ? (
-  <p className="text-xs text-amber-600">
-    ⚠ Connection expired - click to reconnect
-  </p>
-) : outlookConnection ? (
-  <p className="text-xs text-green-600">
-    ✓ Connected: {outlookConnection.provider_account_email}
-  </p>
-) : (
-  <CalendarOAuthManager provider="outlook" ... />
-)}
-```
-
-### Part 3: Improve Test Email Feedback
-
-Currently the test email shows success even if delivery fails. Update to show clearer feedback:
+Add timestamp display below each message bubble:
 
 ```typescript
-const sendTestEmail = async () => {
-  if (!email) {
-    toast({
-      title: "Email Required",
-      description: "Please enter an email address before testing.",
-      variant: "destructive",
-    });
-    return;
-  }
+// Add helper function for relative time
+const formatRelativeTime = (dateStr: string): string => {
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
   
-  try {
-    const { data, error } = await supabase.functions.invoke('send-unified-notification', {...});
-    
-    if (error) throw error;
-    
-    toast({
-      title: "Test Email Sent",
-      description: `Email notification sent to ${email}. Please check your inbox.`,
-    });
-  } catch (error) {
-    console.error('Error sending test email:', error);
-    toast({
-      title: "Email Test Failed",
-      description: error.message || "Could not send test email. Check your email configuration.",
-      variant: "destructive",
-    });
-  }
+  if (diffMins < 1) return 'Just now';
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return date.toLocaleDateString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 };
+
+// In the message bubble:
+<p className="text-[10px] text-muted-foreground/60 mt-1">
+  {formatRelativeTime(message.created_at)}
+</p>
 ```
 
-### Part 4: Add Same Pattern for Google Calendar
+### Part 3: Add Copy Button on Message Long-Press/Hover
 
-Apply the same connection button pattern for Google Calendar consistency.
+**File:** `src/components/CommsConsole/TranscriptScroll.tsx`
+
+Add a copy button that appears on hover (desktop) or long-press context menu (mobile):
+
+```typescript
+import { Copy, Check } from 'lucide-react';
+
+// Add state for copied status
+const [copiedId, setCopiedId] = useState<string | null>(null);
+
+const handleCopy = async (content: string, id: string) => {
+  await navigator.clipboard.writeText(content);
+  setCopiedId(id);
+  setTimeout(() => setCopiedId(null), 2000);
+};
+
+// In each message bubble, add copy button:
+<button 
+  onClick={() => handleCopy(message.content, message.id)}
+  className="opacity-0 group-hover:opacity-100 absolute -right-6 top-1 p-1 rounded hover:bg-muted transition-opacity"
+  title="Copy message"
+>
+  {copiedId === message.id ? (
+    <Check className="w-3 h-3 text-green-500" />
+  ) : (
+    <Copy className="w-3 h-3 text-muted-foreground" />
+  )}
+</button>
+```
 
 ---
 
@@ -114,59 +112,58 @@ Apply the same connection button pattern for Google Calendar consistency.
 
 | File | Change |
 |------|--------|
-| `src/components/NotificationSettings.tsx` | Add inline OAuth buttons for Outlook/Google; show expiry status; improve test feedback |
+| Database: `user_scheduling_prefs` | Add `parse_and_create_tasks` to core_instructions |
+| `src/components/CommsConsole/TranscriptScroll.tsx` | Add timestamps and copy functionality |
 
 ---
 
-## UI After Fix
+## Technical Flow After Fix
 
+### Task Creation with Times:
 ```text
-+--------------------------------------------+
-| Delivery Channels                          |
-|                                            |
-| [Email toggle] ✓ Enabled                   |
-|   your@email.com                           |
-|                                            |
-| [Outlook Calendar]                         |
-|   Create events with native phone reminders|
-|   ⚠ Connection expired                     |
-|   [ 🔄 Reconnect Outlook Calendar ]        |
-|                                            |
-| [Google Calendar]                          |
-|   Create calendar events                   |
-|   [ Connect Google Calendar ]              |
-|                                            |
-| [Slack toggle] ✓ Enabled                   |
-+--------------------------------------------+
+User: "Create tasks: Go to gym at 945; Meeting at 2pm; Dinner at 7"
+    ↓
+AI sees parse_and_create_tasks in available tools
+    ↓
+AI calls: parse_and_create_tasks({
+  text: "Go to gym at 945; Meeting at 2pm; Dinner at 7",
+  target_date: "today",
+  auto_schedule: true
+})
+    ↓
+execute-tool → ai-task-parser extracts times
+    ↓
+batch-calendar-scheduler assigns time slots
+    ↓
+Tasks created with start_time, end_time, is_scheduled=true
+    ↓
+Tasks appear in Today's Schedule at correct times
 ```
 
----
-
-## Technical Details
-
-### OAuth Flow Integration
-
-The `CalendarOAuthManager` component already handles the full OAuth flow:
-1. Calls `calendar-token-manager` edge function to get OAuth URL
-2. Redirects user to Microsoft/Google consent screen
-3. Callback handled by `useOAuthCallback` hook (already in Settings page)
-4. Tokens stored in `calendar_connections` table
-
-### Why Connections Show "Not Connected"
-
-The `get_calendar_connections_safe` RPC uses `auth.uid()` to filter by current user. If:
-- User is in demo mode → no connections shown
-- Tokens expired → connections still shown (the query doesn't filter by expiry)
-
-The issue is the UI isn't fetching the `expires_at` field to show expired status.
+### Chat Message UX:
+```text
++-----------------------------------------------+
+|  [Iris]                                        |
+|  The tasks have been scheduled:               |
+|  - Go to gym: 9:45 AM                         |
+|  - Meeting: 2:00 PM                           |
+|  - Dinner: 7:00 PM                            |
+|                                   [📋]        |
+|                           10:54 AM            |
++-----------------------------------------------+
+```
 
 ---
 
 ## Expected Behavior After Fix
 
-1. Go to Settings → Notifications
-2. See Outlook shows "Connection expired" with a "Reconnect" button
-3. Click button → redirected to Microsoft login
-4. After auth → return to Settings with fresh tokens
-5. Test Email shows clear success/failure message with email address
-6. Test Outlook Event creates an event in your calendar with reminder
+1. **Task Scheduling:**
+   - User: "Schedule these for today: gym at 9, meeting at 2, dinner at 7"
+   - AI uses `parse_and_create_tasks` instead of individual `create_task` calls
+   - Tasks appear in Today's Schedule with correct time slots
+   - "3 scheduled" shown instead of "0 scheduled"
+
+2. **Chat UX:**
+   - Each message shows relative timestamp ("10:54 AM", "2m ago")
+   - Copy button appears on hover/long-press
+   - Visual feedback when content is copied
