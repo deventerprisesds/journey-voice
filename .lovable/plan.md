@@ -1,134 +1,110 @@
 
-# Fix: Microsoft OAuth Edge Function Authentication Failure
 
-## Problem Summary
+# Fix: Chat Copy Button and Timestamp Positioning
 
-After successfully authenticating with Microsoft, the edge function `calendar-token-manager` fails with "User authentication required" when trying to exchange the OAuth code for tokens.
+## Issues Identified
 
-**Flow:**
-1. User clicks "Connect Outlook" → `get_oauth_url` works fine (no auth needed)
-2. User authenticates on Microsoft's consent screen
-3. Microsoft redirects back with `?code=...&state=outlook`
-4. `useOAuthCallback` calls `exchange_code` action
-5. Edge function fails: `supabase.auth.getUser()` returns null
+1. **Copy button not working visually**: The copy button uses `absolute` positioning but its parent container lacks `relative`, causing it to be positioned incorrectly or hidden.
 
-## Root Cause
-
-The edge function uses deprecated authentication patterns:
-
-```typescript
-// Current (broken) approach in calendar-token-manager:
-supabaseClient.auth.setSession({
-  access_token: authHeader.replace('Bearer ', ''),
-  refresh_token: ''
-})
-
-const { data: { user }, error: userError } = await supabaseClient.auth.getUser()
-// This fails because setSession() is deprecated for edge functions
-```
-
-`setSession()` doesn't properly authenticate the client in the current Supabase edge runtime. The correct approach is to use `getClaims()` for JWT validation.
+2. **Timestamp takes horizontal space**: The timestamp is currently positioned outside the message bubble as a separate element. You want it inside the bubble at the bottom-right corner (like iMessage/WhatsApp style).
 
 ## Solution
 
-### Part 1: Fix Edge Function Authentication
+### Change 1: Move timestamp inside the message bubble
 
-Update `supabase/functions/calendar-token-manager/index.ts` to use proper JWT validation:
+Move the timestamp to be inline at the bottom-right of the message content, saving vertical space and matching modern messaging apps:
 
-```typescript
-// Replace the setSession() pattern with getClaims()
-const authHeader = req.headers.get('Authorization')
-if (!authHeader?.startsWith('Bearer ')) {
-  // For get_oauth_url action, auth is optional
-  if (action !== 'get_oauth_url') {
-    throw new Error('No authorization header')
-  }
-}
-
-// Create client with auth header
-const supabaseClient = createClient(
-  Deno.env.get('SUPABASE_URL') ?? '',
-  Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-  { global: { headers: { Authorization: authHeader } } }
-)
-
-// For actions requiring auth, validate JWT with getClaims()
-case 'exchange_code':
-  const token = authHeader?.replace('Bearer ', '')
-  if (!token) {
-    throw new Error('User authentication required')
-  }
-  
-  const { data: claims, error: claimsError } = await supabaseClient.auth.getClaims(token)
-  if (claimsError || !claims?.claims) {
-    throw new Error('User authentication required')
-  }
-  
-  const userId = claims.claims.sub
-  // Continue with token exchange...
+```
+Before:                          After:
+┌────────────────┐              ┌────────────────────────┐
+│ Message text   │              │ Message text    2m ago │
+└────────────────┘              └────────────────────────┘
+         2m ago                 
 ```
 
-### Part 2: Improve useOAuthCallback Session Detection
+### Change 2: Fix copy button positioning  
 
-The hook currently waits 5 seconds for session, but the session should already exist in localStorage. The issue is timing:
+Move the copy button inside the message bubble at the top-right corner with proper hover behavior. Use a small icon that appears on hover/tap.
 
-```typescript
-// In useOAuthCallback.tsx - add better session restoration logging
-const { data: sessionData } = await supabase.auth.getSession();
+## Code Changes
 
-if (!sessionData.session) {
-  console.warn('[OAuth] No session found immediately. Checking localStorage...');
+**File: `src/components/CommsConsole/TranscriptScroll.tsx`**
+
+```tsx
+// Inside the message bubble div, restructure to:
+<div className={cn(
+  'relative max-w-[80%] rounded-lg px-3 py-2',
+  // ... existing classes
+)}>
+  {message.role === 'assistant' && !message.content ? (
+    // ... typing indicator (unchanged)
+  ) : (
+    <div className="flex flex-col">
+      {/* Message content with inline timestamp */}
+      <p className="text-sm whitespace-pre-wrap break-words">
+        {message.content}
+        {/* Inline timestamp at end of content */}
+        {message.created_at && (
+          <span className={cn(
+            'inline-block text-[10px] ml-2 align-bottom opacity-60',
+            isUser ? 'text-primary-foreground/70' : 'text-muted-foreground'
+          )}>
+            {formatRelativeTime(message.created_at)}
+          </span>
+        )}
+      </p>
+      
+      {/* Copy button - top-right corner inside bubble */}
+      {message.content && !isSystem && (
+        <button
+          onClick={() => handleCopy(message.content || '', message.id || String(index))}
+          className={cn(
+            'absolute top-1 right-1 p-1 rounded transition-opacity',
+            'opacity-0 group-hover:opacity-100 hover:bg-black/10',
+            isUser && 'hover:bg-white/20'
+          )}
+          title="Copy message"
+        >
+          {copiedId === (message.id || String(index)) ? (
+            <Check className="w-3 h-3 text-green-500" />
+          ) : (
+            <Copy className={cn(
+              'w-3 h-3',
+              isUser ? 'text-primary-foreground/70' : 'text-muted-foreground'
+            )} />
+          )}
+        </button>
+      )}
+    </div>
+  )}
   
-  // Force refresh the session from localStorage
-  await supabase.auth.refreshSession();
-  const { data: refreshed } = await supabase.auth.getSession();
-  
-  if (refreshed.session) {
-    console.log('[OAuth] Session restored after refresh');
-  }
-}
+  {/* Retry button stays here */}
+</div>
+
+{/* REMOVE the separate timestamp span that was outside the bubble */}
 ```
 
-## Files to Modify
+## Visual Result
 
-| File | Change |
-|------|--------|
-| `supabase/functions/calendar-token-manager/index.ts` | Replace `setSession()` with `getClaims()` for proper JWT validation |
-| `src/hooks/useOAuthCallback.tsx` | Add session refresh attempt before falling back to timeout |
-
-## Technical Flow After Fix
-
-```text
-User clicks "Connect Outlook"
-    ↓
-get_oauth_url (no auth needed) → returns Microsoft OAuth URL
-    ↓
-User redirected to Microsoft, authenticates
-    ↓
-Microsoft redirects to /calendar?code=...&state=outlook
-    ↓
-useOAuthCallback detects code + state
-    ↓
-supabase.auth.getSession() → session exists (persisted from before redirect)
-    ↓
-supabase.functions.invoke('calendar-token-manager', {
-  body: { action: 'exchange_code', code, provider: 'outlook', redirect_uri }
-})
-    ↓
-Edge function: getClaims(token) → validates JWT, extracts userId
-    ↓
-exchangeMicrosoftCode() → exchanges code for tokens, stores connection
-    ↓
-Returns success → toast shows "Successfully connected to Outlook Calendar"
+**Assistant messages:**
+```
+┌──────────────────────────────────[📋]┐
+│ Here's your schedule for today   2m │
+└──────────────────────────────────────┘
 ```
 
-## Config Changes
-
-Update `supabase/config.toml` to ensure JWT verification is disabled (handled in code):
-
-```toml
-[functions.calendar-token-manager]
-verify_jwt = false
+**User messages (right-aligned):**
+```
+                        ┌[📋]──────────────────┐
+│ Show me tomorrow's tasks   Just now │
+└──────────────────────────────────────┘
 ```
 
-This allows the edge function to handle both authenticated and unauthenticated actions (like `get_oauth_url`) in the same function.
+## Summary
+
+| Change | Description |
+|--------|-------------|
+| Timestamp position | Move inside bubble, inline after text content |
+| Copy button | Fix to top-right corner inside bubble with proper relative parent |
+| Hover behavior | Copy icon appears on hover with appropriate contrast for user/assistant bubbles |
+
