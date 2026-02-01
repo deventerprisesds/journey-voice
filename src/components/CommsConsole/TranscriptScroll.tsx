@@ -132,34 +132,50 @@ const TranscriptScroll: React.FC<TranscriptScrollProps> = ({
                     </>
                   )}
                   
-                  {/* Copy button - appears on hover */}
-                  {message.content && !isSystem && (
-                    <button
-                      onClick={() => handleCopy(message.content || '', message.id || String(index))}
-                      className={cn(
-                        'absolute -right-7 top-1/2 -translate-y-1/2 p-1 rounded transition-opacity',
-                        'opacity-0 group-hover:opacity-100 hover:bg-muted/80',
-                        isUser && '-left-7 -right-auto'
-                      )}
-                      title="Copy message"
-                    >
-                      {copiedId === (message.id || String(index)) ? (
-                        <Check className="w-3.5 h-3.5 text-green-500" />
-                      ) : (
-                        <Copy className="w-3.5 h-3.5 text-muted-foreground" />
-                      )}
-                    </button>
-                  )}
                 </div>
                 
-                {/* Timestamp - SMS-like display */}
-                {message.created_at && (
-                  <span className={cn(
-                    'text-[10px] text-muted-foreground/60 mt-0.5 px-1',
-                    isUser && 'text-right'
+                {/* Timestamp + Copy button row - below bubble */}
+                {message.created_at && !isSystem && (
+                  <div className={cn(
+                    'flex items-center gap-1.5 mt-0.5 px-1',
+                    isUser ? 'justify-end' : 'justify-start'
                   )}>
-                    {formatRelativeTime(message.created_at)}
-                  </span>
+                    {isUser ? (
+                      <>
+                        <button
+                          onClick={() => handleCopy(message.content || '', message.id || String(index))}
+                          className="p-0.5 rounded hover:bg-muted/60 transition-colors"
+                          title="Copy message"
+                        >
+                          {copiedId === (message.id || String(index)) ? (
+                            <Check className="w-3 h-3 text-green-500" />
+                          ) : (
+                            <Copy className="w-3 h-3 text-muted-foreground/50" />
+                          )}
+                        </button>
+                        <span className="text-[10px] text-muted-foreground/60">
+                          {formatRelativeTime(message.created_at)}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="text-[10px] text-muted-foreground/60">
+                          {formatRelativeTime(message.created_at)}
+                        </span>
+                        <button
+                          onClick={() => handleCopy(message.content || '', message.id || String(index))}
+                          className="p-0.5 rounded hover:bg-muted/60 transition-colors"
+                          title="Copy message"
+                        >
+                          {copiedId === (message.id || String(index)) ? (
+                            <Check className="w-3 h-3 text-green-500" />
+                          ) : (
+                            <Copy className="w-3 h-3 text-muted-foreground/50" />
+                          )}
+                        </button>
+                      </>
+                    )}
+                  </div>
                 )}
               </div>
             </div>
