@@ -21,7 +21,7 @@ export function useOAuthCallback() {
 
       // Handle OAuth error
       if (error) {
-        console.error('OAuth error:', error);
+        console.error('[OAuth] Error from provider:', error);
         toast.error(`Calendar connection failed: ${error}`);
         navigate(location.pathname, { replace: true });
         return;
@@ -33,12 +33,28 @@ export function useOAuthCallback() {
         
         try {
           toast.info('Completing calendar connection...');
+          console.log('[OAuth] Starting token exchange for provider:', provider);
           
-          // Wait for a valid session before exchanging the code
-          const { data: sessionData } = await supabase.auth.getSession();
+          // First try to get existing session
+          let { data: sessionData } = await supabase.auth.getSession();
           
           if (!sessionData.session) {
-            console.warn('No session found, waiting for auth state change...');
+            console.warn('[OAuth] No session found immediately. Attempting refresh...');
+            
+            // Force refresh the session from localStorage
+            const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
+            
+            if (refreshError) {
+              console.warn('[OAuth] Session refresh failed:', refreshError.message);
+            } else if (refreshed.session) {
+              console.log('[OAuth] Session restored after refresh');
+              sessionData = refreshed;
+            }
+          }
+          
+          // If still no session, wait for auth state change
+          if (!sessionData.session) {
+            console.warn('[OAuth] No session after refresh, waiting for auth state change...');
             
             // Wait up to 5 seconds for session to be restored
             const sessionPromise = new Promise<boolean>((resolve) => {
@@ -57,21 +73,24 @@ export function useOAuthCallback() {
             
             if (!hasSession) {
               // No session after waiting - store OAuth params and redirect to sign in
-              console.error('No session available after timeout');
+              console.error('[OAuth] No session available after timeout');
               sessionStorage.setItem('pending_oauth_exchange', JSON.stringify({
                 code,
                 provider,
-                redirect_uri: `${window.location.origin}/calendar`,
-                return_path: '/calendar'
+                redirect_uri: `${window.location.origin}${location.pathname}`,
+                return_path: location.pathname
               }));
               toast.error('Please sign in to complete calendar connection');
               navigate('/auth', { replace: true });
               return;
             }
+            
+            // Refresh session data after waiting
+            const { data: finalSession } = await supabase.auth.getSession();
+            sessionData = finalSession;
           }
 
-          // Add small debounce to ensure session is fully restored
-          await new Promise(resolve => setTimeout(resolve, 100));
+          console.log('[OAuth] Session found, exchanging code for tokens');
           
           const { data, error: exchangeError } = await supabase.functions.invoke('calendar-token-manager', {
             body: {
@@ -83,7 +102,7 @@ export function useOAuthCallback() {
           });
 
           if (exchangeError) {
-            console.error('Token exchange error:', exchangeError);
+            console.error('[OAuth] Token exchange error:', exchangeError);
             
             // Check for specific authentication error
             if (exchangeError.message?.includes('User authentication required')) {
@@ -94,6 +113,7 @@ export function useOAuthCallback() {
             throw exchangeError;
           }
 
+          console.log('[OAuth] Token exchange successful:', data);
           toast.success(`Successfully connected to ${provider === 'google' ? 'Google' : 'Outlook'} Calendar`);
           
           // Trigger a sync of calendar events
@@ -107,13 +127,13 @@ export function useOAuthCallback() {
               }
             });
           } catch (syncError) {
-            console.warn('Initial sync failed, will retry later:', syncError);
+            console.warn('[OAuth] Initial sync failed, will retry later:', syncError);
           }
 
           // Clean URL and navigate back to current page
           navigate(location.pathname, { replace: true });
         } catch (error) {
-          console.error('Failed to complete OAuth flow:', error);
+          console.error('[OAuth] Failed to complete OAuth flow:', error);
           navigate(location.pathname, { replace: true });
         }
       }

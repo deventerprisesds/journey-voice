@@ -3,7 +3,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
 }
 
 interface TokenRequest {
@@ -20,28 +20,50 @@ interface TokenRequest {
 serve(async (req) => {
   // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
+    return new Response('ok', { headers: corsHeaders });
   }
 
   try {
-    const supabaseClient = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-    )
-
+    const { action, connectionId, accessToken, refreshToken, expiresAt, provider, code, redirect_uri }: TokenRequest = await req.json()
+    
     // Get the Authorization header from the request
     const authHeader = req.headers.get('Authorization')
-    if (!authHeader) {
-      throw new Error('No authorization header')
+    
+    // For get_oauth_url, auth is optional - allow unauthenticated requests
+    const requiresAuth = action !== 'get_oauth_url'
+    
+    if (requiresAuth && !authHeader?.startsWith('Bearer ')) {
+      console.error('[calendar-token-manager] No authorization header for action:', action)
+      return new Response(
+        JSON.stringify({ error: 'User authentication required' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
     }
 
-    // Set the Authorization header for the supabase client
-    supabaseClient.auth.setSession({
-      access_token: authHeader.replace('Bearer ', ''),
-      refresh_token: ''
-    })
+    // Create client - use service role for database operations, but validate user JWT separately
+    const supabaseClient = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+      authHeader ? { global: { headers: { Authorization: authHeader } } } : undefined
+    )
 
-    const { action, connectionId, accessToken, refreshToken, expiresAt, provider, code, redirect_uri }: TokenRequest = await req.json()
+    // For authenticated actions, validate the JWT and extract user ID
+    let userId: string | null = null
+    if (requiresAuth && authHeader) {
+      const token = authHeader.replace('Bearer ', '')
+      const { data: claims, error: claimsError } = await supabaseClient.auth.getClaims(token)
+      
+      if (claimsError || !claims?.claims?.sub) {
+        console.error('[calendar-token-manager] JWT validation failed:', claimsError?.message || 'No claims found')
+        return new Response(
+          JSON.stringify({ error: 'User authentication required' }),
+          { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        )
+      }
+      
+      userId = claims.claims.sub as string
+      console.log('[calendar-token-manager] Authenticated user:', userId)
+    }
 
     let result
     switch (action) {
@@ -58,13 +80,11 @@ serve(async (req) => {
           throw new Error('Provider, code, and redirect_uri are required for token exchange')
         }
         
-        // Get user from session
-        const { data: { user }, error: userError } = await supabaseClient.auth.getUser()
-        if (userError || !user) {
-          throw new Error('User authentication required')
+        if (!userId) {
+          throw new Error('User authentication required for token exchange')
         }
         
-        result = await exchangeCodeForTokens(supabaseClient, provider, code, redirect_uri, user.id)
+        result = await exchangeCodeForTokens(supabaseClient, provider, code, redirect_uri, userId)
         break
 
       case 'get':
@@ -188,7 +208,7 @@ async function getOAuthUrl(provider: string, redirectUri: string) {
 
 // Exchange authorization code for access tokens
 async function exchangeCodeForTokens(supabaseClient: any, provider: string, code: string, redirectUri: string, userId: string) {
-  console.log(`Exchanging code for ${provider} tokens`);
+  console.log(`Exchanging code for ${provider} tokens for user: ${userId}`);
   
   if (provider === 'google') {
     return await exchangeGoogleCode(supabaseClient, code, redirectUri, userId);
@@ -251,9 +271,10 @@ async function exchangeGoogleCode(supabaseClient: any, code: string, redirectUri
     ? new Date(Date.now() + tokens.expires_in * 1000).toISOString()
     : null;
   
-  // Store connection using secure RPC
+  // Store connection using secure RPC with explicit user_id
   const { data: connectionId, error: insertError } = await supabaseClient
-    .rpc('insert_calendar_connection', {
+    .rpc('insert_calendar_connection_for_user', {
+      _user_id: userId,
       _provider: 'google',
       _provider_account_id: userInfo.id,
       _provider_account_email: userInfo.email,
@@ -330,9 +351,10 @@ async function exchangeMicrosoftCode(supabaseClient: any, code: string, redirect
     ? new Date(Date.now() + tokens.expires_in * 1000).toISOString()
     : null;
   
-  // Store connection using secure RPC
+  // Store connection using secure RPC with explicit user_id
   const { data: connectionId, error: insertError } = await supabaseClient
-    .rpc('insert_calendar_connection', {
+    .rpc('insert_calendar_connection_for_user', {
+      _user_id: userId,
       _provider: 'outlook',
       _provider_account_id: userInfo.id,
       _provider_account_email: userInfo.mail || userInfo.userPrincipalName,
