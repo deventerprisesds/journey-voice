@@ -41,7 +41,6 @@ const TranscriptScroll: React.FC<TranscriptScrollProps> = ({
   className,
   onRetry,
 }) => {
-  const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
@@ -71,7 +70,7 @@ const TranscriptScroll: React.FC<TranscriptScrollProps> = ({
   }
 
   return (
-    <ScrollArea className={cn('flex-1', className)} ref={scrollRef}>
+    <ScrollArea className={cn('flex-1', className)}>
       <div className="flex flex-col gap-3 p-4">
         {messages.map((message, index) => {
           const SourceIcon = sourceIcons[message.source] || MessageSquare;
