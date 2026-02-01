@@ -1,195 +1,213 @@
 
-# Debug Analysis: Published Site Loading Forever
+# Fix: Profile Settings & Greeting Preference
 
-## Investigation Summary
+## Problem Summary
 
-After thoroughly reviewing the code, I've identified why the published site suddenly shows "loading forever." The issue is **definitely related to auth logic**, but in a subtle way that creates a race condition.
+1. **Profile Settings is a placeholder** - Shows "Profile settings will be implemented in a future update"
+2. **first_name is NULL in database** - The `profiles.first_name` field is empty
+3. **No preferred greeting option** - There's no way to specify "Sir" as the preferred address form
+4. **Fallback uses "Dev"** - The system falls back to parsing `full_name` ("Dev") when `first_name` is null
 
----
-
-## The Root Cause: Missing Route Protection + Race Condition
-
-### Finding 1: Routes Are NOT Protected
-
-**File**: `src/App.tsx` (Lines 83-95)
-
-```typescript
-<Route path="/*" element={
-  <MainLayout>
-    <Routes>
-      <Route path="/" element={<Navigate to="/tasks?view=focus" replace />} />
-      <Route path="/tasks" element={<TasksPage />} />  // <-- NO ProtectedRoute wrapper!
-      ...
-    </Routes>
-  </MainLayout>
-} />
+Database shows your profile:
 ```
-
-The `/tasks` route does **not** use the `ProtectedRoute` component. This means:
-- On production, `isDemoMode = false`
-- No automatic redirect to `/auth` when user is null
-- The page tries to load tasks without being authenticated
-
-### Finding 2: loadTasks Early Exit Doesn't Clear Loading
-
-**File**: `src/pages/TasksPage.tsx` (Lines 103-104)
-
-```typescript
-const loadTasks = async () => {
-  if (!user) return;  // Returns WITHOUT calling setLoading(false)!
-  setLoading(true);
-  // ...
-}
-```
-
-Initial state is `loading = true` (line 19). When:
-1. `user` is `null` on production (not logged in)
-2. `loadTasks()` exits early at line 104
-3. `setLoading(false)` is never called
-4. Spinner shows forever
-
-### Finding 3: MainLayout Renders Children Even Without User
-
-**File**: `src/components/MainLayout.tsx` (Lines 398-401)
-
-```typescript
-// If not logged in, just render children (Auth page, etc.)
-if (!user) {
-  return <>{children}</>;  // Still renders TasksPage!
-}
-```
-
-This is meant to allow the Auth page to render, but it also renders TasksPage even when unauthenticated.
-
----
-
-## Why It "Suddenly Stopped Working"
-
-It likely didn't "suddenly" stop - this bug has always existed. Here's what probably happened:
-
-1. **During development**: You're in the Lovable preview iframe, so `isDemoMode = true` and mock user is created immediately
-2. **On production**: `isDemoMode = false`, so real auth is required
-3. **If you were previously logged in**: Your session cookie may have expired
-4. **Now without a valid session**: The loading spinner appears forever
-
----
-
-## Error Handling Assessment
-
-**Current error handling is actually good** - the try/catch exists in loadTasks (lines 140-145). The problem is the **early return before the try block even runs**.
-
-```typescript
-const loadTasks = async () => {
-  if (!user) return;        // <-- Problem: Exits here, no error handling reached
-  
-  setLoading(true);
-  try {                     // <-- Never gets here if !user
-    // ... fetch logic
-  } catch (error) {
-    console.error('[TasksPage] Error in loadTasks:', error);
-    setTasks([]);
-  } finally {
-    setLoading(false);      // <-- Never reached if !user
-  }
-};
+first_name: NULL
+full_name: Dev
+→ AI greets you as "Good morning, Dev" instead of "Good morning, Sir"
 ```
 
 ---
 
-## Solution
+## Root Cause
 
-### Option A: Wrap Routes with ProtectedRoute (Recommended)
-
-**File**: `src/App.tsx`
+The greeting logic in all voice/phone bridges uses this pattern:
 
 ```typescript
-import ProtectedRoute from './components/ProtectedRoute';
-
-// ...
-
-<Route path="/tasks" element={
-  <ProtectedRoute>
-    <TasksPage />
-  </ProtectedRoute>
-} />
+const userName = profile?.first_name || profile?.full_name?.split(' ')[0] || 'sir';
 ```
 
-This ensures unauthenticated users are redirected to `/auth`.
+This means:
+1. If `first_name` exists → use it
+2. Else if `full_name` exists → parse first word
+3. Else → fallback to "sir"
 
-### Option B: Fix loadTasks to Handle No User
-
-**File**: `src/pages/TasksPage.tsx`
-
-```typescript
-const loadTasks = async () => {
-  if (!user) {
-    setLoading(false);  // Add this line
-    return;
-  }
-  // ... rest of function
-}
-```
-
-### Option C: Add Auth Check in TasksPage (Both Fixes)
-
-```typescript
-import { Navigate } from 'react-router-dom';
-
-// In component:
-const { user, isDemoMode, loading: authLoading } = useAuth();
-
-// Early return with redirect
-if (!authLoading && !user && !isDemoMode) {
-  return <Navigate to="/auth" replace />;
-}
-
-// Also fix loadTasks
-const loadTasks = async () => {
-  if (!user) {
-    setLoading(false);
-    return;
-  }
-  // ...
-}
-```
+Since your `first_name` is NULL and `full_name` is "Dev", you get "Dev".
 
 ---
 
-## Files to Modify
+## Solution: Implement Profile Settings with Greeting Preference
+
+### Part 1: Add `preferred_greeting` Column to Profiles Table
+
+Create a migration to add a new column:
+
+```sql
+ALTER TABLE profiles 
+ADD COLUMN preferred_greeting TEXT DEFAULT NULL;
+
+COMMENT ON COLUMN profiles.preferred_greeting IS 
+'How the user prefers to be addressed (e.g., "Sir", "Von", "Mr. Chase"). If set, overrides first_name for greetings.';
+```
+
+### Part 2: Create ProfileSettings Component
+
+**New File**: `src/components/ProfileSettings.tsx`
+
+A form with fields for:
+- **First Name** (text input)
+- **Last Name** (text input)  
+- **Preferred Greeting** (text input with examples: "Sir", "Von", "Mr. Chase")
+- **Full Name** (text input)
+- **Phone Number** (text input)
+- **Email** (read-only, from auth)
+
+The component will:
+1. Load current profile data from `profiles` table
+2. Allow editing and saving changes
+3. Include a "How would you like to be addressed?" field
+
+### Part 3: Replace Placeholder in Settings Page
+
+**File**: `src/pages/Settings.tsx` (Lines 168-179)
+
+Replace the placeholder with the new component:
+
+```typescript
+<TabsContent value="profile" className="mt-6">
+  <ProfileSettings />
+</TabsContent>
+```
+
+### Part 4: Update Greeting Logic in Voice Bridges
+
+Update the userName extraction in all 4 locations to check `preferred_greeting` first:
+
+**Files to modify**:
+- `supabase/functions/generate-realtime-token/index.ts`
+- `supabase/functions/twilio-realtime-bridge/index.ts`
+- `cloudflare/src/TwilioCallSession.ts`
+- `src/utils/RealtimeVoiceAssistant.ts`
+
+**New pattern**:
+```typescript
+// Old: const userName = profile?.first_name || profile?.full_name?.split(' ')[0] || 'sir';
+// New: 
+const userName = profile?.preferred_greeting 
+  || profile?.first_name 
+  || profile?.full_name?.split(' ')[0] 
+  || 'sir';
+```
+
+This allows you to:
+- Set `preferred_greeting = "Sir"` → AI says "Good morning, Sir"
+- Leave it NULL and set `first_name = "Von"` → AI says "Good morning, Von"
+- Leave both NULL → Falls back to parsing full_name or "sir"
+
+---
+
+## Files to Create/Modify
 
 | File | Change |
 |------|--------|
-| `src/App.tsx` | Wrap authenticated routes with `<ProtectedRoute>` |
-| `src/pages/TasksPage.tsx` | Add `setLoading(false)` before early return |
+| `supabase/migrations/XXXX_add_preferred_greeting.sql` | Add `preferred_greeting` column |
+| `src/components/ProfileSettings.tsx` | NEW - Profile editing form |
+| `src/pages/Settings.tsx` | Import and use ProfileSettings component |
+| `src/integrations/supabase/types.ts` | Update Profile type (if manually maintained) |
+| `supabase/functions/generate-realtime-token/index.ts` | Add preferred_greeting to SELECT and greeting logic |
+| `supabase/functions/twilio-realtime-bridge/index.ts` | Add preferred_greeting to SELECT and greeting logic |
+| `cloudflare/src/TwilioCallSession.ts` | Update greeting logic |
+| `src/utils/RealtimeVoiceAssistant.ts` | Update greeting logic |
 
 ---
 
-## Technical Summary
+## Technical Details
 
-| Question | Answer |
-|----------|--------|
-| Is it a Supabase problem? | No - Supabase is working fine |
-| Is it an auth problem? | **Yes** - missing route protection + race condition |
-| Is there proper error handling? | Yes for DB errors, but **no for missing auth** |
-| Why did it "suddenly" stop? | Session cookie likely expired; the bug always existed |
+### Database Query Update
+
+```sql
+SELECT first_name, full_name, preferred_greeting FROM profiles WHERE user_id = $1
+```
+
+### ProfileSettings Component Structure
+
+```typescript
+// Key states
+const [firstName, setFirstName] = useState('');
+const [lastName, setLastName] = useState('');
+const [preferredGreeting, setPreferredGreeting] = useState('');
+const [fullName, setFullName] = useState('');
+const [phone, setPhone] = useState('');
+
+// Load on mount
+useEffect(() => {
+  const { data } = await supabase
+    .from('profiles')
+    .select('first_name, last_name, full_name, phone, preferred_greeting')
+    .eq('user_id', user.id)
+    .single();
+  // Populate state...
+}, [user?.id]);
+
+// Save handler
+const handleSave = async () => {
+  await supabase
+    .from('profiles')
+    .update({
+      first_name: firstName || null,
+      last_name: lastName || null,
+      full_name: fullName || null,
+      phone: phone || null,
+      preferred_greeting: preferredGreeting || null,
+    })
+    .eq('user_id', user.id);
+};
+```
+
+### UI Example
+
+```
+┌─────────────────────────────────────────────┐
+│ Profile Settings                            │
+├─────────────────────────────────────────────┤
+│                                             │
+│ Email                                       │
+│ ┌─────────────────────────────────────────┐ │
+│ │ dev@enterpriseds.io (read-only)         │ │
+│ └─────────────────────────────────────────┘ │
+│                                             │
+│ First Name                                  │
+│ ┌─────────────────────────────────────────┐ │
+│ │ Von                                     │ │
+│ └─────────────────────────────────────────┘ │
+│                                             │
+│ Last Name                                   │
+│ ┌─────────────────────────────────────────┐ │
+│ │ Chase                                   │ │
+│ └─────────────────────────────────────────┘ │
+│                                             │
+│ How should I address you?                   │
+│ ┌─────────────────────────────────────────┐ │
+│ │ Sir                                     │ │
+│ └─────────────────────────────────────────┘ │
+│ Examples: "Sir", "Von", "Mr. Chase"         │
+│                                             │
+│ Phone                                       │
+│ ┌─────────────────────────────────────────┐ │
+│ │ +14434150606                            │ │
+│ └─────────────────────────────────────────┘ │
+│                                             │
+│              [Save Changes]                 │
+│                                             │
+└─────────────────────────────────────────────┘
+```
 
 ---
 
 ## Expected Behavior After Fix
 
-**On Production (journey-voice.lovable.app)**:
-1. User visits site without valid session
-2. ProtectedRoute detects no user
-3. Redirects to `/auth` page
-4. User logs in
-5. Redirected back to `/tasks`
-6. Tasks load correctly
+1. Go to Settings → Profile tab
+2. See your current profile info (email, name, phone)
+3. Enter "Sir" in the "How should I address you?" field
+4. Click Save
+5. Next voice/phone call: "Good morning, Sir. What can I help you with?"
 
-**If using Option B only**:
-1. User visits site without valid session
-2. Loading spinner appears briefly
-3. `loadTasks` exits, sets `loading = false`
-4. Page shows empty state (no tasks)
-5. User must manually navigate to `/auth`
-
-Option A (ProtectedRoute) provides a better user experience by automatically redirecting.
+The system respects your preference across all communication modes (WebRTC voice, phone calls, chat).
