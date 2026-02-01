@@ -1,260 +1,172 @@
 
-# Fix: Outlook Calendar Event Reminders for Task Notifications
+# Plan: Add Outlook OAuth Connection & Improve Error Feedback in Notification Settings
 
 ## Problem Summary
 
-The Outlook reminder option in Settings doesn't work because:
+From the screenshots and investigation:
 
-1. **Notification delivery uses external webhook**: When you enable `OUTLOOK_EVENT` channel, the `send-unified-notification` function sends data to an external n8n webhook (`UNIFIED_WEBHOOK_URL`) rather than using the Microsoft Graph API directly
-2. **Direct API integration exists but isn't used**: The `calendar-integration-manager` function has working Microsoft Graph API code for creating Outlook events, but notifications don't use it
-3. **Missing connection between channels and OAuth tokens**: The notification system doesn't retrieve your Office 365 OAuth tokens to create events directly
+1. **"Not connected" for Outlook** - Your Outlook connections exist but have expired tokens (expired Jan 6, 2026). The UI shows "Not connected - add in Calendar settings" but there's no way to connect directly from the Notification Settings page.
 
-## Current Flow (Broken)
-```text
-Task Due Reminder
-    ↓
-notification-delivery reads user's channels (includes OUTLOOK_EVENT)
-    ↓
-Calls send-unified-notification with OUTLOOK_EVENT channel
-    ↓
-send-unified-notification builds event payload
-    ↓
-Sends to UNIFIED_WEBHOOK_URL (n8n webhook)
-    ↓
-n8n webhook may or may not handle Outlook correctly
-    ↓
-❌ No event appears in Outlook
-```
+2. **No OAuth setup path** - Clicking through to "Calendar settings" doesn't exist - you'd need to go to the Calendar page and find the connection modal there, which is not intuitive.
 
-## Proposed Flow (Fixed)
-```text
-Task Due Reminder
-    ↓
-notification-delivery reads user's channels (includes OUTLOOK_EVENT)
-    ↓
-Calls send-unified-notification with OUTLOOK_EVENT channel
-    ↓
-send-unified-notification detects OUTLOOK_EVENT
-    ↓
-Fetches user's Office 365 OAuth tokens via get_office365_connection_secure()
-    ↓
-Creates event directly via Microsoft Graph API
-    ↓
-✅ Event with reminder appears in Outlook app
-```
+3. **Test Email failed silently** - The test button showed a success toast saying "Check your unified webhook" but gave no indication if the email was actually delivered or if there was an issue.
 
-## Solution: Direct Microsoft Graph API Integration
+---
 
-### Part 1: Update send-unified-notification Edge Function
+## Solution
 
-Modify `supabase/functions/send-unified-notification/index.ts` to create Outlook events directly using the Microsoft Graph API instead of relying on the external webhook.
+### Part 1: Add "Connect Outlook" Button Directly in Notification Settings
 
-**New function to add:**
-```typescript
-async function createOutlookEventDirect(
-  supabaseClient: any,
-  userId: string,
-  eventData: {
-    title: string;
-    startTime: string;
-    endTime: string;
-    description?: string;
-    reminderMinutes?: number;
-  }
-): Promise<{ success: boolean; eventId?: string; error?: string }> {
-  // 1. Get user's Office 365 connection with decrypted tokens
-  const { data: connection, error } = await supabaseClient
-    .rpc('get_office365_connection_secure');
-  
-  if (error || !connection || connection.length === 0) {
-    return { success: false, error: 'No Office 365 connection found' };
-  }
-  
-  const { access_token, refresh_token, expires_at } = connection[0];
-  
-  // 2. Check if token needs refresh
-  if (new Date(expires_at) < new Date()) {
-    // Refresh token logic (call calendar-token-manager)
-  }
-  
-  // 3. Create event via Microsoft Graph API
-  const event = {
-    subject: eventData.title,
-    body: {
-      contentType: 'text',
-      content: eventData.description || '',
-    },
-    start: {
-      dateTime: eventData.startTime,
-      timeZone: 'UTC',
-    },
-    end: {
-      dateTime: eventData.endTime,
-      timeZone: 'UTC',
-    },
-    isReminderOn: true,
-    reminderMinutesBeforeStart: eventData.reminderMinutes || 15,
-  };
-  
-  const response = await fetch(
-    'https://graph.microsoft.com/v1.0/me/calendar/events',
-    {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${access_token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(event),
-    }
-  );
-  
-  if (!response.ok) {
-    return { success: false, error: `Graph API error: ${response.status}` };
-  }
-  
-  const result = await response.json();
-  return { success: true, eventId: result.id };
-}
-```
+Allow users to initiate the OAuth flow right from the Notification Settings page instead of having to navigate elsewhere.
 
-**Modify the main flow** to use direct creation for Outlook:
-```typescript
-// In callUnifiedWebhook function, add before sending to external webhook:
-if (payload.channels.includes('OUTLOOK_EVENT')) {
-  const outlookResult = await createOutlookEventDirect(
-    supabaseClient,
-    payload.userId,
-    {
-      title: dynamicOutlookEvent?.title || payload.title || 'Task Reminder',
-      startTime: dynamicOutlookEvent?.startTime || new Date().toISOString(),
-      endTime: dynamicOutlookEvent?.endTime || new Date(Date.now() + 60*60*1000).toISOString(),
-      description: payload.body,
-      reminderMinutes: 15,
-    }
-  );
-  
-  result.channelResults.outlook = outlookResult;
-  
-  // Remove OUTLOOK_EVENT from channels going to external webhook
-  payload.channels = payload.channels.filter(c => c !== 'OUTLOOK_EVENT');
-}
-```
-
-### Part 2: Add Token Refresh Support
-
-Create a helper function to refresh expired tokens using the existing `calendar-token-manager`:
+**Changes to `src/components/NotificationSettings.tsx`:**
 
 ```typescript
-async function refreshOutlookToken(
-  supabaseClient: any,
-  connectionId: string,
-  refreshToken: string
-): Promise<string | null> {
-  // Call the token manager to refresh
-  const { data, error } = await supabaseClient.functions.invoke(
-    'calendar-token-manager',
-    {
-      body: {
-        action: 'refresh',
-        provider: 'office365',
-        connection_id: connectionId,
-        refresh_token: refreshToken,
-      }
-    }
-  );
-  
-  return error ? null : data?.access_token;
-}
-```
+// Import the OAuth component
+import { CalendarOAuthManager } from './CalendarOAuthManager';
 
-### Part 3: Update Notification Settings UI
-
-Enhance the Outlook toggle with connection status and test button:
-
-```typescript
-{/* Outlook Calendar Events */}
-<div className="flex items-center justify-between p-3 rounded-lg border">
-  <div className="flex items-center gap-3">
-    <Calendar className="h-5 w-5 text-blue-500" />
-    <div>
-      <span className="font-medium">Outlook Calendar</span>
-      <p className="text-xs text-muted-foreground">
-        Creates events with native phone reminders
-      </p>
-      {/* Show connection status */}
-      {hasOutlookConnection ? (
-        <p className="text-xs text-green-600">
-          ✓ Connected: {outlookEmail}
-        </p>
-      ) : (
-        <p className="text-xs text-amber-600">
-          ⚠ Not connected - add in Calendar settings
-        </p>
-      )}
-    </div>
-  </div>
-  <div className="flex items-center gap-2">
-    <Switch 
-      checked={prefs.channels.includes('OUTLOOK_EVENT')} 
-      onCheckedChange={() => handleToggleChannel('OUTLOOK_EVENT')}
-      disabled={!hasOutlookConnection}
+// In the Outlook section, when not connected:
+{!outlookConnection ? (
+  <div className="mt-2">
+    <CalendarOAuthManager
+      provider="outlook"
+      onSuccess={() => {
+        loadCalendarConnections();
+        toast({ title: "Outlook Connected", description: "Your Outlook calendar is now connected." });
+      }}
+      onError={(err) => toast({ title: "Connection Failed", description: err, variant: "destructive" })}
     />
-    <Button 
-      size="sm" 
-      variant="outline" 
-      onClick={sendTestOutlookEvent}
-      disabled={!hasOutlookConnection}
-    >
-      Test
-    </Button>
   </div>
-</div>
+) : null}
 ```
+
+### Part 2: Show Connection Status with Expiry Warning
+
+Indicate when a connection exists but tokens are expired, with a reconnect option.
+
+```typescript
+// Add state for tracking expired status
+const [outlookExpired, setOutlookExpired] = useState(false);
+
+// In loadCalendarConnections, check expiry:
+if (outlook) {
+  const isExpired = outlook.expires_at && new Date(outlook.expires_at) < new Date();
+  setOutlookConnection({...});
+  setOutlookExpired(isExpired);
+}
+
+// In UI:
+{outlookConnection && outlookExpired ? (
+  <p className="text-xs text-amber-600">
+    ⚠ Connection expired - click to reconnect
+  </p>
+) : outlookConnection ? (
+  <p className="text-xs text-green-600">
+    ✓ Connected: {outlookConnection.provider_account_email}
+  </p>
+) : (
+  <CalendarOAuthManager provider="outlook" ... />
+)}
+```
+
+### Part 3: Improve Test Email Feedback
+
+Currently the test email shows success even if delivery fails. Update to show clearer feedback:
+
+```typescript
+const sendTestEmail = async () => {
+  if (!email) {
+    toast({
+      title: "Email Required",
+      description: "Please enter an email address before testing.",
+      variant: "destructive",
+    });
+    return;
+  }
+  
+  try {
+    const { data, error } = await supabase.functions.invoke('send-unified-notification', {...});
+    
+    if (error) throw error;
+    
+    toast({
+      title: "Test Email Sent",
+      description: `Email notification sent to ${email}. Please check your inbox.`,
+    });
+  } catch (error) {
+    console.error('Error sending test email:', error);
+    toast({
+      title: "Email Test Failed",
+      description: error.message || "Could not send test email. Check your email configuration.",
+      variant: "destructive",
+    });
+  }
+};
+```
+
+### Part 4: Add Same Pattern for Google Calendar
+
+Apply the same connection button pattern for Google Calendar consistency.
+
+---
 
 ## Files to Modify
 
 | File | Change |
 |------|--------|
-| `supabase/functions/send-unified-notification/index.ts` | Add direct Microsoft Graph API integration for Outlook events |
-| `src/components/NotificationSettings.tsx` | Show Outlook connection status; disable toggle if not connected |
+| `src/components/NotificationSettings.tsx` | Add inline OAuth buttons for Outlook/Google; show expiry status; improve test feedback |
+
+---
+
+## UI After Fix
+
+```text
++--------------------------------------------+
+| Delivery Channels                          |
+|                                            |
+| [Email toggle] ✓ Enabled                   |
+|   your@email.com                           |
+|                                            |
+| [Outlook Calendar]                         |
+|   Create events with native phone reminders|
+|   ⚠ Connection expired                     |
+|   [ 🔄 Reconnect Outlook Calendar ]        |
+|                                            |
+| [Google Calendar]                          |
+|   Create calendar events                   |
+|   [ Connect Google Calendar ]              |
+|                                            |
+| [Slack toggle] ✓ Enabled                   |
++--------------------------------------------+
+```
+
+---
 
 ## Technical Details
 
-### Microsoft Graph API Event Creation
+### OAuth Flow Integration
 
-The key properties for native reminders:
-```json
-{
-  "subject": "Task: Review Report",
-  "isReminderOn": true,
-  "reminderMinutesBeforeStart": 15,
-  "start": {
-    "dateTime": "2026-02-01T14:00:00",
-    "timeZone": "America/New_York"
-  },
-  "end": {
-    "dateTime": "2026-02-01T15:00:00", 
-    "timeZone": "America/New_York"
-  }
-}
-```
+The `CalendarOAuthManager` component already handles the full OAuth flow:
+1. Calls `calendar-token-manager` edge function to get OAuth URL
+2. Redirects user to Microsoft/Google consent screen
+3. Callback handled by `useOAuthCallback` hook (already in Settings page)
+4. Tokens stored in `calendar_connections` table
 
-### Existing OAuth Infrastructure
+### Why Connections Show "Not Connected"
 
-Your project already has:
-- `calendar_connections` table with encrypted tokens
-- `get_office365_connection_secure()` RPC to decrypt tokens
-- `calendar-token-manager` edge function for token refresh
-- Working Office 365 connection (`Von.Ellis@EnterpriseDS.io`)
+The `get_calendar_connections_safe` RPC uses `auth.uid()` to filter by current user. If:
+- User is in demo mode → no connections shown
+- Tokens expired → connections still shown (the query doesn't filter by expiry)
+
+The issue is the UI isn't fetching the `expires_at` field to show expired status.
+
+---
 
 ## Expected Behavior After Fix
 
 1. Go to Settings → Notifications
-2. Enable "Outlook Calendar" toggle (shows your connected account)
-3. Click "Test" → Creates test event in Outlook with reminder
-4. When task reminders are due, events appear in Outlook app with native notifications
-
-The notification will appear as an Outlook event with:
-- Native phone/desktop push notification
-- Configurable reminder time (default 15 minutes before)
-- Event details showing task title and description
+2. See Outlook shows "Connection expired" with a "Reconnect" button
+3. Click button → redirected to Microsoft login
+4. After auth → return to Settings with fresh tokens
+5. Test Email shows clear success/failure message with email address
+6. Test Outlook Event creates an event in your calendar with reminder
