@@ -1,122 +1,156 @@
 
-# Fix: List View Status Dropdown Changes Not Persisting
+# Debug Analysis: Published Site Loading Forever
 
-## Problem Summary
+## Investigation Summary
 
-When you change a task's status (or priority) via the dropdown in the List View, the selection visually changes momentarily but then reverts back - the change is never saved to the database.
+After thoroughly reviewing the code, I've identified why the published site suddenly shows "loading forever." The issue is **definitely related to auth logic**, but in a subtle way that creates a race condition.
 
 ---
 
-## Root Cause
+## The Root Cause: Missing Route Protection + Race Condition
 
-In `src/components/EnhancedTaskGridView.tsx`, the `renderEditableCell` function handles the Select dropdown for status and priority fields.
+### Finding 1: Routes Are NOT Protected
 
-**Current Code (Lines 327-340):**
+**File**: `src/App.tsx` (Lines 83-95)
+
 ```typescript
-if (type === 'select' && options) {
-  return (
-    <Select value={editValue} onValueChange={setEditValue}>
-      <SelectTrigger className="h-8">
-        <SelectValue />
-      </SelectTrigger>
+<Route path="/*" element={
+  <MainLayout>
+    <Routes>
+      <Route path="/" element={<Navigate to="/tasks?view=focus" replace />} />
+      <Route path="/tasks" element={<TasksPage />} />  // <-- NO ProtectedRoute wrapper!
       ...
-    </Select>
-  );
+    </Routes>
+  </MainLayout>
+} />
+```
+
+The `/tasks` route does **not** use the `ProtectedRoute` component. This means:
+- On production, `isDemoMode = false`
+- No automatic redirect to `/auth` when user is null
+- The page tries to load tasks without being authenticated
+
+### Finding 2: loadTasks Early Exit Doesn't Clear Loading
+
+**File**: `src/pages/TasksPage.tsx` (Lines 103-104)
+
+```typescript
+const loadTasks = async () => {
+  if (!user) return;  // Returns WITHOUT calling setLoading(false)!
+  setLoading(true);
+  // ...
 }
 ```
 
-**The Problem:**
-- `onValueChange` only calls `setEditValue(newValue)` - it updates local React state
-- Unlike the text Input (which has `onBlur={() => saveEdit(...)}`), the Select has **no mechanism to trigger `saveEdit()`**
-- When the dropdown closes, the local state has the new value, but it's never persisted to the database
-- On the next render, the task prop still has the old value, so the UI reverts
+Initial state is `loading = true` (line 19). When:
+1. `user` is `null` on production (not logged in)
+2. `loadTasks()` exits early at line 104
+3. `setLoading(false)` is never called
+4. Spinner shows forever
+
+### Finding 3: MainLayout Renders Children Even Without User
+
+**File**: `src/components/MainLayout.tsx` (Lines 398-401)
+
+```typescript
+// If not logged in, just render children (Auth page, etc.)
+if (!user) {
+  return <>{children}</>;  // Still renders TasksPage!
+}
+```
+
+This is meant to allow the Auth page to render, but it also renders TasksPage even when unauthenticated.
+
+---
+
+## Why It "Suddenly Stopped Working"
+
+It likely didn't "suddenly" stop - this bug has always existed. Here's what probably happened:
+
+1. **During development**: You're in the Lovable preview iframe, so `isDemoMode = true` and mock user is created immediately
+2. **On production**: `isDemoMode = false`, so real auth is required
+3. **If you were previously logged in**: Your session cookie may have expired
+4. **Now without a valid session**: The loading spinner appears forever
+
+---
+
+## Error Handling Assessment
+
+**Current error handling is actually good** - the try/catch exists in loadTasks (lines 140-145). The problem is the **early return before the try block even runs**.
+
+```typescript
+const loadTasks = async () => {
+  if (!user) return;        // <-- Problem: Exits here, no error handling reached
+  
+  setLoading(true);
+  try {                     // <-- Never gets here if !user
+    // ... fetch logic
+  } catch (error) {
+    console.error('[TasksPage] Error in loadTasks:', error);
+    setTasks([]);
+  } finally {
+    setLoading(false);      // <-- Never reached if !user
+  }
+};
+```
 
 ---
 
 ## Solution
 
-Modify the Select's `onValueChange` to immediately save the change and close the editor:
+### Option A: Wrap Routes with ProtectedRoute (Recommended)
 
-**Updated Code:**
+**File**: `src/App.tsx`
+
 ```typescript
-if (type === 'select' && options) {
-  return (
-    <Select 
-      value={editValue} 
-      onValueChange={(newValue) => {
-        setEditValue(newValue);
-        // Immediately save the selection and close edit mode
-        saveEditImmediate(task.id, field, newValue);
-      }}
-    >
-      ...
-    </Select>
-  );
+import ProtectedRoute from './components/ProtectedRoute';
+
+// ...
+
+<Route path="/tasks" element={
+  <ProtectedRoute>
+    <TasksPage />
+  </ProtectedRoute>
+} />
+```
+
+This ensures unauthenticated users are redirected to `/auth`.
+
+### Option B: Fix loadTasks to Handle No User
+
+**File**: `src/pages/TasksPage.tsx`
+
+```typescript
+const loadTasks = async () => {
+  if (!user) {
+    setLoading(false);  // Add this line
+    return;
+  }
+  // ... rest of function
 }
 ```
 
-Since `saveEdit()` uses `editValue` from state (which won't be updated yet due to React's async state), we need a variation that accepts the value directly:
+### Option C: Add Auth Check in TasksPage (Both Fixes)
 
-**New helper function:**
 ```typescript
-const saveEditImmediate = async (taskId: string, field: string, value: string) => {
-  try {
-    const updateData: any = { [field]: value };
-    console.log(`Updating task ${taskId} field ${field} to:`, value);
-    
-    // Optimistic update - immediately update the UI
-    const updatedTasks = currentTasks.map((task: Task) => 
-      task.id === taskId ? { ...task, ...updateData, updated_at: new Date().toISOString() } : task
-    );
-    setOptimisticTasks(updatedTasks);
-    
-    if (isDemoMode) {
-      const demoTasks = localStorage.getItem('kanban-demo-tasks');
-      if (demoTasks) {
-        const tasks = JSON.parse(demoTasks);
-        const updatedDemoTasks = tasks.map((task: Task) => 
-          task.id === taskId ? { ...task, ...updateData } : task
-        );
-        localStorage.setItem('kanban-demo-tasks', JSON.stringify(updatedDemoTasks));
-      }
-    } else {
-      const { error } = await supabase
-        .from('tasks')
-        .update(updateData)
-        .eq('id', taskId);
+import { Navigate } from 'react-router-dom';
 
-      if (error) {
-        console.error('Error updating task:', error);
-        setOptimisticTasks([]);
-        toast({
-          title: "Error",
-          description: "Failed to update task",
-          variant: "destructive",
-        });
-        return;
-      }
-    }
+// In component:
+const { user, isDemoMode, loading: authLoading } = useAuth();
 
-    // Clear optimistic updates and refresh data
-    setTimeout(() => {
-      setOptimisticTasks([]);
-      if (onTaskUpdate) {
-        onTaskUpdate();
-      }
-    }, 100);
+// Early return with redirect
+if (!authLoading && !user && !isDemoMode) {
+  return <Navigate to="/auth" replace />;
+}
 
-    toast({
-      title: "Task updated",
-      description: "Task has been updated successfully",
-    });
-  } catch (error) {
-    console.error('Error saving edit:', error);
-    setOptimisticTasks([]);
-  } finally {
-    setEditingCell(null);
-    setEditValue('');
+// Also fix loadTasks
+const loadTasks = async () => {
+  if (!user) {
+    setLoading(false);
+    return;
   }
-};
+  // ...
+}
 ```
 
 ---
@@ -125,24 +159,37 @@ const saveEditImmediate = async (taskId: string, field: string, value: string) =
 
 | File | Change |
 |------|--------|
-| `src/components/EnhancedTaskGridView.tsx` | Add `saveEditImmediate` function and update Select's `onValueChange` handler |
+| `src/App.tsx` | Wrap authenticated routes with `<ProtectedRoute>` |
+| `src/pages/TasksPage.tsx` | Add `setLoading(false)` before early return |
 
 ---
 
 ## Technical Summary
 
-| Issue | Location | Root Cause |
-|-------|----------|------------|
-| Status/Priority changes don't persist | `renderEditableCell()` | Select's `onValueChange` only updates local state, never calls `saveEdit()` |
+| Question | Answer |
+|----------|--------|
+| Is it a Supabase problem? | No - Supabase is working fine |
+| Is it an auth problem? | **Yes** - missing route protection + race condition |
+| Is there proper error handling? | Yes for DB errors, but **no for missing auth** |
+| Why did it "suddenly" stop? | Session cookie likely expired; the bug always existed |
 
 ---
 
 ## Expected Behavior After Fix
 
-1. User clicks the status/priority badge in List View
-2. Dropdown appears with options
-3. User selects a new value (e.g., "UP_NEXT")
-4. Change is **immediately** saved to Supabase
-5. Dropdown closes automatically
-6. Toast shows "Task updated"
-7. The new status persists correctly
+**On Production (journey-voice.lovable.app)**:
+1. User visits site without valid session
+2. ProtectedRoute detects no user
+3. Redirects to `/auth` page
+4. User logs in
+5. Redirected back to `/tasks`
+6. Tasks load correctly
+
+**If using Option B only**:
+1. User visits site without valid session
+2. Loading spinner appears briefly
+3. `loadTasks` exits, sets `loading = false`
+4. Page shows empty state (no tasks)
+5. User must manually navigate to `/auth`
+
+Option A (ProtectedRoute) provides a better user experience by automatically redirecting.
