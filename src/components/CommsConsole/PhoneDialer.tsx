@@ -223,6 +223,33 @@ const PhoneDialer: React.FC<PhoneDialerProps> = ({
     }
   }, [isConnected, callState, onCallStateChange]);
 
+  // Watch for AI-initiated disconnection during active call
+  useEffect(() => {
+    // If we were in a call (connected state) and the voice session disconnects,
+    // transition to 'ended' state - this handles AI-triggered disconnect tool
+    if (!isConnected && callState === 'connected') {
+      console.log('[PhoneDialer] Voice disconnected during call - transitioning to ended');
+      
+      // Stop ring audio if somehow still playing
+      ringAudioRef.current?.pause();
+      if (ringAudioRef.current) ringAudioRef.current.currentTime = 0;
+      
+      onCallStateChange('ended');
+      setIsMuted(false);
+      setIsSpeaker(false);
+      
+      toast({
+        title: 'Call Ended',
+        description: `Duration: ${formatDuration(callDuration)}`,
+      });
+
+      // Auto-transition to idle after showing "Call ended" briefly
+      setTimeout(() => {
+        onCallStateChange('idle');
+      }, 2000);
+    }
+  }, [isConnected, callState, onCallStateChange, callDuration, toast]);
+
   // Call duration timer
   useEffect(() => {
     let interval: NodeJS.Timeout;
