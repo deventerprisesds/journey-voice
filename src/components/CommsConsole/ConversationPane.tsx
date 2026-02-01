@@ -17,6 +17,7 @@ interface ConversationPaneProps {
   onVoiceToggle?: () => void;
   phoneCallState?: PhoneCallState;
   onPhoneCallStateChange?: (state: PhoneCallState) => void;
+  onRetry?: () => void;
 }
 
 const ConversationPane: React.FC<ConversationPaneProps> = ({
@@ -30,6 +31,7 @@ const ConversationPane: React.FC<ConversationPaneProps> = ({
   onVoiceToggle,
   phoneCallState = 'idle',
   onPhoneCallStateChange,
+  onRetry,
 }) => {
   return (
     <div className={cn('flex flex-col flex-1 min-h-0', className)}>
@@ -67,6 +69,7 @@ const ConversationPane: React.FC<ConversationPaneProps> = ({
           messages={messages}
           isLoading={isLoading}
           className="flex-1 min-h-0"
+          onRetry={onRetry}
         />
       )}
     </div>

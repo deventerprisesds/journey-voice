@@ -1,10 +1,11 @@
 import React from 'react';
-import { PanelLeft, ChevronDown, PanelRightClose } from 'lucide-react';
+import { PanelLeft, ChevronDown, PanelRightClose, Plus, MoreVertical } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
@@ -17,6 +18,7 @@ interface AssistantHeaderProps {
   onSelectAssistant: (assistant: Assistant) => void;
   onToggleSidebar: () => void;
   onClose: () => void;
+  onNewConversation?: () => void;
   isSidebarExpanded: boolean;
   showCloseButton?: boolean;
   showSidebarToggle?: boolean;
@@ -29,6 +31,7 @@ const AssistantHeader: React.FC<AssistantHeaderProps> = ({
   onSelectAssistant,
   onToggleSidebar,
   onClose,
+  onNewConversation,
   isSidebarExpanded,
   showCloseButton = true,
   showSidebarToggle = true,
@@ -115,18 +118,43 @@ const AssistantHeader: React.FC<AssistantHeaderProps> = ({
         </DropdownMenu>
       </div>
 
-      {/* Right: Close button (mobile) */}
-      {showCloseButton && (
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={onClose}
-          className="h-8 w-8 z-10 relative"
-          aria-label="Collapse panel"
-        >
-          <PanelRightClose className="w-4 h-4" />
-        </Button>
-      )}
+      {/* Right: Options menu + Close button */}
+      <div className="flex items-center gap-1">
+        {/* Options dropdown with New Conversation */}
+        {onNewConversation && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                aria-label="More options"
+              >
+                <MoreVertical className="w-4 h-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48 bg-popover z-50">
+              <DropdownMenuItem onClick={onNewConversation} className="gap-2 cursor-pointer">
+                <Plus className="w-4 h-4" />
+                New Conversation
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+
+        {/* Close button (mobile) */}
+        {showCloseButton && (
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onClose}
+            className="h-8 w-8 z-10 relative"
+            aria-label="Collapse panel"
+          >
+            <PanelRightClose className="w-4 h-4" />
+          </Button>
+        )}
+      </div>
     </div>
   );
 };

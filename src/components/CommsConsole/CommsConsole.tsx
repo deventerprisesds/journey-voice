@@ -41,6 +41,8 @@ const CommsConsole: React.FC<CommsConsoleProps> = ({ className, embedded = false
     setPhoneCallState,
     isMobileSidebarOpen,
     setMobileSidebarOpen,
+    retryLastMessage,
+    startNewConversation,
   } = useCommsConsole();
 
   // Derive effective mode
@@ -96,6 +98,7 @@ const CommsConsole: React.FC<CommsConsoleProps> = ({ className, embedded = false
           onSelectAssistant={selectAssistant}
           onToggleSidebar={() => {}}
           onClose={togglePanel}
+          onNewConversation={startNewConversation}
           isSidebarExpanded={false}
           showCloseButton={true}
           showSidebarToggle={false}
@@ -112,6 +115,7 @@ const CommsConsole: React.FC<CommsConsoleProps> = ({ className, embedded = false
           onVoiceToggle={handleVoiceToggle}
           phoneCallState={phoneCallState}
           onPhoneCallStateChange={setPhoneCallState}
+          onRetry={retryLastMessage}
         />
 
         {/* Text input */}
@@ -164,6 +168,7 @@ const CommsConsole: React.FC<CommsConsoleProps> = ({ className, embedded = false
             onSelectAssistant={selectAssistant}
             onToggleSidebar={handleMobileSidebarToggle}
             onClose={togglePanel}
+            onNewConversation={startNewConversation}
             isSidebarExpanded={isSidebarExpanded}
             showCloseButton={false}
             showSidebarToggle={isMobile}
@@ -180,6 +185,7 @@ const CommsConsole: React.FC<CommsConsoleProps> = ({ className, embedded = false
             onVoiceToggle={handleVoiceToggle}
             phoneCallState={phoneCallState}
             onPhoneCallStateChange={setPhoneCallState}
+            onRetry={retryLastMessage}
           />
 
           {/* Text input */}
@@ -216,6 +222,7 @@ const CommsConsole: React.FC<CommsConsoleProps> = ({ className, embedded = false
         onSelectAssistant={selectAssistant}
         onToggleSidebar={handleMobileSidebarToggle}
         onClose={togglePanel}
+        onNewConversation={startNewConversation}
         isSidebarExpanded={isSidebarExpanded}
         showCloseButton={isMobile}
         showSidebarToggle={isMobile}
@@ -255,6 +262,7 @@ const CommsConsole: React.FC<CommsConsoleProps> = ({ className, embedded = false
             onVoiceToggle={handleVoiceToggle}
             phoneCallState={phoneCallState}
             onPhoneCallStateChange={setPhoneCallState}
+            onRetry={retryLastMessage}
           />
 
           {/* Text input */}
