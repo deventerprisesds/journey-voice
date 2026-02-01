@@ -82,7 +82,7 @@ const TranscriptScroll: React.FC<TranscriptScrollProps> = ({
             <div
               key={message.id || index}
               className={cn(
-                'flex gap-2 animate-fade-in',
+                'flex gap-2 animate-fade-in group',
                 isUser && 'flex-row-reverse',
                 isSystem && 'justify-center'
               )}
@@ -90,7 +90,7 @@ const TranscriptScroll: React.FC<TranscriptScrollProps> = ({
               {!isSystem && (
                 <div
                   className={cn(
-                    'flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center',
+                    'flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center mt-0.5',
                     isUser ? 'bg-primary/10' : 'bg-muted'
                   )}
                 >
@@ -98,38 +98,69 @@ const TranscriptScroll: React.FC<TranscriptScrollProps> = ({
                 </div>
               )}
 
-              <div
-                className={cn(
-                  'max-w-[80%] rounded-lg px-3 py-2',
-                  isUser && 'bg-primary text-primary-foreground',
-                  !isUser && !isSystem && 'bg-muted',
-                  isSystem && 'bg-muted/50 text-muted-foreground text-sm italic'
-                )}
-              >
-                {message.role === 'assistant' && !message.content ? (
-                  <div className="flex gap-1 py-1">
-                    <div className="w-2 h-2 rounded-full bg-muted-foreground/40 animate-bounce" style={{ animationDelay: '0ms' }} />
-                    <div className="w-2 h-2 rounded-full bg-muted-foreground/40 animate-bounce" style={{ animationDelay: '150ms' }} />
-                    <div className="w-2 h-2 rounded-full bg-muted-foreground/40 animate-bounce" style={{ animationDelay: '300ms' }} />
-                  </div>
-                ) : (
-                  <>
-                    <p className="text-sm whitespace-pre-wrap break-words">
-                      {message.content}
-                    </p>
-                    {/* Retry button for connection errors */}
-                    {isSystem && message.content?.includes('Connection interrupted') && onRetry && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={onRetry}
-                        className="mt-2 gap-1.5"
-                      >
-                        <RefreshCw className="w-3 h-3" />
-                        Retry
-                      </Button>
-                    )}
-                  </>
+              <div className="flex flex-col">
+                <div
+                  className={cn(
+                    'relative max-w-[80%] rounded-lg px-3 py-2',
+                    isUser && 'bg-primary text-primary-foreground',
+                    !isUser && !isSystem && 'bg-muted',
+                    isSystem && 'bg-muted/50 text-muted-foreground text-sm italic'
+                  )}
+                >
+                  {message.role === 'assistant' && !message.content ? (
+                    <div className="flex gap-1 py-1">
+                      <div className="w-2 h-2 rounded-full bg-muted-foreground/40 animate-bounce" style={{ animationDelay: '0ms' }} />
+                      <div className="w-2 h-2 rounded-full bg-muted-foreground/40 animate-bounce" style={{ animationDelay: '150ms' }} />
+                      <div className="w-2 h-2 rounded-full bg-muted-foreground/40 animate-bounce" style={{ animationDelay: '300ms' }} />
+                    </div>
+                  ) : (
+                    <>
+                      <p className="text-sm whitespace-pre-wrap break-words">
+                        {message.content}
+                      </p>
+                      {/* Retry button for connection errors */}
+                      {isSystem && message.content?.includes('Connection interrupted') && onRetry && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={onRetry}
+                          className="mt-2 gap-1.5"
+                        >
+                          <RefreshCw className="w-3 h-3" />
+                          Retry
+                        </Button>
+                      )}
+                    </>
+                  )}
+                  
+                  {/* Copy button - appears on hover */}
+                  {message.content && !isSystem && (
+                    <button
+                      onClick={() => handleCopy(message.content || '', message.id || String(index))}
+                      className={cn(
+                        'absolute -right-7 top-1/2 -translate-y-1/2 p-1 rounded transition-opacity',
+                        'opacity-0 group-hover:opacity-100 hover:bg-muted/80',
+                        isUser && '-left-7 -right-auto'
+                      )}
+                      title="Copy message"
+                    >
+                      {copiedId === (message.id || String(index)) ? (
+                        <Check className="w-3.5 h-3.5 text-green-500" />
+                      ) : (
+                        <Copy className="w-3.5 h-3.5 text-muted-foreground" />
+                      )}
+                    </button>
+                  )}
+                </div>
+                
+                {/* Timestamp - SMS-like display */}
+                {message.created_at && (
+                  <span className={cn(
+                    'text-[10px] text-muted-foreground/60 mt-0.5 px-1',
+                    isUser && 'text-right'
+                  )}>
+                    {formatRelativeTime(message.created_at)}
+                  </span>
                 )}
               </div>
             </div>
