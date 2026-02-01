@@ -5,12 +5,13 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
-import { Calendar, Mail, MessageSquare, Volume2, VolumeX, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
+import { Calendar, Mail, MessageSquare, Volume2, VolumeX, CheckCircle2, AlertCircle, Loader2, RefreshCw } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { z } from "zod";
+import { CalendarOAuthManager } from "./CalendarOAuthManager";
 
 type NotificationChannel = 'EMAIL' | 'SLACK' | 'PUSH' | 'OUTLOOK_EVENT' | 'GOOGLE_EVENT';
 type DatabaseChannel = NotificationChannel;
@@ -32,6 +33,7 @@ interface CalendarConnection {
   provider: string;
   provider_account_email: string;
   is_active: boolean;
+  expires_at?: string;
 }
 
 const NotificationSettings = () => {
@@ -53,6 +55,8 @@ const NotificationSettings = () => {
   const [useCustomSlackWebhook, setUseCustomSlackWebhook] = useState(false);
   const [outlookConnection, setOutlookConnection] = useState<CalendarConnection | null>(null);
   const [googleConnection, setGoogleConnection] = useState<CalendarConnection | null>(null);
+  const [outlookExpired, setOutlookExpired] = useState(false);
+  const [googleExpired, setGoogleExpired] = useState(false);
   const [isTestingOutlook, setIsTestingOutlook] = useState(false);
   const { toast } = useToast();
   const { user, isDemoMode } = useAuth();
@@ -83,21 +87,33 @@ const NotificationSettings = () => {
         const google = data.find((c: any) => c.provider === 'google' && c.is_active);
         
         if (outlook) {
+          const isExpired = outlook.expires_at && new Date(outlook.expires_at) < new Date();
+          setOutlookExpired(isExpired);
           setOutlookConnection({
             id: outlook.id,
             provider: outlook.provider,
             provider_account_email: outlook.provider_account_email,
-            is_active: outlook.is_active
+            is_active: outlook.is_active,
+            expires_at: outlook.expires_at
           });
+        } else {
+          setOutlookConnection(null);
+          setOutlookExpired(false);
         }
         
         if (google) {
+          const isExpired = google.expires_at && new Date(google.expires_at) < new Date();
+          setGoogleExpired(isExpired);
           setGoogleConnection({
             id: google.id,
             provider: google.provider,
             provider_account_email: google.provider_account_email,
-            is_active: google.is_active
+            is_active: google.is_active,
+            expires_at: google.expires_at
           });
+        } else {
+          setGoogleConnection(null);
+          setGoogleExpired(false);
         }
       }
     } catch (error) {
@@ -324,8 +340,26 @@ const NotificationSettings = () => {
   };
 
   const sendTestEmail = async () => {
+    if (!email) {
+      toast({
+        title: "Email Required",
+        description: "Please enter an email address before testing.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!z.string().email().safeParse(email).success) {
+      toast({
+        title: "Invalid Email",
+        description: "Please enter a valid email address.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     try {
-      await supabase.functions.invoke('send-unified-notification', {
+      const { data, error } = await supabase.functions.invoke('send-unified-notification', {
         body: {
           userId: user?.id || 'demo-user',
           title: '🧪 Test Email Notification',
@@ -336,15 +370,17 @@ const NotificationSettings = () => {
         }
       });
       
+      if (error) throw error;
+      
       toast({
-        title: "Test email sent",
-        description: "Check your unified webhook for the email notification.",
+        title: "Test Email Sent",
+        description: `Email notification sent to ${email}. Please check your inbox.`,
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error sending test email:', error);
       toast({
-        title: "Error",
-        description: "Failed to send test email notification.",
+        title: "Email Test Failed",
+        description: error.message || "Could not send test email. Check your email configuration.",
         variant: "destructive",
       });
     }
@@ -755,16 +791,21 @@ const NotificationSettings = () => {
                 <div>
                   <h4 className="font-medium">Outlook Calendar</h4>
                   <p className="text-sm text-muted-foreground">Create events with native phone reminders</p>
-                  {/* Connection status */}
-                  {outlookConnection ? (
+                  {/* Connection status with expiry detection */}
+                  {outlookConnection && outlookExpired ? (
+                    <p className="text-xs text-amber-600 flex items-center gap-1 mt-1">
+                      <AlertCircle className="h-3 w-3" />
+                      Connection expired - reconnect below
+                    </p>
+                  ) : outlookConnection ? (
                     <p className="text-xs text-green-600 flex items-center gap-1 mt-1">
                       <CheckCircle2 className="h-3 w-3" />
                       Connected: {outlookConnection.provider_account_email}
                     </p>
                   ) : (
-                    <p className="text-xs text-amber-600 flex items-center gap-1 mt-1">
+                    <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
                       <AlertCircle className="h-3 w-3" />
-                      Not connected - add in Calendar settings
+                      Not connected
                     </p>
                   )}
                 </div>
@@ -773,12 +814,33 @@ const NotificationSettings = () => {
                 <Switch
                   checked={prefs.channels.includes('OUTLOOK_EVENT')}
                   onCheckedChange={(checked) => handleToggleChannel('OUTLOOK_EVENT')}
-                  disabled={!outlookConnection}
+                  disabled={!outlookConnection || outlookExpired}
                 />
               </div>
             </div>
             
-            {prefs.channels.includes('OUTLOOK_EVENT') && outlookConnection && (
+            {/* Show OAuth button if not connected or expired */}
+            {(!outlookConnection || outlookExpired) && (
+              <div className="mt-2 pl-8">
+                <CalendarOAuthManager
+                  provider="outlook"
+                  onSuccess={() => {
+                    loadCalendarConnections();
+                    toast({
+                      title: "Outlook Connected",
+                      description: "Your Outlook calendar is now connected for reminders.",
+                    });
+                  }}
+                  onError={(err) => toast({
+                    title: "Connection Failed",
+                    description: err,
+                    variant: "destructive",
+                  })}
+                />
+              </div>
+            )}
+            
+            {prefs.channels.includes('OUTLOOK_EVENT') && outlookConnection && !outlookExpired && (
               <div className="space-y-2 mt-4 pl-8">
                 <div className="flex items-center gap-2 p-3 rounded-md bg-muted/50 border border-border">
                   <CheckCircle2 className="h-4 w-4 text-green-500 flex-shrink-0" />
@@ -819,19 +881,73 @@ const NotificationSettings = () => {
                 <div>
                   <h4 className="font-medium">Google Calendar</h4>
                   <p className="text-sm text-muted-foreground">Create calendar events in Google Calendar</p>
+                  {/* Connection status with expiry detection */}
+                  {googleConnection && googleExpired ? (
+                    <p className="text-xs text-amber-600 flex items-center gap-1 mt-1">
+                      <AlertCircle className="h-3 w-3" />
+                      Connection expired - reconnect below
+                    </p>
+                  ) : googleConnection ? (
+                    <p className="text-xs text-green-600 flex items-center gap-1 mt-1">
+                      <CheckCircle2 className="h-3 w-3" />
+                      Connected: {googleConnection.provider_account_email}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
+                      <AlertCircle className="h-3 w-3" />
+                      Not connected
+                    </p>
+                  )}
                 </div>
               </div>
               <Switch
                 checked={prefs.channels.includes('GOOGLE_EVENT')}
                 onCheckedChange={(checked) => handleToggleChannel('GOOGLE_EVENT')}
+                disabled={!googleConnection || googleExpired}
               />
             </div>
             
-            {prefs.channels.includes('GOOGLE_EVENT') && (
-              <div className="space-y-2 mt-4">
-                <p className="text-sm text-muted-foreground">
-                  Calendar events will be automatically generated by AI based on your tasks. No manual configuration needed.
-                </p>
+            {/* Show OAuth button if not connected or expired */}
+            {(!googleConnection || googleExpired) && (
+              <div className="mt-2 pl-8">
+                <CalendarOAuthManager
+                  provider="google"
+                  onSuccess={() => {
+                    loadCalendarConnections();
+                    toast({
+                      title: "Google Calendar Connected",
+                      description: "Your Google calendar is now connected for reminders.",
+                    });
+                  }}
+                  onError={(err) => toast({
+                    title: "Connection Failed",
+                    description: err,
+                    variant: "destructive",
+                  })}
+                />
+              </div>
+            )}
+            
+            {prefs.channels.includes('GOOGLE_EVENT') && googleConnection && !googleExpired && (
+              <div className="space-y-2 mt-4 pl-8">
+                <div className="flex items-center gap-2 p-3 rounded-md bg-muted/50 border border-border">
+                  <CheckCircle2 className="h-4 w-4 text-green-500 flex-shrink-0" />
+                  <div className="text-sm">
+                    <span className="font-medium">Connected to Google Calendar</span>
+                    <p className="text-xs text-muted-foreground">
+                      Events are created directly in your Google calendar with native reminders.
+                    </p>
+                  </div>
+                </div>
+                <Button 
+                  onClick={sendTestGoogleEvent}
+                  variant="outline"
+                  size="sm"
+                  className="w-full"
+                >
+                  <Calendar className="h-4 w-4 mr-2" />
+                  Send Test Reminder
+                </Button>
               </div>
             )}
           </div>
