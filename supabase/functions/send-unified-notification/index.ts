@@ -13,7 +13,7 @@ interface NotificationPayload {
   channels: string[];
   data?: any;
   slackWebhook?: string;
-  notificationId?: string; // Optional: link to existing scheduled_notification
+  notificationId?: string;
   userProfile?: {
     email?: string;
     phone?: string;
@@ -51,6 +51,281 @@ interface NotificationResult {
   webhookResponse?: any;
   errors: string[];
 }
+
+// ============== DIRECT OUTLOOK INTEGRATION ==============
+
+interface OutlookEventData {
+  title: string;
+  startTime: string;
+  endTime: string;
+  description?: string;
+  reminderMinutes?: number;
+}
+
+async function getOutlookConnection(supabaseClient: any, userId: string): Promise<{
+  id: string;
+  access_token: string;
+  refresh_token: string;
+  expires_at: string;
+  provider_account_email: string;
+} | null> {
+  try {
+    // Use the secure RPC that decrypts tokens for the authenticated user
+    // We need to use service role to get tokens for any user (notification system)
+    const { data, error } = await supabaseClient
+      .rpc('get_office365_connection_secure')
+      .single();
+
+    if (error || !data) {
+      console.log('[Outlook] No Office 365 connection found for user:', userId, error?.message);
+      return null;
+    }
+
+    return data;
+  } catch (err) {
+    console.error('[Outlook] Error fetching connection:', err);
+    return null;
+  }
+}
+
+async function getOutlookConnectionForUser(supabaseClient: any, userId: string): Promise<{
+  id: string;
+  access_token: string;
+  refresh_token: string;
+  expires_at: string;
+  provider_account_email: string;
+} | null> {
+  try {
+    // Direct query for service-level access (notification system needs to access user's tokens)
+    // First get the encrypted tokens
+    const { data: connection, error: connError } = await supabaseClient
+      .from('calendar_connections')
+      .select('id, access_token, refresh_token, expires_at, provider_account_email, user_id')
+      .eq('user_id', userId)
+      .eq('provider', 'office365')
+      .eq('is_active', true)
+      .maybeSingle();
+
+    if (connError || !connection) {
+      console.log('[Outlook] No active Office 365 connection for user:', userId);
+      return null;
+    }
+
+    // Decrypt tokens using the database function
+    const { data: decrypted, error: decryptError } = await supabaseClient.rpc(
+      'decrypt_token',
+      { encrypted_token: connection.access_token, p_user_id: userId }
+    );
+
+    if (decryptError) {
+      console.error('[Outlook] Token decryption failed:', decryptError);
+      return null;
+    }
+
+    let decryptedRefresh = null;
+    if (connection.refresh_token) {
+      const { data: refreshDecrypted } = await supabaseClient.rpc(
+        'decrypt_token',
+        { encrypted_token: connection.refresh_token, p_user_id: userId }
+      );
+      decryptedRefresh = refreshDecrypted;
+    }
+
+    return {
+      id: connection.id,
+      access_token: decrypted,
+      refresh_token: decryptedRefresh,
+      expires_at: connection.expires_at,
+      provider_account_email: connection.provider_account_email
+    };
+  } catch (err) {
+    console.error('[Outlook] Error in getOutlookConnectionForUser:', err);
+    return null;
+  }
+}
+
+async function refreshOutlookToken(
+  supabaseClient: any,
+  connectionId: string,
+  refreshToken: string,
+  userId: string
+): Promise<{ access_token: string; expires_at: string } | null> {
+  try {
+    console.log('[Outlook] Refreshing expired token...');
+    
+    const clientId = Deno.env.get('AZURE_AD_CLIENT_ID');
+    const clientSecret = Deno.env.get('AZURE_AD_CLIENT_SECRET');
+    
+    if (!clientId || !clientSecret) {
+      console.error('[Outlook] Missing Azure AD credentials for token refresh');
+      return null;
+    }
+
+    const tokenUrl = 'https://login.microsoftonline.com/common/oauth2/v2.0/token';
+    const params = new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: refreshToken,
+      grant_type: 'refresh_token',
+      scope: 'https://graph.microsoft.com/Calendars.ReadWrite offline_access'
+    });
+
+    const response = await fetch(tokenUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params.toString()
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('[Outlook] Token refresh failed:', response.status, errorText);
+      return null;
+    }
+
+    const tokens = await response.json();
+    const expiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString();
+
+    // Update the connection with new encrypted tokens
+    const { data: encryptedAccess } = await supabaseClient.rpc(
+      'encrypt_token',
+      { token_value: tokens.access_token, p_user_id: userId }
+    );
+
+    const updateData: any = {
+      access_token: encryptedAccess,
+      expires_at: expiresAt,
+      updated_at: new Date().toISOString()
+    };
+
+    if (tokens.refresh_token) {
+      const { data: encryptedRefresh } = await supabaseClient.rpc(
+        'encrypt_token',
+        { token_value: tokens.refresh_token, p_user_id: userId }
+      );
+      updateData.refresh_token = encryptedRefresh;
+    }
+
+    await supabaseClient
+      .from('calendar_connections')
+      .update(updateData)
+      .eq('id', connectionId);
+
+    console.log('[Outlook] Token refreshed successfully');
+    return { access_token: tokens.access_token, expires_at: expiresAt };
+  } catch (err) {
+    console.error('[Outlook] Token refresh error:', err);
+    return null;
+  }
+}
+
+async function createOutlookEventDirect(
+  supabaseClient: any,
+  userId: string,
+  eventData: OutlookEventData
+): Promise<ChannelResult> {
+  console.log('[Outlook] Creating event directly via Microsoft Graph API for user:', userId);
+  
+  // Get user's Office 365 connection with decrypted tokens
+  const connection = await getOutlookConnectionForUser(supabaseClient, userId);
+  
+  if (!connection) {
+    return { 
+      success: false, 
+      error: 'No Office 365 connection found. Please connect your Outlook account in Calendar settings.' 
+    };
+  }
+
+  let accessToken = connection.access_token;
+
+  // Check if token needs refresh (with 5 min buffer)
+  const expiresAt = new Date(connection.expires_at);
+  const now = new Date();
+  const bufferMs = 5 * 60 * 1000; // 5 minutes
+
+  if (expiresAt.getTime() - bufferMs < now.getTime()) {
+    console.log('[Outlook] Token expired or expiring soon, refreshing...');
+    
+    if (!connection.refresh_token) {
+      return { success: false, error: 'Token expired and no refresh token available. Please reconnect your Outlook account.' };
+    }
+
+    const refreshed = await refreshOutlookToken(
+      supabaseClient,
+      connection.id,
+      connection.refresh_token,
+      userId
+    );
+
+    if (!refreshed) {
+      return { success: false, error: 'Failed to refresh expired token. Please reconnect your Outlook account.' };
+    }
+
+    accessToken = refreshed.access_token;
+  }
+
+  // Build the calendar event
+  const event = {
+    subject: eventData.title,
+    body: {
+      contentType: 'text',
+      content: eventData.description || `Task reminder from Journey Voice`,
+    },
+    start: {
+      dateTime: eventData.startTime,
+      timeZone: 'UTC',
+    },
+    end: {
+      dateTime: eventData.endTime,
+      timeZone: 'UTC',
+    },
+    isReminderOn: true,
+    reminderMinutesBeforeStart: eventData.reminderMinutes || 15,
+  };
+
+  console.log('[Outlook] Creating event:', JSON.stringify(event, null, 2));
+
+  try {
+    const response = await fetch(
+      'https://graph.microsoft.com/v1.0/me/calendar/events',
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(event),
+      }
+    );
+
+    const responseText = await response.text();
+    
+    if (!response.ok) {
+      console.error('[Outlook] Graph API error:', response.status, responseText);
+      return { 
+        success: false, 
+        error: `Microsoft Graph API error: ${response.status} - ${responseText.substring(0, 200)}` 
+      };
+    }
+
+    const result = JSON.parse(responseText);
+    console.log('[Outlook] Event created successfully:', result.id);
+    
+    return { 
+      success: true, 
+      details: { 
+        eventId: result.id, 
+        webLink: result.webLink,
+        account: connection.provider_account_email 
+      } 
+    };
+  } catch (fetchError) {
+    const errorMsg = fetchError instanceof Error ? fetchError.message : 'Network error calling Microsoft Graph API';
+    console.error('[Outlook] Fetch error:', errorMsg);
+    return { success: false, error: errorMsg };
+  }
+}
+
+// ============== END DIRECT OUTLOOK INTEGRATION ==============
 
 serve(async (req) => {
   // Handle CORS preflight requests
@@ -112,23 +387,94 @@ serve(async (req) => {
       profile = dbProfile || profile || {};
     }
 
-    // Call the unified webhook and capture detailed results
-    const webhookResult = await callUnifiedWebhook({
-      userId,
-      title,
-      body,
-      channels,
-      userProfile: userProfile || profile,
-      taskData: data,
-      slackWebhook: slackWebhook || Deno.env.get('SLACK_WEBHOOK_URL') || '',
-      outlookEvent,
-      googleEvent
-    }, supabaseClient, notificationId);
+    // ============== HANDLE OUTLOOK DIRECTLY ==============
+    // Process Outlook events directly via Graph API instead of external webhook
+    let remainingChannels = [...channels];
+    
+    if (channels.includes('OUTLOOK_EVENT')) {
+      console.log('[Notification] Processing OUTLOOK_EVENT channel directly...');
+      
+      // Build event data from task data or provided event
+      const taskData = data;
+      const currentTime = new Date();
+      const eventTitle = taskData?.taskTitle || title || 'Task Reminder';
+      const eventDescription = taskData?.taskDescription || body || 'Reminder from Journey Voice';
+      const startTime = taskData?.startTime 
+        ? new Date(taskData.startTime) 
+        : new Date(currentTime.getTime() + 60 * 60 * 1000); // 1 hour from now
+      const duration = taskData?.estimateMinutes || 60;
+      const endTime = new Date(startTime.getTime() + duration * 60 * 1000);
+      
+      const outlookResult = await createOutlookEventDirect(
+        supabaseClient,
+        userId,
+        {
+          title: eventTitle,
+          startTime: startTime.toISOString(),
+          endTime: endTime.toISOString(),
+          description: eventDescription,
+          reminderMinutes: 15,
+        }
+      );
+      
+      result.channelResults.outlook = outlookResult;
+      
+      // Remove OUTLOOK_EVENT from channels going to external webhook
+      remainingChannels = remainingChannels.filter(c => c !== 'OUTLOOK_EVENT');
+      
+      if (outlookResult.success) {
+        console.log('[Notification] Outlook event created successfully');
+      } else {
+        console.error('[Notification] Outlook event creation failed:', outlookResult.error);
+        result.errors.push(`Outlook: ${outlookResult.error}`);
+      }
+    }
+    // ============== END OUTLOOK HANDLING ==============
 
-    result.channelResults = webhookResult.channelResults;
-    result.webhookResponse = webhookResult.webhookResponse;
-    result.notificationId = webhookResult.notificationId;
-    result.errors = [...result.errors, ...webhookResult.errors];
+    // Only call external webhook for remaining channels
+    if (remainingChannels.length > 0) {
+      const webhookResult = await callUnifiedWebhook({
+        userId,
+        title,
+        body,
+        channels: remainingChannels,
+        userProfile: userProfile || profile,
+        taskData: data,
+        slackWebhook: slackWebhook || Deno.env.get('SLACK_WEBHOOK_URL') || '',
+        outlookEvent,
+        googleEvent
+      }, supabaseClient, notificationId);
+
+      // Merge channel results
+      result.channelResults = { ...result.channelResults, ...webhookResult.channelResults };
+      result.webhookResponse = webhookResult.webhookResponse;
+      result.notificationId = webhookResult.notificationId;
+      result.errors = [...result.errors, ...webhookResult.errors];
+    } else if (!notificationId) {
+      // If we handled all channels directly, create a notification record
+      const notificationRecord = {
+        user_id: userId,
+        title: title || 'Event Notification',
+        body: body || '',
+        notification_type: data?.type || 'general',
+        scheduled_for: new Date().toISOString(),
+        delivered_at: result.channelResults.outlook?.success ? new Date().toISOString() : null,
+        failed_at: result.channelResults.outlook?.success ? null : new Date().toISOString(),
+        failure_reason: result.channelResults.outlook?.success ? null : result.errors.join('; ').substring(0, 500),
+        task_id: data?.taskId || null
+      };
+
+      try {
+        const { data: savedNotification } = await supabaseClient
+          .from('scheduled_notifications')
+          .insert(notificationRecord)
+          .select('id')
+          .single();
+        result.notificationId = savedNotification?.id;
+      } catch (error) {
+        console.error('Error storing notification record:', error);
+      }
+    }
     
     // Determine overall success - at least one channel succeeded
     const channelSuccesses = Object.values(result.channelResults).filter(r => r?.success);
@@ -283,10 +629,10 @@ async function callUnifiedWebhook(
 
   console.log('Using webhook URL:', webhookUrl.substring(0, 50) + '...');
 
-  // Generate AI-powered calendar events for calendar channels
-  let dynamicOutlookEvent, dynamicGoogleEvent;
+  // Generate AI-powered calendar events for calendar channels (Google only now, Outlook handled directly)
+  let dynamicGoogleEvent;
   
-  if (payload.channels.includes('OUTLOOK_EVENT') || payload.channels.includes('GOOGLE_EVENT')) {
+  if (payload.channels.includes('GOOGLE_EVENT')) {
     const taskData = payload.taskData;
     const currentTime = new Date();
     
@@ -297,25 +643,13 @@ async function callUnifiedWebhook(
     const duration = taskData?.estimateMinutes || 60;
     const endTime = new Date(startTime.getTime() + duration * 60 * 1000);
     
-    if (payload.channels.includes('OUTLOOK_EVENT')) {
-      dynamicOutlookEvent = {
-        title: eventTitle,
-        startTime: startTime.toISOString(),
-        endTime: endTime.toISOString(),
-        description: eventDescription,
-        reminder: '15'
-      };
-    }
-    
-    if (payload.channels.includes('GOOGLE_EVENT')) {
-      dynamicGoogleEvent = {
-        title: eventTitle,
-        startTime: startTime.toISOString(),
-        endTime: endTime.toISOString(),
-        description: eventDescription,
-        reminder: '15'
-      };
-    }
+    dynamicGoogleEvent = {
+      title: eventTitle,
+      startTime: startTime.toISOString(),
+      endTime: endTime.toISOString(),
+      description: eventDescription,
+      reminder: '15'
+    };
   }
 
   const queryParams = new URLSearchParams({
@@ -325,7 +659,6 @@ async function callUnifiedWebhook(
     channels: JSON.stringify(payload.channels),
     userProfile: JSON.stringify(payload.userProfile),
     taskData: JSON.stringify(payload.taskData),
-    ...(dynamicOutlookEvent && { outlookEvent: JSON.stringify(dynamicOutlookEvent) }),
     ...(dynamicGoogleEvent && { googleEvent: JSON.stringify(dynamicGoogleEvent) })
   });
 
@@ -372,21 +705,16 @@ async function callUnifiedWebhook(
       console.log('Unified webhook result:', responseJson);
       
       // Parse n8n response for channel-specific results
-      // n8n may return: { message: "Workflow was started" } or channel-specific status
       if (responseJson?.message === 'Workflow was started') {
-        // Workflow started but we don't know individual results yet
-        // Mark channels as pending/unknown
         for (const channel of payload.channels) {
           result.channelResults[channel.toLowerCase() as keyof typeof result.channelResults] = {
-            success: true, // Optimistically assume success since workflow started
+            success: true,
             details: 'Workflow started - check n8n for final status'
           };
         }
       } else if (responseJson?.channelResults) {
-        // If n8n returns structured channel results, use them
         result.channelResults = responseJson.channelResults;
       } else if (responseJson?.results) {
-        // Alternative structure
         for (const [channel, channelResult] of Object.entries(responseJson.results)) {
           const cr = channelResult as any;
           result.channelResults[channel.toLowerCase() as keyof typeof result.channelResults] = {
@@ -396,7 +724,6 @@ async function callUnifiedWebhook(
           };
         }
       } else {
-        // Default: mark all requested channels as success
         for (const channel of payload.channels) {
           result.channelResults[channel.toLowerCase() as keyof typeof result.channelResults] = {
             success: true,
@@ -415,7 +742,7 @@ async function callUnifiedWebhook(
   const notificationRecord = {
     user_id: payload.userId,
     title: payload.title || 'Event Notification',
-    body: payload.body || JSON.stringify(payload.outlookEvent || payload.googleEvent || {}),
+    body: payload.body || JSON.stringify(payload.googleEvent || {}),
     notification_type: payload.taskData?.type || 'general',
     scheduled_for: new Date().toISOString(),
     delivered_at: result.errors.length === 0 ? new Date().toISOString() : null,

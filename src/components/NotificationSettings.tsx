@@ -5,7 +5,7 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
-import { Calendar, Mail, MessageSquare, Volume2, VolumeX, CheckCircle2 } from "lucide-react";
+import { Calendar, Mail, MessageSquare, Volume2, VolumeX, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
@@ -27,6 +27,13 @@ interface NotificationPrefs {
   channels: NotificationChannel[];
 }
 
+interface CalendarConnection {
+  id: string;
+  provider: string;
+  provider_account_email: string;
+  is_active: boolean;
+}
+
 const NotificationSettings = () => {
   const [prefs, setPrefs] = useState<NotificationPrefs>({
     due_reminders_enabled: true,
@@ -44,6 +51,9 @@ const NotificationSettings = () => {
   const [email, setEmail] = useState('');
   const [slackWebhookUrl, setSlackWebhookUrl] = useState('');
   const [useCustomSlackWebhook, setUseCustomSlackWebhook] = useState(false);
+  const [outlookConnection, setOutlookConnection] = useState<CalendarConnection | null>(null);
+  const [googleConnection, setGoogleConnection] = useState<CalendarConnection | null>(null);
+  const [isTestingOutlook, setIsTestingOutlook] = useState(false);
   const { toast } = useToast();
   const { user, isDemoMode } = useAuth();
 
@@ -52,8 +62,48 @@ const NotificationSettings = () => {
       loadDemoNotificationPrefs();
     } else if (user) {
       loadNotificationPrefs();
+      loadCalendarConnections();
     }
   }, [isDemoMode, user]);
+
+  const loadCalendarConnections = async () => {
+    if (!user?.id) return;
+
+    try {
+      // Use the safe RPC that doesn't expose tokens
+      const { data, error } = await supabase.rpc('get_calendar_connections_safe');
+      
+      if (error) {
+        console.error('Error loading calendar connections:', error);
+        return;
+      }
+
+      if (data && Array.isArray(data)) {
+        const outlook = data.find((c: any) => c.provider === 'office365' && c.is_active);
+        const google = data.find((c: any) => c.provider === 'google' && c.is_active);
+        
+        if (outlook) {
+          setOutlookConnection({
+            id: outlook.id,
+            provider: outlook.provider,
+            provider_account_email: outlook.provider_account_email,
+            is_active: outlook.is_active
+          });
+        }
+        
+        if (google) {
+          setGoogleConnection({
+            id: google.id,
+            provider: google.provider,
+            provider_account_email: google.provider_account_email,
+            is_active: google.is_active
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error loading calendar connections:', error);
+    }
+  };
 
   const loadNotificationPrefs = async () => {
     if (!user?.id) return;
@@ -301,36 +351,56 @@ const NotificationSettings = () => {
   };
 
   const sendTestOutlookEvent = async () => {
+    if (!outlookConnection) {
+      toast({
+        title: "Outlook Not Connected",
+        description: "Please connect your Outlook account in Calendar settings first.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsTestingOutlook(true);
     try {
-      console.log('Testing Outlook event notification...');
+      console.log('Testing Outlook event notification via direct Graph API...');
       const { data, error } = await supabase.functions.invoke('send-unified-notification', {
         body: {
           userId: user?.id,
+          title: 'Test Outlook Reminder',
+          body: 'This is a test calendar event created directly via Microsoft Graph API',
           channels: ['OUTLOOK_EVENT'],
           userProfile: { email },
           data: { 
             type: 'test_notification',
             taskTitle: 'Test Calendar Event',
-            taskDescription: 'This is a test calendar event created by AI',
-            startTime: new Date(Date.now() + 60 * 60 * 1000).toISOString(), // 1 hour from now
-            estimateMinutes: 60
+            taskDescription: 'This is a test calendar event with native reminder. You should see a notification from your Outlook app.',
+            startTime: new Date(Date.now() + 5 * 60 * 1000).toISOString(), // 5 minutes from now
+            estimateMinutes: 30
           }
         }
       });
 
       if (error) throw error;
 
-      toast({
-        title: "Test Outlook Event Sent",
-        description: "AI-generated calendar event sent to your integration.",
-      });
+      const outlookResult = data?.channelResults?.outlook;
+      
+      if (outlookResult?.success) {
+        toast({
+          title: "✓ Outlook Event Created",
+          description: `Calendar event created in ${outlookConnection.provider_account_email}. Check your Outlook app for the reminder!`,
+        });
+      } else {
+        throw new Error(outlookResult?.error || 'Unknown error creating Outlook event');
+      }
     } catch (error: any) {
       console.error('Error sending test Outlook event:', error);
       toast({
         title: "Test Failed", 
-        description: error.message || "Failed to send test Outlook event",
+        description: error.message || "Failed to create Outlook calendar event",
         variant: "destructive",
       });
+    } finally {
+      setIsTestingOutlook(false);
     }
   };
 
@@ -681,23 +751,63 @@ const NotificationSettings = () => {
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <Calendar className="h-5 w-5 text-primary" />
+                <Calendar className="h-5 w-5 text-blue-500" />
                 <div>
                   <h4 className="font-medium">Outlook Calendar</h4>
-                  <p className="text-sm text-muted-foreground">Create calendar events in Outlook</p>
+                  <p className="text-sm text-muted-foreground">Create events with native phone reminders</p>
+                  {/* Connection status */}
+                  {outlookConnection ? (
+                    <p className="text-xs text-green-600 flex items-center gap-1 mt-1">
+                      <CheckCircle2 className="h-3 w-3" />
+                      Connected: {outlookConnection.provider_account_email}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-amber-600 flex items-center gap-1 mt-1">
+                      <AlertCircle className="h-3 w-3" />
+                      Not connected - add in Calendar settings
+                    </p>
+                  )}
                 </div>
               </div>
-              <Switch
-                checked={prefs.channels.includes('OUTLOOK_EVENT')}
-                onCheckedChange={(checked) => handleToggleChannel('OUTLOOK_EVENT')}
-              />
+              <div className="flex items-center gap-2">
+                <Switch
+                  checked={prefs.channels.includes('OUTLOOK_EVENT')}
+                  onCheckedChange={(checked) => handleToggleChannel('OUTLOOK_EVENT')}
+                  disabled={!outlookConnection}
+                />
+              </div>
             </div>
             
-            {prefs.channels.includes('OUTLOOK_EVENT') && (
-              <div className="space-y-2 mt-4">
-                <p className="text-sm text-muted-foreground">
-                  Calendar events will be automatically generated by AI based on your tasks. No manual configuration needed.
-                </p>
+            {prefs.channels.includes('OUTLOOK_EVENT') && outlookConnection && (
+              <div className="space-y-2 mt-4 pl-8">
+                <div className="flex items-center gap-2 p-3 rounded-md bg-muted/50 border border-border">
+                  <CheckCircle2 className="h-4 w-4 text-green-500 flex-shrink-0" />
+                  <div className="text-sm">
+                    <span className="font-medium">Direct Microsoft Graph API</span>
+                    <p className="text-xs text-muted-foreground">
+                      Events are created directly in your Outlook calendar with native reminders.
+                    </p>
+                  </div>
+                </div>
+                <Button 
+                  onClick={sendTestOutlookEvent}
+                  variant="outline"
+                  size="sm"
+                  disabled={isTestingOutlook}
+                  className="w-full"
+                >
+                  {isTestingOutlook ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Creating Event...
+                    </>
+                  ) : (
+                    <>
+                      <Calendar className="h-4 w-4 mr-2" />
+                      Send Test Reminder
+                    </>
+                  )}
+                </Button>
               </div>
             )}
           </div>
@@ -812,9 +922,13 @@ const NotificationSettings = () => {
               onClick={sendTestOutlookEvent}
               variant="outline" 
               className="w-full"
-              disabled={!prefs.channels.includes('OUTLOOK_EVENT')}
+              disabled={!prefs.channels.includes('OUTLOOK_EVENT') || !outlookConnection || isTestingOutlook}
             >
-              <Calendar className="h-4 w-4 mr-2" />
+              {isTestingOutlook ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Calendar className="h-4 w-4 mr-2" />
+              )}
               Test Outlook Event
             </Button>
             
