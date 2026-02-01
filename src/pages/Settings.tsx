@@ -30,6 +30,7 @@ import UpcomingReminders from '@/components/UpcomingReminders';
 import NotificationStatusDashboard from '@/components/NotificationStatusDashboard';
 import SchedulingSettings from '@/components/SchedulingSettings';
 import VoiceAssistantSettings from '@/components/VoiceAssistantSettings';
+import ProfileSettings from '@/components/ProfileSettings';
 import { AssignmentSyncSettings } from '@/components/AssignmentSyncSettings';
 import { useOAuthCallback } from '@/hooks/useOAuthCallback';
 
@@ -166,16 +167,7 @@ const Settings: React.FC = () => {
           </TabsContent>
 
           <TabsContent value="profile" className="mt-6">
-            <Card>
-              <CardHeader>
-                <CardTitle>Profile Settings</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-muted-foreground">
-                  Profile settings will be implemented in a future update.
-                </p>
-              </CardContent>
-            </Card>
+            <ProfileSettings />
           </TabsContent>
 
           <TabsContent value="appearance" className="mt-6">

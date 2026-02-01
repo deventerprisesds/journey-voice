@@ -90,7 +90,7 @@ When the user says goodbye phrases like 'that's all', 'thanks that's it', 'disco
             .maybeSingle(),
           supabase
             .from('profiles')
-            .select('first_name, full_name')
+            .select('first_name, full_name, preferred_greeting')
             .eq('user_id', userId)
             .maybeSingle()
         ]);
@@ -98,8 +98,8 @@ When the user says goodbye phrases like 'that's all', 'thanks that's it', 'disco
         const prefs = prefsResult.data;
         const profile = profileResult.data;
 
-        // Extract user name with fallback to "sir" (matches Twilio bridge pattern)
-        const userName = profile?.first_name || profile?.full_name?.split(' ')[0] || 'sir';
+        // Extract user name with fallback to "sir" - preferred_greeting takes priority
+        const userName = profile?.preferred_greeting || profile?.first_name || profile?.full_name?.split(' ')[0] || 'sir';
         const userTimezone = prefs?.timezone || 'America/New_York';
         const currentTime = new Date().toLocaleString('en-US', {
           timeZone: userTimezone,
