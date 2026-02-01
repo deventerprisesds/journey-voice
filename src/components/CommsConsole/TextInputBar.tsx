@@ -29,8 +29,8 @@ const TextInputBar: React.FC<TextInputBarProps> = ({
   const [message, setMessage] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = (e?: React.SyntheticEvent) => {
+    e?.preventDefault();
     if (message.trim() && !disabled && !isLoading) {
       onSend(message.trim());
       setMessage('');
@@ -38,8 +38,9 @@ const TextInputBar: React.FC<TextInputBarProps> = ({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
+    // UX: Enter inserts a newline (default textarea behavior).
+    // Use Cmd/Ctrl + Enter to send.
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       handleSubmit(e);
     }
   };

@@ -292,14 +292,17 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
           .eq('thread_id', dbThreadId)
           .eq('user_id', userId)
           .eq('source', 'chat')
-          .order('created_at', { ascending: true })
+          // IMPORTANT: load most recent messages first, then reverse for chronological display.
+          // If we order ascending + limit, we'd only ever see the *oldest* 50 messages.
+          .order('created_at', { ascending: false })
           .limit(50);
 
         if (error) throw error;
 
         if (data && data.length > 0) {
           console.log(`[CommsConsole] Loaded ${data.length} messages from history`);
-          setMessages(data.map(msg => ({
+          const chronological = [...data].reverse();
+          setMessages(chronological.map(msg => ({
             id: msg.id,
             role: msg.role as 'user' | 'assistant' | 'system',
             content: msg.content,
