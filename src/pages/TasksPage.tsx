@@ -101,7 +101,10 @@ const TasksPage: React.FC = () => {
   }, [loading, tasks, location.search, navigate]);
 
   const loadTasks = async () => {
-    if (!user) return;
+    if (!user) {
+      setLoading(false);
+      return;
+    }
 
     setLoading(true);
     try {
