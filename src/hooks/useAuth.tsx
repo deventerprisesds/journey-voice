@@ -55,51 +55,91 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
-  const [isDemoMode] = useState(isDevelopmentMode());
+  const [isDemoMode, setIsDemoMode] = useState(false);
+  const isPreviewEnvironment = isDevelopmentMode();
 
   useEffect(() => {
-    if (isDemoMode) {
-      // Use mock authentication for preview mode
-      const mockUser = createMockUser();
-      const mockSession = createMockSession(mockUser);
-      setUser(mockUser);
-      setSession(mockSession);
-      setIsAdmin(true); // Demo user has admin access
-      setLoading(false);
-      return;
-    }
+    let subscription: { unsubscribe: () => void } | null = null;
 
-    // Set up auth state listener for production
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (event, session) => {
-        setSession(session);
-        setUser(session?.user ?? null);
+    const initAuth = async () => {
+      // First, always check for a real session - even in preview environments
+      // This ensures logged-in users keep their session on refresh
+      const { data: { session: existingSession } } = await supabase.auth.getSession();
+      
+      if (existingSession?.user) {
+        // Real session exists - use it even in preview environment
+        console.log('[Auth] Found existing session for user:', existingSession.user.email);
+        setSession(existingSession);
+        setUser(existingSession.user);
+        setIsDemoMode(false);
+        setLoading(false);
+        checkAdminStatus(existingSession.user.id);
+        
+        // Set up auth state listener to handle sign out/in
+        const { data: { subscription: sub } } = supabase.auth.onAuthStateChange(
+          (event, session) => {
+            console.log('[Auth] Auth state changed:', event);
+            if (session?.user) {
+              setSession(session);
+              setUser(session.user);
+              setIsDemoMode(false);
+              checkAdminStatus(session.user.id);
+            } else if (isPreviewEnvironment) {
+              // User signed out in preview - fall back to demo mode
+              const mockUser = createMockUser();
+              const mockSession = createMockSession(mockUser);
+              setUser(mockUser);
+              setSession(mockSession);
+              setIsDemoMode(true);
+              setIsAdmin(true);
+            } else {
+              setSession(null);
+              setUser(null);
+              setIsAdmin(false);
+            }
+          }
+        );
+        subscription = sub;
+      } else if (isPreviewEnvironment) {
+        // No real session and we're in preview - use demo mode
+        console.log('[Auth] No session found, using demo mode for preview environment');
+        const mockUser = createMockUser();
+        const mockSession = createMockSession(mockUser);
+        setUser(mockUser);
+        setSession(mockSession);
+        setIsDemoMode(true);
+        setIsAdmin(true);
+        setLoading(false);
+      } else {
+        // No session and not in preview - just set loading to false
         setLoading(false);
         
-        // Check admin status when user changes
-        if (session?.user) {
-          setTimeout(() => {
-            checkAdminStatus(session.user.id);
-          }, 0);
-        } else {
-          setIsAdmin(false);
-        }
+        // Set up auth state listener for future sign-ins
+        const { data: { subscription: sub } } = supabase.auth.onAuthStateChange(
+          (event, session) => {
+            setSession(session);
+            setUser(session?.user ?? null);
+            setLoading(false);
+            
+            if (session?.user) {
+              checkAdminStatus(session.user.id);
+            } else {
+              setIsAdmin(false);
+            }
+          }
+        );
+        subscription = sub;
       }
-    );
+    };
 
-    // Check for existing session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      setLoading(false);
-      
-      if (session?.user) {
-        checkAdminStatus(session.user.id);
+    initAuth();
+
+    return () => {
+      if (subscription) {
+        subscription.unsubscribe();
       }
-    });
-
-    return () => subscription.unsubscribe();
-  }, [isDemoMode]);
+    };
+  }, [isPreviewEnvironment]);
 
   const checkAdminStatus = async (userId: string) => {
     try {
