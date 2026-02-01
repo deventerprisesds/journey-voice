@@ -1,213 +1,277 @@
 
-# Fix: Profile Settings & Greeting Preference
+# Fix: Chat Persistence, History, and Reconnection
 
 ## Problem Summary
 
-1. **Profile Settings is a placeholder** - Shows "Profile settings will be implemented in a future update"
-2. **first_name is NULL in database** - The `profiles.first_name` field is empty
-3. **No preferred greeting option** - There's no way to specify "Sir" as the preferred address form
-4. **Fallback uses "Dev"** - The system falls back to parsing `full_name` ("Dev") when `first_name` is null
+The user reported three distinct issues with the chat functionality:
 
-Database shows your profile:
-```
-first_name: NULL
-full_name: Dev
-→ AI greets you as "Good morning, Dev" instead of "Good morning, Sir"
-```
+1. **Connection Interrupted Message** - When returning to the chat page, they see "_Using tools..._" followed by "Connection interrupted. Please try again." - the chat doesn't gracefully recover.
+
+2. **Transcript Tab Shows Empty History** - The "Transcript" tab in phone mode shows "No conversation history" even though conversations have occurred over the past few days.
+
+3. **Chat Clears on Every Refresh** - Unlike SMS, the chat doesn't persist as a running thread. Each page refresh/navigation clears the conversation.
 
 ---
 
-## Root Cause
+## Root Cause Analysis
 
-The greeting logic in all voice/phone bridges uses this pattern:
+### Issue 1: Connection Interrupted (No Reconnection)
 
-```typescript
-const userName = profile?.first_name || profile?.full_name?.split(' ')[0] || 'sir';
-```
+**Location**: `src/contexts/CommsConsoleContext.tsx`
 
-This means:
-1. If `first_name` exists → use it
-2. Else if `full_name` exists → parse first word
-3. Else → fallback to "sir"
+When a streaming request fails mid-flight (e.g., user navigates away, network blip, or timeout), the error handler shows "Connection interrupted" but:
+- There's no mechanism to **retry** the failed request
+- There's no **refresh button** to reload the chat
+- The SSE stream cannot be resumed once broken
 
-Since your `first_name` is NULL and `full_name` is "Dev", you get "Dev".
+### Issue 2: Transcript Tab Empty
 
----
+**Location**: `src/components/CommsConsole/PhoneDialer.tsx` (Lines 549-555)
 
-## Solution: Implement Profile Settings with Greeting Preference
-
-### Part 1: Add `preferred_greeting` Column to Profiles Table
-
-Create a migration to add a new column:
-
-```sql
-ALTER TABLE profiles 
-ADD COLUMN preferred_greeting TEXT DEFAULT NULL;
-
-COMMENT ON COLUMN profiles.preferred_greeting IS 
-'How the user prefers to be addressed (e.g., "Sir", "Von", "Mr. Chase"). If set, overrides first_name for greetings.';
-```
-
-### Part 2: Create ProfileSettings Component
-
-**New File**: `src/components/ProfileSettings.tsx`
-
-A form with fields for:
-- **First Name** (text input)
-- **Last Name** (text input)  
-- **Preferred Greeting** (text input with examples: "Sir", "Von", "Mr. Chase")
-- **Full Name** (text input)
-- **Phone Number** (text input)
-- **Email** (read-only, from auth)
-
-The component will:
-1. Load current profile data from `profiles` table
-2. Allow editing and saving changes
-3. Include a "How would you like to be addressed?" field
-
-### Part 3: Replace Placeholder in Settings Page
-
-**File**: `src/pages/Settings.tsx` (Lines 168-179)
-
-Replace the placeholder with the new component:
+The Transcript tab displays `voiceTranscripts` from `VoiceAssistantContext`:
 
 ```typescript
-<TabsContent value="profile" className="mt-6">
-  <ProfileSettings />
+<TabsContent value="transcript" className="flex-1 overflow-hidden p-4 m-0">
+  {voiceTranscripts.length === 0 ? (
+    <div>No conversation history</div>
+  ) : (
+    // Show transcripts
+  )}
 </TabsContent>
 ```
 
-### Part 4: Update Greeting Logic in Voice Bridges
+**Problem**: `voiceTranscripts` is an **in-memory array** that:
+1. Gets **cleared on every page refresh** (React state resets)
+2. Gets **cleared when connecting** (`setVoiceTranscripts([])` in `handleConnectionChange`)
+3. Is never **loaded from the database** on mount
 
-Update the userName extraction in all 4 locations to check `preferred_greeting` first:
+The conversation_messages table HAS the history - the query confirms messages exist - but they're never fetched and displayed.
 
-**Files to modify**:
-- `supabase/functions/generate-realtime-token/index.ts`
-- `supabase/functions/twilio-realtime-bridge/index.ts`
-- `cloudflare/src/TwilioCallSession.ts`
-- `src/utils/RealtimeVoiceAssistant.ts`
+### Issue 3: Chat Clears on Refresh
 
-**New pattern**:
+**Location**: `src/contexts/CommsConsoleContext.tsx` (Line 110)
+
 ```typescript
-// Old: const userName = profile?.first_name || profile?.full_name?.split(' ')[0] || 'sir';
-// New: 
-const userName = profile?.preferred_greeting 
-  || profile?.first_name 
-  || profile?.full_name?.split(' ')[0] 
-  || 'sir';
+const [messages, setMessages] = useState<ConversationMessage[]>([]);
 ```
 
-This allows you to:
-- Set `preferred_greeting = "Sir"` → AI says "Good morning, Sir"
-- Leave it NULL and set `first_name = "Von"` → AI says "Good morning, Von"
-- Leave both NULL → Falls back to parsing full_name or "sir"
+Chat messages are stored as **React state only**. On page refresh:
+1. Component unmounts
+2. State is lost
+3. Component remounts with empty `[]` array
+4. No code loads previous messages from `conversation_messages` table
+
+The system correctly **persists** messages to the database (via `persistMessagesWithMetrics`), but never **loads** them back on mount.
 
 ---
 
-## Files to Create/Modify
+## Solution
 
-| File | Change |
-|------|--------|
-| `supabase/migrations/XXXX_add_preferred_greeting.sql` | Add `preferred_greeting` column |
-| `src/components/ProfileSettings.tsx` | NEW - Profile editing form |
-| `src/pages/Settings.tsx` | Import and use ProfileSettings component |
-| `src/integrations/supabase/types.ts` | Update Profile type (if manually maintained) |
-| `supabase/functions/generate-realtime-token/index.ts` | Add preferred_greeting to SELECT and greeting logic |
-| `supabase/functions/twilio-realtime-bridge/index.ts` | Add preferred_greeting to SELECT and greeting logic |
-| `cloudflare/src/TwilioCallSession.ts` | Update greeting logic |
-| `src/utils/RealtimeVoiceAssistant.ts` | Update greeting logic |
+### Part 1: Load Chat History on Mount
 
----
+**File**: `src/contexts/CommsConsoleContext.tsx`
 
-## Technical Details
-
-### Database Query Update
-
-```sql
-SELECT first_name, full_name, preferred_greeting FROM profiles WHERE user_id = $1
-```
-
-### ProfileSettings Component Structure
+Add a new effect that fetches previous chat messages when the thread is initialized:
 
 ```typescript
-// Key states
-const [firstName, setFirstName] = useState('');
-const [lastName, setLastName] = useState('');
-const [preferredGreeting, setPreferredGreeting] = useState('');
-const [fullName, setFullName] = useState('');
-const [phone, setPhone] = useState('');
-
-// Load on mount
+// Load chat history when thread is ready
 useEffect(() => {
-  const { data } = await supabase
-    .from('profiles')
-    .select('first_name, last_name, full_name, phone, preferred_greeting')
-    .eq('user_id', user.id)
-    .single();
-  // Populate state...
-}, [user?.id]);
+  if (!dbThreadId || !userId) return;
+  
+  const loadChatHistory = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('conversation_messages')
+        .select('id, role, content, source, created_at, assistant_id')
+        .eq('thread_id', dbThreadId)
+        .eq('user_id', userId)
+        .eq('source', 'chat')
+        .order('created_at', { ascending: true })
+        .limit(50);  // Last 50 messages
+      
+      if (error) throw error;
+      
+      if (data && data.length > 0) {
+        setMessages(data.map(msg => ({
+          id: msg.id,
+          role: msg.role as 'user' | 'assistant' | 'system',
+          content: msg.content,
+          source: msg.source as CommunicationMode,
+          assistant_id: msg.assistant_id,
+          created_at: msg.created_at,
+        })));
+      }
+    } catch (err) {
+      console.error('[CommsConsole] Failed to load chat history:', err);
+    }
+  };
+  
+  loadChatHistory();
+}, [dbThreadId, userId]);
+```
 
-// Save handler
-const handleSave = async () => {
-  await supabase
-    .from('profiles')
-    .update({
-      first_name: firstName || null,
-      last_name: lastName || null,
-      full_name: fullName || null,
-      phone: phone || null,
-      preferred_greeting: preferredGreeting || null,
-    })
-    .eq('user_id', user.id);
+### Part 2: Load Voice Transcript History
+
+**File**: `src/contexts/VoiceAssistantContext.tsx`
+
+Modify the `handleConnectionChange` to NOT clear transcripts, and add a new function to load voice history:
+
+```typescript
+// Don't clear transcripts on connect - they represent session history
+const handleConnectionChange = (connected: boolean) => {
+  setIsConnected(connected);
+  if (connected) {
+    setConnectionError(null);
+    setRetryAttempts(0);
+    // REMOVED: setVoiceTranscripts([]);
+  } else {
+    setIsListening(false);
+    setIsSpeaking(false);
+  }
 };
 ```
 
-### UI Example
+Add a new effect to load voice history from database:
 
+```typescript
+// Load voice transcript history on mount
+useEffect(() => {
+  if (!user?.id) return;
+  
+  const loadVoiceHistory = async () => {
+    const { data, error } = await supabase
+      .from('conversation_messages')
+      .select('id, role, content, source, created_at')
+      .eq('user_id', user.id)
+      .eq('source', 'voice')
+      .order('created_at', { ascending: false })
+      .limit(50);
+    
+    if (!error && data) {
+      setVoiceTranscripts(data.reverse().map(msg => ({
+        id: msg.id,
+        role: msg.role as 'user' | 'assistant',
+        content: msg.content,
+        source: 'voice',
+        assistant_id: null,
+        created_at: msg.created_at,
+      })));
+    }
+  };
+  
+  loadVoiceHistory();
+}, [user?.id]);
 ```
-┌─────────────────────────────────────────────┐
-│ Profile Settings                            │
-├─────────────────────────────────────────────┤
-│                                             │
-│ Email                                       │
-│ ┌─────────────────────────────────────────┐ │
-│ │ dev@enterpriseds.io (read-only)         │ │
-│ └─────────────────────────────────────────┘ │
-│                                             │
-│ First Name                                  │
-│ ┌─────────────────────────────────────────┐ │
-│ │ Von                                     │ │
-│ └─────────────────────────────────────────┘ │
-│                                             │
-│ Last Name                                   │
-│ ┌─────────────────────────────────────────┐ │
-│ │ Chase                                   │ │
-│ └─────────────────────────────────────────┘ │
-│                                             │
-│ How should I address you?                   │
-│ ┌─────────────────────────────────────────┐ │
-│ │ Sir                                     │ │
-│ └─────────────────────────────────────────┘ │
-│ Examples: "Sir", "Von", "Mr. Chase"         │
-│                                             │
-│ Phone                                       │
-│ ┌─────────────────────────────────────────┐ │
-│ │ +14434150606                            │ │
-│ └─────────────────────────────────────────┘ │
-│                                             │
-│              [Save Changes]                 │
-│                                             │
-└─────────────────────────────────────────────┘
+
+### Part 3: Add Refresh/Retry Button for Interrupted Connections
+
+**File**: `src/components/CommsConsole/TranscriptScroll.tsx`
+
+Add a retry button when showing connection error messages:
+
+```typescript
+{message.content === 'Connection interrupted. Please try again.' && (
+  <Button 
+    size="sm" 
+    variant="outline" 
+    onClick={() => window.location.reload()}
+    className="mt-2"
+  >
+    Retry
+  </Button>
+)}
+```
+
+**File**: `src/contexts/CommsConsoleContext.tsx`
+
+Add a `retryLastMessage` function that can be called to resend the last user message after connection failure.
+
+### Part 4: Add Clear Chat / New Conversation Option
+
+Allow users to start fresh while keeping history accessible:
+
+**File**: `src/components/CommsConsole/AssistantHeader.tsx`
+
+Add a menu option to clear current conversation or start new thread.
+
+---
+
+## Files to Modify
+
+| File | Change |
+|------|--------|
+| `src/contexts/CommsConsoleContext.tsx` | Load chat history on mount; add retry mechanism |
+| `src/contexts/VoiceAssistantContext.tsx` | Load voice history on mount; don't clear on connect |
+| `src/components/CommsConsole/TranscriptScroll.tsx` | Add retry button for connection errors |
+| `src/components/CommsConsole/AssistantHeader.tsx` | Add "New Conversation" option |
+
+---
+
+## Technical Flow After Fix
+
+### On Page Load / Return:
+```text
+1. User navigates to chat page
+2. CommsConsoleContext initializes
+3. useUnifiedThread fetches/creates dbThreadId
+4. useEffect triggers loadChatHistory()
+5. Previous messages populate UI immediately
+6. User sees their conversation right where they left off
+```
+
+### On Voice Tab:
+```text
+1. User switches to Phone mode → Transcript tab
+2. VoiceAssistantContext loads voice history from DB
+3. Previous voice transcripts displayed
+4. New transcripts during session added to existing history
+```
+
+### On Connection Error:
+```text
+1. Streaming request fails
+2. Error message shown with "Retry" button
+3. User clicks retry → resends last message
+4. Conversation continues
+```
+
+---
+
+## Database Queries
+
+**Load Chat History**:
+```sql
+SELECT id, role, content, source, created_at, assistant_id
+FROM conversation_messages
+WHERE thread_id = $1 AND user_id = $2 AND source = 'chat'
+ORDER BY created_at ASC
+LIMIT 50
+```
+
+**Load Voice History**:
+```sql
+SELECT id, role, content, source, created_at
+FROM conversation_messages
+WHERE user_id = $1 AND source = 'voice'
+ORDER BY created_at DESC
+LIMIT 50
 ```
 
 ---
 
 ## Expected Behavior After Fix
 
-1. Go to Settings → Profile tab
-2. See your current profile info (email, name, phone)
-3. Enter "Sir" in the "How should I address you?" field
-4. Click Save
-5. Next voice/phone call: "Good morning, Sir. What can I help you with?"
+1. **Chat History Persists**: Navigate away and back - previous messages still visible
+2. **Transcript Tab Shows History**: Voice transcripts from past sessions load on mount
+3. **Connection Errors Recoverable**: "Retry" button allows quick recovery from interruptions
+4. **SMS-like Experience**: Running thread continues across sessions, just like iMessage or WhatsApp
 
-The system respects your preference across all communication modes (WebRTC voice, phone calls, chat).
+---
+
+## Technical Summary
+
+| Issue | Root Cause | Fix |
+|-------|------------|-----|
+| Chat clears on refresh | Messages only in React state | Load from `conversation_messages` on mount |
+| Transcript tab empty | `voiceTranscripts` cleared on connect | Load history from DB; don't clear on connect |
+| Connection interrupted | No retry mechanism | Add retry button and `retryLastMessage()` function |
