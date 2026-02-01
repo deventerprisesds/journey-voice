@@ -8,6 +8,7 @@ import { AssignmentSelectionProvider } from "@/contexts/AssignmentSelectionConte
 import { VoiceAssistantProvider } from "@/contexts/VoiceAssistantContext";
 import { CommsConsoleProvider } from "@/contexts/CommsConsoleContext";
 import MainLayout from "./components/MainLayout";
+import ProtectedRoute from "./components/ProtectedRoute";
 import TasksPage from "./pages/TasksPage";
 import DailyPriorities from "./pages/DailyPriorities";
 import Auth from "./pages/Auth";
@@ -81,17 +82,19 @@ const App = () => {
                       <Route path="/auth" element={<Auth />} />
                       {/* All authenticated routes wrapped in MainLayout */}
                       <Route path="/*" element={
-                        <MainLayout>
-                          <Routes>
-                            <Route path="/" element={<Navigate to="/tasks?view=focus" replace />} />
-                            <Route path="/tasks" element={<TasksPage />} />
-                            <Route path="/agenda" element={<DailyPriorities />} />
-                            <Route path="/admin" element={<Admin />} />
-                            <Route path="/settings" element={<Settings />} />
-                            <Route path="/calendar" element={<Calendar />} />
-                            <Route path="*" element={<NotFound />} />
-                          </Routes>
-                        </MainLayout>
+                        <ProtectedRoute>
+                          <MainLayout>
+                            <Routes>
+                              <Route path="/" element={<Navigate to="/tasks?view=focus" replace />} />
+                              <Route path="/tasks" element={<TasksPage />} />
+                              <Route path="/agenda" element={<DailyPriorities />} />
+                              <Route path="/admin" element={<ProtectedRoute requireAdmin><Admin /></ProtectedRoute>} />
+                              <Route path="/settings" element={<Settings />} />
+                              <Route path="/calendar" element={<Calendar />} />
+                              <Route path="*" element={<NotFound />} />
+                            </Routes>
+                          </MainLayout>
+                        </ProtectedRoute>
                       } />
                     </Routes>
                   </ErrorBoundary>
