@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, useCallback, ReactNode } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
 
@@ -9,6 +9,8 @@ interface AuthContextType {
   signOut: () => Promise<void>;
   isAdmin: boolean;
   isDemoMode: boolean;
+  initError: string | null;
+  retryAuth: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -50,21 +52,83 @@ const createMockSession = (mockUser: User): Session => ({
   user: mockUser
 });
 
+// Helper to log auth errors to the database (best-effort, never blocks UI)
+const logAuthError = async (errorType: string, message: string, metadata?: Record<string, unknown>) => {
+  try {
+    await supabase.from('error_log').insert({
+      source: 'frontend',
+      component: 'AuthProvider',
+      error_type: errorType,
+      error_message: message,
+      context: {
+        origin: window.location.origin,
+        hostname: window.location.hostname,
+        pathname: window.location.pathname,
+        userAgent: navigator.userAgent,
+        ...metadata
+      }
+    });
+  } catch (e) {
+    console.error('[Auth] Failed to log error to database:', e);
+  }
+};
+
+// Timeout wrapper for async operations
+const withTimeout = <T,>(promise: Promise<T>, ms: number, errorMessage: string): Promise<T> => {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => 
+      setTimeout(() => reject(new Error(errorMessage)), ms)
+    )
+  ]);
+};
+
+const AUTH_TIMEOUT_MS = 10000; // 10 seconds
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
   const [isDemoMode, setIsDemoMode] = useState(false);
+  const [initError, setInitError] = useState<string | null>(null);
   const isPreviewEnvironment = isDevelopmentMode();
 
-  useEffect(() => {
+  const checkAdminStatus = async (userId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('user_roles')
+        .select('role')
+        .eq('user_id', userId)
+        .eq('role', 'admin')
+        .maybeSingle();
+      
+      if (!error) {
+        setIsAdmin(!!data);
+      }
+    } catch (error) {
+      console.error('Error checking admin status:', error);
+    }
+  };
+
+  const initAuth = useCallback(async () => {
+    console.log('[Auth] Starting auth initialization...');
+    setLoading(true);
+    setInitError(null);
+    
     let subscription: { unsubscribe: () => void } | null = null;
 
-    const initAuth = async () => {
-      // First, always check for a real session - even in preview environments
-      // This ensures logged-in users keep their session on refresh
-      const { data: { session: existingSession } } = await supabase.auth.getSession();
+    try {
+      // Fetch session with timeout to prevent infinite hang
+      const { data: { session: existingSession }, error: sessionError } = await withTimeout(
+        supabase.auth.getSession(),
+        AUTH_TIMEOUT_MS,
+        'Authentication service timed out'
+      );
+
+      if (sessionError) {
+        throw sessionError;
+      }
       
       if (existingSession?.user) {
         // Real session exists - use it even in preview environment
@@ -72,7 +136,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setSession(existingSession);
         setUser(existingSession.user);
         setIsDemoMode(false);
-        setLoading(false);
         checkAdminStatus(existingSession.user.id);
         
         // Set up auth state listener to handle sign out/in
@@ -109,17 +172,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setSession(mockSession);
         setIsDemoMode(true);
         setIsAdmin(true);
-        setLoading(false);
       } else {
         // No session and not in preview - just set loading to false
-        setLoading(false);
+        console.log('[Auth] No session found in production, user needs to sign in');
+        setSession(null);
+        setUser(null);
         
         // Set up auth state listener for future sign-ins
         const { data: { subscription: sub } } = supabase.auth.onAuthStateChange(
           (event, session) => {
             setSession(session);
             setUser(session?.user ?? null);
-            setLoading(false);
             
             if (session?.user) {
               checkAdminStatus(session.user.id);
@@ -130,10 +193,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         );
         subscription = sub;
       }
-    };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown authentication error';
+      const isTimeout = errorMessage.includes('timed out');
+      
+      console.error('[Auth] Initialization failed:', errorMessage);
+      
+      // Log to database for visibility
+      logAuthError(
+        isTimeout ? 'auth_init_timeout' : 'auth_init_failed',
+        errorMessage,
+        { isPreviewEnvironment }
+      );
+      
+      // Set user-facing error
+      setInitError(
+        isTimeout 
+          ? 'Connection to authentication service timed out. Please check your network and try again.'
+          : `Authentication failed: ${errorMessage}`
+      );
+      
+      // Reset to safe defaults
+      setSession(null);
+      setUser(null);
+      setIsAdmin(false);
+      setIsDemoMode(false);
+    } finally {
+      // ALWAYS set loading to false to prevent infinite loading screen
+      setLoading(false);
+      console.log('[Auth] Initialization complete, loading set to false');
+    }
 
-    initAuth();
-
+    // Return cleanup function
     return () => {
       if (subscription) {
         subscription.unsubscribe();
@@ -141,22 +232,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [isPreviewEnvironment]);
 
-  const checkAdminStatus = async (userId: string) => {
-    try {
-      const { data, error } = await supabase
-        .from('user_roles')
-        .select('role')
-        .eq('user_id', userId)
-        .eq('role', 'admin')
-        .maybeSingle();
-      
-      if (!error) {
-        setIsAdmin(!!data);
+  // Retry function for user-triggered retry
+  const retryAuth = useCallback(() => {
+    console.log('[Auth] User triggered retry');
+    initAuth();
+  }, [initAuth]);
+
+  useEffect(() => {
+    let cleanup: (() => void) | undefined;
+    
+    initAuth().then(cleanupFn => {
+      cleanup = cleanupFn;
+    });
+
+    return () => {
+      if (cleanup) {
+        cleanup();
       }
-    } catch (error) {
-      console.error('Error checking admin status:', error);
-    }
-  };
+    };
+  }, [initAuth]);
 
   const signOut = async () => {
     if (isDemoMode) {
@@ -170,7 +264,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, session, loading, signOut, isAdmin, isDemoMode }}>
+    <AuthContext.Provider value={{ 
+      user, 
+      session, 
+      loading, 
+      signOut, 
+      isAdmin, 
+      isDemoMode,
+      initError,
+      retryAuth
+    }}>
       {children}
     </AuthContext.Provider>
   );
