@@ -194,7 +194,7 @@ async function loadUserProfile(supabase: any, userId: string): Promise<any> {
   try {
     const { data } = await supabase
       .from('profiles')
-      .select('full_name, first_name, email, phone')
+      .select('full_name, first_name, email, phone, preferred_greeting')
       .eq('user_id', userId)
       .maybeSingle();
     return data || {};
@@ -293,7 +293,7 @@ IMPORTANT:
 
 // Load user instructions from database (single source of truth)
 async function loadUserInstructions(userId: string | null, ragContext: string, userProfile: any, timezone: string): Promise<string> {
-  const userName = userProfile?.first_name || userProfile?.full_name?.split(' ')[0] || 'sir';
+  const userName = userProfile?.preferred_greeting || userProfile?.first_name || userProfile?.full_name?.split(' ')[0] || 'sir';
   const currentTime = getCurrentTimeString(timezone);
   
   if (!userId) {

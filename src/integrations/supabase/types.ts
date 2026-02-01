@@ -2562,6 +2562,7 @@ export type Database = {
           last_name: string | null
           openai_vector_store_id: string | null
           phone: string | null
+          preferred_greeting: string | null
           updated_at: string
           user_id: string
           years_of_experience: number | null
@@ -2579,6 +2580,7 @@ export type Database = {
           last_name?: string | null
           openai_vector_store_id?: string | null
           phone?: string | null
+          preferred_greeting?: string | null
           updated_at?: string
           user_id: string
           years_of_experience?: number | null
@@ -2596,6 +2598,7 @@ export type Database = {
           last_name?: string | null
           openai_vector_store_id?: string | null
           phone?: string | null
+          preferred_greeting?: string | null
           updated_at?: string
           user_id?: string
           years_of_experience?: number | null

@@ -146,7 +146,7 @@ export class TwilioCallSession {
   private isAiSpeaking: boolean = false;
 
   // v7: User profile for personalization (parity with Supabase)
-  private userProfile: { first_name?: string; full_name?: string } = {};
+  private userProfile: { first_name?: string; full_name?: string; preferred_greeting?: string } = {};
 
   // v7b: State tracking for proper truncation (parity with Supabase)
   private currentResponseItemId: string | null = null;
@@ -574,12 +574,12 @@ export class TwilioCallSession {
   }
 
   // Copy from Supabase lines 192-205
-  private async loadUserProfile(): Promise<{ first_name?: string; full_name?: string }> {
+  private async loadUserProfile(): Promise<{ first_name?: string; full_name?: string; preferred_greeting?: string }> {
     if (!this.userId) return {};
     
     try {
       const response = await fetch(
-        `${this.env.SUPABASE_URL}/rest/v1/profiles?user_id=eq.${this.userId}&select=first_name,full_name`,
+        `${this.env.SUPABASE_URL}/rest/v1/profiles?user_id=eq.${this.userId}&select=first_name,full_name,preferred_greeting`,
         {
           headers: {
             'Authorization': `Bearer ${this.env.SUPABASE_SERVICE_KEY}`,
@@ -1118,7 +1118,8 @@ ${this.ragContext ? `Context: ${this.ragContext}` : ''}]`;
 
     // v7: Generate dynamic personalized greeting (parity with Supabase)
     const timeGreeting = this.getTimeBasedGreeting();
-    const userName = this.userProfile?.first_name || 'sir';
+    // preferred_greeting takes priority over first_name
+    const userName = this.userProfile?.preferred_greeting || this.userProfile?.first_name || 'sir';
     const callContext = this.ragContext || '';
     const greeting = this.greetingText || this.generateGreetingForCallType(callContext, timeGreeting, userName);
     
