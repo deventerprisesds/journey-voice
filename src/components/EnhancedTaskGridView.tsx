@@ -314,6 +314,70 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
     }
   };
 
+  // Immediate save for select dropdowns - value is passed directly since React state is async
+  const saveEditImmediate = async (taskId: string, field: string, value: string) => {
+    try {
+      const updateData: any = { [field]: value };
+      console.log(`Updating task ${taskId} field ${field} to:`, value);
+      
+      // Optimistic update - immediately update the UI
+      const updatedTasks = currentTasks.map((task: Task) => 
+        task.id === taskId ? { ...task, ...updateData, updated_at: new Date().toISOString() } : task
+      );
+      setOptimisticTasks(updatedTasks);
+      
+      if (isDemoMode) {
+        // Update localStorage for demo mode
+        const demoTasks = localStorage.getItem('kanban-demo-tasks');
+        if (demoTasks) {
+          const tasks = JSON.parse(demoTasks);
+          const updatedDemoTasks = tasks.map((task: Task) => 
+            task.id === taskId ? { ...task, ...updateData } : task
+          );
+          localStorage.setItem('kanban-demo-tasks', JSON.stringify(updatedDemoTasks));
+        }
+      } else {
+        const { error } = await supabase
+          .from('tasks')
+          .update(updateData)
+          .eq('id', taskId);
+
+        if (error) {
+          console.error('Error updating task:', error);
+          // Rollback optimistic update
+          setOptimisticTasks([]);
+          toast({
+            title: "Error",
+            description: "Failed to update task",
+            variant: "destructive",
+          });
+          return;
+        }
+      }
+
+      // Clear optimistic updates and refresh data
+      setTimeout(() => {
+        setOptimisticTasks([]);
+        if (onTaskUpdate) {
+          console.log('Calling onTaskUpdate to refresh data');
+          onTaskUpdate();
+        }
+      }, 100);
+
+      toast({
+        title: "Task updated",
+        description: "Task has been updated successfully",
+      });
+    } catch (error) {
+      console.error('Error saving edit:', error);
+      // Rollback optimistic update
+      setOptimisticTasks([]);
+    } finally {
+      setEditingCell(null);
+      setEditValue('');
+    }
+  };
+
   const cancelEdit = () => {
     setEditingCell(null);
     setEditValue('');
@@ -325,7 +389,14 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
     if (isEditing) {
       if (type === 'select' && options) {
         return (
-          <Select value={editValue} onValueChange={setEditValue}>
+          <Select 
+            value={editValue} 
+            onValueChange={(newValue) => {
+              setEditValue(newValue);
+              // Immediately save the selection - don't wait for blur
+              saveEditImmediate(task.id, field, newValue);
+            }}
+          >
             <SelectTrigger className="h-8">
               <SelectValue />
             </SelectTrigger>
