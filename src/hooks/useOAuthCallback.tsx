@@ -27,9 +27,10 @@ export function useOAuthCallback() {
         return;
       }
 
-      // Handle successful OAuth callback
-      if (code && state) {
-        const provider = state; // 'google' or 'outlook'
+      // Handle successful OAuth callback - ONLY for calendar OAuth (not Supabase Auth)
+      // Supabase Auth uses PKCE tokens in state, calendar OAuth uses 'google' or 'outlook'
+      if (code && state && (state === 'google' || state === 'outlook')) {
+        const provider = state as 'google' | 'outlook';
         
         try {
           toast.info('Completing calendar connection...');
