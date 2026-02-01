@@ -1,6 +1,7 @@
 import React, { useRef, useEffect } from 'react';
-import { Mic, Phone, MessageSquare } from 'lucide-react';
+import { Mic, Phone, MessageSquare, RefreshCw } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import type { ConversationMessage } from './types';
 
@@ -8,6 +9,7 @@ interface TranscriptScrollProps {
   messages: ConversationMessage[];
   isLoading?: boolean;
   className?: string;
+  onRetry?: () => void;
 }
 
 const sourceIcons: Record<string, React.ElementType> = {
@@ -20,6 +22,7 @@ const TranscriptScroll: React.FC<TranscriptScrollProps> = ({
   messages,
   isLoading = false,
   className,
+  onRetry,
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -82,9 +85,23 @@ const TranscriptScroll: React.FC<TranscriptScrollProps> = ({
                     <div className="w-2 h-2 rounded-full bg-muted-foreground/40 animate-bounce" style={{ animationDelay: '300ms' }} />
                   </div>
                 ) : (
-                  <p className="text-sm whitespace-pre-wrap break-words">
-                    {message.content}
-                  </p>
+                  <>
+                    <p className="text-sm whitespace-pre-wrap break-words">
+                      {message.content}
+                    </p>
+                    {/* Retry button for connection errors */}
+                    {isSystem && message.content?.includes('Connection interrupted') && onRetry && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={onRetry}
+                        className="mt-2 gap-1.5"
+                      >
+                        <RefreshCw className="w-3 h-3" />
+                        Retry
+                      </Button>
+                    )}
+                  </>
                 )}
               </div>
             </div>

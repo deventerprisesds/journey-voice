@@ -29,6 +29,8 @@ interface CommsConsoleContextValue extends ExtendedCommsConsoleState {
   setPhoneCallState: (state: PhoneCallState) => void;
   isMobileSidebarOpen: boolean;
   setMobileSidebarOpen: (open: boolean) => void;
+  retryLastMessage: () => Promise<void>;
+  startNewConversation: () => void;
 }
 
 const CommsConsoleContext = createContext<CommsConsoleContextValue | null>(null);
@@ -111,7 +113,8 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const [threadId, setThreadId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
-
+  const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [lastUserMessage, setLastUserMessage] = useState<string | null>(null);
   // Phone state
   const [phoneCallState, setPhoneCallState] = useState<PhoneCallState>('idle');
 
@@ -274,6 +277,46 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     fetchAssistants();
   }, [userId]);
 
+  // ============================================================
+  // Load chat history from database on mount
+  // ============================================================
+  useEffect(() => {
+    if (!dbThreadId || !userId || historyLoaded) return;
+
+    const loadChatHistory = async () => {
+      try {
+        console.log('[CommsConsole] Loading chat history for thread:', dbThreadId);
+        const { data, error } = await supabase
+          .from('conversation_messages')
+          .select('id, role, content, source, created_at, assistant_id')
+          .eq('thread_id', dbThreadId)
+          .eq('user_id', userId)
+          .eq('source', 'chat')
+          .order('created_at', { ascending: true })
+          .limit(50);
+
+        if (error) throw error;
+
+        if (data && data.length > 0) {
+          console.log(`[CommsConsole] Loaded ${data.length} messages from history`);
+          setMessages(data.map(msg => ({
+            id: msg.id,
+            role: msg.role as 'user' | 'assistant' | 'system',
+            content: msg.content,
+            source: (msg.source || 'chat') as CommunicationMode,
+            assistant_id: msg.assistant_id,
+            created_at: msg.created_at,
+          })));
+        }
+        setHistoryLoaded(true);
+      } catch (err) {
+        console.error('[CommsConsole] Failed to load chat history:', err);
+        setHistoryLoaded(true); // Mark as loaded to prevent retry loop
+      }
+    };
+
+    loadChatHistory();
+  }, [dbThreadId, userId, historyLoaded]);
   const togglePanel = useCallback(() => {
     setIsPanelOpen((prev) => !prev);
   }, []);
@@ -326,6 +369,7 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     };
 
     setMessages((prev) => [...prev, userMessage]);
+    setLastUserMessage(content); // Store for retry functionality
     setIsLoading(true);
 
     // Latency metrics
@@ -685,6 +729,25 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     voiceAssistant.sendTextMessage(text);
   }, [voiceAssistant]);
 
+  // Retry last failed message
+  const retryLastMessage = useCallback(async () => {
+    if (lastUserMessage) {
+      // Remove the error message first
+      setMessages((prev) => prev.filter(m => 
+        !(m.role === 'system' && m.content?.includes('Connection interrupted'))
+      ));
+      await sendMessage(lastUserMessage);
+    }
+  }, [lastUserMessage, sendMessage]);
+
+  // Start a new conversation (clear messages but keep thread for history)
+  const startNewConversation = useCallback(() => {
+    setMessages([]);
+    setLastUserMessage(null);
+    setHistoryLoaded(false); // Will reload if user navigates back
+    console.log('[CommsConsole] Started new conversation');
+  }, []);
+
   const value: CommsConsoleContextValue = {
     isPanelOpen,
     isSidebarExpanded,
@@ -710,6 +773,8 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     setPhoneCallState,
     isMobileSidebarOpen,
     setMobileSidebarOpen,
+    retryLastMessage,
+    startNewConversation,
   };
 
   return (

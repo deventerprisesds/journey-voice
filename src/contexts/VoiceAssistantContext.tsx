@@ -3,6 +3,7 @@ import { useToast } from '@/hooks/use-toast';
 import { RealtimeVoiceAssistant } from '@/utils/RealtimeVoiceAssistant';
 import { loadUserSchedulingConfig } from '@/services/schedulingService';
 import { useAuth } from '@/hooks/useAuth';
+import { supabase } from '@/integrations/supabase/client';
 import type { ConversationMessage } from '@/components/CommsConsole/types';
 
 interface VoiceAssistantContextType {
@@ -213,8 +214,7 @@ export const VoiceAssistantProvider: React.FC<VoiceAssistantProviderProps> = ({
     if (connected) {
       setConnectionError(null);
       setRetryAttempts(0);
-      // Clear transcripts for new session
-      setVoiceTranscripts([]);
+      // Don't clear transcripts - they represent session history loaded from DB
     } else {
       setIsListening(false);
       setIsSpeaking(false);
@@ -379,6 +379,44 @@ export const VoiceAssistantProvider: React.FC<VoiceAssistantProviderProps> = ({
     };
   }, []);
 
+  // ============================================================
+  // Load voice transcript history from database on mount
+  // ============================================================
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const loadVoiceHistory = async () => {
+      try {
+        console.log('[VoiceAssistant] Loading voice transcript history');
+        const { data, error } = await supabase
+          .from('conversation_messages')
+          .select('id, role, content, source, created_at')
+          .eq('user_id', user.id)
+          .eq('source', 'voice')
+          .order('created_at', { ascending: false })
+          .limit(50);
+
+        if (error) throw error;
+
+        if (data && data.length > 0) {
+          console.log(`[VoiceAssistant] Loaded ${data.length} voice messages from history`);
+          // Reverse to get chronological order
+          setVoiceTranscripts(data.reverse().map(msg => ({
+            id: msg.id,
+            role: msg.role as 'user' | 'assistant',
+            content: msg.content,
+            source: 'voice',
+            assistant_id: null,
+            created_at: msg.created_at,
+          })));
+        }
+      } catch (err) {
+        console.error('[VoiceAssistant] Failed to load voice history:', err);
+      }
+    };
+
+    loadVoiceHistory();
+  }, [user?.id]);
   return (
     <VoiceAssistantContext.Provider
       value={{
