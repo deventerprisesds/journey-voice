@@ -480,7 +480,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
 
       {/* Right Comms Panel - Desktop only, collapsible */}
       {!isMobile && isPanelOpen && (
-        <aside className="w-[400px] border-l border-border bg-card/50 flex-shrink-0 flex flex-col">
+        <aside className="w-[400px] border-l border-border bg-card/50 flex-shrink-0 flex flex-col h-[calc(100dvh-56px)] overflow-hidden">
           <CommsConsole mode="panel" />
         </aside>
       )}

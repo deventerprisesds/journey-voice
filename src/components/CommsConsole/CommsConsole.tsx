@@ -90,7 +90,7 @@ const CommsConsole: React.FC<CommsConsoleProps> = ({ className, embedded = false
   // Panel mode - right-side persistent panel (no sidebar)
   if (effectiveMode === 'panel') {
     return (
-      <div className={cn('flex flex-col h-full bg-background', className)}>
+      <div className={cn('flex flex-col h-full overflow-hidden bg-background', className)}>
         {/* Header with close button */}
         <AssistantHeader
           currentAssistant={currentAssistant}
