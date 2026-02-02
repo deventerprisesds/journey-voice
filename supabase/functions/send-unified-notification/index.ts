@@ -188,8 +188,8 @@ async function refreshOutlookToken(
   try {
     console.log('[Outlook] Refreshing expired token...');
     
-    const clientId = Deno.env.get('AZURE_AD_CLIENT_ID');
-    const clientSecret = Deno.env.get('AZURE_AD_CLIENT_SECRET');
+    const clientId = Deno.env.get('MICROSOFT_CLIENT_ID') || Deno.env.get('AZURE_AD_CLIENT_ID');
+    const clientSecret = Deno.env.get('MICROSOFT_CLIENT_SECRET') || Deno.env.get('AZURE_AD_CLIENT_SECRET');
     
     if (!clientId || !clientSecret) {
       console.error('[Outlook] Missing Azure AD credentials for token refresh');
