@@ -322,7 +322,28 @@ Examples:
       console.log('✅ Successfully parsed tasks:', parsed.tasks?.length || 0, 'tasks');
 
       // Return tasks with AI's scheduling context hints
-      const tasks = Array.isArray(parsed.tasks) ? parsed.tasks : [];
+      const rawTasks = Array.isArray(parsed.tasks) ? parsed.tasks : [];
+      
+      // POST-PARSE STATUS LOGIC: If task is for today, set status to UP_NEXT
+      // Otherwise keep the existing category-based status
+      const todayStr = targetDate 
+        ? new Date(targetDate).toDateString() 
+        : new Date().toDateString();
+      
+      const tasks = rawTasks.map((task: any) => {
+        // Check if task's due_date is today
+        const taskDueDate = task.due_date ? new Date(task.due_date).toDateString() : null;
+        const isForToday = taskDueDate === todayStr;
+        
+        if (isForToday) {
+          console.log(`📅 Task "${task.title}" is for today - setting status to UP_NEXT`);
+          return {
+            ...task,
+            status: 'UP_NEXT'
+          };
+        }
+        return task;
+      });
       
       // BULK MODE THRESHOLD
       const BULK_THRESHOLD = 3;
