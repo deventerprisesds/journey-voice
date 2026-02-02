@@ -745,10 +745,12 @@ export type Database = {
           provider: string
           provider_account_email: string
           provider_account_id: string
+          purposes: string[] | null
           refresh_token: string | null
           scope: string | null
           scopes: string[] | null
           service_type: string | null
+          sync_token: string | null
           updated_at: string
           user_id: string
         }
@@ -762,10 +764,12 @@ export type Database = {
           provider: string
           provider_account_email: string
           provider_account_id: string
+          purposes?: string[] | null
           refresh_token?: string | null
           scope?: string | null
           scopes?: string[] | null
           service_type?: string | null
+          sync_token?: string | null
           updated_at?: string
           user_id: string
         }
@@ -779,10 +783,12 @@ export type Database = {
           provider?: string
           provider_account_email?: string
           provider_account_id?: string
+          purposes?: string[] | null
           refresh_token?: string | null
           scope?: string | null
           scopes?: string[] | null
           service_type?: string | null
+          sync_token?: string | null
           updated_at?: string
           user_id?: string
         }
@@ -1692,6 +1698,7 @@ export type Database = {
           is_all_day: boolean
           last_synced_at: string
           location: string | null
+          source_task_id: string | null
           start_time: string
           title: string
           updated_at: string
@@ -1708,6 +1715,7 @@ export type Database = {
           is_all_day?: boolean
           last_synced_at?: string
           location?: string | null
+          source_task_id?: string | null
           start_time: string
           title: string
           updated_at?: string
@@ -1724,6 +1732,7 @@ export type Database = {
           is_all_day?: boolean
           last_synced_at?: string
           location?: string | null
+          source_task_id?: string | null
           start_time?: string
           title?: string
           updated_at?: string
@@ -1735,6 +1744,13 @@ export type Database = {
             columns: ["connection_id"]
             isOneToOne: false
             referencedRelation: "calendar_connections"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "external_calendar_events_source_task_id_fkey"
+            columns: ["source_task_id"]
+            isOneToOne: false
+            referencedRelation: "tasks"
             referencedColumns: ["id"]
           },
         ]
@@ -3617,7 +3633,9 @@ export type Database = {
           provider: string
           provider_account_email: string
           provider_account_id: string
+          purposes: string[]
           scope: string
+          sync_token: string
           updated_at: string
           user_id: string
         }[]
@@ -3633,8 +3651,10 @@ export type Database = {
           provider: string
           provider_account_email: string
           provider_account_id: string
+          purposes: string[]
           refresh_token: string
           scope: string
+          sync_token: string
           updated_at: string
           user_id: string
         }[]
@@ -3720,19 +3740,34 @@ export type Database = {
         }
         Returns: string
       }
-      insert_calendar_connection_for_user: {
-        Args: {
-          _access_token: string
-          _expires_at?: string
-          _provider: string
-          _provider_account_email: string
-          _provider_account_id: string
-          _refresh_token?: string
-          _scope?: string
-          _user_id: string
-        }
-        Returns: string
-      }
+      insert_calendar_connection_for_user:
+        | {
+            Args: {
+              _access_token: string
+              _expires_at?: string
+              _provider: string
+              _provider_account_email: string
+              _provider_account_id: string
+              _refresh_token?: string
+              _scope?: string
+              _user_id: string
+            }
+            Returns: string
+          }
+        | {
+            Args: {
+              _access_token: string
+              _expires_at?: string
+              _provider: string
+              _provider_account_email: string
+              _provider_account_id: string
+              _purposes?: string[]
+              _refresh_token?: string
+              _scope?: string
+              _user_id: string
+            }
+            Returns: string
+          }
       log_oauth_token_access: {
         Args: {
           _action_type: string
@@ -3804,6 +3839,10 @@ export type Database = {
         }
         Returns: string
       }
+      update_calendar_connection_purposes: {
+        Args: { _connection_id: string; _purposes: string[] }
+        Returns: boolean
+      }
       update_calendar_connection_tokens: {
         Args: {
           _access_token: string
@@ -3821,6 +3860,10 @@ export type Database = {
           _refresh_token?: string
           _user_id: string
         }
+        Returns: boolean
+      }
+      update_calendar_sync_token: {
+        Args: { _connection_id: string; _sync_token: string }
         Returns: boolean
       }
       update_office365_connection_tokens: {

@@ -9,6 +9,9 @@ verify_jwt = false
 [functions.calendar-integration-manager]
 verify_jwt = true
 
+[functions.calendar-delta-sync]
+verify_jwt = false
+
 [functions.realtime-voice-assistant]
 verify_jwt = false
 

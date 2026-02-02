@@ -7,7 +7,7 @@ const corsHeaders = {
 }
 
 interface TokenRequest {
-  action: 'get' | 'update' | 'revoke' | 'get_oauth_url' | 'exchange_code'
+  action: 'get' | 'update' | 'revoke' | 'get_oauth_url' | 'exchange_code' | 'update_purposes'
   connectionId?: string
   accessToken?: string
   refreshToken?: string
@@ -15,6 +15,7 @@ interface TokenRequest {
   provider?: string
   code?: string
   redirect_uri?: string
+  purposes?: string[]  // NEW: For setting connection purposes (READ, WRITE)
 }
 
 serve(async (req) => {
@@ -24,7 +25,7 @@ serve(async (req) => {
   }
 
   try {
-    const { action, connectionId, accessToken, refreshToken, expiresAt, provider, code, redirect_uri }: TokenRequest = await req.json()
+    const { action, connectionId, accessToken, refreshToken, expiresAt, provider, code, redirect_uri, purposes }: TokenRequest = await req.json()
     
     // Get the Authorization header from the request
     const authHeader = req.headers.get('Authorization')
@@ -130,6 +131,24 @@ serve(async (req) => {
         if (revokeError) throw revokeError
         
         result = { success: revoked }
+        break
+
+      case 'update_purposes':
+        if (!connectionId || !purposes) {
+          throw new Error('Missing connection ID or purposes for update')
+        }
+
+        // Update connection purposes
+        const { data: purposeUpdated, error: purposeError } = await supabaseClient
+          .rpc('update_calendar_connection_purposes', {
+            _connection_id: connectionId,
+            _purposes: purposes
+          })
+
+        if (purposeError) throw purposeError
+        
+        result = { success: purposeUpdated }
+        console.log(`[calendar-token-manager] Updated purposes for connection ${connectionId} to: ${purposes.join(', ')}`)
         break
 
       default:
