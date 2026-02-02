@@ -1,190 +1,134 @@
 
-# Complete Fix: Duplicate Outlook Events and Timing Issues
 
-## Root Cause Analysis (Confirmed)
+# Fix: Remove Duplicate send-unified-notification Calls
 
-After tracing the entire flow, I found **MULTIPLE issues** creating duplicates:
+## Root Cause Confirmed
 
-### Issue 1: Missing `notificationId` Passed from notification-delivery
+The duplicate Outlook events are caused by **TWO separate calls** to `send-unified-notification` for every notification:
 
-**Location:** `supabase/functions/notification-delivery/index.ts` (lines 565-573)
-
-```typescript
-const { data: unifiedResult, error: unifiedError } = await supabaseClient.functions.invoke('send-unified-notification', {
-  body: {
-    userId: userId,
-    title: title,
-    body: body,
-    channels: enabledChannels.filter((channel: string) => ['SLACK', 'EMAIL', 'OUTLOOK_EVENT', 'GOOGLE_EVENT'].includes(channel)),
-    data: notificationData
-    // MISSING: notificationId is NOT passed!
-  }
-});
+```text
+notification-delivery
+    │
+    ├── calls send-push-notification (line 524)
+    │       │
+    │       └── calls send-unified-notification ❌ (NO notificationId, NO task times)
+    │                  → Creates Outlook event with 1-hour fallback time
+    │
+    └── calls send-unified-notification directly (line 565)
+               → Creates Outlook event with CORRECT task times
 ```
 
-**Evidence from logs:**
-```
-notificationId: undefined
-```
+### Evidence from Logs
 
-### Issue 2: Triple INSERT Points in send-unified-notification
-
-**Location:** `supabase/functions/send-unified-notification/index.ts`
-
-The function has **THREE separate places** that INSERT into `scheduled_notifications`:
-
-1. **Lines 514-537**: When `!notificationId` and all channels handled directly (Outlook)
-2. **Lines 662-684**: In `callUnifiedWebhook` when `UNIFIED_WEBHOOK_URL` not configured
-3. **Lines 802-826**: In `callUnifiedWebhook` at the end of processing
-
-Each of these can create duplicate notification records, which then get picked up by the next cron run.
-
-### Issue 3: Missing Task Data on Some Calls
-
-**Evidence from logs:**
-
-**Call 1 (18:14:01):**
+**Call 1 (20:37:01)** - via send-push-notification:
 ```json
-data: {
-  type: "task_start_now",
-  taskId: "92c8c050...",
-  notificationIds: ["aff91b2f..."],
-  batchSize: 1
-  // NO startTime, endTime, estimateMinutes, taskTitle
+{
+  "notificationId": undefined,
+  "data": {
+    "batchSize": 1,
+    // NO startTime, endTime, taskTitle
+  }
 }
 ```
-Result: Used fallback (1 hour from now = 19:14:01)
+Result: Event created at 21:37 (1 hour from now fallback)
 
-**Call 2 (18:14:03):**
+**Call 2 (20:37:03)** - direct from notification-delivery:
 ```json
-data: {
-  type: "task_start_now",
-  taskId: "92c8c050...",
-  notificationIds: ["aff91b2f..."],
-  batchSize: 1,
-  startTime: "2026-02-02T18:14:00+00:00",  // Correct
-  endTime: "2026-02-02T18:29:00+00:00",
-  estimateMinutes: 15,
-  taskTitle: "Test Task"
+{
+  "notificationId": "09593b56...",
+  "data": {
+    "batchSize": 1,
+    "startTime": "2026-02-02T20:37:00+00:00",
+    "endTime": "2026-02-02T20:52:00+00:00"
+  }
 }
 ```
-Result: Used correct task time (18:14:00)
+Result: Event created at 20:37 (correct time)
 
-This shows the same notification was processed TWICE with different data.
+## Why Slack Doesn't Have This Issue
 
----
+Slack notifications are stateless webhook calls - receiving two messages with the same content is just annoying, not persistent. Outlook calendar events are persistent objects, so duplicates accumulate and display incorrect times.
 
-## Complete Fix
+## Solution
 
-### Fix 1: Pass `notificationId` to prevent duplicate record creation
+### Option A: Remove `send-unified-notification` from `send-push-notification` (Recommended)
 
-**File:** `supabase/functions/notification-delivery/index.ts`
+The `send-push-notification` function should ONLY handle actual push notifications (browser/mobile), not be a general dispatcher.
 
-Update lines 565-573 to include `notificationId`:
+**File:** `supabase/functions/send-push-notification/index.ts`
+
+Remove lines 51-66 that call `send-unified-notification`. The function should only:
+1. Check if push notifications are enabled
+2. Send to browser push subscriptions (if any)
+3. Return success
+
+This is the cleanest fix because:
+- `notification-delivery` already calls `send-unified-notification` directly with full task data
+- `send-push-notification` shouldn't be responsible for Outlook/Slack/Email
+- Eliminates the duplicate call entirely
+
+### Option B: Skip Calendar Channels in send-push-notification
+
+If we need to keep the call for backward compatibility, we could filter out `OUTLOOK_EVENT` and `GOOGLE_EVENT`:
+
+**File:** `supabase/functions/send-push-notification/index.ts`
 
 ```typescript
-const { data: unifiedResult, error: unifiedError } = await supabaseClient.functions.invoke('send-unified-notification', {
-  body: {
-    userId: userId,
-    title: title,
-    body: body,
-    channels: enabledChannels.filter((channel: string) => ['SLACK', 'EMAIL', 'OUTLOOK_EVENT', 'GOOGLE_EVENT'].includes(channel)),
-    data: notificationData,
-    notificationId: notificationIds[0]  // Pass the original notification ID
-  }
-});
+const userChannels = prefs?.channels || ['EMAIL'];
+// Filter out calendar channels - notification-delivery handles those with proper task times
+const nonCalendarChannels = userChannels.filter(
+  (c: string) => !['OUTLOOK_EVENT', 'GOOGLE_EVENT'].includes(c)
+);
 ```
 
-### Fix 2: Remove ALL duplicate INSERT logic from send-unified-notification
+This is a partial fix that still creates duplicate Slack/Email but at least stops duplicate calendar events.
+
+### Option C: Add Idempotency Key to Outlook Event Creation (Defense in Depth)
+
+Add a check in `send-unified-notification` to skip Outlook event creation if one was already created for this task today:
 
 **File:** `supabase/functions/send-unified-notification/index.ts`
 
-**Change 1:** Remove lines 514-538 (the block that creates a record when `!notificationId`)
-
-Replace:
+Before creating Outlook event:
 ```typescript
-} else if (!notificationId) {
-  // If we handled all channels directly, create a notification record
-  const notificationRecord = { ... };
-  try {
-    const { data: savedNotification } = await supabaseClient
-      .from('scheduled_notifications')
-      .insert(notificationRecord)
-      ...
+// Check for existing event today with same task
+if (taskData?.taskId) {
+  const { data: existing } = await supabaseClient
+    .from('external_calendar_events')
+    .select('id')
+    .eq('source_task_id', taskData.taskId)
+    .gte('created_at', new Date(Date.now() - 24*60*60*1000).toISOString())
+    .maybeSingle();
+  
+  if (existing) {
+    console.log('[Outlook] Event already exists for this task today, skipping');
+    return { success: true, details: 'Skipped - event exists' };
   }
 }
 ```
 
-With:
-```typescript
-} else if (!notificationId) {
-  // Don't create duplicate notification records
-  // notification-delivery already created the record and will mark it delivered
-  console.log('[Notification] No notificationId provided - skipping record creation (notification-delivery handles status)');
-}
-```
+## Recommended Approach
 
-**Change 2:** In `callUnifiedWebhook` function, remove lines 662-688 and 802-828 (both INSERT blocks)
+**Apply all three fixes:**
 
-Replace the INSERT logic at the end of `callUnifiedWebhook` with:
-```typescript
-// Don't insert new notification records here - notification-delivery owns the lifecycle
-// Just update existing if notificationId was provided
-if (existingNotificationId) {
-  result.notificationId = existingNotificationId;
-} else {
-  console.log('[Webhook] No notificationId provided - skipping record creation');
-}
-```
+1. **Option A** - Stop `send-push-notification` from calling `send-unified-notification` for calendar channels
+2. **Option B** - As an immediate quick fix, filter out calendar channels
+3. **Option C** - Add idempotency as defense in depth
 
-### Fix 3: Add database constraint to prevent future duplicates
+## Summary of Changes
 
-**Migration SQL:**
+| File | Change |
+|------|--------|
+| `send-push-notification/index.ts` | Filter out `OUTLOOK_EVENT` and `GOOGLE_EVENT` from channels before calling `send-unified-notification` |
+| `send-unified-notification/index.ts` | Add idempotency check to skip Outlook event if one exists for this task today |
 
-```sql
--- Prevent duplicate notifications for the same task/type within a 1-minute window
--- This is a safety net in case code creates duplicates
-CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduled_notifications_dedup
-ON scheduled_notifications (task_id, notification_type, date_trunc('minute', scheduled_for))
-WHERE task_id IS NOT NULL 
-  AND delivered_at IS NULL 
-  AND failed_at IS NULL;
-```
+## About the Delay in Calendar Appearance
 
----
+Your screenshot shows the event DID appear with the correct time (3:37 PM - 3:52 PM). The delay you noticed is likely:
 
-## Summary of All Changes
+1. **Microsoft Graph API propagation** - Can take 10-30 seconds for events to sync to mobile devices
+2. **Outlook mobile app sync interval** - The app syncs periodically, not instantly
+3. **Both Outlook events being created** - The first (wrong) one appears, then the second (correct) one appears later
 
-| File | Line(s) | Change |
-|------|---------|--------|
-| `notification-delivery/index.ts` | 565-573 | Add `notificationId: notificationIds[0]` to invoke body |
-| `send-unified-notification/index.ts` | 514-538 | Remove INSERT block, add skip log |
-| `send-unified-notification/index.ts` | 662-688 | Remove INSERT block in callUnifiedWebhook (webhook not configured case) |
-| `send-unified-notification/index.ts` | 802-828 | Remove INSERT block at end of callUnifiedWebhook |
-| New migration | - | Add unique partial index on (task_id, notification_type, minute) |
+After this fix, there will only be ONE event created at the correct time, and it should appear within ~30 seconds of the notification trigger.
 
----
-
-## Why This is the Complete Fix
-
-The notification lifecycle should be:
-
-1. **Database trigger** (`schedule_task_reminders`) creates the ONLY notification record
-2. **Cron job** runs `notification-delivery` every minute
-3. `notification-delivery` claims due notifications and processes them
-4. `notification-delivery` calls `send-unified-notification` WITH the notificationId
-5. `send-unified-notification` creates Outlook/Google events and updates the EXISTING record
-6. `notification-delivery` marks the original record as delivered
-
-Currently, step 4 doesn't pass the ID, and step 5 creates NEW records instead of updating, causing the cron to pick up duplicates on subsequent runs.
-
----
-
-## Expected Outcome
-
-After this fix:
-- Each task will have exactly 4 notification records (from the database trigger): task_start_reminder, task_start_now, due_soon, due_now
-- Each record will be processed exactly ONCE
-- Only ONE Outlook calendar event will be created per task
-- The event will use the task's actual `start_time`, not a fallback
-- No more duplicate Slack messages, emails, or calendar events
