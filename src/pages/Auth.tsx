@@ -187,6 +187,36 @@ const Auth = () => {
 
   const handleGoogleSignIn = async () => {
     setLoading(true);
+    
+    // Environment-aware OAuth strategy
+    const isProductionDomain = window.location.hostname === 'journey-voice.lovable.app';
+    
+    if (isProductionDomain) {
+      // Production: Use standard redirect (no popup issues, no skipBrowserRedirect)
+      console.log('[Auth] Production domain detected - using standard OAuth redirect');
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: `${window.location.origin}/auth`
+          // NO skipBrowserRedirect - let Supabase handle the redirect normally
+        }
+      });
+
+      if (error) {
+        toast({
+          variant: "destructive",
+          title: "Google sign in failed",
+          description: error.message
+        });
+        setLoading(false);
+      }
+      // Note: On success, the page will redirect to Google, then back to /auth
+      // The V2 auth listener will capture the SIGNED_IN event
+      return;
+    }
+    
+    // Preview/Dev: Use popup/new tab approach for Lovable iframe compatibility
+    console.log('[Auth] Preview environment detected - using popup OAuth');
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {

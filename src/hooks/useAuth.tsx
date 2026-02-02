@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, useCallback, useMemo, ReactNode } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
+import { bootTrace } from '@/utils/bootTrace';
 
 interface AuthContextType {
   user: User | null;
@@ -14,6 +15,12 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+// ============================================================================
+// FEATURE FLAG: Toggle between V1 (original) and V2 (listener-first) auth flow
+// Set to false to immediately revert to original behavior if V2 causes issues
+// ============================================================================
+const USE_V2_AUTH = true;
 
 // Check if running in Lovable iframe preview or preview URL
 const isDevelopmentMode = () => {
@@ -55,19 +62,20 @@ const createMockSession = (mockUser: User): Session => ({
 // Helper to log auth errors to the database (best-effort, never blocks UI)
 const logAuthError = async (errorType: string, message: string, metadata?: Record<string, unknown>) => {
   try {
-    await supabase.from('error_log').insert({
+    await supabase.from('error_log').insert([{
       source: 'frontend',
       component: 'AuthProvider',
       error_type: errorType,
       error_message: message,
-      context: {
+      context: JSON.parse(JSON.stringify({
         origin: window.location.origin,
         hostname: window.location.hostname,
         pathname: window.location.pathname,
         userAgent: navigator.userAgent,
+        boot_id: bootTrace.getBootId(),
         ...metadata
-      }
-    });
+      }))
+    }]);
   } catch (e) {
     console.error('[Auth] Failed to log error to database:', e);
   }
@@ -100,10 +108,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   console.log('[Auth] Environment:', {
     hostname: window.location.hostname,
     isPreviewEnvironment,
+    useV2Auth: USE_V2_AUTH,
+    bootId: bootTrace.getBootId(),
     timestamp: new Date().toISOString()
   });
 
-  const checkAdminStatus = async (userId: string) => {
+  // Admin check - moved to separate effect to avoid callback issues
+  const checkAdminStatus = useCallback(async (userId: string) => {
+    bootTrace.mark('admin_check_start', { userId: userId.substring(0, 8) });
     try {
       const { data, error } = await supabase
         .from('user_roles')
@@ -114,14 +126,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       
       if (!error) {
         setIsAdmin(!!data);
+        bootTrace.mark('admin_check_done', { isAdmin: !!data });
       }
     } catch (error) {
       console.error('Error checking admin status:', error);
+      bootTrace.mark('admin_check_error');
     }
-  };
+  }, []);
 
-  const initAuth = useCallback(async () => {
-    console.log('[Auth] Starting auth initialization...');
+  // ============================================================================
+  // V1: ORIGINAL AUTH INITIALIZATION (preserved as backup)
+  // ============================================================================
+  const initAuthV1 = useCallback(async () => {
+    console.log('[Auth] Starting V1 auth initialization...');
+    bootTrace.mark('v1_init_start');
     setLoading(true);
     setInitError(null);
     
@@ -129,11 +147,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     try {
       // Fetch session with timeout to prevent infinite hang
+      bootTrace.mark('v1_getSession_start');
       const { data: { session: existingSession }, error: sessionError } = await withTimeout(
         supabase.auth.getSession(),
         AUTH_TIMEOUT_MS,
         'Authentication service timed out'
       );
+      bootTrace.mark('v1_getSession_done', { hasSession: !!existingSession });
 
       if (sessionError) {
         throw sessionError;
@@ -145,17 +165,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setSession(existingSession);
         setUser(existingSession.user);
         setIsDemoMode(false);
-        checkAdminStatus(existingSession.user.id);
+        bootTrace.mark('v1_user_set', { email: existingSession.user.email });
+        
+        // Check admin status asynchronously (don't block)
+        setTimeout(() => checkAdminStatus(existingSession.user.id), 0);
         
         // Set up auth state listener to handle sign out/in
         const { data: { subscription: sub } } = supabase.auth.onAuthStateChange(
           (event, session) => {
             console.log('[Auth] Auth state changed:', event);
+            bootTrace.mark(`auth_event:${event}`);
             if (session?.user) {
               setSession(session);
               setUser(session.user);
               setIsDemoMode(false);
-              checkAdminStatus(session.user.id);
+              setTimeout(() => checkAdminStatus(session.user.id), 0);
             } else if (isPreviewEnvironment) {
               // User signed out in preview - fall back to demo mode
               const mockUser = createMockUser();
@@ -181,20 +205,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setSession(mockSession);
         setIsDemoMode(true);
         setIsAdmin(true);
+        bootTrace.mark('v1_demo_mode_set');
       } else {
         // No session and not in preview - just set loading to false
         console.log('[Auth] No session found in production, user needs to sign in');
         setSession(null);
         setUser(null);
+        bootTrace.mark('v1_no_session');
         
         // Set up auth state listener for future sign-ins
         const { data: { subscription: sub } } = supabase.auth.onAuthStateChange(
           (event, session) => {
+            bootTrace.mark(`auth_event:${event}`);
             setSession(session);
             setUser(session?.user ?? null);
             
             if (session?.user) {
-              checkAdminStatus(session.user.id);
+              setTimeout(() => checkAdminStatus(session.user.id), 0);
             } else {
               setIsAdmin(false);
             }
@@ -206,13 +233,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown authentication error';
       const isTimeout = errorMessage.includes('timed out');
       
-      console.error('[Auth] Initialization failed:', errorMessage);
+      console.error('[Auth] V1 Initialization failed:', errorMessage);
+      bootTrace.mark('v1_init_error', { error: errorMessage, isTimeout });
       
       // Log to database for visibility
       logAuthError(
         isTimeout ? 'auth_init_timeout' : 'auth_init_failed',
         errorMessage,
-        { isPreviewEnvironment }
+        { isPreviewEnvironment, version: 'v1' }
       );
       
       // Set user-facing error
@@ -230,7 +258,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       // ALWAYS set loading to false to prevent infinite loading screen
       setLoading(false);
-      console.log('[Auth] Initialization complete, loading set to false');
+      bootTrace.mark('v1_init_complete');
+      console.log('[Auth] V1 Initialization complete, loading set to false');
     }
 
     // Return cleanup function
@@ -239,18 +268,173 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         subscription.unsubscribe();
       }
     };
-  }, [isPreviewEnvironment]);
+  }, [isPreviewEnvironment, checkAdminStatus]);
+
+  // ============================================================================
+  // V2: NEW LISTENER-FIRST AUTH INITIALIZATION (race-condition safe)
+  // This version attaches the auth state listener BEFORE calling getSession()
+  // to ensure we never miss SIGNED_IN events during OAuth code exchange
+  // ============================================================================
+  const initAuthV2 = useCallback(async () => {
+    console.log('[Auth] Starting V2 auth initialization (listener-first)...');
+    bootTrace.mark('v2_init_start');
+    setLoading(true);
+    setInitError(null);
+    
+    let subscription: { unsubscribe: () => void } | null = null;
+    let hasReceivedSession = false;
+
+    try {
+      // STEP 1: Attach listener FIRST (before any getSession)
+      // This ensures we capture SIGNED_IN events from OAuth code exchange
+      bootTrace.mark('v2_listener_attaching');
+      
+      const { data: { subscription: sub } } = supabase.auth.onAuthStateChange(
+        (event, session) => {
+          console.log('[Auth V2] Auth state changed:', event, session?.user?.email);
+          bootTrace.mark(`auth_event:${event}`, { hasUser: !!session?.user });
+          
+          if (session?.user) {
+            hasReceivedSession = true;
+            setSession(session);
+            setUser(session.user);
+            setIsDemoMode(false);
+            setLoading(false);
+            bootTrace.mark('v2_user_set_from_event', { email: session.user.email });
+            
+            // Check admin status asynchronously (don't block)
+            setTimeout(() => checkAdminStatus(session.user.id), 0);
+          } else if (event === 'SIGNED_OUT') {
+            if (isPreviewEnvironment) {
+              // User signed out in preview - fall back to demo mode
+              const mockUser = createMockUser();
+              const mockSession = createMockSession(mockUser);
+              setUser(mockUser);
+              setSession(mockSession);
+              setIsDemoMode(true);
+              setIsAdmin(true);
+              bootTrace.mark('v2_demo_mode_fallback');
+            } else {
+              setSession(null);
+              setUser(null);
+              setIsAdmin(false);
+            }
+            setLoading(false);
+          }
+        }
+      );
+      subscription = sub;
+      bootTrace.mark('v2_listener_attached');
+
+      // STEP 2: Now seed initial state by calling getSession
+      // If there's an existing session, this will trigger the listener above
+      bootTrace.mark('v2_getSession_start');
+      const { data: { session: existingSession }, error: sessionError } = await withTimeout(
+        supabase.auth.getSession(),
+        AUTH_TIMEOUT_MS,
+        'Authentication service timed out'
+      );
+      bootTrace.mark('v2_getSession_done', { hasSession: !!existingSession, hasReceivedSession });
+
+      if (sessionError) {
+        throw sessionError;
+      }
+      
+      // If we already got a session from the listener, don't override
+      if (hasReceivedSession) {
+        console.log('[Auth V2] Session already set from listener event');
+        bootTrace.mark('v2_session_from_listener');
+        return () => subscription?.unsubscribe();
+      }
+      
+      if (existingSession?.user) {
+        // Real session exists - set it
+        console.log('[Auth V2] Found existing session for user:', existingSession.user.email);
+        setSession(existingSession);
+        setUser(existingSession.user);
+        setIsDemoMode(false);
+        bootTrace.mark('v2_user_set_from_getSession', { email: existingSession.user.email });
+        
+        // Check admin status asynchronously
+        setTimeout(() => checkAdminStatus(existingSession.user.id), 0);
+      } else if (isPreviewEnvironment) {
+        // No real session and we're in preview - use demo mode
+        console.log('[Auth V2] No session found, using demo mode for preview environment');
+        const mockUser = createMockUser();
+        const mockSession = createMockSession(mockUser);
+        setUser(mockUser);
+        setSession(mockSession);
+        setIsDemoMode(true);
+        setIsAdmin(true);
+        bootTrace.mark('v2_demo_mode_set');
+      } else {
+        // No session and not in preview - user needs to sign in
+        console.log('[Auth V2] No session found in production, user needs to sign in');
+        setSession(null);
+        setUser(null);
+        bootTrace.mark('v2_no_session');
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown authentication error';
+      const isTimeout = errorMessage.includes('timed out');
+      
+      console.error('[Auth V2] Initialization failed:', errorMessage);
+      bootTrace.mark('v2_init_error', { error: errorMessage, isTimeout });
+      
+      // Log to database for visibility
+      logAuthError(
+        isTimeout ? 'auth_init_timeout' : 'auth_init_failed',
+        errorMessage,
+        { isPreviewEnvironment, version: 'v2' }
+      );
+      
+      // Set user-facing error
+      setInitError(
+        isTimeout 
+          ? 'Connection to authentication service timed out. Please check your network and try again.'
+          : `Authentication failed: ${errorMessage}`
+      );
+      
+      // Reset to safe defaults
+      setSession(null);
+      setUser(null);
+      setIsAdmin(false);
+      setIsDemoMode(false);
+    } finally {
+      // ALWAYS set loading to false to prevent infinite loading screen
+      setLoading(false);
+      bootTrace.mark('v2_init_complete');
+      console.log('[Auth V2] Initialization complete, loading set to false');
+    }
+
+    // Return cleanup function
+    return () => {
+      if (subscription) {
+        subscription.unsubscribe();
+      }
+    };
+  }, [isPreviewEnvironment, checkAdminStatus]);
 
   // Retry function for user-triggered retry
   const retryAuth = useCallback(() => {
     console.log('[Auth] User triggered retry');
-    initAuth();
-  }, [initAuth]);
+    bootTrace.mark('auth_retry_triggered');
+    if (USE_V2_AUTH) {
+      initAuthV2();
+    } else {
+      initAuthV1();
+    }
+  }, [initAuthV1, initAuthV2]);
 
+  // Main initialization effect - uses feature flag to choose V1 or V2
   useEffect(() => {
     let cleanup: (() => void) | undefined;
     
-    initAuth().then(cleanupFn => {
+    bootTrace.mark('auth_init_start', { version: USE_V2_AUTH ? 'v2' : 'v1' });
+    
+    const initFn = USE_V2_AUTH ? initAuthV2 : initAuthV1;
+    
+    initFn().then(cleanupFn => {
       cleanup = cleanupFn;
     });
 
@@ -259,17 +443,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         cleanup();
       }
     };
-  }, [initAuth]);
+  }, [initAuthV1, initAuthV2]);
 
   const signOut = async () => {
+    bootTrace.mark('sign_out_start');
     if (isDemoMode) {
       // In demo mode, just clear the mock session
       setUser(null);
       setSession(null);
       setIsAdmin(false);
+      bootTrace.mark('sign_out_demo_mode');
       return;
     }
     await supabase.auth.signOut();
+    bootTrace.mark('sign_out_complete');
   };
 
   return (

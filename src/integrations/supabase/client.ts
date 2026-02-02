@@ -8,9 +8,36 @@ export const SUPABASE_PUBLISHABLE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.ey
 // Import the supabase client like this:
 // import { supabase } from "@/integrations/supabase/client";
 
+/**
+ * Safe Storage Adapter - Falls back to in-memory if localStorage is blocked
+ * This prevents crashes in environments where localStorage is unavailable
+ */
+const createSafeStorage = (): Storage => {
+  // Test if localStorage is available
+  try {
+    const testKey = '__storage_test__';
+    localStorage.setItem(testKey, testKey);
+    localStorage.removeItem(testKey);
+    console.log('[Supabase] Using localStorage for auth persistence');
+    return localStorage;
+  } catch (e) {
+    console.warn('[Supabase] localStorage unavailable, using in-memory storage');
+    // In-memory fallback
+    const memoryStorage: Record<string, string> = {};
+    return {
+      getItem: (key: string) => memoryStorage[key] ?? null,
+      setItem: (key: string, value: string) => { memoryStorage[key] = value; },
+      removeItem: (key: string) => { delete memoryStorage[key]; },
+      clear: () => { Object.keys(memoryStorage).forEach(k => delete memoryStorage[k]); },
+      get length() { return Object.keys(memoryStorage).length; },
+      key: (index: number) => Object.keys(memoryStorage)[index] ?? null
+    };
+  }
+};
+
 export const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
   auth: {
-    storage: localStorage,
+    storage: createSafeStorage(),
     persistSession: true,
     autoRefreshToken: true,
   }
