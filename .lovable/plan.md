@@ -1,185 +1,190 @@
 
-# Fix: Stale App Version After Publishing
+# Complete Fix: Duplicate Outlook Events and Timing Issues
 
-## Root Cause Analysis
+## Root Cause Analysis (Confirmed)
 
-Your project has **TWO caching layers** that are causing the stale version issue:
+After tracing the entire flow, I found **MULTIPLE issues** creating duplicates:
 
-### 1. Service Worker Cache-First Strategy (Primary Culprit)
+### Issue 1: Missing `notificationId` Passed from notification-delivery
 
-**File:** `public/sw.js` (lines 54-61)
+**Location:** `supabase/functions/notification-delivery/index.ts` (lines 565-573)
 
-```javascript
-// For other requests, use cache-first strategy
-event.respondWith(
-  caches.match(event.request)
-    .then((response) => {
-      // Return cached version or fetch from network
-      return response || fetch(event.request);
-    }
-  )
-);
-```
-
-This means:
-- When you publish a new version, the SW continues serving **old cached assets** (HTML, JS, CSS)
-- The SW only fetches from network if cache misses
-- `Ctrl+Shift+R` forces the browser to bypass cache, but **the SW still intercepts** and serves from its cache
-- The SW install event caches `/` and `/assets/` but **doesn't update existing caches** until `skipWaiting()` is called
-
-### 2. Missing Service Worker Update Detection
-
-The current implementation lacks:
-- No `updatefound` listener to detect when a new SW version is available
-- No automatic `skipWaiting()` trigger on page load
-- The user must manually unregister the SW from the Debug page to get updates
-
----
-
-## Solution
-
-### Fix 1: Add Network-First Strategy for HTML/Document Requests
-
-Update the SW to use **network-first for navigation requests** (HTML documents) so the app shell always loads fresh:
-
-**File:** `public/sw.js`
-
-```javascript
-self.addEventListener('fetch', (event) => {
-  const url = new URL(event.request.url);
-  
-  // Never cache auth/API requests
-  if (url.hostname.includes('supabase.co') ||
-      url.hostname.includes('supabase.in') ||
-      url.pathname.includes('/auth/') ||
-      url.pathname.includes('/rest/') ||
-      url.pathname.includes('/functions/') ||
-      event.request.method !== 'GET') {
-    event.respondWith(fetch(event.request));
-    return;
+```typescript
+const { data: unifiedResult, error: unifiedError } = await supabaseClient.functions.invoke('send-unified-notification', {
+  body: {
+    userId: userId,
+    title: title,
+    body: body,
+    channels: enabledChannels.filter((channel: string) => ['SLACK', 'EMAIL', 'OUTLOOK_EVENT', 'GOOGLE_EVENT'].includes(channel)),
+    data: notificationData
+    // MISSING: notificationId is NOT passed!
   }
-  
-  // NETWORK-FIRST for navigation (HTML) requests - ensures fresh app shell
-  if (event.request.mode === 'navigate') {
-    event.respondWith(
-      fetch(event.request)
-        .then((response) => {
-          // Cache the fresh response for offline use
-          const responseClone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(event.request, responseClone);
-          });
-          return response;
-        })
-        .catch(() => {
-          // Fallback to cache only if network fails (offline)
-          return caches.match(event.request);
-        })
-    );
-    return;
-  }
-  
-  // Cache-first for static assets (JS, CSS, images)
-  event.respondWith(
-    caches.match(event.request)
-      .then((response) => response || fetch(event.request))
-  );
 });
 ```
 
-### Fix 2: Auto-Update Service Worker on New Version
+**Evidence from logs:**
+```
+notificationId: undefined
+```
 
-Update the registration to detect updates and activate them immediately:
+### Issue 2: Triple INSERT Points in send-unified-notification
 
-**File:** `src/hooks/useNotifications.tsx` - Update `registerServiceWorker`:
+**Location:** `supabase/functions/send-unified-notification/index.ts`
+
+The function has **THREE separate places** that INSERT into `scheduled_notifications`:
+
+1. **Lines 514-537**: When `!notificationId` and all channels handled directly (Outlook)
+2. **Lines 662-684**: In `callUnifiedWebhook` when `UNIFIED_WEBHOOK_URL` not configured
+3. **Lines 802-826**: In `callUnifiedWebhook` at the end of processing
+
+Each of these can create duplicate notification records, which then get picked up by the next cron run.
+
+### Issue 3: Missing Task Data on Some Calls
+
+**Evidence from logs:**
+
+**Call 1 (18:14:01):**
+```json
+data: {
+  type: "task_start_now",
+  taskId: "92c8c050...",
+  notificationIds: ["aff91b2f..."],
+  batchSize: 1
+  // NO startTime, endTime, estimateMinutes, taskTitle
+}
+```
+Result: Used fallback (1 hour from now = 19:14:01)
+
+**Call 2 (18:14:03):**
+```json
+data: {
+  type: "task_start_now",
+  taskId: "92c8c050...",
+  notificationIds: ["aff91b2f..."],
+  batchSize: 1,
+  startTime: "2026-02-02T18:14:00+00:00",  // Correct
+  endTime: "2026-02-02T18:29:00+00:00",
+  estimateMinutes: 15,
+  taskTitle: "Test Task"
+}
+```
+Result: Used correct task time (18:14:00)
+
+This shows the same notification was processed TWICE with different data.
+
+---
+
+## Complete Fix
+
+### Fix 1: Pass `notificationId` to prevent duplicate record creation
+
+**File:** `supabase/functions/notification-delivery/index.ts`
+
+Update lines 565-573 to include `notificationId`:
 
 ```typescript
-const registerServiceWorker = async () => {
-  try {
-    const registration = await navigator.serviceWorker.register('/sw.js', {
-      updateViaCache: 'none' // Force browser to check for SW updates
-    });
-    console.log('Service Worker registered:', registration);
-    
-    // Check for updates on page load
-    registration.update();
-    
-    // Listen for new SW waiting
-    registration.addEventListener('updatefound', () => {
-      const newWorker = registration.installing;
-      if (newWorker) {
-        newWorker.addEventListener('statechange', () => {
-          if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-            // New version available - activate it immediately
-            console.log('New Service Worker version available, activating...');
-            newWorker.postMessage({ type: 'SKIP_WAITING' });
-          }
-        });
-      }
-    });
-    
-    // Reload page when new SW takes over
-    let refreshing = false;
-    navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (!refreshing) {
-        refreshing = true;
-        console.log('New Service Worker activated, reloading page...');
-        window.location.reload();
-      }
-    });
-    
-    // Get existing subscription
-    const existingSubscription = await registration.pushManager.getSubscription();
-    setSubscription(existingSubscription);
-    
-    if (existingSubscription) {
-      await syncSubscriptionWithBackend(existingSubscription);
-    }
-  } catch (error) {
-    console.error('Service Worker registration failed:', error);
+const { data: unifiedResult, error: unifiedError } = await supabaseClient.functions.invoke('send-unified-notification', {
+  body: {
+    userId: userId,
+    title: title,
+    body: body,
+    channels: enabledChannels.filter((channel: string) => ['SLACK', 'EMAIL', 'OUTLOOK_EVENT', 'GOOGLE_EVENT'].includes(channel)),
+    data: notificationData,
+    notificationId: notificationIds[0]  // Pass the original notification ID
   }
-};
+});
 ```
 
-### Fix 3: Bump Cache Version on Each Deploy
+### Fix 2: Remove ALL duplicate INSERT logic from send-unified-notification
 
-Add a version identifier to the cache name so old caches are automatically cleared:
+**File:** `supabase/functions/send-unified-notification/index.ts`
 
-**File:** `public/sw.js`
+**Change 1:** Remove lines 514-538 (the block that creates a record when `!notificationId`)
 
-```javascript
-// Increment this on each deploy to bust old caches
-const CACHE_VERSION = 'v3'; // Bump this when publishing
-const CACHE_NAME = `task-manager-${CACHE_VERSION}`;
+Replace:
+```typescript
+} else if (!notificationId) {
+  // If we handled all channels directly, create a notification record
+  const notificationRecord = { ... };
+  try {
+    const { data: savedNotification } = await supabaseClient
+      .from('scheduled_notifications')
+      .insert(notificationRecord)
+      ...
+  }
+}
+```
+
+With:
+```typescript
+} else if (!notificationId) {
+  // Don't create duplicate notification records
+  // notification-delivery already created the record and will mark it delivered
+  console.log('[Notification] No notificationId provided - skipping record creation (notification-delivery handles status)');
+}
+```
+
+**Change 2:** In `callUnifiedWebhook` function, remove lines 662-688 and 802-828 (both INSERT blocks)
+
+Replace the INSERT logic at the end of `callUnifiedWebhook` with:
+```typescript
+// Don't insert new notification records here - notification-delivery owns the lifecycle
+// Just update existing if notificationId was provided
+if (existingNotificationId) {
+  result.notificationId = existingNotificationId;
+} else {
+  console.log('[Webhook] No notificationId provided - skipping record creation');
+}
+```
+
+### Fix 3: Add database constraint to prevent future duplicates
+
+**Migration SQL:**
+
+```sql
+-- Prevent duplicate notifications for the same task/type within a 1-minute window
+-- This is a safety net in case code creates duplicates
+CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduled_notifications_dedup
+ON scheduled_notifications (task_id, notification_type, date_trunc('minute', scheduled_for))
+WHERE task_id IS NOT NULL 
+  AND delivered_at IS NULL 
+  AND failed_at IS NULL;
 ```
 
 ---
 
-## Summary of Changes
+## Summary of All Changes
 
-| File | Change |
-|------|--------|
-| `public/sw.js` | Network-first for navigation, cache-first for assets, versioned cache name |
-| `src/hooks/useNotifications.tsx` | Add SW update detection and auto-reload on new version |
+| File | Line(s) | Change |
+|------|---------|--------|
+| `notification-delivery/index.ts` | 565-573 | Add `notificationId: notificationIds[0]` to invoke body |
+| `send-unified-notification/index.ts` | 514-538 | Remove INSERT block, add skip log |
+| `send-unified-notification/index.ts` | 662-688 | Remove INSERT block in callUnifiedWebhook (webhook not configured case) |
+| `send-unified-notification/index.ts` | 802-828 | Remove INSERT block at end of callUnifiedWebhook |
+| New migration | - | Add unique partial index on (task_id, notification_type, minute) |
 
 ---
 
-## Why Ctrl+Shift+R Doesn't Work
+## Why This is the Complete Fix
 
-Even with hard refresh:
-1. Browser bypasses **browser cache**
-2. But the **Service Worker still intercepts** the request
-3. SW returns cached response from its own cache (IndexedDB-backed)
-4. Only unregistering the SW or the SW detecting an update can fix this
+The notification lifecycle should be:
 
-## Immediate Workaround
+1. **Database trigger** (`schedule_task_reminders`) creates the ONLY notification record
+2. **Cron job** runs `notification-delivery` every minute
+3. `notification-delivery` claims due notifications and processes them
+4. `notification-delivery` calls `send-unified-notification` WITH the notificationId
+5. `send-unified-notification` creates Outlook/Google events and updates the EXISTING record
+6. `notification-delivery` marks the original record as delivered
 
-Until this fix is deployed, users can clear the stale version by:
-1. Going to `/debug` 
-2. Clicking "Unregister SW"
-3. Clicking "Clear Storage"
-4. Hard refresh
+Currently, step 4 doesn't pass the ID, and step 5 creates NEW records instead of updating, causing the cron to pick up duplicates on subsequent runs.
 
-Or in DevTools:
-1. Application tab > Service Workers > Unregister
-2. Application tab > Storage > Clear site data
+---
+
+## Expected Outcome
+
+After this fix:
+- Each task will have exactly 4 notification records (from the database trigger): task_start_reminder, task_start_now, due_soon, due_now
+- Each record will be processed exactly ONCE
+- Only ONE Outlook calendar event will be created per task
+- The event will use the task's actual `start_time`, not a fallback
+- No more duplicate Slack messages, emails, or calendar events
