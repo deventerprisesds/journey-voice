@@ -3813,6 +3813,16 @@ export type Database = {
         }
         Returns: boolean
       }
+      update_calendar_connection_tokens_for_user: {
+        Args: {
+          _access_token: string
+          _connection_id: string
+          _expires_at?: string
+          _refresh_token?: string
+          _user_id: string
+        }
+        Returns: boolean
+      }
       update_office365_connection_tokens: {
         Args: {
           _access_token: string

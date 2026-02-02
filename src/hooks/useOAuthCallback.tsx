@@ -31,6 +31,7 @@ export function useOAuthCallback() {
       // Supabase Auth uses PKCE tokens in state, calendar OAuth uses 'google' or 'outlook'
       if (code && state && (state === 'google' || state === 'outlook')) {
         const provider = state as 'google' | 'outlook';
+        const providerDisplayName = provider === 'google' ? 'Google' : 'Outlook';
         
         try {
           toast.info('Completing calendar connection...');
@@ -105,35 +106,69 @@ export function useOAuthCallback() {
           if (exchangeError) {
             console.error('[OAuth] Token exchange error:', exchangeError);
             
-            // Check for specific authentication error
-            if (exchangeError.message?.includes('User authentication required')) {
-              toast.error('Could not verify your sign-in. Please sign in and try again.');
-            } else {
-              toast.error(`Failed to connect calendar: ${exchangeError.message || 'Unknown error'}`);
+            const errorMessage = exchangeError.message || '';
+            
+            // Check for "already connected" scenarios - treat as success
+            if (errorMessage.includes('ALREADY_CONNECTED') || 
+                errorMessage.includes('23505') ||
+                errorMessage.includes('duplicate key')) {
+              console.log('[OAuth] Connection already exists, treating as success');
+              toast.success(`${providerDisplayName} Calendar is already connected!`);
+              
+              // Dispatch refresh event to update UI
+              window.dispatchEvent(new CustomEvent('calendar-connection-updated', {
+                detail: { provider }
+              }));
+              
+              navigate(location.pathname, { replace: true });
+              return;
             }
+            
+            // Check for specific authentication error
+            if (errorMessage.includes('User authentication required')) {
+              toast.error('Could not verify your sign-in. Please sign in and try again.');
+            } else if (errorMessage.includes('REFRESH_FAILED')) {
+              toast.error(`Failed to refresh ${providerDisplayName} connection. Please try again.`);
+            } else {
+              toast.error(`Failed to connect calendar: ${errorMessage}`);
+            }
+            
+            // Still dispatch refresh to show true connection state
+            window.dispatchEvent(new CustomEvent('calendar-connection-updated', {
+              detail: { provider }
+            }));
+            
             throw exchangeError;
           }
 
           console.log('[OAuth] Token exchange successful:', data);
-          toast.success(`Successfully connected to ${provider === 'google' ? 'Google' : 'Outlook'} Calendar`);
+          
+          // Show appropriate success message based on whether it was a refresh or new connection
+          if (data?.refreshed) {
+            toast.success(`${providerDisplayName} Calendar connection refreshed!`);
+          } else {
+            toast.success(`Successfully connected to ${providerDisplayName} Calendar`);
+          }
           
           // Dispatch event to notify settings components to refresh
           window.dispatchEvent(new CustomEvent('calendar-connection-updated', {
             detail: { provider }
           }));
           
-          // Trigger a sync of calendar events
-          try {
-            await supabase.functions.invoke('calendar-integration-manager', {
-              body: {
-                action: 'sync_events',
-                connection_id: data.connection_id,
-                start_date: new Date().toISOString(),
-                end_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
-              }
-            });
-          } catch (syncError) {
-            console.warn('[OAuth] Initial sync failed, will retry later:', syncError);
+          // Trigger a sync of calendar events (only for new connections or if we have a connection_id)
+          if (data?.connection_id) {
+            try {
+              await supabase.functions.invoke('calendar-integration-manager', {
+                body: {
+                  action: 'sync_events',
+                  connection_id: data.connection_id,
+                  start_date: new Date().toISOString(),
+                  end_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+                }
+              });
+            } catch (syncError) {
+              console.warn('[OAuth] Initial sync failed, will retry later:', syncError);
+            }
           }
 
           // Clean URL and navigate back to current page
