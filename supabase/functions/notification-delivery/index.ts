@@ -568,7 +568,8 @@ serve(async (req) => {
                 title: title,
                 body: body,
                 channels: enabledChannels.filter((channel: string) => ['SLACK', 'EMAIL', 'OUTLOOK_EVENT', 'GOOGLE_EVENT'].includes(channel)),
-                data: notificationData
+                data: notificationData,
+                notificationId: notificationIds[0]  // Pass first notification ID to prevent duplicate record creation
               }
             });
 
