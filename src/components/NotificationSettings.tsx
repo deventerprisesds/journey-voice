@@ -94,13 +94,39 @@ const NotificationSettings = () => {
       }
 
       if (data && Array.isArray(data)) {
-        const outlook = data.find((c: any) => 
+        const now = new Date();
+        
+        // Helper to select best connection: prefer non-expired, then most recent
+        const selectBestConnection = (connections: any[]) => {
+          if (connections.length === 0) return null;
+          
+          // First try to find a non-expired connection
+          const validConnection = connections.find(c => 
+            !c.expires_at || new Date(c.expires_at) > now
+          );
+          if (validConnection) return validConnection;
+          
+          // If all expired, return the most recently updated one
+          return connections.sort((a, b) => 
+            new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+          )[0];
+        };
+        
+        // Filter Outlook connections (both provider names)
+        const outlookConnections = data.filter((c: any) => 
           (c.provider === 'office365' || c.provider === 'outlook') && c.is_active
         );
-        const google = data.find((c: any) => c.provider === 'google' && c.is_active);
+        const outlook = selectBestConnection(outlookConnections);
         
+        // Filter Google connections
+        const googleConnections = data.filter((c: any) => 
+          c.provider === 'google' && c.is_active
+        );
+        const google = selectBestConnection(googleConnections);
+        
+        // Set state for Outlook
         if (outlook) {
-          const isExpired = outlook.expires_at && new Date(outlook.expires_at) < new Date();
+          const isExpired = outlook.expires_at && new Date(outlook.expires_at) < now;
           setOutlookExpired(isExpired);
           setOutlookConnection({
             id: outlook.id,
@@ -114,8 +140,9 @@ const NotificationSettings = () => {
           setOutlookExpired(false);
         }
         
+        // Set state for Google
         if (google) {
-          const isExpired = google.expires_at && new Date(google.expires_at) < new Date();
+          const isExpired = google.expires_at && new Date(google.expires_at) < now;
           setGoogleExpired(isExpired);
           setGoogleConnection({
             id: google.id,
