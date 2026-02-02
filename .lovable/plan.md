@@ -1,79 +1,73 @@
+# Fix: Outlook Calendar Events Use Task's Actual Start Time
 
+## Problem
 
-# Fix: Minimal Change for Today → UP_NEXT, Remove "To Do" Column
+When automated task reminders trigger (via `notification-delivery`), Outlook calendar events are created at the **wrong time** because:
 
-## Changes Required
+1. `notification-delivery` calls `send-unified-notification` with only `taskId`
+2. `send-unified-notification` fetches task data but the response may not include `start_time`
+3. Falls back to "1 hour from now" instead of the task's actual scheduled time
 
-### 1. Remove "To Do" Column from KanbanBoard
+**Result**: A task scheduled for 11:30 AM creates an Outlook event at ~11:30 AM (when notification fires) + 1 hour = 12:30 PM ❌
 
-**File**: `src/components/KanbanBoard.tsx` (lines 85-93)
+## Solution
 
-Remove the added "To Do" column and restore original positions:
+### 1. Update `notification-delivery` to Pass Task Times
 
-```typescript
-const STANDARD_COLUMNS: Column[] = [
-  { id: 'std-backlog', name: 'Backlog', status: 'BACKLOG', position: 0, board_id: 'std' },
-  { id: 'std-blocked', name: 'Blocked', status: 'BLOCKED', position: 1, board_id: 'std' },
-  { id: 'std-ready', name: 'Ready', status: 'READY', position: 2, board_id: 'std' },
-  { id: 'std-upnext', name: 'Up Next', status: 'UP_NEXT', position: 3, board_id: 'std' },
-  { id: 'std-doing', name: 'Doing', status: 'DOING', position: 4, board_id: 'std' },
-  { id: 'std-done', name: 'Done', status: 'DONE', position: 5, board_id: 'std' },
-];
-```
+**File**: `supabase/functions/notification-delivery/index.ts`
 
-### 2. Add Post-Parse Status Logic in AI Task Parser
-
-**File**: `supabase/functions/ai-task-parser/index.ts`
-
-After tasks are parsed (around line 325 where `tasks` array is created), add logic to override status:
-
-- If task has a `due_date` that matches **today** (the `targetDate`) → set `status: 'UP_NEXT'`
-- Otherwise → keep the existing category-based status (no change to current behavior)
+After fetching the task data for the notification, explicitly pass `startTime` and `endTime` to `send-unified-notification`:
 
 ```typescript
-// After line 325: const tasks = Array.isArray(parsed.tasks) ? parsed.tasks : [];
-
-// Determine if task is for today - if so, set status to UP_NEXT
-const todayStr = targetDate ? new Date(targetDate).toDateString() : new Date().toDateString();
-
-const tasksWithCorrectStatus = tasks.map((task: any) => {
-  // Check if task's due_date is today
-  const taskDueDate = task.due_date ? new Date(task.due_date).toDateString() : null;
-  const isForToday = taskDueDate === todayStr;
-  
-  return {
-    ...task,
-    status: isForToday ? 'UP_NEXT' : task.status  // Only override if today
-  };
-});
-
-// Use tasksWithCorrectStatus instead of tasks in the rest of the function
+// When calling send-unified-notification for OUTLOOK channel
+const payload = {
+  userId: notification.user_id,
+  taskId: notification.task_id,
+  channel: 'OUTLOOK',
+  title: notification.title,
+  body: notification.body,
+  // ADD THESE - use task's actual times
+  startTime: task.start_time,  
+  endTime: task.end_time || calculateEndTime(task.start_time, task.estimate_minutes)
+};
 ```
 
-This change is applied at the end of parsing, so all existing category-based status logic remains untouched - we only override to `UP_NEXT` when the task is for today.
+### 2. Verify `send-unified-notification` Uses Passed Times
 
-### 3. Fix Existing TODO Tasks in Database
+**File**: `supabase/functions/send-unified-notification/index.ts`
 
-One-time SQL to convert any existing `TODO` tasks to `BACKLOG`:
+Ensure it prioritizes the passed `startTime` over fetched/default values:
 
-```sql
-UPDATE tasks 
-SET status = 'BACKLOG', updated_at = NOW() 
-WHERE status = 'TODO';
+```typescript
+// Current (problematic):
+const startTime = taskData.startTime || new Date(Date.now() + 3600000).toISOString();
+
+// Fixed:
+const startTime = requestBody.startTime || taskData?.start_time || new Date(Date.now() + 3600000).toISOString();
 ```
 
-## Summary of Changes
+### 3. Handle Edge Cases
 
-| What | Change |
+- **Task with `due_date` but no `start_time`**: Use `due_date` as the event time
+- **Task with neither**: Fall back to current behavior (1 hour from now) with warning log
+
+## Files to Modify
+
+| File | Change |
 |------|--------|
-| KanbanBoard | Remove "To Do" column, restore original positions |
-| AI Parser | Add post-parse check: if `due_date = today` → `status = UP_NEXT` |
-| Database | Convert existing `TODO` → `BACKLOG` |
+| `supabase/functions/notification-delivery/index.ts` | Pass `startTime`/`endTime` from task to `send-unified-notification` |
+| `supabase/functions/send-unified-notification/index.ts` | Prioritize passed times over defaults |
 
-## Expected Behavior
+## Expected Behavior After Fix
 
-- Tasks created for **today** → appear in **Up Next** column
-- Tasks created for **future dates** → appear in their **category column** (LIFE, CAREER, etc.)
-- Tasks with **no date** → appear in their **category column**
-- **No "To Do" column** exists
+1. Task created for 11:30 AM → Reminder scheduled for 11:15 AM
+2. At 11:15 AM, `notification-delivery` triggers
+3. Slack message sent: "Task starts in 15 minutes" ✅
+4. Outlook event created for **11:30 AM** (not 12:15 PM) ✅
+5. Outlook native reminder triggers at 11:15 AM ✅
 
+## Testing
+
+1. Create a task with `start_time` 20 minutes from now
+2. Wait for the 15-minute reminder to trigger
+3. Check Outlook calendar - event should be at the task's actual time
