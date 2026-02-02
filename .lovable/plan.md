@@ -1,97 +1,180 @@
 
-# Fix Plan: Supabase Auth `getSession()` Hanging Issue
+# Fix Plan: True Race Strategy for Auth + Assistant Loading
 
 ## Problem Summary
-The production app shows "Connection to authentication service timed out" after 10 seconds, despite the auth endpoint being healthy (verified via direct fetch probes). The issue is **inside supabase-js**, not at the network layer.
+
+Two related issues are causing poor user experience:
+
+1. **Auth takes 10 seconds despite fast path success**: The code uses `Promise.allSettled()` which waits for BOTH promises to complete. Even though the fast path (direct REST) returns in ~100ms with a valid session, the UI is blocked waiting for the slow path's 10-second timeout.
+
+2. **"No assistants available" shows incorrectly**: The assistant fetch in `CommsConsoleContext` runs when `userId` is still null (during the 10-second auth wait), and doesn't retry when auth finally completes.
 
 ## Root Cause Analysis
-Based on the backend traces:
-- Auth endpoint responds in ~131ms when probed directly with `fetch()`
-- `supabase.auth.getSession()` hangs for 10+ seconds and times out
-- This pattern suggests an internal lock or deadlock in supabase-js (possibly IndexedDB, storage, or internal state machine)
 
-## Solution: Parallel Auth Strategy with Direct Token Check
+From the trace data for Boot ID `ML4RZ02Y-EY5RIF`:
+- `v2_init_start` at 20ms
+- `fast_path_validate_success` likely completed in ~100-200ms (based on probe data)
+- `v2_user_set` at **10,025ms** - 10 seconds later!
 
-We will implement a "race" strategy that checks for an existing session token via direct localStorage/REST before waiting on `supabase.auth.getSession()`:
-
-### Phase 1: Fast-Path Token Detection
-
-Add a fast check that reads the auth token directly from localStorage and validates it via REST API (bypassing supabase-js entirely):
-
-```text
-┌─────────────────────────────────────────────────────────────┐
-│                     AUTH INITIALIZATION                      │
-├─────────────────────────────────────────────────────────────┤
-│  FAST PATH (Direct REST)           SLOW PATH (supabase-js)  │
-│  ────────────────────────          ─────────────────────────│
-│  1. Read token from localStorage   1. supabase.getSession() │
-│  2. POST /auth/v1/user (validate)  2. Wait up to 10s        │
-│  3. If valid → use session         3. Timeout → error       │
-│                                                              │
-│  RACE: First successful path wins, cancels the other        │
-└─────────────────────────────────────────────────────────────┘
+The problem is in `useAuth.tsx` lines 358-374:
+```typescript
+// CURRENT: Waits for BOTH to complete
+const [fastResult, slowResult] = await Promise.allSettled([
+  fastPath(),
+  slowPath()  // <-- This times out after 10 seconds
+]);
+// Processing happens AFTER both complete
+if (fastResult.status === 'fulfilled' && fastResult.value?.session) {
+  raceResult = fastResult.value;
+  // ...but user already waited 10 seconds
+}
 ```
 
-### Phase 2: Implementation Details
+## Solution: True Racing with Early Exit
 
-**Files to modify:**
+Replace `Promise.allSettled` with a pattern that immediately uses the first successful result and cancels/ignores the slow path.
 
-1. **`src/integrations/supabase/client.ts`** - Add helper to read stored session token directly
-2. **`src/utils/directAuth.ts`** (new) - Direct REST-based session validation
-3. **`src/hooks/useAuth.tsx`** - Add fast-path race to initAuthV2
+### Implementation Strategy
 
-**Key code changes:**
+```text
++---------------------------------------------------------+
+|                   TRUE RACE PATTERN                      |
++---------------------------------------------------------+
+|  FAST PATH              SLOW PATH                        |
+|  ──────────             ─────────                        |
+|  0ms: Start             0ms: Start                       |
+|  100ms: Session valid   ...waiting...                    |
+|  100ms: SET USER        (cancelled/ignored)              |
+|  100ms: LOADING=FALSE   10000ms: Would timeout           |
++---------------------------------------------------------+
+```
 
-1. Create `src/utils/directAuth.ts`:
-   - `getStoredTokens()` - Read access_token/refresh_token from localStorage
-   - `validateTokenDirect()` - POST to `/auth/v1/user` with the token
-   - `refreshTokenDirect()` - POST to `/auth/v1/token?grant_type=refresh_token` if expired
+### Files to Modify
 
-2. Modify `initAuthV2()` in useAuth.tsx:
-   - Run fast-path and slow-path in parallel with `Promise.race()`
-   - If fast-path succeeds first (user has valid cached token), use it immediately
-   - If fast-path fails (no token, invalid, etc.), fall back to supabase-js path
-   - Log which path won for debugging
+| File | Change | Description |
+|------|--------|-------------|
+| `src/hooks/useAuth.tsx` | Modify | Replace `Promise.allSettled` with true race pattern that exits immediately on fast path success |
+| `src/contexts/CommsConsoleContext.tsx` | Minor fix | Ensure assistants refetch when userId changes from null to valid |
 
-### Phase 3: Fallback Improvements
+### Detailed Changes
 
-- If both paths fail, show a more specific error based on which failed:
-  - "No stored session" → Redirect to sign in
-  - "Token expired and refresh failed" → Clear storage and redirect to sign in
-  - "Network timeout" → Show retry with network diagnostics
+**1. `src/hooks/useAuth.tsx` - True Race Implementation**
 
-### Phase 4: Logging for Diagnosis
+Replace the current race logic (lines 325-381) with:
 
-Add trace steps to capture:
-- Whether a stored token was found
-- Fast-path validation result and latency
-- Which path won the race
-- Any errors from either path
+```typescript
+// STEP 2: TRUE RACE - First successful result wins immediately
+bootTrace.mark('v2_race_start');
 
-## Files Changed
+let raceWinner: { session: Session | null; source: 'fast' | 'slow' } | null = null;
 
-| File | Change Type | Description |
-|------|-------------|-------------|
-| `src/utils/directAuth.ts` | Create | Direct REST auth validation utility |
-| `src/hooks/useAuth.tsx` | Modify | Add fast-path race to initAuthV2 |
-| `src/integrations/supabase/client.ts` | Modify | Export storage key constant |
+// Create an abort controller for the slow path
+const abortController = new AbortController();
 
-## Success Criteria
+// Fast path - returns immediately if cached session is valid
+const fastPathPromise = (async () => {
+  bootTrace.mark('fast_path_attempt');
+  const session = await fastPathGetSession();
+  if (session) {
+    bootTrace.mark('fast_path_won', { userId: session.user?.id?.substring(0, 8) });
+    return { session, source: 'fast' as const };
+  }
+  return null; // No cached session
+})();
 
-1. Users with valid cached sessions load instantly (fast-path wins)
-2. Users without sessions are redirected to sign-in quickly
-3. The 10-second timeout only triggers if both paths fail (rare)
-4. Backend logs show which path resolved first for debugging
+// Slow path - standard supabase-js (may hang)
+const slowPathPromise = (async () => {
+  bootTrace.mark('slow_path_start');
+  try {
+    const { data: { session }, error } = await withTimeout(
+      supabase.auth.getSession(),
+      AUTH_TIMEOUT_MS,
+      'Authentication service timed out'
+    );
+    if (error) throw error;
+    bootTrace.mark('slow_path_done', { hasSession: !!session });
+    return { session, source: 'slow' as const };
+  } catch (e) {
+    bootTrace.mark('slow_path_error', { error: String(e) });
+    throw e;
+  }
+})();
+
+// TRUE RACE: Use Promise.race with a wrapper that ignores null results
+try {
+  raceWinner = await Promise.race([
+    fastPathPromise.then(r => {
+      if (r?.session) {
+        fastPathWon = true;
+        return r;
+      }
+      // Fast path has no session - wait for slow path
+      return slowPathPromise;
+    }),
+    slowPathPromise
+  ]);
+} catch (error) {
+  // If slow path threw (timeout), check if fast path had a session
+  const fastResult = await fastPathPromise.catch(() => null);
+  if (fastResult?.session) {
+    raceWinner = fastResult;
+    fastPathWon = true;
+  } else {
+    throw error; // Both failed
+  }
+}
+
+bootTrace.mark('v2_race_complete', { 
+  winner: raceWinner?.source || 'none', 
+  hasSession: !!raceWinner?.session 
+});
+```
+
+**Key changes:**
+- Fast path that finds a valid session immediately sets the session (no waiting for slow path)
+- Fast path that returns null (no cached token) falls back to slow path
+- If slow path times out but fast path succeeded, use fast path result
+- Both paths failing still results in timeout error
+
+**2. `src/contexts/CommsConsoleContext.tsx` - Ensure assistants load on auth complete**
+
+The assistants fetch should already work since it depends on `[userId]`, but we should verify. If `userId` goes from `null` → `"a3378f93-..."`, the effect should re-run.
+
+However, the screenshots show "No assistants available" which suggests either:
+a) The fetch is happening before auth completes and not re-running
+b) The fetch is erroring silently
+
+Add explicit logging and ensure the effect re-triggers:
+
+```typescript
+// In the assistants fetch useEffect (around line 164)
+useEffect(() => {
+  console.log('[CommsConsole] Assistants effect triggered, userId:', userId);
+  if (!userId) {
+    console.log('[CommsConsole] No userId yet, skipping assistant fetch');
+    return;
+  }
+  // ... rest of fetch logic
+}, [userId, isDemoMode]); // Ensure isDemoMode is also a dependency
+```
+
+## Expected Outcome
+
+After this fix:
+
+1. **Auth completes in ~100-200ms** for users with cached sessions (vs current 10 seconds)
+2. **Assistants load immediately** after auth completes
+3. **Tasks page shows tasks** instead of infinite "Loading tasks..." spinner
+4. **Slow path timeout** only affects users without cached sessions (new sign-ins)
+
+## Success Metrics
+
+- Boot trace shows `v2_user_set` within 500ms of `v2_init_start` (for cached sessions)
+- No more "No assistants available" for authenticated users
+- Tasks load immediately after auth
 
 ## Risk Assessment
 
-- **Low risk**: Fast-path is additive; supabase-js path remains as fallback
-- **No breaking changes**: Existing behavior preserved if fast-path fails
-- **Rollback**: Can disable fast-path with a feature flag
-
-## Alternative Considered
-
-Replacing supabase-js entirely was considered but rejected because:
-- Would lose automatic token refresh, listener events, and other features
-- Higher maintenance burden
-- The parallel strategy gives us the best of both worlds
+- **Low risk**: This is a refinement of the existing parallel strategy
+- **Fallback preserved**: If fast path fails, slow path is still used
+- **No breaking changes**: The session shape and auth flow remain identical
