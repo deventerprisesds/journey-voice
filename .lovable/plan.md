@@ -1,135 +1,97 @@
 
-Objective (what we will change)
-- Make /debug usable even when Supabase auth initialization is hung (currently /debug is blocked by the same “Initializing your session” gate).
-- Ensure every production attempt produces backend-visible evidence in your existing `error_log` table, even if `supabase.auth.getSession()` never resolves.
-- Let us answer: “Did the browser reach Supabase REST? Auth? How long did DNS/TLS take? Did the app hang inside supabase-js or in network?”
+# Fix Plan: Supabase Auth `getSession()` Hanging Issue
 
-What we learned from your report + replay
-- On `journey-voice.lovable.app/debug`, you still see the “Loading… Initializing your session” screen with a Boot ID (example from replay: `ML4OI6LD-FDE5KN`).
-- That means the debug page is currently not helpful, because the app must complete auth init before you can see diagnostics.
-- Also, I currently do not see any `error_log` entries coming from the production hostname, which strongly suggests our current logging path (BootTrace → `supabase.from('error_log').insert(...)`) is not reliable in the failing scenario (likely because the underlying supabase-js / auth layer is what’s hanging).
+## Problem Summary
+The production app shows "Connection to authentication service timed out" after 10 seconds, despite the auth endpoint being healthy (verified via direct fetch probes). The issue is **inside supabase-js**, not at the network layer.
 
-Root issue (diagnostics architecture)
-- Both:
-  1) auth initialization (AuthProvider) and
-  2) backend logging (BootTrace DB insert)
-  currently depend on supabase-js.
-- If supabase-js is the thing hanging (storage lock, internal mutex, auth exchange deadlock, or a fetch that never resolves), then:
-  - /debug can’t open (because AuthProvider keeps “loading”)
-  - and logs never reach `error_log` (because the logger uses the same library that is stuck)
-- We need a logging “escape hatch” that does NOT depend on supabase-js.
+## Root Cause Analysis
+Based on the backend traces:
+- Auth endpoint responds in ~131ms when probed directly with `fetch()`
+- `supabase.auth.getSession()` hangs for 10+ seconds and times out
+- This pattern suggests an internal lock or deadlock in supabase-js (possibly IndexedDB, storage, or internal state machine)
 
-Solution approach (no removals; additive + bypasses)
-A) “Debug-route bypass” so /debug always loads
-- Add a safe bypass: when `window.location.pathname.startsWith('/debug')`, AuthProvider will NOT run the normal `initAuthV2/initAuthV1` flow.
-- Instead it will:
-  - set `loading=false` immediately,
-  - set `user/session=null`,
-  - mark a BootTrace step like `debug_bypass_auth_init`,
-  - and allow Debug UI to render.
-- This does not change behavior for any other route; it only prevents the debug route from being blocked by the auth initializer.
+## Solution: Parallel Auth Strategy with Direct Token Check
 
-B) Replace backend logging transport with a “direct REST fetch” transport (supabase-js independent)
-- Implement a small logging utility that writes to `error_log` via `fetch()` directly to:
-  - `https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/error_log`
-  - using the anon key in headers.
-- This avoids any internal supabase-js locking/hanging and gives us backend traces even when auth init is broken.
-- Update BOTH:
-  - `src/utils/bootTrace.ts` (BootTrace logging)
-  - `src/hooks/useAuth.tsx` (logAuthError)
-  to use this new transport in addition to (or instead of) `supabase.from(...).insert(...)`.
-- Keep the existing supabase-js insert path as a fallback (not removed), but prefer direct REST for reliability.
+We will implement a "race" strategy that checks for an existing session token via direct localStorage/REST before waiting on `supabase.auth.getSession()`:
 
-C) Add explicit “connectivity probes” on /debug (and log results to backend)
-On /debug we will add buttons that run and display:
-1) REST probe:
-   - `GET /rest/v1/` (or a lightweight known table HEAD/OPTIONS) with a 3–5s timeout
-2) Auth probe:
-   - `GET /auth/v1/health` (or another safe auth endpoint) with a 3–5s timeout
-3) Edge function probe (optional but very useful):
-   - `supabase.functions.invoke('test-external-db')` or a new tiny `ping` edge function (no secrets, verify_jwt=false) so we can see function edge logs.
-Each probe will:
-- record a BootTrace step (start/done/error),
-- show latency + error in the UI,
-- send a structured row to `error_log` via the direct REST logger.
+### Phase 1: Fast-Path Token Detection
 
-D) Add global “hard failure capture” (frontend → backend)
-Add global listeners (minimal, privacy-safe):
-- `window.onerror`
-- `unhandledrejection`
-Log only:
-- error message
-- stack (truncated)
-- current URL
-- Boot ID
-- userAgent
-- network hints:
-  - `navigator.onLine`
-  - `navigator.connection.effectiveType` (when available)
-These will go through the direct REST logger so they still show up during auth hangs.
+Add a fast check that reads the auth token directly from localStorage and validates it via REST API (bypassing supabase-js entirely):
 
-E) Make it easy for you to report an attempt (no “context id” required)
-- On the loader (ProtectedRoute loading screen) and on the error card, you already see Boot ID.
-- We will ensure that the Boot ID is also written to backend as the very first thing the app does (via direct REST logger), so you can simply tell me:
-  - “Boot ID: XXXXX”
-  and I can query the DB and reconstruct the attempt.
-- In other words: the Boot ID becomes the correlation key; no separate context id is needed.
+```text
+┌─────────────────────────────────────────────────────────────┐
+│                     AUTH INITIALIZATION                      │
+├─────────────────────────────────────────────────────────────┤
+│  FAST PATH (Direct REST)           SLOW PATH (supabase-js)  │
+│  ────────────────────────          ─────────────────────────│
+│  1. Read token from localStorage   1. supabase.getSession() │
+│  2. POST /auth/v1/user (validate)  2. Wait up to 10s        │
+│  3. If valid → use session         3. Timeout → error       │
+│                                                              │
+│  RACE: First successful path wins, cancels the other        │
+└─────────────────────────────────────────────────────────────┘
+```
 
-Implementation steps (files)
-1) Add a new logging utility (frontend)
-- Create `src/utils/directLog.ts` (name flexible):
-  - `logErrorLogRow({ component, error_type, error_message, context })`
-  - Uses `fetch` + timeout + best-effort (never throws).
-  - Adds standard context fields automatically (origin, pathname, userAgent, boot_id).
-2) Update BootTrace DB logging
-- Edit `src/utils/bootTrace.ts`:
-  - Replace `supabase.from('error_log').insert(...)` inside `logToDatabase()` with the new direct logger.
-  - Keep the existing behavior of “significantSteps only”.
-3) Update AuthProvider error logging
-- Edit `src/hooks/useAuth.tsx`:
-  - Update `logAuthError` to use the direct logger.
-  - Add the /debug bypass:
-    - if pathname starts with `/debug`, skip initAuth and immediately set loading false.
-4) Upgrade Debug page so it’s useful without auth
-- Edit `src/pages/Debug.tsx`:
-  - Remove dependency on “auth must be initialized” by ensuring it still renders meaningful content when `user=null` and `session=null`.
-  - Add the probes (REST/Auth/Functions) + UI for results.
-  - Add “Send test log” button that writes a known row to `error_log` so we can confirm backend visibility instantly.
-5) (Optional) Add a tiny `ping` edge function for a second logging channel
-- Create `supabase/functions/ping/index.ts`
-  - No secrets.
-  - Logs request info (origin, userAgent) in edge logs.
-  - Returns JSON `{ ok: true, timestamp }`.
-  - This gives us Supabase Edge logs even if DB insert fails for any reason.
-- Update `supabase/config.toml` to set `verify_jwt=false` for this function.
-6) Ensure ProtectedRoute provides a direct link that does not depend on router state
-- Small tweak: “Debug Page” button can use `window.location.href = '/debug'` in addition to navigate(), so even if router state is weird, it hard-navigates.
+### Phase 2: Implementation Details
 
-How we will use the backend to trace your attempts
-- After you reproduce on production:
-  1) Read the Boot ID shown on the loader card.
-  2) Send me the Boot ID.
-- I will query `error_log` filtering by `context.boot_id` and reconstruct:
-  - whether we could hit REST endpoints,
-  - whether auth endpoints were reachable,
-  - whether the hang is a supabase-js internal deadlock vs. network stall,
-  - and the exact last successful step.
+**Files to modify:**
 
-Success criteria
-- Visiting `journey-voice.lovable.app/debug` always shows the debug dashboard (even if auth init is broken).
-- Every page load produces at least one backend `error_log` row with:
-  - `component=BootTrace`, `error_message=app_start`, and the Boot ID
-- After a failing attempt, we can identify the failure class:
-  - “Auth endpoint unreachable”
-  - “REST reachable but auth hanging”
-  - “supabase-js internal deadlock / storage lock”
-  - “service worker / caching interference”
-  - “routing/redirect issue”
-…and we can then target the fix without further guesswork.
+1. **`src/integrations/supabase/client.ts`** - Add helper to read stored session token directly
+2. **`src/utils/directAuth.ts`** (new) - Direct REST-based session validation
+3. **`src/hooks/useAuth.tsx`** - Add fast-path race to initAuthV2
 
-Risk / rollback
-- No code removal.
-- Changes are additive and scoped:
-  - /debug bypass only affects `/debug`
-  - logging changes only add an alternate transport
-- If anything is noisy, we can restrict logging to production-only and/or only on failures.
+**Key code changes:**
+
+1. Create `src/utils/directAuth.ts`:
+   - `getStoredTokens()` - Read access_token/refresh_token from localStorage
+   - `validateTokenDirect()` - POST to `/auth/v1/user` with the token
+   - `refreshTokenDirect()` - POST to `/auth/v1/token?grant_type=refresh_token` if expired
+
+2. Modify `initAuthV2()` in useAuth.tsx:
+   - Run fast-path and slow-path in parallel with `Promise.race()`
+   - If fast-path succeeds first (user has valid cached token), use it immediately
+   - If fast-path fails (no token, invalid, etc.), fall back to supabase-js path
+   - Log which path won for debugging
+
+### Phase 3: Fallback Improvements
+
+- If both paths fail, show a more specific error based on which failed:
+  - "No stored session" → Redirect to sign in
+  - "Token expired and refresh failed" → Clear storage and redirect to sign in
+  - "Network timeout" → Show retry with network diagnostics
+
+### Phase 4: Logging for Diagnosis
+
+Add trace steps to capture:
+- Whether a stored token was found
+- Fast-path validation result and latency
+- Which path won the race
+- Any errors from either path
+
+## Files Changed
+
+| File | Change Type | Description |
+|------|-------------|-------------|
+| `src/utils/directAuth.ts` | Create | Direct REST auth validation utility |
+| `src/hooks/useAuth.tsx` | Modify | Add fast-path race to initAuthV2 |
+| `src/integrations/supabase/client.ts` | Modify | Export storage key constant |
+
+## Success Criteria
+
+1. Users with valid cached sessions load instantly (fast-path wins)
+2. Users without sessions are redirected to sign-in quickly
+3. The 10-second timeout only triggers if both paths fail (rare)
+4. Backend logs show which path resolved first for debugging
+
+## Risk Assessment
+
+- **Low risk**: Fast-path is additive; supabase-js path remains as fallback
+- **No breaking changes**: Existing behavior preserved if fast-path fails
+- **Rollback**: Can disable fast-path with a feature flag
+
+## Alternative Considered
+
+Replacing supabase-js entirely was considered but rejected because:
+- Would lose automatic token refresh, listener events, and other features
+- Higher maintenance burden
+- The parallel strategy gives us the best of both worlds
