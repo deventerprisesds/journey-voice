@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, useCallback, ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, useCallback, useMemo, ReactNode } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
 
@@ -92,7 +92,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isAdmin, setIsAdmin] = useState(false);
   const [isDemoMode, setIsDemoMode] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
-  const isPreviewEnvironment = isDevelopmentMode();
+  
+  // Memoize environment check to prevent unnecessary recalculations
+  const isPreviewEnvironment = useMemo(() => isDevelopmentMode(), []);
+  
+  // Diagnostic logging for production debugging
+  console.log('[Auth] Environment:', {
+    hostname: window.location.hostname,
+    isPreviewEnvironment,
+    timestamp: new Date().toISOString()
+  });
 
   const checkAdminStatus = async (userId: string) => {
     try {
