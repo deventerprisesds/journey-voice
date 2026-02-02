@@ -85,11 +85,12 @@ const statusColors = {
 // Standard workflow columns for tabbed view
 const STANDARD_COLUMNS: Column[] = [
   { id: 'std-backlog', name: 'Backlog', status: 'BACKLOG', position: 0, board_id: 'std' },
-  { id: 'std-blocked', name: 'Blocked', status: 'BLOCKED', position: 1, board_id: 'std' },
-  { id: 'std-ready', name: 'Ready', status: 'READY', position: 2, board_id: 'std' },
-  { id: 'std-upnext', name: 'Up Next', status: 'UP_NEXT', position: 3, board_id: 'std' },
-  { id: 'std-doing', name: 'Doing', status: 'DOING', position: 4, board_id: 'std' },
-  { id: 'std-done', name: 'Done', status: 'DONE', position: 5, board_id: 'std' },
+  { id: 'std-todo', name: 'To Do', status: 'TODO', position: 1, board_id: 'std' },
+  { id: 'std-blocked', name: 'Blocked', status: 'BLOCKED', position: 2, board_id: 'std' },
+  { id: 'std-ready', name: 'Ready', status: 'READY', position: 3, board_id: 'std' },
+  { id: 'std-upnext', name: 'Up Next', status: 'UP_NEXT', position: 4, board_id: 'std' },
+  { id: 'std-doing', name: 'Doing', status: 'DOING', position: 5, board_id: 'std' },
+  { id: 'std-done', name: 'Done', status: 'DONE', position: 6, board_id: 'std' },
 ];
 
 

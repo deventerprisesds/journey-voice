@@ -146,7 +146,7 @@ Parse the user's input into one or more tasks. Each task should have:
 - start_time: ISO timestamp ONLY if user explicitly schedules a specific time to work on task
 - end_time: ISO timestamp ONLY if user specifies when scheduled work should end
 - estimate_minutes: Estimated duration in minutes
-- status: BACKLOG, TODO, READY, UP_NEXT, DOING
+- status: BACKLOG (default for new tasks), READY, UP_NEXT, or DOING (only if user explicitly says task is in progress)
 - scheduling_context: Empty array (client-side will extract context from title/description)
 
 DUE DATE vs SCHEDULED TIME (CRITICAL):
