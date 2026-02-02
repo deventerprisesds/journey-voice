@@ -15,21 +15,27 @@ import Auth from "./pages/Auth";
 import Admin from "./pages/Admin";
 import Settings from "./pages/Settings";
 import Calendar from "./pages/Calendar";
+import Debug from "./pages/Debug";
 import NotFound from "./pages/NotFound";
 import DemoModeBadge from "./components/DemoModeBadge";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { supabase } from "@/integrations/supabase/client";
 import { useEffect } from "react";
+import { bootTrace } from "@/utils/bootTrace";
 
 const queryClient = new QueryClient();
 
 const App = () => {
   useEffect(() => {
+    // Mark app component mount
+    bootTrace.mark('app_component_mount');
+    
     // Log production info for debugging
     console.log('App Environment:', {
       origin: window.location.origin,
       supabaseUrl: "https://wwxgajrtmslzklnyplah.supabase.co",
-      isProduction: window.location.origin.includes('journey-voice.lovable.app')
+      isProduction: window.location.origin.includes('journey-voice.lovable.app'),
+      bootId: bootTrace.getBootId()
     });
 
     // Only run test-external-db in preview/development
@@ -80,6 +86,7 @@ const App = () => {
                   <ErrorBoundary>
                     <Routes>
                       <Route path="/auth" element={<Auth />} />
+                      <Route path="/debug" element={<Debug />} />
                       {/* All authenticated routes wrapped in MainLayout */}
                       <Route path="/*" element={
                         <ProtectedRoute>
