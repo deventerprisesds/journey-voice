@@ -1,15 +1,30 @@
 
 # 2-Way Calendar Sync: Multiple Accounts with Different Purposes
 
+## ✅ IMPLEMENTATION STATUS
+
+### Phase 1: Database & Backend Updates — COMPLETE
+- ✅ Added `purposes` column (TEXT[]) to `calendar_connections` table
+- ✅ Added `sync_token` column for delta sync
+- ✅ Added `source_task_id` to `external_calendar_events` for bi-directional linking
+- ✅ Updated `insert_calendar_connection_for_user` to accept purposes
+- ✅ Created `update_calendar_connection_purposes` function
+- ✅ Created `update_calendar_sync_token` function
+- ✅ Updated `get_calendar_connections_safe` and `get_calendar_connections_secure` to return purposes
+
+### Phase 2: Edge Functions — COMPLETE
+- ✅ Updated `calendar-token-manager` with `update_purposes` action
+- ✅ Updated `calendar-integration-manager` with purpose-aware sync/create
+- ✅ Added `get_read_connections` and `get_write_connections` actions
+- ✅ Created `calendar-delta-sync` edge function for polling changes
+
+### Phase 3: UI Updates — COMPLETE
+- ✅ Updated `CalendarConnectionModal` with purpose selector UI
+- ✅ Users can now set READ, WRITE, or both purposes per connection
+
+---
+
 ## Understanding Your Requirements
-
-You want to:
-1. **Pull calendar items** (meetings, appointments) from one or more Outlook/Google accounts (personal, business, school)
-2. **Push task events** to potentially a different calendar account
-3. Keep these as separate OAuth connections with distinct purposes
-4. Achieve near real-time sync without breaking existing functionality
-
-## Current State
 
 ### What Exists Today
 

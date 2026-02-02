@@ -24,7 +24,7 @@ serve(async (req) => {
   }
 
   try {
-    const { action, provider, connection_id, start_date, end_date } = await req.json();
+    const { action, provider, connection_id, start_date, end_date, user_id, task } = await req.json();
     
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
@@ -35,13 +35,23 @@ serve(async (req) => {
 
     switch (action) {
       case 'sync_events':
+        // Only sync from connections with READ purpose
         return await syncCalendarEvents(supabaseClient, connection_id, start_date, end_date);
       
       case 'get_availability':
         return await getCalendarAvailability(supabaseClient, connection_id, start_date, end_date);
       
       case 'create_event':
-        return await createCalendarEvent(supabaseClient, connection_id, req);
+        // Only create events on connections with WRITE purpose
+        return await createCalendarEvent(supabaseClient, connection_id, { task });
+      
+      case 'get_read_connections':
+        // Get all connections with READ purpose for a user
+        return await getConnectionsByPurpose(supabaseClient, user_id, 'READ');
+      
+      case 'get_write_connections':
+        // Get all connections with WRITE purpose for a user
+        return await getConnectionsByPurpose(supabaseClient, user_id, 'WRITE');
       
       default:
         return new Response(
@@ -61,6 +71,34 @@ serve(async (req) => {
   }
 });
 
+// NEW: Get connections by purpose (READ or WRITE)
+async function getConnectionsByPurpose(supabaseClient: any, userId: string, purpose: 'READ' | 'WRITE') {
+  const { data: connections, error } = await supabaseClient
+    .from('calendar_connections')
+    .select('id, provider, provider_account_email, purposes, is_active, expires_at')
+    .eq('user_id', userId)
+    .eq('is_active', true)
+    .contains('purposes', [purpose]);
+
+  if (error) {
+    console.error(`Failed to get ${purpose} connections:`, error);
+    throw new Error(`Failed to get connections: ${error.message}`);
+  }
+
+  // Filter out expired connections
+  const now = new Date();
+  const validConnections = (connections || []).filter((conn: any) => 
+    !conn.expires_at || new Date(conn.expires_at) > now
+  );
+
+  console.log(`Found ${validConnections.length} active ${purpose} connections for user ${userId}`);
+
+  return new Response(
+    JSON.stringify({ connections: validConnections }),
+    { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+  );
+}
+
 async function syncCalendarEvents(supabaseClient: any, connectionId: string, startDate: string, endDate: string) {
   // Get calendar connection tokens securely
   const { data: tokenData, error: tokenError } = await supabaseClient
@@ -74,6 +112,21 @@ async function syncCalendarEvents(supabaseClient: any, connectionId: string, sta
   }
   
   const connection = tokenData[0];
+
+  // Verify connection has READ purpose
+  const { data: connInfo, error: connError } = await supabaseClient
+    .from('calendar_connections')
+    .select('purposes')
+    .eq('id', connectionId)
+    .single();
+
+  if (connError || !connInfo?.purposes?.includes('READ')) {
+    console.warn(`Connection ${connectionId} does not have READ purpose, skipping sync`);
+    return new Response(
+      JSON.stringify({ success: false, error: 'Connection does not have READ purpose' }),
+      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  }
 
   const events = await fetchExternalCalendarEvents(connection, startDate, endDate);
   
@@ -136,8 +189,8 @@ async function getCalendarAvailability(supabaseClient: any, connectionId: string
   );
 }
 
-async function createCalendarEvent(supabaseClient: any, connectionId: string, req: Request) {
-  const { task } = await req.json();
+async function createCalendarEvent(supabaseClient: any, connectionId: string, body: { task: any }) {
+  const { task } = body;
   
   // Get calendar connection tokens securely
   const { data: tokenData, error: tokenError } = await supabaseClient
@@ -152,17 +205,60 @@ async function createCalendarEvent(supabaseClient: any, connectionId: string, re
   
   const connection = tokenData[0];
 
+  // Verify connection has WRITE purpose
+  const { data: connInfo, error: connError } = await supabaseClient
+    .from('calendar_connections')
+    .select('purposes, user_id')
+    .eq('id', connectionId)
+    .single();
+
+  if (connError || !connInfo?.purposes?.includes('WRITE')) {
+    console.warn(`Connection ${connectionId} does not have WRITE purpose, skipping event creation`);
+    return new Response(
+      JSON.stringify({ success: false, error: 'Connection does not have WRITE purpose' }),
+      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  }
+
   // Create event in external calendar
   const externalEventId = await createExternalCalendarEvent(connection, task);
   
   // Update task with external event ID
-  const { error: updateError } = await supabaseClient
-    .from('tasks')
-    .update({ external_event_id: externalEventId })
-    .eq('id', task.id);
+  if (task?.id) {
+    const { error: updateError } = await supabaseClient
+      .from('tasks')
+      .update({ external_event_id: externalEventId })
+      .eq('id', task.id);
 
-  if (updateError) {
-    console.error('Failed to update task with external event ID:', updateError);
+    if (updateError) {
+      console.error('Failed to update task with external event ID:', updateError);
+    }
+  }
+
+  // Also store in external_calendar_events table with source_task_id for bi-directional sync
+  if (task?.id) {
+    const { error: insertError } = await supabaseClient
+      .from('external_calendar_events')
+      .upsert({
+        user_id: connInfo.user_id,
+        connection_id: connectionId,
+        external_event_id: externalEventId,
+        title: task.title,
+        description: task.description || '',
+        start_time: task.start_time,
+        end_time: task.end_time,
+        is_all_day: false,
+        calendar_id: 'primary',
+        source_task_id: task.id,  // NEW: Link back to task for bi-directional sync
+        last_synced_at: new Date().toISOString(),
+      }, {
+        onConflict: 'connection_id,external_event_id',
+        ignoreDuplicates: false
+      });
+
+    if (insertError) {
+      console.warn('Failed to store external calendar event:', insertError);
+    }
   }
 
   return new Response(
