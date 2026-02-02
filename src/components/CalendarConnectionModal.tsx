@@ -37,11 +37,18 @@ export function CalendarConnectionModal({ isOpen, onClose, onConnectionSuccess }
       if (data && Array.isArray(data)) {
         data.forEach((conn: any) => {
           const isExpired = conn.expires_at ? new Date(conn.expires_at) < new Date() : false;
-          status[conn.provider] = {
-            connected: true,
-            expired: isExpired,
-            connectionId: conn.id
-          };
+          
+          // Normalize provider name - treat 'office365' as 'outlook'
+          const providerKey = conn.provider === 'office365' ? 'outlook' : conn.provider;
+          
+          // Only store if not already set, or if this one is more recent/valid
+          if (!status[providerKey] || (!isExpired && status[providerKey].expired)) {
+            status[providerKey] = {
+              connected: true,
+              expired: isExpired,
+              connectionId: conn.id
+            };
+          }
         });
       }
       

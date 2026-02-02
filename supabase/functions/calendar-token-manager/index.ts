@@ -271,7 +271,51 @@ async function exchangeGoogleCode(supabaseClient: any, code: string, redirectUri
     ? new Date(Date.now() + tokens.expires_in * 1000).toISOString()
     : null;
   
-  // Store connection using secure RPC with explicit user_id
+  // Check if connection already exists for this provider + account
+  const { data: existing, error: lookupError } = await supabaseClient
+    .from('calendar_connections')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('provider', 'google')
+    .eq('provider_account_id', userInfo.id)
+    .maybeSingle();
+
+  if (lookupError && lookupError.code !== 'PGRST116') {
+    console.error('Error checking existing Google connection:', lookupError);
+    throw new Error(`Failed to check existing connection: ${lookupError.message}`);
+  }
+
+  if (existing) {
+    // UPDATE existing connection with fresh tokens
+    console.log(`Refreshing existing Google connection ${existing.id} with new tokens`);
+    
+    const { error: updateError } = await supabaseClient
+      .rpc('update_calendar_connection_tokens_for_user', {
+        _connection_id: existing.id,
+        _user_id: userId,
+        _access_token: tokens.access_token,
+        _refresh_token: tokens.refresh_token || null,
+        _expires_at: expiresAt
+      });
+
+    if (updateError) {
+      console.error('Failed to refresh Google connection:', updateError);
+      throw new Error(`REFRESH_FAILED: Could not refresh existing connection`);
+    }
+
+    console.log(`Successfully refreshed Google connection: ${existing.id}`);
+    
+    return {
+      success: true,
+      connection_id: existing.id,
+      provider: 'google',
+      email: userInfo.email,
+      refreshed: true,
+      message: 'Connection refreshed with new tokens'
+    };
+  }
+
+  // Store new connection using secure RPC with explicit user_id
   const { data: connectionId, error: insertError } = await supabaseClient
     .rpc('insert_calendar_connection_for_user', {
       _user_id: userId,
@@ -285,6 +329,17 @@ async function exchangeGoogleCode(supabaseClient: any, code: string, redirectUri
     });
   
   if (insertError) {
+    // Handle duplicate key as success (race condition)
+    if (insertError.code === '23505') {
+      console.log('Duplicate Google connection detected (race condition), treating as success');
+      return {
+        success: true,
+        provider: 'google',
+        email: userInfo.email,
+        refreshed: true,
+        message: 'Connection already exists and is valid'
+      };
+    }
     console.error('Failed to store Google connection:', insertError);
     throw new Error(`Failed to store connection: ${insertError.message}`);
   }
@@ -295,7 +350,9 @@ async function exchangeGoogleCode(supabaseClient: any, code: string, redirectUri
     success: true,
     connection_id: connectionId,
     provider: 'google',
-    email: userInfo.email
+    email: userInfo.email,
+    refreshed: false,
+    message: 'New connection created'
   };
 }
 
@@ -344,20 +401,66 @@ async function exchangeMicrosoftCode(supabaseClient: any, code: string, redirect
   }
   
   const userInfo = await userInfoResponse.json();
-  console.log(`Got Microsoft user email: ${userInfo.mail || userInfo.userPrincipalName}`);
+  const userEmail = userInfo.mail || userInfo.userPrincipalName;
+  console.log(`Got Microsoft user email: ${userEmail}`);
   
   // Calculate expiry time
   const expiresAt = tokens.expires_in 
     ? new Date(Date.now() + tokens.expires_in * 1000).toISOString()
     : null;
   
-  // Store connection using secure RPC with explicit user_id
+  // Check if connection already exists for this provider + account
+  // Accept both 'outlook' and 'office365' as provider names
+  const { data: existing, error: lookupError } = await supabaseClient
+    .from('calendar_connections')
+    .select('id')
+    .eq('user_id', userId)
+    .in('provider', ['outlook', 'office365'])
+    .eq('provider_account_id', userInfo.id)
+    .maybeSingle();
+
+  if (lookupError && lookupError.code !== 'PGRST116') {
+    console.error('Error checking existing Microsoft connection:', lookupError);
+    throw new Error(`Failed to check existing connection: ${lookupError.message}`);
+  }
+
+  if (existing) {
+    // UPDATE existing connection with fresh tokens
+    console.log(`Refreshing existing Microsoft connection ${existing.id} with new tokens`);
+    
+    const { error: updateError } = await supabaseClient
+      .rpc('update_calendar_connection_tokens_for_user', {
+        _connection_id: existing.id,
+        _user_id: userId,
+        _access_token: tokens.access_token,
+        _refresh_token: tokens.refresh_token || null,
+        _expires_at: expiresAt
+      });
+
+    if (updateError) {
+      console.error('Failed to refresh Microsoft connection:', updateError);
+      throw new Error(`REFRESH_FAILED: Could not refresh existing connection`);
+    }
+
+    console.log(`Successfully refreshed Microsoft connection: ${existing.id}`);
+    
+    return {
+      success: true,
+      connection_id: existing.id,
+      provider: 'outlook',
+      email: userEmail,
+      refreshed: true,
+      message: 'Connection refreshed with new tokens'
+    };
+  }
+  
+  // Store new connection using secure RPC with explicit user_id
   const { data: connectionId, error: insertError } = await supabaseClient
     .rpc('insert_calendar_connection_for_user', {
       _user_id: userId,
       _provider: 'outlook',
       _provider_account_id: userInfo.id,
-      _provider_account_email: userInfo.mail || userInfo.userPrincipalName,
+      _provider_account_email: userEmail,
       _access_token: tokens.access_token,
       _refresh_token: tokens.refresh_token || null,
       _scope: tokens.scope || null,
@@ -365,6 +468,17 @@ async function exchangeMicrosoftCode(supabaseClient: any, code: string, redirect
     });
   
   if (insertError) {
+    // Handle duplicate key as success (race condition)
+    if (insertError.code === '23505') {
+      console.log('Duplicate Microsoft connection detected (race condition), treating as success');
+      return {
+        success: true,
+        provider: 'outlook',
+        email: userEmail,
+        refreshed: true,
+        message: 'Connection already exists and is valid'
+      };
+    }
     console.error('Failed to store Microsoft connection:', insertError);
     throw new Error(`Failed to store connection: ${insertError.message}`);
   }
@@ -375,6 +489,8 @@ async function exchangeMicrosoftCode(supabaseClient: any, code: string, redirect
     success: true,
     connection_id: connectionId,
     provider: 'outlook',
-    email: userInfo.mail || userInfo.userPrincipalName
+    email: userEmail,
+    refreshed: false,
+    message: 'New connection created'
   };
 }
