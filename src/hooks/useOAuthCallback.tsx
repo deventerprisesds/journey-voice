@@ -117,6 +117,11 @@ export function useOAuthCallback() {
           console.log('[OAuth] Token exchange successful:', data);
           toast.success(`Successfully connected to ${provider === 'google' ? 'Google' : 'Outlook'} Calendar`);
           
+          // Dispatch event to notify settings components to refresh
+          window.dispatchEvent(new CustomEvent('calendar-connection-updated', {
+            detail: { provider }
+          }));
+          
           // Trigger a sync of calendar events
           try {
             await supabase.functions.invoke('calendar-integration-manager', {

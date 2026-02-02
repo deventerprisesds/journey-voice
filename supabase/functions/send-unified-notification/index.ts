@@ -97,12 +97,12 @@ async function getOutlookConnectionForUser(supabaseClient: any, userId: string):
 } | null> {
   try {
     // Direct query for service-level access (notification system needs to access user's tokens)
-    // First get the encrypted tokens
+    // First get the encrypted tokens - accept both 'outlook' and 'office365' as valid provider names
     const { data: connection, error: connError } = await supabaseClient
       .from('calendar_connections')
       .select('id, access_token, refresh_token, expires_at, provider_account_email, user_id')
       .eq('user_id', userId)
-      .eq('provider', 'office365')
+      .in('provider', ['office365', 'outlook'])
       .eq('is_active', true)
       .maybeSingle();
 
