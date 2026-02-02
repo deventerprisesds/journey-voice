@@ -74,3 +74,33 @@ verify_jwt = false
 
 [functions.agenda-manager]
 verify_jwt = false
+
+[functions.rag-context-retrieval]
+verify_jwt = false
+
+[functions.generate-embeddings]
+verify_jwt = false
+
+[functions.hybrid-assistant-api]
+verify_jwt = false
+
+[functions.manage-push-subscription]
+verify_jwt = false
+
+[functions.notification-callback]
+verify_jwt = false
+
+[functions.send-unified-notification]
+verify_jwt = false
+
+[functions.sync-assistant-knowledge]
+verify_jwt = false
+
+[functions.web-search]
+verify_jwt = false
+
+[functions.elevenlabs-tts]
+verify_jwt = false
+
+[functions.assistant-actions-webhook]
+verify_jwt = false
