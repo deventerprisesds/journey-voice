@@ -1,87 +1,79 @@
 
-Goal
-- Fix “Test Failed — No Office 365 connection found…” while the UI shows Outlook “Connected”.
 
-What’s happening (root cause)
-- The “Send Test Reminder” button in Notification Settings calls the edge function: supabase/functions/send-unified-notification.
-- That edge function tries to load the user’s Outlook token from calendar_connections using:
-  - provider IN ('office365','outlook')
-  - is_active = true
-  - .maybeSingle()
-- Your database currently has multiple active Outlook/Office365 rows for the same user (from earlier iterations / provider-name changes).
-- When multiple rows match, .maybeSingle() fails (it expects 0 or 1 row), so the function treats it as “no connection” and returns the “No Office 365 connection found…” error.
+# Fix: Minimal Change for Today → UP_NEXT, Remove "To Do" Column
 
-Fix approach
-- Make the backend (send-unified-notification) robust to multiple active rows by selecting the “best” connection, rather than requiring exactly one.
-- Prevent new duplicates going forward by deactivating older Outlook/Office365 rows whenever a new Microsoft token is stored/refreshed.
+## Changes Required
 
-Implementation steps (code changes)
+### 1. Remove "To Do" Column from KanbanBoard
 
-1) Update Outlook connection selection in send-unified-notification
-File: supabase/functions/send-unified-notification/index.ts
+**File**: `src/components/KanbanBoard.tsx` (lines 85-93)
 
-Change getOutlookConnectionForUser():
-- Replace the .maybeSingle() query with “pick best connection” logic:
+Remove the added "To Do" column and restore original positions:
 
-Selection rules (same spirit as the UI fix):
-- Prefer a non-expired connection (expires_at is null OR expires_at > now), and among those pick the most recently updated.
-- If none are valid, pick the most recently updated active connection.
+```typescript
+const STANDARD_COLUMNS: Column[] = [
+  { id: 'std-backlog', name: 'Backlog', status: 'BACKLOG', position: 0, board_id: 'std' },
+  { id: 'std-blocked', name: 'Blocked', status: 'BLOCKED', position: 1, board_id: 'std' },
+  { id: 'std-ready', name: 'Ready', status: 'READY', position: 2, board_id: 'std' },
+  { id: 'std-upnext', name: 'Up Next', status: 'UP_NEXT', position: 3, board_id: 'std' },
+  { id: 'std-doing', name: 'Doing', status: 'DOING', position: 4, board_id: 'std' },
+  { id: 'std-done', name: 'Done', status: 'DONE', position: 5, board_id: 'std' },
+];
+```
 
-Implementation detail (recommended)
-- Do two queries with order + limit(1):
-  A) “valid” query:
-     - user_id = userId
-     - is_active = true
-     - provider IN ('office365','outlook')
-     - AND (expires_at is null OR expires_at > nowISO)
-     - order by updated_at desc (and optionally expires_at desc)
-     - limit 1
-  B) fallback query:
-     - same filters except no expires_at condition
-     - order by updated_at desc
-     - limit 1
-- This avoids the “multiple rows returned” error and ensures we consistently select a good token.
+### 2. Add Post-Parse Status Logic in AI Task Parser
 
-Expected outcome
-- Clicking “Send Test Reminder” will stop failing simply because multiple active rows exist.
+**File**: `supabase/functions/ai-task-parser/index.ts`
 
-2) Prevent future duplicates in calendar-token-manager when saving Microsoft tokens
-File: supabase/functions/calendar-token-manager/index.ts
+After tasks are parsed (around line 325 where `tasks` array is created), add logic to override status:
 
-A) Make “existing connection lookup” resilient
-- In exchangeMicrosoftCode(), the lookup uses .maybeSingle() across provider IN ('outlook','office365') + provider_account_id.
-- If both an 'outlook' and an 'office365' row exist for the same account id, that can also produce multiple rows and break refresh logic.
-- Change the lookup to either:
-  - use order('updated_at', { ascending: false }).limit(1).maybeSingle()
-  - or fetch multiple and pick the most recently updated.
+- If task has a `due_date` that matches **today** (the `targetDate`) → set `status: 'UP_NEXT'`
+- Otherwise → keep the existing category-based status (no change to current behavior)
 
-B) Deactivate older active Outlook/Office365 rows after a successful insert/refresh
-- After the code successfully updates or inserts the new/refresh connection, run a cleanup update:
-  - set is_active = false
-  - where user_id = userId
-  - and provider IN ('outlook','office365')
-  - and is_active = true
-  - and id != “the chosen/updated/inserted id”
-- This ensures there is only one active Outlook connection going forward, reducing future confusion and edge-function ambiguity.
+```typescript
+// After line 325: const tasks = Array.isArray(parsed.tasks) ? parsed.tasks : [];
 
-3) Deploy updated edge functions
-- Deploy:
-  - send-unified-notification
-  - calendar-token-manager
+// Determine if task is for today - if so, set status to UP_NEXT
+const todayStr = targetDate ? new Date(targetDate).toDateString() : new Date().toDateString();
 
-4) Validate end-to-end
-- In the app:
-  - Go to Settings → Notifications
-  - Confirm Outlook still displays “Connected”
-  - Tap “Send Test Reminder”
-  - Expect success toast and a calendar event created in Outlook.
-- If it still fails, check edge logs for send-unified-notification to confirm which connection row was selected and whether token decryption/refresh succeeded.
+const tasksWithCorrectStatus = tasks.map((task: any) => {
+  // Check if task's due_date is today
+  const taskDueDate = task.due_date ? new Date(task.due_date).toDateString() : null;
+  const isForToday = taskDueDate === todayStr;
+  
+  return {
+    ...task,
+    status: isForToday ? 'UP_NEXT' : task.status  // Only override if today
+  };
+});
 
-Edge cases considered
-- Multiple active connections where one is expired and another is valid: we will select the valid one.
-- All active connections are expired: we’ll select the most recently updated and then proceed into the refresh flow (if refresh_token exists).
-- Mixed provider labels ('outlook' vs 'office365'): treated as the same provider group everywhere.
+// Use tasksWithCorrectStatus instead of tasks in the rest of the function
+```
 
-Files affected
-- supabase/functions/send-unified-notification/index.ts
-- supabase/functions/calendar-token-manager/index.ts
+This change is applied at the end of parsing, so all existing category-based status logic remains untouched - we only override to `UP_NEXT` when the task is for today.
+
+### 3. Fix Existing TODO Tasks in Database
+
+One-time SQL to convert any existing `TODO` tasks to `BACKLOG`:
+
+```sql
+UPDATE tasks 
+SET status = 'BACKLOG', updated_at = NOW() 
+WHERE status = 'TODO';
+```
+
+## Summary of Changes
+
+| What | Change |
+|------|--------|
+| KanbanBoard | Remove "To Do" column, restore original positions |
+| AI Parser | Add post-parse check: if `due_date = today` → `status = UP_NEXT` |
+| Database | Convert existing `TODO` → `BACKLOG` |
+
+## Expected Behavior
+
+- Tasks created for **today** → appear in **Up Next** column
+- Tasks created for **future dates** → appear in their **category column** (LIFE, CAREER, etc.)
+- Tasks with **no date** → appear in their **category column**
+- **No "To Do" column** exists
+
