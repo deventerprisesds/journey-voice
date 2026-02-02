@@ -70,6 +70,17 @@ const NotificationSettings = () => {
     }
   }, [isDemoMode, user]);
 
+  // Listen for OAuth completion events to auto-refresh connection status
+  useEffect(() => {
+    const handleConnectionUpdate = () => {
+      console.log('[NotificationSettings] OAuth completion detected, refreshing connections...');
+      loadCalendarConnections();
+    };
+    
+    window.addEventListener('calendar-connection-updated', handleConnectionUpdate);
+    return () => window.removeEventListener('calendar-connection-updated', handleConnectionUpdate);
+  }, [user]);
+
   const loadCalendarConnections = async () => {
     if (!user?.id) return;
 
@@ -83,7 +94,9 @@ const NotificationSettings = () => {
       }
 
       if (data && Array.isArray(data)) {
-        const outlook = data.find((c: any) => c.provider === 'office365' && c.is_active);
+        const outlook = data.find((c: any) => 
+          (c.provider === 'office365' || c.provider === 'outlook') && c.is_active
+        );
         const google = data.find((c: any) => c.provider === 'google' && c.is_active);
         
         if (outlook) {
