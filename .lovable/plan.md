@@ -1,77 +1,156 @@
 
-# Fix Plan: Outlook Events + Chat Panel Height
+# Fix: Stale App Version After Publishing
 
-## Issue 1: Outlook Calendar Events Not Created
+## Root Cause Analysis
 
-### Root Cause
-The edge function `send-unified-notification` looks for secrets named:
-- `AZURE_AD_CLIENT_ID`
-- `AZURE_AD_CLIENT_SECRET`
+Your project has **TWO caching layers** that are causing the stale version issue:
 
-But your Supabase project has secrets configured as:
-- `MICROSOFT_CLIENT_ID`
-- `MICROSOFT_CLIENT_SECRET`
+### 1. Service Worker Cache-First Strategy (Primary Culprit)
 
-This mismatch causes the token refresh to fail silently, and expired tokens cannot be renewed.
+**File:** `public/sw.js` (lines 54-61)
 
-### Solution
-Update the `send-unified-notification` edge function to use the correct secret names:
-
-**File:** `supabase/functions/send-unified-notification/index.ts`
-
-Change lines 191-192 from:
-```typescript
-const clientId = Deno.env.get('AZURE_AD_CLIENT_ID');
-const clientSecret = Deno.env.get('AZURE_AD_CLIENT_SECRET');
+```javascript
+// For other requests, use cache-first strategy
+event.respondWith(
+  caches.match(event.request)
+    .then((response) => {
+      // Return cached version or fetch from network
+      return response || fetch(event.request);
+    }
+  )
+);
 ```
 
-To:
-```typescript
-const clientId = Deno.env.get('MICROSOFT_CLIENT_ID') || Deno.env.get('AZURE_AD_CLIENT_ID');
-const clientSecret = Deno.env.get('MICROSOFT_CLIENT_SECRET') || Deno.env.get('AZURE_AD_CLIENT_SECRET');
-```
+This means:
+- When you publish a new version, the SW continues serving **old cached assets** (HTML, JS, CSS)
+- The SW only fetches from network if cache misses
+- `Ctrl+Shift+R` forces the browser to bypass cache, but **the SW still intercepts** and serves from its cache
+- The SW install event caches `/` and `/assets/` but **doesn't update existing caches** until `skipWaiting()` is called
 
-This will check for both naming conventions for backward compatibility.
+### 2. Missing Service Worker Update Detection
+
+The current implementation lacks:
+- No `updatefound` listener to detect when a new SW version is available
+- No automatic `skipWaiting()` trigger on page load
+- The user must manually unregister the SW from the Debug page to get updates
 
 ---
 
-## Issue 2: Chat Panel Height Not Constrained
+## Solution
 
-### Root Cause
-The CommsConsole panel lacks proper height constraints. Looking at the CSS hierarchy:
+### Fix 1: Add Network-First Strategy for HTML/Document Requests
 
-1. `MainLayout` sets up the aside with `flex flex-col` but no explicit height control
-2. `CommsConsole` uses `h-full` which should inherit height
-3. The problem is that `ConversationPane` → `TranscriptScroll` has `flex-1` but the flex container chain is broken
+Update the SW to use **network-first for navigation requests** (HTML documents) so the app shell always loads fresh:
 
-The missing piece is that the aside in MainLayout needs `h-[calc(100vh-56px)]` or similar, and the CommsConsole needs `overflow-hidden` to ensure flex children respect boundaries.
+**File:** `public/sw.js`
 
-### Solution
-Update the MainLayout and CommsConsole to properly constrain heights:
-
-**File:** `src/components/MainLayout.tsx` (line 483)
-
-Change:
-```tsx
-<aside className="w-[400px] border-l border-border bg-card/50 flex-shrink-0 flex flex-col">
-  <CommsConsole mode="panel" />
-</aside>
+```javascript
+self.addEventListener('fetch', (event) => {
+  const url = new URL(event.request.url);
+  
+  // Never cache auth/API requests
+  if (url.hostname.includes('supabase.co') ||
+      url.hostname.includes('supabase.in') ||
+      url.pathname.includes('/auth/') ||
+      url.pathname.includes('/rest/') ||
+      url.pathname.includes('/functions/') ||
+      event.request.method !== 'GET') {
+    event.respondWith(fetch(event.request));
+    return;
+  }
+  
+  // NETWORK-FIRST for navigation (HTML) requests - ensures fresh app shell
+  if (event.request.mode === 'navigate') {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          // Cache the fresh response for offline use
+          const responseClone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(event.request, responseClone);
+          });
+          return response;
+        })
+        .catch(() => {
+          // Fallback to cache only if network fails (offline)
+          return caches.match(event.request);
+        })
+    );
+    return;
+  }
+  
+  // Cache-first for static assets (JS, CSS, images)
+  event.respondWith(
+    caches.match(event.request)
+      .then((response) => response || fetch(event.request))
+  );
+});
 ```
 
-To:
-```tsx
-<aside className="w-[400px] border-l border-border bg-card/50 flex-shrink-0 flex flex-col h-[calc(100dvh-56px)] overflow-hidden">
-  <CommsConsole mode="panel" />
-</aside>
+### Fix 2: Auto-Update Service Worker on New Version
+
+Update the registration to detect updates and activate them immediately:
+
+**File:** `src/hooks/useNotifications.tsx` - Update `registerServiceWorker`:
+
+```typescript
+const registerServiceWorker = async () => {
+  try {
+    const registration = await navigator.serviceWorker.register('/sw.js', {
+      updateViaCache: 'none' // Force browser to check for SW updates
+    });
+    console.log('Service Worker registered:', registration);
+    
+    // Check for updates on page load
+    registration.update();
+    
+    // Listen for new SW waiting
+    registration.addEventListener('updatefound', () => {
+      const newWorker = registration.installing;
+      if (newWorker) {
+        newWorker.addEventListener('statechange', () => {
+          if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+            // New version available - activate it immediately
+            console.log('New Service Worker version available, activating...');
+            newWorker.postMessage({ type: 'SKIP_WAITING' });
+          }
+        });
+      }
+    });
+    
+    // Reload page when new SW takes over
+    let refreshing = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!refreshing) {
+        refreshing = true;
+        console.log('New Service Worker activated, reloading page...');
+        window.location.reload();
+      }
+    });
+    
+    // Get existing subscription
+    const existingSubscription = await registration.pushManager.getSubscription();
+    setSubscription(existingSubscription);
+    
+    if (existingSubscription) {
+      await syncSubscriptionWithBackend(existingSubscription);
+    }
+  } catch (error) {
+    console.error('Service Worker registration failed:', error);
+  }
+};
 ```
 
-The `56px` accounts for the top header height (h-14 = 3.5rem = 56px).
+### Fix 3: Bump Cache Version on Each Deploy
 
-**File:** `src/components/CommsConsole/CommsConsole.tsx` (line 93)
+Add a version identifier to the cache name so old caches are automatically cleared:
 
-Update the panel mode container to add `overflow-hidden`:
-```tsx
-<div className={cn('flex flex-col h-full overflow-hidden bg-background', className)}>
+**File:** `public/sw.js`
+
+```javascript
+// Increment this on each deploy to bust old caches
+const CACHE_VERSION = 'v3'; // Bump this when publishing
+const CACHE_NAME = `task-manager-${CACHE_VERSION}`;
 ```
 
 ---
@@ -80,14 +159,27 @@ Update the panel mode container to add `overflow-hidden`:
 
 | File | Change |
 |------|--------|
-| `supabase/functions/send-unified-notification/index.ts` | Fix secret name mismatch: use `MICROSOFT_CLIENT_ID` |
-| `src/components/MainLayout.tsx` | Add explicit height and overflow-hidden to chat panel aside |
-| `src/components/CommsConsole/CommsConsole.tsx` | Add overflow-hidden to panel mode container |
+| `public/sw.js` | Network-first for navigation, cache-first for assets, versioned cache name |
+| `src/hooks/useNotifications.tsx` | Add SW update detection and auto-reload on new version |
 
-## Technical Details
+---
 
-### Secret Name Fix
-The Microsoft OAuth secrets were originally added with `MICROSOFT_` prefix but the code (likely copied from Azure AD examples) expected `AZURE_AD_` prefix. By supporting both, we maintain backward compatibility.
+## Why Ctrl+Shift+R Doesn't Work
 
-### Height Constraint Fix
-The CSS flexbox model requires explicit height constraints to flow down properly. Without `overflow-hidden` on flex containers, child elements with `flex-1` can grow beyond their parent's intended bounds. The `h-[calc(100dvh-56px)]` calculation ensures the panel fills exactly the remaining viewport height below the header.
+Even with hard refresh:
+1. Browser bypasses **browser cache**
+2. But the **Service Worker still intercepts** the request
+3. SW returns cached response from its own cache (IndexedDB-backed)
+4. Only unregistering the SW or the SW detecting an update can fix this
+
+## Immediate Workaround
+
+Until this fix is deployed, users can clear the stale version by:
+1. Going to `/debug` 
+2. Clicking "Unregister SW"
+3. Clicking "Clear Storage"
+4. Hard refresh
+
+Or in DevTools:
+1. Application tab > Service Workers > Unregister
+2. Application tab > Storage > Clear site data
