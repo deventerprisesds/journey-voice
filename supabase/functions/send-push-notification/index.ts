@@ -48,56 +48,25 @@ serve(async (req) => {
 
     const userChannels = prefs?.channels || ['EMAIL'];
 
-    // Send via unified notification service 
-    try {
-      const { data: result, error } = await supabaseClient.functions.invoke('send-unified-notification', {
-        body: {
-          userId,
-          title,
-          body,
-          channels: userChannels,
-          data
-        }
-      });
+    // IMPORTANT: Do NOT call send-unified-notification here!
+    // notification-delivery already calls it directly with proper task data (start_time, end_time, notificationId).
+    // Calling it here would create duplicate Outlook events with fallback times.
+    // This function should only handle browser push subscriptions in the future.
+    
+    console.log('[send-push-notification] Processed for user. Channels available:', userChannels);
+    console.log('[send-push-notification] Note: Calendar/Slack/Email handled by notification-delivery directly');
 
-      if (error) {
-        console.error('Error sending unified notification:', error);
-        throw error;
+    return new Response(
+      JSON.stringify({ 
+        success: true, 
+        channels: userChannels,
+        message: 'Push notification processed (unified delivery handled by caller)'
+      }),
+      {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       }
-
-      console.log('Notification sent via unified service:', result);
-
-      return new Response(
-        JSON.stringify({ 
-          success: true, 
-          channels: userChannels,
-          result
-        }),
-        {
-          status: 200,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        }
-      );
-
-    } catch (unifiedError) {
-      console.error('Unified notification failed, falling back to individual channels:', unifiedError);
-      
-      // Fallback: send in-app notification only
-      console.log('Sending in-app notification as fallback');
-      
-      return new Response(
-        JSON.stringify({ 
-          success: true, 
-          channels: ['IN_APP'],
-          fallback: true,
-          message: 'Notification processed (in-app only)'
-        }),
-        {
-          status: 200,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        }
-      );
-    }
+    );
 
   } catch (error) {
     console.error('Error in push notification handler:', error);

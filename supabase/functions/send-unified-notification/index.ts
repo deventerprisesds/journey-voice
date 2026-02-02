@@ -432,62 +432,84 @@ serve(async (req) => {
       // Build event data from task data or provided event
       // CRITICAL: Use task's actual start_time passed from notification-delivery
       const taskData = data;
-      const currentTime = new Date();
-      const eventTitle = taskData?.taskTitle || title || 'Task Reminder';
-      const eventDescription = taskData?.taskDescription || body || 'Reminder from Journey Voice';
       
-      // Prioritize passed start_time from notification-delivery over fallback
-      let startTime: Date;
-      let endTime: Date;
-      
-      if (taskData?.startTime) {
-        // Use the task's actual scheduled time
-        startTime = new Date(taskData.startTime);
-        console.log('[Notification] Using task start_time:', taskData.startTime);
+      // IDEMPOTENCY CHECK: Skip if Outlook event already exists for this task today
+      if (taskData?.taskId) {
+        const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+        const { data: existingEvent } = await supabaseClient
+          .from('external_calendar_events')
+          .select('id')
+          .eq('source_task_id', taskData.taskId)
+          .gte('created_at', oneDayAgo)
+          .maybeSingle();
         
-        if (taskData?.endTime) {
-          endTime = new Date(taskData.endTime);
+        if (existingEvent) {
+          console.log('[Notification] Outlook event already exists for task, skipping duplicate creation');
+          result.channelResults.outlook = { success: true, details: 'Skipped - event already exists' };
+          remainingChannels = remainingChannels.filter(c => c !== 'OUTLOOK_EVENT');
+          // Skip the rest of Outlook processing
+        }
+      }
+      
+      // Only proceed if we haven't skipped due to existing event
+      if (remainingChannels.includes('OUTLOOK_EVENT')) {
+        const currentTime = new Date();
+        const eventTitle = taskData?.taskTitle || title || 'Task Reminder';
+        const eventDescription = taskData?.taskDescription || body || 'Reminder from Journey Voice';
+        
+        // Prioritize passed start_time from notification-delivery over fallback
+        let startTime: Date;
+        let endTime: Date;
+        
+        if (taskData?.startTime) {
+          // Use the task's actual scheduled time
+          startTime = new Date(taskData.startTime);
+          console.log('[Notification] Using task start_time:', taskData.startTime);
+          
+          if (taskData?.endTime) {
+            endTime = new Date(taskData.endTime);
+          } else {
+            // Calculate end time based on estimate or default 60 mins
+            const duration = taskData?.estimateMinutes || 60;
+            endTime = new Date(startTime.getTime() + duration * 60 * 1000);
+          }
         } else {
-          // Calculate end time based on estimate or default 60 mins
+          // Fallback: 1 hour from now (only for edge cases without start_time)
+          console.log('[Notification] ⚠️ No task start_time provided, using fallback (1 hour from now)');
+          startTime = new Date(currentTime.getTime() + 60 * 60 * 1000);
           const duration = taskData?.estimateMinutes || 60;
           endTime = new Date(startTime.getTime() + duration * 60 * 1000);
         }
-      } else {
-        // Fallback: 1 hour from now (only for edge cases without start_time)
-        console.log('[Notification] ⚠️ No task start_time provided, using fallback (1 hour from now)');
-        startTime = new Date(currentTime.getTime() + 60 * 60 * 1000);
-        const duration = taskData?.estimateMinutes || 60;
-        endTime = new Date(startTime.getTime() + duration * 60 * 1000);
-      }
-      
-      console.log('[Notification] Creating Outlook event:', {
-        title: eventTitle,
-        startTime: startTime.toISOString(),
-        endTime: endTime.toISOString()
-      });
-      
-      const outlookResult = await createOutlookEventDirect(
-        supabaseClient,
-        userId,
-        {
+        
+        console.log('[Notification] Creating Outlook event:', {
           title: eventTitle,
           startTime: startTime.toISOString(),
-          endTime: endTime.toISOString(),
-          description: eventDescription,
-          reminderMinutes: 15,
+          endTime: endTime.toISOString()
+        });
+        
+        const outlookResult = await createOutlookEventDirect(
+          supabaseClient,
+          userId,
+          {
+            title: eventTitle,
+            startTime: startTime.toISOString(),
+            endTime: endTime.toISOString(),
+            description: eventDescription,
+            reminderMinutes: 15,
+          }
+        );
+        
+        result.channelResults.outlook = outlookResult;
+        
+        // Remove OUTLOOK_EVENT from channels going to external webhook
+        remainingChannels = remainingChannels.filter(c => c !== 'OUTLOOK_EVENT');
+        
+        if (outlookResult.success) {
+          console.log('[Notification] Outlook event created successfully');
+        } else {
+          console.error('[Notification] Outlook event creation failed:', outlookResult.error);
+          result.errors.push(`Outlook: ${outlookResult.error}`);
         }
-      );
-      
-      result.channelResults.outlook = outlookResult;
-      
-      // Remove OUTLOOK_EVENT from channels going to external webhook
-      remainingChannels = remainingChannels.filter(c => c !== 'OUTLOOK_EVENT');
-      
-      if (outlookResult.success) {
-        console.log('[Notification] Outlook event created successfully');
-      } else {
-        console.error('[Notification] Outlook event creation failed:', outlookResult.error);
-        result.errors.push(`Outlook: ${outlookResult.error}`);
       }
     }
     // ============== END OUTLOOK HANDLING ==============
