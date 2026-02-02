@@ -38,8 +38,37 @@ export const useNotifications = () => {
 
   const registerServiceWorker = async () => {
     try {
-      const registration = await navigator.serviceWorker.register('/sw.js');
+      const registration = await navigator.serviceWorker.register('/sw.js', {
+        updateViaCache: 'none' // Force browser to check for SW updates
+      });
       console.log('Service Worker registered:', registration);
+      
+      // Check for updates on page load
+      registration.update();
+      
+      // Listen for new SW waiting
+      registration.addEventListener('updatefound', () => {
+        const newWorker = registration.installing;
+        if (newWorker) {
+          newWorker.addEventListener('statechange', () => {
+            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+              // New version available - activate it immediately
+              console.log('New Service Worker version available, activating...');
+              newWorker.postMessage({ type: 'SKIP_WAITING' });
+            }
+          });
+        }
+      });
+      
+      // Reload page when new SW takes over
+      let refreshing = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (!refreshing) {
+          refreshing = true;
+          console.log('New Service Worker activated, reloading page...');
+          window.location.reload();
+        }
+      });
       
       // Get existing subscription
       const existingSubscription = await registration.pushManager.getSubscription();

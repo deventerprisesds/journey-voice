@@ -1,5 +1,7 @@
 // Service Worker for Push Notifications
-const CACHE_NAME = 'task-manager-v2';
+// Increment this on each deploy to bust old caches
+const CACHE_VERSION = 'v3';
+const CACHE_NAME = `task-manager-${CACHE_VERSION}`;
 const urlsToCache = [
   '/',
   '/assets/'
@@ -7,7 +9,7 @@ const urlsToCache = [
 
 // Install event - cache resources
 self.addEventListener('install', (event) => {
-  console.log('Service Worker installing');
+  console.log('Service Worker installing, version:', CACHE_VERSION);
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then((cache) => {
@@ -19,7 +21,7 @@ self.addEventListener('install', (event) => {
 
 // Activate event - clean up old caches
 self.addEventListener('activate', (event) => {
-  console.log('Service Worker activating');
+  console.log('Service Worker activating, version:', CACHE_VERSION);
   event.waitUntil(
     caches.keys().then((cacheNames) => {
       return Promise.all(
@@ -34,12 +36,11 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// Fetch event - serve from cache when offline
+// Fetch event - use network-first for navigation, cache-first for assets
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   
   // Never cache auth/API requests - always fetch from network
-  // This prevents stale Supabase auth responses from causing infinite loading
   if (url.hostname.includes('supabase.co') ||
       url.hostname.includes('supabase.in') ||
       url.pathname.includes('/auth/') ||
@@ -50,14 +51,32 @@ self.addEventListener('fetch', (event) => {
     return;
   }
   
-  // For other requests, use cache-first strategy
+  // NETWORK-FIRST for navigation (HTML) requests - ensures fresh app shell
+  if (event.request.mode === 'navigate') {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          // Cache the fresh response for offline use
+          const responseClone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(event.request, responseClone);
+          });
+          return response;
+        })
+        .catch(() => {
+          // Fallback to cache only if network fails (offline)
+          return caches.match(event.request);
+        })
+    );
+    return;
+  }
+  
+  // Cache-first for static assets (JS, CSS, images)
   event.respondWith(
     caches.match(event.request)
       .then((response) => {
-        // Return cached version or fetch from network
         return response || fetch(event.request);
-      }
-    )
+      })
   );
 });
 
