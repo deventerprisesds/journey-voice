@@ -411,15 +411,31 @@ serve(async (req) => {
           }
           
           // Check if tasks are completed before sending notifications
+          // Also fetch start_time and end_time for Outlook calendar events
           const tasksToCheck = batchNotifications
             .filter((n: any) => n.task_id)
             .map((n: any) => n.task_id);
           
+          // Store task details for calendar event creation
+          let taskDetails: Record<string, { start_time: string | null; end_time: string | null; estimate_minutes: number | null; title: string }> = {};
+          
           if (tasksToCheck.length > 0) {
             const { data: tasks } = await supabaseClient
               .from('tasks')
-              .select('id, status, completed_at')
+              .select('id, status, completed_at, start_time, end_time, estimate_minutes, title')
               .in('id', tasksToCheck);
+            
+            // Build task details lookup
+            if (tasks) {
+              for (const task of tasks) {
+                taskDetails[task.id] = {
+                  start_time: task.start_time,
+                  end_time: task.end_time,
+                  estimate_minutes: task.estimate_minutes,
+                  title: task.title
+                };
+              }
+            }
             
             const completedTaskIds = new Set(
               tasks?.filter((t: any) => t.status === 'DONE' || t.completed_at)
@@ -525,18 +541,34 @@ serve(async (req) => {
 
           // Send unified notification for other channels (Slack, Email, etc.)
           if (enabledChannels.some((channel: string) => ['SLACK', 'EMAIL', 'OUTLOOK_EVENT', 'GOOGLE_EVENT'].includes(channel))) {
+            // Get task time details for calendar events
+            const singleTaskId = batchNotifications.length === 1 ? batchNotifications[0].task_id : null;
+            const taskInfo = singleTaskId ? taskDetails[singleTaskId] : null;
+            
+            // Build data payload with task times for Outlook/Google calendar events
+            const notificationData: Record<string, any> = {
+              type: batchNotifications.length === 1 ? batchNotifications[0].notification_type : 'batched_reminders',
+              taskId: singleTaskId,
+              notificationIds: notificationIds,
+              batchSize: batchNotifications.length
+            };
+            
+            // CRITICAL: Pass task's actual start_time and end_time for calendar events
+            if (taskInfo) {
+              console.log(`📅 Including task times for calendar event: start=${taskInfo.start_time}, end=${taskInfo.end_time}`);
+              notificationData.startTime = taskInfo.start_time;
+              notificationData.endTime = taskInfo.end_time;
+              notificationData.estimateMinutes = taskInfo.estimate_minutes;
+              notificationData.taskTitle = taskInfo.title;
+            }
+            
             const { data: unifiedResult, error: unifiedError } = await supabaseClient.functions.invoke('send-unified-notification', {
               body: {
                 userId: userId,
                 title: title,
                 body: body,
                 channels: enabledChannels.filter((channel: string) => ['SLACK', 'EMAIL', 'OUTLOOK_EVENT', 'GOOGLE_EVENT'].includes(channel)),
-                data: {
-                  type: batchNotifications.length === 1 ? batchNotifications[0].notification_type : 'batched_reminders',
-                  taskId: batchNotifications.length === 1 ? batchNotifications[0].task_id : null,
-                  notificationIds: notificationIds,
-                  batchSize: batchNotifications.length
-                }
+                data: notificationData
               }
             });
 

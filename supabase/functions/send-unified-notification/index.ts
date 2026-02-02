@@ -430,15 +430,41 @@ serve(async (req) => {
       console.log('[Notification] Processing OUTLOOK_EVENT channel directly...');
       
       // Build event data from task data or provided event
+      // CRITICAL: Use task's actual start_time passed from notification-delivery
       const taskData = data;
       const currentTime = new Date();
       const eventTitle = taskData?.taskTitle || title || 'Task Reminder';
       const eventDescription = taskData?.taskDescription || body || 'Reminder from Journey Voice';
-      const startTime = taskData?.startTime 
-        ? new Date(taskData.startTime) 
-        : new Date(currentTime.getTime() + 60 * 60 * 1000); // 1 hour from now
-      const duration = taskData?.estimateMinutes || 60;
-      const endTime = new Date(startTime.getTime() + duration * 60 * 1000);
+      
+      // Prioritize passed start_time from notification-delivery over fallback
+      let startTime: Date;
+      let endTime: Date;
+      
+      if (taskData?.startTime) {
+        // Use the task's actual scheduled time
+        startTime = new Date(taskData.startTime);
+        console.log('[Notification] Using task start_time:', taskData.startTime);
+        
+        if (taskData?.endTime) {
+          endTime = new Date(taskData.endTime);
+        } else {
+          // Calculate end time based on estimate or default 60 mins
+          const duration = taskData?.estimateMinutes || 60;
+          endTime = new Date(startTime.getTime() + duration * 60 * 1000);
+        }
+      } else {
+        // Fallback: 1 hour from now (only for edge cases without start_time)
+        console.log('[Notification] ⚠️ No task start_time provided, using fallback (1 hour from now)');
+        startTime = new Date(currentTime.getTime() + 60 * 60 * 1000);
+        const duration = taskData?.estimateMinutes || 60;
+        endTime = new Date(startTime.getTime() + duration * 60 * 1000);
+      }
+      
+      console.log('[Notification] Creating Outlook event:', {
+        title: eventTitle,
+        startTime: startTime.toISOString(),
+        endTime: endTime.toISOString()
+      });
       
       const outlookResult = await createOutlookEventDirect(
         supabaseClient,
