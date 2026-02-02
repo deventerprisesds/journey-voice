@@ -1,5 +1,8 @@
 project_id = "wwxgajrtmslzklnyplah"
 
+[functions.ping]
+verify_jwt = false
+
 [functions.calendar-token-manager]
 verify_jwt = false
 

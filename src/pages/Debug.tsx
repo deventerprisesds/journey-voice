@@ -5,14 +5,23 @@
  * - Boot ID and environment info
  * - Full boot trace timeline
  * - Current auth state (no tokens exposed)
+ * - Connectivity probes (REST, Auth, Edge Functions)
  * - Action buttons for debugging
+ * 
+ * IMPORTANT: This page bypasses auth initialization so it always loads
+ * even when supabase-js is hung.
  */
 
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { bootTrace } from '@/utils/bootTrace';
-import { supabase } from '@/integrations/supabase/client';
+import { 
+  logToErrorLog, 
+  probeRestApi, 
+  probeAuthApi, 
+  probeEdgeFunction 
+} from '@/utils/directLog';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -28,8 +37,19 @@ import {
   CheckCircle,
   XCircle,
   Clock,
-  Wifi
+  Wifi,
+  Activity,
+  Send,
+  Zap
 } from 'lucide-react';
+
+interface ProbeResult {
+  name: string;
+  status: 'pending' | 'running' | 'success' | 'error';
+  latencyMs?: number;
+  error?: string;
+  response?: any;
+}
 
 const Debug = () => {
   const { user, session, loading, isDemoMode, initError, signOut } = useAuth();
@@ -37,6 +57,12 @@ const Debug = () => {
   const { toast } = useToast();
   const [entries, setEntries] = useState(bootTrace.getEntries());
   const [serviceWorkerStatus, setServiceWorkerStatus] = useState<string>('checking...');
+  const [probes, setProbes] = useState<ProbeResult[]>([
+    { name: 'REST API', status: 'pending' },
+    { name: 'Auth API', status: 'pending' },
+    { name: 'Edge Functions', status: 'pending' }
+  ]);
+  const [testLogSent, setTestLogSent] = useState(false);
 
   // Refresh entries periodically
   useEffect(() => {
@@ -114,21 +140,181 @@ const Debug = () => {
     window.location.reload();
   };
 
+  // Run all connectivity probes
+  const runProbes = async () => {
+    bootTrace.mark('probe_all_start');
+    
+    // Reset probe states
+    setProbes([
+      { name: 'REST API', status: 'running' },
+      { name: 'Auth API', status: 'running' },
+      { name: 'Edge Functions', status: 'running' }
+    ]);
+
+    // Run probes in parallel
+    const [restResult, authResult, edgeResult] = await Promise.all([
+      (async () => {
+        bootTrace.mark('probe_rest_start');
+        const result = await probeRestApi();
+        bootTrace.mark('probe_rest_done', result);
+        return result;
+      })(),
+      (async () => {
+        bootTrace.mark('probe_auth_start');
+        const result = await probeAuthApi();
+        bootTrace.mark('probe_auth_done', result);
+        return result;
+      })(),
+      (async () => {
+        bootTrace.mark('probe_edge_start');
+        const result = await probeEdgeFunction('ping');
+        bootTrace.mark('probe_edge_done', result);
+        return result;
+      })()
+    ]);
+
+    // Update probe results
+    setProbes([
+      { 
+        name: 'REST API', 
+        status: restResult.ok ? 'success' : 'error',
+        latencyMs: restResult.latencyMs,
+        error: restResult.error
+      },
+      { 
+        name: 'Auth API', 
+        status: authResult.ok ? 'success' : 'error',
+        latencyMs: authResult.latencyMs,
+        error: authResult.error
+      },
+      { 
+        name: 'Edge Functions', 
+        status: edgeResult.ok ? 'success' : 'error',
+        latencyMs: edgeResult.latencyMs,
+        error: edgeResult.error,
+        response: edgeResult.response
+      }
+    ]);
+
+    // Log probe results to backend
+    await logToErrorLog({
+      component: 'Debug',
+      error_type: 'probe_results',
+      error_message: 'connectivity_probes_complete',
+      context: {
+        rest: restResult,
+        auth: authResult,
+        edge: edgeResult
+      }
+    });
+
+    bootTrace.mark('probe_all_done');
+    
+    toast({
+      title: "Probes complete",
+      description: `REST: ${restResult.ok ? '✓' : '✗'} | Auth: ${authResult.ok ? '✓' : '✗'} | Edge: ${edgeResult.ok ? '✓' : '✗'}`
+    });
+  };
+
+  // Send a test log entry
+  const sendTestLog = async () => {
+    const success = await logToErrorLog({
+      component: 'Debug',
+      error_type: 'test_log',
+      error_message: 'manual_test_log_from_debug_page',
+      context: {
+        test: true,
+        timestamp: new Date().toISOString()
+      }
+    });
+
+    setTestLogSent(true);
+    
+    toast({
+      title: success ? "Test log sent!" : "Test log may have failed",
+      description: success 
+        ? "Check error_log table for this boot_id" 
+        : "The log request completed but we couldn't confirm success",
+      variant: success ? "default" : "destructive"
+    });
+  };
+
   const env = bootTrace.getEnvironment();
+
+  const getProbeIcon = (status: ProbeResult['status']) => {
+    switch (status) {
+      case 'pending': return <Clock className="w-4 h-4 text-muted-foreground" />;
+      case 'running': return <RefreshCw className="w-4 h-4 text-primary animate-spin" />;
+      case 'success': return <CheckCircle className="w-4 h-4 text-green-500" />;
+      case 'error': return <XCircle className="w-4 h-4 text-destructive" />;
+    }
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-primary/5 p-4">
       <div className="max-w-4xl mx-auto space-y-4">
         {/* Header */}
         <div className="flex items-center justify-between">
-          <Button variant="ghost" onClick={() => navigate(-1)}>
+          <Button variant="ghost" onClick={() => window.location.href = '/'}>
             <ArrowLeft className="w-4 h-4 mr-2" />
-            Back
+            Home
           </Button>
           <Badge variant="outline" className="font-mono">
             Boot ID: {bootTrace.getBootId()}
           </Badge>
         </div>
+
+        {/* Auth Bypass Notice */}
+        <Card className="border-yellow-500/50 bg-yellow-500/5">
+          <CardContent className="py-3">
+            <p className="text-sm text-yellow-600 dark:text-yellow-400">
+              ⚠️ This page bypasses authentication. Auth state shown below may be null.
+            </p>
+          </CardContent>
+        </Card>
+
+        {/* Connectivity Probes Card */}
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Activity className="w-5 h-5" />
+              Connectivity Probes
+            </CardTitle>
+            <CardDescription>
+              Test direct connectivity to Supabase endpoints
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="grid gap-2">
+              {probes.map((probe, i) => (
+                <div key={i} className="flex items-center justify-between p-2 rounded border bg-muted/30">
+                  <div className="flex items-center gap-2">
+                    {getProbeIcon(probe.status)}
+                    <span className="font-medium text-sm">{probe.name}</span>
+                  </div>
+                  <div className="text-xs font-mono text-muted-foreground">
+                    {probe.status === 'success' && `${probe.latencyMs}ms`}
+                    {probe.status === 'error' && (
+                      <span className="text-destructive">{probe.error}</span>
+                    )}
+                    {probe.status === 'pending' && 'Not run'}
+                    {probe.status === 'running' && 'Running...'}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <Button onClick={runProbes} size="sm">
+                <Zap className="w-4 h-4 mr-2" />
+                Run All Probes
+              </Button>
+              <Button onClick={sendTestLog} size="sm" variant="outline" disabled={testLogSent}>
+                <Send className="w-4 h-4 mr-2" />
+                {testLogSent ? 'Log Sent' : 'Send Test Log'}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
 
         {/* Environment Card */}
         <Card>
@@ -152,6 +338,8 @@ const Debug = () => {
               <span>{env.isPreview ? '✅ Yes' : '❌ No'}</span>
               <span className="text-muted-foreground">Service Worker:</span>
               <span className="truncate">{serviceWorkerStatus}</span>
+              <span className="text-muted-foreground">Online:</span>
+              <span>{navigator.onLine ? '✅ Yes' : '❌ No'}</span>
             </div>
           </CardContent>
         </Card>
@@ -163,23 +351,26 @@ const Debug = () => {
               {user ? (
                 <CheckCircle className="w-5 h-5 text-green-500" />
               ) : (
-                <XCircle className="w-5 h-5 text-destructive" />
+                <XCircle className="w-5 h-5 text-muted-foreground" />
               )}
               Auth State
             </CardTitle>
+            <CardDescription>
+              Note: Auth is bypassed on this page, so user/session may be null
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-2 text-sm font-mono">
             <div className="grid grid-cols-2 gap-2">
               <span className="text-muted-foreground">Loading:</span>
               <span>{loading ? '⏳ Yes' : '✅ No'}</span>
               <span className="text-muted-foreground">User:</span>
-              <span>{user?.email || 'null'}</span>
+              <span>{user?.email || 'null (expected on /debug)'}</span>
               <span className="text-muted-foreground">User ID:</span>
               <span className="truncate">{user?.id || 'null'}</span>
               <span className="text-muted-foreground">Demo Mode:</span>
               <span>{isDemoMode ? '✅ Yes' : '❌ No'}</span>
               <span className="text-muted-foreground">Session:</span>
-              <span>{session ? '✅ Active' : '❌ None'}</span>
+              <span>{session ? '✅ Active' : '❌ None (expected on /debug)'}</span>
               {session && (
                 <>
                   <span className="text-muted-foreground">Expires At:</span>

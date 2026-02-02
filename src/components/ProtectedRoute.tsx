@@ -86,7 +86,7 @@ const ProtectedRoute = ({ children, requireAdmin = false }: ProtectedRouteProps)
                 <Copy className="w-4 h-4 mr-2" />
                 Copy Diagnostics
               </Button>
-              <Button variant="ghost" size="sm" onClick={() => navigate('/debug')}>
+              <Button variant="ghost" size="sm" onClick={() => window.location.href = '/debug'}>
                 <Bug className="w-4 h-4 mr-2" />
                 Debug Page
               </Button>
@@ -154,7 +154,7 @@ const ProtectedRoute = ({ children, requireAdmin = false }: ProtectedRouteProps)
                     <Copy className="w-4 h-4 mr-2" />
                     Copy Diagnostics
                   </Button>
-                  <Button variant="ghost" size="sm" onClick={() => navigate('/debug')}>
+                  <Button variant="ghost" size="sm" onClick={() => window.location.href = '/debug'}>
                     <Bug className="w-4 h-4 mr-2" />
                     Debug Page
                   </Button>

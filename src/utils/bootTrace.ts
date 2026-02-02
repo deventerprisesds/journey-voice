@@ -9,7 +9,7 @@
  * - One-click diagnostics copy for sharing
  */
 
-import { supabase } from '@/integrations/supabase/client';
+import { logToErrorLog } from '@/utils/directLog';
 
 interface TraceEntry {
   step: string;
@@ -157,7 +157,7 @@ export const copyDiagnostics = async (): Promise<boolean> => {
 };
 
 /**
- * Best-effort log to database
+ * Best-effort log to database using direct REST (supabase-js independent)
  */
 const logToDatabase = async (entry: TraceEntry): Promise<void> => {
   // Only log significant steps to avoid noise
@@ -173,29 +173,28 @@ const logToDatabase = async (entry: TraceEntry): Promise<void> => {
     'auth_event:SIGNED_OUT',
     'auth_event:TOKEN_REFRESHED',
     'auth_init_error',
-    'auth_init_timeout'
+    'auth_init_timeout',
+    'debug_bypass_active',
+    'probe_rest_start',
+    'probe_auth_start',
+    'probe_edge_start'
   ];
   
   if (!significantSteps.some(s => entry.step.includes(s))) {
     return;
   }
   
-  try {
-    await supabase.from('error_log').insert([{
-      source: 'frontend',
-      component: 'BootTrace',
-      error_type: 'trace_step',
-      error_message: entry.step,
-      context: JSON.parse(JSON.stringify({
-        boot_id: state.bootId,
-        elapsed_ms: entry.elapsedMs,
-        environment: state.environment,
-        metadata: entry.metadata || null
-      }))
-    }]);
-  } catch (e) {
-    // Silently ignore - best effort only
-  }
+  // Use direct REST logger (bypasses supabase-js)
+  await logToErrorLog({
+    component: 'BootTrace',
+    error_type: 'trace_step',
+    error_message: entry.step,
+    context: {
+      elapsed_ms: entry.elapsedMs,
+      environment: state.environment,
+      metadata: entry.metadata || null
+    }
+  });
 };
 
 /**

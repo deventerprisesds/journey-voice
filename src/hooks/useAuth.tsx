@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useState, useCallback, useMemo, R
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
 import { bootTrace } from '@/utils/bootTrace';
+import { logToErrorLog } from '@/utils/directLog';
 
 interface AuthContextType {
   user: User | null;
@@ -60,22 +61,15 @@ const createMockSession = (mockUser: User): Session => ({
 });
 
 // Helper to log auth errors to the database (best-effort, never blocks UI)
+// Uses direct REST logger to bypass supabase-js if it's hung
 const logAuthError = async (errorType: string, message: string, metadata?: Record<string, unknown>) => {
   try {
-    await supabase.from('error_log').insert([{
-      source: 'frontend',
+    await logToErrorLog({
       component: 'AuthProvider',
       error_type: errorType,
       error_message: message,
-      context: JSON.parse(JSON.stringify({
-        origin: window.location.origin,
-        hostname: window.location.hostname,
-        pathname: window.location.pathname,
-        userAgent: navigator.userAgent,
-        boot_id: bootTrace.getBootId(),
-        ...metadata
-      }))
-    }]);
+      context: metadata
+    });
   } catch (e) {
     console.error('[Auth] Failed to log error to database:', e);
   }
@@ -427,7 +421,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [initAuthV1, initAuthV2]);
 
   // Main initialization effect - uses feature flag to choose V1 or V2
+  // BYPASS: Skip auth init entirely on /debug route so debug page always loads
   useEffect(() => {
+    // Check if we're on the debug route - if so, skip auth init entirely
+    if (window.location.pathname.startsWith('/debug')) {
+      console.log('[Auth] Debug route detected - bypassing auth initialization');
+      bootTrace.mark('debug_bypass_active');
+      setLoading(false);
+      setSession(null);
+      setUser(null);
+      setIsDemoMode(false);
+      setIsAdmin(false);
+      return;
+    }
+    
     let cleanup: (() => void) | undefined;
     
     bootTrace.mark('auth_init_start', { version: USE_V2_AUTH ? 'v2' : 'v1' });
