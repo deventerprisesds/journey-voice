@@ -512,29 +512,10 @@ serve(async (req) => {
       result.notificationId = webhookResult.notificationId;
       result.errors = [...result.errors, ...webhookResult.errors];
     } else if (!notificationId) {
-      // If we handled all channels directly, create a notification record
-      const notificationRecord = {
-        user_id: userId,
-        title: title || 'Event Notification',
-        body: body || '',
-        notification_type: data?.type || 'general',
-        scheduled_for: new Date().toISOString(),
-        delivered_at: result.channelResults.outlook?.success ? new Date().toISOString() : null,
-        failed_at: result.channelResults.outlook?.success ? null : new Date().toISOString(),
-        failure_reason: result.channelResults.outlook?.success ? null : result.errors.join('; ').substring(0, 500),
-        task_id: data?.taskId || null
-      };
-
-      try {
-        const { data: savedNotification } = await supabaseClient
-          .from('scheduled_notifications')
-          .insert(notificationRecord)
-          .select('id')
-          .single();
-        result.notificationId = savedNotification?.id;
-      } catch (error) {
-        console.error('Error storing notification record:', error);
-      }
+      // Don't create duplicate notification records - notification-delivery owns the lifecycle
+      // The original notification was created by the database trigger (schedule_task_reminders)
+      // and notification-delivery will mark it as delivered
+      console.log('[Notification] No notificationId provided - skipping record creation (notification-delivery handles status)');
     }
     
     // Determine overall success - at least one channel succeeded
@@ -658,31 +639,11 @@ async function callUnifiedWebhook(
     console.log('Available environment variables:', Object.keys(Deno.env.toObject()).join(', '));
     result.errors.push('UNIFIED_WEBHOOK_URL not configured - notifications cannot be delivered');
     
-    // Still create a notification record to track the failure
-    if (!existingNotificationId) {
-      const notificationRecord = {
-        user_id: payload.userId,
-        title: payload.title || 'Notification',
-        body: payload.body || '',
-        notification_type: payload.taskData?.type || 'general',
-        scheduled_for: new Date().toISOString(),
-        failed_at: new Date().toISOString(),
-        failure_reason: 'UNIFIED_WEBHOOK_URL not configured',
-        task_id: payload.taskData?.taskId || null
-      };
-      
-      try {
-        const { data } = await supabaseClient
-          .from('scheduled_notifications')
-          .insert(notificationRecord)
-          .select('id')
-          .single();
-        result.notificationId = data?.id;
-      } catch (error) {
-        console.error('Error storing notification record:', error);
-      }
-    } else {
+    // Don't create duplicate notification records - notification-delivery owns the lifecycle
+    if (existingNotificationId) {
       result.notificationId = existingNotificationId;
+    } else {
+      console.log('[Webhook] No notificationId provided - skipping record creation (notification-delivery handles status)');
     }
     
     return result;
@@ -799,32 +760,12 @@ async function callUnifiedWebhook(
     result.errors.push(`Webhook network error: ${errorMsg}`);
   }
 
-  // Store notification record for tracking
-  const notificationRecord = {
-    user_id: payload.userId,
-    title: payload.title || 'Event Notification',
-    body: payload.body || JSON.stringify(payload.googleEvent || {}),
-    notification_type: payload.taskData?.type || 'general',
-    scheduled_for: new Date().toISOString(),
-    delivered_at: result.errors.length === 0 ? new Date().toISOString() : null,
-    failed_at: result.errors.length > 0 ? new Date().toISOString() : null,
-    failure_reason: result.errors.length > 0 ? result.errors.join('; ').substring(0, 500) : null,
-    task_id: payload.taskData?.taskId || null
-  };
-
-  if (!existingNotificationId) {
-    try {
-      const { data } = await supabaseClient
-        .from('scheduled_notifications')
-        .insert(notificationRecord)
-        .select('id')
-        .single();
-      result.notificationId = data?.id;
-    } catch (error) {
-      console.error('Error storing notification record:', error);
-    }
-  } else {
+  // Don't insert new notification records here - notification-delivery owns the lifecycle
+  // Just reference existing notification if provided
+  if (existingNotificationId) {
     result.notificationId = existingNotificationId;
+  } else {
+    console.log('[Webhook] No existingNotificationId provided - skipping record creation');
   }
 
   return result;
