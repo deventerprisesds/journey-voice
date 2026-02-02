@@ -1,83 +1,115 @@
 
+# Root Cause Analysis & Fix: Infinite Loading on Published Site
 
-# Fix: OAuth Callback Collision Between Supabase Auth and Calendar OAuth
+## Problem Summary
+The published app at `journey-voice.lovable.app` gets stuck on the "Loading... Initializing your session" screen. The user reports this started after calendar OAuth integration was added and affects Private/Incognito mode on the published site.
 
-## Root Cause Identified
+## Diagnostic Findings
 
-The `useOAuthCallback` hook cannot distinguish between two different OAuth flows that both use `code` and `state` URL parameters:
+After thorough code review, I identified **two potential causes** and **one definite bug fix** needed:
 
-1. **Supabase Auth OAuth** (Google Sign-In)
-   - Returns: `code=auth_code&state=pkce_random_token`
-   - Should be handled automatically by Supabase client
-   
-2. **Calendar OAuth** (Google/Outlook Calendar connection)
-   - Returns: `code=calendar_code&state=google` or `state=outlook`
-   - Should be handled by our `useOAuthCallback` hook
+### Issue 1: Service Worker Cache Interference (High Probability)
+The `public/sw.js` uses a **cache-first strategy** that intercepts ALL fetch requests:
 
-Currently, the hook fires for BOTH flows because it only checks if `code` and `state` exist, not whether the `state` value indicates a calendar OAuth flow.
-
-## Why This Causes Re-Authentication Issues
-
-When a user signs in with Google:
-1. After auth, URL contains `?code=xxx&state=pkce_token`
-2. `useOAuthCallback` runs (it's in Calendar and Settings pages)
-3. It calls `supabase.auth.getSession()` before Supabase has finished restoring the session
-4. Finding no session, it may redirect to `/auth` or create race conditions
-5. Meanwhile, Supabase's own auth callback handler is trying to process the same `code`
-
-## Solution
-
-Add a guard to `useOAuthCallback` to **only process calendar OAuth callbacks**, by checking that `state` equals exactly `'google'` or `'outlook'`.
-
-### Code Change
-
-**File: `src/hooks/useOAuthCallback.tsx`**
-
-```tsx
-// Current code (line 31):
-if (code && state) {
-  const provider = state; // 'google' or 'outlook'
-
-// Fixed code:
-if (code && state && (state === 'google' || state === 'outlook')) {
-  const provider = state;
+```javascript
+self.addEventListener('fetch', (event) => {
+  event.respondWith(
+    caches.match(event.request)
+      .then((response) => {
+        return response || fetch(event.request);  // Returns cache if exists
+      }
+    )
+  );
+});
 ```
 
-This single change ensures:
-- Supabase Auth callbacks (where `state` is a PKCE token) are **ignored** by this hook
-- Calendar OAuth callbacks (where `state` is explicitly `'google'` or `'outlook'`) are **processed**
+**Problem**: This can cache Supabase auth API responses. If a stale or malformed auth response is cached, `supabase.auth.getSession()` may return incorrect data or hang waiting for a valid response.
 
-## Additional Cleanup: Remove Duplicate AuthContext
+**Evidence**: 
+- The SW caches paths designed for Create React App (`/static/js/bundle.js`) not Vite (`/assets/`)
+- Cache-first strategies are known to cause auth issues in SPAs
 
-There's also a duplicate `src/contexts/AuthContext.tsx` file that's not imported anywhere but could cause confusion. It should be deleted to prevent future issues.
+### Issue 2: OAuth Callback Cleanup Not Fully Isolated (Medium Probability)
+While we fixed the `useOAuthCallback` hook to only process `state === 'google' || state === 'outlook'`, the hook still runs on Calendar and Settings pages. If the user navigates to these pages with leftover URL parameters from a previous OAuth flow, it could interfere.
 
-## Files to Change
-
-| File | Change |
-|------|--------|
-| `src/hooks/useOAuthCallback.tsx` | Add `state === 'google' \|\| state === 'outlook'` guard to line 31 |
-| `src/contexts/AuthContext.tsx` | Delete (unused duplicate of `src/hooks/useAuth.tsx`) |
-
-## Technical Details
-
-### Before (problematic):
-```tsx
-// Fires for ANY OAuth callback with code + state
-if (code && state) {
-  const provider = state; // Could be 'google', 'outlook', OR a PKCE token!
+### Issue 3: Missing `useMemo` for `isPreviewEnvironment` (Low but Real Bug)
+The current code:
+```typescript
+const isPreviewEnvironment = isDevelopmentMode();  // Called every render
 ```
 
-### After (fixed):
-```tsx
-// Only fires for calendar-specific OAuth callbacks
-if (code && state && (state === 'google' || state === 'outlook')) {
-  const provider = state as 'google' | 'outlook';
+While this shouldn't cause infinite loops (boolean comparison is by value), it's inefficient and could interact poorly with React StrictMode double-renders.
+
+## Proposed Solution
+
+### Step 1: Exclude Auth Requests from Service Worker Cache
+Update `public/sw.js` to bypass caching for Supabase and authentication-related requests:
+
+```javascript
+self.addEventListener('fetch', (event) => {
+  const url = new URL(event.request.url);
+  
+  // Never cache auth/API requests - always fetch from network
+  if (url.hostname.includes('supabase.co') ||
+      url.pathname.includes('/auth/') ||
+      event.request.method !== 'GET') {
+    event.respondWith(fetch(event.request));
+    return;
+  }
+  
+  // For other requests, use cache-first strategy
+  event.respondWith(
+    caches.match(event.request)
+      .then((response) => {
+        return response || fetch(event.request);
+      }
+    )
+  );
+});
 ```
 
-## Expected Result
+### Step 2: Memoize `isPreviewEnvironment` to Prevent Unnecessary Recalculations
+Update `src/hooks/useAuth.tsx`:
 
-- Google Sign-In works without triggering calendar token exchange
-- Calendar OAuth connection works as before (unchanged flow)
-- No more re-authentication loops when already signed in
-- Clean codebase with single source of truth for auth context
+```typescript
+// Before
+const isPreviewEnvironment = isDevelopmentMode();
 
+// After
+const isPreviewEnvironment = useMemo(() => isDevelopmentMode(), []);
+```
+
+### Step 3: Add Diagnostic Logging for Production Issues
+Add console logs that will help debug future issues:
+
+```typescript
+console.log('[Auth] Environment:', {
+  hostname: window.location.hostname,
+  isPreviewEnvironment,
+  timestamp: new Date().toISOString()
+});
+```
+
+### Step 4: Clear URL Parameters After Supabase Auth Completes
+In `src/pages/Auth.tsx`, ensure URL parameters are cleaned after successful authentication to prevent interference with other OAuth flows.
+
+## Files to Modify
+
+| File | Changes |
+|------|---------|
+| `public/sw.js` | Add network-first for Supabase/auth requests; update cache paths for Vite |
+| `src/hooks/useAuth.tsx` | Wrap `isDevelopmentMode()` in `useMemo`; add diagnostic logging |
+| `src/pages/Auth.tsx` | Clean URL params after successful OAuth |
+
+## Expected Outcome
+- Auth requests will always go to network, never served from stale cache
+- Published site will load correctly in both normal and Private/Incognito modes
+- Better diagnostic logging for future debugging
+
+## Technical Note on Service Worker Behavior
+Service Workers persist even in Incognito mode for the duration of the browsing session. If the user:
+1. Visited the site previously
+2. A broken auth response was cached
+3. They now open in Incognito
+
+The SW could still serve that cached response. The fix ensures auth requests are NEVER cached.
