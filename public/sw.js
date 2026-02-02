@@ -1,9 +1,8 @@
 // Service Worker for Push Notifications
-const CACHE_NAME = 'task-manager-v1';
+const CACHE_NAME = 'task-manager-v2';
 const urlsToCache = [
   '/',
-  '/static/js/bundle.js',
-  '/static/css/main.css'
+  '/assets/'
 ];
 
 // Install event - cache resources
@@ -37,6 +36,21 @@ self.addEventListener('activate', (event) => {
 
 // Fetch event - serve from cache when offline
 self.addEventListener('fetch', (event) => {
+  const url = new URL(event.request.url);
+  
+  // Never cache auth/API requests - always fetch from network
+  // This prevents stale Supabase auth responses from causing infinite loading
+  if (url.hostname.includes('supabase.co') ||
+      url.hostname.includes('supabase.in') ||
+      url.pathname.includes('/auth/') ||
+      url.pathname.includes('/rest/') ||
+      url.pathname.includes('/functions/') ||
+      event.request.method !== 'GET') {
+    event.respondWith(fetch(event.request));
+    return;
+  }
+  
+  // For other requests, use cache-first strategy
   event.respondWith(
     caches.match(event.request)
       .then((response) => {

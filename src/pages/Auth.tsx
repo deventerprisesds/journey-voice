@@ -75,13 +75,17 @@ const Auth = () => {
     }
   }, [user, navigate, toast]);
 
-  // Check for OAuth errors in URL parameters
+  // Check for OAuth errors in URL parameters AND clean up after successful auth
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const error = urlParams.get('error');
-    const errorCode = urlParams.get('error_code');
     const errorDescription = urlParams.get('error_description');
+    const code = urlParams.get('code');
+    const state = urlParams.get('state');
 
+    // Always clean up OAuth-related URL parameters to prevent interference
+    const hasOAuthParams = error || code || state;
+    
     if (error) {
       let title = "Authentication Error";
       let description = errorDescription || "An unknown error occurred during authentication.";
@@ -109,8 +113,11 @@ const Auth = () => {
         title,
         description
       });
+    }
 
-      // Clean up URL parameters
+    // Clean up URL parameters after processing (success or error)
+    if (hasOAuthParams) {
+      console.log('[Auth] Cleaning up OAuth URL parameters');
       const newUrl = window.location.pathname;
       window.history.replaceState({}, document.title, newUrl);
     }
