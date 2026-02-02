@@ -97,19 +97,54 @@ async function getOutlookConnectionForUser(supabaseClient: any, userId: string):
 } | null> {
   try {
     // Direct query for service-level access (notification system needs to access user's tokens)
-    // First get the encrypted tokens - accept both 'outlook' and 'office365' as valid provider names
-    const { data: connection, error: connError } = await supabaseClient
+    // Accept both 'outlook' and 'office365' as valid provider names
+    // Use "pick best connection" logic: prefer non-expired, then most recently updated
+    
+    const nowISO = new Date().toISOString();
+    
+    // Query A: Try to find a valid (non-expired) connection first
+    const { data: validConnection, error: validError } = await supabaseClient
       .from('calendar_connections')
-      .select('id, access_token, refresh_token, expires_at, provider_account_email, user_id')
+      .select('id, access_token, refresh_token, expires_at, provider_account_email, user_id, updated_at')
       .eq('user_id', userId)
       .in('provider', ['office365', 'outlook'])
       .eq('is_active', true)
+      .or(`expires_at.is.null,expires_at.gt.${nowISO}`)
+      .order('updated_at', { ascending: false })
+      .limit(1)
       .maybeSingle();
 
-    if (connError || !connection) {
+    let connection = validConnection;
+
+    // Query B: Fallback - if no valid connection, get most recently updated (may be expired)
+    if (!connection && !validError) {
+      console.log('[Outlook] No valid (non-expired) connection, trying fallback...');
+      const { data: fallbackConnection, error: fallbackError } = await supabaseClient
+        .from('calendar_connections')
+        .select('id, access_token, refresh_token, expires_at, provider_account_email, user_id, updated_at')
+        .eq('user_id', userId)
+        .in('provider', ['office365', 'outlook'])
+        .eq('is_active', true)
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (fallbackError) {
+        console.error('[Outlook] Fallback query error:', fallbackError);
+      }
+      connection = fallbackConnection;
+    }
+
+    if (validError) {
+      console.error('[Outlook] Valid connection query error:', validError);
+    }
+
+    if (!connection) {
       console.log('[Outlook] No active Office 365 connection for user:', userId);
       return null;
     }
+
+    console.log('[Outlook] Selected connection:', connection.id, 'expires_at:', connection.expires_at);
 
     // Decrypt tokens using the database function
     const { data: decrypted, error: decryptError } = await supabaseClient.rpc(

@@ -411,18 +411,23 @@ async function exchangeMicrosoftCode(supabaseClient: any, code: string, redirect
   
   // Check if connection already exists for this provider + account
   // Accept both 'outlook' and 'office365' as provider names
-  const { data: existing, error: lookupError } = await supabaseClient
+  // Use order + limit to handle multiple rows gracefully
+  const { data: existingConnections, error: lookupError } = await supabaseClient
     .from('calendar_connections')
     .select('id')
     .eq('user_id', userId)
     .in('provider', ['outlook', 'office365'])
     .eq('provider_account_id', userInfo.id)
-    .maybeSingle();
+    .order('updated_at', { ascending: false })
+    .limit(1);
 
-  if (lookupError && lookupError.code !== 'PGRST116') {
+  if (lookupError) {
     console.error('Error checking existing Microsoft connection:', lookupError);
     throw new Error(`Failed to check existing connection: ${lookupError.message}`);
   }
+
+  const existing = existingConnections?.[0] || null;
+  let chosenConnectionId: string | null = null;
 
   if (existing) {
     // UPDATE existing connection with fresh tokens
@@ -442,55 +447,67 @@ async function exchangeMicrosoftCode(supabaseClient: any, code: string, redirect
       throw new Error(`REFRESH_FAILED: Could not refresh existing connection`);
     }
 
+    chosenConnectionId = existing.id;
     console.log(`Successfully refreshed Microsoft connection: ${existing.id}`);
+  } else {
+    // Store new connection using secure RPC with explicit user_id
+    const { data: connectionId, error: insertError } = await supabaseClient
+      .rpc('insert_calendar_connection_for_user', {
+        _user_id: userId,
+        _provider: 'outlook',
+        _provider_account_id: userInfo.id,
+        _provider_account_email: userEmail,
+        _access_token: tokens.access_token,
+        _refresh_token: tokens.refresh_token || null,
+        _scope: tokens.scope || null,
+        _expires_at: expiresAt
+      });
     
-    return {
-      success: true,
-      connection_id: existing.id,
-      provider: 'outlook',
-      email: userEmail,
-      refreshed: true,
-      message: 'Connection refreshed with new tokens'
-    };
-  }
-  
-  // Store new connection using secure RPC with explicit user_id
-  const { data: connectionId, error: insertError } = await supabaseClient
-    .rpc('insert_calendar_connection_for_user', {
-      _user_id: userId,
-      _provider: 'outlook',
-      _provider_account_id: userInfo.id,
-      _provider_account_email: userEmail,
-      _access_token: tokens.access_token,
-      _refresh_token: tokens.refresh_token || null,
-      _scope: tokens.scope || null,
-      _expires_at: expiresAt
-    });
-  
-  if (insertError) {
-    // Handle duplicate key as success (race condition)
-    if (insertError.code === '23505') {
-      console.log('Duplicate Microsoft connection detected (race condition), treating as success');
-      return {
-        success: true,
-        provider: 'outlook',
-        email: userEmail,
-        refreshed: true,
-        message: 'Connection already exists and is valid'
-      };
+    if (insertError) {
+      // Handle duplicate key as success (race condition)
+      if (insertError.code === '23505') {
+        console.log('Duplicate Microsoft connection detected (race condition), treating as success');
+        return {
+          success: true,
+          provider: 'outlook',
+          email: userEmail,
+          refreshed: true,
+          message: 'Connection already exists and is valid'
+        };
+      }
+      console.error('Failed to store Microsoft connection:', insertError);
+      throw new Error(`Failed to store connection: ${insertError.message}`);
     }
-    console.error('Failed to store Microsoft connection:', insertError);
-    throw new Error(`Failed to store connection: ${insertError.message}`);
+    
+    chosenConnectionId = connectionId;
+    console.log(`Successfully stored Microsoft connection: ${connectionId}`);
   }
-  
-  console.log(`Successfully stored Microsoft connection: ${connectionId}`);
+
+  // Cleanup: Deactivate older active Outlook/Office365 connections for this user
+  // This ensures only one active Microsoft connection exists going forward
+  if (chosenConnectionId) {
+    const { error: cleanupError } = await supabaseClient
+      .from('calendar_connections')
+      .update({ is_active: false, updated_at: new Date().toISOString() })
+      .eq('user_id', userId)
+      .in('provider', ['outlook', 'office365'])
+      .eq('is_active', true)
+      .neq('id', chosenConnectionId);
+
+    if (cleanupError) {
+      console.warn('[calendar-token-manager] Failed to cleanup old Microsoft connections:', cleanupError);
+      // Don't fail the whole operation for cleanup issues
+    } else {
+      console.log('[calendar-token-manager] Deactivated any older Microsoft connections');
+    }
+  }
   
   return {
     success: true,
-    connection_id: connectionId,
+    connection_id: chosenConnectionId,
     provider: 'outlook',
     email: userEmail,
-    refreshed: false,
-    message: 'New connection created'
+    refreshed: !!existing,
+    message: existing ? 'Connection refreshed with new tokens' : 'New connection created'
   };
 }
