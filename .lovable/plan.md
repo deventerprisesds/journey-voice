@@ -1,262 +1,93 @@
 
-# 2-Way Calendar Sync: Multiple Accounts with Different Purposes
+# Fix Plan: Outlook Events + Chat Panel Height
 
-## ✅ IMPLEMENTATION STATUS
+## Issue 1: Outlook Calendar Events Not Created
 
-### Phase 1: Database & Backend Updates — COMPLETE
-- ✅ Added `purposes` column (TEXT[]) to `calendar_connections` table
-- ✅ Added `sync_token` column for delta sync
-- ✅ Added `source_task_id` to `external_calendar_events` for bi-directional linking
-- ✅ Updated `insert_calendar_connection_for_user` to accept purposes
-- ✅ Created `update_calendar_connection_purposes` function
-- ✅ Created `update_calendar_sync_token` function
-- ✅ Updated `get_calendar_connections_safe` and `get_calendar_connections_secure` to return purposes
+### Root Cause
+The edge function `send-unified-notification` looks for secrets named:
+- `AZURE_AD_CLIENT_ID`
+- `AZURE_AD_CLIENT_SECRET`
 
-### Phase 2: Edge Functions — COMPLETE
-- ✅ Updated `calendar-token-manager` with `update_purposes` action
-- ✅ Updated `calendar-integration-manager` with purpose-aware sync/create
-- ✅ Added `get_read_connections` and `get_write_connections` actions
-- ✅ Created `calendar-delta-sync` edge function for polling changes
+But your Supabase project has secrets configured as:
+- `MICROSOFT_CLIENT_ID`
+- `MICROSOFT_CLIENT_SECRET`
 
-### Phase 3: UI Updates — COMPLETE
-- ✅ Updated `CalendarConnectionModal` with purpose selector UI
-- ✅ Users can now set READ, WRITE, or both purposes per connection
+This mismatch causes the token refresh to fail silently, and expired tokens cannot be renewed.
 
----
+### Solution
+Update the `send-unified-notification` edge function to use the correct secret names:
 
-## Understanding Your Requirements
+**File:** `supabase/functions/send-unified-notification/index.ts`
 
-### What Exists Today
-
-| Component | Status | Details |
-|-----------|--------|---------|
-| `calendar_connections` table | Has `service_type` and `connected_services` columns but **not used** for read vs write distinction |
-| OAuth Flow | Single purpose per connection - currently all connections are treated the same |
-| Event Sync | `sync_events` action in `calendar-integration-manager` pulls events from ALL active connections |
-| Event Creation | Creates events on ALL active calendar connections when tasks are scheduled |
-| External Events | Stored in `external_calendar_events` table with `connection_id` reference |
-
-### Database Schema Already Supports This
-
-```text
-calendar_connections:
-  - service_type: TEXT (exists but unused - values like 'calendar', 'workspace')
-  - connected_services: JSONB (exists but unused - can store {read: true, write: false})
-```
-
----
-
-## Solution: Connection Purpose System
-
-### New Concept: Connection Purposes
-
-Each calendar connection will have explicit **purposes**:
-
-| Purpose | Description |
-|---------|-------------|
-| `READ` | Pull events from this calendar (meetings, appointments) for conflict detection |
-| `WRITE` | Push task events/reminders to this calendar |
-| `BOTH` | Read and write (current behavior, backward compatible) |
-
-### Architecture
-
-```text
-User can have:
-├── Work Outlook (READ only) - pulls meetings
-├── Personal Outlook (WRITE only) - receives task events
-├── School Google (READ only) - pulls class schedule
-└── Personal Google (BOTH) - full sync
-```
-
----
-
-## Implementation Plan
-
-### Phase 1: Database & Backend Updates
-
-**1.1 Add Purpose Column to calendar_connections**
-
-Migration to add a `purposes` column:
-
-```sql
-ALTER TABLE calendar_connections 
-ADD COLUMN purposes TEXT[] DEFAULT ARRAY['READ', 'WRITE'];
-
--- Migrate existing connections to have both purposes (backward compatible)
-UPDATE calendar_connections 
-SET purposes = ARRAY['READ', 'WRITE'] 
-WHERE purposes IS NULL;
-```
-
-**1.2 Update `calendar-token-manager` Edge Function**
-
-Modify the OAuth exchange flow to accept and store the selected purpose:
-
-- `insert_calendar_connection_for_user` RPC will accept `_purposes TEXT[]` parameter
-- When re-authenticating, preserve existing purposes unless explicitly changed
-
-**1.3 Update `calendar-integration-manager` Edge Function**
-
-Add purpose-aware logic:
-
-- `sync_events`: Only process connections with `READ` purpose
-- `create_event`: Only use connections with `WRITE` purpose
-- Add new action: `get_write_connections` - returns connections available for creating events
-
-### Phase 2: Delta Sync for Incoming Changes
-
-**2.1 Create New Edge Function: `calendar-delta-sync`**
-
-This function will poll Microsoft Graph and Google Calendar APIs for changes:
-
+Change lines 191-192 from:
 ```typescript
-// For Outlook
-GET https://graph.microsoft.com/v1.0/me/calendarView/delta
-  ?startDateTime={lastSyncTime}
-  &endDateTime={30daysFromNow}
-
-// For Google
-GET https://www.googleapis.com/calendar/v3/calendars/primary/events
-  ?syncToken={storedSyncToken}
+const clientId = Deno.env.get('AZURE_AD_CLIENT_ID');
+const clientSecret = Deno.env.get('AZURE_AD_CLIENT_SECRET');
 ```
 
-**Key Features:**
-- Stores `sync_token` or `deltaLink` in a new column on `calendar_connections`
-- Only processes READ-purpose connections
-- Detects: created events, updated events, deleted events
-- Updates `external_calendar_events` table accordingly
-
-**2.2 Add Sync Token Storage**
-
-```sql
-ALTER TABLE calendar_connections 
-ADD COLUMN sync_token TEXT;  -- Stores delta token for incremental sync
+To:
+```typescript
+const clientId = Deno.env.get('MICROSOFT_CLIENT_ID') || Deno.env.get('AZURE_AD_CLIENT_ID');
+const clientSecret = Deno.env.get('MICROSOFT_CLIENT_SECRET') || Deno.env.get('AZURE_AD_CLIENT_SECRET');
 ```
 
-### Phase 3: Outbound Sync (Task to Calendar)
+This will check for both naming conventions for backward compatibility.
 
-**3.1 Update Event Creation Flow**
+---
 
-When a task is scheduled or updated:
-1. Check for connections with `WRITE` purpose
-2. Create/update events only on those calendars
-3. Store the `external_event_id` mapping per connection (since task can exist on multiple calendars)
+## Issue 2: Chat Panel Height Not Constrained
 
-**3.2 Add `source_task_id` to External Events**
+### Root Cause
+The CommsConsole panel lacks proper height constraints. Looking at the CSS hierarchy:
 
-```sql
-ALTER TABLE external_calendar_events 
-ADD COLUMN source_task_id UUID REFERENCES tasks(id);
+1. `MainLayout` sets up the aside with `flex flex-col` but no explicit height control
+2. `CommsConsole` uses `h-full` which should inherit height
+3. The problem is that `ConversationPane` → `TranscriptScroll` has `flex-1` but the flex container chain is broken
+
+The missing piece is that the aside in MainLayout needs `h-[calc(100vh-56px)]` or similar, and the CommsConsole needs `overflow-hidden` to ensure flex children respect boundaries.
+
+### Solution
+Update the MainLayout and CommsConsole to properly constrain heights:
+
+**File:** `src/components/MainLayout.tsx` (line 483)
+
+Change:
+```tsx
+<aside className="w-[400px] border-l border-border bg-card/50 flex-shrink-0 flex flex-col">
+  <CommsConsole mode="panel" />
+</aside>
 ```
 
-This links outbound events back to their source tasks for bi-directional updates.
-
-### Phase 4: UI Updates
-
-**4.1 Modify CalendarConnectionModal**
-
-Add a purpose selector when connecting:
-
-```
-┌────────────────────────────────────────────────┐
-│ Connect Outlook Calendar                       │
-├────────────────────────────────────────────────┤
-│ Account: work@company.com                      │
-│                                                │
-│ Use this calendar for:                         │
-│ ☑ Reading events (meetings, appointments)     │
-│ ☐ Writing task reminders/events               │
-│                                                │
-│ [Connect]                                      │
-└────────────────────────────────────────────────┘
+To:
+```tsx
+<aside className="w-[400px] border-l border-border bg-card/50 flex-shrink-0 flex flex-col h-[calc(100dvh-56px)] overflow-hidden">
+  <CommsConsole mode="panel" />
+</aside>
 ```
 
-**4.2 Update NotificationSettings**
+The `56px` accounts for the top header height (h-14 = 3.5rem = 56px).
 
-- Show list of connected calendars with their purposes
-- Allow changing purpose without re-authenticating
-- Indicate which calendar receives task events
+**File:** `src/components/CommsConsole/CommsConsole.tsx` (line 93)
 
-**4.3 Add Calendar Selection Dropdown**
-
-When creating Outlook events for reminders:
-- Show dropdown of WRITE-purpose connections
-- Let user set a "default write calendar" in settings
-
-### Phase 5: Polling Schedule
-
-**5.1 Cron Job for Delta Sync**
-
-Add to `supabase/config.toml`:
-
-```toml
-[functions.calendar-delta-sync]
-verify_jwt = false
-schedule = "*/10 * * * *"  # Every 10 minutes
+Update the panel mode container to add `overflow-hidden`:
+```tsx
+<div className={cn('flex flex-col h-full overflow-hidden bg-background', className)}>
 ```
 
 ---
 
-## Files to Create/Modify
+## Summary of Changes
 
-| File | Action | Purpose |
-|------|--------|---------|
-| `supabase/migrations/xxx_add_calendar_purposes.sql` | Create | Add `purposes` and `sync_token` columns |
-| `supabase/functions/calendar-token-manager/index.ts` | Modify | Accept purposes during OAuth exchange |
-| `supabase/functions/calendar-integration-manager/index.ts` | Modify | Purpose-aware read/write operations |
-| `supabase/functions/calendar-delta-sync/index.ts` | Create | New function for polling changes |
-| `src/components/CalendarConnectionModal.tsx` | Modify | Add purpose selection UI |
-| `src/components/NotificationSettings.tsx` | Modify | Show calendar purposes, allow editing |
-| `src/utils/taskScheduling.ts` | Modify | Only use WRITE-purpose connections |
-| `supabase/config.toml` | Modify | Add cron schedule for delta sync |
+| File | Change |
+|------|--------|
+| `supabase/functions/send-unified-notification/index.ts` | Fix secret name mismatch: use `MICROSOFT_CLIENT_ID` |
+| `src/components/MainLayout.tsx` | Add explicit height and overflow-hidden to chat panel aside |
+| `src/components/CommsConsole/CommsConsole.tsx` | Add overflow-hidden to panel mode container |
 
----
+## Technical Details
 
-## Expected User Flow
+### Secret Name Fix
+The Microsoft OAuth secrets were originally added with `MICROSOFT_` prefix but the code (likely copied from Azure AD examples) expected `AZURE_AD_` prefix. By supporting both, we maintain backward compatibility.
 
-### Connecting Multiple Calendars
-
-1. User clicks "Connect Calendar" in Settings
-2. Selects provider (Outlook/Google)
-3. **New**: Selects purpose (Read, Write, or Both)
-4. Completes OAuth flow
-5. Connection stored with selected purpose(s)
-6. Can repeat for multiple accounts
-
-### Viewing Calendar
-
-1. App fetches events from all READ-purpose connections
-2. Events displayed in unified calendar view
-3. User can toggle visibility per connected account
-
-### Creating Task Reminders
-
-1. Task is scheduled with a time
-2. System checks notification preferences for OUTLOOK_EVENT channel
-3. System finds connections with WRITE purpose
-4. Creates event on the designated "default write calendar"
-5. If changed in Outlook later → delta sync picks up change → updates task (optional)
-
----
-
-## Edge Cases Handled
-
-| Scenario | Solution |
-|----------|----------|
-| User deletes calendar event | Delta sync marks `external_calendar_events` as deleted; optionally notify user |
-| User updates event time in Outlook | Delta sync updates `external_calendar_events`; can optionally update task |
-| Token expires | Existing refresh logic in `calendar-token-manager` handles this |
-| Multiple WRITE calendars | Use "default write calendar" preference, or prompt user |
-| Conflicting updates | Last-write-wins based on `updated_at` timestamp |
-
----
-
-## Summary
-
-This plan adds multi-account calendar support with distinct purposes (Read vs Write) by:
-
-1. Adding a `purposes` column to track each connection's role
-2. Making sync operations purpose-aware
-3. Implementing delta sync polling for near real-time updates from external calendars
-4. Updating UI to allow users to select purpose during connection
-5. Keeping backward compatibility - existing connections get `[READ, WRITE]` by default
+### Height Constraint Fix
+The CSS flexbox model requires explicit height constraints to flow down properly. Without `overflow-hidden` on flex containers, child elements with `flex-1` can grow beyond their parent's intended bounds. The `h-[calc(100dvh-56px)]` calculation ensures the panel fills exactly the remaining viewport height below the header.
