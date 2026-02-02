@@ -322,12 +322,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       subscription = sub;
       bootTrace.mark('v2_listener_attached');
 
-      // STEP 2: RACE - Fast path (direct REST) vs Slow path (supabase-js)
-      // First one to succeed wins and sets the session
+      // STEP 2: TRUE RACE - First successful result wins immediately
+      // Fast path bypasses supabase-js entirely if cached token is valid
       bootTrace.mark('v2_race_start');
 
-      // Create the slow path promise (supabase-js getSession with timeout)
-      const slowPath = async (): Promise<{ session: Session | null; source: 'slow' }> => {
+      // Fast path promise - direct REST validation (bypasses supabase-js)
+      const fastPathPromise = (async (): Promise<{ session: Session | null; source: 'fast' } | null> => {
+        bootTrace.mark('fast_path_attempt');
+        try {
+          const session = await fastPathGetSession();
+          if (session) {
+            bootTrace.mark('fast_path_success', { userId: session.user?.id?.substring(0, 8) });
+            return { session, source: 'fast' as const };
+          }
+          bootTrace.mark('fast_path_no_session');
+          return null; // No cached session
+        } catch (e) {
+          bootTrace.mark('fast_path_error', { error: String(e) });
+          return null;
+        }
+      })();
+
+      // Slow path promise - standard supabase-js (may hang due to internal locks)
+      const slowPathPromise = (async (): Promise<{ session: Session | null; source: 'slow' }> => {
         bootTrace.mark('slow_path_start');
         const { data: { session }, error } = await withTimeout(
           supabase.auth.getSession(),
@@ -337,47 +354,47 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (error) throw error;
         bootTrace.mark('slow_path_done', { hasSession: !!session });
         return { session, source: 'slow' as const };
-      };
+      })();
 
-      // Create the fast path promise (direct REST validation)
-      const fastPath = async (): Promise<{ session: Session | null; source: 'fast' } | null> => {
-        bootTrace.mark('fast_path_attempt');
-        const session = await fastPathGetSession();
-        if (session) {
-          bootTrace.mark('fast_path_won', { userId: session.user?.id?.substring(0, 8) });
-          return { session, source: 'fast' as const };
-        }
-        // Fast path failed (no cached session or invalid) - return null to let slow path win
-        return null;
-      };
-
-      // Race implementation compatible with ES2020
-      // Fast path returns null if no session, slow path throws on timeout
+      // TRUE RACE: Use Promise.race pattern
+      // If fast path returns a valid session, use it immediately without waiting for slow path
       let raceResult: { session: Session | null; source: 'fast' | 'slow' };
       
-      const [fastResult, slowResult] = await Promise.allSettled([
-        fastPath(),
-        slowPath()
-      ]);
+      try {
+        // Type-safe race: both paths return the same union type
+        const fastPathWithFallback = fastPathPromise.then((r): Promise<{ session: Session | null; source: 'fast' | 'slow' }> => {
+          if (r?.session) {
+            fastPathWon = true;
+            bootTrace.mark('fast_path_won', { userId: r.session.user?.id?.substring(0, 8) });
+            return Promise.resolve({ session: r.session, source: 'fast' as const });
+          }
+          // No cached session - fall through to slow path
+          return slowPathPromise;
+        });
 
-      // Check if fast path succeeded with a valid session
-      if (fastResult.status === 'fulfilled' && fastResult.value?.session) {
-        raceResult = fastResult.value;
-        fastPathWon = true;
-      } else if (slowResult.status === 'fulfilled') {
-        // Slow path succeeded (even if session is null - that's valid)
-        raceResult = slowResult.value;
-      } else {
-        // Both failed - throw the slow path error (more informative, likely timeout)
-        const slowError = slowResult.status === 'rejected' ? slowResult.reason : new Error('Auth failed');
-        throw slowError;
+        raceResult = await Promise.race([
+          fastPathWithFallback,
+          slowPathPromise
+        ]);
+      } catch (raceError) {
+        // If slow path threw (likely timeout), check if fast path had a session
+        bootTrace.mark('race_error', { error: String(raceError) });
+        const fastResult = await fastPathPromise.catch(() => null);
+        if (fastResult?.session) {
+          raceResult = { session: fastResult.session, source: 'fast' as const };
+          fastPathWon = true;
+          bootTrace.mark('fast_path_rescued', { userId: fastResult.session.user?.id?.substring(0, 8) });
+        } else {
+          throw raceError; // Both failed
+        }
       }
 
       bootTrace.mark('v2_race_complete', { 
         winner: raceResult.source, 
-        hasSession: !!raceResult.session 
+        hasSession: !!raceResult.session,
+        fastPathWon
       });
-      console.log(`[Auth V2] Race won by: ${raceResult.source} path`);
+      console.log(`[Auth V2] Race won by: ${raceResult.source} path (fastPathWon: ${fastPathWon})`);
       fastPathWon = raceResult.source === 'fast';
 
       // If we already got a session from the listener, don't override

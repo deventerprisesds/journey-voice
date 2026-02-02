@@ -160,11 +160,17 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     localStorage.setItem('comms-panel-open', JSON.stringify(isPanelOpen));
   }, [isPanelOpen]);
 
-  // Fetch assistants on mount
+  // Fetch assistants when userId becomes available
   useEffect(() => {
-    if (!userId) return;
+    console.log('[CommsConsole] Assistants effect triggered, userId:', userId, 'isDemoMode:', isDemoMode);
+    
+    if (!userId) {
+      console.log('[CommsConsole] No userId yet, skipping assistant fetch');
+      return;
+    }
 
     const fetchAssistants = async () => {
+      console.log('[CommsConsole] Fetching assistants for userId:', userId);
       try {
         // For demo mode, fetch dev user's assistants (shared Iris approach)
         const targetUserId = isDemoMode ? DEV_USER_ID : userId;
@@ -178,6 +184,8 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
           .order('created_at', { ascending: true });
 
         if (error) throw error;
+
+        console.log('[CommsConsole] Fetched assistants:', data?.length || 0, 'assistants');
 
         if (data && data.length > 0) {
           // Map to proper Assistant type
@@ -201,6 +209,7 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
           }));
           setAssistants(mapped);
           setCurrentAssistant(mapped[0]);
+          console.log('[CommsConsole] Set current assistant:', mapped[0].name);
         } else {
           // In demo mode, don't create a new assistant - dev's Iris should exist
           if (isDemoMode) {
@@ -218,6 +227,7 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
           }
           
           // Create default Iris assistant for authenticated users
+          console.log('[CommsConsole] No assistants found, creating default Iris');
           const { data: newAssistant, error: createError } = await supabase
             .from('assistants')
             .insert({ ...DEFAULT_IRIS, user_id: userId })
@@ -257,10 +267,11 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
             };
             setAssistants([mapped]);
             setCurrentAssistant(mapped);
+            console.log('[CommsConsole] Created and set default assistant:', mapped.name);
           }
         }
       } catch (err) {
-        console.error('Error fetching assistants:', err);
+        console.error('[CommsConsole] Error fetching assistants:', err);
         // Fallback to mock for demo
         const mockIris: Assistant = {
           id: 'mock-iris-id',
@@ -275,7 +286,7 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     };
 
     fetchAssistants();
-  }, [userId]);
+  }, [userId, isDemoMode]);
 
   // ============================================================
   // Load chat history from database on mount
