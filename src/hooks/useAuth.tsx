@@ -3,6 +3,7 @@ import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
 import { bootTrace } from '@/utils/bootTrace';
 import { logToErrorLog } from '@/utils/directLog';
+import { fastPathGetSession } from '@/utils/directAuth';
 
 interface AuthContextType {
   user: User | null;
@@ -265,18 +266,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [isPreviewEnvironment, checkAdminStatus]);
 
   // ============================================================================
-  // V2: NEW LISTENER-FIRST AUTH INITIALIZATION (race-condition safe)
-  // This version attaches the auth state listener BEFORE calling getSession()
-  // to ensure we never miss SIGNED_IN events during OAuth code exchange
+  // V2: PARALLEL AUTH INITIALIZATION WITH FAST-PATH
+  // This version races a direct REST validation against supabase.getSession()
+  // to bypass potential library deadlocks and provide instant auth for cached sessions
   // ============================================================================
   const initAuthV2 = useCallback(async () => {
-    console.log('[Auth] Starting V2 auth initialization (listener-first)...');
+    console.log('[Auth] Starting V2 auth initialization (parallel fast-path)...');
     bootTrace.mark('v2_init_start');
     setLoading(true);
     setInitError(null);
     
     let subscription: { unsubscribe: () => void } | null = null;
     let hasReceivedSession = false;
+    let fastPathWon = false;
 
     try {
       // STEP 1: Attach listener FIRST (before any getSession)
@@ -320,20 +322,64 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       subscription = sub;
       bootTrace.mark('v2_listener_attached');
 
-      // STEP 2: Now seed initial state by calling getSession
-      // If there's an existing session, this will trigger the listener above
-      bootTrace.mark('v2_getSession_start');
-      const { data: { session: existingSession }, error: sessionError } = await withTimeout(
-        supabase.auth.getSession(),
-        AUTH_TIMEOUT_MS,
-        'Authentication service timed out'
-      );
-      bootTrace.mark('v2_getSession_done', { hasSession: !!existingSession, hasReceivedSession });
+      // STEP 2: RACE - Fast path (direct REST) vs Slow path (supabase-js)
+      // First one to succeed wins and sets the session
+      bootTrace.mark('v2_race_start');
 
-      if (sessionError) {
-        throw sessionError;
-      }
+      // Create the slow path promise (supabase-js getSession with timeout)
+      const slowPath = async (): Promise<{ session: Session | null; source: 'slow' }> => {
+        bootTrace.mark('slow_path_start');
+        const { data: { session }, error } = await withTimeout(
+          supabase.auth.getSession(),
+          AUTH_TIMEOUT_MS,
+          'Authentication service timed out'
+        );
+        if (error) throw error;
+        bootTrace.mark('slow_path_done', { hasSession: !!session });
+        return { session, source: 'slow' as const };
+      };
+
+      // Create the fast path promise (direct REST validation)
+      const fastPath = async (): Promise<{ session: Session | null; source: 'fast' } | null> => {
+        bootTrace.mark('fast_path_attempt');
+        const session = await fastPathGetSession();
+        if (session) {
+          bootTrace.mark('fast_path_won', { userId: session.user?.id?.substring(0, 8) });
+          return { session, source: 'fast' as const };
+        }
+        // Fast path failed (no cached session or invalid) - return null to let slow path win
+        return null;
+      };
+
+      // Race implementation compatible with ES2020
+      // Fast path returns null if no session, slow path throws on timeout
+      let raceResult: { session: Session | null; source: 'fast' | 'slow' };
       
+      const [fastResult, slowResult] = await Promise.allSettled([
+        fastPath(),
+        slowPath()
+      ]);
+
+      // Check if fast path succeeded with a valid session
+      if (fastResult.status === 'fulfilled' && fastResult.value?.session) {
+        raceResult = fastResult.value;
+        fastPathWon = true;
+      } else if (slowResult.status === 'fulfilled') {
+        // Slow path succeeded (even if session is null - that's valid)
+        raceResult = slowResult.value;
+      } else {
+        // Both failed - throw the slow path error (more informative, likely timeout)
+        const slowError = slowResult.status === 'rejected' ? slowResult.reason : new Error('Auth failed');
+        throw slowError;
+      }
+
+      bootTrace.mark('v2_race_complete', { 
+        winner: raceResult.source, 
+        hasSession: !!raceResult.session 
+      });
+      console.log(`[Auth V2] Race won by: ${raceResult.source} path`);
+      fastPathWon = raceResult.source === 'fast';
+
       // If we already got a session from the listener, don't override
       if (hasReceivedSession) {
         console.log('[Auth V2] Session already set from listener event');
@@ -341,13 +387,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return () => subscription?.unsubscribe();
       }
       
+      const existingSession = raceResult.session;
+      
       if (existingSession?.user) {
         // Real session exists - set it
-        console.log('[Auth V2] Found existing session for user:', existingSession.user.email);
+        console.log('[Auth V2] Found session via', raceResult.source, 'path for:', existingSession.user.email);
         setSession(existingSession);
         setUser(existingSession.user);
         setIsDemoMode(false);
-        bootTrace.mark('v2_user_set_from_getSession', { email: existingSession.user.email });
+        bootTrace.mark('v2_user_set', { 
+          email: existingSession.user.email, 
+          source: raceResult.source,
+          fastPathWon 
+        });
         
         // Check admin status asynchronously
         setTimeout(() => checkAdminStatus(existingSession.user.id), 0);
@@ -373,13 +425,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const isTimeout = errorMessage.includes('timed out');
       
       console.error('[Auth V2] Initialization failed:', errorMessage);
-      bootTrace.mark('v2_init_error', { error: errorMessage, isTimeout });
+      bootTrace.mark('v2_init_error', { error: errorMessage, isTimeout, fastPathWon });
       
       // Log to database for visibility
       logAuthError(
         isTimeout ? 'auth_init_timeout' : 'auth_init_failed',
         errorMessage,
-        { isPreviewEnvironment, version: 'v2' }
+        { isPreviewEnvironment, version: 'v2', fastPathWon }
       );
       
       // Set user-facing error
@@ -397,7 +449,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       // ALWAYS set loading to false to prevent infinite loading screen
       setLoading(false);
-      bootTrace.mark('v2_init_complete');
+      bootTrace.mark('v2_init_complete', { fastPathWon });
       console.log('[Auth V2] Initialization complete, loading set to false');
     }
 
