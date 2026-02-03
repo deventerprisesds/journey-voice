@@ -55,26 +55,28 @@ export const toolDefinitions = [
     description: "Get all tasks for today, including both scheduled and unscheduled tasks.",
     parameters: { type: "object", properties: {} }
   },
-  {
-    type: "function",
-    name: "create_task",
-    description: "Create a new task. Use UPPERCASE for priority.",
-    parameters: {
-      type: "object",
-      properties: {
-        title: { type: "string", description: "Task title" },
-        description: { type: "string", description: "Task description" },
-        priority: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "URGENT"] },
-        category: { type: "string", enum: ["LIFE", "CAREER", "VENTURES", "EDUCATION"] },
-        status: { 
-          type: "string", 
-          enum: ["BACKLOG", "TODO", "READY", "UP_NEXT", "DOING", "DONE", "BLOCKED", "PLANNING"],
-          description: "Task workflow status. BACKLOG=not yet planned, TODO=planned but not started, READY=ready to work on, UP_NEXT=queued to start soon, DOING=in progress, DONE=completed, BLOCKED=waiting on something, PLANNING=needs more detail. Defaults to BACKLOG."
-        }
-      },
-      required: ["title"]
-    }
-  },
+  // TEMPORARILY DISABLED FOR DEBUGGING - Forces AI to use parse_and_create_tasks
+  // which properly handles time parsing and auto-scheduling
+  // {
+  //   type: "function",
+  //   name: "create_task",
+  //   description: "Create a new task. Use UPPERCASE for priority.",
+  //   parameters: {
+  //     type: "object",
+  //     properties: {
+  //       title: { type: "string", description: "Task title" },
+  //       description: { type: "string", description: "Task description" },
+  //       priority: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "URGENT"] },
+  //       category: { type: "string", enum: ["LIFE", "CAREER", "VENTURES", "EDUCATION"] },
+  //       status: { 
+  //         type: "string", 
+  //         enum: ["BACKLOG", "TODO", "READY", "UP_NEXT", "DOING", "DONE", "BLOCKED", "PLANNING"],
+  //         description: "Task workflow status. BACKLOG=not yet planned, TODO=planned but not started, READY=ready to work on, UP_NEXT=queued to start soon, DOING=in progress, DONE=completed, BLOCKED=waiting on something, PLANNING=needs more detail. Defaults to BACKLOG."
+  //       }
+  //     },
+  //     required: ["title"]
+  //   }
+  // },
   {
     type: "function",
     name: "update_task",
@@ -610,7 +612,13 @@ async function executeToolCall(
         return await getTodayTasks(supabase, userId, context.timezone);
       
       case 'create_task':
-        return await createTask(supabase, userId, args);
+        // TEMPORARILY REDIRECTED FOR DEBUGGING
+        // Route through parse_and_create_tasks for proper time extraction and scheduling
+        console.log('[EXECUTE-TOOL] create_task redirected to parse_and_create_tasks');
+        return await parseAndCreateTasks(supabase, userId, {
+          text: args.title + (args.description ? '. ' + args.description : ''),
+          auto_schedule: true
+        }, context?.timezone);
       
       case 'update_task':
         return await updateTask(supabase, args);
