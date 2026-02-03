@@ -1639,6 +1639,13 @@ export type Database = {
             foreignKeyName: "delivery_logs_notification_id_fkey"
             columns: ["notification_id"]
             isOneToOne: false
+            referencedRelation: "notification_trace"
+            referencedColumns: ["notification_id"]
+          },
+          {
+            foreignKeyName: "delivery_logs_notification_id_fkey"
+            columns: ["notification_id"]
+            isOneToOne: false
             referencedRelation: "scheduled_notifications"
             referencedColumns: ["id"]
           },
@@ -1745,6 +1752,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "calendar_connections"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "external_calendar_events_source_task_id_fkey"
+            columns: ["source_task_id"]
+            isOneToOne: false
+            referencedRelation: "notification_trace"
+            referencedColumns: ["task_id"]
           },
           {
             foreignKeyName: "external_calendar_events_source_task_id_fkey"
@@ -2865,6 +2879,13 @@ export type Database = {
             foreignKeyName: "scheduled_notifications_task_id_fkey"
             columns: ["task_id"]
             isOneToOne: false
+            referencedRelation: "notification_trace"
+            referencedColumns: ["task_id"]
+          },
+          {
+            foreignKeyName: "scheduled_notifications_task_id_fkey"
+            columns: ["task_id"]
+            isOneToOne: false
             referencedRelation: "tasks"
             referencedColumns: ["id"]
           },
@@ -3202,6 +3223,13 @@ export type Database = {
             foreignKeyName: "task_checklist_items_task_id_fkey"
             columns: ["task_id"]
             isOneToOne: false
+            referencedRelation: "notification_trace"
+            referencedColumns: ["task_id"]
+          },
+          {
+            foreignKeyName: "task_checklist_items_task_id_fkey"
+            columns: ["task_id"]
+            isOneToOne: false
             referencedRelation: "tasks"
             referencedColumns: ["id"]
           },
@@ -3241,6 +3269,13 @@ export type Database = {
             foreignKeyName: "task_columns_task_id_fkey"
             columns: ["task_id"]
             isOneToOne: false
+            referencedRelation: "notification_trace"
+            referencedColumns: ["task_id"]
+          },
+          {
+            foreignKeyName: "task_columns_task_id_fkey"
+            columns: ["task_id"]
+            isOneToOne: false
             referencedRelation: "tasks"
             referencedColumns: ["id"]
           },
@@ -3275,6 +3310,13 @@ export type Database = {
           user_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "task_events_task_id_fkey"
+            columns: ["task_id"]
+            isOneToOne: false
+            referencedRelation: "notification_trace"
+            referencedColumns: ["task_id"]
+          },
           {
             foreignKeyName: "task_events_task_id_fkey"
             columns: ["task_id"]
@@ -3559,6 +3601,32 @@ export type Database = {
           stage: string | null
           status: string | null
           timestamp: string | null
+          user_id: string | null
+        }
+        Relationships: []
+      }
+      notification_trace: {
+        Row: {
+          activity_error: string | null
+          activity_event: string | null
+          activity_metadata: Json | null
+          activity_stage: string | null
+          activity_status: string | null
+          activity_timestamp: string | null
+          calendar_created_at: string | null
+          calendar_event_id: string | null
+          delivered_at: string | null
+          external_event_id: string | null
+          failed_at: string | null
+          failure_reason: string | null
+          notification_id: string | null
+          notification_type: string | null
+          scheduled_for: string | null
+          task_created_at: string | null
+          task_id: string | null
+          task_start_time: string | null
+          task_status: Database["public"]["Enums"]["task_status"] | null
+          task_title: string | null
           user_id: string | null
         }
         Relationships: []
