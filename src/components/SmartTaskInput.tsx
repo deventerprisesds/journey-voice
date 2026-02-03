@@ -220,8 +220,9 @@ const SmartTaskInput: React.FC<SmartTaskInputProps> = ({
           <Label 
             htmlFor="include-assignments" 
             className="cursor-pointer text-xs text-muted-foreground whitespace-nowrap"
+            title="Include pending homework assignments in scheduling context"
           >
-            +Assign ({selectedAssignmentIds.size})
+            + Homework ({selectedAssignmentIds.size})
           </Label>
         </div>
         

@@ -693,17 +693,6 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
 
   return (
     <div className="space-y-6">
-      {/* Smart Task Input */}
-      <Card>
-        <CardContent className="pt-4">
-          <SmartTaskInput 
-            tasks={tasks}
-            targetDate={new Date()}
-            onTaskScheduled={onTaskUpdate}
-          />
-        </CardContent>
-      </Card>
-
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -777,6 +766,17 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
           </div>
         </div>
       )}
+
+      {/* Smart Task Input */}
+      <Card>
+        <CardContent className="pt-4">
+          <SmartTaskInput 
+            tasks={tasks}
+            targetDate={new Date()}
+            onTaskScheduled={onTaskUpdate}
+          />
+        </CardContent>
+      </Card>
 
       {/* Controls */}
       <div className="flex items-center gap-4 flex-wrap">
