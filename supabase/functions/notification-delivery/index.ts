@@ -539,13 +539,22 @@ serve(async (req) => {
             console.error(`Push notification failed: ${pushError.message}`);
           }
 
-          // Send unified notification for other channels (Slack, Email, etc.)
-          if (enabledChannels.some((channel: string) => ['SLACK', 'EMAIL', 'OUTLOOK_EVENT', 'GOOGLE_EVENT'].includes(channel))) {
-            // Get task time details for calendar events
+          // Filter channels - Outlook/Google events are created at task creation, not reminder delivery
+          const channelsForDelivery = enabledChannels.filter((channel: string) => {
+            if (['OUTLOOK_EVENT', 'GOOGLE_EVENT'].includes(channel)) {
+              console.log(`📅 Skipping ${channel} - event created at task creation time`);
+              return false;
+            }
+            return ['SLACK', 'EMAIL'].includes(channel);
+          });
+          
+          // Send unified notification for other channels (Slack, Email)
+          if (channelsForDelivery.length > 0) {
+            // Get task time details for reference
             const singleTaskId = batchNotifications.length === 1 ? batchNotifications[0].task_id : null;
             const taskInfo = singleTaskId ? taskDetails[singleTaskId] : null;
             
-            // Build data payload with task times for Outlook/Google calendar events
+            // Build data payload with task times
             const notificationData: Record<string, any> = {
               type: batchNotifications.length === 1 ? batchNotifications[0].notification_type : 'batched_reminders',
               taskId: singleTaskId,
@@ -553,9 +562,9 @@ serve(async (req) => {
               batchSize: batchNotifications.length
             };
             
-            // CRITICAL: Pass task's actual start_time and end_time for calendar events
+            // Include task details for reference
             if (taskInfo) {
-              console.log(`📅 Including task times for calendar event: start=${taskInfo.start_time}, end=${taskInfo.end_time}`);
+              console.log(`📋 Including task info: start=${taskInfo.start_time}, end=${taskInfo.end_time}`);
               notificationData.startTime = taskInfo.start_time;
               notificationData.endTime = taskInfo.end_time;
               notificationData.estimateMinutes = taskInfo.estimate_minutes;
@@ -567,7 +576,7 @@ serve(async (req) => {
                 userId: userId,
                 title: title,
                 body: body,
-                channels: enabledChannels.filter((channel: string) => ['SLACK', 'EMAIL', 'OUTLOOK_EVENT', 'GOOGLE_EVENT'].includes(channel)),
+                channels: channelsForDelivery,
                 data: notificationData,
                 notificationId: notificationIds[0]  // Pass first notification ID to prevent duplicate record creation
               }
@@ -599,9 +608,9 @@ serve(async (req) => {
             console.log(`Successfully delivered batch for user ${userId} (${batchNotifications.length} notifications)`);
             delivered += batchNotifications.length;
             
-            // Log each notification for tracing
+            // Log each notification for tracing (fire and forget)
             for (const notif of batchNotifications) {
-              await supabaseClient.from('activity_log').insert({
+              supabaseClient.from('activity_log').insert({
                 user_id: userId,
                 activity_type: 'notification_delivered',
                 session_id: notif.id,
@@ -613,7 +622,11 @@ serve(async (req) => {
                   title: notif.title,
                   notification_type: notif.notification_type
                 }
-              }).catch(() => {}); // Best effort
+              }).then(() => {
+                console.log(`[DELIVERY] Activity logged: notification_delivered for ${notif.notification_type}`);
+              }).catch(() => {
+                // Silently ignore logging failures
+              });
             }
           }
 

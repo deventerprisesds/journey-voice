@@ -531,8 +531,8 @@ serve(async (req) => {
             }
           }
           
-          // Log to activity_log for tracing
-          await supabaseClient.from('activity_log').insert({
+          // Log to activity_log for tracing (fire and forget)
+          supabaseClient.from('activity_log').insert({
             user_id: userId,
             activity_type: 'calendar_event_created',
             session_id: outlookResult.details?.eventId || 'unknown',
@@ -544,13 +544,17 @@ serve(async (req) => {
               event_id: outlookResult.details?.eventId,
               account: outlookResult.details?.account
             }
-          }).catch(() => {});
+          }).then(() => {
+            console.log(`[Notification] Activity logged: calendar_event_created`);
+          }).catch(() => {
+            // Silently ignore logging failures
+          });
         } else {
           console.error('[Notification] Outlook event creation failed:', outlookResult.error);
           result.errors.push(`Outlook: ${outlookResult.error}`);
           
-          // Log failure for tracing
-          await supabaseClient.from('activity_log').insert({
+          // Log failure for tracing (fire and forget)
+          supabaseClient.from('activity_log').insert({
             user_id: userId,
             activity_type: 'calendar_event_failed',
             session_id: taskData?.taskId || 'unknown',
@@ -558,7 +562,11 @@ serve(async (req) => {
             stage: 'outlook_event',
             error_message: outlookResult.error,
             metadata: { task_id: taskData?.taskId }
-          }).catch(() => {});
+          }).then(() => {
+            console.log(`[Notification] Activity logged: calendar_event_failed`);
+          }).catch(() => {
+            // Silently ignore logging failures
+          });
         }
       }
     }

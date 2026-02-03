@@ -1224,16 +1224,24 @@ async function parseAndCreateTasks(
       
       // Normalize start_time/end_time if provided (treat as local to user's timezone)
       const normalizedStartTime = task.start_time ? normalizeDateTime(task.start_time, tz) : null;
-      const normalizedEndTime = task.end_time ? normalizeDateTime(task.end_time, tz) : null;
+      let normalizedEndTime = task.end_time ? normalizeDateTime(task.end_time, tz) : null;
       
-      console.log(`[PARSE_AND_CREATE] Task "${task.title}" dates: raw_due=${rawDueDate} → ${normalizedDueDate}, start=${task.start_time} → ${normalizedStartTime}`);
+      // Calculate end_time from start_time + estimate if missing
+      if (normalizedStartTime && !normalizedEndTime) {
+        const durationMinutes = task.estimate_minutes || task.estimatedDuration || 60;
+        const endDate = new Date(new Date(normalizedStartTime).getTime() + durationMinutes * 60000);
+        normalizedEndTime = endDate.toISOString();
+        console.log(`[PARSE_AND_CREATE] Calculated end_time for "${task.title}": ${normalizedEndTime} (${durationMinutes} min)`);
+      }
+      
+      console.log(`[PARSE_AND_CREATE] Task "${task.title}" dates: raw_due=${rawDueDate} → ${normalizedDueDate}, start=${task.start_time} → ${normalizedStartTime}, end=${normalizedEndTime}`);
       
       const taskData = {
         title: task.title,
         description: task.description || null,
         priority: (task.priority || 'MEDIUM').toUpperCase(),
         category: (task.category || 'LIFE').toUpperCase(),
-        status: task.status || 'BACKLOG',
+        status: task.status || (normalizedStartTime ? 'UP_NEXT' : 'BACKLOG'),
         due_date: normalizedDueDate,
         start_time: normalizedStartTime,
         end_time: normalizedEndTime,
@@ -1251,7 +1259,33 @@ async function parseAndCreateTasks(
 
       if (data) {
         createdTasks.push(data);
-        console.log(`[PARSE_AND_CREATE] Created task: ${data.title} (${data.id})`);
+        console.log(`[PARSE_AND_CREATE] Created task: ${data.title} (${data.id}) at ${new Date().toISOString()}`);
+        
+        // Create Outlook calendar event IMMEDIATELY if task has scheduled time
+        if (data.start_time) {
+          console.log(`[PARSE_AND_CREATE] Creating immediate Outlook event for "${data.title}" at ${data.start_time}`);
+          
+          supabase.functions.invoke('send-unified-notification', {
+            body: {
+              userId: userId,
+              title: `Task: ${data.title}`,
+              body: data.description || 'Scheduled task',
+              channels: ['OUTLOOK_EVENT'],  // Only Outlook - Slack/Email via reminders
+              data: {
+                type: 'task_calendar_event',
+                taskId: data.id,
+                taskTitle: data.title,
+                startTime: data.start_time,
+                endTime: data.end_time,
+                estimateMinutes: data.estimate_minutes
+              }
+            }
+          }).then(response => {
+            console.log(`[PARSE_AND_CREATE] Outlook event result for "${data.title}":`, response.data?.channelResults?.outlook);
+          }).catch(err => {
+            console.error(`[PARSE_AND_CREATE] Outlook event failed for "${data.title}":`, err);
+          });
+        }
         
         // Best-effort activity logging (fire and forget)
         supabase.from('activity_log').insert({
@@ -1260,7 +1294,7 @@ async function parseAndCreateTasks(
           session_id: data.id,
           status: 'completed',
           stage: 'parse_and_create',
-          metadata: { title: data.title, category: data.category, status: data.status, priority: data.priority }
+          metadata: { title: data.title, category: data.category, status: data.status, priority: data.priority, start_time: data.start_time }
         }).then(() => {
           console.log('[PARSE_AND_CREATE] Activity logged: task_created');
         }).catch(() => {
