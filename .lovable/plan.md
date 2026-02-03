@@ -1,153 +1,233 @@
 
 
-# Plan: Fix Task Creation Bug - Invalid `.catch()` on Supabase Operations
+# Plan: Fix Task Status, Auto-Calculate End Time, Immediate Outlook Event, and Logging
 
 ## Summary
 
-The AI assistant cannot create tasks because the recently added activity logging code uses an unsupported pattern (`.catch()`) that crashes the edge functions.
+Implementing all approved fixes plus the missing logging corrections:
 
-## Root Cause Analysis
-
-### Error Discovered
-```
-"supabase.from(...).insert(...).catch is not a function"
-```
-
-### Why This Happens
-The Supabase JavaScript client in Deno returns a `PostgrestBuilder` object from `.insert()`, not a native Promise. While PostgrestBuilder is thenable (works with `await`), it does **not** have a `.catch()` method.
-
-### The Broken Code Pattern (multiple locations)
-```typescript
-// THIS IS BROKEN - crashes the function
-await supabase.from('activity_log').insert({
-  user_id: userId,
-  activity_type: 'task_created',
-  ...
-}).catch((e: Error) => console.error('[LOG] Failed:', e.message));
-```
-
-### Impact
-1. User asks: "create a test task for 12:15am"
-2. `parse_and_create_tasks` is called correctly
-3. The AI parser extracts the task correctly
-4. The task might get inserted into the database
-5. **The `.catch()` line throws an error and crashes the function**
-6. The AI receives: `{ success: false, error: "supabase.from(...).insert(...).catch is not a function" }`
-7. The AI apologizes: "Unable to create tasks at this moment"
-
-## Files With This Bug
-
-| File | Lines | Instances |
-|------|-------|-----------|
-| `supabase/functions/execute-tool/index.ts` | 1264, 1358 | 2 |
-| `supabase/functions/send-unified-notification/index.ts` | 547, 561 | 2 |
-| `supabase/functions/notification-delivery/index.ts` | 616 | 1 |
-
-**Total: 5 instances across 3 edge functions**
+1. **Calculate end_time automatically** when start_time exists - makes `is_scheduled=true`, skips batch scheduler
+2. **Status logic**: Scheduled tasks (today OR future) → `UP_NEXT`, unscheduled/undated → `BACKLOG`
+3. **Create Outlook event immediately** at task creation time
+4. **Skip calendar channels in notification-delivery** to prevent duplicates
+5. **Fix broken `.catch()` logging** in notification-delivery and send-unified-notification
 
 ---
 
-## Technical Fix
-
-### Option A: Wrap in Try-Catch (Best Practice)
-```typescript
-// Fixed pattern - wrap in try/catch, don't await (fire-and-forget)
-try {
-  supabase.from('activity_log').insert({
-    user_id: userId,
-    activity_type: 'task_created',
-    ...
-  }); // Note: not awaited - fire and forget for logging
-} catch (e) {
-  console.error('[LOG] Failed:', e);
-}
-```
-
-### Option B: Use .then() with Error Handler
-```typescript
-// Alternative - use then/catch pattern (also works)
-supabase.from('activity_log').insert({...})
-  .then(() => {})
-  .catch((e: Error) => console.error('[LOG] Failed:', e));
-```
-
-### Recommended: Option A
-The try-catch pattern is cleaner and aligns with Deno best practices. Since logging is best-effort (shouldn't block the main flow), we don't need to await the result.
-
----
-
-## Changes Required
+## Technical Changes
 
 ### File 1: `supabase/functions/execute-tool/index.ts`
 
-**Line 1257-1264** - Replace:
+**Lines 1226-1227** - Calculate end_time when missing:
+
 ```typescript
-await supabase.from('activity_log').insert({
-  user_id: userId,
-  activity_type: 'task_created',
-  session_id: data.id,
-  status: 'completed',
-  stage: 'parse_and_create',
-  metadata: { title: data.title, category: data.category, status: data.status, priority: data.priority }
-}).catch((e: Error) => console.error('[PARSE_AND_CREATE] Failed to log activity:', e.message));
+// Current:
+const normalizedStartTime = task.start_time ? normalizeDateTime(task.start_time, tz) : null;
+const normalizedEndTime = task.end_time ? normalizeDateTime(task.end_time, tz) : null;
+
+// Replace with:
+const normalizedStartTime = task.start_time ? normalizeDateTime(task.start_time, tz) : null;
+let normalizedEndTime = task.end_time ? normalizeDateTime(task.end_time, tz) : null;
+
+// Calculate end_time from start_time + estimate if missing
+if (normalizedStartTime && !normalizedEndTime) {
+  const durationMinutes = task.estimate_minutes || task.estimatedDuration || 60;
+  const endDate = new Date(new Date(normalizedStartTime).getTime() + durationMinutes * 60000);
+  normalizedEndTime = endDate.toISOString();
+  console.log(`[PARSE_AND_CREATE] Calculated end_time for "${task.title}": ${normalizedEndTime} (${durationMinutes} min)`);
+}
 ```
 
-With:
+**Line 1236** - Fix status logic (scheduled = UP_NEXT, unscheduled = BACKLOG):
+
 ```typescript
-// Best-effort activity logging (fire and forget)
-supabase.from('activity_log').insert({
+// Current:
+status: task.status || 'BACKLOG',
+
+// Replace with:
+status: task.status || (normalizedStartTime ? 'UP_NEXT' : 'BACKLOG'),
+```
+
+**After line 1268** - Add immediate Outlook event creation:
+
+```typescript
+// Create Outlook calendar event IMMEDIATELY if task has scheduled time
+if (data.start_time) {
+  console.log(`[PARSE_AND_CREATE] Creating immediate Outlook event for "${data.title}" at ${data.start_time}`);
+  
+  supabase.functions.invoke('send-unified-notification', {
+    body: {
+      userId: userId,
+      title: `Task: ${data.title}`,
+      body: data.description || 'Scheduled task',
+      channels: ['OUTLOOK_EVENT'],  // Only Outlook - Slack/Email via reminders
+      data: {
+        type: 'task_calendar_event',
+        taskId: data.id,
+        taskTitle: data.title,
+        startTime: data.start_time,
+        endTime: data.end_time,
+        estimateMinutes: data.estimate_minutes
+      }
+    }
+  }).then(response => {
+    console.log(`[PARSE_AND_CREATE] Outlook event result:`, response.data?.channelResults?.outlook);
+  }).catch(err => {
+    console.error(`[PARSE_AND_CREATE] Outlook event failed:`, err);
+  });
+}
+```
+
+---
+
+### File 2: `supabase/functions/notification-delivery/index.ts`
+
+**Lines 604-616** - Fix broken logging pattern:
+
+```typescript
+// Current (BROKEN):
+await supabaseClient.from('activity_log').insert({
+  ...
+}).catch(() => {}); // Best effort
+
+// Replace with:
+supabaseClient.from('activity_log').insert({
   user_id: userId,
-  activity_type: 'task_created',
-  session_id: data.id,
+  activity_type: 'notification_delivered',
+  session_id: notif.id,
   status: 'completed',
-  stage: 'parse_and_create',
-  metadata: { title: data.title, category: data.category, status: data.status, priority: data.priority }
+  stage: notif.notification_type,
+  metadata: { 
+    task_id: notif.task_id,
+    channels: enabledChannels,
+    title: notif.title,
+    notification_type: notif.notification_type
+  }
 }).then(() => {
-  console.log('[PARSE_AND_CREATE] Activity logged: task_created');
+  console.log(`[DELIVERY] Activity logged: notification_delivered for ${notif.notification_type}`);
 }).catch(() => {
   // Silently ignore logging failures
 });
 ```
 
-**Line 1351-1358** - Same fix for the scheduling activity log.
+**Around line 543** - Skip calendar channels (event created at task time):
 
-### File 2: `supabase/functions/send-unified-notification/index.ts`
-
-**Lines 538-547, 550-561** - Apply the same `.then().catch()` pattern.
-
-### File 3: `supabase/functions/notification-delivery/index.ts`
-
-**Lines 606-616** - Apply the same `.then().catch()` pattern.
-
-### File 4: `supabase/functions/_shared/config.ts`
-
-Bump version to track deployment:
 ```typescript
-export const GLOBAL_VERSION = "2026-02-03-v18";
+// Filter channels - Outlook/Google events are created at task creation, not reminder delivery
+const channelsForDelivery = enabledChannels.filter((channel: string) => {
+  if (['OUTLOOK_EVENT', 'GOOGLE_EVENT'].includes(channel)) {
+    console.log(`📅 Skipping ${channel} - event created at task creation time`);
+    return false;
+  }
+  return ['SLACK', 'EMAIL'].includes(channel);
+});
 ```
 
 ---
 
-## Expected Results After Fix
+### File 3: `supabase/functions/send-unified-notification/index.ts`
 
-1. **Task creation works again** - Users can create tasks via chat
-2. **Activity logging is best-effort** - Failures don't crash the main flow
-3. **All notification flows work** - Outlook events, Slack messages, etc.
-4. **Version bump** - Easy to verify the fix is deployed via `/ping`
+**Lines 535-547** - Fix broken logging pattern:
+
+```typescript
+// Current (BROKEN):
+await supabaseClient.from('activity_log').insert({
+  ...
+}).catch(() => {});
+
+// Replace with:
+supabaseClient.from('activity_log').insert({
+  user_id: userId,
+  activity_type: 'calendar_event_created',
+  session_id: outlookResult.details?.eventId || 'unknown',
+  status: 'completed',
+  stage: 'outlook_event',
+  metadata: { 
+    task_id: taskData?.taskId,
+    start_time: startTime.toISOString(),
+    event_id: outlookResult.details?.eventId,
+    account: outlookResult.details?.account
+  }
+}).then(() => {
+  console.log(`[Notification] Activity logged: calendar_event_created`);
+}).catch(() => {
+  // Silently ignore logging failures
+});
+```
+
+**Lines 553-561** - Same fix for failure logging:
+
+```typescript
+supabaseClient.from('activity_log').insert({
+  user_id: userId,
+  activity_type: 'calendar_event_failed',
+  session_id: taskData?.taskId || 'unknown',
+  status: 'error',
+  stage: 'outlook_event',
+  error_message: outlookResult.error,
+  metadata: { task_id: taskData?.taskId }
+}).then(() => {
+  console.log(`[Notification] Activity logged: calendar_event_failed`);
+}).catch(() => {
+  // Silently ignore logging failures
+});
+```
 
 ---
 
-## Verification Steps
+### File 4: `supabase/functions/_shared/config.ts`
 
-After deployment:
-1. Call `/ping` endpoint - should return `global_version: "2026-02-03-v18"`
-2. Test task creation via chat: "create a test task for 5pm"
-3. Verify task appears in database and on board
-4. Check activity_log for the logged event (optional - not critical)
+**Line 6**:
+```typescript
+export const GLOBAL_VERSION = "2026-02-03-v19";
+```
 
 ---
 
-## Root Cause of This Bug
+## Files to Modify
 
-The activity logging code was added in the previous implementation to enable end-to-end tracing. The `.catch()` pattern works in browser JavaScript but **not** with Supabase's Deno client, which returns a PostgrestBuilder rather than a native Promise.
+| File | Changes |
+|------|---------|
+| `supabase/functions/execute-tool/index.ts` | Calculate end_time, fix status logic, add immediate Outlook event |
+| `supabase/functions/notification-delivery/index.ts` | Fix logging, skip calendar channels |
+| `supabase/functions/send-unified-notification/index.ts` | Fix logging pattern (2 locations) |
+| `supabase/functions/_shared/config.ts` | Bump version to v19 |
+
+---
+
+## Status Logic Summary
+
+| Condition | Status |
+|-----------|--------|
+| Has `start_time` (today) | `UP_NEXT` |
+| Has `start_time` (future) | `UP_NEXT` |
+| No `start_time` (unscheduled) | `BACKLOG` |
+
+---
+
+## Expected Flow After Fix
+
+```text
+User: "task for 3:00 AM tomorrow"
+
+1. parse_and_create_tasks:
+   - Parses start_time → 08:00 UTC
+   - Calculates end_time → 09:00 UTC (+60 min)
+   - is_scheduled: true ✓
+   - status: UP_NEXT ✓
+   - Inserts task
+   - IMMEDIATELY creates Outlook event ← Appears on calendar now!
+   - Activity logged: task_created ✓
+   
+2. Batch scheduler: SKIPPED (is_scheduled=true)
+
+3. DB trigger: Creates notifications
+   - task_start_reminder at 07:45 UTC
+   - task_start_now at 08:00 UTC
+
+4. notification-delivery (at 07:45):
+   - Sends Slack notification ✓
+   - SKIPS Outlook (already exists)
+   - Activity logged: notification_delivered ✓
+```
 
