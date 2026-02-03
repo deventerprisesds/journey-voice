@@ -199,29 +199,33 @@ const SmartTaskInput: React.FC<SmartTaskInputProps> = ({
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
-          <div className="flex items-center gap-2">
-            <Switch 
-              checked={includeAssignments} 
-              onCheckedChange={setIncludeAssignments}
-              id="include-assignments"
-            />
-            <Label htmlFor="include-assignments" className="cursor-pointer">
-              Include Selected Assignments ({selectedAssignmentIds.size})
-            </Label>
-          </div>
-        </div>
-      
-      <form onSubmit={handleSubmit} className="flex gap-2">
+    <div className="space-y-3">
+      <form onSubmit={handleSubmit} className="flex items-center gap-2">
         <Input
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="Describe your task... (e.g., 'Review project proposal tomorrow morning for 2 hours')"
+          placeholder="Describe your task... (e.g., 'Review project tomorrow 2pm')"
           disabled={isProcessing}
           className="flex-1"
         />
-        <Button type="submit" disabled={isProcessing || !input.trim()}>
+        
+        {/* Compact assignment toggle */}
+        <div className="flex items-center gap-1.5 px-2 py-1.5 bg-muted/50 rounded-md shrink-0">
+          <Switch 
+            checked={includeAssignments} 
+            onCheckedChange={setIncludeAssignments}
+            id="include-assignments"
+            className="scale-90"
+          />
+          <Label 
+            htmlFor="include-assignments" 
+            className="cursor-pointer text-xs text-muted-foreground whitespace-nowrap"
+          >
+            +Assign ({selectedAssignmentIds.size})
+          </Label>
+        </div>
+        
+        <Button type="submit" disabled={isProcessing || !input.trim()} size="icon">
           {isProcessing ? (
             <Loader2 className="h-4 w-4 animate-spin" />
           ) : (

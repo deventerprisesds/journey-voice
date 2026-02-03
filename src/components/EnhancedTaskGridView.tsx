@@ -39,8 +39,8 @@ import { formatDateOnly, formatDuration } from '@/lib/date';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
-
 import { Task } from '@/types/task';
+import SmartTaskInput from './SmartTaskInput';
 
 interface TaskGridViewProps {
   tasks: Task[];
@@ -693,6 +693,17 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
 
   return (
     <div className="space-y-6">
+      {/* Smart Task Input */}
+      <Card>
+        <CardContent className="pt-4">
+          <SmartTaskInput 
+            tasks={tasks}
+            targetDate={new Date()}
+            onTaskScheduled={onTaskUpdate}
+          />
+        </CardContent>
+      </Card>
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>

@@ -107,6 +107,34 @@ const Calendar: React.FC = () => {
     return () => window.removeEventListener('voice-task-created', handleVoiceTaskCreated);
   }, []);
 
+  // Set up real-time subscription for task changes
+  useEffect(() => {
+    if (!user || isDemoMode) return;
+    
+    console.log('[Calendar] Setting up real-time subscription');
+    
+    const channel = supabase
+      .channel('calendar-task-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'tasks',
+          filter: `user_id=eq.${user.id}`
+        },
+        (payload) => {
+          console.log('[Calendar] Task change detected:', payload.eventType);
+          loadTasks();
+        }
+      )
+      .subscribe();
+    
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user, isDemoMode]);
+
   // Handle deep linking to specific tasks (same as Dashboard)
   useEffect(() => {
     if (!loading && tasks.length > 0) {

@@ -22,6 +22,7 @@ import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import TaskCard from './TaskCard';
+import SmartTaskInput from './SmartTaskInput';
 
 import TaskCreationModal from './TaskCreationModal';
 import TaskFilters from './TaskFilters';
@@ -1023,6 +1024,17 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
           </p>
         </div>
       )}
+
+      {/* Smart Task Input */}
+      <Card>
+        <CardContent className="pt-4">
+          <SmartTaskInput 
+            tasks={tasks}
+            targetDate={new Date()}
+            onTaskScheduled={onTaskUpdate}
+          />
+        </CardContent>
+      </Card>
 
       {/* Toolbar - always visible, horizontal scroll on mobile */}
       <div className="flex items-center justify-end">
