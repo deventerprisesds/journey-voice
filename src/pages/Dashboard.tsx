@@ -42,15 +42,21 @@ const Dashboard = () => {
       .on(
         'postgres_changes',
         {
-          event: 'INSERT',
+          event: '*',
           schema: 'public',
           table: 'tasks',
           filter: `user_id=eq.${user.id}`
         },
         (payload) => {
-          console.log('✨ New task detected via real-time:', payload.new);
+          const newTask = payload.new as any;
+          const oldTask = payload.old as any;
+          console.log('📡 Task change detected:', payload.eventType, newTask?.title);
           
-          toast.success(`Task Created: "${payload.new.title}" has been added`);
+          if (payload.eventType === 'INSERT') {
+            toast.success(`Task Created: "${newTask?.title}"`);
+          } else if (payload.eventType === 'UPDATE' && newTask?.start_time && !oldTask?.start_time) {
+            toast.success(`Task Scheduled: "${newTask?.title}"`);
+          }
           
           // Reload tasks immediately
           loadTasks();

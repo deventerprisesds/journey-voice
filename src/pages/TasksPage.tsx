@@ -59,14 +59,22 @@ const TasksPage: React.FC = () => {
       .on(
         'postgres_changes',
         {
-          event: 'INSERT',
+          event: '*',
           schema: 'public',
           table: 'tasks',
           filter: `user_id=eq.${user.id}`,
         },
         (payload) => {
-          console.log('[TasksPage] Real-time task insert:', payload.new);
-          toast.success(`Task Created: "${payload.new.title}" has been added`);
+          const newTask = payload.new as any;
+          const oldTask = payload.old as any;
+          console.log('[TasksPage] Task change detected:', payload.eventType, newTask?.title);
+          
+          if (payload.eventType === 'INSERT') {
+            toast.success(`Task Created: "${newTask?.title}"`);
+          } else if (payload.eventType === 'UPDATE' && newTask?.start_time && !oldTask?.start_time) {
+            toast.success(`Task Scheduled: "${newTask?.title}"`);
+          }
+          
           loadTasks();
         }
       )
