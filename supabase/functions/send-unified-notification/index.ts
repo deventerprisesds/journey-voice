@@ -506,9 +506,59 @@ serve(async (req) => {
         
         if (outlookResult.success) {
           console.log('[Notification] Outlook event created successfully');
+          
+          // Record the event in external_calendar_events for deduplication and tracing
+          if (outlookResult.details?.eventId && taskData?.taskId) {
+            try {
+              const connection = await getOutlookConnectionForUser(supabaseClient, userId);
+              const calendarId = connection?.provider_account_email || 'primary';
+              
+              await supabaseClient.from('external_calendar_events').insert({
+                user_id: userId,
+                connection_id: connection?.id || null,
+                calendar_id: calendarId,
+                external_event_id: outlookResult.details.eventId,
+                source_task_id: taskData.taskId,
+                title: eventTitle,
+                start_time: startTime.toISOString(),
+                end_time: endTime.toISOString(),
+                last_synced_at: new Date().toISOString()
+              });
+              console.log('[Notification] Recorded Outlook event in external_calendar_events for task:', taskData.taskId);
+            } catch (recordError) {
+              console.error('[Notification] Failed to record event in external_calendar_events:', recordError);
+              // Don't fail the notification - event was created successfully
+            }
+          }
+          
+          // Log to activity_log for tracing
+          await supabaseClient.from('activity_log').insert({
+            user_id: userId,
+            activity_type: 'calendar_event_created',
+            session_id: outlookResult.details?.eventId || 'unknown',
+            status: 'completed',
+            stage: 'outlook_event',
+            metadata: { 
+              task_id: taskData?.taskId,
+              start_time: startTime.toISOString(),
+              event_id: outlookResult.details?.eventId,
+              account: outlookResult.details?.account
+            }
+          }).catch(() => {});
         } else {
           console.error('[Notification] Outlook event creation failed:', outlookResult.error);
           result.errors.push(`Outlook: ${outlookResult.error}`);
+          
+          // Log failure for tracing
+          await supabaseClient.from('activity_log').insert({
+            user_id: userId,
+            activity_type: 'calendar_event_failed',
+            session_id: taskData?.taskId || 'unknown',
+            status: 'error',
+            stage: 'outlook_event',
+            error_message: outlookResult.error,
+            metadata: { task_id: taskData?.taskId }
+          }).catch(() => {});
         }
       }
     }

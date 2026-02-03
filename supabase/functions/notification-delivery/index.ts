@@ -598,6 +598,23 @@ serve(async (req) => {
           } else {
             console.log(`Successfully delivered batch for user ${userId} (${batchNotifications.length} notifications)`);
             delivered += batchNotifications.length;
+            
+            // Log each notification for tracing
+            for (const notif of batchNotifications) {
+              await supabaseClient.from('activity_log').insert({
+                user_id: userId,
+                activity_type: 'notification_delivered',
+                session_id: notif.id,
+                status: 'completed',
+                stage: notif.notification_type,
+                metadata: { 
+                  task_id: notif.task_id,
+                  channels: enabledChannels,
+                  title: notif.title,
+                  notification_type: notif.notification_type
+                }
+              }).catch(() => {}); // Best effort
+            }
           }
 
         } catch (error) {
