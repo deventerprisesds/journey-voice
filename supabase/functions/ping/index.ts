@@ -1,19 +1,18 @@
 /**
- * Ping Edge Function - Minimal health check for connectivity probing
+ * Ping Edge Function - Health check with deployment version info
  * 
  * This function:
  * - Requires no secrets or authentication
+ * - Returns comprehensive deployment info for debugging
  * - Logs request info to edge function logs for visibility
- * - Returns a simple JSON response with timestamp
  * 
- * Use this to verify edge function connectivity from the frontend
- * when supabase-js might be hung or unavailable.
+ * Use this to verify:
+ * - Edge function connectivity from the frontend
+ * - Which version of the code is deployed
+ * - Whether published site is using latest code vs cache
  */
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
-};
+import { GLOBAL_VERSION, FUNCTION_IDS, corsHeaders } from "../_shared/config.ts";
 
 Deno.serve(async (req) => {
   // Handle CORS preflight
@@ -48,11 +47,17 @@ Deno.serve(async (req) => {
 
   const processingTime = Date.now() - startTime;
 
-  // Build response
-  const response = {
+  // Build comprehensive deployment info
+  const deploymentInfo = {
     ok: true,
+    global_version: GLOBAL_VERSION,
+    function_versions: Object.fromEntries(
+      Object.entries(FUNCTION_IDS).map(([key, id]) => [key, `${GLOBAL_VERSION}-${id}`])
+    ),
     timestamp: new Date().toISOString(),
     processingTimeMs: processingTime,
+    environment: Deno.env.get('SUPABASE_URL')?.includes('supabase.co') ? 'production' : 'local',
+    status: 'healthy',
     received: {
       origin: requestInfo.origin,
       boot_id: body.boot_id || null,
@@ -60,9 +65,9 @@ Deno.serve(async (req) => {
     }
   };
 
-  console.log('[PING] Response:', JSON.stringify(response));
+  console.log('[PING] Response:', JSON.stringify(deploymentInfo));
 
-  return new Response(JSON.stringify(response), {
+  return new Response(JSON.stringify(deploymentInfo), {
     headers: { 
       ...corsHeaders, 
       'Content-Type': 'application/json' 

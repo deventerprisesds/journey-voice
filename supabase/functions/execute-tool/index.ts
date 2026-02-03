@@ -1252,6 +1252,16 @@ async function parseAndCreateTasks(
       if (data) {
         createdTasks.push(data);
         console.log(`[PARSE_AND_CREATE] Created task: ${data.title} (${data.id})`);
+        
+        // Log to activity_log for tracing
+        await supabase.from('activity_log').insert({
+          user_id: userId,
+          activity_type: 'task_created',
+          session_id: data.id,
+          status: 'completed',
+          stage: 'parse_and_create',
+          metadata: { title: data.title, category: data.category, status: data.status, priority: data.priority }
+        }).catch((e: Error) => console.error('[PARSE_AND_CREATE] Failed to log activity:', e.message));
       } else if (error) {
         console.error(`[PARSE_AND_CREATE] Failed to create task "${task.title}":`, error);
       }
@@ -1308,7 +1318,12 @@ async function parseAndCreateTasks(
               const scheduledDate = slot.start_time.split('T')[0];
               const syncedDueDate = normalizeDueDate(scheduledDate, tz);
               
-              console.log(`[PARSE_AND_CREATE] Applying schedule: task="${task.title}", start=${slot.start_time}, synced_due=${syncedDueDate}`);
+              // FIX: Determine status based on whether task is for today
+              // Tasks scheduled for today should be UP_NEXT, future tasks get TODO
+              const todayInTz = new Date().toLocaleDateString('en-CA', { timeZone: tz });
+              const taskStatus = scheduledDate === todayInTz ? 'UP_NEXT' : 'TODO';
+              
+              console.log(`[PARSE_AND_CREATE] Applying schedule: task="${task.title}", start=${slot.start_time}, synced_due=${syncedDueDate}, status=${taskStatus}, today=${todayInTz}`);
               
               const { error: updateError } = await supabase
                 .from('tasks')
@@ -1317,7 +1332,7 @@ async function parseAndCreateTasks(
                   end_time: slot.end_time,
                   due_date: syncedDueDate, // Sync due_date with scheduled date
                   is_scheduled: true,
-                  status: 'TODO'
+                  status: taskStatus  // Dynamic: UP_NEXT for today, TODO for future
                 })
                 .eq('id', task.id);
 
@@ -1330,7 +1345,17 @@ async function parseAndCreateTasks(
                     timeZone: tz
                   })
                 });
-                console.log(`[PARSE_AND_CREATE] Scheduled "${task.title}" at ${slot.start_time}`);
+                console.log(`[PARSE_AND_CREATE] Scheduled "${task.title}" at ${slot.start_time} with status ${taskStatus}`);
+                
+                // Log scheduling to activity_log for tracing
+                await supabase.from('activity_log').insert({
+                  user_id: userId,
+                  activity_type: 'task_scheduled',
+                  session_id: task.id,
+                  status: 'completed',
+                  stage: 'auto_schedule',
+                  metadata: { title: task.title, start_time: slot.start_time, status: taskStatus, today: todayInTz }
+                }).catch((e: Error) => console.error('[PARSE_AND_CREATE] Failed to log schedule activity:', e.message));
               }
             }
           }
