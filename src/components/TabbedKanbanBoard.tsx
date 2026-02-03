@@ -2,8 +2,10 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Card, CardContent } from '@/components/ui/card';
 import { Task } from '@/types/task';
 import KanbanBoard from './KanbanBoard';
+import SmartTaskInput from './SmartTaskInput';
 import { format, isToday, parseISO, startOfWeek, endOfWeek, addWeeks, isWithinInterval } from 'date-fns';
 import { cn } from '@/lib/utils';
 
@@ -169,7 +171,19 @@ const TabbedKanbanBoard: React.FC<TabbedKanbanBoardProps> = ({
   const timeFilteredCount = getTimeFilteredTasks().length;
 
   return (
-    <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
+    <div className="space-y-4">
+      {/* Smart Task Input - Above category tabs */}
+      <Card>
+        <CardContent className="pt-4">
+          <SmartTaskInput 
+            tasks={normalizedTasks}
+            targetDate={new Date()}
+            onTaskScheduled={onTaskUpdate}
+          />
+        </CardContent>
+      </Card>
+      
+      <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
       <div className="flex items-center gap-1 overflow-x-auto flex-nowrap pb-1 mb-4 scrollbar-thin">
         {/* Time Period Dropdown (replaces Today pill) */}
         <Select value={timePeriod} onValueChange={handleTimePeriodChange}>
@@ -240,7 +254,8 @@ const TabbedKanbanBoard: React.FC<TabbedKanbanBoardProps> = ({
           />
         </TabsContent>
       ))}
-    </Tabs>
+      </Tabs>
+    </div>
   );
 };
 
