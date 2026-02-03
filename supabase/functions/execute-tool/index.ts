@@ -1253,15 +1253,19 @@ async function parseAndCreateTasks(
         createdTasks.push(data);
         console.log(`[PARSE_AND_CREATE] Created task: ${data.title} (${data.id})`);
         
-        // Log to activity_log for tracing
-        await supabase.from('activity_log').insert({
+        // Best-effort activity logging (fire and forget)
+        supabase.from('activity_log').insert({
           user_id: userId,
           activity_type: 'task_created',
           session_id: data.id,
           status: 'completed',
           stage: 'parse_and_create',
           metadata: { title: data.title, category: data.category, status: data.status, priority: data.priority }
-        }).catch((e: Error) => console.error('[PARSE_AND_CREATE] Failed to log activity:', e.message));
+        }).then(() => {
+          console.log('[PARSE_AND_CREATE] Activity logged: task_created');
+        }).catch(() => {
+          // Silently ignore logging failures
+        });
       } else if (error) {
         console.error(`[PARSE_AND_CREATE] Failed to create task "${task.title}":`, error);
       }
@@ -1347,15 +1351,19 @@ async function parseAndCreateTasks(
                 });
                 console.log(`[PARSE_AND_CREATE] Scheduled "${task.title}" at ${slot.start_time} with status ${taskStatus}`);
                 
-                // Log scheduling to activity_log for tracing
-                await supabase.from('activity_log').insert({
+                // Best-effort activity logging (fire and forget)
+                supabase.from('activity_log').insert({
                   user_id: userId,
                   activity_type: 'task_scheduled',
                   session_id: task.id,
                   status: 'completed',
                   stage: 'auto_schedule',
                   metadata: { title: task.title, start_time: slot.start_time, status: taskStatus, today: todayInTz }
-                }).catch((e: Error) => console.error('[PARSE_AND_CREATE] Failed to log schedule activity:', e.message));
+                }).then(() => {
+                  console.log('[PARSE_AND_CREATE] Activity logged: task_scheduled');
+                }).catch(() => {
+                  // Silently ignore logging failures
+                });
               }
             }
           }
