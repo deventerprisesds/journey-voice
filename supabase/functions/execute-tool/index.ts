@@ -1056,12 +1056,13 @@ async function scheduleTask(supabase: any, args: any, timezone?: string): Promis
     const normalizedStartTime = normalizeDateTime(startTimeRaw, tz);
     console.log(`[SCHEDULE_TASK] Raw: ${startTimeRaw} → Normalized: ${normalizedStartTime} (tz: ${tz})`);
     
+    const normalizedDueDate = normalizeDueDate(dateStr, tz);
     const updateData: any = {
       start_time: normalizedStartTime,
       is_scheduled: true,
-      status: 'TODO',
+      status: 'UP_NEXT',  // Has start_time, so UP_NEXT
       // Sync due_date to the scheduled date
-      due_date: normalizeDueDate(dateStr, tz)
+      due_date: normalizedDueDate
     };
     
     if (args.duration_minutes) {
@@ -1241,7 +1242,7 @@ async function parseAndCreateTasks(
         description: task.description || null,
         priority: (task.priority || 'MEDIUM').toUpperCase(),
         category: (task.category || 'LIFE').toUpperCase(),
-        status: task.status || (normalizedStartTime ? 'UP_NEXT' : 'BACKLOG'),
+        status: task.status || ((normalizedStartTime || normalizedDueDate) ? 'UP_NEXT' : 'BACKLOG'),
         due_date: normalizedDueDate,
         start_time: normalizedStartTime,
         end_time: normalizedEndTime,
@@ -1310,7 +1311,14 @@ async function parseAndCreateTasks(
     }
 
     // 6. If auto_schedule is enabled and tasks need scheduling, call batch-calendar-scheduler
-    const unscheduledTasks = createdTasks.filter(t => !t.is_scheduled);
+    // Filter out tasks that already have start_time (they're already scheduled)
+    const unscheduledTasks = createdTasks.filter(t => {
+      if (t.start_time) {
+        console.log(`[PARSE_AND_CREATE] Task "${t.title}" has start_time, skipping batch scheduler`);
+        return false;
+      }
+      return !t.is_scheduled;
+    });
     const scheduledResults: Array<{ title: string; time: string }> = [];
 
     if (autoSchedule && unscheduledTasks.length > 0) {
@@ -1348,20 +1356,24 @@ async function parseAndCreateTasks(
           console.log('[PARSE_AND_CREATE] Batch scheduler result:', batchResult);
           
           // Apply scheduled times to tasks (already normalized by batch-calendar-scheduler)
+          const todayInTz = new Date().toLocaleDateString('en-CA', { timeZone: tz });
+          
           for (const slot of batchResult.scheduled || []) {
             const task = unscheduledTasks[slot.taskIndex];
             if (task && slot.start_time && slot.end_time) {
               // The batch scheduler now returns properly normalized UTC times
               // Also sync due_date to match the scheduled date
               const scheduledDate = slot.start_time.split('T')[0];
+              
+              // VALIDATION: Reject past dates - task keeps original status (BACKLOG if no due_date, UP_NEXT if has due_date)
+              if (scheduledDate < todayInTz) {
+                console.error(`[PARSE_AND_CREATE] REJECTED past date ${scheduledDate} for "${task.title}" - keeping original status`);
+                continue;
+              }
+              
               const syncedDueDate = normalizeDueDate(scheduledDate, tz);
               
-              // FIX: Determine status based on whether task is for today
-              // Tasks scheduled for today should be UP_NEXT, future tasks get TODO
-              const todayInTz = new Date().toLocaleDateString('en-CA', { timeZone: tz });
-              const taskStatus = scheduledDate === todayInTz ? 'UP_NEXT' : 'TODO';
-              
-              console.log(`[PARSE_AND_CREATE] Applying schedule: task="${task.title}", start=${slot.start_time}, synced_due=${syncedDueDate}, status=${taskStatus}, today=${todayInTz}`);
+              console.log(`[PARSE_AND_CREATE] Applying schedule: task="${task.title}", start=${slot.start_time}, synced_due=${syncedDueDate}, status=UP_NEXT, today=${todayInTz}`);
               
               const { error: updateError } = await supabase
                 .from('tasks')
@@ -1370,7 +1382,7 @@ async function parseAndCreateTasks(
                   end_time: slot.end_time,
                   due_date: syncedDueDate, // Sync due_date with scheduled date
                   is_scheduled: true,
-                  status: taskStatus  // Dynamic: UP_NEXT for today, TODO for future
+                  status: 'UP_NEXT'  // Has start_time now, so UP_NEXT
                 })
                 .eq('id', task.id);
 
@@ -1383,7 +1395,7 @@ async function parseAndCreateTasks(
                     timeZone: tz
                   })
                 });
-                console.log(`[PARSE_AND_CREATE] Scheduled "${task.title}" at ${slot.start_time} with status ${taskStatus}`);
+                console.log(`[PARSE_AND_CREATE] Scheduled "${task.title}" at ${slot.start_time} with status UP_NEXT`);
                 
                 // Best-effort activity logging (fire and forget)
                 supabase.from('activity_log').insert({
@@ -1392,7 +1404,7 @@ async function parseAndCreateTasks(
                   session_id: task.id,
                   status: 'completed',
                   stage: 'auto_schedule',
-                  metadata: { title: task.title, start_time: slot.start_time, status: taskStatus, today: todayInTz }
+                  metadata: { title: task.title, start_time: slot.start_time, status: 'UP_NEXT', today: todayInTz }
                 }).then(() => {
                   console.log('[PARSE_AND_CREATE] Activity logged: task_scheduled');
                 }).catch(() => {

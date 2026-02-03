@@ -197,15 +197,15 @@ CATEGORY TIME WINDOWS:
 
 CRITICAL TIME FORMAT REQUIREMENTS:
 - Return ALL times as ISO 8601 strings WITH EXPLICIT TIMEZONE OFFSET
-- Example for ${timezone}: "2026-01-30T12:00:00-05:00" (noon Eastern with offset)
-- Or use UTC with Z suffix: "2026-01-30T17:00:00Z" (same moment as noon Eastern)
-- NEVER return naive timestamps like "2026-01-30T12:00:00" without offset
+- Example for ${timezone}: "${targetDateStr}T12:00:00-05:00" (noon Eastern with offset)
+- Or use UTC with Z suffix: "${targetDateStr}T17:00:00Z" (same moment as noon Eastern)
+- NEVER return naive timestamps like "${targetDateStr}T12:00:00" without offset
 - The offset must reflect the actual timezone (${timezone})
 
 Return a JSON array with one entry per task in order:
 [
-  { "taskIndex": 0, "start_time": "2026-01-30T10:00:00-05:00", "end_time": "2026-01-30T11:00:00-05:00", "reasoning": "brief reason" },
-  { "taskIndex": 1, "start_time": "2026-01-30T14:00:00-05:00", "end_time": "2026-01-30T15:00:00-05:00", "reasoning": "brief reason" },
+  { "taskIndex": 0, "start_time": "${targetDateStr}T10:00:00-05:00", "end_time": "${targetDateStr}T11:00:00-05:00", "reasoning": "brief reason" },
+  { "taskIndex": 1, "start_time": "${targetDateStr}T14:00:00-05:00", "end_time": "${targetDateStr}T15:00:00-05:00", "reasoning": "brief reason" },
   ...
 ]
 
