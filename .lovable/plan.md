@@ -1,246 +1,197 @@
 
-# Plan: Fix Real-time UI Updates + SmartTaskInput Improvements
 
-## Problem Analysis
+# Plan: SmartTaskInput Positioning & Label Improvements
 
-### Issue 1: UI Not Updating Even After Manual Refresh
-The real root cause is more subtle than just the subscription event type:
+## Summary
 
-**Current subscriptions only listen for `INSERT`, missing `UPDATE`:**
-- `Dashboard.tsx` (line 45): `event: 'INSERT'`
-- `TasksPage.tsx` (line 62): `event: 'INSERT'`  
-- `Calendar.tsx`: **No subscription at all**
-
-**Why this matters:**
-When a task is created via voice/chat, the flow is:
-1. Task `INSERT` → UI should update (but might be missed)
-2. Task `UPDATE` with `start_time` → UI does NOT update (only INSERT subscribed)
-
-### Issue 2: Duplicate Reminders - Already Handled!
-Good news: The database trigger `schedule_task_reminders` already prevents duplicates:
-
-```sql
-IF NEW.start_time IS NOT NULL OR NEW.due_date IS NOT NULL THEN
-    DELETE FROM scheduled_notifications WHERE task_id = NEW.id;  -- Deletes ALL existing
-    -- Then creates fresh ones
-END IF;
-```
-
-Every time a task is updated (status, due_date, start_time, etc.), it:
-1. Deletes ALL pending scheduled_notifications for that task
-2. Creates fresh ones based on current task state
-
-So no duplicates will be created - this is already working correctly.
+This plan addresses three issues across three views:
+1. **Focus View**: Move SmartTaskInput to its own row at the top, above both columns
+2. **Kanban Board**: Move SmartTaskInput above the filter pills (category tabs) 
+3. **List View**: Move SmartTaskInput below the header section and above the "Group by" controls
+4. **All Views**: Improve the "+Assign" label to be more intuitive
 
 ---
 
-## Changes to Implement
+## Current vs. Desired Layout
 
-### Part 1: Fix Real-time Subscriptions
+### Focus View
 
-**File: `src/pages/Dashboard.tsx`**
-
-Change lines 44-45 from:
-```typescript
-{
-  event: 'INSERT',
+**Current**: SmartTaskInput is inside the "Today's Schedule" card, below the card header
 ```
-To:
-```typescript
-{
-  event: '*',
+┌─────────────────────────────────────────────────────────────┐
+│ Today's Schedule Card                 │ Currently Doing     │
+│ ┌─────────────────────────────────┐  │                     │
+│ │ [SmartTaskInput HERE - WRONG]   │  │                     │
+│ └─────────────────────────────────┘  │                     │
+│ Morning, Business Hours, etc.        │                     │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-Add UPDATE detection in the callback (lines 51-56):
-```typescript
-(payload) => {
-  console.log('Task change detected:', payload.eventType, payload.new?.title);
-  
-  if (payload.eventType === 'INSERT') {
-    toast.success(`Task Created: "${payload.new.title}"`);
-  } else if (payload.eventType === 'UPDATE' && payload.new?.start_time && !payload.old?.start_time) {
-    toast.success(`Task Scheduled: "${payload.new.title}"`);
-  }
-  
-  loadTasks();
-}
+**Desired**: SmartTaskInput on its own row at the very top
+```
+┌─────────────────────────────────────────────────────────────┐
+│ [SmartTaskInput - FULL WIDTH - OWN ROW]                     │
+├─────────────────────────────────────────────────────────────┤
+│ Today's Schedule Card                 │ Currently Doing     │
+└─────────────────────────────────────────────────────────────┘
 ```
 
----
+### Kanban Board (via TabbedKanbanBoard)
 
-**File: `src/pages/TasksPage.tsx`**
-
-Change line 62 from:
-```typescript
-event: 'INSERT',
+**Current**: Category pills are at the top, SmartTaskInput is below them inside KanbanBoard
 ```
-To:
-```typescript
-event: '*',
+[Today v] [Career] [Prof. Education] [Ventures] [Life]    ← Pills (in TabbedKanbanBoard)
+┌─────────────────────────────────────────────────────────────┐
+│ [SmartTaskInput HERE - WRONG]                               │ ← Inside KanbanBoard
+├─────────────────────────────────────────────────────────────┤
+│ Toolbar (Voice, Select, Show, Filters, AI Create, Schedule) │
+│ Kanban columns...                                           │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-Update callback (lines 67-71):
-```typescript
-(payload) => {
-  console.log('[TasksPage] Task change:', payload.eventType);
-  
-  if (payload.eventType === 'INSERT') {
-    toast.success(`Task Created: "${payload.new.title}"`);
-  } else if (payload.eventType === 'UPDATE' && payload.new?.start_time && !payload.old?.start_time) {
-    toast.success(`Task Scheduled: "${payload.new.title}"`);
-  }
-  
-  loadTasks();
-}
+**Desired**: SmartTaskInput above the category pills
+```
+┌─────────────────────────────────────────────────────────────┐
+│ [SmartTaskInput - FULL WIDTH - ABOVE PILLS]                 │
+├─────────────────────────────────────────────────────────────┤
+[Today v] [Career] [Prof. Education] [Ventures] [Life]
+│ Toolbar (Voice, Select, Show, Filters, AI Create, Schedule) │
+│ Kanban columns...                                           │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### List View (EnhancedTaskGridView)
+
+**Current**: SmartTaskInput at the very top, above "Task Grid" header
+```
+┌─────────────────────────────────────────────────────────────┐
+│ [SmartTaskInput HERE - WRONG]                               │
+├─────────────────────────────────────────────────────────────┤
+│ Task Grid                              [Select] [Hide] [Stats]│
+│ Manage your tasks in a structured grid view with grouping   │
+├─────────────────────────────────────────────────────────────┤
+│ Group by: [Category v]  Sort by: [Created v]  [↓ DESC]      │
+├─────────────────────────────────────────────────────────────┤
+│ Task table...                                               │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Desired**: SmartTaskInput between header/description and controls
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Task Grid                              [Select] [Hide] [Stats]│
+│ Manage your tasks in a structured grid view with grouping   │
+├─────────────────────────────────────────────────────────────┤
+│ [SmartTaskInput - CORRECT POSITION]                         │
+├─────────────────────────────────────────────────────────────┤
+│ Group by: [Category v]  Sort by: [Created v]  [↓ DESC]      │
+├─────────────────────────────────────────────────────────────┤
+│ Task table...                                               │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-**File: `src/pages/Calendar.tsx`**
+## Label Improvement
 
-Add new useEffect after line 108 to create a real-time subscription:
-```typescript
-// Set up real-time subscription for task changes
-useEffect(() => {
-  if (!user || isDemoMode) return;
-  
-  console.log('[Calendar] Setting up real-time subscription');
-  
-  const channel = supabase
-    .channel('calendar-task-changes')
-    .on(
-      'postgres_changes',
-      {
-        event: '*',
-        schema: 'public',
-        table: 'tasks',
-        filter: `user_id=eq.${user.id}`
-      },
-      (payload) => {
-        console.log('[Calendar] Task change detected:', payload.eventType);
-        loadTasks();
-      }
-    )
-    .subscribe();
-  
-  return () => {
-    supabase.removeChannel(channel);
-  };
-}, [user, isDemoMode]);
-```
+**Current**: `+Assign (0)` - Not intuitive, unclear what it assigns
+
+**New**: `📋 Include Homework (0)` - Clearer that it adds pending assignments/homework to the scheduling context
+
+Alternative options:
+- `+ Homework (0)` 
+- `Include Assignments (0)`
+- `+ Pending Work (0)`
 
 ---
 
-### Part 2: Condense SmartTaskInput to 2 Rows
+## Technical Changes
 
-**File: `src/components/SmartTaskInput.tsx`**
+### 1. SmartTaskInput.tsx - Update Label (Lines 220-225)
 
-Replace lines 201-244 with condensed layout:
-```typescript
+Change the label from "+Assign" to something more descriptive:
+```tsx
+<Label 
+  htmlFor="include-assignments" 
+  className="cursor-pointer text-xs text-muted-foreground whitespace-nowrap"
+>
+  + Homework ({selectedAssignmentIds.size})
+</Label>
+```
+
+Also add a tooltip or title attribute for additional clarity.
+
+### 2. FocusView.tsx - Move SmartTaskInput to Top Row
+
+**Current location**: Lines 388-395 (inside the "Today's Schedule" Card, after CardHeader)
+
+**Move to**: Before the grid div that contains both columns (line 366)
+
+```tsx
 return (
-  <div className="space-y-3">
-    <form onSubmit={handleSubmit} className="flex items-center gap-2">
-      <Input
-        value={input}
-        onChange={(e) => setInput(e.target.value)}
-        placeholder="Describe your task... (e.g., 'Review project tomorrow 2pm')"
-        disabled={isProcessing}
-        className="flex-1"
-      />
-      
-      {/* Compact assignment toggle */}
-      <div className="flex items-center gap-1.5 px-2 py-1.5 bg-muted/50 rounded-md shrink-0">
-        <Switch 
-          checked={includeAssignments} 
-          onCheckedChange={setIncludeAssignments}
-          id="include-assignments"
-          className="scale-90"
+  <DragDropContext onDragEnd={handleDragEnd}>
+    {/* Smart Task Input - Own row at top */}
+    <Card className="mb-4">
+      <CardContent className="pt-4">
+        <SmartTaskInput 
+          tasks={tasks}
+          targetDate={today}
+          onTaskScheduled={onTaskUpdate}
         />
-        <Label 
-          htmlFor="include-assignments" 
-          className="cursor-pointer text-xs text-muted-foreground whitespace-nowrap"
-        >
-          +Assign ({selectedAssignmentIds.size})
-        </Label>
-      </div>
-      
-      <Button type="submit" disabled={isProcessing || !input.trim()} size="icon">
-        {isProcessing ? (
-          <Loader2 className="h-4 w-4 animate-spin" />
-        ) : (
-          <Send className="h-4 w-4" />
-        )}
-      </Button>
-    </form>
+      </CardContent>
+    </Card>
+    
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      {/* Timeline - 2/3 width on desktop */}
+      ...
+```
 
-    {lastSuggestion && lastSuggestion.taskSuggestion && (
-      <EditableTaskSuggestion
-        suggestion={lastSuggestion.taskSuggestion}
-        onAccept={handleAcceptSuggestion}
-        onDismiss={() => {
-          setLastSuggestion(null);
-          setBusySlots([]);
-        }}
-        busySlots={busySlots}
-      />
-    )}
+**Remove**: The SmartTaskInput block from lines 388-395 inside the Today's Schedule card.
+
+### 3. TabbedKanbanBoard.tsx - Add SmartTaskInput Above Pills
+
+The category pills are rendered in `TabbedKanbanBoard.tsx` (line 173), but the KanbanBoard component inside each tab has its own SmartTaskInput.
+
+**Solution**: 
+1. Add SmartTaskInput import to `TabbedKanbanBoard.tsx`
+2. Add SmartTaskInput above the tabs (line 171)
+3. Remove SmartTaskInput from `KanbanBoard.tsx` (lines 1028-1037)
+
+```tsx
+// TabbedKanbanBoard.tsx
+import SmartTaskInput from './SmartTaskInput';
+
+return (
+  <div className="space-y-4">
+    {/* Smart Task Input - Above category tabs */}
+    <Card>
+      <CardContent className="pt-4">
+        <SmartTaskInput 
+          tasks={normalizedTasks}
+          targetDate={new Date()}
+          onTaskScheduled={onTaskUpdate}
+        />
+      </CardContent>
+    </Card>
+    
+    <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
+      {/* Pills row */}
+      <div className="flex items-center gap-1 ...">
+        ...
+      </div>
+      ...
+    </Tabs>
   </div>
 );
 ```
 
-**Visual change:**
-```
-Before (3 rows):
-┌──────────────────────────────────────────┐
-│ [Toggle] Include Selected Assignments (0) │  ← Row 1
-├──────────────────────────────────────────┤
-│ [Input field........................] [▶] │  ← Row 2
-├──────────────────────────────────────────┤
-│ [Editable suggestion card]                │  ← Row 3
-└──────────────────────────────────────────┘
+### 4. KanbanBoard.tsx - Remove SmartTaskInput
 
-After (2 rows):
-┌──────────────────────────────────────────┐
-│ [Input field..........] [+Assign (0)] [▶] │  ← Row 1
-├──────────────────────────────────────────┤
-│ [Editable suggestion card]                │  ← Row 2
-└──────────────────────────────────────────┘
-```
-
----
-
-### Part 3: Add SmartTaskInput to Other Views
-
-**File: `src/components/FocusView.tsx`**
-
-Add import at top:
-```typescript
-import SmartTaskInput from './SmartTaskInput';
-```
-
-Add component after the "Today's Schedule" CardHeader (find the appropriate CardContent location):
-```typescript
-<div className="px-4 pb-3">
-  <SmartTaskInput 
-    tasks={tasks}
-    targetDate={today}
-    onTaskScheduled={onTaskUpdate}
-  />
-</div>
-```
-
----
-
-**File: `src/components/KanbanBoard.tsx`**
-
-Add import at top:
-```typescript
-import SmartTaskInput from './SmartTaskInput';
-```
-
-Add component after the filter section, before the DragDropContext:
-```typescript
-<Card className="mb-4">
+Remove lines 1028-1037:
+```tsx
+// DELETE THIS BLOCK
+{/* Smart Task Input */}
+<Card>
   <CardContent className="pt-4">
     <SmartTaskInput 
       tasks={tasks}
@@ -251,62 +202,55 @@ Add component after the filter section, before the DragDropContext:
 </Card>
 ```
 
+Also remove the import from line 25.
+
+### 5. EnhancedTaskGridView.tsx - Move SmartTaskInput Below Header
+
+**Current location**: Lines 696-705 (at the very top)
+
+**Move to**: After the header section (line 746) and before the Controls section (line 781)
+
+The new order will be:
+1. Header ("Task Grid" title + description + buttons)
+2. Bulk Action Bar (if select mode active)
+3. **SmartTaskInput (NEW POSITION)**
+4. Controls (Group by, Sort by)
+5. Grouped Task Grid
+
+### 6. Toolbar Alignment in KanbanBoard.tsx
+
+The user noted the toolbar is right-aligned instead of left-aligned.
+
+**Current** (line 1040):
+```tsx
+<div className="flex items-center justify-end">
+```
+
+**Change to**:
+```tsx
+<div className="flex items-center justify-start">
+```
+
 ---
 
-**File: `src/components/EnhancedTaskGridView.tsx`**
+## Files to Modify
 
-Add import at top:
-```typescript
-import SmartTaskInput from './SmartTaskInput';
-```
-
-Add component before the table:
-```typescript
-<Card className="mb-4">
-  <CardContent className="pt-4">
-    <SmartTaskInput 
-      tasks={tasks}
-      targetDate={new Date()}
-      onTaskScheduled={onTaskUpdate}
-    />
-  </CardContent>
-</Card>
-```
+| File | Changes |
+|------|---------|
+| `src/components/SmartTaskInput.tsx` | Change "+Assign" label to "+ Homework" |
+| `src/components/FocusView.tsx` | Move SmartTaskInput above the grid, wrap in Card |
+| `src/components/TabbedKanbanBoard.tsx` | Add SmartTaskInput above the category tabs |
+| `src/components/KanbanBoard.tsx` | Remove SmartTaskInput, fix toolbar alignment |
+| `src/components/EnhancedTaskGridView.tsx` | Move SmartTaskInput between header and controls |
 
 ---
 
-## Summary
+## Expected Results
 
-| File | Change |
-|------|--------|
-| `src/pages/Dashboard.tsx` | Change realtime from `INSERT` to `*` |
-| `src/pages/TasksPage.tsx` | Change realtime from `INSERT` to `*` |
-| `src/pages/Calendar.tsx` | Add new realtime subscription |
-| `src/components/SmartTaskInput.tsx` | Condense to 2-row layout |
-| `src/components/FocusView.tsx` | Add SmartTaskInput import and component |
-| `src/components/KanbanBoard.tsx` | Add SmartTaskInput import and component |
-| `src/components/EnhancedTaskGridView.tsx` | Add SmartTaskInput import and component |
+After implementation:
+1. **Focus View**: SmartTaskInput on its own full-width row above both "Today's Schedule" and "Currently Doing" columns
+2. **Kanban Board**: SmartTaskInput above the category filter pills (Today, Career, etc.)
+3. **List View**: SmartTaskInput below the "Task Grid" title/description and above the "Group by" controls
+4. **All Views**: Label changed from "+Assign (0)" to "+ Homework (0)" for clarity
+5. **Kanban Toolbar**: Left-aligned instead of right-aligned
 
-## Technical Notes
-
-### Why Slack Arrives Before UI Updates
-```
-Task Creation via Voice/Chat:
-1. Edge function INSERTs task → DB trigger creates scheduled_notifications
-2. notification-delivery cron (runs every minute) → sends Slack immediately
-3. Meanwhile, browser realtime subscription...
-   - Was only listening for INSERT
-   - If task INSERT happened, then UPDATE for scheduling...
-   - UPDATE was NOT caught → UI never refreshed
-```
-
-### Duplicate Prevention (Already Working)
-The `schedule_task_reminders` trigger has this logic:
-```sql
-IF NEW.start_time IS NOT NULL OR NEW.due_date IS NOT NULL THEN
-    DELETE FROM scheduled_notifications WHERE task_id = NEW.id;
-    -- Then insert fresh notifications
-END IF;
-```
-
-This means every UPDATE to a task's timing fields wipes all pending notifications and creates new ones. No duplicates possible.
