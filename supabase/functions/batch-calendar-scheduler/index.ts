@@ -70,7 +70,25 @@ serve(async (req) => {
 
     // Determine date range for busy slots
     const now = new Date();
+    
+    // =============================================================
+    // EXPLICIT DATE CONTEXT - Create unambiguous date strings
+    // =============================================================
+    const todayISO = now.toISOString().split('T')[0];  // "2026-02-03"
+    const todayReadable = now.toLocaleDateString('en-US', {
+      timeZone: timezone,
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });  // "Monday, February 3, 2026"
+    
     const targetDateObj = targetDate ? new Date(targetDate) : null;
+    
+    // Create ISO date for use in examples (CRITICAL FIX)
+    const targetDateISO = targetDateObj 
+      ? targetDateObj.toISOString().split('T')[0]  // "2026-02-03"
+      : todayISO;
     
     // If allowOverflow, fetch busy slots for target date + next day
     // Otherwise, fetch for the next 14 days
@@ -152,7 +170,7 @@ serve(async (req) => {
         }).join('\n')
       : 'No existing conflicts';
 
-    // Determine target date for scheduling
+    // Determine target date for scheduling (human-readable for AI context)
     const targetDateStr = targetDateObj 
       ? targetDateObj.toLocaleDateString('en-US', { timeZone: timezone, dateStyle: 'full' })
       : 'today or tomorrow based on current time';
@@ -161,18 +179,35 @@ serve(async (req) => {
     const overflowInstructions = allowOverflow 
       ? `
 OVERFLOW RULES:
-- Primary target date: ${targetDateStr}
-- If there isn't enough time remaining on ${targetDateStr}, schedule remaining tasks for the NEXT DAY
+- Primary target date: ${targetDateISO} (${targetDateStr})
+- If there isn't enough time remaining on ${targetDateISO}, schedule remaining tasks for the NEXT DAY
 - Mark overflow tasks with reasoning like "Scheduled for tomorrow - today fully booked"
 - Prioritize HIGH/URGENT priority tasks for the target date
 - Tasks with earlier due dates should also be prioritized for the target date`
       : '';
 
+    // Current time in user's timezone for AI context
+    const currentTimeStr = now.toLocaleTimeString('en-US', { 
+      timeZone: timezone, 
+      hour: '2-digit', 
+      minute: '2-digit',
+      hour12: true
+    });
+
     const batchPrompt = `You are a scheduling assistant. Schedule ALL ${tasks.length} tasks efficiently, avoiding conflicts.
 
-TARGET DATE: ${targetDateStr}
-CURRENT TIME: ${now.toLocaleString('en-US', { timeZone: timezone })}
+=== CRITICAL DATE CONTEXT (READ CAREFULLY) ===
+TODAY'S DATE (ISO format): ${todayISO}
+TODAY'S DATE (readable): ${todayReadable}
+TARGET SCHEDULING DATE (ISO): ${targetDateISO}
+TARGET SCHEDULING DATE (readable): ${targetDateStr}
+CURRENT TIME: ${currentTimeStr}
 TIMEZONE: ${timezone}
+
+⚠️ IMPORTANT: ALL scheduled times MUST use date ${targetDateISO} or later.
+⚠️ NEVER schedule anything before ${todayISO}.
+⚠️ Use ISO format for all times: "${targetDateISO}T10:00:00-05:00"
+==============================================
 
 TASKS TO SCHEDULE:
 ${tasksList}
@@ -181,12 +216,12 @@ EXISTING BUSY SLOTS (MUST AVOID):
 ${busySlotsStr}
 
 SCHEDULING RULES:
-1. ${targetDateObj ? `IMPORTANT: Schedule ALL tasks for ${targetDateStr} first. Start from current time if today, or from 9am if future date.` : 'Schedule each task in its preferred time window based on category'}
+1. ${targetDateObj ? `IMPORTANT: Schedule ALL tasks for ${targetDateISO} first. Start from current time if today, or from 9am if future date.` : 'Schedule each task in its preferred time window based on category'}
 2. NEVER double-book - each new task must not overlap with busy slots OR other new tasks
 3. Higher priority tasks should get better time slots
 4. Respect due dates - schedule before deadline
 5. Leave 15-minute buffer between tasks when possible
-6. ${targetDateObj ? `Try to fit all tasks on ${targetDateStr}` : 'Start from tomorrow if today is mostly over'}
+6. ${targetDateObj ? `Try to fit all tasks on ${targetDateISO}` : 'Start from tomorrow if today is mostly over'}
 ${overflowInstructions}
 
 CATEGORY TIME WINDOWS:
@@ -197,19 +232,33 @@ CATEGORY TIME WINDOWS:
 
 CRITICAL TIME FORMAT REQUIREMENTS:
 - Return ALL times as ISO 8601 strings WITH EXPLICIT TIMEZONE OFFSET
-- Example for ${timezone}: "${targetDateStr}T12:00:00-05:00" (noon Eastern with offset)
-- Or use UTC with Z suffix: "${targetDateStr}T17:00:00Z" (same moment as noon Eastern)
-- NEVER return naive timestamps like "${targetDateStr}T12:00:00" without offset
+- Example for ${timezone}: "${targetDateISO}T12:00:00-05:00" (noon Eastern with offset)
+- Or use UTC with Z suffix: "${targetDateISO}T17:00:00Z" (same moment as noon Eastern)
+- NEVER return naive timestamps like "${targetDateISO}T12:00:00" without offset
 - The offset must reflect the actual timezone (${timezone})
 
 Return a JSON array with one entry per task in order:
 [
-  { "taskIndex": 0, "start_time": "${targetDateStr}T10:00:00-05:00", "end_time": "${targetDateStr}T11:00:00-05:00", "reasoning": "brief reason" },
-  { "taskIndex": 1, "start_time": "${targetDateStr}T14:00:00-05:00", "end_time": "${targetDateStr}T15:00:00-05:00", "reasoning": "brief reason" },
+  { "taskIndex": 0, "start_time": "${targetDateISO}T10:00:00-05:00", "end_time": "${targetDateISO}T11:00:00-05:00", "reasoning": "brief reason" },
+  { "taskIndex": 1, "start_time": "${targetDateISO}T14:00:00-05:00", "end_time": "${targetDateISO}T15:00:00-05:00", "reasoning": "brief reason" },
   ...
 ]
 
 IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include timezone offset or Z suffix.`;
+
+    // ===============================================
+    // TRACING: Log AI input for debugging
+    // ===============================================
+    console.log('=== BATCH SCHEDULER AI INPUT ===');
+    console.log('Today ISO:', todayISO);
+    console.log('Today Readable:', todayReadable);
+    console.log('Target Date ISO:', targetDateISO);
+    console.log('Target Date Readable:', targetDateStr);
+    console.log('Timezone:', timezone);
+    console.log('Tasks count:', tasks.length);
+    console.log('Prompt length:', batchPrompt.length);
+    console.log('First 800 chars of prompt:', batchPrompt.substring(0, 800));
+    console.log('=================================');
 
     console.log('🤖 Calling AI for batch scheduling...');
     const aiStartTime = Date.now();
@@ -260,6 +309,13 @@ IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include tim
     
     console.log(`✅ AI responded in ${Date.now() - aiStartTime}ms`);
 
+    // ===============================================
+    // TRACING: Log raw AI output for debugging
+    // ===============================================
+    console.log('=== BATCH SCHEDULER AI OUTPUT ===');
+    console.log('Raw AI response (first 1500 chars):', aiContent?.substring(0, 1500));
+    console.log('==================================');
+
     if (!aiContent) {
       throw new Error('No content in AI response');
     }
@@ -281,6 +337,20 @@ IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include tim
       }
       
       console.log(`✅ Parsed ${scheduledResults.length} scheduled slots`);
+      
+      // ===============================================
+      // TRACING: Log parsed results with date validation
+      // ===============================================
+      console.log('=== BATCH SCHEDULER PARSED RESULTS ===');
+      scheduledResults.forEach((r, i) => {
+        const dateFromResult = r.start_time?.split('T')[0];
+        console.log(`  Slot ${i}: taskIndex=${r.taskIndex}, start=${r.start_time}, end=${r.end_time}`);
+        if (dateFromResult && dateFromResult < todayISO) {
+          console.error(`  ⚠️ WARNING: Slot ${i} has PAST date ${dateFromResult} (today is ${todayISO})`);
+        }
+      });
+      console.log('======================================');
+      
     } catch (parseError) {
       console.error('❌ Failed to parse AI response:', aiContent.substring(0, 500));
       // Return empty schedule on parse error - tasks can be scheduled manually

@@ -3,7 +3,7 @@
 // Update GLOBAL_VERSION here and all functions will use it automatically
 // =============================================================================
 
-export const GLOBAL_VERSION = "2026-02-03-v20";
+export const GLOBAL_VERSION = "2026-02-03-v21";
 
 // Phone call mode types
 export type PhoneCallMode = 'media_streams' | 'conversation_relay' | 'cloudflare';
