@@ -1148,7 +1148,7 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
       <div className="relative">
         {/* Navigation Controls */}
         {canScrollLeft && (
-          <div className="absolute left-0 top-1/2 -translate-y-1/2 z-50">
+          <div className="fixed left-4 top-1/2 -translate-y-1/2 z-50 pointer-events-auto">
             <Button
               variant="outline"
               size="icon"
@@ -1161,7 +1161,7 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
         )}
         
         {canScrollRight && (
-          <div className="absolute right-0 top-1/2 -translate-y-1/2 z-50">
+          <div className="fixed right-4 top-1/2 -translate-y-1/2 z-50 pointer-events-auto">
             <Button
               variant="outline"
               size="icon"

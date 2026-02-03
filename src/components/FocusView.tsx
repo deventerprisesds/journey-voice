@@ -77,6 +77,13 @@ const timeWindowStyles: Record<string, {
     borderClass: 'border-l-4 border-l-purple-400',
     textClass: 'text-purple-700 dark:text-purple-300'
   },
+  other: { 
+    icon: <Clock className="h-4 w-4" />, 
+    label: 'Other Times', 
+    bgClass: 'bg-gray-50 dark:bg-gray-950/20',
+    borderClass: 'border-l-4 border-l-gray-400',
+    textClass: 'text-gray-700 dark:text-gray-300'
+  },
 };
 
 // Priority colors matching TaskCard
@@ -179,12 +186,16 @@ const FocusView: React.FC<FocusViewProps> = ({
     business_hours: [],
     after_work: [],
     evening: [],
+    other: [],  // Catch-all for tasks outside defined windows
   };
 
   scheduledToday.forEach(task => {
     const window = getTimeWindowForTask(task);
     if (window && tasksByWindow[window]) {
       tasksByWindow[window].push(task);
+    } else {
+      // Tasks outside defined time windows go to "other" bucket
+      tasksByWindow['other'].push(task);
     }
   });
 

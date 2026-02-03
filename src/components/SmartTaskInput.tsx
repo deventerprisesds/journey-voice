@@ -200,17 +200,27 @@ const SmartTaskInput: React.FC<SmartTaskInputProps> = ({
 
   return (
     <div className="space-y-3">
-      <form onSubmit={handleSubmit} className="flex items-center gap-2">
-        <Input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Describe your task... (e.g., 'Review project tomorrow 2pm')"
-          disabled={isProcessing}
-          className="flex-1"
-        />
+      <form onSubmit={handleSubmit} className="flex flex-wrap items-center gap-2">
+        {/* Main input row */}
+        <div className="flex items-center gap-2 flex-1 min-w-0 w-full sm:w-auto">
+          <Input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Describe your task..."
+            disabled={isProcessing}
+            className="flex-1 min-w-0"
+          />
+          <Button type="submit" disabled={isProcessing || !input.trim()} size="icon" className="shrink-0">
+            {isProcessing ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Send className="h-4 w-4" />
+            )}
+          </Button>
+        </div>
         
-        {/* Compact assignment toggle */}
-        <div className="flex items-center gap-1.5 px-2 py-1.5 bg-muted/50 rounded-md shrink-0">
+        {/* Toggle moves to second row on mobile */}
+        <div className="flex items-center gap-1.5 px-2 py-1.5 bg-muted/50 rounded-md w-full sm:w-auto justify-center sm:justify-start">
           <Switch 
             checked={includeAssignments} 
             onCheckedChange={setIncludeAssignments}
@@ -225,14 +235,6 @@ const SmartTaskInput: React.FC<SmartTaskInputProps> = ({
             + Homework ({selectedAssignmentIds.size})
           </Label>
         </div>
-        
-        <Button type="submit" disabled={isProcessing || !input.trim()} size="icon">
-          {isProcessing ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <Send className="h-4 w-4" />
-          )}
-        </Button>
       </form>
 
       {lastSuggestion && lastSuggestion.taskSuggestion && (

@@ -398,10 +398,24 @@ Examples:
             const batchResult = await batchResponse.json();
             console.log(`✅ Batch scheduler returned ${batchResult.scheduled?.length || 0} scheduled slots`);
             
-            // Merge scheduled times into parsed tasks
+            // Get today's date for validation
+            const todayISO = new Date().toISOString().split('T')[0];
+            
+            // Merge scheduled times into parsed tasks WITH DATE VALIDATION
             const tasksWithPreview = tasks.map((task: any, idx: number) => {
               const scheduled = batchResult.scheduled?.find((s: any) => s.taskIndex === idx);
               if (scheduled?.start_time && scheduled?.end_time) {
+                // VALIDATION: Reject past dates from batch scheduler
+                const scheduledDate = scheduled.start_time.split('T')[0];
+                if (scheduledDate < todayISO) {
+                  console.error(`[PARSER] REJECTED: Batch returned past date ${scheduledDate} for "${task.title}" (today=${todayISO})`);
+                  return {
+                    ...task,
+                    needsScheduling: true,
+                    schedulingHints: extractSchedulingHints(task.title, task.category, task.priority, userConfig),
+                  };
+                }
+                
                 return {
                   ...task,
                   start_time: scheduled.start_time,
