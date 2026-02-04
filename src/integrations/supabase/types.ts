@@ -3443,6 +3443,30 @@ export type Database = {
           },
         ]
       }
+      user_presence: {
+        Row: {
+          active_context: string | null
+          is_active: boolean | null
+          last_seen_at: string | null
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          active_context?: string | null
+          is_active?: boolean | null
+          last_seen_at?: string | null
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          active_context?: string | null
+          is_active?: boolean | null
+          last_seen_at?: string | null
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       user_roles: {
         Row: {
           created_at: string

@@ -4,6 +4,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useVoiceAssistant } from '@/contexts/VoiceAssistantContext';
 import { useUnifiedThread } from '@/hooks/useUnifiedThread';
+import { usePresenceTracking } from '@/hooks/usePresenceTracking';
 import type {
   Assistant,
   ConversationMessage,
@@ -333,6 +334,61 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
     loadChatHistory();
   }, [dbThreadId, userId, historyLoaded]);
+
+  // ============================================================
+  // Realtime subscription for new messages (instant delivery)
+  // ============================================================
+  useEffect(() => {
+    if (!dbThreadId || !userId) return;
+    
+    console.log('[CommsConsole] Setting up realtime subscription for thread:', dbThreadId);
+    
+    const channel = supabase
+      .channel(`chat-messages-${dbThreadId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'conversation_messages',
+          filter: `thread_id=eq.${dbThreadId}`,
+        },
+        (payload) => {
+          const newMessage = payload.new as any;
+          console.log('[CommsConsole] Realtime message received:', newMessage.id);
+          
+          // Deduplicate - skip if already in state
+          setMessages(prev => {
+            if (prev.some(m => m.id === newMessage.id)) return prev;
+            
+            return [...prev, {
+              id: newMessage.id,
+              role: newMessage.role as 'user' | 'assistant' | 'system',
+              content: newMessage.content,
+              source: (newMessage.source || 'chat') as CommunicationMode,
+              assistant_id: newMessage.assistant_id,
+              created_at: newMessage.created_at,
+            }];
+          });
+        }
+      )
+      .subscribe();
+    
+    return () => {
+      console.log('[CommsConsole] Cleaning up realtime subscription');
+      supabase.removeChannel(channel);
+    };
+  }, [dbThreadId, userId]);
+
+  // ============================================================
+  // User presence tracking for conditional push notifications
+  // ============================================================
+  usePresenceTracking({
+    userId,
+    isPanelOpen,
+    currentMode,
+    enabled: true
+  });
 
   // ============================================================
   // Handle notification clicks from service worker

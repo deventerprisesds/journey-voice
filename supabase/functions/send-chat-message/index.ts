@@ -147,15 +147,32 @@ serve(async (req) => {
       });
     }
 
-    console.log(`[SEND-CHAT-MESSAGE] Processing for user ${userId}, generateFromContext:`, generateFromContext);
+    console.log(`[SEND-CHAT-MESSAGE] Processing for user ${userId}, generateFromContext:`, generateFromContext, ', assistantId:', assistantId);
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // 1. Get or create the user's active chat thread
+    // 1. Resolve effective assistant ID
+    let effectiveAssistantId = assistantId;
+    
+    if (!effectiveAssistantId) {
+      // Fall back to user's default assistant
+      const { data: defaultAssistant } = await supabase
+        .from('assistants')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('is_default', true)
+        .maybeSingle();
+      
+      effectiveAssistantId = defaultAssistant?.id || null;
+      console.log('[SEND-CHAT-MESSAGE] Using default assistant:', effectiveAssistantId);
+    }
+
+    // 2. Get or create the user's active chat thread for this assistant
     const { data: existingThread } = await supabase
       .from('ai_threads')
       .select('id, openai_thread_id')
       .eq('user_id', userId)
+      .eq('assistant_id', effectiveAssistantId) // Match by assistant for consistent threading
       .order('updated_at', { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -163,13 +180,14 @@ serve(async (req) => {
     let dbThreadId = existingThread?.id;
 
     if (!dbThreadId) {
-      // Create a new thread
+      // Create a new thread for this user + assistant
       const { data: newThread, error: createError } = await supabase
         .from('ai_threads')
         .insert({
           user_id: userId,
+          assistant_id: effectiveAssistantId,
           openai_thread_id: `pending_${Date.now()}`, // Will be created on first API call
-          mode: 'chat'
+          mode: 'unified'
         })
         .select('id')
         .single();
@@ -179,10 +197,10 @@ serve(async (req) => {
         throw new Error('Failed to create conversation thread');
       }
       dbThreadId = newThread.id;
-      console.log('[SEND-CHAT-MESSAGE] Created new thread:', dbThreadId);
+      console.log('[SEND-CHAT-MESSAGE] Created new thread:', dbThreadId, 'for assistant:', effectiveAssistantId);
     }
 
-    // 2. Generate message content if needed
+    // 3. Generate message content if needed
     let content = message;
     let callType: string | undefined;
 
@@ -234,7 +252,7 @@ serve(async (req) => {
       });
     }
 
-    // 3. Store the message in conversation_messages
+    // 4. Store the message in conversation_messages WITH assistant_id
     const { data: storedMessage, error: storeError } = await supabase
       .from('conversation_messages')
       .insert({
@@ -243,7 +261,7 @@ serve(async (req) => {
         role: 'assistant',
         content,
         source: 'chat',
-        assistant_id: assistantId || null,
+        assistant_id: effectiveAssistantId, // Always set for proper UI filtering
         metadata: {
           system_initiated: true,
           trigger: callType || 'direct',
@@ -258,12 +276,29 @@ serve(async (req) => {
       throw new Error('Failed to store message in database');
     }
 
-    console.log('[SEND-CHAT-MESSAGE] Message stored with ID:', storedMessage.id);
+    console.log('[SEND-CHAT-MESSAGE] Message stored with ID:', storedMessage.id, 'assistant_id:', effectiveAssistantId);
 
-    // 4. Send push notification if requested
-    let pushResult = null;
+    // 5. Check user presence before sending push notification
+    let shouldSendPush = sendPush;
+    
     if (sendPush) {
-      console.log('[SEND-CHAT-MESSAGE] Sending push notification');
+      const { data: presence } = await supabase
+        .from('user_presence')
+        .select('is_active, active_context')
+        .eq('user_id', userId)
+        .maybeSingle();
+      
+      // Skip push if user is active in chat
+      if (presence?.is_active && presence?.active_context === 'chat') {
+        console.log('[SEND-CHAT-MESSAGE] User active in chat, skipping push notification');
+        shouldSendPush = false;
+      }
+    }
+
+    // 6. Send push notification only if user is NOT active in chat
+    let pushResult = null;
+    if (shouldSendPush) {
+      console.log('[SEND-CHAT-MESSAGE] Sending push notification (user not active in chat)');
       
       const pushResponse = await fetch(`${supabaseUrl}/functions/v1/send-push-notification`, {
         method: 'POST',
@@ -293,8 +328,9 @@ serve(async (req) => {
       success: true,
       threadId: dbThreadId,
       messageId: storedMessage.id,
+      assistantId: effectiveAssistantId,
       content,
-      pushSent: sendPush,
+      pushSent: shouldSendPush,
       pushResult
     }), {
       status: 200,
