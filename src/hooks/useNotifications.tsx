@@ -202,10 +202,23 @@ export const useNotifications = () => {
   };
 
   const getVapidPublicKey = async (): Promise<string> => {
-    // In a real implementation, you'd get this from your backend
-    // For demo purposes, we'll use a placeholder key
-    // You should generate actual VAPID keys for production
-    return 'BMqSvZPiJJXKVQr-8xI6U7VS_F3ZzXqj2x7tLuenJnyE8I_7xNcNSfXgzNhx3VXRn0wXOJNTWZW9CqZG4AQ5P-w';
+    try {
+      const { data, error } = await supabase.functions.invoke('get-vapid-key');
+      
+      if (error) {
+        console.error('Error fetching VAPID key:', error);
+        throw new Error('Failed to fetch VAPID key');
+      }
+      
+      if (!data?.vapidPublicKey) {
+        throw new Error('VAPID key not configured on server');
+      }
+      
+      return data.vapidPublicKey;
+    } catch (error) {
+      console.error('Failed to get VAPID public key:', error);
+      throw error;
+    }
   };
 
   const syncSubscriptionWithBackend = async (pushSubscription: PushSubscription): Promise<boolean> => {
