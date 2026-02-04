@@ -131,9 +131,27 @@ export const useNotifications = () => {
     try {
       const registration = await navigator.serviceWorker.ready;
       
-      // Generate VAPID public key or use existing one
+      // Fetch current VAPID public key from backend
       const vapidPublicKey = await getVapidPublicKey();
       
+      // Check for existing subscription with potentially different VAPID key
+      // This handles VAPID key rotation gracefully
+      const existingSubscription = await registration.pushManager.getSubscription();
+      
+      if (existingSubscription) {
+        // Always unsubscribe first to handle VAPID key changes
+        // PushManager.subscribe() throws if applicationServerKey differs from existing subscription
+        console.log('[useNotifications] Removing existing subscription before re-subscribing');
+        try {
+          await existingSubscription.unsubscribe();
+          await removeSubscriptionFromBackend();
+        } catch (unsubError) {
+          console.warn('[useNotifications] Could not unsubscribe old subscription:', unsubError);
+          // Continue anyway - the new subscribe call will either work or fail gracefully
+        }
+      }
+      
+      // Create new subscription with current VAPID key
       const pushSubscription = await registration.pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey: urlBase64ToUint8Array(vapidPublicKey).buffer as ArrayBuffer
