@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
-import { format, parseISO, isToday, formatDistanceToNow, addMinutes } from 'date-fns';
+import { format, parseISO, isToday, isPast, formatDistanceToNow, addMinutes, startOfDay } from 'date-fns';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -131,14 +131,32 @@ const FocusView: React.FC<FocusViewProps> = ({
   // Filter task groups
   const doingTasks = tasks.filter(t => t.status === 'DOING');
   
+  // Helper: Check if task is incomplete and was scheduled in the past (rolled over)
+  const isRolledOver = (t: Task): boolean => {
+    if (t.status === 'DONE' || t.status === 'DOING') return false;
+    if (!t.start_time) return false;
+    const startDate = parseISO(t.start_time);
+    // Past scheduled time AND not scheduled for today = rolled over
+    return isPast(startDate) && !isToday(startDate);
+  };
+  
   const upNextTasks = tasks
     .filter(t => 
       t.status === 'UP_NEXT' || 
       (t.status === 'READY' && ['URGENT', 'HIGH'].includes(t.priority)) ||
-      (t.status === 'TODO' && t.priority === 'URGENT')
+      (t.status === 'TODO' && t.priority === 'URGENT') ||
+      // NEW: Include rolled-over tasks (past scheduled, incomplete)
+      isRolledOver(t)
     )
+    // Exclude tasks already showing in Today's Schedule
+    .filter(t => !(t.start_time && isToday(parseISO(t.start_time))))
     .sort((a, b) => {
-      // Sort by priority first
+      // Rolled-over tasks bubble to top
+      const aRolled = isRolledOver(a);
+      const bRolled = isRolledOver(b);
+      if (aRolled && !bRolled) return -1;
+      if (!aRolled && bRolled) return 1;
+      // Then by priority
       const priorityDiff = priorityOrder[a.priority] - priorityOrder[b.priority];
       if (priorityDiff !== 0) return priorityDiff;
       // Then by due date
@@ -151,7 +169,7 @@ const FocusView: React.FC<FocusViewProps> = ({
     });
   
   const scheduledToday = tasks.filter(t => 
-    t.start_time && isToday(parseISO(t.start_time))
+    t.start_time && isToday(parseISO(t.start_time)) && t.status !== 'DONE'
   ).sort((a, b) => {
     if (!a.start_time || !b.start_time) return 0;
     return new Date(a.start_time).getTime() - new Date(b.start_time).getTime();
