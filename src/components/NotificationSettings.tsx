@@ -946,25 +946,47 @@ const NotificationSettings = () => {
                         </p>
                       </div>
                     </div>
-                    <Button 
-                      onClick={sendTestPush}
-                      variant="outline"
-                      size="sm"
-                      disabled={isTestingPush}
-                      className="w-full"
-                    >
-                      {isTestingPush ? (
-                        <>
-                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                          Sending...
-                        </>
-                      ) : (
-                        <>
-                          <Bell className="h-4 w-4 mr-2" />
-                          Send Test Push
-                        </>
-                      )}
-                    </Button>
+                    <div className="flex gap-2">
+                      <Button 
+                        onClick={sendTestPush}
+                        variant="outline"
+                        size="sm"
+                        disabled={isTestingPush || pushNotifications.isLoading}
+                        className="flex-1"
+                      >
+                        {isTestingPush ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            Sending...
+                          </>
+                        ) : (
+                          <>
+                            <Bell className="h-4 w-4 mr-2" />
+                            Send Test
+                          </>
+                        )}
+                      </Button>
+                      <Button
+                        onClick={pushNotifications.forceResubscribe}
+                        variant="outline"
+                        size="sm"
+                        disabled={pushNotifications.isLoading}
+                        className="flex-1"
+                        title="Force refresh push subscription - use if notifications aren't working"
+                      >
+                        {pushNotifications.isLoading ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            Refreshing...
+                          </>
+                        ) : (
+                          <>
+                            <RefreshCw className="h-4 w-4 mr-2" />
+                            Refresh
+                          </>
+                        )}
+                      </Button>
+                    </div>
                   </>
                 ) : (
                   <Button 

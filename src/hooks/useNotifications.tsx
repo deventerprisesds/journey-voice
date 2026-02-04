@@ -172,10 +172,12 @@ export const useNotifications = () => {
         throw new Error('Failed to sync subscription with backend');
       }
     } catch (error) {
-      console.error('Error subscribing to push notifications:', error);
+      console.error('[useNotifications] Error subscribing to push notifications:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error('[useNotifications] Error details:', errorMessage);
       toast({
         title: "Subscription failed",
-        description: "Failed to subscribe to push notifications",
+        description: `Push subscription error: ${errorMessage}`,
         variant: "destructive",
       });
       return false;
@@ -211,6 +213,103 @@ export const useNotifications = () => {
       toast({
         title: "Unsubscription failed",
         description: "Failed to unsubscribe from push notifications",
+        variant: "destructive",
+      });
+      return false;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  /**
+   * Force resubscribe - clears all stale data and creates fresh subscription
+   * Use when VAPID keys have changed or subscription is in a bad state
+   */
+  const forceResubscribe = async (): Promise<boolean> => {
+    if (!user) {
+      toast({
+        title: "Not logged in",
+        description: "Please log in to enable notifications",
+        variant: "destructive",
+      });
+      return false;
+    }
+
+    setIsLoading(true);
+    try {
+      console.log('[useNotifications] Starting force resubscribe...');
+      
+      // 1. Remove all backend subscriptions for this user
+      console.log('[useNotifications] Step 1: Removing backend subscriptions...');
+      await removeSubscriptionFromBackend();
+      
+      // 2. Get current SW registration and unsubscribe from any push
+      console.log('[useNotifications] Step 2: Unsubscribing from push manager...');
+      const registration = await navigator.serviceWorker.ready;
+      const existingSub = await registration.pushManager.getSubscription();
+      if (existingSub) {
+        try {
+          await existingSub.unsubscribe();
+          console.log('[useNotifications] Successfully unsubscribed existing subscription');
+        } catch (e) {
+          console.warn('[useNotifications] Failed to unsubscribe existing:', e);
+        }
+      }
+      setSubscription(null);
+      
+      // 3. Clear the service worker cache to bust any stale data
+      console.log('[useNotifications] Step 3: Clearing service worker caches...');
+      try {
+        const cacheNames = await caches.keys();
+        for (const name of cacheNames) {
+          await caches.delete(name);
+        }
+        console.log('[useNotifications] Cleared', cacheNames.length, 'caches');
+      } catch (e) {
+        console.warn('[useNotifications] Failed to clear caches:', e);
+      }
+      
+      // 4. Ensure permission is still granted
+      if (Notification.permission !== 'granted') {
+        const permission = await Notification.requestPermission();
+        if (permission !== 'granted') {
+          throw new Error('Notification permission denied');
+        }
+      }
+      
+      // 5. Now subscribe fresh with current VAPID key
+      console.log('[useNotifications] Step 4: Creating fresh subscription...');
+      const vapidPublicKey = await getVapidPublicKey();
+      console.log('[useNotifications] Got VAPID key:', vapidPublicKey.substring(0, 20) + '...');
+      
+      const pushSubscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(vapidPublicKey).buffer as ArrayBuffer
+      });
+      
+      console.log('[useNotifications] New subscription created:', pushSubscription.endpoint.substring(0, 50) + '...');
+      setSubscription(pushSubscription);
+      
+      // 6. Sync with backend
+      console.log('[useNotifications] Step 5: Syncing with backend...');
+      const success = await syncSubscriptionWithBackend(pushSubscription);
+      
+      if (success) {
+        console.log('[useNotifications] Force resubscribe completed successfully!');
+        toast({
+          title: "Push refreshed",
+          description: "Successfully refreshed push notification registration",
+        });
+        return true;
+      } else {
+        throw new Error('Failed to sync new subscription with backend');
+      }
+    } catch (error) {
+      console.error('[useNotifications] Force resubscribe failed:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      toast({
+        title: "Refresh failed",
+        description: `Could not refresh push subscription: ${errorMessage}`,
         variant: "destructive",
       });
       return false;
@@ -342,6 +441,7 @@ export const useNotifications = () => {
     requestPermission,
     subscribe,
     unsubscribe,
+    forceResubscribe,
     sendTestNotification
   };
 };
