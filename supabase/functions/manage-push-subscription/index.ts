@@ -17,6 +17,7 @@ interface PushSubscription {
 interface RequestBody {
   action: 'subscribe' | 'unsubscribe';
   subscription?: PushSubscription;
+  userId: string;
 }
 
 serve(async (req) => {
@@ -26,35 +27,27 @@ serve(async (req) => {
   }
 
   try {
+    // Use service role key for server-side operations (matches other notification functions)
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-      {
-        global: {
-          headers: { Authorization: req.headers.get('Authorization')! },
-        },
-      }
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
-    // Get the user from the request
-    const {
-      data: { user },
-      error: userError,
-    } = await supabaseClient.auth.getUser();
+    const { action, subscription, userId }: RequestBody = await req.json();
 
-    if (userError || !user) {
-      console.error('Authentication error:', userError);
+    // Validate userId is provided
+    if (!userId) {
+      console.error('Missing userId in request body');
       return new Response(
-        JSON.stringify({ error: 'Unauthorized' }),
+        JSON.stringify({ error: 'userId required' }),
         {
-          status: 401,
+          status: 400,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         }
       );
     }
 
-    const { action, subscription }: RequestBody = await req.json();
-    console.log(`Processing ${action} request for user:`, user.id);
+    console.log(`Processing ${action} request for user:`, userId);
 
     if (action === 'subscribe') {
       if (!subscription) {
@@ -71,7 +64,7 @@ serve(async (req) => {
       const { error: insertError } = await supabaseClient
         .from('push_subscriptions')
         .upsert({
-          user_id: user.id,
+          user_id: userId,
           endpoint: subscription.endpoint,
           p256dh_key: subscription.keys.p256dh,
           auth_key: subscription.keys.auth,
@@ -121,7 +114,7 @@ serve(async (req) => {
       const { error: deleteError } = await supabaseClient
         .from('push_subscriptions')
         .delete()
-        .eq('user_id', user.id);
+        .eq('user_id', userId);
 
       if (deleteError) {
         console.error('Error deleting subscription:', deleteError);
