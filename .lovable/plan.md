@@ -1,142 +1,185 @@
 
-# Fix: AI Choosing Slack Instead of In-App Chat for Messages
 
-## Problem Identified
+# Create QuickTaskInput for Focus View Direct Task Creation
 
-When you ask the AI "send me a message about xyz", it routes to Slack instead of the in-app chat. This is a **tool description ambiguity issue** in the OpenAI assistant.
+## Overview
 
-### Root Cause
+Create a new, simpler component specifically for the Focus View that directly calls `parse_and_create_tasks` (same as Chat/Voice) instead of going through the preview card flow.
 
-The tool descriptions in `execute-tool/index.ts` create confusion:
+## Why a New Component?
 
-| Tool | Current Description | Problem |
-|------|---------------------|---------|
-| `send_slack_message` | "Send a Slack message to the user." | Generic - sounds like the default |
-| `send_chat_message` | "Send a chat message to the user. Use for 'remind me in X minutes'..." | Focuses on scheduling, not general messaging |
+`SmartTaskInput` is used in 4 places:
+- `FocusView.tsx` - Today's schedule (needs direct creation)
+- `EnhancedTaskGridView.tsx` - List view (keeps preview)
+- `CalendarModule.tsx` - Calendar view (keeps preview)
+- `TabbedKanbanBoard.tsx` - Kanban view (keeps preview)
 
-When you say "send me a message about X", the AI sees `send_slack_message` as the simpler match because `send_chat_message` emphasizes delayed/scheduled messages.
-
----
+Only Focus View needs the simplified "create immediately" behavior. The other 3 views benefit from the preview/edit step since they deal with various dates.
 
 ## Solution
 
-Update the tool descriptions to make `send_chat_message` the **primary in-app messaging tool** and `send_slack_message` the **explicit Slack integration tool**:
+### File 1: Create `src/components/QuickTaskInput.tsx` (NEW)
 
-### Updated Descriptions
+A streamlined component that:
+- Takes text input from user
+- Calls `execute-tool` edge function with `parse_and_create_tasks`
+- Always defaults `target_date` to `'today'` (using central timezone utility)
+- Creates task immediately (no preview step)
+- Shows success/error toast
 
-**`send_chat_message`** (PRIMARY for in-app messages):
-```
-"Send a message to the user via the app's chat interface. This is the PRIMARY way to message the user.
-Use for: immediate messages, reminders ('remind me in X minutes'), scheduled check-ins ('send me a message at 3pm'),
-or any request to 'message me', 'text me', 'send me something', or 'notify me'. Prefer this over Slack unless
-the user explicitly says 'send to Slack' or 'Slack message'."
-```
-
-**`send_slack_message`** (ONLY for explicit Slack requests):
-```
-"Send a message via Slack integration. ONLY use this when the user EXPLICITLY requests Slack
-(e.g., 'send me a Slack message', 'post to Slack', 'message me on Slack'). For general
-'send me a message' requests, use send_chat_message instead."
-```
-
----
-
-## Implementation Details
-
-### File: `supabase/functions/execute-tool/index.ts`
-
-**Change 1: Update `send_slack_message` description (lines 181-191)**
-
-From:
 ```typescript
-{
-  type: "function",
-  name: "send_slack_message",
-  description: "Send a Slack message to the user.",
-  parameters: {
-    type: "object",
-    properties: {
-      message: { type: "string", description: "The message to send" }
-    },
-    required: ["message"]
-  }
+import React, { useState } from 'react';
+import { Send, Loader2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { supabase } from '@/integrations/supabase/client';
+import { useToast } from '@/hooks/use-toast';
+import { getDefaultTimezone } from '@/lib/date';
+
+interface QuickTaskInputProps {
+  onTaskCreated?: () => void;
 }
+
+const QuickTaskInput: React.FC<QuickTaskInputProps> = ({ onTaskCreated }) => {
+  const [input, setInput] = useState('');
+  const [isProcessing, setIsProcessing] = useState(false);
+  const { toast } = useToast();
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!input.trim() || isProcessing) return;
+
+    setIsProcessing(true);
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('User not authenticated');
+
+      const userTimezone = getDefaultTimezone();
+
+      // Call execute-tool with parse_and_create_tasks
+      // target_date: 'today' ensures due_date defaults to today
+      const { data, error } = await supabase.functions.invoke('execute-tool', {
+        body: {
+          toolName: 'parse_and_create_tasks',
+          toolArgs: {
+            text: input.trim(),
+            target_date: 'today',
+            auto_schedule: true
+          },
+          userId: user.id,
+          context: {
+            timezone: userTimezone
+          }
+        }
+      });
+
+      if (error) throw error;
+      if (!data?.success) throw new Error(data?.error || 'Failed to create task');
+
+      const createdCount = data.result?.createdTasks?.length || 1;
+      toast({
+        title: "Task Created",
+        description: `Added ${createdCount} task${createdCount !== 1 ? 's' : ''} to today's schedule`,
+      });
+
+      setInput('');
+      onTaskCreated?.();
+
+    } catch (error) {
+      console.error('Failed to create task:', error);
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to create task",
+        variant: "destructive"
+      });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="flex items-center gap-2">
+      <Input
+        value={input}
+        onChange={(e) => setInput(e.target.value)}
+        placeholder="Add a task for today..."
+        disabled={isProcessing}
+        className="flex-1"
+      />
+      <Button type="submit" disabled={isProcessing || !input.trim()} size="icon">
+        {isProcessing ? (
+          <Loader2 className="h-4 w-4 animate-spin" />
+        ) : (
+          <Send className="h-4 w-4" />
+        )}
+      </Button>
+    </form>
+  );
+};
+
+export default QuickTaskInput;
 ```
 
-To:
+### File 2: Update `src/components/FocusView.tsx`
+
+Replace `SmartTaskInput` import and usage with `QuickTaskInput`:
+
+**Change 1**: Update import (line 35):
 ```typescript
-{
-  type: "function",
-  name: "send_slack_message",
-  description: "Send a message via Slack integration. ONLY use when user EXPLICITLY requests Slack (e.g., 'send me a Slack message', 'post to Slack', 'message me on Slack'). For general 'send me a message' requests, use send_chat_message instead.",
-  parameters: {
-    type: "object",
-    properties: {
-      message: { type: "string", description: "The message to send" }
-    },
-    required: ["message"]
-  }
-}
+// Before
+import SmartTaskInput from './SmartTaskInput';
+
+// After
+import QuickTaskInput from './QuickTaskInput';
 ```
 
-**Change 2: Update `send_chat_message` description (lines 254-279)**
-
-From:
+**Change 2**: Update component usage (lines 398-402):
 ```typescript
-{
-  type: "function",
-  name: "send_chat_message",
-  description: "Send a chat message to the user. Use for 'remind me in X minutes', 'send me a message at 3pm', 'check in with me later', or any deferred messaging request.",
-  parameters: { ... }
-}
+// Before
+<SmartTaskInput 
+  tasks={tasks}
+  targetDate={today}
+  onTaskScheduled={onTaskUpdate}
+/>
+
+// After
+<QuickTaskInput 
+  onTaskCreated={() => onTaskUpdate?.(null as any)}
+/>
 ```
 
-To:
-```typescript
-{
-  type: "function",
-  name: "send_chat_message",
-  description: "Send a message to the user via the app's chat interface. This is the PRIMARY and DEFAULT way to message the user. Use for: immediate messages, reminders ('remind me in X minutes'), scheduled check-ins ('message me at 3pm'), or ANY request like 'message me', 'send me something', 'text me', 'notify me about X'. Prefer this over Slack/Email unless user explicitly requests those channels.",
-  parameters: { ... }
-}
+## How It Works
+
+```text
+User types "gym" in Focus View
+        ↓
+QuickTaskInput → execute-tool edge function
+        ↓
+toolName: 'parse_and_create_tasks'
+toolArgs: { text: "gym", target_date: "today", auto_schedule: true }
+        ↓
+execute-tool resolves "today" → "2026-02-04" (user's timezone)
+        ↓
+ai-task-parser sets due_date: "2026-02-04"
+        ↓
+Task created in DB with due_date + auto-scheduled start_time
+        ↓
+Toast "Task Created" → List refreshes → Task appears
 ```
 
----
+## Files to Create/Modify
 
-## Why This Works
+| File | Action |
+|------|--------|
+| `src/components/QuickTaskInput.tsx` | CREATE - New simplified component |
+| `src/components/FocusView.tsx` | MODIFY - Use QuickTaskInput instead of SmartTaskInput |
 
-1. **"PRIMARY and DEFAULT"** - Makes it clear to the AI that this is the preferred tool
-2. **Broader trigger phrases** - Covers "message me", "send me something", "text me", "notify me"
-3. **Explicit routing** - `send_slack_message` now says "ONLY use when user EXPLICITLY requests Slack"
-4. **Immediate + delayed** - Covers both use cases in one tool
+## Benefits
 
----
+1. **No breaking changes** - SmartTaskInput unchanged for other views
+2. **Unified with Chat/Voice** - Same `parse_and_create_tasks` path
+3. **Automatic due_date** - Always defaults to today for Focus View
+4. **Simpler UX** - No preview step needed for today's tasks
+5. **Uses central timezone utility** - Consistent date handling
 
-## Files to Modify
-
-| File | Changes |
-|------|---------|
-| `supabase/functions/execute-tool/index.ts` | Update descriptions for `send_slack_message` and `send_chat_message` |
-
----
-
-## Expected Behavior After Fix
-
-| User Says | AI Chooses |
-|-----------|------------|
-| "Send me a message about the meeting" | `send_chat_message` |
-| "Message me in 5 minutes" | `send_chat_message` |
-| "Remind me at 3pm" | `send_chat_message` |
-| "Text me about this" | `send_chat_message` |
-| "Send me a **Slack** message" | `send_slack_message` |
-| "Post this to **Slack**" | `send_slack_message` |
-
----
-
-## Testing
-
-After deployment:
-1. Ask the AI: "Send me a message about my tasks"
-2. Verify `send_chat_message` is called (check activity_log for `chat_send` events)
-3. Ask the AI: "Send me a Slack message about my tasks"
-4. Verify `send_slack_message` is called
