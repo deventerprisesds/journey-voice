@@ -5,13 +5,14 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
-import { Calendar, Mail, MessageSquare, Volume2, VolumeX, CheckCircle2, AlertCircle, Loader2, RefreshCw } from "lucide-react";
+import { Calendar, Mail, MessageSquare, Volume2, VolumeX, CheckCircle2, AlertCircle, Loader2, RefreshCw, Bell, BellOff, Smartphone } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { z } from "zod";
 import { CalendarOAuthManager } from "./CalendarOAuthManager";
+import { useNotifications } from "@/hooks/useNotifications";
 
 type NotificationChannel = 'EMAIL' | 'SLACK' | 'PUSH' | 'OUTLOOK_EVENT' | 'GOOGLE_EVENT';
 type DatabaseChannel = NotificationChannel;
@@ -58,8 +59,10 @@ const NotificationSettings = () => {
   const [outlookExpired, setOutlookExpired] = useState(false);
   const [googleExpired, setGoogleExpired] = useState(false);
   const [isTestingOutlook, setIsTestingOutlook] = useState(false);
+  const [isTestingPush, setIsTestingPush] = useState(false);
   const { toast } = useToast();
   const { user, isDemoMode } = useAuth();
+  const pushNotifications = useNotifications();
 
   useEffect(() => {
     if (isDemoMode) {
@@ -568,6 +571,66 @@ const NotificationSettings = () => {
     }
   };
 
+  const sendTestPush = async () => {
+    if (!pushNotifications.subscription) {
+      toast({
+        title: "Not Subscribed",
+        description: "Please enable push notifications first.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsTestingPush(true);
+    try {
+      const { error } = await supabase.functions.invoke('send-push-notification', {
+        body: {
+          userId: user?.id,
+          title: '🧪 Test Push Notification',
+          body: 'If you see this, browser push notifications are working!',
+          data: { type: 'test_notification' }
+        }
+      });
+
+      if (error) throw error;
+
+      toast({
+        title: "Test Push Sent",
+        description: "Check your browser/device for the notification.",
+      });
+    } catch (error: any) {
+      console.error('Error sending test push:', error);
+      toast({
+        title: "Test Failed",
+        description: error.message || "Could not send test push notification.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsTestingPush(false);
+    }
+  };
+
+  const handleEnablePush = async () => {
+    const permissionGranted = await pushNotifications.requestPermission();
+    if (permissionGranted) {
+      const subscribed = await pushNotifications.subscribe();
+      if (subscribed) {
+        // Add PUSH to channels if not already there
+        if (!prefs.channels.includes('PUSH')) {
+          setPrefs({ ...prefs, channels: [...prefs.channels, 'PUSH'] });
+        }
+      }
+    }
+  };
+
+  const handleDisablePush = async () => {
+    const unsubscribed = await pushNotifications.unsubscribe();
+    if (unsubscribed) {
+      // Remove PUSH from channels
+      setPrefs({ ...prefs, channels: prefs.channels.filter(c => c !== 'PUSH') });
+    }
+  };
+
   const testQuietHours = async () => {
     try {
       const now = new Date();
@@ -820,6 +883,110 @@ const NotificationSettings = () => {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                 />
+              </div>
+            )}
+          </div>
+
+          {/* Push Notifications Section */}
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Smartphone className="h-5 w-5 text-primary" />
+                <div>
+                  <h4 className="font-medium">Push Notifications</h4>
+                  <p className="text-sm text-muted-foreground">Browser/device notifications for instant alerts</p>
+                  {/* Status indicator */}
+                  {!pushNotifications.isSupported ? (
+                    <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
+                      <AlertCircle className="h-3 w-3" />
+                      Not supported in this browser
+                    </p>
+                  ) : pushNotifications.permission === 'denied' ? (
+                    <p className="text-xs text-destructive flex items-center gap-1 mt-1">
+                      <BellOff className="h-3 w-3" />
+                      Blocked - enable in browser settings
+                    </p>
+                  ) : pushNotifications.subscription ? (
+                    <p className="text-xs text-green-600 flex items-center gap-1 mt-1">
+                      <CheckCircle2 className="h-3 w-3" />
+                      Enabled and subscribed
+                    </p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
+                      <Bell className="h-3 w-3" />
+                      Not enabled
+                    </p>
+                  )}
+                </div>
+              </div>
+              <Switch
+                checked={prefs.channels.includes('PUSH') && pushNotifications.subscription}
+                onCheckedChange={(checked) => {
+                  if (checked) {
+                    handleEnablePush();
+                  } else {
+                    handleDisablePush();
+                  }
+                }}
+                disabled={!pushNotifications.isSupported || pushNotifications.permission === 'denied' || pushNotifications.isLoading}
+              />
+            </div>
+            
+            {/* Push subscription controls */}
+            {pushNotifications.isSupported && pushNotifications.permission !== 'denied' && (
+              <div className="space-y-2 mt-4 pl-8">
+                {pushNotifications.subscription ? (
+                  <>
+                    <div className="flex items-center gap-2 p-3 rounded-md bg-muted/50 border border-border">
+                      <CheckCircle2 className="h-4 w-4 text-green-500 flex-shrink-0" />
+                      <div className="text-sm">
+                        <span className="font-medium">Push notifications active</span>
+                        <p className="text-xs text-muted-foreground">
+                          You'll receive instant browser notifications for task reminders.
+                        </p>
+                      </div>
+                    </div>
+                    <Button 
+                      onClick={sendTestPush}
+                      variant="outline"
+                      size="sm"
+                      disabled={isTestingPush}
+                      className="w-full"
+                    >
+                      {isTestingPush ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          Sending...
+                        </>
+                      ) : (
+                        <>
+                          <Bell className="h-4 w-4 mr-2" />
+                          Send Test Push
+                        </>
+                      )}
+                    </Button>
+                  </>
+                ) : (
+                  <Button 
+                    onClick={handleEnablePush}
+                    variant="outline"
+                    size="sm"
+                    disabled={pushNotifications.isLoading}
+                    className="w-full"
+                  >
+                    {pushNotifications.isLoading ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Enabling...
+                      </>
+                    ) : (
+                      <>
+                        <Bell className="h-4 w-4 mr-2" />
+                        Enable Push Notifications
+                      </>
+                    )}
+                  </Button>
+                )}
               </div>
             )}
           </div>
@@ -1109,13 +1276,26 @@ const NotificationSettings = () => {
             </Button>
 
             <Button 
+              onClick={sendTestPush}
+              variant="outline" 
+              className="w-full"
+              disabled={!pushNotifications.subscription || isTestingPush}
+            >
+              {isTestingPush ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Bell className="h-4 w-4 mr-2" />
+              )}
+              Test Push
+            </Button>
+
+            <Button 
               onClick={sendTestInApp}
               variant="outline" 
               className="w-full"
-              disabled={!prefs.channels.includes('PUSH')}
             >
               <Volume2 className="h-4 w-4 mr-2" />
-              Test In-App
+              Test In-App Toast
             </Button>
 
             <Button 
