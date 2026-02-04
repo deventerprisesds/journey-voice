@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useAuth';
+import { supabase } from '@/integrations/supabase/client';
 import { loadUserSchedulingConfig, saveUserSchedulingConfig, type SchedulingConfigWithInstructions, type CustomVoice, type ScheduledCall, type PhoneCallMode, type CommsMode } from '@/services/schedulingService';
 import { Loader2, RotateCcw, Save, Plus, Trash2, Volume2, Phone, Clock, AlertCircle, Radio, Copy, Check, MessageSquare, Mail, Hash } from 'lucide-react';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
@@ -136,12 +137,34 @@ const VoiceAssistantSettings: React.FC = () => {
   
   // Phone call infrastructure
   const [phoneCallMode, setPhoneCallMode] = useState<PhoneCallMode>('media_streams');
+  
+  // Available assistants for selection
+  const [assistants, setAssistants] = useState<{ id: string; name: string }[]>([]);
 
   useEffect(() => {
     if (user?.id) {
       loadConfig();
+      loadAssistants();
     }
   }, [user?.id]);
+
+  const loadAssistants = async () => {
+    if (!user?.id) return;
+    
+    try {
+      const { data, error } = await supabase
+        .from('assistants')
+        .select('id, name')
+        .eq('user_id', user.id)
+        .eq('is_active', true)
+        .order('is_default', { ascending: false });
+      
+      if (error) throw error;
+      if (data) setAssistants(data);
+    } catch (error) {
+      console.error('Failed to load assistants:', error);
+    }
+  };
 
   const loadConfig = async () => {
     if (!user?.id) return;
@@ -326,6 +349,14 @@ const VoiceAssistantSettings: React.FC = () => {
     setScheduledCalls(calls =>
       calls.map(call =>
         call.id === callId ? { ...call, commsMode } : call
+      )
+    );
+  };
+
+  const handleUpdateCallAssistant = (callId: string, assistantId: string) => {
+    setScheduledCalls(calls =>
+      calls.map(call =>
+        call.id === callId ? { ...call, assistantId } : call
       )
     );
   };
@@ -773,6 +804,27 @@ const VoiceAssistantSettings: React.FC = () => {
                               </SelectItem>
                             </SelectContent>
                           </Select>
+                          {/* Assistant selector - show for chat/phone modes */}
+                          {assistants.length > 0 && (
+                            <>
+                              <span className="text-muted-foreground">•</span>
+                              <Select
+                                value={call.assistantId || assistants[0]?.id || ''}
+                                onValueChange={(value) => handleUpdateCallAssistant(call.id, value)}
+                              >
+                                <SelectTrigger className="h-6 w-20 text-xs border-none p-0 focus:ring-0 bg-transparent">
+                                  <SelectValue placeholder="Assistant" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {assistants.map((assistant) => (
+                                    <SelectItem key={assistant.id} value={assistant.id}>
+                                      {assistant.name}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </>
+                          )}
                         </div>
                       </div>
                     </div>

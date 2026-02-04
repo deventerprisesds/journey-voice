@@ -34,6 +34,7 @@ export interface ScheduledCall {
   callType: 'morning_standup' | 'midday_checkin' | 'eod_wrapup' | 'custom';
   context: string;
   commsMode?: CommsMode; // Delivery method (default: 'phone')
+  assistantId?: string;  // Which assistant sends the message (for chat/phone modes)
 }
 
 // Communication mode for delivery method

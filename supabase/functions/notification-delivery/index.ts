@@ -215,12 +215,15 @@ serve(async (req) => {
       console.log(`  - ID: ${notif.id}, Type: ${notif.notification_type}, Scheduled: ${notif.scheduled_for}, Title: "${notif.title}"`);
     }
     
-    // Separate scheduled_call notifications from regular notifications
+    // Separate scheduled_call and scheduled_chat notifications from regular notifications
     const scheduledCallNotifications = pendingNotifications.filter(
       (n: any) => n.notification_type === 'scheduled_call'
     );
+    const scheduledChatNotifications = pendingNotifications.filter(
+      (n: any) => n.notification_type === 'scheduled_chat'
+    );
     const regularNotifications = pendingNotifications.filter(
-      (n: any) => n.notification_type !== 'scheduled_call'
+      (n: any) => n.notification_type !== 'scheduled_call' && n.notification_type !== 'scheduled_chat'
     );
 
     let delivered = 0;
@@ -367,6 +370,67 @@ serve(async (req) => {
             failure_reason: error instanceof Error ? error.message : 'Unknown error'
           })
           .eq('id', callNotification.id);
+        
+        failed++;
+      }
+    }
+
+    // Process scheduled_chat notifications
+    for (const chatNotification of scheduledChatNotifications) {
+      try {
+        const userId = chatNotification.user_id;
+        console.log(`💬 Processing scheduled chat for user ${userId}: "${chatNotification.title}"`);
+        
+        // Parse metadata for message details
+        const metadata = chatNotification.metadata || {};
+        
+        const { data: chatResult, error: chatError } = await supabaseClient.functions.invoke('send-chat-message', {
+          body: {
+            userId,
+            message: metadata.message,
+            generateFromContext: metadata.message 
+              ? undefined 
+              : { callType: 'custom', context: metadata.context || 'scheduled check-in' },
+            sendPush: true,
+            assistantId: metadata.assistantId
+          }
+        });
+        
+        if (chatError) {
+          console.error(`💬 Chat failed for user ${userId}:`, chatError);
+          
+          await supabaseClient
+            .from('scheduled_notifications')
+            .update({
+              failed_at: new Date().toISOString(),
+              failure_reason: chatError.message || 'Chat delivery failed'
+            })
+            .eq('id', chatNotification.id);
+          
+          failed++;
+        } else {
+          console.log(`✅ Chat delivered successfully for user ${userId}`);
+          
+          await supabaseClient
+            .from('scheduled_notifications')
+            .update({
+              delivered_at: new Date().toISOString(),
+              failure_reason: null
+            })
+            .eq('id', chatNotification.id);
+          
+          delivered++;
+        }
+      } catch (error) {
+        console.error(`Failed to process scheduled chat ${chatNotification.id}:`, error);
+        
+        await supabaseClient
+          .from('scheduled_notifications')
+          .update({
+            failed_at: new Date().toISOString(),
+            failure_reason: error instanceof Error ? error.message : 'Unknown error'
+          })
+          .eq('id', chatNotification.id);
         
         failed++;
       }

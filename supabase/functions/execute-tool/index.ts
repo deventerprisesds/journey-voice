@@ -251,6 +251,32 @@ export const toolDefinitions = [
       }
     }
   },
+  {
+    type: "function",
+    name: "send_chat_message",
+    description: "Send a chat message to the user. Use for 'remind me in X minutes', 'send me a message at 3pm', 'check in with me later', or any deferred messaging request.",
+    parameters: {
+      type: "object",
+      properties: {
+        delay_minutes: { 
+          type: "number", 
+          description: "Minutes to wait before sending (e.g., 'in 5 minutes' = 5). If 0 or not provided, sends immediately." 
+        },
+        scheduled_time: { 
+          type: "string", 
+          description: "Specific time to send in HH:MM format (e.g., '15:00' for 3pm). Takes precedence over delay_minutes." 
+        },
+        message: { 
+          type: "string", 
+          description: "The message content to send. If not provided, AI will generate a contextual message." 
+        },
+        context: { 
+          type: "string", 
+          description: "Context for AI to generate a message if no specific message provided (e.g., 'check on task progress', 'daily reminder')" 
+        }
+      }
+    }
+  },
 
   // SEARCH TOOLS
   {
@@ -658,6 +684,9 @@ async function executeToolCall(
       case 'initiate_phone_call':
       case 'Phone_Call':
         return await initiatePhoneCall(supabase, userId, args, context.interface);
+      
+      case 'send_chat_message':
+        return await sendScheduledChatMessage(supabase, userId, args);
 
       // ============ SEARCH TOOLS ============
       case 'web_search':
@@ -1750,6 +1779,92 @@ async function initiatePhoneCall(supabase: any, userId: string, args: any, inter
       };
     }
   } catch (error) {
+    return { success: false, error: extractErrorMessage(error) };
+  }
+}
+
+// ============================================================================
+// SCHEDULED CHAT MESSAGE FUNCTION
+// ============================================================================
+
+async function sendScheduledChatMessage(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
+  const delayMinutes = args.delay_minutes || 0;
+  const scheduledTime = args.scheduled_time;
+  const message = args.message;
+  const context = args.context || 'scheduled check-in';
+  
+  console.log(`[SEND_CHAT_MESSAGE] userId: ${userId}, delay: ${delayMinutes}min, time: ${scheduledTime}, message: ${message?.substring(0, 50)}`);
+  
+  try {
+    // Get user's default assistant ID
+    const { data: defaultAssistant } = await supabase
+      .from('assistants')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('is_default', true)
+      .maybeSingle();
+    
+    const assistantId = defaultAssistant?.id || null;
+    
+    // Calculate when to send
+    let sendAt: Date;
+    if (scheduledTime) {
+      // Parse HH:MM and set for today/tomorrow
+      const [hours, minutes] = scheduledTime.split(':').map(Number);
+      sendAt = new Date();
+      sendAt.setHours(hours, minutes, 0, 0);
+      if (sendAt < new Date()) sendAt.setDate(sendAt.getDate() + 1); // Tomorrow if past
+    } else {
+      sendAt = new Date(Date.now() + delayMinutes * 60 * 1000);
+    }
+    
+    // Send immediately if no delay
+    if (delayMinutes === 0 && !scheduledTime) {
+      const { data, error } = await supabase.functions.invoke('send-chat-message', {
+        body: {
+          userId,
+          message,
+          generateFromContext: message ? undefined : { callType: 'custom', context },
+          sendPush: true,
+          assistantId
+        }
+      });
+      
+      if (error) throw error;
+      
+      return { 
+        success: true, 
+        message: message ? 'Message sent!' : `I've sent you a check-in message.`
+      };
+    }
+    
+    // Schedule for later via scheduled_notifications
+    const { error } = await supabase.from('scheduled_notifications').insert({
+      user_id: userId,
+      notification_type: 'scheduled_chat',
+      scheduled_for: sendAt.toISOString(),
+      title: 'Iris',
+      body: message || `Scheduled check-in: ${context}`,
+      metadata: {
+        type: 'chat_message',
+        message,
+        context,
+        assistantId
+      }
+    });
+    
+    if (error) throw error;
+    
+    const timeDescription = scheduledTime 
+      ? `at ${scheduledTime}`
+      : `in ${delayMinutes} minute${delayMinutes !== 1 ? 's' : ''}`;
+    
+    return { 
+      success: true, 
+      message: `I'll send you a message ${timeDescription}.`
+    };
+  } catch (error) {
+    console.error('[SEND_CHAT_MESSAGE] Error:', error);
     return { success: false, error: extractErrorMessage(error) };
   }
 }
