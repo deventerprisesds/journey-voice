@@ -1,75 +1,186 @@
 
 
-# Systematic Prevention: Supabase Integration Checklist
+# Fix: Realtime Subscription + Presence Tracking Failures
 
-## Problem Analysis
+## Root Cause Analysis
 
-You're right - we have checklists but they don't cover this failure mode:
+The Realtime message subscription did NOT work because of a race condition and RLS policy issues:
 
-| Existing Checklist | What It Covers | Gap |
-|-------------------|----------------|-----|
-| `cloudflare/PREFLIGHT_CHECKLIST.md` | Cloudflare worker deployments | No Supabase coverage |
-| `docs/DEBUG_TRACKER.md` | UI bugs and attempted fixes | Not preventive for new features |
+### Finding 1: Race Condition in Thread Initialization
 
-The Realtime oversight happened because there's no checklist that says: *"When implementing Realtime subscriptions, verify the table is in the publication."*
+The Realtime subscription at line 341-381 of `CommsConsoleContext.tsx` depends on `dbThreadId`:
 
-## Solution: Create Supabase Integration Checklist
-
-Create `docs/SUPABASE_CHECKLIST.md` with mandatory verification steps for common Supabase features:
-
-### Proposed Checklist Sections
-
-**1. Realtime Subscriptions**
-```text
-When adding a Realtime subscription to a table:
-- [ ] Table added to publication: `ALTER PUBLICATION supabase_realtime ADD TABLE public.<table>`
-- [ ] Verify with query: `SELECT * FROM pg_publication_tables WHERE pubname = 'supabase_realtime'`
-- [ ] RLS policies allow SELECT for the subscribing user
-- [ ] Test subscription receives events (INSERT, UPDATE, DELETE as needed)
+```typescript
+useEffect(() => {
+  if (!dbThreadId || !userId) return;  // <-- EXIT EARLY if null
+  // ... subscription code
+}, [dbThreadId, userId]);
 ```
 
-**2. New Tables**
-```text
-When creating a new table:
-- [ ] RLS enabled: `ALTER TABLE <table> ENABLE ROW LEVEL SECURITY`
-- [ ] RLS policies created for all required operations (SELECT, INSERT, UPDATE, DELETE)
-- [ ] If Realtime needed, add to publication
-- [ ] Types regenerated: verify `src/integrations/supabase/types.ts` updated
+The `dbThreadId` comes from `useUnifiedThread` which requires BOTH `userId` AND `assistantId`:
+
+```typescript
+// useUnifiedThread.ts line 39
+if (!enabled || !userId || !assistantId) {
+  setDbThreadId(null);  // <-- dbThreadId stays null!
+  return;
+}
 ```
 
-**3. Edge Functions Calling Database**
-```text
-When an edge function writes to a table:
-- [ ] Uses SUPABASE_SERVICE_ROLE_KEY for admin operations
-- [ ] Uses user's auth token for user-scoped operations
-- [ ] Error handling includes RLS denial cases
+**Timeline of the bug:**
+1. User loads page → `userId` becomes available
+2. `useUnifiedThread` runs but `currentAssistant` is still `null`
+3. `dbThreadId` remains `null`
+4. Realtime subscription sees `!dbThreadId` → **never subscribes**
+5. Later, `currentAssistant` is set from the async fetch
+6. `useUnifiedThread` runs again and sets `dbThreadId`
+7. Realtime subscription now works... **but the user may have already missed messages**
+
+### Finding 2: User Presence RLS Policy Issue
+
+The console log shows:
+```
+[PresenceTracking] Failed to update presence: 
+  new row violates row-level security policy for table "user_presence"
 ```
 
-**4. Common Mistakes Log**
-```text
+The upsert operation fails because:
+- There's no existing row in `user_presence` for this user
+- The INSERT policy exists but the upsert's ON CONFLICT behavior may be triggering incorrectly
+
+This means **presence is never set**, so the `send-chat-message` function thinks the user is always "away" and tries to send push notifications.
+
+### Finding 3: Database State Confirmation
+
+```sql
+-- Thread exists and is correctly linked:
+SELECT id, assistant_id FROM ai_threads WHERE user_id = 'a3378f93-...';
+-- Result: 6643d1fc-904e-4103-b143-e51f2f4b5015, f6d67661-c41b-49e4-...
+
+-- Messages are being stored with correct thread_id:
+SELECT thread_id FROM conversation_messages WHERE user_id = 'a3378f93-...' LIMIT 1;
+-- Result: 6643d1fc-904e-4103-b143-e51f2f4b5015
+
+-- Table IS in the publication:
+SELECT tablename FROM pg_publication_tables WHERE pubname = 'supabase_realtime';
+-- Result: conversation_messages ✓
+
+-- But presence is empty (failed to upsert):
+SELECT * FROM user_presence WHERE user_id = 'a3378f93-...';
+-- Result: (empty)
+```
+
+---
+
+## Solution
+
+### Fix 1: Update user_presence RLS to Allow Initial Insert
+
+The current INSERT policy may have a conflict with the ALL policy. Simplify to a single policy:
+
+```sql
+-- Drop conflicting policies
+DROP POLICY IF EXISTS "Users can insert own presence" ON user_presence;
+DROP POLICY IF EXISTS "Users can manage own presence" ON user_presence;
+DROP POLICY IF EXISTS "Users can view own presence" ON user_presence;
+
+-- Create a single unified policy for authenticated users
+CREATE POLICY "Users can manage own presence"
+  ON user_presence
+  FOR ALL
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
+
+-- Keep service role policy for edge functions
+-- (already exists: "Service role can read all presence")
+```
+
+### Fix 2: Ensure Realtime Subscription Waits for Valid Thread
+
+Modify the Realtime subscription effect to log clearly when it can't subscribe, and ensure it retries when `dbThreadId` becomes available:
+
+**File: `src/contexts/CommsConsoleContext.tsx` (lines 341-381)**
+
+Add logging to understand when subscription is active:
+
+```typescript
+useEffect(() => {
+  if (!userId) {
+    console.log('[CommsConsole] Realtime: No userId, skipping subscription');
+    return;
+  }
+  if (!dbThreadId) {
+    console.log('[CommsConsole] Realtime: No dbThreadId yet, waiting for thread initialization');
+    return;
+  }
+  
+  console.log('[CommsConsole] Realtime: Setting up subscription for thread:', dbThreadId);
+  
+  const channel = supabase
+    .channel(`chat-messages-${dbThreadId}`)
+    .on(/* ... existing code ... */)
+    .subscribe((status) => {
+      console.log('[CommsConsole] Realtime subscription status:', status);
+    });
+  
+  return () => {
+    console.log('[CommsConsole] Realtime: Cleaning up subscription for thread:', dbThreadId);
+    supabase.removeChannel(channel);
+  };
+}, [dbThreadId, userId]);
+```
+
+### Fix 3: Add Presence Debugging
+
+Add more logging to `usePresenceTracking.ts` to understand failure modes:
+
+```typescript
+try {
+  const { error, data } = await supabase
+    .from('user_presence')
+    .upsert({/* ... */}, { onConflict: 'user_id' });
+
+  if (error) {
+    console.error('[PresenceTracking] Failed to update presence:', error);
+    console.error('[PresenceTracking] User ID:', userId, 'Auth UID:', (await supabase.auth.getUser()).data.user?.id);
+  }
+} catch (err) {
+  console.error('[PresenceTracking] Error:', err);
+}
+```
+
+---
+
+## Files to Modify
+
+| File | Change |
+|------|--------|
+| Migration | Fix `user_presence` RLS policies |
+| `src/contexts/CommsConsoleContext.tsx` | Add Realtime debug logging |
+| `src/hooks/usePresenceTracking.ts` | Add auth debugging |
+
+## Testing After Fix
+
+1. Open browser DevTools Console
+2. Navigate to a page with Comms Console
+3. Look for logs:
+   - `[CommsConsole] Realtime: Setting up subscription for thread: <uuid>`
+   - `[CommsConsole] Realtime subscription status: SUBSCRIBED`
+   - `[PresenceTracking] Updated: isActive=true, context=chat`
+4. I'll send a test message via edge function
+5. You should see:
+   - `[CommsConsole] Realtime message received: <uuid>`
+   - Message appears instantly in chat
+   - NO push notification (because you're active in chat)
+
+## Checklist Update
+
+Add to `docs/SUPABASE_CHECKLIST.md`:
+
+```markdown
 | Date | Mistake | Resolution |
 |------|---------|------------|
-| 2026-02-04 | Realtime subscription created but table not in publication | Always run ALTER PUBLICATION after creating subscription code |
+| 2026-02-04 | Realtime subscription never started due to race condition with async thread initialization | Always ensure subscription dependencies are set before subscription runs; add debug logging |
+| 2026-02-04 | RLS INSERT+ALL policies conflicted on upsert for new rows | Use single ALL policy with USING and WITH CHECK clauses |
 ```
-
-## Update Debug Tracker
-
-Add this incident to `docs/DEBUG_TRACKER.md` Lessons Learned:
-
-```text
-4. **Supabase Realtime requires explicit publication registration**: Creating a frontend subscription (`.channel().on('postgres_changes')`) does NOT automatically enable events. The table must be added to the `supabase_realtime` publication via `ALTER PUBLICATION`. Always verify with `pg_publication_tables` query.
-```
-
-## How This Prevents Future Oversights
-
-1. **Before implementing Realtime**: I read the checklist and see the publication step
-2. **After implementing Realtime**: I verify with the `pg_publication_tables` query
-3. **When a new mistake is discovered**: We add it to the Common Mistakes Log
-
-## Files to Create/Modify
-
-| File | Action | Purpose |
-|------|--------|---------|
-| `docs/SUPABASE_CHECKLIST.md` | CREATE | Preventive checklist for Supabase integrations |
-| `docs/DEBUG_TRACKER.md` | UPDATE | Add Realtime lesson to Lessons Learned |
 
