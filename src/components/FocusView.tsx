@@ -32,7 +32,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { useAuth } from '@/hooks/useAuth';
 import { useBatchScheduling } from '@/hooks/useBatchScheduling';
 import { getTimePartsInTimezone, localTimeToUtcISO, getDefaultTimezone } from '@/lib/date';
-import SmartTaskInput from './SmartTaskInput';
+import QuickTaskInput from './QuickTaskInput';
 
 interface FocusViewProps {
   tasks: Task[];
@@ -395,11 +395,7 @@ const FocusView: React.FC<FocusViewProps> = ({
       {/* Smart Task Input - Own row at top */}
       <Card className="mb-4">
         <CardContent className="pt-4">
-          <SmartTaskInput 
-            tasks={tasks}
-            targetDate={today}
-            onTaskScheduled={onTaskUpdate}
-          />
+          <QuickTaskInput onTaskCreated={onTaskUpdate} />
         </CardContent>
       </Card>
       
