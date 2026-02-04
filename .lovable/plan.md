@@ -1,100 +1,127 @@
 
 
-# Generate Valid VAPID Keys
+# Implementation: Fix Push Notifications & Shortcut Task Input
 
 ## Summary
 
-Create a utility edge function that generates a cryptographically valid VAPID key pair using the Web Crypto API. You'll call it once, copy the keys, then I'll update the secrets.
+Updating VAPID secrets with the generated valid key pair and refactoring `ItineraryEngine.findOptimalTimeSlot()` to use the working `ai-task-parser` instead of `smart-calendar-scheduler`. The VAPID key generation utility will be kept for future use.
 
 ---
 
-## Implementation
+## Part 1: Update VAPID Secrets
 
-### Step 1: Create Utility Edge Function
+Update both secrets with the generated values:
 
-**File: `supabase/functions/generate-vapid-keys/index.ts`**
+| Secret | Value |
+|--------|-------|
+| `VAPID_PUBLIC_KEY` | `BFTRyPyY3SHyUwoXERMEXOH1kfgB0iIEHmuP1u6rp3V-_pVsp8upDKZDojFvUkztL021Y8v_EdWeK9boXKl67QU` |
+| `VAPID_PRIVATE_KEY` | `_pVsp8upDKZDojFvUkztL021Y8v_EdWeK9boXKl67QU` |
 
+---
+
+## Part 2: Refactor ItineraryEngine.findOptimalTimeSlot()
+
+**File: `src/utils/ItineraryEngine.ts`**
+
+Replace the `smart-calendar-scheduler` call (lines 342-356) with `ai-task-parser`:
+
+### Current Code (lines 342-365)
 ```typescript
-import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
+const { data, error } = await supabase.functions.invoke('smart-calendar-scheduler', {
+  body: {
+    taskText,
+    targetDate: targetDate?.toISOString() || new Date().toISOString(),
+    existingTasks,
+    workingMinutes: 420,
+    busySlots,
+    scheduling_context: this.extractSchedulingContext(taskText, existingTasks[0]?.category)
+  }
+});
 
-// ECDSA P-256 curve for VAPID keys
-async function generateVapidKeys() {
-  const keyPair = await crypto.subtle.generateKey(
-    { name: "ECDSA", namedCurve: "P-256" },
-    true,
-    ["sign", "verify"]
-  );
-
-  // Export keys in raw format
-  const publicKeyBuffer = await crypto.subtle.exportKey("raw", keyPair.publicKey);
-  const privateKeyBuffer = await crypto.subtle.exportKey("pkcs8", keyPair.privateKey);
-
-  // Extract the 32-byte private key from PKCS8 format (last 32 bytes)
-  const privateKeyBytes = new Uint8Array(privateKeyBuffer).slice(-32);
-
-  // Convert to URL-safe base64
-  const publicKey = btoa(String.fromCharCode(...new Uint8Array(publicKeyBuffer)))
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-  const privateKey = btoa(String.fromCharCode(...privateKeyBytes))
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-
-  return { publicKey, privateKey };
+if (error) {
+  console.error('Smart scheduler error:', error);
+  throw error;
 }
 
-serve(async () => {
-  const keys = await generateVapidKeys();
-  
-  return new Response(JSON.stringify({
-    message: "Copy these keys to your Supabase secrets",
-    VAPID_PUBLIC_KEY: keys.publicKey,
-    VAPID_PRIVATE_KEY: keys.privateKey,
-    instructions: [
-      "1. Copy VAPID_PUBLIC_KEY value",
-      "2. Go to Supabase > Settings > Edge Functions > Add secret",
-      "3. Name: VAPID_PUBLIC_KEY, Value: [paste]",
-      "4. Repeat for VAPID_PRIVATE_KEY"
-    ]
-  }, null, 2), {
-    headers: { "Content-Type": "application/json" }
-  });
+return {
+  ...data,
+  busySlots
+};
+```
+
+### New Code
+```typescript
+// Use the working ai-task-parser (same as chat/voice)
+const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+const { data, error } = await supabase.functions.invoke('ai-task-parser', {
+  body: {
+    text: taskText,
+    timezone,
+    userId: user.id,
+    targetDate: targetDate?.toISOString().split('T')[0] || new Date().toISOString().split('T')[0],
+    existingTasks: existingTasks.map(t => ({
+      id: t.id,
+      title: t.title,
+      start_time: t.start_time,
+      end_time: t.end_time,
+      category: t.category
+    }))
+  }
 });
-```
 
-### Step 2: Register in Config
+if (error) {
+  console.error('AI task parser error:', error);
+  throw new Error(`Failed to parse task: ${error.message || 'Unknown error'}`);
+}
 
-**File: `supabase/config.toml`** (add entry)
+if (!data?.tasks || data.tasks.length === 0) {
+  throw new Error('No tasks parsed from input');
+}
 
-```toml
-[functions.generate-vapid-keys]
-verify_jwt = false
+const parsedTask = data.tasks[0];
+
+return {
+  parsedTask: {
+    title: parsedTask.title,
+    description: parsedTask.description,
+    priority: parsedTask.priority,
+    category: parsedTask.category,
+    estimate_minutes: parsedTask.estimate_minutes || 60,
+    due_date: parsedTask.due_date,
+    status: parsedTask.status
+  },
+  scheduledSlot: parsedTask.start_time ? {
+    start_time: parsedTask.start_time,
+    end_time: parsedTask.end_time
+  } : null,
+  aiReasoning: `Parsed as ${parsedTask.category} task with ${parsedTask.priority} priority`,
+  busySlots
+};
 ```
 
 ---
 
-## Usage
-
-After deployment, call the function:
-```
-GET https://wwxgajrtmslzklnyplah.supabase.co/functions/v1/generate-vapid-keys
-```
-
-Response will contain both keys ready to copy to secrets.
-
----
-
-## After Keys Are Set
-
-Once you confirm the new keys are in secrets, I'll:
-1. Delete the utility function (no longer needed)
-2. Fix `ItineraryEngine.ts` to use `ai-task-parser`
-3. Test push notifications end-to-end
-
----
-
-## Files to Create/Modify
+## Files to Modify
 
 | File | Action |
 |------|--------|
-| `supabase/functions/generate-vapid-keys/index.ts` | Create |
-| `supabase/config.toml` | Add function entry |
+| **Secrets** | Update `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` |
+| `src/utils/ItineraryEngine.ts` | Refactor `findOptimalTimeSlot()` (lines 342-365) |
+
+---
+
+## What Stays Unchanged
+
+- `supabase/functions/generate-vapid-keys/index.ts` - kept for future use
+- `supabase/config.toml` - keeps the `generate-vapid-keys` entry
+- `smart-calendar-scheduler` - remains available for batch scheduling
+- All chat/voice paths continue working as-is
+
+---
+
+## Expected Outcome
+
+1. **Push notifications work** - Valid VAPID keys enable browser push delivery
+2. **Shortcut task input works** - Uses same AI path as chat/voice (`ai-task-parser` with `OPENAI_API_KEY`)
+3. **Consistent architecture** - Single AI parsing function for all task creation paths
 
