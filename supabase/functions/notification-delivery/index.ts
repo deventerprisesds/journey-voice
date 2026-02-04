@@ -128,21 +128,23 @@ async function scheduleNextOccurrence(supabaseClient: any, userId: string, callC
   try {
     const callTime = callConfig.call_time; // e.g., "11:00:00"
     const timezone = callConfig.timezone || 'America/New_York';
+    const commsMode = callConfig.comms_mode || 'phone';
 
-    // Call the database function to schedule next occurrence
+    // Call the database function to schedule next occurrence with comms_mode preserved
     const { error } = await supabaseClient.rpc('schedule_next_call', {
       p_user_id: userId,
       p_call_id: callConfig.call_id,
       p_call_name: callConfig.call_name,
       p_call_time: callTime,
       p_call_context: callConfig.context || '',
-      p_timezone: timezone
+      p_timezone: timezone,
+      p_comms_mode: commsMode
     });
 
     if (error) {
       console.error(`Failed to schedule next occurrence for ${callConfig.call_name}:`, error);
     } else {
-      console.log(`📅 Scheduled next occurrence of ${callConfig.call_name} for tomorrow`);
+      console.log(`📅 Scheduled next occurrence of ${callConfig.call_name} for tomorrow (mode: ${commsMode})`);
     }
   } catch (error) {
     console.error('Error scheduling next call occurrence:', error);
@@ -243,27 +245,9 @@ serve(async (req) => {
           callConfig = { call_id: 'custom', context: callNotification.body };
         }
 
-        // Get user's phone number from profiles
-        const { data: profile } = await supabaseClient
-          .from('profiles')
-          .select('phone')
-          .eq('user_id', userId)
-          .maybeSingle();
-
-        // Fallback phone number for demo/testing when user has no phone configured
-        const FALLBACK_PHONE = '+14434150606';
-        let phoneNumber = profile?.phone;
-        
-        if (!phoneNumber) {
-          console.log(`📞 User ${userId}: No phone in profile, using fallback: ${FALLBACK_PHONE}`);
-          phoneNumber = FALLBACK_PHONE;
-        }
-
-        // Build context based on call type
-        const context = await buildCallContext(callConfig, userId, supabaseClient);
-        
-        // Parse agenda items from context for tracking
-        const agenda = parseAgendaFromContext(context);
+        // Check comms_mode - route based on delivery preference
+        const commsMode = callConfig.comms_mode || 'phone';
+        console.log(`📞 Scheduled call comms_mode: ${commsMode}`);
 
         // Get user preferences for timezone
         const { data: userPrefs } = await supabaseClient
@@ -272,79 +256,162 @@ serve(async (req) => {
           .eq('user_id', userId)
           .maybeSingle();
 
-        // === PRE-CONNECT ARCHITECTURE ===
-        // Step 1: Establish OpenAI session BEFORE placing call to eliminate greeting latency
-        console.log(`📞 Pre-connecting OpenAI session for user ${userId}...`);
-        
-        const { data: preConnectResult, error: preConnectError } = await supabaseClient.functions.invoke(
-          'twilio-realtime-bridge',
-          {
+        let deliverySuccess = false;
+        let deliveryError: any = null;
+
+        if (commsMode === 'app_message') {
+          // === APP MESSAGE DELIVERY ===
+          console.log(`💬 Routing scheduled call to app chat for user ${userId}`);
+          
+          // Build context for the chat message
+          const context = await buildCallContext(callConfig, userId, supabaseClient);
+          
+          const { data: chatResult, error: chatError } = await supabaseClient.functions.invoke('send-chat-message', {
             body: {
-              mode: 'pre-connect',
               userId,
-              context,
-              agenda,
-              timezone: userPrefs?.timezone || 'America/New_York',
-              phoneNumber
+              generateFromContext: {
+                callType: callConfig.call_id || 'custom',
+                context: callConfig.context || ''
+              },
+              sendPush: true
             }
+          });
+
+          if (chatError) {
+            console.error(`💬 App chat delivery failed for user ${userId}:`, chatError);
+            deliveryError = chatError;
+          } else {
+            console.log(`✅ App chat delivered successfully for user ${userId}: ${callNotification.title}`);
+            deliverySuccess = true;
           }
-        );
 
-        let callResult: any;
-        let callError: any;
-
-        if (preConnectError || !preConnectResult?.sessionId) {
-          console.error(`⚠️ Pre-connect failed, falling back to live greeting:`, preConnectError);
+        } else if (commsMode === 'slack' || commsMode === 'email') {
+          // === SLACK/EMAIL DELIVERY ===
+          console.log(`📧 Routing scheduled call to ${commsMode} for user ${userId}`);
           
-          // Fallback to existing behavior - call triggers greeting live
-          console.log(`📞 [INVOKE] twilio-voice-handler with action=trigger-call (fallback)`);
-          const fallbackResult = await supabaseClient.functions.invoke('twilio-voice-handler', {
+          const { data: unifiedResult, error: unifiedError } = await supabaseClient.functions.invoke('send-unified-notification', {
             body: {
-              action: 'trigger-call',
               userId,
-              context,
-              phoneNumber,
+              taskId: null,
+              title: callConfig.call_name || callNotification.title,
+              body: `Time for your ${(callConfig.call_name || callNotification.title).toLowerCase()}. ${callConfig.context || ''}`,
+              channels: [commsMode]
             }
           });
-          callResult = fallbackResult.data;
-          callError = fallbackResult.error;
+
+          if (unifiedError) {
+            console.error(`📧 ${commsMode} delivery failed for user ${userId}:`, unifiedError);
+            deliveryError = unifiedError;
+          } else {
+            console.log(`✅ ${commsMode} notification delivered for user ${userId}: ${callNotification.title}`);
+            deliverySuccess = true;
+          }
+
         } else {
-          console.log(`✅ Pre-connected session: ${preConnectResult.sessionId}`);
-          console.log(`🎙️ Greeting cached (${preConnectResult.audioBytes || 0} bytes): "${(preConnectResult.greetingText || '').substring(0, 50)}..."`);
+          // === PHONE CALL DELIVERY (default) ===
+          // Get user's phone number from profiles
+          const { data: profile } = await supabaseClient
+            .from('profiles')
+            .select('phone')
+            .eq('user_id', userId)
+            .maybeSingle();
+
+          // Fallback phone number for demo/testing when user has no phone configured
+          const FALLBACK_PHONE = '+14434150606';
+          let phoneNumber = profile?.phone;
           
-          // Step 2: Place call with reference to existing session
-          console.log(`📞 [INVOKE] twilio-voice-handler with action=trigger-call-with-session, sessionId=${preConnectResult.sessionId}`);
-          const sessionCallResult = await supabaseClient.functions.invoke('twilio-voice-handler', {
-            body: {
-              action: 'trigger-call-with-session',
-              userId,
-              phoneNumber,
-              sessionId: preConnectResult.sessionId,
-              cachedAudioBase64: preConnectResult.audioBase64,
-              greetingText: preConnectResult.greetingText,
-              agenda: preConnectResult.agenda,
-              context,
-              timezone: userPrefs?.timezone || 'America/New_York'
+          if (!phoneNumber) {
+            console.log(`📞 User ${userId}: No phone in profile, using fallback: ${FALLBACK_PHONE}`);
+            phoneNumber = FALLBACK_PHONE;
+          }
+
+          // Build context based on call type
+          const context = await buildCallContext(callConfig, userId, supabaseClient);
+          
+          // Parse agenda items from context for tracking
+          const agenda = parseAgendaFromContext(context);
+
+          // === PRE-CONNECT ARCHITECTURE ===
+          // Step 1: Establish OpenAI session BEFORE placing call to eliminate greeting latency
+          console.log(`📞 Pre-connecting OpenAI session for user ${userId}...`);
+          
+          const { data: preConnectResult, error: preConnectError } = await supabaseClient.functions.invoke(
+            'twilio-realtime-bridge',
+            {
+              body: {
+                mode: 'pre-connect',
+                userId,
+                context,
+                agenda,
+                timezone: userPrefs?.timezone || 'America/New_York',
+                phoneNumber
+              }
             }
-          });
-          callResult = sessionCallResult.data;
-          callError = sessionCallResult.error;
+          );
+
+          let callResult: any;
+          let callError: any;
+
+          if (preConnectError || !preConnectResult?.sessionId) {
+            console.error(`⚠️ Pre-connect failed, falling back to live greeting:`, preConnectError);
+            
+            // Fallback to existing behavior - call triggers greeting live
+            console.log(`📞 [INVOKE] twilio-voice-handler with action=trigger-call (fallback)`);
+            const fallbackResult = await supabaseClient.functions.invoke('twilio-voice-handler', {
+              body: {
+                action: 'trigger-call',
+                userId,
+                context,
+                phoneNumber,
+              }
+            });
+            callResult = fallbackResult.data;
+            callError = fallbackResult.error;
+          } else {
+            console.log(`✅ Pre-connected session: ${preConnectResult.sessionId}`);
+            console.log(`🎙️ Greeting cached (${preConnectResult.audioBytes || 0} bytes): "${(preConnectResult.greetingText || '').substring(0, 50)}..."`);
+            
+            // Step 2: Place call with reference to existing session
+            console.log(`📞 [INVOKE] twilio-voice-handler with action=trigger-call-with-session, sessionId=${preConnectResult.sessionId}`);
+            const sessionCallResult = await supabaseClient.functions.invoke('twilio-voice-handler', {
+              body: {
+                action: 'trigger-call-with-session',
+                userId,
+                phoneNumber,
+                sessionId: preConnectResult.sessionId,
+                cachedAudioBase64: preConnectResult.audioBase64,
+                greetingText: preConnectResult.greetingText,
+                agenda: preConnectResult.agenda,
+                context,
+                timezone: userPrefs?.timezone || 'America/New_York'
+              }
+            });
+            callResult = sessionCallResult.data;
+            callError = sessionCallResult.error;
+          }
+
+          if (callError) {
+            deliveryError = callError;
+          } else {
+            deliverySuccess = true;
+          }
         }
 
-        if (callError) {
-          console.error(`📞 Call failed for user ${userId}:`, callError);
+        // Update notification status based on delivery result
+        if (deliveryError) {
+          console.error(`📞 Delivery failed for user ${userId}:`, deliveryError);
           
           await supabaseClient
             .from('scheduled_notifications')
             .update({
               failed_at: new Date().toISOString(),
-              failure_reason: callError.message || 'Call failed'
+              failure_reason: deliveryError.message || 'Delivery failed'
             })
             .eq('id', callNotification.id);
           
           failed++;
         } else {
-          console.log(`✅ Call triggered successfully for user ${userId}: ${callNotification.title}`);
+          console.log(`✅ Delivery successful for user ${userId}: ${callNotification.title} (mode: ${commsMode})`);
           
           await supabaseClient
             .from('scheduled_notifications')
@@ -357,7 +424,7 @@ serve(async (req) => {
           delivered++;
         }
 
-        // Schedule the next occurrence for tomorrow
+        // Schedule the next occurrence for tomorrow (preserves comms_mode)
         await scheduleNextOccurrence(supabaseClient, userId, callConfig);
 
       } catch (error) {
