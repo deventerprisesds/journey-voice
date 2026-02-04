@@ -34,6 +34,8 @@ Track all issues, attempted fixes, outcomes, and lessons learned to ensure progr
 
 3. **Flex overflow prevention pattern**: Use `min-w-0` on flex containers that should shrink, `truncate` on text that can be cut, and `flex-shrink-0` on elements that must remain visible.
 
+4. **Supabase Realtime requires explicit publication registration**: Creating a frontend subscription (`.channel().on('postgres_changes')`) does NOT automatically enable events. The table must be added to the `supabase_realtime` publication via `ALTER PUBLICATION`. Always verify with `pg_publication_tables` query.
+
 ---
 
 ## Pending Solutions
