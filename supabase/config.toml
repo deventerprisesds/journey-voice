@@ -108,5 +108,8 @@ verify_jwt = false
 [functions.assistant-actions-webhook]
 verify_jwt = false
 
+[functions.generate-vapid-keys]
+verify_jwt = false
+
 [functions.get-vapid-key]
 verify_jwt = false
