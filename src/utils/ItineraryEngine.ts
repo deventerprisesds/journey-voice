@@ -339,125 +339,30 @@ export class ItineraryEngine {
       
       busySlots.push(...scheduledTasks);
 
-      // Use ai-task-parser (which uses OPENAI_API_KEY) instead of smart-calendar-scheduler
-      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      const { data: parsed, error: parseError } = await supabase.functions.invoke('ai-task-parser', {
+      const { data, error } = await supabase.functions.invoke('smart-calendar-scheduler', {
         body: {
-          text: taskText,
-          timezone,
-          userId: user.id,
-          targetDate: targetDate?.toISOString() || new Date().toISOString()
+          taskText,
+          targetDate: targetDate?.toISOString() || new Date().toISOString(),
+          existingTasks,
+          workingMinutes: 420, // 7 hours default
+          busySlots,
+          scheduling_context: this.extractSchedulingContext(taskText, existingTasks[0]?.category)
         }
       });
 
-      if (parseError) {
-        console.error('AI task parser error:', parseError);
-        throw parseError;
+      if (error) {
+        console.error('Smart scheduler error:', error);
+        throw error;
       }
 
-      // Extract parsed task from response
-      const parsedTask = parsed?.tasks?.[0] || parsed;
-      
-      // Calculate optimal slot based on parsed data and busy slots
-      const scheduledSlot = this.calculateOptimalSlot(
-        parsedTask,
-        busySlots,
-        targetDate || new Date()
-      );
-
       return {
-        parsedTask,
-        scheduledSlot,
-        aiReasoning: `Scheduled based on task type "${parsedTask?.category || 'general'}" and available time slots`,
-        busySlots
+        ...data,
+        busySlots // Include busy slots for UI visualization
       };
     } catch (error) {
       console.error('Failed to find optimal time slot:', error);
       throw error;
     }
-  }
-
-  /**
-   * Calculate optimal time slot avoiding busy periods
-   */
-  private calculateOptimalSlot(
-    parsedTask: any,
-    busySlots: Array<{start: string; end: string; title: string; type: string}>,
-    targetDate: Date
-  ): { start: string; end: string; confidence: number } {
-    const workingHours = this.getWorkingHours();
-    const duration = parsedTask?.estimate_minutes || 60;
-    
-    // If task already has a specific time, use it
-    if (parsedTask?.start_time) {
-      const start = new Date(parsedTask.start_time);
-      const end = new Date(start.getTime() + duration * 60 * 1000);
-      return {
-        start: start.toISOString(),
-        end: end.toISOString(),
-        confidence: 0.9
-      };
-    }
-    
-    // Find first available slot on target date
-    const dayStart = new Date(targetDate);
-    dayStart.setHours(workingHours.defaultStart, 0, 0, 0);
-    
-    const dayEnd = new Date(targetDate);
-    dayEnd.setHours(workingHours.defaultEnd, 0, 0, 0);
-    
-    // Sort busy slots by start time
-    const sortedBusy = busySlots
-      .filter(slot => {
-        const slotDate = new Date(slot.start);
-        return slotDate.toDateString() === targetDate.toDateString();
-      })
-      .sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
-    
-    let candidateStart = new Date(dayStart);
-    
-    for (const busy of sortedBusy) {
-      const busyStart = new Date(busy.start);
-      const busyEnd = new Date(busy.end);
-      
-      // Check if there's enough time before this busy slot
-      const gapMinutes = (busyStart.getTime() - candidateStart.getTime()) / (60 * 1000);
-      if (gapMinutes >= duration) {
-        // Found a slot
-        const end = new Date(candidateStart.getTime() + duration * 60 * 1000);
-        return {
-          start: candidateStart.toISOString(),
-          end: end.toISOString(),
-          confidence: 0.8
-        };
-      }
-      
-      // Move candidate start to after this busy slot
-      candidateStart = new Date(Math.max(candidateStart.getTime(), busyEnd.getTime()));
-    }
-    
-    // Check if there's time at the end of the day
-    const remainingMinutes = (dayEnd.getTime() - candidateStart.getTime()) / (60 * 1000);
-    if (remainingMinutes >= duration) {
-      const end = new Date(candidateStart.getTime() + duration * 60 * 1000);
-      return {
-        start: candidateStart.toISOString(),
-        end: end.toISOString(),
-        confidence: 0.7
-      };
-    }
-    
-    // Fallback: suggest next day morning
-    const nextDay = new Date(targetDate);
-    nextDay.setDate(nextDay.getDate() + 1);
-    nextDay.setHours(workingHours.defaultStart, 0, 0, 0);
-    const nextEnd = new Date(nextDay.getTime() + duration * 60 * 1000);
-    
-    return {
-      start: nextDay.toISOString(),
-      end: nextEnd.toISOString(),
-      confidence: 0.5
-    };
   }
 
   extractSchedulingContext(taskText: string, category?: string): string[] {
