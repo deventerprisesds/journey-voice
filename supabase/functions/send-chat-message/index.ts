@@ -20,6 +20,39 @@ interface ChatMessageRequest {
   assistantId?: string;          // Optional assistant ID
 }
 
+// Helper to log activity (fire-and-forget)
+async function logActivity(
+  supabase: any,
+  userId: string,
+  activityType: string,
+  status: 'started' | 'completed' | 'error',
+  stage?: string,
+  metadata?: Record<string, unknown>,
+  errorMessage?: string,
+  errorCode?: string
+): Promise<void> {
+  try {
+    await supabase.from('activity_log').insert({
+      user_id: userId,
+      activity_type: activityType,
+      status,
+      stage: stage || null,
+      error_message: errorMessage || null,
+      error_code: errorCode || null,
+      session_id: `EF-${Date.now().toString(36)}`,
+      metadata: {
+        ...metadata,
+        timestamp: new Date().toISOString(),
+        source: 'edge_function',
+        function: 'send-chat-message'
+      }
+    });
+  } catch (err) {
+    // Silent failure - don't let logging break the main flow
+    console.error('[ACTIVITY_LOG] Failed to log:', err);
+  }
+}
+
 // Get today's tasks for briefing context
 async function getTodaysBriefing(supabase: any, userId: string): Promise<string> {
   const today = new Date();
@@ -134,8 +167,13 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  const supabase = createClient(supabaseUrl, supabaseServiceKey);
+  let userId: string | null = null;
+
   try {
-    const { userId, message, generateFromContext, sendPush = true, assistantId } = await req.json() as ChatMessageRequest;
+    const body = await req.json() as ChatMessageRequest;
+    userId = body.userId;
+    const { message, generateFromContext, sendPush = true, assistantId } = body;
 
     if (!userId) {
       return new Response(JSON.stringify({ 
@@ -147,9 +185,16 @@ serve(async (req) => {
       });
     }
 
-    console.log(`[SEND-CHAT-MESSAGE] Processing for user ${userId}, generateFromContext:`, generateFromContext, ', assistantId:', assistantId);
+    // Log: Request received
+    await logActivity(supabase, userId, 'chat_send', 'started', 'request_received', {
+      hasMessage: !!message,
+      hasGenerateFromContext: !!generateFromContext,
+      callType: generateFromContext?.callType,
+      sendPush,
+      assistantId
+    });
 
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    console.log(`[SEND-CHAT-MESSAGE] Processing for user ${userId}, generateFromContext:`, generateFromContext, ', assistantId:', assistantId);
 
     // 1. Resolve effective assistant ID
     let effectiveAssistantId = assistantId;
@@ -166,6 +211,12 @@ serve(async (req) => {
       effectiveAssistantId = defaultAssistant?.id || null;
       console.log('[SEND-CHAT-MESSAGE] Using default assistant:', effectiveAssistantId);
     }
+
+    // Log: Assistant resolved
+    await logActivity(supabase, userId, 'chat_send', 'completed', 'assistant_resolved', {
+      effectiveAssistantId,
+      wasProvided: !!assistantId
+    });
 
     // 2. Get or create the user's active chat thread for this assistant
     const { data: existingThread } = await supabase
@@ -194,11 +245,21 @@ serve(async (req) => {
 
       if (createError) {
         console.error('[SEND-CHAT-MESSAGE] Failed to create thread:', createError);
+        await logActivity(supabase, userId, 'chat_send', 'error', 'thread_creation_failed', {
+          error: createError.message
+        }, createError.message, createError.code);
         throw new Error('Failed to create conversation thread');
       }
       dbThreadId = newThread.id;
       console.log('[SEND-CHAT-MESSAGE] Created new thread:', dbThreadId, 'for assistant:', effectiveAssistantId);
     }
+
+    // Log: Thread resolved
+    await logActivity(supabase, userId, 'chat_send', 'completed', 'thread_resolved', {
+      dbThreadId,
+      wasExisting: !!existingThread,
+      assistantId: effectiveAssistantId
+    });
 
     // 3. Generate message content if needed
     let content = message;
@@ -214,6 +275,10 @@ serve(async (req) => {
       );
 
       console.log('[SEND-CHAT-MESSAGE] Generating AI response with context');
+      
+      await logActivity(supabase, userId, 'chat_send', 'started', 'ai_generation', {
+        callType
+      });
 
       // Call hybrid-assistant-api to generate the response
       const response = await fetch(`${supabaseUrl}/functions/v1/hybrid-assistant-api`, {
@@ -234,15 +299,25 @@ serve(async (req) => {
       if (!response.ok) {
         const errorText = await response.text();
         console.error('[SEND-CHAT-MESSAGE] AI API error:', errorText);
+        await logActivity(supabase, userId, 'chat_send', 'error', 'ai_generation_failed', {
+          statusCode: response.status,
+          errorPreview: errorText.substring(0, 200)
+        }, errorText);
         throw new Error('Failed to generate AI response');
       }
 
       const aiResult = await response.json();
       content = aiResult.response;
       console.log('[SEND-CHAT-MESSAGE] Generated AI response:', content?.substring(0, 100));
+      
+      await logActivity(supabase, userId, 'chat_send', 'completed', 'ai_generation_success', {
+        contentLength: content?.length,
+        callType
+      });
     }
 
     if (!content) {
+      await logActivity(supabase, userId, 'chat_send', 'error', 'no_content', {});
       return new Response(JSON.stringify({ 
         success: false, 
         error: 'No message content provided or generated' 
@@ -273,20 +348,48 @@ serve(async (req) => {
 
     if (storeError) {
       console.error('[SEND-CHAT-MESSAGE] Failed to store message:', storeError);
+      await logActivity(supabase, userId, 'chat_send', 'error', 'message_store_failed', {
+        error: storeError.message
+      }, storeError.message, storeError.code);
       throw new Error('Failed to store message in database');
     }
 
     console.log('[SEND-CHAT-MESSAGE] Message stored with ID:', storedMessage.id, 'assistant_id:', effectiveAssistantId);
+    
+    // Log: Message stored
+    await logActivity(supabase, userId, 'chat_send', 'completed', 'message_stored', {
+      messageId: storedMessage.id,
+      threadId: dbThreadId,
+      assistantId: effectiveAssistantId,
+      contentLength: content.length
+    });
 
     // 5. Check user presence before sending push notification
     let shouldSendPush = sendPush;
+    let presenceData: { is_active: boolean | null; active_context: string | null } = {
+      is_active: null,
+      active_context: null
+    };
     
     if (sendPush) {
-      const { data: presence } = await supabase
+      const { data: presence, error: presenceError } = await supabase
         .from('user_presence')
         .select('is_active, active_context')
         .eq('user_id', userId)
         .maybeSingle();
+      
+      presenceData = {
+        is_active: presence?.is_active ?? null,
+        active_context: presence?.active_context ?? null
+      };
+      
+      // Log: Presence checked
+      await logActivity(supabase, userId, 'chat_send', 'completed', 'presence_checked', {
+        presenceFound: !!presence,
+        presenceError: presenceError?.message,
+        isActive: presenceData.is_active,
+        activeContext: presenceData.active_context
+      });
       
       // Skip push if user is active in chat
       if (presence?.is_active && presence?.active_context === 'chat') {
@@ -299,6 +402,10 @@ serve(async (req) => {
     let pushResult = null;
     if (shouldSendPush) {
       console.log('[SEND-CHAT-MESSAGE] Sending push notification (user not active in chat)');
+      
+      await logActivity(supabase, userId, 'chat_send', 'started', 'push_send', {
+        reason: presenceData.is_active === null ? 'no_presence_record' : 'user_away'
+      });
       
       const pushResponse = await fetch(`${supabaseUrl}/functions/v1/send-push-notification`, {
         method: 'POST',
@@ -322,7 +429,31 @@ serve(async (req) => {
 
       pushResult = await pushResponse.json();
       console.log('[SEND-CHAT-MESSAGE] Push notification result:', pushResult);
+      
+      // Log: Push result
+      await logActivity(supabase, userId, 'chat_send', 'completed', 'push_sent', {
+        pushSuccess: pushResult?.success ?? false,
+        delivered: pushResult?.delivered ?? 0,
+        failed: pushResult?.failed ?? 0,
+        error: pushResult?.error
+      });
+    } else {
+      // Log: Push skipped
+      await logActivity(supabase, userId, 'chat_send', 'completed', 'push_skipped', {
+        reason: 'user_active_in_chat',
+        isActive: presenceData.is_active,
+        activeContext: presenceData.active_context
+      });
     }
+
+    // Log: Complete success
+    await logActivity(supabase, userId, 'chat_send', 'completed', 'complete', {
+      messageId: storedMessage.id,
+      threadId: dbThreadId,
+      assistantId: effectiveAssistantId,
+      pushSent: shouldSendPush,
+      callType
+    });
 
     return new Response(JSON.stringify({
       success: true,
@@ -339,6 +470,15 @@ serve(async (req) => {
 
   } catch (error) {
     console.error('[SEND-CHAT-MESSAGE] Error:', error);
+    
+    // Log: Error
+    if (userId) {
+      await logActivity(supabase, userId, 'chat_send', 'error', 'exception', {
+        errorMessage: error instanceof Error ? error.message : 'Unknown error',
+        errorStack: error instanceof Error ? error.stack?.substring(0, 500) : undefined
+      }, error instanceof Error ? error.message : 'Unknown error');
+    }
+    
     return new Response(JSON.stringify({
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error'

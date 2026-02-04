@@ -1,10 +1,11 @@
-import React, { createContext, useContext, useState, useCallback, useEffect, useMemo } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useVoiceAssistant } from '@/contexts/VoiceAssistantContext';
 import { useUnifiedThread } from '@/hooks/useUnifiedThread';
 import { usePresenceTracking } from '@/hooks/usePresenceTracking';
+import { logRealtime, logChat } from '@/utils/activityLogger';
 import type {
   Assistant,
   ConversationMessage,
@@ -120,6 +121,10 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const [lastUserMessage, setLastUserMessage] = useState<string | null>(null);
   // Phone state
   const [phoneCallState, setPhoneCallState] = useState<PhoneCallState>('idle');
+  
+  // Realtime subscription state for logging
+  const [realtimeStatus, setRealtimeStatus] = useState<string>('idle');
+  const subscribeStartTimeRef = useRef<number | null>(null);
 
   const userId = user?.id || (isDemoMode ? DEMO_USER_ID : null);
 
@@ -337,6 +342,7 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
   // ============================================================
   // Realtime subscription for new messages (instant delivery)
+  // With comprehensive logging and watchdog
   // ============================================================
   useEffect(() => {
     // Enhanced logging to debug subscription initialization
@@ -346,10 +352,22 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     }
     if (!dbThreadId) {
       console.log('[CommsConsole] Realtime: No dbThreadId yet, waiting for thread initialization. currentAssistant:', currentAssistant?.id);
+      logRealtime(userId, 'waiting_for_thread', 'started', {
+        hasAssistant: !!currentAssistant?.id,
+        assistantId: currentAssistant?.id
+      });
       return;
     }
     
     console.log('[CommsConsole] Realtime: Setting up subscription for thread:', dbThreadId);
+    
+    // Log subscription attempt
+    subscribeStartTimeRef.current = Date.now();
+    setRealtimeStatus('subscribing');
+    logRealtime(userId, 'setup', 'started', {
+      threadId: dbThreadId,
+      assistantId: currentAssistant?.id
+    });
     
     const channel = supabase
       .channel(`chat-messages-${dbThreadId}`)
@@ -365,10 +383,22 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
           const newMessage = payload.new as any;
           console.log('[CommsConsole] Realtime message received:', newMessage.id, 'content:', newMessage.content?.substring(0, 50));
           
+          // Log message receipt
+          logChat(userId, 'realtime_received', 'completed', {
+            messageId: newMessage.id,
+            role: newMessage.role,
+            contentPreview: newMessage.content?.substring(0, 50),
+            source: newMessage.source,
+            threadId: dbThreadId
+          });
+          
           // Deduplicate - skip if already in state
           setMessages(prev => {
             if (prev.some(m => m.id === newMessage.id)) {
               console.log('[CommsConsole] Realtime: Skipping duplicate message:', newMessage.id);
+              logChat(userId, 'realtime_duplicate_skipped', 'completed', {
+                messageId: newMessage.id
+              });
               return prev;
             }
             
@@ -384,14 +414,56 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
         }
       )
       .subscribe((status) => {
+        const elapsedMs = subscribeStartTimeRef.current 
+          ? Date.now() - subscribeStartTimeRef.current 
+          : null;
+          
         console.log('[CommsConsole] Realtime subscription status:', status);
+        setRealtimeStatus(status);
+        
+        logRealtime(
+          userId, 
+          status === 'SUBSCRIBED' ? 'subscribed' : `status_${status}`,
+          status === 'SUBSCRIBED' ? 'completed' : 'started',
+          {
+            status,
+            threadId: dbThreadId,
+            elapsedMs
+          },
+          status === 'CHANNEL_ERROR' ? `Subscription failed with status: ${status}` : undefined
+        );
       });
     
     return () => {
       console.log('[CommsConsole] Realtime: Cleaning up subscription for thread:', dbThreadId);
+      logRealtime(userId, 'cleanup', 'completed', { threadId: dbThreadId });
       supabase.removeChannel(channel);
+      setRealtimeStatus('idle');
     };
   }, [dbThreadId, userId, currentAssistant?.id]);
+
+  // ============================================================
+  // Realtime subscription watchdog - log if not subscribed within 5s
+  // ============================================================
+  useEffect(() => {
+    if (realtimeStatus !== 'subscribing') return;
+    
+    const timeout = setTimeout(() => {
+      if (realtimeStatus === 'subscribing') {
+        logRealtime(userId, 'timeout', 'error', {
+          threadId: dbThreadId,
+          elapsedMs: subscribeStartTimeRef.current 
+            ? Date.now() - subscribeStartTimeRef.current 
+            : null,
+          status: realtimeStatus
+        }, 'Subscription not SUBSCRIBED after 5 seconds');
+        
+        console.warn('[CommsConsole] Realtime: Subscription timeout - not SUBSCRIBED after 5 seconds');
+      }
+    }, 5000);
+    
+    return () => clearTimeout(timeout);
+  }, [realtimeStatus, userId, dbThreadId]);
 
   // ============================================================
   // User presence tracking for conditional push notifications

@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
+import { logRealtime, logChat } from '@/utils/activityLogger';
 
 export interface ChatMessage {
   id: string;
@@ -24,6 +25,12 @@ export function useChatAssistant(): UseChatAssistantReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [threadId, setThreadId] = useState<string | null>(null);
+  
+  // Realtime subscription tracking
+  const [realtimeStatus, setRealtimeStatus] = useState<string>('idle');
+  const subscribeStartTimeRef = useRef<number | null>(null);
+
+  const userId = user?.id || null;
 
   // Load or create thread on mount
   useEffect(() => {
@@ -87,6 +94,108 @@ export function useChatAssistant(): UseChatAssistantReturn {
       console.error('Error loading messages:', error);
     }
   };
+
+  // ============================================================
+  // Realtime subscription for new messages (instant delivery)
+  // Ensures ChatInterface sheet receives system-initiated messages
+  // ============================================================
+  useEffect(() => {
+    if (!userId) {
+      console.log('[useChatAssistant] Realtime: No userId, skipping subscription');
+      return;
+    }
+    if (!threadId) {
+      console.log('[useChatAssistant] Realtime: No threadId yet, waiting...');
+      logRealtime(userId, 'waiting_for_thread', 'started', { source: 'useChatAssistant' });
+      return;
+    }
+
+    console.log('[useChatAssistant] Realtime: Setting up subscription for thread:', threadId);
+    
+    subscribeStartTimeRef.current = Date.now();
+    setRealtimeStatus('subscribing');
+    logRealtime(userId, 'setup', 'started', { threadId, source: 'useChatAssistant' });
+
+    const channel = supabase
+      .channel(`chat-assistant-${threadId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'conversation_messages',
+          filter: `thread_id=eq.${threadId}`,
+        },
+        (payload) => {
+          const newMessage = payload.new as any;
+          console.log('[useChatAssistant] Realtime message received:', newMessage.id);
+          
+          logChat(userId, 'realtime_received', 'completed', {
+            messageId: newMessage.id,
+            role: newMessage.role,
+            source: 'useChatAssistant',
+            threadId
+          });
+
+          // Deduplicate - skip if already in state
+          setMessages(prev => {
+            if (prev.some(m => m.id === newMessage.id)) {
+              console.log('[useChatAssistant] Realtime: Skipping duplicate:', newMessage.id);
+              return prev;
+            }
+
+            return [...prev, {
+              id: newMessage.id,
+              role: newMessage.role as 'user' | 'assistant',
+              content: newMessage.content,
+              timestamp: new Date(newMessage.created_at),
+              isLoading: false
+            }];
+          });
+        }
+      )
+      .subscribe((status) => {
+        const elapsedMs = subscribeStartTimeRef.current
+          ? Date.now() - subscribeStartTimeRef.current
+          : null;
+          
+        console.log('[useChatAssistant] Realtime subscription status:', status);
+        setRealtimeStatus(status);
+        
+        logRealtime(
+          userId,
+          status === 'SUBSCRIBED' ? 'subscribed' : `status_${status}`,
+          status === 'SUBSCRIBED' ? 'completed' : 'started',
+          { status, threadId, elapsedMs, source: 'useChatAssistant' },
+          status === 'CHANNEL_ERROR' ? `Subscription failed: ${status}` : undefined
+        );
+      });
+
+    return () => {
+      console.log('[useChatAssistant] Realtime: Cleaning up subscription for thread:', threadId);
+      logRealtime(userId, 'cleanup', 'completed', { threadId, source: 'useChatAssistant' });
+      supabase.removeChannel(channel);
+      setRealtimeStatus('idle');
+    };
+  }, [threadId, userId]);
+
+  // Realtime watchdog - log if not subscribed within 5s
+  useEffect(() => {
+    if (realtimeStatus !== 'subscribing') return;
+    
+    const timeout = setTimeout(() => {
+      if (realtimeStatus === 'subscribing') {
+        logRealtime(userId, 'timeout', 'error', {
+          threadId,
+          source: 'useChatAssistant'
+        }, 'Subscription not SUBSCRIBED after 5 seconds');
+        
+        console.warn('[useChatAssistant] Realtime: Subscription timeout');
+      }
+    }, 5000);
+    
+    return () => clearTimeout(timeout);
+  }, [realtimeStatus, userId, threadId]);
 
   const createNewThread = useCallback(async (assistantId?: string | null) => {
     if (!user) return;
