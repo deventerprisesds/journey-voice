@@ -1044,8 +1044,39 @@ async function scheduleTask(supabase: any, args: any, timezone?: string): Promis
   const tz = timezone || 'America/New_York';
 
   try {
+    // =====================================================
+    // CHECK 1: Skip if task is already scheduled
+    // Prevents OpenAI from overwriting batch scheduler times
+    // =====================================================
+    const { data: existingTask, error: fetchError } = await supabase
+      .from('tasks')
+      .select('id, title, start_time, end_time, is_scheduled')
+      .eq('id', args.task_id)
+      .single();
+    
+    if (fetchError) {
+      return { success: false, error: `Task not found: ${fetchError.message}` };
+    }
+    
+    if (existingTask?.is_scheduled && existingTask?.start_time) {
+      console.warn(`[SCHEDULE_TASK] ⚠️ SKIPPED: Task "${existingTask.title}" already scheduled at ${existingTask.start_time}`);
+      return { 
+        success: true, 
+        result: { task: existingTask, skipped: true },
+        message: `Task "${existingTask.title}" is already scheduled for ${existingTask.start_time}. Use reschedule_task to change the time.`
+      };
+    }
+
+    // =====================================================
+    // CHECK 2: Validate and auto-correct past dates
+    // =====================================================
     const today = getTodayInTimezone(tz);
-    const dateStr = args.date || today;
+    let dateStr = args.date || today;
+    
+    if (dateStr < today) {
+      console.error(`[SCHEDULE_TASK] ⚠️ PAST DATE ${dateStr} auto-corrected to ${today}`);
+      dateStr = today;
+    }
     
     let startTimeRaw = dateStr;
     if (args.start_time) {

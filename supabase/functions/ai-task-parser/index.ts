@@ -96,25 +96,31 @@ serve(async (req) => {
 
     console.log('✅ Starting task parsing...');
 
-    // Get current date for context
+    // Get current date for context - USE USER'S TIMEZONE
     const now = new Date();
+    const userTz = timezone || 'America/New_York';
     const currentDateString = now.toLocaleDateString('en-US', { 
+      timeZone: userTz,  // Use user's timezone
       weekday: 'long',
       year: 'numeric',
       month: 'long',
       day: 'numeric'
     });
     const currentTimeString = now.toLocaleTimeString('en-US', { 
+      timeZone: userTz,  // Use user's timezone
       hour: '2-digit',
       minute: '2-digit'
     });
 
-    // Parse target date for context in prompt
+    // Parse target date for context in prompt - AVOID UTC SHIFT
     let targetDateContext = '';
     let targetDateStr = '';
     if (targetDate) {
-      const targetDateObj = new Date(targetDate);
-      targetDateStr = targetDateObj.toLocaleDateString('en-US', { 
+      // Parse date by splitting string to avoid UTC midnight interpretation
+      const [year, month, day] = targetDate.split('-').map(Number);
+      const tempDate = new Date(year, month - 1, day, 12, 0, 0); // Noon local avoids DST issues
+      targetDateStr = tempDate.toLocaleDateString('en-US', { 
+        timeZone: userTz,  // Use user's timezone
         weekday: 'long',
         year: 'numeric',
         month: 'long',
