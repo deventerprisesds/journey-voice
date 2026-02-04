@@ -1,6 +1,6 @@
 // Service Worker for Push Notifications
 // Increment this on each deploy to bust old caches
-const CACHE_VERSION = 'v4';
+const CACHE_VERSION = 'v5';
 const CACHE_NAME = `task-manager-${CACHE_VERSION}`;
 const urlsToCache = [
   '/',
@@ -81,6 +81,7 @@ self.addEventListener('fetch', (event) => {
 });
 
 // Push event - handle incoming push notifications
+// Implements Slack/SMS model: post message to app clients immediately
 self.addEventListener('push', (event) => {
   console.log('Push event received:', event);
   
@@ -129,11 +130,29 @@ self.addEventListener('push', (event) => {
     tag: notificationData.tag || 'task-notification'
   };
 
+  // Slack/SMS Model: If this push contains a chat message, post it to all open app clients
+  // This ensures the message appears instantly in the UI without waiting for Realtime
+  const messageData = notificationData.data?.messageData;
+  
   event.waitUntil(
-    self.registration.showNotification(
-      notificationData.title || 'Task Manager',
-      notificationOptions
-    )
+    Promise.all([
+      // 1. Show the notification
+      self.registration.showNotification(
+        notificationData.title || 'Task Manager',
+        notificationOptions
+      ),
+      // 2. Post message to all open app clients (if messageData exists)
+      messageData ? clients.matchAll({ type: 'window', includeUncontrolled: true })
+        .then((clientList) => {
+          console.log('[SW] Posting NEW_CHAT_MESSAGE to', clientList.length, 'clients');
+          for (const client of clientList) {
+            client.postMessage({
+              type: 'NEW_CHAT_MESSAGE',
+              message: messageData
+            });
+          }
+        }) : Promise.resolve()
+    ])
   );
 });
 

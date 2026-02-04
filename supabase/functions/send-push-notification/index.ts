@@ -100,13 +100,18 @@ serve(async (req) => {
     console.log(`[send-push-notification] Found ${subscriptions.length} subscription(s) for user`);
 
     // Prepare notification payload
+    // Include messageData at top level for SW to access easily (Slack/SMS model)
     const payload = JSON.stringify({
       title,
       body,
-      data,
+      data: {
+        ...data,
+        // Ensure messageData is accessible at data.messageData
+        messageData: data?.messageData || null,
+      },
       icon: '/favicon.ico',
       badge: '/favicon.ico',
-      tag: data?.notificationId || 'default',
+      tag: data?.notificationId || data?.messageId || 'default',
       requireInteraction: true,
     });
 
