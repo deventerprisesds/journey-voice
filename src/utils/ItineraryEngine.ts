@@ -339,25 +339,51 @@ export class ItineraryEngine {
       
       busySlots.push(...scheduledTasks);
 
-      const { data, error } = await supabase.functions.invoke('smart-calendar-scheduler', {
+      // Use the working ai-task-parser (same as chat/voice)
+      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const { data, error } = await supabase.functions.invoke('ai-task-parser', {
         body: {
-          taskText,
-          targetDate: targetDate?.toISOString() || new Date().toISOString(),
-          existingTasks,
-          workingMinutes: 420, // 7 hours default
-          busySlots,
-          scheduling_context: this.extractSchedulingContext(taskText, existingTasks[0]?.category)
+          text: taskText,
+          timezone,
+          userId: user.id,
+          targetDate: targetDate?.toISOString().split('T')[0] || new Date().toISOString().split('T')[0],
+          existingTasks: existingTasks.map(t => ({
+            id: t.id,
+            title: t.title,
+            start_time: t.start_time,
+            end_time: t.end_time,
+            category: t.category
+          }))
         }
       });
 
       if (error) {
-        console.error('Smart scheduler error:', error);
-        throw error;
+        console.error('AI task parser error:', error);
+        throw new Error(`Failed to parse task: ${error.message || 'Unknown error'}`);
       }
 
+      if (!data?.tasks || data.tasks.length === 0) {
+        throw new Error('No tasks parsed from input');
+      }
+
+      const parsedTask = data.tasks[0];
+
       return {
-        ...data,
-        busySlots // Include busy slots for UI visualization
+        parsedTask: {
+          title: parsedTask.title,
+          description: parsedTask.description,
+          priority: parsedTask.priority,
+          category: parsedTask.category,
+          estimate_minutes: parsedTask.estimate_minutes || 60,
+          due_date: parsedTask.due_date,
+          status: parsedTask.status
+        },
+        scheduledSlot: parsedTask.start_time ? {
+          start_time: parsedTask.start_time,
+          end_time: parsedTask.end_time
+        } : null,
+        aiReasoning: `Parsed as ${parsedTask.category} task with ${parsedTask.priority} priority`,
+        busySlots
       };
     } catch (error) {
       console.error('Failed to find optimal time slot:', error);
