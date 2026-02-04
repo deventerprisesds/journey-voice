@@ -9,8 +9,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useAuth';
-import { loadUserSchedulingConfig, saveUserSchedulingConfig, type SchedulingConfigWithInstructions, type CustomVoice, type ScheduledCall, type PhoneCallMode } from '@/services/schedulingService';
-import { Loader2, RotateCcw, Save, Plus, Trash2, Volume2, Phone, Clock, AlertCircle, Radio, Copy, Check } from 'lucide-react';
+import { loadUserSchedulingConfig, saveUserSchedulingConfig, type SchedulingConfigWithInstructions, type CustomVoice, type ScheduledCall, type PhoneCallMode, type CommsMode } from '@/services/schedulingService';
+import { Loader2, RotateCcw, Save, Plus, Trash2, Volume2, Phone, Clock, AlertCircle, Radio, Copy, Check, MessageSquare, Mail, Hash } from 'lucide-react';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -322,6 +322,13 @@ const VoiceAssistantSettings: React.FC = () => {
     );
   };
 
+  const handleUpdateCallCommsMode = (callId: string, commsMode: CommsMode) => {
+    setScheduledCalls(calls =>
+      calls.map(call =>
+        call.id === callId ? { ...call, commsMode } : call
+      )
+    );
+  };
   const handleAddCustomCall = () => {
     if (!newCallName.trim()) {
       toast({
@@ -731,6 +738,41 @@ const VoiceAssistantSettings: React.FC = () => {
                             onChange={(e) => handleUpdateCallTime(call.id, e.target.value)}
                             className="w-24 h-6 text-xs border-none p-0 focus-visible:ring-0 bg-transparent text-muted-foreground"
                           />
+                          <span className="text-muted-foreground">•</span>
+                          <Select
+                            value={call.commsMode || 'phone'}
+                            onValueChange={(value) => handleUpdateCallCommsMode(call.id, value as CommsMode)}
+                          >
+                            <SelectTrigger className="h-6 w-28 text-xs border-none p-0 focus:ring-0 bg-transparent">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="phone">
+                                <div className="flex items-center gap-1.5">
+                                  <Phone className="h-3 w-3" />
+                                  <span>Phone Call</span>
+                                </div>
+                              </SelectItem>
+                              <SelectItem value="app_message">
+                                <div className="flex items-center gap-1.5">
+                                  <MessageSquare className="h-3 w-3" />
+                                  <span>In-App Chat</span>
+                                </div>
+                              </SelectItem>
+                              <SelectItem value="slack">
+                                <div className="flex items-center gap-1.5">
+                                  <Hash className="h-3 w-3" />
+                                  <span>Slack</span>
+                                </div>
+                              </SelectItem>
+                              <SelectItem value="email">
+                                <div className="flex items-center gap-1.5">
+                                  <Mail className="h-3 w-3" />
+                                  <span>Email</span>
+                                </div>
+                              </SelectItem>
+                            </SelectContent>
+                          </Select>
                         </div>
                       </div>
                     </div>

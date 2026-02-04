@@ -33,7 +33,11 @@ export interface ScheduledCall {
   enabled: boolean;
   callType: 'morning_standup' | 'midday_checkin' | 'eod_wrapup' | 'custom';
   context: string;
+  commsMode?: CommsMode; // Delivery method (default: 'phone')
 }
+
+// Communication mode for delivery method
+export type CommsMode = 'phone' | 'app_message' | 'slack' | 'email';
 
 // Phone call mode for infrastructure selection
 export type PhoneCallMode = 'media_streams' | 'conversation_relay' | 'cloudflare';

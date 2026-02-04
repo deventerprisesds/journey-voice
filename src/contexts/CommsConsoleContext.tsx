@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useMemo } from 'react';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useVoiceAssistant } from '@/contexts/VoiceAssistantContext';
@@ -91,6 +92,7 @@ function parseSSEEvents(chunk: string): Array<{ type: string; content?: string; 
 export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, isDemoMode, session } = useAuth();
   const voiceAssistant = useVoiceAssistant();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   // Panel state - default to open on desktop
   const [isPanelOpen, setIsPanelOpen] = useState(() => {
@@ -331,6 +333,53 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
     loadChatHistory();
   }, [dbThreadId, userId, historyLoaded]);
+
+  // ============================================================
+  // Handle notification clicks from service worker
+  // ============================================================
+  useEffect(() => {
+    const handleServiceWorkerMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'NOTIFICATION_CLICKED') {
+        const notificationData = event.data.data || {};
+        console.log('[CommsConsole] Notification clicked:', notificationData);
+        
+        if (notificationData.openCommsConsole || 
+            notificationData.type === 'chat_message' || 
+            notificationData.type === 'scheduled_checkin') {
+          setIsPanelOpen(true);
+          setCurrentMode('chat');
+          
+          // Reload messages to include the new system-initiated message
+          setHistoryLoaded(false);
+        }
+      }
+    };
+    
+    navigator.serviceWorker?.addEventListener('message', handleServiceWorkerMessage);
+    
+    return () => {
+      navigator.serviceWorker?.removeEventListener('message', handleServiceWorkerMessage);
+    };
+  }, []);
+
+  // ============================================================
+  // Check URL params on mount for fresh app opens
+  // ============================================================
+  useEffect(() => {
+    if (searchParams.get('openComms') === 'true') {
+      console.log('[CommsConsole] Opening panel from URL parameter');
+      setIsPanelOpen(true);
+      setCurrentMode('chat');
+      
+      // Reload messages to show latest
+      setHistoryLoaded(false);
+      
+      // Clean up URL without triggering navigation
+      searchParams.delete('openComms');
+      setSearchParams(searchParams, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
+  
   const togglePanel = useCallback(() => {
     setIsPanelOpen((prev) => !prev);
   }, []);
