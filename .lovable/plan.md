@@ -1,346 +1,180 @@
 
-# Plan: Fix Batch Scheduler Date Hallucination with Explicit Dating and Tracing
 
-## Summary
+# Complete Fix Plan: Date Utility Enforcement + Notification Trigger + Multi-Channel Comms
 
-This plan fixes the root cause of tasks being created with wrong dates by:
-1. Explicitly telling the AI "TODAY IS 2026-02-03" in an unambiguous ISO format
-2. Creating a separate ISO date variable for use in prompt examples
-3. Adding comprehensive tracing of AI input/output for debugging
-4. Fixing UI issues (FocusView "Other" bucket, Kanban arrows, SmartTaskInput mobile)
+## Overview
 
----
+This plan addresses **6 issues** in order of priority:
 
-## Root Cause Analysis
-
-### The Problem
-
-In `batch-calendar-scheduler/index.ts`, the AI prompt uses `${targetDateStr}` in example ISO timestamps (lines 200, 207-208):
-
-```typescript
-// Line 156-158
-const targetDateStr = targetDateObj 
-  ? targetDateObj.toLocaleDateString('en-US', { timeZone: timezone, dateStyle: 'full' })
-  : 'today or tomorrow based on current time';
-
-// This produces "Monday, February 3, 2026"
-
-// Lines 200, 207-208 use this in examples:
-"${targetDateStr}T10:00:00-05:00"  
-// Results in: "Monday, February 3, 2026T10:00:00-05:00" ← INVALID ISO!
-```
-
-The AI sees malformed examples and hallucinates dates, returning Feb 2 instead of Feb 3.
-
-### Missing Context
-
-The AI is never explicitly told what today's date is in an unambiguous format. Line 174 shows:
-
-```typescript
-CURRENT TIME: ${now.toLocaleString('en-US', { timeZone: timezone })}
-// Outputs: "2/3/2026, 9:30:00 AM"
-```
-
-This "2/3/2026" format can be misinterpreted as March 2nd (European) vs February 3rd (US).
+1. **Date parsing uses UTC instead of centralized timezone utility** in batch-calendar-scheduler and ai-task-parser
+2. **OpenAI assistant calls `schedule_task` after batch scheduler** overwrites correct dates with stale ones
+3. **Database trigger deletes ALL notifications** including `task_created` on task UPDATE
+4. **Missing past-date validation** in schedule_task
+5. **Version bump** for tracing
+6. **Multi-channel comms mode** for recurring jobs (Phase 2)
 
 ---
 
-## Technical Fixes
+## Phase 1: Critical Scheduling Fixes
 
-### Fix 1: Add Explicit ISO Date + Improve Prompt Context
-
-**File**: `supabase/functions/batch-calendar-scheduler/index.ts`
-
-```typescript
-// After line 72 (const now = new Date()):
-// Create unambiguous date strings
-const todayISO = now.toISOString().split('T')[0];  // "2026-02-03"
-const todayReadable = now.toLocaleDateString('en-US', {
-  timeZone: timezone,
-  weekday: 'long',
-  year: 'numeric',
-  month: 'long',
-  day: 'numeric'
-});  // "Monday, February 3, 2026"
-
-// After line 158, add:
-const targetDateISO = targetDateObj 
-  ? targetDateObj.toISOString().split('T')[0]  // "2026-02-03"
-  : todayISO;
-
-// Replace line 171-175 with explicit date context:
-const batchPrompt = `You are a scheduling assistant. Schedule ALL ${tasks.length} tasks efficiently, avoiding conflicts.
-
-=== CRITICAL DATE CONTEXT (READ CAREFULLY) ===
-TODAY'S DATE (ISO): ${todayISO}
-TODAY'S DATE (Readable): ${todayReadable}
-TARGET SCHEDULING DATE: ${targetDateISO} (${targetDateStr})
-CURRENT TIME: ${now.toLocaleTimeString('en-US', { timeZone: timezone, hour: '2-digit', minute: '2-digit' })}
-TIMEZONE: ${timezone}
-
-IMPORTANT: ALL scheduled times MUST be on or after ${targetDateISO}. 
-NEVER schedule anything before ${todayISO}.
-==============================================
-
-// Lines 200, 207-208: Replace ${targetDateStr} with ${targetDateISO}:
-- Example for ${timezone}: "${targetDateISO}T12:00:00-05:00" (noon Eastern with offset)
-...
-[
-  { "taskIndex": 0, "start_time": "${targetDateISO}T10:00:00-05:00", "end_time": "${targetDateISO}T11:00:00-05:00", "reasoning": "brief reason" },
-  { "taskIndex": 1, "start_time": "${targetDateISO}T14:00:00-05:00", "end_time": "${targetDateISO}T15:00:00-05:00", "reasoning": "brief reason" },
-  ...
-]
-```
-
-### Fix 2: Add Input/Output Tracing for Debugging
+### Fix 1: batch-calendar-scheduler - Use Centralized Timezone Utility
 
 **File**: `supabase/functions/batch-calendar-scheduler/index.ts`
 
-Add logging before and after AI call:
+**Problem**: Lines 77 and 86-91 use UTC-based parsing which causes dates to shift to "yesterday" near midnight.
 
-```typescript
-// Before line 217 (const aiResponse = await fetch...):
-console.log('=== BATCH SCHEDULER AI INPUT ===');
-console.log('Today ISO:', todayISO);
-console.log('Target Date ISO:', targetDateISO);
-console.log('Target Date Readable:', targetDateStr);
-console.log('Tasks count:', tasks.length);
-console.log('Prompt length:', batchPrompt.length);
-console.log('First 500 chars of prompt:', batchPrompt.substring(0, 500));
-console.log('=================================');
+**Changes**:
+- Line 4: Add `getTodayInTimezone` to import from `_shared/timezone.ts`
+- Lines 77-91: Replace UTC logic with timezone-aware parsing:
+  - Use `getTodayInTimezone(timezone)` instead of `now.toISOString().split('T')[0]`
+  - Parse `targetDate` by splitting the YYYY-MM-DD string and setting hours to noon local time
+  - Avoid `new Date(targetDate)` which interprets as UTC midnight
 
-// After line 259 (const aiContent = ...):
-console.log('=== BATCH SCHEDULER AI OUTPUT ===');
-console.log('Raw AI response (first 1000 chars):', aiContent?.substring(0, 1000));
-console.log('==================================');
+---
 
-// After line 283 (successful parse):
-console.log('=== BATCH SCHEDULER PARSED RESULTS ===');
-scheduledResults.forEach((r, i) => {
-  console.log(`  Slot ${i}: taskIndex=${r.taskIndex}, start=${r.start_time}, end=${r.end_time}`);
-  const dateFromResult = r.start_time?.split('T')[0];
-  if (dateFromResult && dateFromResult < todayISO) {
-    console.error(`  ⚠️ WARNING: Slot ${i} has PAST date ${dateFromResult} (today is ${todayISO})`);
-  }
-});
-console.log('======================================');
+### Fix 2: ai-task-parser - Use User's Timezone for Date Context
+
+**File**: `supabase/functions/ai-task-parser/index.ts`
+
+**Problem**: Lines 101-110 and 116-122 format dates without timezone parameter, causing inconsistent date context sent to the AI.
+
+**Changes**:
+- Lines 101-110: Add `timeZone: userTz` parameter to `toLocaleDateString()` and `toLocaleTimeString()`
+- Lines 116-122: Parse `targetDate` by splitting the string instead of using `new Date()`, then format with timezone
+
+---
+
+### Fix 3: schedule_task - Skip Already-Scheduled Tasks + Past Date Validation
+
+**File**: `supabase/functions/execute-tool/index.ts`
+
+**Problem**: `schedule_task` can overwrite already-scheduled tasks with stale dates from the OpenAI assistant.
+
+**Changes** to `scheduleTask()` function (lines 1041-1095):
+
+1. **Add skip-if-scheduled check**: Query the task first, if `is_scheduled === true` and `start_time` exists, return early with a message suggesting `reschedule_task` instead
+
+2. **Add past-date validation**: Compare `args.date` against `getTodayInTimezone(tz)`, if date is in the past, auto-correct to today with a warning log
+
+---
+
+### Fix 4: Database Trigger - Preserve task_created Notifications
+
+**SQL Migration**: Modify `schedule_task_reminders` function
+
+**Problem**: The DELETE statement removes ALL notifications including `task_created` when a task is updated.
+
+**Change**: Modify the DELETE statement to exclude `task_created`:
+
+```sql
+DELETE FROM scheduled_notifications 
+WHERE task_id = NEW.id 
+  AND notification_type NOT IN ('task_created')
+  AND delivered_at IS NULL 
+  AND failed_at IS NULL;
 ```
 
-### Fix 3: Add Same Validation in ai-task-parser
+This ensures `task_created` notifications survive task updates and get delivered to Slack.
 
-**File**: `supabase/functions/ai-task-parser/index.ts` (around line 401-418)
+---
 
-Add date validation when merging batch results:
-
-```typescript
-// Before merging, get today's date
-const todayISO = new Date().toISOString().split('T')[0];
-
-const tasksWithPreview = tasks.map((task: any, idx: number) => {
-  const scheduled = batchResult.scheduled?.find((s: any) => s.taskIndex === idx);
-  if (scheduled?.start_time && scheduled?.end_time) {
-    // VALIDATE: Reject past dates
-    const scheduledDate = scheduled.start_time.split('T')[0];
-    if (scheduledDate < todayISO) {
-      console.error(`[PARSER] REJECTED: Batch returned past date ${scheduledDate} for "${task.title}" (today=${todayISO})`);
-      return { ...task, needsScheduling: true };  // Don't apply bad data
-    }
-    
-    return {
-      ...task,
-      start_time: scheduled.start_time,
-      end_time: scheduled.end_time,
-      scheduling_note: scheduled.reasoning || null,
-      isPreview: true,
-    };
-  }
-  return { ...task, needsScheduling: true };
-});
-```
-
-### Fix 4: FocusView "Other" Time Bucket
-
-**File**: `src/components/FocusView.tsx`
-
-Add "Other" bucket for tasks outside defined windows:
-
-```typescript
-// Line 79 - Add to timeWindowStyles:
-other: { 
-  icon: <Clock className="h-4 w-4" />, 
-  label: 'Other Times', 
-  bgClass: 'bg-gray-50 dark:bg-gray-950/20',
-  borderClass: 'border-l-4 border-l-gray-400',
-  textClass: 'text-gray-700 dark:text-gray-300'
-},
-
-// Line 177-182 - Add 'other' to tasksByWindow:
-const tasksByWindow: Record<string, Task[]> = {
-  morning: [],
-  business_hours: [],
-  after_work: [],
-  evening: [],
-  other: [],  // NEW: catch-all bucket
-};
-
-// Lines 184-189 - Push to 'other' when window is null:
-scheduledToday.forEach(task => {
-  const window = getTimeWindowForTask(task);
-  if (window && tasksByWindow[window]) {
-    tasksByWindow[window].push(task);
-  } else {
-    tasksByWindow['other'].push(task);  // NEW: fallback
-  }
-});
-```
-
-Also add a new import for Clock icon and render the "Other" section in the timeline.
-
-### Fix 5: Kanban Arrow Viewport Positioning
-
-**File**: `src/components/KanbanBoard.tsx` (lines 1150-1174)
-
-Change from `absolute` to `fixed` positioning:
-
-```typescript
-// Line 1151 - Change to fixed:
-{canScrollLeft && (
-  <div className="fixed left-4 top-1/2 -translate-y-1/2 z-50">
-    <Button
-      variant="outline"
-      size="icon"
-      onClick={scrollLeft}
-      className="h-12 w-12 bg-background shadow-xl border-2 hover:bg-background/90 transition-all hover:scale-110"
-    >
-      <ChevronLeft className="h-5 w-5" />
-    </Button>
-  </div>
-)}
-
-// Line 1164 - Change to fixed:
-{canScrollRight && (
-  <div className="fixed right-4 top-1/2 -translate-y-1/2 z-50">
-    <Button
-      variant="outline"
-      size="icon"
-      onClick={scrollRight}
-      className="h-12 w-12 bg-background shadow-xl border-2 hover:bg-background/90 transition-all hover:scale-110"
-    >
-      <ChevronRight className="h-5 w-5" />
-    </Button>
-  </div>
-)}
-```
-
-### Fix 6: SmartTaskInput Mobile Responsive Layout
-
-**File**: `src/components/SmartTaskInput.tsx` (lines 203-236)
-
-Make the layout wrap on mobile with multi-line input support:
-
-```typescript
-<form onSubmit={handleSubmit} className="flex flex-wrap items-center gap-2">
-  {/* Main input row */}
-  <div className="flex items-center gap-2 flex-1 min-w-0 w-full sm:w-auto">
-    <Input
-      value={input}
-      onChange={(e) => setInput(e.target.value)}
-      placeholder="Describe your task..."
-      disabled={isProcessing}
-      className="flex-1 min-w-0"
-    />
-    <Button type="submit" disabled={isProcessing || !input.trim()} size="icon" className="shrink-0">
-      {isProcessing ? (
-        <Loader2 className="h-4 w-4 animate-spin" />
-      ) : (
-        <Send className="h-4 w-4" />
-      )}
-    </Button>
-  </div>
-  
-  {/* Toggle moves to second row on mobile */}
-  <div className="flex items-center gap-1.5 px-2 py-1.5 bg-muted/50 rounded-md w-full sm:w-auto justify-center sm:justify-start">
-    <Switch 
-      checked={includeAssignments} 
-      onCheckedChange={setIncludeAssignments}
-      id="include-assignments"
-      className="scale-90"
-    />
-    <Label 
-      htmlFor="include-assignments" 
-      className="cursor-pointer text-xs text-muted-foreground whitespace-nowrap"
-      title="Include pending homework assignments in scheduling context"
-    >
-      + Homework ({selectedAssignmentIds.size})
-    </Label>
-  </div>
-</form>
-```
-
-### Fix 7: Bump Version
+### Fix 5: Version Bump
 
 **File**: `supabase/functions/_shared/config.ts`
 
-```typescript
-export const GLOBAL_VERSION = "2026-02-03-v21";
-```
+**Change**: Update `GLOBAL_VERSION` to `"2026-02-04-v23"`
 
 ---
 
-## Files to Modify
+## Phase 1 Summary
 
 | File | Changes |
 |------|---------|
-| `supabase/functions/batch-calendar-scheduler/index.ts` | Add `targetDateISO` variable, explicit "TODAY IS" context, use ISO in examples, add AI input/output tracing |
-| `supabase/functions/ai-task-parser/index.ts` | Add date validation before merging batch results |
-| `supabase/functions/_shared/config.ts` | Bump version to v21 |
-| `src/components/FocusView.tsx` | Add "Other" time bucket + Clock import |
-| `src/components/KanbanBoard.tsx` | Change arrow positioning from `absolute` to `fixed` |
-| `src/components/SmartTaskInput.tsx` | Responsive 2-row layout for mobile |
+| `supabase/functions/batch-calendar-scheduler/index.ts` | Import and use `getTodayInTimezone()`, parse targetDate without UTC shift |
+| `supabase/functions/ai-task-parser/index.ts` | Add `timeZone` parameter to date formatting |
+| `supabase/functions/execute-tool/index.ts` | Add skip-if-scheduled + past-date validation to scheduleTask |
+| `supabase/functions/_shared/config.ts` | Bump version to v23 |
+| **Database**: `schedule_task_reminders` trigger | Exclude `task_created` from DELETE on UPDATE |
 
 ---
 
-## Expected Tracing Output After Fix
+## Phase 2: Multi-Channel Comms Mode (Follow-up)
 
-When batch scheduler runs, logs will show:
+### Overview
 
-```text
-=== BATCH SCHEDULER AI INPUT ===
-Today ISO: 2026-02-03
-Target Date ISO: 2026-02-03
-Target Date Readable: Monday, February 3, 2026
-Tasks count: 3
-Prompt length: 2450
-First 500 chars of prompt: You are a scheduling assistant...
-=== CRITICAL DATE CONTEXT (READ CAREFULLY) ===
-TODAY'S DATE (ISO): 2026-02-03
-...
-=================================
+Enable recurring jobs (morning stand-up, midday check-in, EOD wrap-up) to use different communication channels:
 
-🤖 Calling AI for batch scheduling...
-✅ AI responded in 1250ms
+- **Phone Call** (Twilio) - existing behavior
+- **In-App Message** (Comms Console with push notification)
+- **Slack Message**
+- **Email**
 
-=== BATCH SCHEDULER AI OUTPUT ===
-Raw AI response (first 1000 chars): [
-  { "taskIndex": 0, "start_time": "2026-02-03T10:00:00-05:00", ...
-==================================
+### Schema Enhancement
 
-=== BATCH SCHEDULER PARSED RESULTS ===
-  Slot 0: taskIndex=0, start=2026-02-03T10:00:00-05:00, end=2026-02-03T11:00:00-05:00
-  Slot 1: taskIndex=1, start=2026-02-03T14:00:00-05:00, end=2026-02-03T15:00:00-05:00
-======================================
+Add `commsMode` field to scheduled calls JSONB:
+
+```typescript
+interface ScheduledCall {
+  id: string;
+  name: string;
+  time: string;
+  enabled: boolean;
+  callType: string;
+  context: string;
+  commsMode: 'phone' | 'app_message' | 'slack' | 'email';  // NEW
+}
 ```
 
-If the AI returns a past date, the log will show:
+### UI Changes
 
-```text
-  ⚠️ WARNING: Slot 2 has PAST date 2026-02-02 (today is 2026-02-03)
-```
+**File**: `src/components/VoiceAssistantSettings.tsx`
 
-And the validation layer will reject it.
+Add "Delivery Method" dropdown to each scheduled call card with options for Phone, In-App Message, Slack, and Email.
+
+**File**: `src/services/schedulingService.ts`
+
+Update `ScheduledCall` type to include `commsMode`.
+
+### Backend Changes
+
+**File**: `supabase/functions/twilio-scheduled-call/index.ts`
+
+Modify `processRecurringCalls()` to branch by `commsMode`:
+- `phone` → existing Twilio call logic
+- `app_message` → hybrid-assistant-api + send-push-notification
+- `slack` → send-unified-notification (Slack channel)
+- `email` → send-unified-notification (Email channel)
+
+### Push Notification Enhancement
+
+**File**: `public/sw.js`
+
+Handle notification clicks to open Comms Console to the relevant thread.
 
 ---
 
-## What's STILL Holding
+## Phase 2 Summary
 
-**TODO vs UP_NEXT status mapping** - Holding until architecture is documented for consistency.
+| File | Changes |
+|------|---------|
+| `src/services/schedulingService.ts` | Add `commsMode` to `ScheduledCall` type |
+| `src/components/VoiceAssistantSettings.tsx` | Add "Delivery Method" dropdown per call |
+| `supabase/functions/twilio-scheduled-call/index.ts` | Branch by `commsMode`, add handler functions |
+| `public/sw.js` | Handle notification click to open Comms Console |
+
+---
+
+## Expected Outcomes
+
+### After Phase 1
+- `getTodayInTimezone('America/New_York')` returns correct date regardless of server UTC time
+- AI prompts show correct dates like "Tuesday, February 4, 2026"
+- If OpenAI calls `schedule_task` after batch scheduler, it's skipped with "already scheduled" message
+- Past dates are auto-corrected to today with warning logs
+- `task_created` notifications survive task updates and get delivered to Slack
+
+### After Phase 2
+- Each recurring job can be configured to contact you via phone, in-app message, Slack, or email
+- In-app messages include push notifications that feel like SMS
+- All existing phone calls continue working (backward compatible)
+
