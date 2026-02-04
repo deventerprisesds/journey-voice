@@ -91,15 +91,7 @@ function parseSSEEvents(chunk: string): Array<{ type: string; content?: string; 
 
 export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, isDemoMode, session } = useAuth();
-  
-  // Safely access voice assistant context - may not be available during initial render
-  let voiceAssistant: ReturnType<typeof useVoiceAssistant> | null = null;
-  try {
-    voiceAssistant = useVoiceAssistant();
-  } catch {
-    // VoiceAssistantProvider not yet mounted - this is fine during initial render
-    console.log('[CommsConsole] VoiceAssistant context not yet available');
-  }
+  const voiceAssistant = useVoiceAssistant();
   const [searchParams, setSearchParams] = useSearchParams();
 
   // Panel state - default to open on desktop
@@ -146,21 +138,20 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
   // Derive voice state from voice assistant context
   const voiceState: VoiceState = useMemo(() => {
-    if (!voiceAssistant) return 'idle';
     if (voiceAssistant.isProcessing) return 'processing';
     if (voiceAssistant.isSpeaking) return 'speaking';
     if (voiceAssistant.isListening) return 'listening';
     return 'idle';
-  }, [voiceAssistant?.isProcessing, voiceAssistant?.isSpeaking, voiceAssistant?.isListening]);
+  }, [voiceAssistant.isProcessing, voiceAssistant.isSpeaking, voiceAssistant.isListening]);
 
   
   // Merge voice transcripts with chat messages based on current mode
   const allMessages = useMemo(() => {
-    if (currentMode === 'voice' && voiceAssistant) {
+    if (currentMode === 'voice') {
       return voiceAssistant.voiceTranscripts || [];
     }
     return messages; // Chat/phone messages
-  }, [currentMode, messages, voiceAssistant?.voiceTranscripts]);
+  }, [currentMode, messages, voiceAssistant.voiceTranscripts]);
 
   // Persist sidebar and panel state
   useEffect(() => {
@@ -405,7 +396,7 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     setCurrentMode(mode);
     
     // Disconnect voice when leaving voice mode
-    if (mode !== 'voice' && voiceAssistant?.isConnected) {
+    if (mode !== 'voice' && voiceAssistant.isConnected) {
       voiceAssistant.disconnectAssistant();
     }
   }, [voiceAssistant]);
@@ -790,17 +781,15 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
   // Connect voice with unified thread and assistant ID for cross-mode memory
   const connectVoice = useCallback(async () => {
-    if (voiceAssistant) {
-      await voiceAssistant.connectToAssistant(dbThreadId || undefined, currentAssistant?.id || undefined);
-    }
+    await voiceAssistant.connectToAssistant(dbThreadId || undefined, currentAssistant?.id || undefined);
   }, [voiceAssistant, dbThreadId, currentAssistant?.id]);
 
   const disconnectVoice = useCallback(() => {
-    voiceAssistant?.disconnectAssistant();
+    voiceAssistant.disconnectAssistant();
   }, [voiceAssistant]);
 
   const sendVoiceTextMessage = useCallback((text: string) => {
-    voiceAssistant?.sendTextMessage(text);
+    voiceAssistant.sendTextMessage(text);
   }, [voiceAssistant]);
 
   // Retry last failed message
@@ -833,7 +822,7 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     threadId,
     isLoading,
     voiceState,
-    isConnected: voiceAssistant?.isConnected ?? false,
+    isConnected: voiceAssistant.isConnected,
     phoneCallState,
     connectionError,
     togglePanel,
