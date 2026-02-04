@@ -1,151 +1,242 @@
-# Self-Debugging Chat + Presence + Realtime System
 
-## Status: ✅ IMPLEMENTED - Awaiting User Test
 
----
+# Smart Message Catch-up (Slack/SMS Model)
 
-## What Was Built
+## Current Problem
 
-### 1. Activity Logger Utility (`src/utils/activityLogger.ts`) ✅
-- REST-based logging directly to `activity_log` table
-- Only logs for dev user (`a3378f93-d655-4913-b2fa-ca5b1d8020f1`)
-- Fire-and-forget (never blocks UI)
-- Includes session_id, user_id, stage, metadata
+When you receive a push notification and open the app, the message doesn't appear until you refresh. The naive fix (reload on every visibility change) wastes network requests and feels janky.
 
-### 2. Presence Tracking (`src/hooks/usePresenceTracking.ts`) ✅
-- Comprehensive logging at every step
-- **Heartbeat every 30 seconds** (keeps presence fresh)
-- **pagehide listener** (critical for iOS background detection)
-- **focus/blur listeners** (more reliable than visibilitychange alone)
-- Logs: `presence_update` with stages: compute, upsert_start, upsert_success, upsert_error, unmount
+## The Slack/SMS Model
 
-### 3. Realtime Subscription Logging (`src/contexts/CommsConsoleContext.tsx`) ✅
-- Tracks subscription lifecycle: setup → subscribing → subscribed/error
-- **5-second watchdog** logs timeout if not subscribed
-- Logs message receipt with messageId, role, content preview
-- Logs duplicate skips, cleanup
+Slack appears to have messages "already there" because:
 
-### 4. ChatInterface Realtime (`src/hooks/useChatAssistant.ts`) ✅
-- Added Realtime subscription (was missing!)
-- Same logging pattern as CommsConsoleContext
-- Ensures system-initiated messages appear in ChatInterface sheet
+1. **Push payload carries the message data** - The push notification contains the message content, ID, and thread ID
+2. **Service worker receives push and posts to app** - Even if the app is suspended, the SW can wake it briefly or store the message
+3. **App listens for SW messages and updates state** - The message appears instantly without a network fetch
+4. **On visibility change, only fetch if needed** - Quick check: "Is there anything newer than my last message?" - if yes, fetch; if no, skip
 
-### 5. Edge Function Step Logging (`supabase/functions/send-chat-message`) ✅
-- Logs every stage:
-  - `request_received`
-  - `assistant_resolved`
-  - `thread_resolved`
-  - `message_stored`
-  - `presence_checked` (with isActive, activeContext values)
-  - `push_send` / `push_sent` / `push_skipped`
-  - `complete`
-  - `exception` (on error)
+## Implementation Plan
 
----
+### Phase 1: Include full message in push payload
 
-## How to Debug
+**File: `supabase/functions/send-push-notification/index.ts`**
 
-### Query: See full timeline for your user
-```sql
-SELECT created_at, activity_type, status, stage, error_message, error_code,
-       metadata::text
-FROM activity_log 
-WHERE user_id = 'a3378f93-d655-4913-b2fa-ca5b1d8020f1'
-ORDER BY created_at DESC
-LIMIT 50;
+Modify the push payload to include the full message data:
+
+```typescript
+const payload = JSON.stringify({
+  title,
+  body,
+  data: {
+    ...data,
+    // Include full message for immediate display
+    message: data?.messageData || null
+  },
+  // ...rest
+});
 ```
 
-### Query: Presence events only
-```sql
-SELECT created_at, stage, status, error_message,
-       metadata->>'isActive' as is_active,
-       metadata->>'context' as context,
-       metadata->>'trigger' as trigger
-FROM activity_log 
-WHERE user_id = 'a3378f93-d655-4913-b2fa-ca5b1d8020f1'
-  AND activity_type = 'presence_update'
-ORDER BY created_at DESC
-LIMIT 20;
+**File: `supabase/functions/send-chat-message/index.ts`**
+
+Pass the full message data to the push notification:
+
+```typescript
+body: JSON.stringify({
+  userId,
+  title: 'Iris',
+  body: truncateText(content, 100),
+  data: {
+    type: 'chat_message',
+    // NEW: Include full message for immediate display
+    messageData: {
+      id: storedMessage.id,
+      role: 'assistant',
+      content,
+      source: 'chat',
+      assistant_id: effectiveAssistantId,
+      created_at: new Date().toISOString(),
+      thread_id: dbThreadId
+    },
+    openCommsConsole: true,
+    threadId: dbThreadId,
+    messageId: storedMessage.id
+  }
+})
 ```
 
-### Query: Realtime subscription events
-```sql
-SELECT created_at, stage, status, error_message,
-       metadata->>'threadId' as thread_id,
-       metadata->>'status' as realtime_status,
-       metadata->>'elapsedMs' as elapsed_ms
-FROM activity_log 
-WHERE user_id = 'a3378f93-d655-4913-b2fa-ca5b1d8020f1'
-  AND activity_type = 'realtime_subscribe'
-ORDER BY created_at DESC
-LIMIT 20;
+### Phase 2: Service worker posts message to app
+
+**File: `public/sw.js`**
+
+When a push is received, immediately post the message to any open app clients:
+
+```javascript
+self.addEventListener('push', (event) => {
+  // Parse notification data
+  const notificationData = event.data ? event.data.json() : {};
+  
+  // If this push contains a message, post it to all app clients
+  if (notificationData.data?.messageData) {
+    event.waitUntil(
+      clients.matchAll({ type: 'window', includeUncontrolled: true })
+        .then((clientList) => {
+          for (const client of clientList) {
+            client.postMessage({
+              type: 'NEW_CHAT_MESSAGE',
+              message: notificationData.data.messageData
+            });
+          }
+        })
+    );
+  }
+  
+  // Show the notification as usual
+  event.waitUntil(
+    self.registration.showNotification(notificationData.title, {...})
+  );
+});
 ```
 
-### Query: Check if presence row exists
-```sql
-SELECT * FROM user_presence 
-WHERE user_id = 'a3378f93-d655-4913-b2fa-ca5b1d8020f1';
+### Phase 3: App listens for SW messages and updates state immediately
+
+**File: `src/contexts/CommsConsoleContext.tsx`**
+
+Add a listener for `NEW_CHAT_MESSAGE` from the service worker:
+
+```typescript
+useEffect(() => {
+  const handleServiceWorkerMessage = (event: MessageEvent) => {
+    // Existing NOTIFICATION_CLICKED handler...
+    
+    // NEW: Handle message pushed from service worker
+    if (event.data?.type === 'NEW_CHAT_MESSAGE') {
+      const message = event.data.message;
+      console.log('[CommsConsole] Message received from SW:', message.id);
+      
+      // Log receipt
+      logChat(userId, 'sw_message_received', 'completed', {
+        messageId: message.id,
+        threadId: message.thread_id
+      });
+      
+      // Add to messages if not already present and matches current thread
+      if (message.thread_id === dbThreadId) {
+        setMessages(prev => {
+          if (prev.some(m => m.id === message.id)) return prev;
+          return [...prev, {
+            id: message.id,
+            role: message.role,
+            content: message.content,
+            source: message.source,
+            assistant_id: message.assistant_id,
+            created_at: message.created_at,
+          }];
+        });
+      }
+    }
+  };
+  
+  navigator.serviceWorker?.addEventListener('message', handleServiceWorkerMessage);
+  return () => navigator.serviceWorker?.removeEventListener('message', handleServiceWorkerMessage);
+}, [userId, dbThreadId]);
 ```
 
----
+### Phase 4: Smart visibility reload (only if needed)
 
-## Test Result from Edge Function (2026-02-04 21:42:28)
+**File: `src/contexts/CommsConsoleContext.tsx`**
 
-**Edge function logging verified working:**
+Add a visibility change handler that only reloads if there are newer messages:
+
+```typescript
+// Track the latest message timestamp we've seen
+const lastMessageTimestampRef = useRef<string | null>(null);
+
+// Update ref whenever messages change
+useEffect(() => {
+  if (messages.length > 0) {
+    lastMessageTimestampRef.current = messages[messages.length - 1].created_at;
+  }
+}, [messages]);
+
+// On visibility change, check if there are newer messages
+useEffect(() => {
+  const handleVisibilityChange = async () => {
+    if (document.visibilityState !== 'visible' || !dbThreadId || !userId) return;
+    
+    logChat(userId, 'visibility_check', 'started', { threadId: dbThreadId });
+    
+    // Quick query: any messages newer than our last seen?
+    const lastSeen = lastMessageTimestampRef.current || new Date(0).toISOString();
+    
+    const { data, error } = await supabase
+      .from('conversation_messages')
+      .select('id')
+      .eq('thread_id', dbThreadId)
+      .eq('user_id', userId)
+      .gt('created_at', lastSeen)
+      .limit(1);
+    
+    if (error) {
+      logChat(userId, 'visibility_check', 'error', { error: error.message }, error.message);
+      return;
+    }
+    
+    if (data && data.length > 0) {
+      // There are newer messages, reload history
+      logChat(userId, 'visibility_reload', 'started', { 
+        threadId: dbThreadId, 
+        lastSeen,
+        newMessageCount: data.length 
+      });
+      setHistoryLoaded(false);
+    } else {
+      // No new messages, skip reload
+      logChat(userId, 'visibility_check', 'completed', { 
+        result: 'no_new_messages',
+        lastSeen 
+      });
+    }
+  };
+  
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+  return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+}, [dbThreadId, userId]);
 ```
-21:42:25 | chat_send | started   | request_received
-21:42:26 | chat_send | completed | assistant_resolved
-21:42:26 | chat_send | completed | thread_resolved  
-21:42:26 | chat_send | completed | message_stored (messageId: 2d03c431...)
-21:42:26 | chat_send | completed | presence_checked (isActive: null, context: null)
-21:42:27 | chat_send | started   | push_send
-21:42:27 | chat_send | completed | push_sent (delivered: 2, failed: 0)
-21:42:28 | chat_send | completed | complete
-```
 
-**Key finding:** `presence_checked` shows `isActive: null` because `user_presence` table has no row for the user - confirming the frontend presence upsert is failing.
+## Expected Behavior After Implementation
 
----
+1. **Push notification arrives while app is open but backgrounded:**
+   - Service worker receives push
+   - SW posts `NEW_CHAT_MESSAGE` to app
+   - App (still running) adds message to state immediately
+   - When you foreground: message is already there
 
-## Next Steps
+2. **Push notification arrives while app is closed:**
+   - Service worker receives push, shows notification
+   - You tap notification to open app
+   - `?openComms=true` URL param triggers `setHistoryLoaded(false)`
+   - History reload fetches the new message
 
-1. **User opens app on phone** → Frontend logging will start
-2. **Check activity_log** for:
-   - `presence_update` events (will show if upsert fails and why)
-   - `realtime_subscribe` events (will show if subscription connects)
-3. **Send test message** via edge function
-4. **Query timeline** to see full event sequence
+3. **App foregrounded without tapping notification:**
+   - Visibility change fires
+   - Quick query checks for messages newer than last seen
+   - If new messages exist: reload history
+   - If no new messages: do nothing (efficient!)
 
----
+## Activity Logging Added
 
-## Architecture Diagram
+| Event | Stage | Description |
+|-------|-------|-------------|
+| `sw_message_received` | completed | Message received from service worker |
+| `visibility_check` | started/completed | Checking for newer messages on foreground |
+| `visibility_reload` | started | Reloading because newer messages found |
 
-```text
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                          LOGGING FLOW                                        │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  FRONTEND (CommsConsoleContext.tsx, usePresenceTracking.ts)                  │
-│  ─────────────────────────────────────────────────────────────              │
-│  → presence_update   stage: compute         (computed state)                 │
-│  → presence_update   stage: upsert_start    (attempting DB write)            │
-│  → presence_update   stage: upsert_success  (succeeded)                      │
-│  → presence_update   stage: upsert_error    (failed + full error)            │
-│  → realtime_subscribe stage: setup          (thread ID, user ID)             │
-│  → realtime_subscribe stage: subscribed     (SUBSCRIBED status)              │
-│  → realtime_subscribe stage: timeout        (5s watchdog triggered)          │
-│  → chat_receive      stage: realtime_received (message ID, preview)          │
-│                                                                              │
-│  EDGE FUNCTION (send-chat-message)                                           │
-│  ─────────────────────────────────                                           │
-│  → chat_send   stage: request_received      (request params)                 │
-│  → chat_send   stage: assistant_resolved    (assistant ID)                   │
-│  → chat_send   stage: thread_resolved       (thread ID)                      │
-│  → chat_send   stage: message_stored        (message ID)                     │
-│  → chat_send   stage: presence_checked      (isActive, context, decision)    │
-│  → chat_send   stage: push_sent/skipped     (push result or skip reason)     │
-│  → chat_send   stage: complete              (final success)                  │
-│  → chat_send   stage: exception             (error details)                  │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+## Files to Modify
+
+| File | Changes |
+|------|---------|
+| `supabase/functions/send-chat-message/index.ts` | Include full message data in push payload |
+| `supabase/functions/send-push-notification/index.ts` | Pass through message data |
+| `public/sw.js` | Post message to app clients on push |
+| `src/contexts/CommsConsoleContext.tsx` | Handle SW message, smart visibility reload |
+
