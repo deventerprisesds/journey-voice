@@ -1,7 +1,7 @@
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { normalizeDateTime } from "../_shared/timezone.ts";
+import { normalizeDateTime, getTodayInTimezone } from "../_shared/timezone.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -72,38 +72,43 @@ serve(async (req) => {
     const now = new Date();
     
     // =============================================================
-    // EXPLICIT DATE CONTEXT - Create unambiguous date strings
+    // EXPLICIT DATE CONTEXT - Use centralized timezone utility
     // =============================================================
-    const todayISO = now.toISOString().split('T')[0];  // "2026-02-03"
+    const todayISO = getTodayInTimezone(timezone);  // Correct date in user's timezone
     const todayReadable = now.toLocaleDateString('en-US', {
       timeZone: timezone,
       weekday: 'long',
       year: 'numeric',
       month: 'long',
       day: 'numeric'
-    });  // "Monday, February 3, 2026"
+    });  // "Tuesday, February 4, 2026"
     
-    const targetDateObj = targetDate ? new Date(targetDate) : null;
+    // Parse targetDate in user's timezone (avoid UTC midnight shift)
+    let targetDateISO = targetDate || todayISO;
+    if (targetDate) {
+      // Validate: use the string directly, don't parse with new Date()
+      // which would interpret as UTC midnight and shift the date
+      targetDateISO = targetDate;
+    }
     
-    // Create ISO date for use in examples (CRITICAL FIX)
-    const targetDateISO = targetDateObj 
-      ? targetDateObj.toISOString().split('T')[0]  // "2026-02-03"
-      : todayISO;
+    console.log(`[BATCH-SCHEDULER] Timezone: ${timezone}, todayISO: ${todayISO}, targetDateISO: ${targetDateISO}`);
     
     // If allowOverflow, fetch busy slots for target date + next day
     // Otherwise, fetch for the next 14 days
+    // Parse targetDateISO safely without new Date() UTC shift
     let busySlotsEndDate: Date;
-    if (targetDateObj && allowOverflow) {
+    if (targetDate && allowOverflow) {
+      // Parse target date from YYYY-MM-DD string directly
+      const [year, month, day] = targetDateISO.split('-').map(Number);
+      const targetAsDate = new Date(year, month - 1, day, 23, 59, 59, 999);
       // Get end of next day after target
-      const nextDay = new Date(targetDateObj);
+      const nextDay = new Date(targetAsDate);
       nextDay.setDate(nextDay.getDate() + 2); // target + 1 day buffer
-      nextDay.setHours(23, 59, 59, 999);
       busySlotsEndDate = nextDay;
-    } else if (targetDateObj) {
-      // Just the target date
-      const endOfTarget = new Date(targetDateObj);
-      endOfTarget.setHours(23, 59, 59, 999);
-      busySlotsEndDate = endOfTarget;
+    } else if (targetDate) {
+      // Just the target date - parse from string
+      const [year, month, day] = targetDateISO.split('-').map(Number);
+      busySlotsEndDate = new Date(year, month - 1, day, 23, 59, 59, 999);
     } else {
       // Default: 14 days
       busySlotsEndDate = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
