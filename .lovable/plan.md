@@ -1,58 +1,75 @@
 
-# Fix: Realtime Messages Not Appearing Without Refresh
 
-## Problem Identified
+# Systematic Prevention: Supabase Integration Checklist
 
-The `conversation_messages` table is **NOT** added to the Supabase Realtime publication. This means:
-- The Realtime subscription code in `CommsConsoleContext.tsx` is correct
-- BUT Postgres never broadcasts INSERT events because the table isn't in the `supabase_realtime` publication
-- Messages only appear after a manual refresh (when history is re-fetched from DB)
+## Problem Analysis
 
-### Evidence
+You're right - we have checklists but they don't cover this failure mode:
 
-Query result for `pg_publication_tables`:
+| Existing Checklist | What It Covers | Gap |
+|-------------------|----------------|-----|
+| `cloudflare/PREFLIGHT_CHECKLIST.md` | Cloudflare worker deployments | No Supabase coverage |
+| `docs/DEBUG_TRACKER.md` | UI bugs and attempted fixes | Not preventive for new features |
+
+The Realtime oversight happened because there's no checklist that says: *"When implementing Realtime subscriptions, verify the table is in the publication."*
+
+## Solution: Create Supabase Integration Checklist
+
+Create `docs/SUPABASE_CHECKLIST.md` with mandatory verification steps for common Supabase features:
+
+### Proposed Checklist Sections
+
+**1. Realtime Subscriptions**
 ```text
-schemaname | tablename
------------+---------------------------
-public     | lecture_transcripts_segments
-public     | session_notes
+When adding a Realtime subscription to a table:
+- [ ] Table added to publication: `ALTER PUBLICATION supabase_realtime ADD TABLE public.<table>`
+- [ ] Verify with query: `SELECT * FROM pg_publication_tables WHERE pubname = 'supabase_realtime'`
+- [ ] RLS policies allow SELECT for the subscribing user
+- [ ] Test subscription receives events (INSERT, UPDATE, DELETE as needed)
 ```
 
-`conversation_messages` is **missing** from this list.
-
-## Solution
-
-### Phase 1: Add Table to Realtime Publication (Database Migration)
-
-Run a migration to add `conversation_messages` to the Realtime publication:
-
-```sql
--- Add conversation_messages to Supabase Realtime publication
-ALTER PUBLICATION supabase_realtime ADD TABLE public.conversation_messages;
+**2. New Tables**
+```text
+When creating a new table:
+- [ ] RLS enabled: `ALTER TABLE <table> ENABLE ROW LEVEL SECURITY`
+- [ ] RLS policies created for all required operations (SELECT, INSERT, UPDATE, DELETE)
+- [ ] If Realtime needed, add to publication
+- [ ] Types regenerated: verify `src/integrations/supabase/types.ts` updated
 ```
 
-This is a one-line migration that enables Postgres to broadcast INSERT/UPDATE/DELETE events for this table.
+**3. Edge Functions Calling Database**
+```text
+When an edge function writes to a table:
+- [ ] Uses SUPABASE_SERVICE_ROLE_KEY for admin operations
+- [ ] Uses user's auth token for user-scoped operations
+- [ ] Error handling includes RLS denial cases
+```
 
-### Phase 2: Verify Subscription Works
+**4. Common Mistakes Log**
+```text
+| Date | Mistake | Resolution |
+|------|---------|------------|
+| 2026-02-04 | Realtime subscription created but table not in publication | Always run ALTER PUBLICATION after creating subscription code |
+```
 
-After the migration:
-1. Open the Comms Console in the browser
-2. Trigger a test message via the `send-chat-message` edge function
-3. Message should appear instantly in the chat WITHOUT a push notification (if user is active)
-4. Console logs should show: `[CommsConsole] Realtime message received: <message-id>`
+## Update Debug Tracker
 
-## Why This Wasn't Working Before
+Add this incident to `docs/DEBUG_TRACKER.md` Lessons Learned:
 
-- Supabase Realtime requires tables to be explicitly added to the `supabase_realtime` publication
-- Without this, Postgres doesn't emit the change events that the Realtime server listens to
-- The subscription in the frontend was correctly set up but never received events
+```text
+4. **Supabase Realtime requires explicit publication registration**: Creating a frontend subscription (`.channel().on('postgres_changes')`) does NOT automatically enable events. The table must be added to the `supabase_realtime` publication via `ALTER PUBLICATION`. Always verify with `pg_publication_tables` query.
+```
 
-## Files to Modify
+## How This Prevents Future Oversights
+
+1. **Before implementing Realtime**: I read the checklist and see the publication step
+2. **After implementing Realtime**: I verify with the `pg_publication_tables` query
+3. **When a new mistake is discovered**: We add it to the Common Mistakes Log
+
+## Files to Create/Modify
 
 | File | Action | Purpose |
 |------|--------|---------|
-| Migration | CREATE | Add `conversation_messages` to Realtime publication |
+| `docs/SUPABASE_CHECKLIST.md` | CREATE | Preventive checklist for Supabase integrations |
+| `docs/DEBUG_TRACKER.md` | UPDATE | Add Realtime lesson to Lessons Learned |
 
-## Technical Details
-
-The migration uses `ALTER PUBLICATION` which is the standard Postgres way to add tables to a logical replication publication. Supabase's Realtime server subscribes to this publication and forwards events to connected clients via WebSocket.
