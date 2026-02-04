@@ -233,11 +233,12 @@ export const useNotifications = () => {
         }
       };
 
-      // Call edge function to save subscription
+      // Call edge function to save subscription (pass userId explicitly per project pattern)
       const { error } = await supabase.functions.invoke('manage-push-subscription', {
         body: {
           action: 'subscribe',
-          subscription: subscriptionData
+          subscription: subscriptionData,
+          userId: user.id
         }
       });
 
@@ -259,7 +260,8 @@ export const useNotifications = () => {
     try {
       const { error } = await supabase.functions.invoke('manage-push-subscription', {
         body: {
-          action: 'unsubscribe'
+          action: 'unsubscribe',
+          userId: user.id
         }
       });
 
