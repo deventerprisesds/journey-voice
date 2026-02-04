@@ -1,6 +1,6 @@
 // Service Worker for Push Notifications
 // Increment this on each deploy to bust old caches
-const CACHE_VERSION = 'v3';
+const CACHE_VERSION = 'v4';
 const CACHE_NAME = `task-manager-${CACHE_VERSION}`;
 const urlsToCache = [
   '/',
@@ -137,7 +137,7 @@ self.addEventListener('push', (event) => {
   );
 });
 
-// Notification click event - handle user interactions
+// Notification click event - handle user interactions with deep linking
 self.addEventListener('notificationclick', (event) => {
   console.log('Notification clicked:', event);
   
@@ -147,14 +147,21 @@ self.addEventListener('notificationclick', (event) => {
     return;
   }
 
-  // Handle different actions
-  let urlToOpen = '/';
+  const notificationData = event.notification.data || {};
   
-  if (event.notification.data && event.notification.data.taskId) {
-    urlToOpen = `/?task=${event.notification.data.taskId}`;
-  } else if (event.action === 'view') {
-    urlToOpen = '/';
+  // Determine URL based on notification data
+  let urlToOpen = '/tasks?view=focus';
+  
+  // Handle chat/check-in notifications - open with Comms Console
+  if (notificationData.openCommsConsole || 
+      notificationData.type === 'chat_message' || 
+      notificationData.type === 'scheduled_checkin') {
+    urlToOpen = '/tasks?view=focus&openComms=true';
+  } else if (notificationData.taskId) {
+    urlToOpen = `/tasks?task=${notificationData.taskId}`;
   }
+
+  console.log('Opening URL:', urlToOpen, 'with data:', notificationData);
 
   event.waitUntil(
     clients.matchAll({
@@ -164,9 +171,14 @@ self.addEventListener('notificationclick', (event) => {
       // Check if app is already open
       for (const client of clientList) {
         if (client.url.includes(self.location.origin) && 'focus' in client) {
+          // Navigate client to the correct page if needed
+          if (notificationData.openCommsConsole) {
+            client.navigate(urlToOpen);
+          }
+          // Post message to open Comms Console
           client.postMessage({
             type: 'NOTIFICATION_CLICKED',
-            data: event.notification.data
+            data: notificationData
           });
           return client.focus();
         }

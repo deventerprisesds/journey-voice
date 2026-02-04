@@ -9,6 +9,9 @@ const corsHeaders = {
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
 const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
+// Communication mode for recurring calls
+type CommsMode = 'phone' | 'app_message' | 'slack' | 'email';
+
 interface ScheduledCall {
   id: string;
   name: string;
@@ -16,6 +19,7 @@ interface ScheduledCall {
   enabled: boolean;
   callType: 'morning_standup' | 'midday_checkin' | 'eod_wrapup' | 'custom';
   context: string;
+  commsMode?: CommsMode; // NEW: Delivery method (default: 'phone')
 }
 
 interface ScheduledCallConfig {
@@ -226,35 +230,91 @@ async function processRecurringCalls(): Promise<{ processed: number; triggered: 
       processed++;
 
       if (isTimeMatch(currentHHMM, call.time)) {
-        console.log(`[RECURRING] User ${userId}: Triggering ${call.name} at ${call.time}`);
+        const commsMode = call.commsMode || 'phone';
+        console.log(`[RECURRING] User ${userId}: Triggering ${call.name} at ${call.time} via ${commsMode}`);
         
         try {
-          // Build context based on call type
-          const context = await buildCallContext(call, userId);
+          // Route based on communication mode
+          if (commsMode === 'app_message') {
+            // NEW: Send via in-app chat + push notification
+            const response = await fetch(`${supabaseUrl}/functions/v1/send-chat-message`, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${supabaseServiceKey}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                userId,
+                generateFromContext: {
+                  callType: call.callType,
+                  context: call.context
+                },
+                sendPush: true
+              }),
+            });
 
-          // Trigger the call via twilio-voice-handler
-          const response = await fetch(`${supabaseUrl}/functions/v1/twilio-voice-handler`, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${supabaseServiceKey}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              action: 'trigger-call',
-              userId,
-              context,
-              phoneNumber,
-            }),
-          });
+            const result = await response.json();
+            
+            if (result.success) {
+              triggered++;
+              console.log(`[RECURRING] User ${userId}: Chat message sent for ${call.name}`);
+            } else {
+              errors.push(`User ${userId}: Failed to send chat message for ${call.name} - ${result.error}`);
+              console.error(`[RECURRING] User ${userId}: Failed to send chat for ${call.name}:`, result.error);
+            }
+          } else if (commsMode === 'slack' || commsMode === 'email') {
+            // Route via send-unified-notification
+            const response = await fetch(`${supabaseUrl}/functions/v1/send-unified-notification`, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${supabaseServiceKey}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                userId,
+                taskId: null,
+                title: call.name,
+                body: `Time for your ${call.name.toLowerCase()}. ${call.context || ''}`,
+                channels: [commsMode],
+                metadata: { callType: call.callType }
+              }),
+            });
 
-          const result = await response.json();
-          
-          if (result.success) {
-            triggered++;
-            console.log(`[RECURRING] User ${userId}: Call triggered successfully for ${call.name}`);
+            const result = await response.json();
+            
+            if (result.success) {
+              triggered++;
+              console.log(`[RECURRING] User ${userId}: ${commsMode} notification sent for ${call.name}`);
+            } else {
+              errors.push(`User ${userId}: Failed to send ${commsMode} for ${call.name} - ${result.error}`);
+            }
           } else {
-            errors.push(`User ${userId}: Failed to trigger ${call.name} - ${result.error}`);
-            console.error(`[RECURRING] User ${userId}: Failed to trigger ${call.name}:`, result.error);
+            // Default: phone call via twilio-voice-handler
+            const context = await buildCallContext(call, userId);
+
+            const response = await fetch(`${supabaseUrl}/functions/v1/twilio-voice-handler`, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${supabaseServiceKey}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                action: 'trigger-call',
+                userId,
+                context,
+                phoneNumber,
+              }),
+            });
+
+            const result = await response.json();
+            
+            if (result.success) {
+              triggered++;
+              console.log(`[RECURRING] User ${userId}: Call triggered successfully for ${call.name}`);
+            } else {
+              errors.push(`User ${userId}: Failed to trigger ${call.name} - ${result.error}`);
+              console.error(`[RECURRING] User ${userId}: Failed to trigger ${call.name}:`, result.error);
+            }
           }
         } catch (error) {
           const errorMsg = error instanceof Error ? error.message : 'Unknown error';
