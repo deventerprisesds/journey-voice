@@ -54,6 +54,9 @@ export function usePresenceTracking({
 
         if (error) {
           console.error('[PresenceTracking] Failed to update presence:', error);
+          // Debug: verify user_id matches auth.uid()
+          const { data: authData } = await supabase.auth.getUser();
+          console.error('[PresenceTracking] user_id:', userId, 'auth.uid():', authData?.user?.id);
         } else {
           console.log(`[PresenceTracking] Updated: isActive=${isActive}, context=${context}`);
         }

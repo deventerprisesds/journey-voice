@@ -339,9 +339,17 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
   // Realtime subscription for new messages (instant delivery)
   // ============================================================
   useEffect(() => {
-    if (!dbThreadId || !userId) return;
+    // Enhanced logging to debug subscription initialization
+    if (!userId) {
+      console.log('[CommsConsole] Realtime: No userId, skipping subscription');
+      return;
+    }
+    if (!dbThreadId) {
+      console.log('[CommsConsole] Realtime: No dbThreadId yet, waiting for thread initialization. currentAssistant:', currentAssistant?.id);
+      return;
+    }
     
-    console.log('[CommsConsole] Setting up realtime subscription for thread:', dbThreadId);
+    console.log('[CommsConsole] Realtime: Setting up subscription for thread:', dbThreadId);
     
     const channel = supabase
       .channel(`chat-messages-${dbThreadId}`)
@@ -355,11 +363,14 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
         },
         (payload) => {
           const newMessage = payload.new as any;
-          console.log('[CommsConsole] Realtime message received:', newMessage.id);
+          console.log('[CommsConsole] Realtime message received:', newMessage.id, 'content:', newMessage.content?.substring(0, 50));
           
           // Deduplicate - skip if already in state
           setMessages(prev => {
-            if (prev.some(m => m.id === newMessage.id)) return prev;
+            if (prev.some(m => m.id === newMessage.id)) {
+              console.log('[CommsConsole] Realtime: Skipping duplicate message:', newMessage.id);
+              return prev;
+            }
             
             return [...prev, {
               id: newMessage.id,
@@ -372,13 +383,15 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
           });
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log('[CommsConsole] Realtime subscription status:', status);
+      });
     
     return () => {
-      console.log('[CommsConsole] Cleaning up realtime subscription');
+      console.log('[CommsConsole] Realtime: Cleaning up subscription for thread:', dbThreadId);
       supabase.removeChannel(channel);
     };
-  }, [dbThreadId, userId]);
+  }, [dbThreadId, userId, currentAssistant?.id]);
 
   // ============================================================
   // User presence tracking for conditional push notifications
