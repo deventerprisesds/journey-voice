@@ -422,7 +422,17 @@ serve(async (req) => {
             callType: callType || 'direct',
             openCommsConsole: true,
             threadId: dbThreadId,
-            messageId: storedMessage.id
+            messageId: storedMessage.id,
+            // Include full message data for instant display (Slack/SMS model)
+            messageData: {
+              id: storedMessage.id,
+              role: 'assistant',
+              content,
+              source: 'chat',
+              assistant_id: effectiveAssistantId,
+              created_at: new Date().toISOString(),
+              thread_id: dbThreadId
+            }
           }
         })
       });

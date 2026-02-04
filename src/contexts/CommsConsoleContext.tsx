@@ -476,10 +476,12 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
   });
 
   // ============================================================
-  // Handle notification clicks from service worker
+  // Handle service worker messages: notification clicks AND new chat messages
+  // Implements Slack/SMS model for instant message display
   // ============================================================
   useEffect(() => {
     const handleServiceWorkerMessage = (event: MessageEvent) => {
+      // Handle notification clicks
       if (event.data?.type === 'NOTIFICATION_CLICKED') {
         const notificationData = event.data.data || {};
         console.log('[CommsConsole] Notification clicked:', notificationData);
@@ -494,6 +496,47 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
           setHistoryLoaded(false);
         }
       }
+      
+      // Handle new chat messages from push notification (Slack/SMS model)
+      if (event.data?.type === 'NEW_CHAT_MESSAGE') {
+        const message = event.data.message;
+        console.log('[CommsConsole] Message received from SW:', message?.id);
+        
+        if (userId) {
+          logChat(userId, 'sw_message_received', 'completed', {
+            messageId: message?.id,
+            threadId: message?.thread_id,
+            hasDbThread: !!dbThreadId
+          });
+        }
+        
+        // Only add if message is valid and matches current thread
+        if (message?.id && message?.thread_id) {
+          // If we're viewing a different thread, just reload history when we switch
+          if (dbThreadId && message.thread_id !== dbThreadId) {
+            console.log('[CommsConsole] SW message is for different thread, skipping');
+            return;
+          }
+          
+          // Add to messages if not already present (dedupe)
+          setMessages(prev => {
+            if (prev.some(m => m.id === message.id)) {
+              console.log('[CommsConsole] SW message already in state, skipping:', message.id);
+              return prev;
+            }
+            
+            console.log('[CommsConsole] Adding SW message to state:', message.id);
+            return [...prev, {
+              id: message.id,
+              role: message.role as 'user' | 'assistant' | 'system',
+              content: message.content,
+              source: (message.source || 'chat') as CommunicationMode,
+              assistant_id: message.assistant_id,
+              created_at: message.created_at,
+            }];
+          });
+        }
+      }
     };
     
     navigator.serviceWorker?.addEventListener('message', handleServiceWorkerMessage);
@@ -501,7 +544,80 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     return () => {
       navigator.serviceWorker?.removeEventListener('message', handleServiceWorkerMessage);
     };
-  }, []);
+  }, [userId, dbThreadId]);
+  
+  // ============================================================
+  // Track last message timestamp for smart visibility reload
+  // ============================================================
+  const lastMessageTimestampRef = useRef<string | null>(null);
+  
+  useEffect(() => {
+    if (messages.length > 0) {
+      // Update to the latest message timestamp
+      const latestTimestamp = messages
+        .map(m => m.created_at)
+        .filter(Boolean)
+        .sort()
+        .pop();
+      if (latestTimestamp) {
+        lastMessageTimestampRef.current = latestTimestamp;
+      }
+    }
+  }, [messages]);
+  
+  // ============================================================
+  // Smart visibility reload: only fetch if there are newer messages
+  // ============================================================
+  useEffect(() => {
+    const handleVisibilityChange = async () => {
+      if (document.visibilityState !== 'visible' || !dbThreadId || !userId) return;
+      
+      logChat(userId, 'visibility_check', 'started', { 
+        threadId: dbThreadId,
+        lastSeen: lastMessageTimestampRef.current 
+      });
+      
+      // Quick query: any messages newer than our last seen?
+      const lastSeen = lastMessageTimestampRef.current || new Date(0).toISOString();
+      
+      try {
+        const { data, error } = await supabase
+          .from('conversation_messages')
+          .select('id')
+          .eq('thread_id', dbThreadId)
+          .eq('user_id', userId)
+          .gt('created_at', lastSeen)
+          .limit(1);
+        
+        if (error) {
+          logChat(userId, 'visibility_check', 'error', { error: error.message }, error.message);
+          return;
+        }
+        
+        if (data && data.length > 0) {
+          // There are newer messages, reload history
+          console.log('[CommsConsole] Visibility check found newer messages, reloading');
+          logChat(userId, 'visibility_reload', 'started', { 
+            threadId: dbThreadId, 
+            lastSeen,
+            foundNew: true 
+          });
+          setHistoryLoaded(false);
+        } else {
+          // No new messages, skip reload
+          logChat(userId, 'visibility_check', 'completed', { 
+            result: 'no_new_messages',
+            lastSeen 
+          });
+        }
+      } catch (err) {
+        console.error('[CommsConsole] Visibility check error:', err);
+      }
+    };
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [dbThreadId, userId]);
 
   // ============================================================
   // Check URL params on mount for fresh app opens
