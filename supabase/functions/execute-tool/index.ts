@@ -181,7 +181,7 @@ export const toolDefinitions = [
   {
     type: "function",
     name: "send_slack_message",
-    description: "Send a Slack message to the user.",
+    description: "Send a message via Slack integration. ONLY use when user EXPLICITLY requests Slack (e.g., 'send me a Slack message', 'post to Slack', 'message me on Slack'). For general 'send me a message' requests, use send_chat_message instead.",
     parameters: {
       type: "object",
       properties: {
@@ -254,7 +254,7 @@ export const toolDefinitions = [
   {
     type: "function",
     name: "send_chat_message",
-    description: "Send a chat message to the user. Use for 'remind me in X minutes', 'send me a message at 3pm', 'check in with me later', or any deferred messaging request.",
+    description: "Send a message to the user via the app's chat interface. This is the PRIMARY and DEFAULT way to message the user. Use for: immediate messages, reminders ('remind me in X minutes'), scheduled check-ins ('message me at 3pm'), or ANY request like 'message me', 'send me something', 'text me', 'notify me about X'. Prefer this over Slack/Email unless user explicitly requests those channels.",
     parameters: {
       type: "object",
       properties: {
