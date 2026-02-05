@@ -1,34 +1,51 @@
 
-# Add Window-Transition Calls to Demo Mode Settings
+# Add Window-Transition Calls to Your Account
 
-## Overview
-The demo user's `user_scheduling_prefs` currently only has the original 3 recurring calls plus a custom test call. I need to update the `scheduled_calls` JSONB column to include the 5 new window-transition calls so you can test them.
+## Problem
+The window-transition calls (Morning Kickstart, Business Hours Start, etc.) are defined in `DEFAULT_SCHEDULED_CALLS` but:
+- These defaults only apply when **no data exists** in `user_scheduling_prefs`
+- Your account already has saved `scheduled_calls` data (7 calls currently)
+- So the code loads your existing data and never merges in the new defaults
 
-## Current State
-The demo user (`00000000-0000-0000-0000-000000000001`) has these calls:
-- Morning Stand-up (11:00) - disabled
-- Midday Check-in (12:30) - disabled  
-- End of Day Wrap-up (19:00) - disabled
-- Test recurring call (14:11) - enabled
+## Solution
+Create a database migration to add the 5 window-transition calls to your existing `scheduled_calls` array while preserving your current calls.
 
-## What I'll Add
-5 new window-transition calls (matching `DEFAULT_SCHEDULED_CALLS` in VoiceAssistantSettings.tsx):
-- Morning Kickstart (06:00) - `[WINDOW:morning]` - enabled for testing
-- Business Hours Start (09:00) - `[WINDOW:business_hours]` - enabled for testing
-- Daily Wrap-up (17:00) - `[WINDOW:after_work]` - enabled for testing
-- Evening Start (19:00) - `[WINDOW:evening]` - enabled for testing
-- Weekend Morning (10:00) - `[WINDOW:weekends]` - enabled for testing
+## Current Calls (Your Account)
+| Name | Time | Status |
+|------|------|--------|
+| Morning Stand-up | 09:00 | enabled |
+| Midday Check-in | 12:32 | enabled |
+| End of Day Wrap-up | 19:00 | enabled |
+| Test call | 19:57 | enabled |
+| Test call 2 | 22:35 | disabled |
+| Test call 3 | 22:48 | disabled |
+| Fried Fish Recipe | 20:00 | enabled |
+
+## Calls to Add
+| Name | Time | Window Marker | Status |
+|------|------|---------------|--------|
+| Morning Kickstart | 06:00 | `[WINDOW:morning]` | enabled |
+| Business Hours Start | 09:00 | `[WINDOW:business_hours]` | enabled |
+| Daily Wrap-up | 17:00 | `[WINDOW:after_work]` | enabled |
+| Evening Start | 19:00 | `[WINDOW:evening]` | enabled |
+| Weekend Morning | 10:00 | `[WINDOW:weekends]` | enabled |
 
 ## Implementation
-Create a migration that updates the demo user's `scheduled_calls` column to include all 8 calls (3 original + 5 window transitions), with the window transitions **enabled** so you can test them immediately.
+Create a SQL migration that uses `jsonb_concat` to append the 5 new window calls to your existing `scheduled_calls` array.
 
-## Files to Create
-| File | Purpose |
-|------|---------|
-| `supabase/migrations/xxx_demo_window_calls.sql` | Update demo user's scheduled_calls |
+## Technical Details
 
-## Testing After
-1. Go to Settings page in demo mode
-2. Verify 8 scheduled calls appear in the list
-3. Window-transition calls should show as enabled
-4. Test triggering one via the appropriate commsMode
+```sql
+UPDATE public.user_scheduling_prefs
+SET scheduled_calls = scheduled_calls || '[
+  {"id": "window_morning", "name": "Morning Kickstart", ...},
+  {"id": "window_business", "name": "Business Hours Start", ...},
+  ...
+]'::jsonb
+WHERE user_id = 'a3378f93-d655-4913-b2fa-ca5b1d8020f1';
+```
+
+## Result
+After this migration, you'll see all 12 calls in your Settings page:
+- 7 existing calls (preserved)
+- 5 new window-transition calls (added)
