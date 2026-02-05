@@ -32,7 +32,7 @@ const QuickTaskInput: React.FC<QuickTaskInputProps> = ({ onTaskCreated }) => {
       const { data, error } = await supabase.functions.invoke('execute-tool', {
         body: {
           toolName: 'parse_and_create_tasks',
-          toolArgs: {
+          args: {
             text: input.trim(),
             target_date: 'today',
             auto_schedule: true
