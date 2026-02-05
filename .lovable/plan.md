@@ -1,26 +1,89 @@
-# commsMode Routing Implementation - COMPLETED
 
-## Summary
 
-The commsMode routing fix has been implemented. Scheduled calls now respect the delivery method setting (phone, app_message, slack, email).
+# Fix: QuickTaskInput Property Name Mismatch
 
-## Changes Made
+## Root Cause (Confirmed via Logs)
 
-### 1. Database Functions (Migration Applied)
-- `schedule_next_call()` - Added `p_comms_mode` parameter
-- `sync_scheduled_calls()` - Extracts `commsMode` from scheduled_calls JSON and passes it through
+The edge function logs reveal the exact issue:
 
-### 2. Edge Function Updated
-- `notification-delivery` - Routes delivery based on `comms_mode`:
-  - `app_message` → `send-chat-message` + push
-  - `slack`/`email` → `send-unified-notification`
-  - `phone` (default) → Twilio voice call
-
-## Re-sync Required
-
-To update existing scheduled notifications with the new comms_mode, go to Settings and toggle any scheduled call off/on, or update any setting field. This triggers the `sync_scheduled_calls` trigger which will recreate notifications with the correct `comms_mode`.
-
-Alternatively, run in Supabase SQL Editor:
-```sql
-UPDATE user_scheduling_prefs SET updated_at = NOW() WHERE scheduled_calls IS NOT NULL;
 ```
+[EXECUTE-TOOL] Executing: parse_and_create_tasks {
+  args: {},           ← EMPTY!
+  userId: "a3378f93-d655-4913-b2fa-ca5b1d8020f1",
+  interface: undefined
+}
+[PARSE_AND_CREATE] Input: "undefined", target_date: undefined, auto_schedule: true
+```
+
+**The `args` object arrives empty because `QuickTaskInput.tsx` sends the wrong property name.**
+
+### QuickTaskInput.tsx (Current - INCORRECT)
+```typescript
+const { data, error } = await supabase.functions.invoke('execute-tool', {
+  body: {
+    toolName: 'parse_and_create_tasks',
+    toolArgs: {           // ← WRONG: sends "toolArgs"
+      text: input.trim(),
+      target_date: 'today',
+      auto_schedule: true
+    },
+    userId: user.id,
+    context: { timezone: userTimezone }
+  }
+});
+```
+
+### execute-tool/index.ts (Expected)
+```typescript
+const { toolName, args, userId, context } = body;  // ← Expects "args"
+```
+
+## The Fix
+
+Change `toolArgs` → `args` in `src/components/QuickTaskInput.tsx` (line 34):
+
+```typescript
+const { data, error } = await supabase.functions.invoke('execute-tool', {
+  body: {
+    toolName: 'parse_and_create_tasks',
+    args: {                 // ← CORRECT: send "args"
+      text: input.trim(),
+      target_date: 'today',
+      auto_schedule: true
+    },
+    userId: user.id,
+    context: { timezone: userTimezone }
+  }
+});
+```
+
+## Files to Modify
+
+| File | Change |
+|------|--------|
+| `src/components/QuickTaskInput.tsx` | Line 34: rename `toolArgs` to `args` |
+
+## Why This Happened
+
+The `QuickTaskInput` component was likely copied from or modeled after a different code pattern that used `toolArgs`. The `execute-tool` edge function interface expects `args` as defined in its `ExecuteToolRequest` type (line 531-532):
+
+```typescript
+interface ExecuteToolRequest {
+  toolName: string;
+  args: Record<string, any>;  // ← This is the expected key
+  userId: string;
+  context?: { ... };
+}
+```
+
+## Verification
+
+After the fix:
+1. Type "i need to eat an apple in an hour" in the Focus view input
+2. Submit the form
+3. Edge function logs should show:
+   ```
+   [PARSE_AND_CREATE] Input: "i need to eat an apple in an hour", target_date: today, ...
+   ```
+4. Task should be created successfully
+
