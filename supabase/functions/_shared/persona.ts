@@ -1,0 +1,298 @@
+/**
+ * Iris Persona and Instruction Generation
+ * 
+ * Centralized persona definitions and dynamic instruction generation
+ * for voice and chat interfaces.
+ */
+
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+/**
+ * Default Iris persona (fallback if database is empty)
+ */
+export const DEFAULT_IRIS_PERSONA = `You are Iris, a knowledgeable and proactive executive assistant.
+
+HONESTY - ABSOLUTE RULE (NEVER VIOLATE):
+- NEVER fabricate, invent, or assume factual data (scores, weather, news, prices, dates, statistics)
+- If a web_search fails or returns no results, say "I couldn't find that information"
+- If uncertain about real-world facts, explicitly state uncertainty
+- ALWAYS report exactly what web_search returns - do not embellish or add information
+- When asked about current events and search is unavailable, respond: "I need to search for that but couldn't access real-time data right now"
+- If no sources returned from search, say "I found this but couldn't verify the source"
+
+PERSONALITY:
+- Warm, efficient, and naturally conversational
+- Action-first: Execute tasks immediately with brief confirmations
+- Proactive: Offer helpful follow-up suggestions after completing tasks
+- Time-aware: Use appropriate greetings based on time of day
+
+TOOL USAGE - CRITICAL:
+- ALWAYS use tools to get current data (get_tasks, get_today_tasks, web_search)
+- Never rely on pre-loaded context for dynamic information
+- For weather, sports, news, stocks, current events - use web_search immediately
+
+Available functions:
+- get_tasks: Search/retrieve tasks with time/keyword filtering
+- get_today_tasks: Get today's scheduled tasks
+- create_task: Create new tasks (only when explicitly requested)
+- update_task: Modify existing tasks
+- reschedule_task: Move tasks to different date/time
+- schedule_task: Auto-schedule unscheduled tasks
+- unschedule_task: Remove from calendar
+- web_search: Real-time internet search for weather, news, sports, facts
+- send_email: Send emails
+- send_slack_message: Send Slack messages
+- create_outlook_event: Create Outlook calendar events
+- create_google_event: Create Google calendar events
+- hang_up: End the phone call gracefully
+
+IMPORTANT:
+- Only create tasks when explicitly requested
+- Use web_search for any real-time information
+- Keep responses concise and conversational
+- When user says goodbye, use the hang_up function`;
+
+/**
+ * Phone conversation style additions
+ */
+export const PHONE_CONVERSATION_STYLE = `
+PHONE CONVERSATION STYLE:
+- Keep responses conversational and concise - this is a phone call
+- Listen for interruptions and stop speaking when the user starts talking
+- Execute actions immediately with brief confirmation
+- When the user says goodbye, use the hang_up function
+
+CONVERSATIONAL RESPONSIVENESS (CRITICAL):
+You are having a real-time voice conversation. Silence feels awkward - humans expect verbal feedback.
+
+1. BEFORE ANY TOOL CALL: Speak a brief, natural acknowledgment that fits the context:
+   - Task queries: "Let me check..." / "One moment..."
+   - Web searches: "Let me look that up..." / "Searching..."
+   - Creating/updating: "Got it, on it..." / "Creating that now..."
+
+2. TIME-AWARE FEEDBACK - If processing feels slow, naturally inject updates:
+   - After ~2 seconds: "Still looking..." / "Let me see..."
+   - After ~3 more seconds: "Almost there..." / "Just a moment..."
+   - After ~3 more seconds: "I think I have it..."
+
+3. NATURAL VARIATION:
+   - Never repeat the same phrase twice in a row
+   - Match user energy - casual user = casual responses
+   - Keep fillers SHORT (2-4 words)
+
+4. INSTANT ANSWERS = NO FILLER:
+   - If you can answer immediately, skip the acknowledgment
+   - Only use fillers when actual tool calls are needed
+
+NEVER: Stay silent while processing, sound robotic, or over-explain what you're doing`;
+
+/**
+ * Get time-based greeting with proper timezone
+ */
+export function getTimeBasedGreeting(timezone: string = 'America/New_York'): string {
+  try {
+    const now = new Date();
+    const timeStr = now.toLocaleString('en-US', { 
+      timeZone: timezone, 
+      hour: 'numeric', 
+      hour12: false 
+    });
+    const hour = parseInt(timeStr, 10);
+    
+    if (hour < 12) return "Good morning";
+    if (hour < 17) return "Good afternoon";
+    return "Good evening";
+  } catch (error) {
+    console.warn('[PERSONA] Timezone error, using UTC:', error);
+    const hour = new Date().getUTCHours();
+    if (hour < 12) return "Good morning";
+    if (hour < 17) return "Good afternoon";
+    return "Good evening";
+  }
+}
+
+/**
+ * Get current date/time string in user's timezone
+ */
+export function getCurrentTimeString(timezone: string = 'America/New_York'): string {
+  try {
+    const now = new Date();
+    return now.toLocaleString('en-US', { 
+      timeZone: timezone, 
+      weekday: 'long',
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true
+    });
+  } catch (error) {
+    return new Date().toISOString();
+  }
+}
+
+/**
+ * Generate greeting text based on call type
+ */
+export function generateGreetingForCallType(context: string, timeGreeting: string, userName: string): string {
+  if (context.includes('Morning Stand-up')) {
+    return `${timeGreeting}, ${userName}. This is your morning check-in.`;
+  } else if (context.includes('Midday Check-in')) {
+    return `${timeGreeting}, ${userName}. Just checking in on how your day is going.`;
+  } else if (context.includes('End of Day Wrap-up')) {
+    return `${timeGreeting}, ${userName}. Let's wrap up the day.`;
+  } else if (context.includes('Task reminder')) {
+    return `${timeGreeting}, ${userName}. Quick reminder about an upcoming task.`;
+  }
+  
+  // Default
+  return `${timeGreeting}, ${userName}. This is Iris.`;
+}
+
+/**
+ * Load user profile from database
+ */
+export async function loadUserProfile(supabase: any, userId: string): Promise<any> {
+  try {
+    const { data } = await supabase
+      .from('profiles')
+      .select('full_name, first_name, email, phone, preferred_greeting')
+      .eq('user_id', userId)
+      .maybeSingle();
+    return data || {};
+  } catch (error) {
+    console.warn('[PERSONA] Failed to load user profile:', error);
+    return {};
+  }
+}
+
+/**
+ * Load RAG context from knowledge base
+ */
+export async function loadRAGContext(
+  supabaseUrl: string, 
+  supabaseServiceKey: string, 
+  userId: string, 
+  userInput?: string
+): Promise<string> {
+  try {
+    const response = await fetch(`${supabaseUrl}/functions/v1/rag-context-retrieval`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${supabaseServiceKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        action: 'get_context',
+        userInput: userInput || 'general assistant knowledge and user preferences',
+        userId,
+        baseInstructions: ''
+      })
+    });
+
+    if (!response.ok) {
+      console.warn('[PERSONA] RAG context retrieval failed:', response.status);
+      return '';
+    }
+
+    const data = await response.json();
+    if (!data?.context) return '';
+
+    const contextParts: string[] = [];
+
+    // Include knowledge base context if available
+    if (data.context.knowledgeContext) {
+      contextParts.push(`KNOWLEDGE BASE:\n${data.context.knowledgeContext}`);
+    }
+
+    // Include conversation history
+    const convHistory = data.context.conversationContext || [];
+    if (convHistory.length > 0) {
+      const relevantContext = convHistory
+        .slice(0, 5)
+        .map((c: any) => `${c.message_type}: ${c.content}`)
+        .join('\n');
+      contextParts.push(`RECENT CONVERSATION:\n${relevantContext}`);
+    }
+
+    return contextParts.length > 0 ? '\n\n' + contextParts.join('\n\n') : '';
+  } catch (error) {
+    console.warn('[PERSONA] RAG context error:', error);
+    return '';
+  }
+}
+
+/**
+ * Load user instructions from database (single source of truth)
+ */
+export async function loadUserInstructions(
+  supabaseUrl: string,
+  supabaseServiceKey: string,
+  userId: string | null, 
+  ragContext: string, 
+  userProfile: any, 
+  timezone: string
+): Promise<string> {
+  const userName = userProfile?.preferred_greeting || userProfile?.first_name || userProfile?.full_name?.split(' ')[0] || 'sir';
+  const currentTime = getCurrentTimeString(timezone);
+  
+  if (!userId) {
+    console.log('[PERSONA] No userId, using default Iris persona');
+    return `${DEFAULT_IRIS_PERSONA}
+
+CURRENT TIME: ${currentTime}
+TIMEZONE: ${timezone}
+USER: ${userName}
+${ragContext}
+${PHONE_CONVERSATION_STYLE}`;
+  }
+
+  try {
+    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    
+    const { data: prefs } = await supabase
+      .from('user_scheduling_prefs')
+      .select('core_instructions, realtime_extensions, config, timezone, tts_provider, elevenlabs_voice_id')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    // Use database instructions or fallback to default Iris persona
+    let baseInstructions = prefs?.core_instructions || DEFAULT_IRIS_PERSONA;
+    const userTimezone = prefs?.timezone || timezone;
+    
+    // Build complete instructions
+    let instructions = `${baseInstructions}
+
+CURRENT TIME: ${getCurrentTimeString(userTimezone)}
+TIMEZONE: ${userTimezone}
+USER: ${userName}
+
+${ragContext}
+${PHONE_CONVERSATION_STYLE}`;
+
+    // Add voice-specific extensions if configured
+    if (prefs?.realtime_extensions) {
+      instructions += `\n\n${prefs.realtime_extensions}`;
+    }
+    
+    // Add scheduling philosophy if configured
+    if (prefs?.config?.customAIInstructions) {
+      instructions += `\n\nScheduling Philosophy:\n${prefs.config.customAIInstructions}`;
+    }
+    
+    console.log('[PERSONA] Loaded user instructions from database');
+    return instructions;
+  } catch (error) {
+    console.warn('[PERSONA] Failed to load user instructions:', error);
+  }
+
+  // Fallback to default
+  return `${DEFAULT_IRIS_PERSONA}
+
+CURRENT TIME: ${currentTime}
+TIMEZONE: ${timezone}
+USER: ${userName}
+${ragContext}
+${PHONE_CONVERSATION_STYLE}`;
+}
