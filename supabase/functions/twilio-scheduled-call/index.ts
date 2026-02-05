@@ -30,6 +30,25 @@ interface ScheduledCallConfig {
   checkRecurring?: boolean;
 }
 
+// Map categories to window affinities (from schedulingRules.ts)
+const CATEGORY_WINDOW_MAPPING: Record<string, string[]> = {
+  'CAREER': ['business_hours'],
+  'PROF_EDUCATION': ['after_work', 'evening', 'weekends'],
+  'EDUCATION': ['business_hours', 'after_work'],
+  'VENTURES': ['after_work', 'evening', 'weekends'],
+  'LIFE': ['morning', 'after_work', 'evening', 'weekends'],
+  'PERSONAL': ['morning', 'after_work', 'evening', 'weekends'],
+};
+
+// Window time ranges
+const WINDOW_RANGES: Record<string, { start: number; end: number }> = {
+  morning: { start: 6, end: 9 },
+  business_hours: { start: 9, end: 17 },
+  after_work: { start: 17, end: 19 },
+  evening: { start: 19, end: 22 },
+  weekends: { start: 10, end: 20 }
+};
+
 // Get today's tasks for briefing context
 async function getTodaysBriefing(userId: string): Promise<string> {
   const supabase = createClient(supabaseUrl, supabaseServiceKey);
@@ -65,8 +84,255 @@ async function getTodaysBriefing(userId: string): Promise<string> {
   return briefing;
 }
 
+// Get tasks for a specific time window (excluding test and blocked)
+async function getTasksForWindow(
+  supabase: any, 
+  userId: string, 
+  window: string,
+  timezone: string
+): Promise<any[]> {
+  const now = new Date();
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const endOfDay = new Date();
+  endOfDay.setHours(23, 59, 59, 999);
+
+  // Query tasks that are not test/blocked
+  const { data, error } = await supabase
+    .from('tasks')
+    .select('id, title, start_time, priority, category, status, due_date')
+    .eq('user_id', userId)
+    .neq('status', 'BLOCKED')
+    .neq('status', 'DONE')
+    .not('title', 'ilike', '%test%')
+    .or(`start_time.gte.${today.toISOString()},due_date.gte.${today.toISOString().split('T')[0]}`)
+    .order('start_time', { ascending: true, nullsFirst: false });
+
+  if (error || !data) {
+    console.error('[WINDOW-CONTEXT] Error fetching tasks:', error);
+    return [];
+  }
+
+  // Filter by window affinity based on category
+  const windowRange = WINDOW_RANGES[window];
+  if (!windowRange) return data;
+
+  return data.filter((task: any) => {
+    const category = task.category || 'LIFE';
+    const categoryWindows = CATEGORY_WINDOW_MAPPING[category] || ['flexible'];
+    
+    // Check if category matches window
+    if (!categoryWindows.includes(window) && !categoryWindows.includes('flexible')) {
+      return false;
+    }
+
+    // If task has start_time, check if it falls within window
+    if (task.start_time) {
+      const taskTime = new Date(task.start_time);
+      const taskHour = taskTime.getHours();
+      return taskHour >= windowRange.start && taskHour < windowRange.end;
+    }
+
+    return true;
+  });
+}
+
+// Get topics for "memory jog" fallback
+async function getTopicsForWindow(
+  supabase: any, 
+  userId: string, 
+  window: string
+): Promise<any[]> {
+  const { data, error } = await supabase
+    .from('task_topic_index')
+    .select('topic_name, topic_summary, example_tasks')
+    .eq('user_id', userId)
+    .contains('window_affinity', [window])
+    .order('task_count', { ascending: false })
+    .limit(5);
+  
+  if (error) {
+    console.error('[WINDOW-CONTEXT] Error fetching topics:', error);
+    return [];
+  }
+
+  return data || [];
+}
+
+// Format task list for context
+function formatTaskList(tasks: any[]): string {
+  if (tasks.length === 0) return 'No tasks scheduled';
+  
+  return tasks.slice(0, 10).map((t: any, i: number) => {
+    const time = t.start_time ? new Date(t.start_time).toLocaleTimeString('en-US', { 
+      hour: 'numeric', 
+      minute: '2-digit',
+      hour12: true 
+    }) : 'Unscheduled';
+    const priority = t.priority === 'HIGH' || t.priority === 'URGENT' ? ' [HIGH]' : '';
+    return `${i + 1}. ${t.title} (${time})${priority}`;
+  }).join('\n');
+}
+
+// Build window transition context with branching
+async function buildWindowTransitionContext(
+  call: ScheduledCall, 
+  userId: string, 
+  window: string
+): Promise<string> {
+  const supabase = createClient(supabaseUrl, supabaseServiceKey);
+  
+  // Get user timezone
+  const { data: prefs } = await supabase
+    .from('user_scheduling_prefs')
+    .select('timezone')
+    .eq('user_id', userId)
+    .maybeSingle();
+  const timezone = prefs?.timezone || 'America/New_York';
+  
+  // Get tasks for this window
+  const windowTasks = await getTasksForWindow(supabase, userId, window, timezone);
+  
+  console.log(`[WINDOW-CONTEXT] Window: ${window}, Found ${windowTasks.length} tasks for user ${userId}`);
+  
+  // Special handling for morning window: get all tasks for rest of day
+  let allDayTasks: any[] = [];
+  if (window === 'morning') {
+    const { data: dayTasks } = await supabase
+      .from('tasks')
+      .select('id, title, start_time, priority, category, status')
+      .eq('user_id', userId)
+      .neq('status', 'BLOCKED')
+      .neq('status', 'DONE')
+      .not('title', 'ilike', '%test%')
+      .gte('start_time', new Date().toISOString())
+      .order('start_time', { ascending: true });
+    
+    allDayTasks = (dayTasks || []).filter((t: any) => {
+      if (!t.start_time) return false;
+      const taskHour = new Date(t.start_time).getHours();
+      return taskHour >= 9; // After morning window
+    });
+  }
+  
+  if (windowTasks.length > 0 || (window === 'morning' && allDayTasks.length > 0)) {
+    // BRANCH 1: Tasks exist
+    return buildBranch1Context(call.name, windowTasks, allDayTasks, window);
+  } else {
+    // BRANCH 2: No tasks - topic jog fallback
+    const topics = await getTopicsForWindow(supabase, userId, window);
+    return buildBranch2Context(call.name, topics, window);
+  }
+}
+
+// Build Branch 1 context (tasks exist)
+function buildBranch1Context(
+  callName: string, 
+  windowTasks: any[], 
+  allDayTasks: any[],
+  window: string
+): string {
+  const windowTaskList = formatTaskList(windowTasks);
+  const restOfDayList = allDayTasks.length > 0 ? formatTaskList(allDayTasks) : '';
+  
+  const windowLabel = window === 'morning' ? 'Morning'
+    : window === 'business_hours' ? 'Business Hours'
+    : window === 'after_work' ? 'After Work'
+    : window === 'evening' ? 'Evening'
+    : 'Weekend';
+
+  let context = `CALL TYPE: ${callName} (Tasks Available)
+
+[CALL AGENDA - MUST COVER ALL]
+1. Greet: "Hello Sir."
+2. Share ${windowLabel.toLowerCase()} tasks:
+${windowTaskList}
+`;
+
+  if (window === 'morning' && restOfDayList) {
+    context += `
+3. Share rest of day overview:
+${restOfDayList}
+4. Ask: "Would you like to confirm these for today, adjust them, or skip?"
+5. If confirm: "Understood. I will call you back later. Goodbye."
+6. If adjust: Capture edits, confirm changes.`;
+  } else {
+    context += `
+3. Ask: "Which one do you want to start with?" or "Would you like to confirm, adjust, or skip?"
+4. If confirm: Acknowledge and close.
+5. If adjust: Capture edits, confirm changes.`;
+  }
+
+  context += `
+
+Remember: Keep it natural and conversational. Cover all agenda items before ending.`;
+
+  return context;
+}
+
+// Build Branch 2 context (no tasks - topic jog)
+function buildBranch2Context(
+  callName: string,
+  topics: any[],
+  window: string
+): string {
+  const windowLabel = window === 'morning' ? 'Morning'
+    : window === 'business_hours' ? 'Business Hours'
+    : window === 'after_work' ? 'After Work'
+    : window === 'evening' ? 'Evening'
+    : 'Weekend';
+
+  if (window === 'morning') {
+    // Morning with no tasks: brief wake-up nudge
+    return `CALL TYPE: ${callName} (No Tasks)
+
+[CALL AGENDA]
+1. Greet: "Hello Sir."
+2. Say: "I am just calling to help you get started with your day. I will call you back in a few hours to go over plans. Goodbye."
+
+Remember: Keep it brief and encouraging.`;
+  }
+
+  if (topics.length === 0) {
+    return `CALL TYPE: ${callName} (No Tasks or Topics)
+
+[CALL AGENDA]
+1. Greet: "Hello Sir."
+2. Say: "You have no scheduled tasks for the ${windowLabel.toLowerCase()} window. Would you like me to help you plan something?"
+3. If yes: Ask what they'd like to work on and help schedule it.
+4. If no: "Understood. I will check back at the next scheduled call. Goodbye."
+
+Remember: Keep it helpful but not pushy.`;
+  }
+
+  const topicList = topics.map((t: any) => 
+    `- ${t.topic_name}: ${t.topic_summary || 'Various tasks'}`
+  ).join('\n');
+
+  return `CALL TYPE: ${callName} (Topic Jog)
+
+[CALL AGENDA - MUST COVER ALL]
+1. Greet: "Hello Sir."
+2. Topic jog: "You have no scheduled items for the ${windowLabel.toLowerCase()} window. To jog your memory, here are the main topics you have been working on:
+${topicList}
+Do you want to work on any of these right now?"
+3. If yes to a topic: List real tasks under that topic, ask which to include, push to scheduler.
+4. If no: "Understood. I will check back at the next scheduled call. Goodbye."
+
+Remember: Let the user lead the selection. Keep it conversational.`;
+}
+
 // Build structured context with clear agenda items the AI must cover
 async function buildCallContext(call: ScheduledCall, userId: string): Promise<string> {
+  // Check for window marker in context
+  const windowMatch = call.context?.match(/\[WINDOW:(\w+)\]/);
+  
+  if (windowMatch) {
+    const window = windowMatch[1];
+    console.log(`[BUILD-CONTEXT] Detected window transition call: ${window}`);
+    return buildWindowTransitionContext(call, userId, window);
+  }
+
   const briefing = await getTodaysBriefing(userId);
   
   // Base context from user's custom configuration
