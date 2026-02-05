@@ -15,6 +15,21 @@ interface NotificationRequest {
     type: string;
     taskId?: string;
     notificationId?: string;
+    messageId?: string;
+    threadId?: string;
+    callType?: string;
+    openCommsConsole?: boolean;
+    batchSize?: number;
+    notificationIds?: string[];
+    messageData?: {
+      id: string;
+      role: string;
+      content: string;
+      source: string;
+      assistant_id?: string;
+      created_at: string;
+      thread_id: string;
+    };
   };
 }
 
