@@ -1,6 +1,13 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { GLOBAL_VERSION, FUNCTION_IDS, corsHeaders, createHealthResponse, VOICE_CONFIG, FILLER_CONFIG, SENTENCE_ENDERS } from "../_shared/config.ts";
+
+// Import from shared modules
+import { GLOBAL_VERSION, FUNCTION_IDS, corsHeaders, VOICE_CONFIG, FILLER_CONFIG, SENTENCE_ENDERS } from "../_shared/config.ts";
+import { decodeMulaw, encodeMulaw, upsample8to24, downsample24to8, int16ToBase64, base64ToInt16, calculateRMSAmplitude, chunkMulawForTwilio } from "../_shared/audio-codec.ts";
+import { getToolDefinitions } from "../_shared/tool-definitions.ts";
+import { DEFAULT_IRIS_PERSONA, PHONE_CONVERSATION_STYLE, getTimeBasedGreeting, getCurrentTimeString, generateGreetingForCallType, loadUserProfile, loadRAGContext, loadUserInstructions } from "../_shared/persona.ts";
+import { PreConnectSession, storePreConnectSession, getPreConnectSession } from "../_shared/session-manager.ts";
+import { SharedAgendaManager, AgendaManager } from "../_shared/agenda-wrapper.ts";
 
 // Version derived from centralized config
 const BRIDGE_VERSION = `${GLOBAL_VERSION}-${FUNCTION_IDS.BRIDGE}`;
@@ -9,157 +16,6 @@ const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const ELEVENLABS_API_KEY = Deno.env.get("ELEVENLABS_API_KEY");
-
-// G.711 μ-law decoding table (8-bit -> 16-bit)
-const mulawToLinearTable: Int16Array = new Int16Array(256);
-for (let i = 0; i < 256; i++) {
-  let sample = ~i;
-  const sign = sample & 0x80;
-  const exponent = (sample >> 4) & 0x07;
-  let mantissa = sample & 0x0f;
-  mantissa = (mantissa << 1) + 33;
-  mantissa = mantissa << exponent;
-  mantissa -= 33;
-  mulawToLinearTable[i] = sign !== 0 ? -mantissa : mantissa;
-}
-
-// μ-law to PCM16
-function decodeMulaw(mulawData: Uint8Array): Int16Array {
-  const pcm = new Int16Array(mulawData.length);
-  for (let i = 0; i < mulawData.length; i++) {
-    pcm[i] = mulawToLinearTable[mulawData[i]];
-  }
-  return pcm;
-}
-
-// PCM16 to μ-law
-function encodeMulaw(pcmData: Int16Array): Uint8Array {
-  const mulaw = new Uint8Array(pcmData.length);
-  for (let i = 0; i < pcmData.length; i++) {
-    let sample = pcmData[i];
-    const sign = sample < 0 ? 0x80 : 0;
-    sample = Math.abs(sample);
-    if (sample > 32635) sample = 32635;
-    sample = sample + 0x84;
-    let exponent = 7;
-    for (let expMask = 0x4000; (sample & expMask) === 0 && exponent > 0; exponent--, expMask >>= 1);
-    const mantissa = (sample >> (exponent + 3)) & 0x0f;
-    mulaw[i] = ~(sign | (exponent << 4) | mantissa) & 0xff;
-  }
-  return mulaw;
-}
-
-// Upsample 8kHz → 24kHz (3x)
-function upsample8to24(pcm8k: Int16Array): Int16Array {
-  const pcm24k = new Int16Array(pcm8k.length * 3);
-  for (let i = 0; i < pcm8k.length; i++) {
-    const current = pcm8k[i];
-    const next = i < pcm8k.length - 1 ? pcm8k[i + 1] : current;
-    const idx = i * 3;
-    pcm24k[idx] = current;
-    pcm24k[idx + 1] = Math.round(current + (next - current) / 3);
-    pcm24k[idx + 2] = Math.round(current + (2 * (next - current)) / 3);
-  }
-  return pcm24k;
-}
-
-// Downsample 24kHz → 8kHz (1/3)
-function downsample24to8(pcm24k: Int16Array): Int16Array {
-  const pcm8k = new Int16Array(Math.floor(pcm24k.length / 3));
-  for (let i = 0; i < pcm8k.length; i++) {
-    const idx = i * 3;
-    pcm8k[i] = Math.round((pcm24k[idx] + pcm24k[idx + 1] + pcm24k[idx + 2]) / 3);
-  }
-  return pcm8k;
-}
-
-// Int16Array → Base64
-function int16ToBase64(pcmData: Int16Array): string {
-  const uint8 = new Uint8Array(pcmData.buffer);
-  let binary = "";
-  for (let i = 0; i < uint8.length; i++) {
-    binary += String.fromCharCode(uint8[i]);
-  }
-  return btoa(binary);
-}
-
-// Base64 → Int16Array
-function base64ToInt16(base64: string): Int16Array {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return new Int16Array(bytes.buffer);
-}
-
-// Calculate RMS (Root Mean Square) amplitude from PCM audio data
-// Used for echo detection and real barge-in detection
-function calculateRMSAmplitude(pcmData: Int16Array): number {
-  if (pcmData.length === 0) return 0;
-  
-  let sum = 0;
-  let nonZeroCount = 0;
-  let maxVal = 0;
-  
-  for (let i = 0; i < pcmData.length; i++) {
-    const val = pcmData[i];
-    if (val !== 0) nonZeroCount++;
-    if (Math.abs(val) > maxVal) maxVal = Math.abs(val);
-    sum += val * val;
-  }
-  
-  const rms = Math.sqrt(sum / pcmData.length);
-  
-  // Diagnostic: Log if RMS is 0 but we have non-zero samples (indicates bug)
-  if (rms === 0 && nonZeroCount > 0) {
-    console.log(`[AMPLITUDE-BUG] ⚠️ RMS=0 but nonZeroCount=${nonZeroCount}, maxVal=${maxVal}`);
-  }
-  
-  return rms;
-}
-
-// Get time-based greeting with proper timezone
-function getTimeBasedGreeting(timezone: string = 'America/New_York'): string {
-  try {
-    const now = new Date();
-    const timeStr = now.toLocaleString('en-US', { 
-      timeZone: timezone, 
-      hour: 'numeric', 
-      hour12: false 
-    });
-    const hour = parseInt(timeStr, 10);
-    
-    if (hour < 12) return "Good morning";
-    if (hour < 17) return "Good afternoon";
-    return "Good evening";
-  } catch (error) {
-    console.warn('[BRIDGE] Timezone error, using UTC:', error);
-    const hour = new Date().getUTCHours();
-    if (hour < 12) return "Good morning";
-    if (hour < 17) return "Good afternoon";
-    return "Good evening";
-  }
-}
-
-// Get current date/time string in user's timezone
-function getCurrentTimeString(timezone: string = 'America/New_York'): string {
-  try {
-    const now = new Date();
-    return now.toLocaleString('en-US', { 
-      timeZone: timezone, 
-      weekday: 'long',
-      month: 'long',
-      day: 'numeric',
-      year: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true
-    });
-  } catch (error) {
-    return new Date().toISOString();
-  }
-}
 
 // Error logging helper - persists errors to error_log for unified debugging
 async function logError(
@@ -189,458 +45,6 @@ async function logError(
   }
 }
 
-// Load user profile
-async function loadUserProfile(supabase: any, userId: string): Promise<any> {
-  try {
-    const { data } = await supabase
-      .from('profiles')
-      .select('full_name, first_name, email, phone, preferred_greeting')
-      .eq('user_id', userId)
-      .maybeSingle();
-    return data || {};
-  } catch (error) {
-    console.warn('[BRIDGE] Failed to load user profile:', error);
-    return {};
-  }
-}
-
-// REMOVED: loadTodayTasks - AI should use tools instead of pre-loaded context
-// This forces tool-first architecture matching in-app assistant
-
-// Load RAG context - improved to query knowledge base
-async function loadRAGContext(supabase: any, userId: string, userInput?: string): Promise<string> {
-  try {
-    const { data, error } = await supabase.functions.invoke('rag-context-retrieval', {
-      body: {
-        action: 'get_context',
-        userInput: userInput || 'general assistant knowledge and user preferences',
-        userId,
-        baseInstructions: ''
-      }
-    });
-
-    if (error || !data?.context) {
-      console.warn('[BRIDGE] RAG context retrieval failed:', error);
-      return '';
-    }
-
-    let contextParts: string[] = [];
-
-    // Include knowledge base context if available
-    if (data.context.knowledgeContext) {
-      contextParts.push(`KNOWLEDGE BASE:\n${data.context.knowledgeContext}`);
-    }
-
-    // Include conversation history
-    const convHistory = data.context.conversationContext || [];
-    if (convHistory.length > 0) {
-      const relevantContext = convHistory
-        .slice(0, 5)
-        .map((c: any) => `${c.message_type}: ${c.content}`)
-        .join('\n');
-      contextParts.push(`RECENT CONVERSATION:\n${relevantContext}`);
-    }
-
-    return contextParts.length > 0 ? '\n\n' + contextParts.join('\n\n') : '';
-  } catch (error) {
-    console.warn('[BRIDGE] RAG context error:', error);
-    return '';
-  }
-}
-
-// Default Iris persona (fallback if database is empty)
-const DEFAULT_IRIS_PERSONA = `You are Iris, a knowledgeable and proactive executive assistant.
-
-HONESTY - ABSOLUTE RULE (NEVER VIOLATE):
-- NEVER fabricate, invent, or assume factual data (scores, weather, news, prices, dates, statistics)
-- If a web_search fails or returns no results, say "I couldn't find that information"
-- If uncertain about real-world facts, explicitly state uncertainty
-- ALWAYS report exactly what web_search returns - do not embellish or add information
-- When asked about current events and search is unavailable, respond: "I need to search for that but couldn't access real-time data right now"
-- If no sources returned from search, say "I found this but couldn't verify the source"
-
-PERSONALITY:
-- Warm, efficient, and naturally conversational
-- Action-first: Execute tasks immediately with brief confirmations
-- Proactive: Offer helpful follow-up suggestions after completing tasks
-- Time-aware: Use appropriate greetings based on time of day
-
-TOOL USAGE - CRITICAL:
-- ALWAYS use tools to get current data (get_tasks, get_today_tasks, web_search)
-- Never rely on pre-loaded context for dynamic information
-- For weather, sports, news, stocks, current events - use web_search immediately
-
-Available functions:
-- get_tasks: Search/retrieve tasks with time/keyword filtering
-- get_today_tasks: Get today's scheduled tasks
-- create_task: Create new tasks (only when explicitly requested)
-- update_task: Modify existing tasks
-- reschedule_task: Move tasks to different date/time
-- schedule_task: Auto-schedule unscheduled tasks
-- unschedule_task: Remove from calendar
-- web_search: Real-time internet search for weather, news, sports, facts
-- send_email: Send emails
-- send_slack_message: Send Slack messages
-- create_outlook_event: Create Outlook calendar events
-- create_google_event: Create Google calendar events
-- hang_up: End the phone call gracefully
-
-IMPORTANT:
-- Only create tasks when explicitly requested
-- Use web_search for any real-time information
-- Keep responses concise and conversational
-- When user says goodbye, use the hang_up function`;
-
-// Load user instructions from database (single source of truth)
-async function loadUserInstructions(userId: string | null, ragContext: string, userProfile: any, timezone: string): Promise<string> {
-  const userName = userProfile?.preferred_greeting || userProfile?.first_name || userProfile?.full_name?.split(' ')[0] || 'sir';
-  const currentTime = getCurrentTimeString(timezone);
-  
-  if (!userId) {
-    console.log('[BRIDGE] No userId, using default Iris persona');
-    return `${DEFAULT_IRIS_PERSONA}
-
-CURRENT TIME: ${currentTime}
-TIMEZONE: ${timezone}
-USER: ${userName}
-${ragContext}
-
-PHONE CONVERSATION STYLE:
-- Keep responses conversational and concise - this is a phone call
-- Listen for interruptions and stop speaking when the user starts talking
-- Execute actions immediately with brief confirmation
-- When the user says goodbye, use the hang_up function`;
-  }
-
-  try {
-    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
-    
-    const { data: prefs } = await supabase
-      .from('user_scheduling_prefs')
-      .select('core_instructions, realtime_extensions, config, timezone, tts_provider, elevenlabs_voice_id')
-      .eq('user_id', userId)
-      .maybeSingle();
-
-    // Use database instructions or fallback to default Iris persona
-    let baseInstructions = prefs?.core_instructions || DEFAULT_IRIS_PERSONA;
-    const userTimezone = prefs?.timezone || timezone;
-    
-    // Build complete instructions
-    let instructions = `${baseInstructions}
-
-CURRENT TIME: ${getCurrentTimeString(userTimezone)}
-TIMEZONE: ${userTimezone}
-USER: ${userName}
-
-${ragContext}
-
-PHONE CONVERSATION STYLE:
-- Keep responses conversational and concise - this is a phone call
-- Listen for interruptions and stop speaking when the user starts talking
-- Execute actions immediately with brief confirmation
-- When the user says goodbye, use the hang_up function
-
-CONVERSATIONAL RESPONSIVENESS (CRITICAL):
-You are having a real-time voice conversation. Silence feels awkward - humans expect verbal feedback.
-
-1. BEFORE ANY TOOL CALL: Speak a brief, natural acknowledgment that fits the context:
-   - Task queries: "Let me check..." / "One moment..."
-   - Web searches: "Let me look that up..." / "Searching..."
-   - Creating/updating: "Got it, on it..." / "Creating that now..."
-
-2. TIME-AWARE FEEDBACK - If processing feels slow, naturally inject updates:
-   - After ~2 seconds: "Still looking..." / "Let me see..."
-   - After ~3 more seconds: "Almost there..." / "Just a moment..."
-   - After ~3 more seconds: "I think I have it..."
-
-3. NATURAL VARIATION:
-   - Never repeat the same phrase twice in a row
-   - Match user energy - casual user = casual responses
-   - Keep fillers SHORT (2-4 words)
-
-4. INSTANT ANSWERS = NO FILLER:
-   - If you can answer immediately, skip the acknowledgment
-   - Only use fillers when actual tool calls are needed
-
-NEVER: Stay silent while processing, sound robotic, or over-explain what you're doing`;
-
-    // Add voice-specific extensions if configured
-    if (prefs?.realtime_extensions) {
-      instructions += `\n\n${prefs.realtime_extensions}`;
-    }
-    
-    // Add scheduling philosophy if configured
-    if (prefs?.config?.customAIInstructions) {
-      instructions += `\n\nScheduling Philosophy:\n${prefs.config.customAIInstructions}`;
-    }
-    
-    console.log('[BRIDGE] Loaded user instructions from database');
-    return instructions;
-  } catch (error) {
-    console.warn('[BRIDGE] Failed to load user instructions:', error);
-  }
-
-  // Fallback to default
-  return `${DEFAULT_IRIS_PERSONA}
-
-CURRENT TIME: ${currentTime}
-TIMEZONE: ${timezone}
-USER: ${userName}
-${ragContext}
-
-PHONE CONVERSATION STYLE:
-- Keep responses conversational and concise - this is a phone call
-- Listen for interruptions and stop speaking when the user starts talking
-- Execute actions immediately with brief confirmation
-- When the user says goodbye, use the hang_up function
-
-CONVERSATIONAL RESPONSIVENESS (CRITICAL):
-You are having a real-time voice conversation. Silence feels awkward - humans expect verbal feedback.
-
-1. BEFORE ANY TOOL CALL: Speak a brief, natural acknowledgment that fits the context:
-   - Task queries: "Let me check..." / "One moment..."
-   - Web searches: "Let me look that up..." / "Searching..."
-   - Creating/updating: "Got it, on it..." / "Creating that now..."
-
-2. TIME-AWARE FEEDBACK - If processing feels slow, naturally inject updates:
-   - After ~2 seconds: "Still looking..." / "Let me see..."
-   - After ~3 more seconds: "Almost there..." / "Just a moment..."
-   - After ~3 more seconds: "I think I have it..."
-
-3. NATURAL VARIATION:
-   - Never repeat the same phrase twice in a row
-   - Match user energy - casual user = casual responses
-   - Keep fillers SHORT (2-4 words)
-
-4. INSTANT ANSWERS = NO FILLER:
-   - If you can answer immediately, skip the acknowledgment
-   - Only use fillers when actual tool calls are needed
-
-NEVER: Stay silent while processing, sound robotic, or over-explain what you're doing`;
-}
-
-// Tool definitions imported from centralized execute-tool function
-// This ensures feature parity with chat interface
-async function fetchToolDefinitions(): Promise<any[]> {
-  try {
-    const response = await fetch(`${SUPABASE_URL}/functions/v1/execute-tool/definitions`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
-        'Content-Type': 'application/json'
-      }
-    });
-    
-    if (response.ok) {
-      const data = await response.json();
-      console.log(`[BRIDGE] Loaded ${data.count} tool definitions from execute-tool`);
-      return data.tools || [];
-    }
-  } catch (error) {
-    console.warn('[BRIDGE] Failed to fetch tool definitions, using fallback:', error);
-  }
-  
-  // Fallback to inline definitions if fetch fails
-  return getInlineToolDefinitions();
-}
-
-// Fallback tool definitions (kept in sync with execute-tool)
-function getInlineToolDefinitions(): any[] {
-  return [
-    {
-      type: "function",
-      name: "get_tasks",
-      description: "Retrieve tasks and chat history. Can search by time period, keywords, or status.",
-      parameters: {
-        type: "object",
-        properties: {
-          query: { type: "string", description: "Search query or keywords" },
-          time_filter: { type: "string", description: "Time period like 'past week', 'yesterday'" },
-          status: { type: "string", enum: ["BACKLOG", "TODO", "DOING", "DONE"] }
-        }
-      }
-    },
-    {
-      type: "function",
-      name: "create_task",
-      description: "Create a new task. Use UPPERCASE for priority.",
-      parameters: {
-        type: "object",
-        properties: {
-          title: { type: "string", description: "Task title" },
-          description: { type: "string", description: "Task description" },
-          priority: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "URGENT"] },
-          category: { type: "string", enum: ["LIFE", "CAREER", "VENTURES", "EDUCATION"] }
-        },
-        required: ["title"]
-      }
-    },
-    {
-      type: "function",
-      name: "update_task",
-      description: "Update an existing task's properties.",
-      parameters: {
-        type: "object",
-        properties: {
-          task_id: { type: "string", description: "ID of the task to update" },
-          title: { type: "string" },
-          description: { type: "string" },
-          status: { type: "string", enum: ["BACKLOG", "TODO", "DOING", "DONE"] },
-          priority: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "URGENT"] },
-          category: { type: "string", enum: ["LIFE", "CAREER", "VENTURES", "EDUCATION"] }
-        },
-        required: ["task_id"]
-      }
-    },
-    {
-      type: "function",
-      name: "get_today_tasks",
-      description: "Get all tasks for today, including both scheduled and unscheduled tasks.",
-      parameters: { type: "object", properties: {} }
-    },
-    {
-      type: "function",
-      name: "reschedule_task",
-      description: "Move a task to a different date or time.",
-      parameters: {
-        type: "object",
-        properties: {
-          task_id: { type: "string", description: "ID of the task to reschedule" },
-          new_date: { type: "string", description: "New date in YYYY-MM-DD format" },
-          new_start_time: { type: "string", description: "New start time in HH:MM format" },
-          reason: { type: "string" }
-        },
-        required: ["task_id", "new_date"]
-      }
-    },
-    {
-      type: "function",
-      name: "schedule_task",
-      description: "Schedule an unscheduled task to a specific date and time.",
-      parameters: {
-        type: "object",
-        properties: {
-          task_id: { type: "string", description: "ID of the task to schedule" },
-          date: { type: "string", description: "Date in YYYY-MM-DD format" },
-          start_time: { type: "string", description: "Start time in HH:MM format" },
-          duration_minutes: { type: "number" }
-        },
-        required: ["task_id"]
-      }
-    },
-    {
-      type: "function",
-      name: "unschedule_task",
-      description: "Remove a task from the calendar schedule.",
-      parameters: {
-        type: "object",
-        properties: {
-          task_id: { type: "string", description: "ID of the task to unschedule" }
-        },
-        required: ["task_id"]
-      }
-    },
-    {
-      type: "function",
-      name: "send_slack_message",
-      description: "Send a Slack message to the user.",
-      parameters: {
-        type: "object",
-        properties: {
-          message: { type: "string", description: "The message to send" }
-        },
-        required: ["message"]
-      }
-    },
-    {
-      type: "function",
-      name: "send_email",
-      description: "Send an email to the user.",
-      parameters: {
-        type: "object",
-        properties: {
-          subject: { type: "string", description: "Email subject" },
-          body: { type: "string", description: "Email body content" }
-        },
-        required: ["subject", "body"]
-      }
-    },
-    {
-      type: "function",
-      name: "create_calendar_event",
-      description: "Create a calendar event in Outlook or Google Calendar.",
-      parameters: {
-        type: "object",
-        properties: {
-          title: { type: "string", description: "Event title" },
-          start_time: { type: "string", description: "Start time in ISO format or HH:MM" },
-          end_time: { type: "string", description: "End time in ISO format or HH:MM" },
-          calendar: { type: "string", enum: ["outlook", "google"], description: "Which calendar to use" }
-        },
-        required: ["title", "start_time"]
-      }
-    },
-    {
-      type: "function",
-      name: "initiate_phone_call",
-      description: "Schedule a callback - useful for 'call me back in X minutes' requests.",
-      parameters: {
-        type: "object",
-        properties: {
-          delay_minutes: { type: "number", description: "Minutes to wait before calling back" },
-          context: { type: "string", description: "What the callback should be about" }
-        }
-      }
-    },
-    {
-      type: "function",
-      name: "hang_up",
-      description: "End the phone call gracefully. Use when the user says goodbye or indicates they're done.",
-      parameters: {
-        type: "object",
-        properties: {
-          farewell_message: { type: "string", description: "Optional farewell message to say before hanging up" }
-        }
-      }
-    },
-    {
-      type: "function",
-      name: "web_search",
-      description: "Search the internet for REAL-TIME information using Tavily. CRITICAL: The 'query' parameter MUST be a VERBATIM transcription of what the user said - do NOT rephrase or convert temporal phrases like 'this weekend' or 'today' into specific dates. Use the other parameters to configure the search.",
-      parameters: {
-        type: "object",
-        properties: {
-          query: { 
-            type: "string", 
-            description: "The user's EXACT spoken words - pass verbatim without modification" 
-          },
-          topic: {
-            type: "string",
-            enum: ["general", "news", "finance"],
-            description: "Search category. Use 'news' for sports scores, current events, breaking news. Use 'finance' for stock prices. Use 'general' for everything else."
-          },
-          search_depth: {
-            type: "string",
-            enum: ["basic", "advanced"],
-            description: "Use 'advanced' for complex queries (sports scores, specific facts). Use 'basic' for simple lookups."
-          },
-          time_range: {
-            type: "string",
-            enum: ["day", "week", "month", "year"],
-            description: "Use 'day' for today/tonight, 'week' for this week/weekend. Only set if query implies time constraint."
-          },
-          include_domains: {
-            type: "array",
-            items: { type: "string" },
-            description: "Optional: Domains to prioritize. Leave empty to search all sources."
-          }
-        },
-        required: ["query"]
-      }
-    }
-  ];
-}
-
 // Centralized tool execution via execute-tool edge function
 async function executeTool(
   toolName: string,
@@ -652,8 +56,6 @@ async function executeTool(
   if (toolName === 'hang_up') {
     console.log('[BRIDGE] Hang up requested:', args.farewell_message);
     
-    // Give time for the farewell message to play, then close
-    // Uses centralized VOICE_CONFIG.FAREWELL_DELAY_MS
     if (context.twilioWs) {
       setTimeout(() => {
         if (context.twilioWs && context.twilioWs.readyState === WebSocket.OPEN) {
@@ -704,308 +106,7 @@ async function executeTool(
   }
 }
 
-// === PRE-CONNECT SESSION STORAGE ===
-// Stores pre-established sessions in DATABASE for persistence across Edge Function instances
-interface PreConnectSession {
-  userId: string;
-  context: string;
-  agenda: Array<{ index: number; text: string; status: string }>;
-  timezone: string;
-  profile: any;
-  greetingText: string;
-  audioBase64: string;
-  ttsProvider: 'openai' | 'elevenlabs';
-  voiceId: string;  // ElevenLabs voice ID
-  openaiVoice: string;  // OpenAI voice selection
-  phoneCallMode: string;  // User's preferred phone call mode
-  createdAt: number;
-  // NEW: Pre-computed data to skip DB queries during call connect
-  ragContext: string;
-  instructions: string;
-  threadId: string | null;
-}
-
-// Store session in database for cross-instance persistence
-async function storePreConnectSession(supabase: any, sessionId: string, session: PreConnectSession) {
-  const { error } = await supabase
-    .from('pre_connect_sessions')
-    .insert({
-      session_id: sessionId,
-      user_id: session.userId,
-      context: session.context,
-      agenda: session.agenda,
-      timezone: session.timezone,
-      profile: session.profile,
-      greeting_text: session.greetingText,
-      audio_base64: session.audioBase64,
-      tts_provider: session.ttsProvider,
-      voice_id: session.voiceId,
-      openai_voice: session.openaiVoice,
-      phone_call_mode: session.phoneCallMode,
-      // NEW: Pre-computed data to eliminate DB queries during call connect
-      rag_context: session.ragContext,
-      instructions: session.instructions,
-      thread_id: session.threadId,
-      expires_at: new Date(Date.now() + 120000).toISOString() // 2 min TTL
-    });
-  
-  if (error) {
-    console.error('[PRE-CONNECT] Failed to store session in database:', error);
-  } else {
-    console.log(`[PRE-CONNECT] ✅ Session ${sessionId} stored in database`);
-  }
-}
-
-// Retrieve session from database (works across Edge Function instances)
-async function getPreConnectSession(supabase: any, sessionId: string): Promise<PreConnectSession | null> {
-  const { data, error } = await supabase
-    .from('pre_connect_sessions')
-    .select('*')
-    .eq('session_id', sessionId)
-    .gt('expires_at', new Date().toISOString())
-    .single();
-  
-  if (error || !data) {
-    console.log(`[PRE-CONNECT] Session ${sessionId} not found or expired in database`);
-    return null;
-  }
-  
-  // Delete after retrieval (one-time use)
-  await supabase.from('pre_connect_sessions').delete().eq('session_id', sessionId);
-  
-  console.log(`[PRE-CONNECT] ✅ Retrieved session ${sessionId} from database with ${data.audio_base64?.length || 0} bytes audio`);
-  
-  return {
-    userId: data.user_id,
-    context: data.context,
-    agenda: data.agenda,
-    timezone: data.timezone,
-    profile: data.profile,
-    greetingText: data.greeting_text,
-    audioBase64: data.audio_base64,
-    ttsProvider: data.tts_provider,
-    voiceId: data.voice_id,
-    openaiVoice: data.openai_voice || 'alloy',
-    phoneCallMode: data.phone_call_mode || 'media_streams',
-    createdAt: new Date(data.created_at).getTime(),
-    // NEW: Pre-computed data
-    ragContext: data.rag_context || '',
-    instructions: data.instructions || '',
-    threadId: data.thread_id || null
-  };
-}
-
-// === SHARED AGENDA SERVICE ===
-// Wrapper class that calls the centralized agenda-manager edge function
-// Provides the same interface as the legacy in-memory AgendaManager
-class SharedAgendaManager {
-  private threadId: string | null = null;
-  private userId: string | null = null;
-  private cachedStatus: {
-    items: any[];
-    completed: number;
-    total: number;
-    currentItem: any | null;
-    isPaused: boolean;
-  } | null = null;
-
-  constructor(threadId: string | null, userId: string | null) {
-    this.threadId = threadId;
-    this.userId = userId;
-  }
-
-  private async callService(operation: string, params: Record<string, unknown> = {}): Promise<any> {
-    if (!this.threadId || !this.userId) {
-      console.log(`[SHARED-AGENDA] Skipping ${operation} - no thread/user`);
-      return null;
-    }
-    
-    try {
-      const response = await fetch(`${SUPABASE_URL}/functions/v1/agenda-manager`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          operation,
-          threadId: this.threadId,
-          userId: this.userId,
-          ...params
-        })
-      });
-      
-      if (response.ok) {
-        const result = await response.json();
-        console.log(`[SHARED-AGENDA] ${operation} succeeded`);
-        return result;
-      } else {
-        console.error(`[SHARED-AGENDA] ${operation} failed: ${response.status}`);
-        return null;
-      }
-    } catch (error) {
-      console.error(`[SHARED-AGENDA] ${operation} error:`, error);
-      return null;
-    }
-  }
-
-  async initialize(context: string, agenda?: any[], source: string = 'scheduled_call') {
-    // If legacy agenda array is provided, convert to context format
-    let contextToUse = context;
-    if (agenda && agenda.length > 0) {
-      const agendaText = agenda.map((item, idx) => `${idx + 1}. ${item.text}`).join('\n');
-      contextToUse = context + '\n\nAGENDA:\n' + agendaText;
-    }
-    
-    const result = await this.callService('initialize', { context: contextToUse, source });
-    if (result?.itemCount > 0) {
-      // Auto-start first item
-      await this.startItem(0);
-    }
-    return result;
-  }
-
-  async startItem(index: number) {
-    return this.callService('start_item', { itemIndex: index });
-  }
-
-  async completeCurrentItem() {
-    return this.callService('complete_item', { autoAdvance: true });
-  }
-
-  async pauseForQuery(userQuery: string) {
-    return this.callService('pause_for_tangent', { userQuery });
-  }
-
-  async resume() {
-    return this.callService('resume');
-  }
-
-  async getResumeHint(): Promise<string | null> {
-    const result = await this.callService('get_resume_hint');
-    return result?.hint || null;
-  }
-
-  async getStatus() {
-    const status = await this.callService('get_status');
-    if (status) {
-      this.cachedStatus = status;
-    }
-    return this.cachedStatus;
-  }
-
-  // Synchronous accessors use cached status (call getStatus() first to refresh)
-  get isPaused(): boolean {
-    return this.cachedStatus?.isPaused || false;
-  }
-
-  getCurrentItem(): any | null {
-    return this.cachedStatus?.currentItem || null;
-  }
-
-  getProgress(): { completed: number; total: number; remaining: string[] } {
-    if (!this.cachedStatus) {
-      return { completed: 0, total: 0, remaining: [] };
-    }
-    const remaining = this.cachedStatus.items
-      .filter((i: any) => i.status !== 'completed')
-      .map((i: any) => i.item_text);
-    return {
-      completed: this.cachedStatus.completed,
-      total: this.cachedStatus.total,
-      remaining
-    };
-  }
-
-  isComplete(): boolean {
-    if (!this.cachedStatus) return true;
-    return this.cachedStatus.completed === this.cachedStatus.total;
-  }
-}
-
-// LEGACY: Keep in-memory class as fallback for when thread ID is not available
-class AgendaManager {
-  private items: Array<{ index: number; text: string; status: string; startedAt?: number; completedAt?: number }>;
-  private currentIndex = 0;
-  private isPausedState = false;
-  private pausedForQuery?: string;
-
-  constructor(parsedAgenda: Array<{ index: number; text: string; status: string }>) {
-    this.items = parsedAgenda.map(item => ({ ...item }));
-    console.log(`[AGENDA-LEGACY] Initialized with ${this.items.length} items`);
-  }
-
-  startItem(index?: number) {
-    const idx = index ?? this.currentIndex;
-    if (this.items[idx]) {
-      this.items[idx].status = 'in_progress';
-      this.items[idx].startedAt = Date.now();
-      this.currentIndex = idx;
-      console.log(`[AGENDA-LEGACY] Started item ${idx}: "${this.items[idx].text.substring(0, 40)}..."`);
-    }
-  }
-
-  completeCurrentItem() {
-    if (this.items[this.currentIndex]) {
-      this.items[this.currentIndex].status = 'completed';
-      this.items[this.currentIndex].completedAt = Date.now();
-      console.log(`[AGENDA-LEGACY] Completed item ${this.currentIndex}`);
-      
-      // Find next pending
-      const nextIdx = this.items.findIndex(
-        (i, idx) => idx > this.currentIndex && i.status === 'pending'
-      );
-      if (nextIdx !== -1) {
-        this.currentIndex = nextIdx;
-      }
-    }
-  }
-
-  pauseForQuery(userQuery: string) {
-    if (this.items[this.currentIndex]?.status === 'in_progress') {
-      this.items[this.currentIndex].status = 'paused';
-      this.isPausedState = true;
-      this.pausedForQuery = userQuery;
-      console.log(`[AGENDA-LEGACY] Paused for user query: "${userQuery.substring(0, 40)}..."`);
-    }
-  }
-
-  resume() {
-    if (this.isPausedState && this.items[this.currentIndex]) {
-      this.items[this.currentIndex].status = 'in_progress';
-      this.isPausedState = false;
-      this.pausedForQuery = undefined;
-      console.log(`[AGENDA-LEGACY] Resumed item ${this.currentIndex}`);
-    }
-  }
-
-  getResumeHint(): string | null {
-    if (!this.isPausedState) return null;
-    const item = this.items[this.currentIndex];
-    return item ? `Getting back to: ${item.text}` : null;
-  }
-
-  getCurrentItem() {
-    return this.items[this.currentIndex] || null;
-  }
-
-  getProgress(): { completed: number; total: number; remaining: string[] } {
-    const completed = this.items.filter(i => i.status === 'completed').length;
-    const remaining = this.items.filter(i => i.status !== 'completed').map(i => i.text);
-    return { completed, total: this.items.length, remaining };
-  }
-
-  isComplete(): boolean {
-    return this.items.every(i => i.status === 'completed');
-  }
-
-  get isPaused(): boolean {
-    return this.isPausedState;
-  }
-}
-
-// === SMART FILLER MANAGER ===
-// Inserts natural fillers during long tool calls based on elapsed time
+// Smart Filler Manager - inserts natural fillers during long tool calls
 class SmartFillerManager {
   private toolStartTime = 0;
   private fillerTimeouts: number[] = [];
@@ -1019,9 +120,9 @@ class SmartFillerManager {
   };
 
   private readonly DELAYS = {
-    short: 1500,   // First filler after 1.5s
-    medium: 3500,  // Second at 3.5s
-    long: 6000     // Third at 6s
+    short: 1500,
+    medium: 3500,
+    long: 6000
   };
 
   constructor(sendFiller: (text: string) => void) {
@@ -1032,7 +133,6 @@ class SmartFillerManager {
     this.toolStartTime = Date.now();
     console.log(`[FILLER] Starting timer for tool: ${toolName}`);
 
-    // Schedule fillers at intervals
     this.fillerTimeouts.push(
       setTimeout(() => this.insertFiller('short'), this.DELAYS.short) as unknown as number,
       setTimeout(() => this.insertFiller('medium'), this.DELAYS.medium) as unknown as number,
@@ -1041,7 +141,6 @@ class SmartFillerManager {
   }
 
   endTool() {
-    // Cancel all pending fillers
     this.fillerTimeouts.forEach(clearTimeout);
     this.fillerTimeouts = [];
     const elapsed = Date.now() - this.toolStartTime;
@@ -1050,7 +149,6 @@ class SmartFillerManager {
 
   private insertFiller(tier: 'short' | 'medium' | 'long') {
     const phrases = this.FILLERS[tier];
-    // Avoid repeating the same filler
     let phrase = phrases[Math.floor(Math.random() * phrases.length)];
     while (phrase === this.lastFillerUsed && phrases.length > 1) {
       phrase = phrases[Math.floor(Math.random() * phrases.length)];
@@ -1061,24 +159,7 @@ class SmartFillerManager {
   }
 }
 
-// Generate greeting text based on call type
-function generateGreetingForCallType(context: string, timeGreeting: string, userName: string): string {
-  if (context.includes('Morning Stand-up')) {
-    return `${timeGreeting}, ${userName}. This is your morning check-in.`;
-  } else if (context.includes('Midday Check-in')) {
-    return `${timeGreeting}, ${userName}. Just checking in on how your day is going.`;
-  } else if (context.includes('End of Day Wrap-up')) {
-    return `${timeGreeting}, ${userName}. Let's wrap up the day.`;
-  } else if (context.includes('Task reminder')) {
-    return `${timeGreeting}, ${userName}. Quick reminder about an upcoming task.`;
-  }
-  
-  // Default
-  return `${timeGreeting}, ${userName}. This is Iris.`;
-}
-
 // Handle pre-connect mode - establish session before call
-// NOW: Pre-computes RAG, instructions, threadId so connectToOpenAI can skip DB queries
 async function handlePreConnect(params: {
   userId: string;
   context: string;
@@ -1092,7 +173,7 @@ async function handlePreConnect(params: {
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
-  // 1. Load ALL context in parallel - profile, TTS prefs, RAG, assistant, and existing thread
+  // Load ALL context in parallel
   const [profile, ttsPrefs, ragContext, defaultAssistantResult] = await Promise.all([
     loadUserProfile(supabase, userId),
     supabase
@@ -1100,9 +181,7 @@ async function handlePreConnect(params: {
       .select('tts_provider, elevenlabs_voice_id, openai_voice, phone_call_mode')
       .eq('user_id', userId)
       .maybeSingle(),
-    // NEW: Pre-load RAG context
-    loadRAGContext(supabase, userId),
-    // Get user's default assistant for thread association
+    loadRAGContext(SUPABASE_URL, SUPABASE_SERVICE_KEY, userId),
     supabase
       .from('assistants')
       .select('id')
@@ -1118,13 +197,10 @@ async function handlePreConnect(params: {
   
   const assistantId = defaultAssistantResult.data?.id || null;
   
-  // PHASE 2: UNIFIED THREAD LOOKUP
-  // Look for existing unified thread for this user + assistant to enable cross-mode memory
-  // This allows phone calls to remember conversations from chat and voice modes
+  // UNIFIED THREAD LOOKUP
   let threadId: string | null = null;
   
   if (assistantId) {
-    // First try to find a unified thread for this assistant
     const { data: existingThread } = await supabase
       .from('ai_threads')
       .select('id')
@@ -1136,9 +212,7 @@ async function handlePreConnect(params: {
     
     if (existingThread) {
       threadId = existingThread.id;
-      console.log(`[PRE-CONNECT] [UNIFIED_THREAD] Using existing thread for assistant ${assistantId}: ${threadId}`);
-      
-      // Touch the thread to update last_used timestamp
+      console.log(`[PRE-CONNECT] [UNIFIED_THREAD] Using existing thread: ${threadId}`);
       await supabase
         .from('ai_threads')
         .update({ updated_at: new Date().toISOString() })
@@ -1146,7 +220,6 @@ async function handlePreConnect(params: {
     }
   }
   
-  // If no existing thread found, create a new one
   if (!threadId) {
     const { data: newThread } = await supabase
       .from('ai_threads')
@@ -1154,28 +227,28 @@ async function handlePreConnect(params: {
         user_id: userId, 
         assistant_id: assistantId,
         openai_thread_id: `phone_${Date.now()}`,
-        mode: 'unified' // Mark as unified for cross-mode memory
+        mode: 'unified'
       })
       .select('id')
       .single();
     threadId = newThread?.id || null;
-    console.log(`[PRE-CONNECT] [UNIFIED_THREAD] Created new unified thread: ${threadId} for assistant: ${assistantId}`);
+    console.log(`[PRE-CONNECT] [UNIFIED_THREAD] Created new thread: ${threadId}`);
   }
 
   console.log(`[PRE-CONNECT] TTS Provider: ${ttsProvider}, Voice ID: ${voiceId}, RAG: ${ragContext.length} chars`);
 
-  // 2. Generate greeting text
+  // Generate greeting text
   const timeGreeting = getTimeBasedGreeting(timezone);
   const userName = profile?.first_name || 'sir';
   const greetingText = generateGreetingForCallType(context, timeGreeting, userName);
 
   console.log(`[PRE-CONNECT] Generated greeting: "${greetingText}"`);
 
-  // 3. NEW: Pre-generate full instructions (the expensive loadUserInstructions call)
-  const instructions = await loadUserInstructions(userId, ragContext, profile, timezone);
+  // Pre-generate full instructions
+  const instructions = await loadUserInstructions(SUPABASE_URL, SUPABASE_SERVICE_KEY, userId, ragContext, profile, timezone);
   console.log(`[PRE-CONNECT] Pre-generated instructions: ${instructions.length} chars`);
 
-  // 4. Generate audio via ElevenLabs TTS
+  // Generate audio via ElevenLabs TTS
   let audioBase64 = '';
   let audioBytes = 0;
 
@@ -1207,7 +280,7 @@ async function handlePreConnect(params: {
     }
   }
 
-  // 5. Store session in database with ALL pre-computed data
+  // Store session in database
   const sessionId = crypto.randomUUID();
   const totalTime = Date.now() - startTime;
 
@@ -1224,14 +297,12 @@ async function handlePreConnect(params: {
     openaiVoice,
     phoneCallMode,
     createdAt: Date.now(),
-    // NEW: Pre-computed data to skip DB queries during call connect
     ragContext,
     instructions,
     threadId
   });
 
   console.log(`[PRE-CONNECT] ✅ FULL session stored in ${totalTime}ms: ${sessionId}`);
-  console.log(`[PRE-CONNECT] ✅ connectToOpenAI will now skip ~5 DB queries`);
 
   return new Response(JSON.stringify({
     sessionId,
@@ -1259,12 +330,11 @@ serve(async (req) => {
         return handlePreConnect(body);
       }
     } catch (e) {
-      // Not JSON or parsing failed, continue to other handlers
       console.log('[BRIDGE] POST request not pre-connect mode');
     }
   }
 
-  // Health check endpoint - supports both /health path and ?health=1 param
+  // Health check endpoint
   if (url.pathname.endsWith("/health") || url.searchParams.get('health') === '1') {
     return new Response(JSON.stringify({
       name: 'twilio-realtime-bridge',
@@ -1292,22 +362,17 @@ serve(async (req) => {
     let userProfile: any = {};
     let threadId: string | null = null;
     
-    // BARGE-IN: Track if AI is currently speaking
+    // BARGE-IN tracking
     let isAiSpeaking = false;
     let currentResponseId: string | null = null;
-    
-    // TRUNCATION: Track for proper interruption handling (not cancel)
     let currentResponseItemId: string | null = null;
     let audioSamplesPlayed: number = 0;
     
-    // POST-VALIDATION: Track last tool output for response validation
+    // Tool output tracking
     let lastToolOutput: { toolName: string; extractedFacts?: any } | null = null;
-    
-    // VERBATIM WEB SEARCH: Track last user transcript for web_search override
     let lastUserTranscript: string | null = null;
     
-    // === CALL SESSION TRACKING ===
-    // For full conversation logging and review
+    // Call session tracking
     let callSessionId: string | null = null;
     let messageIndex = 0;
     let callStartTime = Date.now();
@@ -1315,49 +380,33 @@ serve(async (req) => {
     let firstAudioTime: number | null = null;
     let greetingLatencyMs: number | null = null;
     
-    // === TTS PROVIDER SETTINGS ===
+    // TTS settings
     let ttsProvider: 'openai' | 'elevenlabs' = 'openai';
     let elevenlabsVoiceId: string = 'EXAVITQu4vr4xnSDxMaL';
-    let openaiVoice: string = 'alloy';  // User's selected OpenAI voice
+    let openaiVoice: string = 'alloy';
     
-    // === ELEVENLABS TEXT BUFFER ===
-    // When using ElevenLabs, we buffer text from OpenAI and send to ElevenLabs TTS
+    // ElevenLabs text buffer
     let pendingTextBuffer: string = '';
     let isProcessingElevenLabsTTS = false;
-    
-    // === SENTENCE STREAMING FOR ELEVENLABS ===
-    // Buffer text deltas and send complete sentences for faster TTS
     let sentenceBuffer: string = '';
-    let audioSentDuringResponse: boolean = false;  // Track if any audio was sent via streaming
-    const SENTENCE_ENDERS = /[.!?]\s*$/;
+    let audioSentDuringResponse: boolean = false;
     
-    // === SPEECH EVENT DEBOUNCE ===
-    // Prevent rapid-fire speech events from causing stuttering
+    // Speech event debounce
     let lastSpeechStartTime = 0;
     const SPEECH_DEBOUNCE_MS = 300;
     
-    // === AMPLITUDE-BASED ECHO FILTERING ===
-    // Suppress OpenAI VAD false-positives caused by TTS echo on phone line
-    // Track when we're actively sending TTS audio to detect echo vs real speech
+    // Echo filtering
     let isSendingTtsAudio = false;
     let ttsAudioEndTime = 0;
-    const TTS_ECHO_GRACE_PERIOD_MS = 500; // Extra time for audio to clear after TTS ends
-    
-    // === DEBUG FLAG: DISABLE ECHO FILTER ===
-    // Set to true to bypass amplitude-based echo filtering (for debugging transcription loss)
-    const DISABLE_ECHO_FILTER = true;  // TEMPORARY: Let all audio through to debug
-    
-    // Amplitude thresholds for echo vs real speech detection
-    // Echo from speaker tends to be lower amplitude than real speech into mic
-    const ECHO_AMPLITUDE_THRESHOLD = 1500;     // Below this = likely echo, ignore
-    const INTERRUPT_AMPLITUDE_THRESHOLD = 3000; // Above this = real speech, process
-    
-    // Rolling window of recent amplitudes for smoother detection
+    const TTS_ECHO_GRACE_PERIOD_MS = 500;
+    const DISABLE_ECHO_FILTER = true;
+    const ECHO_AMPLITUDE_THRESHOLD = 1500;
+    const INTERRUPT_AMPLITUDE_THRESHOLD = 3000;
     let recentAmplitudes: number[] = [];
-    const AMPLITUDE_WINDOW = 5; // Number of chunks to average
+    const AMPLITUDE_WINDOW = 5;
     let amplitudeDebugCounter = 0;
     
-    // === AUDIO PIPELINE TELEMETRY ===
+    // Audio pipeline telemetry
     let twilioMediaFramesIn = 0;
     let openaiAppendCount = 0;
     let openaiAudioDeltaCount = 0;
@@ -1366,35 +415,50 @@ serve(async (req) => {
     let firstAppendLogged = false;
     let firstDeltaLogged = false;
     let firstOutboundLogged = false;
-    // Track all OpenAI message types for debugging
     const openaiEventCounts: Record<string, number> = {};
     
-    // KEEP-ALIVE: Prevent idle timeout
+    // Keep-alive
     let keepAliveInterval: number | null = null;
     
-    // === AGENDA MANAGER INSTANCE ===
-    // Primary: SharedAgendaManager for cross-interface persistence
-    // Fallback: AgendaManager for legacy in-memory mode
+    // Agenda managers
     let sharedAgendaManager: SharedAgendaManager | null = null;
     let agendaManager: AgendaManager | null = null;
     
-    // === SMART FILLER MANAGER INSTANCE ===
+    // Filler manager
     let fillerManager: SmartFillerManager | null = null;
     
-    // === PRE-CONNECTED SESSION STATE ===
+    // Pre-connected session state
     let preConnectedSession: PreConnectSession | null = null;
     let cachedAudioBase64: string = '';
     let preConnectedGreetingText: string = '';
     
-    // === HELLO-TRIGGERED GREETING FOR OUTBOUND CALLS ===
-    // Wait for user to say hello before AI speaks (works with or without cached audio)
+    // Hello-triggered greeting
     let waitingForUserHello = false;
     let pendingCachedGreeting: string = '';
-    let pendingGreetingMode: 'cached' | 'openai' | null = null; // Track greeting delivery method
+    let pendingGreetingMode: 'cached' | 'openai' | null = null;
     let helloTriggerTimer: number | null = null;
-    const HELLO_FALLBACK_MS = VOICE_CONFIG.OUTBOUND_HELLO_WAIT_MS; // Max wait for user audio on outbound
+    const HELLO_FALLBACK_MS = VOICE_CONFIG.OUTBOUND_HELLO_WAIT_MS;
     
-    // Unified trigger for pending greeting (called by timer, buffer detection, or VAD)
+    // Audio buffering
+    const audioRingBuffer: Int16Array[] = [];
+    const MAX_BUFFER_FRAMES = 150;
+    let audioBufferFlushed = false;
+    
+    // Telemetry timestamps
+    let t_twilioStart = 0;
+    let t_openaiWsConstructed = 0;
+    let t_sessionConfigured = 0;
+    let t_firstAudioBuffered = 0;
+    let t_bufferFlushed = 0;
+    let t_cachedGreetingPlayed = 0;
+    
+    // Response tracking
+    let responseCreateCount = 0;
+    let lastResponseTrigger = '';
+    
+    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+
+    // Unified trigger for pending greeting
     function triggerPendingGreeting(source: 'timer' | 'buffer' | 'vad') {
       if (!waitingForUserHello) return;
       
@@ -1413,7 +477,6 @@ serve(async (req) => {
         firstOutboundLogged = true;
         console.log(`[TIMING] twilioStart→greetingPlayed: ${t_cachedGreetingPlayed - t_twilioStart}ms (${source})`);
         
-        // Inject greeting context now that we've played it
         injectAssistantMessage(preConnectedGreetingText, 'PRE_CONNECT_GREETING_HISTORY');
         const userName = userProfile?.first_name || 'sir';
         const contextMsg = `[System: PRE-CONNECTED CALL - You just said: "${preConnectedGreetingText}"
@@ -1422,7 +485,6 @@ ${callContext || ''}
 Cover ALL agenda items naturally before ending. Use hang_up only after all items covered.]`;
         injectSystemMessage(contextMsg, 'PRE_CONNECT_CONTEXT_AFTER_HELLO');
       } else if (pendingGreetingMode === 'openai') {
-        // Trigger live OpenAI greeting - sendOutboundGreeting will be called
         console.log(`[HELLO-TRIGGER] 📡 Mode=openai - will trigger sendOutboundGreeting()`);
         sendOutboundGreeting();
       }
@@ -1431,80 +493,29 @@ Cover ALL agenda items naturally before ending. Use hang_up only after all items
       pendingGreetingMode = null;
     }
     
-    // === EARLY AUDIO BUFFERING ===
-    // Buffer audio while OpenAI WS is connecting so we don't lose user's "hello"
-    const audioRingBuffer: Int16Array[] = [];
-    const MAX_BUFFER_FRAMES = 150; // ~3 seconds of audio at 8kHz (20ms/frame)
-    let audioBufferFlushed = false;
-    
-    // === TELEMETRY TIMESTAMPS ===
-    let t_twilioStart = 0;
-    let t_openaiWsConstructed = 0;
-    let t_sessionConfigured = 0;
-    let t_firstAudioBuffered = 0;
-    let t_bufferFlushed = 0;
-    let t_cachedGreetingPlayed = 0;
-    
-    // =====================================================
-    // === ENHANCED RESPONSE TRIGGER LOGGING SYSTEM ===
-    // =====================================================
-    // Track EVERY response.create call to identify duplicate/unexpected triggers
-    
-type ResponseTrigger = 
-  | 'INBOUND_GREETING'
-  | 'OUTBOUND_GREETING' 
-  | 'OUTBOUND_SCHEDULED_GREETING'
-  | 'PRE_CONNECT_CACHED_AUDIO'
-  | 'FUNCTION_RESULT'
-  | 'VALIDATION_CORRECTION'
-  | 'FILLER_INJECTION'
-  | 'USER_SPEECH_ENDED'
-  | 'UNKNOWN';
-    
-    let lastResponseTrigger: ResponseTrigger = 'UNKNOWN';
-    let lastResponseTriggerTime: number = 0;
-    let responseCreateCount: number = 0;
-    const DUPLICATE_THRESHOLD_MS = 500;
-    
-    // Wrapper for response.create - logs trigger source and detects duplicates
-    function createResponse(trigger: ResponseTrigger, reason?: string): boolean {
+    // Wrapper for response.create - logs trigger source
+    function createResponse(trigger: string, details?: string) {
       if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN) {
-        console.warn(`[RESPONSE-CREATE] ⚠️ Cannot send - OpenAI WS not open`);
-        return false;
+        console.warn(`[RESPONSE] ⚠️ Cannot create - OpenAI WS not open`);
+        return;
       }
       
       responseCreateCount++;
-      const now = Date.now();
-      const timeSinceLast = lastResponseTriggerTime > 0 ? now - lastResponseTriggerTime : -1;
-      const modalities = ttsProvider === 'elevenlabs' ? ["text"] : ["text", "audio"];
-      
-      console.log(`[RESPONSE-CREATE] #${responseCreateCount} trigger=${trigger} modalities=${JSON.stringify(modalities)} reason="${reason || ''}" timeSinceLast=${timeSinceLast}ms`);
-      
-      // DUPLICATE DETECTION: Warn and skip if same trigger within threshold
-      if (trigger === lastResponseTrigger && timeSinceLast >= 0 && timeSinceLast < DUPLICATE_THRESHOLD_MS) {
-        console.warn(`[RESPONSE-CREATE] ⚠️ DUPLICATE TRIGGER: ${trigger} within ${timeSinceLast}ms - SKIPPING to prevent repeat`);
-        return false;
-      }
-      
       lastResponseTrigger = trigger;
-      lastResponseTriggerTime = now;
+      responseStartTime = Date.now();
       
-      openaiWs.send(JSON.stringify({
-        type: "response.create",
-        response: { modalities }
-      }));
+      console.log(`[RESPONSE] #${responseCreateCount} triggered by: ${trigger}${details ? ` (${details})` : ''}`);
       
-      return true;
+      openaiWs.send(JSON.stringify({ type: "response.create" }));
     }
     
-    // Wrapper for conversation.item.create - logs what context we're injecting
+    // Wrapper for conversation.item.create
     function injectSystemMessage(content: string, logTag: string) {
       if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN) {
         console.warn(`[INJECT-MSG] ⚠️ Cannot send - OpenAI WS not open`);
         return;
       }
       
-      // Log first 120 chars to understand what we're telling the AI
       const preview = content.length > 120 ? content.substring(0, 120) + '...' : content;
       console.log(`[INJECT-MSG] ${logTag}: "${preview}"`);
       
@@ -1518,7 +529,6 @@ type ResponseTrigger =
       }));
     }
     
-    // Wrapper for injecting assistant messages (for filler/cached greetings)
     function injectAssistantMessage(content: string, logTag: string) {
       if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN) {
         console.warn(`[INJECT-ASST] ⚠️ Cannot send - OpenAI WS not open`);
@@ -1537,10 +547,10 @@ type ResponseTrigger =
       }));
     }
     
-    // ElevenLabs TTS timeout - fallback to OpenAI if ElevenLabs hangs
-    const ELEVENLABS_TIMEOUT_MS = 5000; // 5 second timeout
+    // ElevenLabs TTS timeout
+    const ELEVENLABS_TIMEOUT_MS = 5000;
     
-    // ElevenLabs TTS function - sends text to ElevenLabs and streams μ-law audio to Twilio
+    // ElevenLabs TTS function
     async function sendElevenLabsTTS(text: string) {
       if (!streamSid || twilioWs.readyState !== WebSocket.OPEN || !ELEVENLABS_API_KEY) {
         console.warn('[ELEVENLABS] Cannot send TTS - missing streamSid, closed WS, or no API key');
@@ -1562,7 +572,6 @@ type ResponseTrigger =
       try {
         const startTime = Date.now();
         
-        // Create abort controller for timeout
         const controller = new AbortController();
         const timeoutId = setTimeout(() => {
           console.warn(`[ELEVENLABS] ⚠️ TIMEOUT after ${ELEVENLABS_TIMEOUT_MS}ms - aborting request`);
@@ -1587,16 +596,13 @@ type ResponseTrigger =
         } catch (fetchError: any) {
           clearTimeout(timeoutId);
           
-          // If timeout/abort, trigger OpenAI fallback
           if (fetchError.name === 'AbortError') {
             console.warn(`[ELEVENLABS] ⚠️ Request timed out, falling back to OpenAI voice`);
             isProcessingElevenLabsTTS = false;
             
-            // Fallback: Inject text and trigger OpenAI audio response
             if (openaiWs && openaiWs.readyState === WebSocket.OPEN) {
               console.log(`[ELEVENLABS-FALLBACK] Triggering OpenAI audio for: "${fullText.substring(0, 50)}..."`);
               
-              // Temporarily switch to audio mode for this response
               openaiWs.send(JSON.stringify({
                 type: "conversation.item.create",
                 item: {
@@ -1606,7 +612,6 @@ type ResponseTrigger =
                 }
               }));
               
-              // Request audio output for this text
               openaiWs.send(JSON.stringify({
                 type: "response.create",
                 response: { 
@@ -1632,32 +637,22 @@ type ResponseTrigger =
         const data = await response.json();
         const latency = Date.now() - startTime;
         
-        // Warn if latency is high but still completed
         if (latency > 3000) {
           console.warn(`[ELEVENLABS] ⚠️ HIGH LATENCY: ${latency}ms (threshold: 3000ms)`);
         }
         
         console.log(`[ELEVENLABS] ✅ Generated ${data.bytes} bytes of μ-law audio in ${latency}ms`);
         
-        // Send the μ-law audio directly to Twilio (it's already in the right format!)
         if (data.audio && streamSid && twilioWs.readyState === WebSocket.OPEN) {
-          // === ECHO FILTERING: Mark that we're sending TTS audio ===
           isSendingTtsAudio = true;
-          recentAmplitudes = []; // Reset amplitude tracking at start of TTS
+          recentAmplitudes = [];
           
-          // ElevenLabs returns the full audio at once - we need to chunk it for Twilio
-          // Twilio expects ~20ms chunks (160 bytes at 8kHz μ-law)
-          const audioBytes = Uint8Array.from(atob(data.audio), c => c.charCodeAt(0));
-          const chunkSize = 160; // 20ms at 8kHz
-          const numChunks = Math.ceil(audioBytes.length / chunkSize);
-          const estimatedDurationMs = numChunks * 20; // 20ms per chunk
+          const chunks = chunkMulawForTwilio(data.audio);
+          const estimatedDurationMs = chunks.length * 20;
           
-          console.log(`[ELEVENLABS] 🔊 Sending ${numChunks} chunks (~${estimatedDurationMs}ms duration)`);
+          console.log(`[ELEVENLABS] 🔊 Sending ${chunks.length} chunks (~${estimatedDurationMs}ms duration)`);
           
-          for (let i = 0; i < audioBytes.length; i += chunkSize) {
-            const chunk = audioBytes.slice(i, i + chunkSize);
-            const chunkBase64 = btoa(String.fromCharCode(...chunk));
-            
+          for (const chunkBase64 of chunks) {
             twilioMediaFramesOut++;
             twilioWs.send(JSON.stringify({
               event: "media",
@@ -1666,12 +661,9 @@ type ResponseTrigger =
             }));
           }
           
-          // === ECHO FILTERING: Schedule end of TTS playback window ===
-          // Audio takes time to play + echo takes time to return
           ttsAudioEndTime = Date.now() + estimatedDurationMs + TTS_ECHO_GRACE_PERIOD_MS;
           console.log(`[ECHO-FILTER] TTS playback window: now + ${estimatedDurationMs + TTS_ECHO_GRACE_PERIOD_MS}ms`);
           
-          // Schedule turning off the flag after audio finishes + grace period
           setTimeout(() => {
             if (isSendingTtsAudio && Date.now() >= ttsAudioEndTime - 50) {
               isSendingTtsAudio = false;
@@ -1690,7 +682,6 @@ type ResponseTrigger =
       } finally {
         isProcessingElevenLabsTTS = false;
         
-        // Process any queued text
         if (pendingTextBuffer.trim()) {
           const queuedText = pendingTextBuffer;
           pendingTextBuffer = '';
@@ -1699,7 +690,7 @@ type ResponseTrigger =
       }
     }
 
-    // Play pre-cached audio directly to Twilio (for pre-connected sessions)
+    // Play pre-cached audio directly to Twilio
     function playCachedAudio(audioBase64: string) {
       if (!streamSid || twilioWs.readyState !== WebSocket.OPEN || !audioBase64) {
         console.warn('[CACHED-AUDIO] Cannot play - missing streamSid, closed WS, or no audio');
@@ -1709,22 +700,15 @@ type ResponseTrigger =
       console.log(`[CACHED-AUDIO] 🎙️ Playing ${audioBase64.length} chars of cached audio`);
 
       try {
-        // === ECHO FILTERING: Mark that we're sending TTS audio ===
         isSendingTtsAudio = true;
-        recentAmplitudes = []; // Reset amplitude tracking at start of TTS
+        recentAmplitudes = [];
         
-        // The audio is already in μ-law format from ElevenLabs - chunk it for Twilio
-        const audioBytes = Uint8Array.from(atob(audioBase64), c => c.charCodeAt(0));
-        const chunkSize = 160; // 20ms at 8kHz
-        const numChunks = Math.ceil(audioBytes.length / chunkSize);
-        const estimatedDurationMs = numChunks * 20; // 20ms per chunk
+        const chunks = chunkMulawForTwilio(audioBase64);
+        const estimatedDurationMs = chunks.length * 20;
 
-        console.log(`[CACHED-AUDIO] 🔊 Sending ${numChunks} chunks (~${estimatedDurationMs}ms duration)`);
+        console.log(`[CACHED-AUDIO] 🔊 Sending ${chunks.length} chunks (~${estimatedDurationMs}ms duration)`);
 
-        for (let i = 0; i < audioBytes.length; i += chunkSize) {
-          const chunk = audioBytes.slice(i, i + chunkSize);
-          const chunkBase64 = btoa(String.fromCharCode(...chunk));
-
+        for (const chunkBase64 of chunks) {
           twilioMediaFramesOut++;
           twilioWs.send(JSON.stringify({
             event: "media",
@@ -1733,11 +717,9 @@ type ResponseTrigger =
           }));
         }
 
-        // === ECHO FILTERING: Schedule end of TTS playback window ===
         ttsAudioEndTime = Date.now() + estimatedDurationMs + TTS_ECHO_GRACE_PERIOD_MS;
         console.log(`[ECHO-FILTER] Cached audio playback window: now + ${estimatedDurationMs + TTS_ECHO_GRACE_PERIOD_MS}ms`);
         
-        // Schedule turning off the flag after audio finishes + grace period
         setTimeout(() => {
           if (isSendingTtsAudio && Date.now() >= ttsAudioEndTime - 50) {
             isSendingTtsAudio = false;
@@ -1745,7 +727,7 @@ type ResponseTrigger =
           }
         }, estimatedDurationMs + TTS_ECHO_GRACE_PERIOD_MS);
 
-        console.log(`[CACHED-AUDIO] ✅ Sent ${numChunks} chunks`);
+        console.log(`[CACHED-AUDIO] ✅ Sent ${chunks.length} chunks`);
       } catch (error) {
         console.error('[CACHED-AUDIO] Error playing cached audio:', error);
       }
@@ -1756,18 +738,14 @@ type ResponseTrigger =
       if (ttsProvider === 'elevenlabs') {
         sendElevenLabsTTS(text);
       } else {
-        // For OpenAI TTS, inject as assistant message and trigger response
         injectAssistantMessage(text, 'FILLER');
         createResponse('FILLER_INJECTION', `filler: "${text}"`);
       }
     });
 
-    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
-
     twilioWs.onopen = () => {
       console.log("[TWILIO-WS] ✅ WebSocket OPEN - ready to receive stream");
       
-      // Keep-alive ping every 30 seconds to prevent idle timeout
       keepAliveInterval = setInterval(() => {
         if (twilioWs.readyState === WebSocket.OPEN) {
           console.log("[BRIDGE] Keep-alive ping");
@@ -1794,33 +772,21 @@ type ResponseTrigger =
             callDirection = customParams.direction || 'inbound';
             userTimezone = customParams.timezone || 'America/New_York';
             
-            // Check for pre-connected session
             const sessionId = customParams.sessionId;
             const greetingCached = customParams.greetingCached === 'true';
-            const cachedGreetingText = customParams.greetingText || '';
             
             console.log(`[TWILIO-STREAM] ✅ Stream START received - streamSid: ${streamSid}`);
             console.log(`[TWILIO-STREAM] Custom params:`, JSON.stringify(customParams));
-            console.log(`[TWILIO-STREAM] Pre-connected session: ${sessionId || 'none'}, greetingCached: ${greetingCached}`);
+            console.log(`[TWILIO-STREAM] Pre-connected session: ${sessionId || 'none'}`);
             
-            // === PRE-CONNECTED SESSION HANDLING ===
-            // For scheduled calls: PLAY GREETING IMMEDIATELY, then connect to OpenAI in parallel
-            // This eliminates the 3-second delay waiting for OpenAI connection
             if (sessionId) {
               t_twilioStart = Date.now();
-              console.log(`[BRIDGE] Version: ${BRIDGE_VERSION}`);
               console.log(`[TWILIO-STREAM] ⚡ Pre-connected mode: fetching session...`);
-              console.log(`[PRE-CONNECT-DEBUG] sessionId="${sessionId}", greetingCached="${greetingCached}"`);
-              console.log(`[PRE-CONNECT-DEBUG] All custom params: ${JSON.stringify(customParams)}`);
               
-              // Retrieve session data
               getPreConnectSession(supabase, sessionId).then((session) => {
-                console.log(`[PRE-CONNECT-DEBUG] Session lookup result: ${session ? 'FOUND' : 'NULL'}`);
                 if (session) {
-                  console.log(`[PRE-CONNECT-DEBUG] Session has: audioBase64=${session.audioBase64?.length || 0} chars, greetingText="${session.greetingText?.substring(0, 50)}..."`);
                   console.log(`[TWILIO-STREAM] ✅ Pre-connected session loaded in ${Date.now() - t_twilioStart}ms`);
                   
-                  // CRITICAL: Set ALL session data
                   preConnectedSession = session;
                   userId = session.userId;
                   callContext = session.context;
@@ -1832,44 +798,34 @@ type ResponseTrigger =
                   cachedAudioBase64 = session.audioBase64;
                   preConnectedGreetingText = session.greetingText;
                   threadId = session.threadId;
-                  console.log(`[PRE-CONNECT] Voice settings: ttsProvider=${ttsProvider}, openaiVoice=${openaiVoice}, elevenlabsVoice=${elevenlabsVoiceId}`);
+                  console.log(`[PRE-CONNECT] Voice settings: ttsProvider=${ttsProvider}, openaiVoice=${openaiVoice}`);
                   
-                  // Initialize shared agenda manager for cross-interface persistence
+                  // Initialize agenda manager
                   if (threadId && userId) {
-                    sharedAgendaManager = new SharedAgendaManager(threadId, userId);
+                    sharedAgendaManager = new SharedAgendaManager(threadId, userId, SUPABASE_URL, SUPABASE_SERVICE_KEY);
                     if (session.agenda && session.agenda.length > 0) {
-                      // Initialize from session agenda
                       sharedAgendaManager.initialize(session.context || '', session.agenda, 'scheduled_call');
                     }
                   } else if (session.agenda && session.agenda.length > 0) {
-                    // Fallback to legacy in-memory manager
                     agendaManager = new AgendaManager(session.agenda);
                     agendaManager.startItem(0);
                   }
                   
-                  // Direction-based greeting logic:
-                  // - OUTBOUND: Wait for user audio (or 2s timeout) before AI speaks
-                  // - INBOUND: AI speaks immediately (user called in, they're ready)
                   const isOutboundCall = callDirection === 'outbound';
-                  console.log(`[PRE-CONNECT-DEBUG] callDirection=${callDirection}, isOutbound=${isOutboundCall}, hasAudio=${!!cachedAudioBase64}, streamSid=${streamSid}`);
                   
                   if (isOutboundCall && streamSid) {
-                    // OUTBOUND: Wait for user to answer and greet (or 2s timeout)
-                    // Works with OR without cached audio
                     console.log(`[HELLO-WAIT] 🎧 Outbound call - waiting for user audio (max ${HELLO_FALLBACK_MS}ms)`);
                     waitingForUserHello = true;
                     pendingGreetingMode = cachedAudioBase64 ? 'cached' : 'openai';
                     pendingCachedGreeting = cachedAudioBase64 || '';
-                    console.log(`[HELLO-WAIT] mode=${pendingGreetingMode}, hasCachedAudio=${!!cachedAudioBase64}`);
                     
                     helloTriggerTimer = setTimeout(() => {
                       if (waitingForUserHello) {
-                        console.log(`[HELLO-TRIGGER] ⏱️ No audio after ${HELLO_FALLBACK_MS}ms - triggering greeting (mode=${pendingGreetingMode})`);
+                        console.log(`[HELLO-TRIGGER] ⏱️ No audio after ${HELLO_FALLBACK_MS}ms - triggering greeting`);
                         triggerPendingGreeting('timer');
                       }
                     }, HELLO_FALLBACK_MS) as unknown as number;
                   } else if (cachedAudioBase64 && streamSid) {
-                    // INBOUND with cached audio: AI speaks immediately (user called in)
                     console.log(`[HELLO-TRIGGER] 🎤 Inbound call - playing greeting immediately`);
                     t_cachedGreetingPlayed = Date.now();
                     playCachedAudio(cachedAudioBase64);
@@ -1879,120 +835,74 @@ type ResponseTrigger =
                     console.log(`[TIMING] twilioStart→greetingPlayed: ${t_cachedGreetingPlayed - t_twilioStart}ms (immediate-inbound)`);
                   }
                   
-                  const csp = customParams.callSid || data.start.callSid || `call_${Date.now()}`;
-                  createCallSession(csp, customParams.fromNumber, customParams.toNumber);
-                  
-                  // Connect to OpenAI in parallel (for handling conversation after greeting)
-                  console.log(`[TWILIO-STREAM] 🚀 Connecting to OpenAI in parallel`);
                   connectToOpenAI();
+                  
                 } else {
-                  console.warn(`[TWILIO-STREAM] ⚠️ Pre-connected session ${sessionId} not found - using slow path`);
-                  const csp = customParams.callSid || data.start.callSid || `call_${Date.now()}`;
-                  createCallSession(csp, customParams.fromNumber, customParams.toNumber);
+                  console.log(`[TWILIO-STREAM] ⚠️ Pre-connected session not found, falling back to standard flow`);
                   connectToOpenAI();
                 }
-              }).catch((err) => {
-                console.error(`[TWILIO-STREAM] Session retrieval error:`, err);
-                const csp = customParams.callSid || data.start.callSid || `call_${Date.now()}`;
-                createCallSession(csp, customParams.fromNumber, customParams.toNumber);
-                connectToOpenAI();
               });
-              break; // Async handler manages session data
+              
+            } else {
+              t_twilioStart = Date.now();
+              connectToOpenAI();
             }
-            
-            console.log(`[TWILIO-STREAM] Call direction: ${callDirection}, userId: ${userId}, timezone: ${userTimezone}`);
-            const callSidFromParams = customParams.callSid || data.start.callSid || `call_${Date.now()}`;
-            createCallSession(callSidFromParams, customParams.fromNumber, customParams.toNumber);
-            connectToOpenAI();
             break;
 
           case "media":
             twilioMediaFramesIn++;
-            
-            // Decode μ-law → PCM16 (always needed for buffering or forwarding)
-            const mulawBytes = Uint8Array.from(atob(data.media.payload), (c) => c.charCodeAt(0));
-            const pcm8k = decodeMulaw(mulawBytes);
-            
-            // === EARLY AUDIO BUFFERING ===
-            // Buffer audio while OpenAI WS is connecting so we don't lose user's "hello"
-            if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN || !sessionConfigured) {
-              // Buffer the audio - OpenAI not ready yet
-              audioRingBuffer.push(pcm8k);
-              if (audioRingBuffer.length > MAX_BUFFER_FRAMES) {
-                audioRingBuffer.shift(); // Keep last ~3 seconds
-              }
-              if (audioRingBuffer.length === 1) {
-                t_firstAudioBuffered = Date.now();
-                console.log(`[AUDIO-BUFFER] 📥 Started buffering audio (OpenAI WS state: ${openaiWs?.readyState}, configured: ${sessionConfigured})`);
-              }
-              if (audioRingBuffer.length % 50 === 0) {
-                console.log(`[AUDIO-BUFFER] 📥 Buffered ${audioRingBuffer.length} frames (~${(audioRingBuffer.length * 20)}ms)`);
-              }
-              break;
-            }
-            
             if (!firstInboundLogged) {
-              console.log(`[AUDIO-IN] 📥 First Twilio inbound frame received (streamSid: ${streamSid})`);
+              console.log(`[TWILIO-IN] ➡️ First inbound audio from Twilio`);
               firstInboundLogged = true;
             }
             
-            // === AMPLITUDE-BASED ECHO FILTERING ===
-            // When we're actively sending TTS audio, the phone line will echo it back
-            // OpenAI's VAD picks this up as "user speech" and interrupts itself
-            // Solution: Check amplitude to distinguish echo (low) from real speech (high)
+            // Decode μ-law to PCM16
+            const rawBytes = Uint8Array.from(atob(data.media.payload), c => c.charCodeAt(0));
+            const pcm8k = decodeMulaw(rawBytes);
             
-            const amplitude = calculateRMSAmplitude(pcm8k);
-            amplitudeDebugCounter++;
-            
-            // Periodic amplitude debugging (every 100 chunks = ~2 seconds)
-            if (amplitudeDebugCounter % 100 === 0) {
-              console.log(`[AMPLITUDE-DEBUG] chunk=${amplitudeDebugCounter} amp=${amplitude.toFixed(0)} isTTS=${isSendingTtsAudio}`);
+            if (!t_firstAudioBuffered && audioRingBuffer.length === 0) {
+              t_firstAudioBuffered = Date.now();
+              console.log(`[TIMING] twilioStart→firstAudioBuffered: ${t_firstAudioBuffered - t_twilioStart}ms`);
             }
             
-            // Check if we're in TTS echo window (actively playing or grace period)
-            const inEchoWindow = isSendingTtsAudio || Date.now() < ttsAudioEndTime;
-            
-            if (inEchoWindow && ttsProvider === 'elevenlabs') {
-              if (DISABLE_ECHO_FILTER) {
-                // === BYPASS MODE: Send all audio to OpenAI, let semantic VAD decide ===
-                const pcm24k = upsample8to24(pcm8k);
-                const audioBase64 = int16ToBase64(pcm24k);
-                openaiAppendCount++;
-                
-                // Log occasionally to confirm audio is flowing during TTS
-                if (amplitudeDebugCounter % 100 === 0) {
-                  console.log(`[ECHO-BYPASS] 🔊 Audio forwarded during TTS (chunk=${amplitudeDebugCounter}, amp=${amplitude.toFixed(0)})`);
-                }
-                
-                openaiWs.send(JSON.stringify({
-                  type: "input_audio_buffer.append",
-                  audio: audioBase64,
-                }));
+            // Buffer audio while OpenAI WS is connecting
+            if (!sessionConfigured) {
+              if (audioRingBuffer.length < MAX_BUFFER_FRAMES) {
+                audioRingBuffer.push(pcm8k);
               } else {
-                // === ORIGINAL AMPLITUDE-BASED FILTERING ===
-                // During TTS playback - use amplitude to detect real interrupts
-                recentAmplitudes.push(amplitude);
+                audioRingBuffer.shift();
+                audioRingBuffer.push(pcm8k);
+              }
+              return;
+            }
+            
+            // Check if waiting for hello trigger
+            if (waitingForUserHello) {
+              const rms = calculateRMSAmplitude(pcm8k);
+              if (rms > INTERRUPT_AMPLITUDE_THRESHOLD) {
+                console.log(`[HELLO-TRIGGER] 🎤 Detected speech in media (RMS=${rms.toFixed(0)})`);
+                triggerPendingGreeting('vad');
+              }
+            }
+            
+            // Send to OpenAI if connected
+            if (openaiWs && openaiWs.readyState === WebSocket.OPEN) {
+              amplitudeDebugCounter++;
+              
+              // Echo filtering
+              if (!DISABLE_ECHO_FILTER && isSendingTtsAudio) {
+                const avgAmplitude = calculateRMSAmplitude(pcm8k);
+                recentAmplitudes.push(avgAmplitude);
                 if (recentAmplitudes.length > AMPLITUDE_WINDOW) {
                   recentAmplitudes.shift();
                 }
                 
-                const avgAmplitude = recentAmplitudes.length > 0 
-                  ? recentAmplitudes.reduce((a, b) => a + b, 0) / recentAmplitudes.length 
-                  : 0;
+                const smoothedAmplitude = recentAmplitudes.reduce((a, b) => a + b, 0) / recentAmplitudes.length;
                 
-                if (avgAmplitude > INTERRUPT_AMPLITUDE_THRESHOLD) {
-                  // Real interrupt detected - loud enough to be actual speech
-                  console.log(`[BARGE-IN] 🎤 REAL INTERRUPT! avgAmp=${avgAmplitude.toFixed(0)} > ${INTERRUPT_AMPLITUDE_THRESHOLD}`);
+                if (smoothedAmplitude > INTERRUPT_AMPLITUDE_THRESHOLD) {
+                  console.log(`[BARGE-IN] Real speech detected (amp=${smoothedAmplitude.toFixed(0)} > ${INTERRUPT_AMPLITUDE_THRESHOLD})`);
+                  isAiSpeaking = false;
                   
-                  // Stop TTS playback tracking
-                  isSendingTtsAudio = false;
-                  ttsAudioEndTime = 0;
-                  recentAmplitudes = [];
-                  
-                  // Clear sentence buffer to stop pending TTS
-                  sentenceBuffer = '';
-                  
-                  // Clear Twilio's audio buffer to stop playback
                   if (streamSid && twilioWs.readyState === WebSocket.OPEN) {
                     twilioWs.send(JSON.stringify({
                       event: "clear",
@@ -2001,7 +911,6 @@ type ResponseTrigger =
                     console.log(`[BARGE-IN] Cleared Twilio buffer`);
                   }
                   
-                  // NOW forward this audio to OpenAI - it's a real interrupt
                   const pcm24k = upsample8to24(pcm8k);
                   const audioBase64 = int16ToBase64(pcm24k);
                   openaiAppendCount++;
@@ -2010,14 +919,10 @@ type ResponseTrigger =
                     audio: audioBase64,
                   }));
                 } else if (avgAmplitude < ECHO_AMPLITUDE_THRESHOLD) {
-                  // Echo detected - too quiet to be real speech, ignore it
-                  // Log occasionally for debugging
                   if (amplitudeDebugCounter % 50 === 0) {
                     console.log(`[ECHO-FILTER] Ignoring echo: avgAmp=${avgAmplitude.toFixed(0)} < ${ECHO_AMPLITUDE_THRESHOLD}`);
                   }
-                  // DON'T forward to OpenAI - this prevents VAD from triggering on echo
                 } else {
-                  // Ambiguous zone - forward with caution (OpenAI VAD will decide)
                   const pcm24k = upsample8to24(pcm8k);
                   const audioBase64 = int16ToBase64(pcm24k);
                   openaiAppendCount++;
@@ -2026,22 +931,21 @@ type ResponseTrigger =
                     audio: audioBase64,
                   }));
                 }
-              }
-            } else {
-              // Not in TTS echo window - send all audio to OpenAI normally
-              const pcm24k = upsample8to24(pcm8k);
-              const audioBase64 = int16ToBase64(pcm24k);
+              } else {
+                const pcm24k = upsample8to24(pcm8k);
+                const audioBase64 = int16ToBase64(pcm24k);
 
-              openaiAppendCount++;
-              if (!firstAppendLogged) {
-                console.log(`[AUDIO-APPEND] ➡️ First audio sent to OpenAI (${audioBase64.length} chars)`);
-                firstAppendLogged = true;
-              }
+                openaiAppendCount++;
+                if (!firstAppendLogged) {
+                  console.log(`[AUDIO-APPEND] ➡️ First audio sent to OpenAI (${audioBase64.length} chars)`);
+                  firstAppendLogged = true;
+                }
 
-              openaiWs.send(JSON.stringify({
-                type: "input_audio_buffer.append",
-                audio: audioBase64,
-              }));
+                openaiWs.send(JSON.stringify({
+                  type: "input_audio_buffer.append",
+                  audio: audioBase64,
+                }));
+              }
             }
             break;
 
@@ -2069,10 +973,8 @@ type ResponseTrigger =
       console.log(`[CALL-SUMMARY] OpenAI event types:`, JSON.stringify(openaiEventCounts));
       console.log(`[CALL-SUMMARY] =============================================`);
       
-      // Close call session for tracking
       await closeCallSession();
       
-      // Clear keep-alive interval
       if (keepAliveInterval) {
         clearInterval(keepAliveInterval);
         keepAliveInterval = null;
@@ -2088,27 +990,22 @@ type ResponseTrigger =
       const connectStart = Date.now();
       console.log("[OPENAI] Connecting...");
 
-      // === FAST PATH: Pre-connected sessions have all data pre-computed ===
       let instructions: string;
       let ragContext = "";
       
       if (preConnectedSession && preConnectedSession.instructions) {
-        // ⚡ FAST PATH: Skip ALL database queries - use pre-computed data
-        console.log(`[OPENAI] ⚡ FAST PATH: Using pre-connected session data (skipping ~5 DB queries)`);
+        console.log(`[OPENAI] ⚡ FAST PATH: Using pre-connected session data`);
         instructions = preConnectedSession.instructions;
         ragContext = preConnectedSession.ragContext;
         threadId = preConnectedSession.threadId;
-        // userProfile, ttsProvider, elevenlabsVoiceId already set in start handler
         console.log(`[OPENAI] ⚡ Pre-loaded: instructions=${instructions.length} chars, ragContext=${ragContext.length} chars, threadId=${threadId}`);
       } else {
-        // === SLOW PATH: Standard inbound calls - load everything from DB ===
         console.log("[OPENAI] 🐢 SLOW PATH: Loading context from database...");
         
         if (userId) {
           const [profile, rag, ttsPrefs] = await Promise.all([
             loadUserProfile(supabase, userId),
-            loadRAGContext(supabase, userId),
-            // Load TTS provider settings
+            loadRAGContext(SUPABASE_URL, SUPABASE_SERVICE_KEY, userId),
             supabase
               .from('user_scheduling_prefs')
               .select('tts_provider, elevenlabs_voice_id, openai_voice')
@@ -2118,15 +1015,13 @@ type ResponseTrigger =
           userProfile = profile;
           ragContext = rag;
           
-          // Set TTS provider from user preferences
           if (ttsPrefs.data) {
             ttsProvider = (ttsPrefs.data.tts_provider as 'openai' | 'elevenlabs') || 'openai';
             elevenlabsVoiceId = ttsPrefs.data.elevenlabs_voice_id || 'EXAVITQu4vr4xnSDxMaL';
             openaiVoice = ttsPrefs.data.openai_voice || 'alloy';
-            console.log(`[BRIDGE] TTS Provider: ${ttsProvider}, ElevenLabs Voice: ${elevenlabsVoiceId}, OpenAI Voice: ${openaiVoice}`);
+            console.log(`[BRIDGE] TTS Provider: ${ttsProvider}, ElevenLabs Voice: ${elevenlabsVoiceId}`);
           }
 
-          // Create or get thread for conversation persistence
           try {
             const { data: existingThread } = await supabase
               .from('ai_threads')
@@ -2140,7 +1035,6 @@ type ResponseTrigger =
               threadId = existingThread.id;
               console.log('[BRIDGE] Using existing thread:', threadId);
             } else {
-              // Get user's default assistant for thread association
               const { data: defaultAssistant } = await supabase
                 .from('assistants')
                 .select('id')
@@ -2167,8 +1061,7 @@ type ResponseTrigger =
           }
         }
 
-        // Load user-specific instructions (no pre-loaded tasks - uses tools instead)
-        instructions = await loadUserInstructions(userId, ragContext, userProfile, userTimezone);
+        instructions = await loadUserInstructions(SUPABASE_URL, SUPABASE_SERVICE_KEY, userId, ragContext, userProfile, userTimezone);
         console.log(`[OPENAI] 🐢 SLOW PATH completed in ${Date.now() - connectStart}ms`);
       }
       
@@ -2188,10 +1081,8 @@ type ResponseTrigger =
         try {
           const msg = JSON.parse(event.data);
           
-          // Track all OpenAI message types for debugging
           openaiEventCounts[msg.type] = (openaiEventCounts[msg.type] || 0) + 1;
           
-          // Log all message types except high-frequency audio deltas
           if (!['response.audio.delta', 'input_audio_buffer.speech_started'].includes(msg.type)) {
             console.log(`[OPENAI-MSG] ${msg.type}`);
           }
@@ -2200,8 +1091,6 @@ type ResponseTrigger =
             case "session.created":
               console.log("[OPENAI-SESSION] ✅ Session CREATED - configuring...");
               
-              // Configure modalities based on TTS provider
-              // If using ElevenLabs, we only need text output (no audio)
               const modalities = ttsProvider === 'elevenlabs' 
                 ? ["text"] 
                 : ["text", "audio"];
@@ -2213,7 +1102,7 @@ type ResponseTrigger =
                 session: {
                   modalities: modalities,
                   instructions: instructions,
-                  voice: openaiVoice,  // Use user's selected voice (not hardcoded "alloy")
+                  voice: openaiVoice,
                   input_audio_format: "pcm16",
                   output_audio_format: "pcm16",
                   input_audio_transcription: { 
@@ -2222,12 +1111,12 @@ type ResponseTrigger =
                     prompt: "tasks, schedule, calendar, reschedule, today, tomorrow, priorities, assignments, meetings, due date, deadline, work session, focus time"
                   },
                   turn_detection: {
-                    type: "semantic_vad",  // Uses AI to detect when user is ACTUALLY done speaking
-                    eagerness: "low",       // Let user take their time (prevents cutting off)
-                    create_response: true,  // Let OpenAI auto-respond when it thinks user is done
-                    interrupt_response: true, // Still allow user to interrupt AI
+                    type: "semantic_vad",
+                    eagerness: "low",
+                    create_response: true,
+                    interrupt_response: true,
                   },
-                  tools: getInlineToolDefinitions(),
+                  tools: getToolDefinitions(),
                   tool_choice: "auto"
                 },
               }));
@@ -2240,15 +1129,12 @@ type ResponseTrigger =
               t_sessionConfigured = Date.now();
               console.log(`[TIMING] twilioStart→sessionConfigured: ${t_sessionConfigured - t_twilioStart}ms`);
               
-              // === FLUSH AUDIO BUFFER WITH SPEECH DETECTION ===
-              // Analyze buffer for speech BEFORE flushing - this is key to detecting buffered "hello"
+              // Flush audio buffer
               let bufferHadSpeech = false;
               if (audioRingBuffer.length > 0) {
                 t_bufferFlushed = Date.now();
                 
-                // Check if buffer contains actual speech (not just noise)
-                // Use amplitude analysis since OpenAI VAD doesn't work well on bulk-flushed audio
-                const SPEECH_THRESHOLD = 500; // RMS amplitude threshold
+                const SPEECH_THRESHOLD = 500;
                 let speechFrames = 0;
                 for (const frame of audioRingBuffer) {
                   const rms = calculateRMSAmplitude(frame);
@@ -2259,7 +1145,6 @@ type ResponseTrigger =
                 bufferHadSpeech = audioRingBuffer.length >= 10 && (speechFrames / audioRingBuffer.length) > 0.15;
                 console.log(`[AUDIO-BUFFER] 🔄 Flushing ${audioRingBuffer.length} frames, speechFrames=${speechFrames}, containsSpeech=${bufferHadSpeech}`);
                 
-                // Flush all buffered audio to OpenAI
                 for (const frame of audioRingBuffer) {
                   const pcm24k = upsample8to24(frame);
                   const audioBase64 = int16ToBase64(pcm24k);
@@ -2270,31 +1155,22 @@ type ResponseTrigger =
                   }));
                 }
                 console.log(`[AUDIO-BUFFER] ✅ Flushed ${audioRingBuffer.length} frames in ${Date.now() - t_bufferFlushed}ms`);
-                audioRingBuffer.length = 0; // Clear buffer
+                audioRingBuffer.length = 0;
                 audioBufferFlushed = true;
               }
               
-              // === PROACTIVE HELLO TRIGGER ===
-              // If buffer contained speech AND we're waiting for hello, trigger greeting NOW
-              // This bypasses OpenAI's VAD which doesn't work well on bulk-flushed audio
+              // Proactive hello trigger
               if (bufferHadSpeech && waitingForUserHello) {
-                console.log("[HELLO-TRIGGER] 🎤 Speech detected in buffer - triggering greeting NOW (bypassing VAD)");
+                console.log("[HELLO-TRIGGER] 🎤 Speech detected in buffer - triggering greeting NOW");
                 triggerPendingGreeting('buffer');
-                
-                // Commit the buffered audio so OpenAI transcribes it
                 openaiWs!.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
-                
                 console.log(`[TIMING] twilioStart→greetingPlayed: ${t_cachedGreetingPlayed - t_twilioStart}ms (buffer-speech-detected)`);
-                return; // Don't fall through to waiting logic
+                return;
               }
               
-              // === HANDLE SCHEDULED CALLS (greeting already sent) ===
-              // For scheduled calls, greeting was played immediately on stream start
-              // Now inject context so OpenAI knows what was said
+              // Handle scheduled calls
               if (preConnectedSession && greetingSent && !waitingForUserHello) {
                 console.log("[OPENAI-SESSION] Scheduled call - greeting already sent, injecting context");
-                
-                // Tell OpenAI what greeting was already said
                 injectAssistantMessage(preConnectedGreetingText, 'PRE_CONNECT_GREETING_HISTORY');
                 
                 const userName = userProfile?.first_name || 'sir';
@@ -2303,16 +1179,14 @@ The user is listening. Current time: ${getCurrentTimeString(userTimezone)}.
 ${callContext || ''}
 Cover ALL agenda items naturally before ending. Use hang_up only after all items covered.]`;
                 injectSystemMessage(contextMsg, 'PRE_CONNECT_CONTEXT_SCHEDULED');
-                console.log("[OPENAI-SESSION] ✅ Context injected for scheduled call - ready for user response");
+                console.log("[OPENAI-SESSION] ✅ Context injected for scheduled call");
                 return;
               }
               
-              // Handle pre-connected sessions - greeting will be played on user speech (VAD fallback)
+              // Handle pre-connected sessions waiting for VAD
               if (preConnectedSession && waitingForUserHello) {
-                // No speech detected in buffer yet - wait for real-time VAD
-                console.log("[OPENAI-SESSION] Pre-connected session - no speech in buffer, waiting for VAD");
+                console.log("[OPENAI-SESSION] Pre-connected session - waiting for VAD");
                 
-                // Inject the call context/agenda for AI to follow (but don't mark greeting as sent yet)
                 const userName = userProfile?.first_name || 'sir';
                 const contextMsg = `[System: PRE-CONNECTED CALL - You are about to greet ${userName}. Current time: ${getCurrentTimeString(userTimezone)}.
 
@@ -2323,19 +1197,16 @@ After greeting, cover ALL agenda items naturally before ending.
 Use hang_up only after all agenda items are covered.]`;
                 
                 injectSystemMessage(contextMsg, 'PRE_CONNECT_WAITING_CONTEXT');
-                console.log("[OPENAI-SESSION] ✅ Pre-connected context injected - waiting for user speech to trigger greeting");
+                console.log("[OPENAI-SESSION] ✅ Pre-connected context injected - waiting for user speech");
                 return;
               }
               
-              // Handle pre-connected sessions where greeting already played (fallback timer)
+              // Handle pre-connected sessions with greeting already played
               if (preConnectedSession && greetingSent) {
-                // Greeting already played from cache - just update OpenAI context
                 console.log("[OPENAI-SESSION] Pre-connected session - updating AI context with greeting");
                 
-                // Inject the pre-spoken greeting into OpenAI's conversation context
                 injectAssistantMessage(preConnectedGreetingText, 'PRE_CONNECT_GREETING_HISTORY');
                 
-                // Inject the call context/agenda for AI to follow
                 const userName = userProfile?.first_name || 'sir';
                 const contextMsg = `[System: PRE-CONNECTED CALL - Greeting already delivered. You just said: "${preConnectedGreetingText}"
 
@@ -2351,162 +1222,128 @@ CRITICAL INSTRUCTIONS:
 5. Use hang_up only after all agenda items are covered]`;
                 
                 injectSystemMessage(contextMsg, 'PRE_CONNECT_CONTEXT');
-                
-                // NOTE: Do NOT call createResponse here - we wait for user speech
-                console.log("[OPENAI-SESSION] ✅ Pre-connected context injected - waiting for user response (NO response.create)");
+                console.log("[OPENAI-SESSION] ✅ Pre-connected session context injected - waiting for user response");
                 return;
               }
               
-              // Standard flow: Send greeting based on call direction
-              if (!greetingSent) {
-                if (callDirection === 'inbound') {
-                  sendInboundGreeting();
-                } else if (!waitingForUserHello) {
-                  // Only send outbound greeting if NOT waiting for user hello
-                  sendOutboundGreeting();
-                } else {
-                  console.log(`[OPENAI-SESSION] Outbound call waiting for user hello (mode=${pendingGreetingMode}) - NOT sending greeting yet`);
-                }
-              }
-              break;
-
-            case "response.created":
-              // Track that AI is generating a response
-              currentResponseId = msg.response?.id || null;
-              isAiSpeaking = true;
-              responseStartTime = Date.now();
-              if (!firstAudioTime) firstAudioTime = Date.now();
-              console.log(`[RESPONSE-LIFECYCLE] CREATED id=${currentResponseId} trigger=${lastResponseTrigger} #${responseCreateCount}`);
-              break;
-
-            case "response.done":
-              // AI finished speaking
-              const responseDuration = responseStartTime > 0 ? Date.now() - responseStartTime : 0;
-              console.log(`[RESPONSE-LIFECYCLE] DONE id=${currentResponseId} duration=${responseDuration}ms trigger=${lastResponseTrigger}`);
-              isAiSpeaking = false;
-              currentResponseId = null;
-              currentResponseItemId = null;
-              audioSamplesPlayed = 0;
-              break;
-
-            case "response.output_item.added":
-              // Track item IDs for truncation
-              if (msg.item?.type === "message") {
-                currentResponseItemId = msg.item.id;
-                audioSamplesPlayed = 0;
-                console.log("[OPENAI] Tracking response item:", currentResponseItemId);
+              // Standard flow - send greeting
+              if (callDirection === 'inbound') {
+                sendInboundGreeting();
+              } else {
+                sendOutboundGreeting();
               }
               break;
 
             case "response.audio.delta":
-              // Skip OpenAI audio when using ElevenLabs TTS
-              if (ttsProvider === 'elevenlabs') {
-                break;
-              }
-              
               openaiAudioDeltaCount++;
               if (!firstDeltaLogged) {
-                console.log(`[AUDIO-DELTA] 🔊 First audio delta from OpenAI (delta length: ${msg.delta?.length || 0} chars)`);
-                console.log(`[AUDIO-DELTA] 🔊 streamSid: ${streamSid}, twilioWs.readyState: ${twilioWs.readyState}`);
+                console.log(`[AUDIO-DELTA] ⬅️ First audio delta from OpenAI`);
                 firstDeltaLogged = true;
+                if (!firstAudioTime) {
+                  firstAudioTime = Date.now();
+                  greetingLatencyMs = firstAudioTime - callStartTime;
+                  console.log(`[TIMING] Call greeting latency: ${greetingLatencyMs}ms`);
+                }
               }
               
+              isAiSpeaking = true;
+              
+              if (ttsProvider === 'elevenlabs') {
+                return;
+              }
+              
+              // Forward OpenAI audio to Twilio
               if (streamSid && twilioWs.readyState === WebSocket.OPEN) {
                 const pcm24k = base64ToInt16(msg.delta);
+                audioSamplesPlayed += pcm24k.length;
+                
                 const pcm8k = downsample24to8(pcm24k);
                 const mulaw = encodeMulaw(pcm8k);
-                const mulawBase64 = btoa(String.fromCharCode(...mulaw));
-
-                // Track samples for truncation calculation
-                audioSamplesPlayed += pcm24k.length;
-
-                twilioMediaFramesOut++;
+                
+                const chunks = chunkMulawForTwilio(btoa(String.fromCharCode(...mulaw)));
+                
+                for (const chunkBase64 of chunks) {
+                  twilioMediaFramesOut++;
+                  twilioWs.send(JSON.stringify({
+                    event: "media",
+                    streamSid: streamSid,
+                    media: { payload: chunkBase64 }
+                  }));
+                }
+                
                 if (!firstOutboundLogged) {
-                  console.log(`[AUDIO-OUT] ⬅️ First audio frame sent to Twilio (${mulawBase64.length} chars)`);
+                  console.log(`[AUDIO-OUT] ⬅️ First audio sent to Twilio`);
                   firstOutboundLogged = true;
                 }
-
-                twilioWs.send(JSON.stringify({
-                  event: "media",
-                  streamSid: streamSid,
-                  media: { payload: mulawBase64 },
-                }));
-              } else {
-                console.warn(`[AUDIO-OUT] ⚠️ Cannot send - streamSid: ${streamSid}, twilio state: ${twilioWs.readyState}`);
               }
               break;
 
-            // ElevenLabs sentence streaming: Buffer text deltas and send complete sentences
+            case "response.audio.done":
+              console.log("[OPENAI] Audio response complete");
+              isAiSpeaking = false;
+              currentResponseItemId = null;
+              audioSamplesPlayed = 0;
+              break;
+
             case "response.text.delta":
               if (ttsProvider === 'elevenlabs' && msg.delta) {
                 sentenceBuffer += msg.delta;
                 
-                // Check if we have a complete sentence
                 if (SENTENCE_ENDERS.test(sentenceBuffer)) {
-                  const sentence = sentenceBuffer.trim();
+                  const textToSpeak = sentenceBuffer.trim();
                   sentenceBuffer = '';
                   
-                  // Send sentence to ElevenLabs immediately (skip tiny fragments)
-                  if (sentence.length > 5) {
-                    console.log(`[ELEVENLABS] 📝 Streaming sentence: "${sentence.substring(0, 40)}..."`);
-                    audioSentDuringResponse = true;  // Track that audio was sent
-                    sendElevenLabsTTS(sentence);
+                  if (textToSpeak.length > 0) {
+                    sendElevenLabsTTS(textToSpeak);
+                    audioSentDuringResponse = true;
                   }
                 }
               }
               break;
-              
-            // ElevenLabs text-to-speech: Flush remaining buffer on completion + LOG ASSISTANT MESSAGE
+
             case "response.text.done":
-              if (ttsProvider === 'elevenlabs') {
-                const fullText = msg.text || sentenceBuffer;
-                
-                // CRITICAL FIX: Save assistant message to database for ElevenLabs mode
-                if (fullText) {
-                  const latency = responseStartTime > 0 ? Date.now() - responseStartTime : undefined;
-                  console.log(`[TRANSCRIPT-AI] 🤖 "${fullText.substring(0, 80)}..." (${latency}ms)`);
-                  saveCallMessage('assistant', fullText, latency);
-                }
-                
-                // Flush any remaining buffered text (e.g., text without sentence-ending punctuation)
-                if (sentenceBuffer.trim()) {
-                  console.log(`[ELEVENLABS] 📝 Flushing remaining: "${sentenceBuffer.substring(0, 40)}..."`);
+              if (ttsProvider === 'elevenlabs' && sentenceBuffer.trim().length > 0) {
+                const remainingText = sentenceBuffer.trim();
+                sentenceBuffer = '';
+                if (remainingText.length > 0) {
+                  sendElevenLabsTTS(remainingText);
                   audioSentDuringResponse = true;
-                  sendElevenLabsTTS(sentenceBuffer.trim());
-                  sentenceBuffer = '';
-                } else if (!audioSentDuringResponse && msg.text) {
-                  // SAFETY FALLBACK: Only send full text if NO audio was sent via streaming
-                  // This handles edge cases where streaming didn't trigger (e.g., no sentence enders)
-                  console.log(`[ELEVENLABS] ⚠️ No audio sent via streaming, sending full text as fallback`);
-                  sendElevenLabsTTS(msg.text);
                 }
-                
-                // Reset flag for next response
-                audioSentDuringResponse = false;
+              }
+              break;
+
+            case "response.done":
+              console.log("[OPENAI] Response complete");
+              isAiSpeaking = false;
+              sentenceBuffer = '';
+              audioSentDuringResponse = false;
+              break;
+
+            case "response.output_item.added":
+              if (msg.item?.type === 'message') {
+                currentResponseItemId = msg.item.id;
+                console.log(`[OPENAI] Response item added: ${currentResponseItemId}`);
               }
               break;
 
             case "input_audio_buffer.speech_started":
-              // Debounce rapid speech events to prevent stuttering
               const now = Date.now();
               if (now - lastSpeechStartTime < SPEECH_DEBOUNCE_MS) {
-                console.log("[OPENAI] Debounced rapid speech event");
+                console.log(`[OPENAI] Debounced speech_started (${now - lastSpeechStartTime}ms since last)`);
                 break;
               }
               lastSpeechStartTime = now;
               
               console.log("[OPENAI] User started speaking");
               
-              // === HELLO-TRIGGERED GREETING ===
-              // If waiting for user hello, play cached greeting immediately
+              // Hello trigger
               if (waitingForUserHello) {
                 console.log("[HELLO-TRIGGER] 🎤 VAD detected user speech - triggering greeting");
                 triggerPendingGreeting('vad');
-                // Don't treat this as a barge-in - let OpenAI continue listening
                 break;
               }
               
-              // ElevenLabs mode: No OpenAI audio to truncate - just clear Twilio buffer
+              // Barge-in handling
               if (ttsProvider === 'elevenlabs') {
                 console.log("[OPENAI] BARGE-IN: ElevenLabs mode - clearing Twilio buffer only");
                 if (streamSid && twilioWs.readyState === WebSocket.OPEN) {
@@ -2515,17 +1352,14 @@ CRITICAL INSTRUCTIONS:
                     streamSid: streamSid
                   }));
                 }
-                // Clear sentence buffer to stop pending TTS
                 sentenceBuffer = '';
                 isAiSpeaking = false;
                 break;
               }
               
-              // OpenAI audio mode: Use truncation (not cancel) so AI remembers what it said
               if (isAiSpeaking && openaiWs?.readyState === WebSocket.OPEN) {
                 if (currentResponseItemId) {
-                  // Truncation preserves context - AI knows what it said up to this point
-                  const audioEndMs = Math.floor(audioSamplesPlayed / 24); // 24kHz to milliseconds
+                  const audioEndMs = Math.floor(audioSamplesPlayed / 24);
                   console.log(`[OPENAI] BARGE-IN: Truncating at ${audioSamplesPlayed} samples (${audioEndMs}ms)`);
                   
                   openaiWs.send(JSON.stringify({
@@ -2535,12 +1369,10 @@ CRITICAL INSTRUCTIONS:
                     audio_end_ms: audioEndMs
                   }));
                 } else {
-                  // Fallback to cancel if no item ID tracked
-                  console.log("[OPENAI] BARGE-IN: Cancelling (no item ID for truncation)");
+                  console.log("[OPENAI] BARGE-IN: Cancelling (no item ID)");
                   openaiWs.send(JSON.stringify({ type: "response.cancel" }));
                 }
                 
-                // Clear Twilio's audio buffer to stop playback immediately
                 if (streamSid && twilioWs.readyState === WebSocket.OPEN) {
                   twilioWs.send(JSON.stringify({
                     event: "clear",
@@ -2556,24 +1388,18 @@ CRITICAL INSTRUCTIONS:
 
             case "input_audio_buffer.speech_stopped":
               console.log("[OPENAI] User stopped speaking");
-              // With create_response: true, OpenAI auto-responds - no manual trigger needed
-              // This prevents double responses and lets OpenAI fully control turn-taking
               console.log("[OPENAI] Auto-response enabled - OpenAI will trigger response when ready");
               break;
 
             case "conversation.item.input_audio_transcription.completed":
-              // === VERBATIM TRANSCRIPTION LOGGING ===
-              // Log EXACTLY what OpenAI transcribed - no modifications
               const rawTranscript = msg.transcript || '';
               const trimmedTranscript = rawTranscript.trim();
               
               console.log(`[TRANSCRIPT-USER] 📢 VERBATIM: "${rawTranscript}"`);
               console.log(`[TRANSCRIPT-USER] 📊 Length: ${rawTranscript.length} chars, trimmed: "${trimmedTranscript}"`);
               
-              // Track for verbatim web_search override
               lastUserTranscript = rawTranscript;
               
-              // Save user message to conversation history (verbatim, no modifications)
               if (trimmedTranscript.length > 0) {
                 saveConversationMessage('user', rawTranscript);
                 console.log(`[TRANSCRIPT-USER] ✅ Saved to conversation history`);
@@ -2584,16 +1410,13 @@ CRITICAL INSTRUCTIONS:
 
             case "response.audio_transcript.done":
               console.log(`[TRANSCRIPT-AI] 🤖 "${msg.transcript}"`);
-              // Save assistant message to conversation history
               saveConversationMessage('assistant', msg.transcript);
               
-              // POST-VALIDATION: Check AI response against last tool output
               if (lastToolOutput?.extractedFacts) {
                 const validation = validateVoiceResponse(msg.transcript, lastToolOutput);
                 if (!validation.valid && validation.correction) {
                   console.log('[BRIDGE] ⚠️ Discrepancy detected, injecting correction');
                   
-                  // Inject correction as new system message
                   injectSystemMessage(
                     `[System: IMPORTANT CORRECTION NEEDED. You just said something inaccurate. ${validation.correction} Please briefly acknowledge this correction to the user.]`,
                     'VALIDATION_CORRECTION'
@@ -2602,7 +1425,7 @@ CRITICAL INSTRUCTIONS:
                 } else {
                   console.log('[BRIDGE] ✅ Response validated - no discrepancies');
                 }
-                lastToolOutput = null;  // Clear after validation
+                lastToolOutput = null;
               }
               break;
 
@@ -2613,15 +1436,14 @@ CRITICAL INSTRUCTIONS:
 
             case "error":
               console.error("[OPENAI] ❌ ERROR:", JSON.stringify(msg.error, null, 2));
-              // Check for common billing/quota errors
               const errorCode = msg.error?.code;
               const errorMessage = msg.error?.message || '';
               if (errorCode === 'insufficient_quota' || errorMessage.includes('quota') || errorMessage.includes('billing')) {
-                console.error("[OPENAI] 💳 BILLING ERROR: OpenAI API credits exhausted or billing issue!");
+                console.error("[OPENAI] 💳 BILLING ERROR: OpenAI API credits exhausted!");
               } else if (errorCode === 'rate_limit_exceeded' || errorMessage.includes('rate limit')) {
-                console.error("[OPENAI] ⏱️ RATE LIMIT: Too many requests - slow down!");
+                console.error("[OPENAI] ⏱️ RATE LIMIT: Too many requests!");
               } else if (errorCode === 'invalid_api_key' || errorMessage.includes('api_key')) {
-                console.error("[OPENAI] 🔑 API KEY ERROR: Invalid or expired API key!");
+                console.error("[OPENAI] 🔑 API KEY ERROR: Invalid or expired!");
               }
               break;
           }
@@ -2637,7 +1459,6 @@ CRITICAL INSTRUCTIONS:
       openaiWs.onerror = async (err) => {
         console.error("[OPENAI] Connection error:", err);
         
-        // Log error to activity_log
         if (userId && streamSid) {
           try {
             await supabase.from('activity_log').update({
@@ -2658,12 +1479,11 @@ CRITICAL INSTRUCTIONS:
       };
     }
 
-    // === CALL SESSION MANAGEMENT ===
+    // Call session management
     async function createCallSession(callSid: string, fromNumber?: string, toNumber?: string) {
       if (!userId) return;
       
       try {
-        // Log to activity_log FIRST (unified timeline)
         await supabase.from('activity_log').insert({
           user_id: userId,
           activity_type: callDirection === 'inbound' ? 'phone_inbound' : 'phone_outbound',
@@ -2681,7 +1501,6 @@ CRITICAL INSTRUCTIONS:
         });
         console.log(`[ACTIVITY_LOG] ✅ phone_${callDirection} started (${streamSid || callSid})`);
         
-        // Then create call_sessions for detailed tracking
         const { data, error } = await supabase.from('call_sessions').insert({
           user_id: userId,
           call_sid: callSid,
@@ -2711,7 +1530,6 @@ CRITICAL INSTRUCTIONS:
       try {
         const durationSeconds = Math.floor((Date.now() - callStartTime) / 1000);
         
-        // Update activity_log with completion
         if (streamSid && userId) {
           await supabase.from('activity_log').update({
             status: 'completed',
@@ -2729,7 +1547,6 @@ CRITICAL INSTRUCTIONS:
           console.log(`[ACTIVITY_LOG] ✅ phone_${callDirection} completed (${durationSeconds}s)`);
         }
         
-        // Update call_sessions for detailed tracking
         await supabase.from('call_sessions').update({
           ended_at: new Date().toISOString(),
           duration_seconds: durationSeconds,
@@ -2742,7 +1559,7 @@ CRITICAL INSTRUCTIONS:
       }
     }
 
-    // === UNIFIED MESSAGE SAVING ===
+    // Unified message saving
     async function saveCallMessage(
       role: string, 
       content: string, 
@@ -2755,7 +1572,6 @@ CRITICAL INSTRUCTIONS:
       const startTime = new Date().toISOString();
       
       try {
-        // Save to call_messages for full call review
         if (callSessionId) {
           await supabase.from('call_messages').insert({
             call_session_id: callSessionId,
@@ -2772,15 +1588,13 @@ CRITICAL INSTRUCTIONS:
           });
         }
         
-        // Also save to conversation_messages for RAG continuity
-        // CRITICAL: Include source: 'phone' for unified transcript tracking
         if (threadId && role !== 'tool') {
           await supabase.from('conversation_messages').insert({
             user_id: userId,
             thread_id: threadId,
             role: role,
             content: content,
-            source: 'phone',  // FIXED: Explicitly set source for cross-mode visibility
+            source: 'phone',
             voice_session_id: streamSid,
             audio_transcript: content,
             metadata: { latency_ms: latencyMs, call_session_id: callSessionId }
@@ -2794,14 +1608,13 @@ CRITICAL INSTRUCTIONS:
     }
 
     async function saveConversationMessage(role: string, content: string) {
-      // Delegate to unified saveCallMessage
       const latency = role === 'assistant' && responseStartTime > 0 
         ? Date.now() - responseStartTime 
         : undefined;
       await saveCallMessage(role, content, latency);
     }
 
-    // PHASE 4: Open-ended greeting - NOT task-focused
+    // Greeting functions
     function sendInboundGreeting() {
       if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN || greetingSent) {
         console.log(`[GREETING] ⚠️ Cannot send - openaiWs open: ${openaiWs?.readyState === WebSocket.OPEN}, greetingSent: ${greetingSent}`);
@@ -2815,8 +1628,7 @@ CRITICAL INSTRUCTIONS:
       
       console.log(`[GREETING] 🎤 Triggering INBOUND greeting for ${userName} with "${greeting}" (timezone: ${userTimezone})`);
       
-      // OPEN-ENDED greeting - don't assume they want schedule info
-      const greetingContext = `[System: This is an inbound phone call from ${userName}. Current time is ${currentTime}. Greet them with "${greeting}, ${userName}. What can I help you with?" Keep it brief and WAIT for them to tell you what they need. Do NOT assume they want schedule information - they might ask about anything. You can help with general questions, tasks, or whatever they need.]`;
+      const greetingContext = `[System: This is an inbound phone call from ${userName}. Current time is ${currentTime}. Greet them with "${greeting}, ${userName}. What can I help you with?" Keep it brief and WAIT for them to tell you what they need. Do NOT assume they want schedule information - they might ask about anything.]`;
       
       injectSystemMessage(greetingContext, 'INBOUND_GREETING_CONTEXT');
       createResponse('INBOUND_GREETING', `inbound call from ${userName}`);
@@ -2829,7 +1641,6 @@ CRITICAL INSTRUCTIONS:
       const greeting = getTimeBasedGreeting(userTimezone);
       const userName = userProfile?.first_name || 'sir';
       
-      // Parse call context for scheduled calls - it contains structured agenda
       const isScheduledCall = callContext && (
         callContext.includes('[CALL AGENDA]') || 
         callContext.includes('CALL TYPE:') ||
@@ -2839,10 +1650,8 @@ CRITICAL INSTRUCTIONS:
       );
       
       console.log(`[GREETING] Outbound call for ${userName}, scheduled: ${isScheduledCall}`);
-      console.log(`[GREETING] Call context preview: ${callContext?.substring(0, 150)}...`);
       
       if (isScheduledCall && callContext) {
-        // SCHEDULED CALL: Use the context to drive the entire conversation
         const scheduledContext = `[System: This is a SCHEDULED outbound call to ${userName}. Current time: ${getCurrentTimeString(userTimezone)}.
 
 ${callContext}
@@ -2861,17 +1670,15 @@ Start speaking IMMEDIATELY with your greeting - the user has just answered the p
         createResponse('OUTBOUND_SCHEDULED_GREETING', `scheduled call to ${userName}`);
         
       } else {
-        // MANUAL OUTBOUND CALL: Wait for user response first
         const contextInfo = callContext || 'your daily briefing';
-        const manualContext = `[System: This is an outbound call YOU initiated to ${userName} for ${contextInfo}. Wait silently for them to answer with "hello" or similar. When they do, briefly introduce yourself as Iris and explain why you're calling in one sentence. You have their schedule loaded.]`;
+        const manualContext = `[System: This is an outbound call YOU initiated to ${userName} for ${contextInfo}. Wait silently for them to answer with "hello" or similar. When they do, briefly introduce yourself as Iris and explain why you're calling in one sentence.]`;
         
         injectSystemMessage(manualContext, 'OUTBOUND_MANUAL_CONTEXT');
-        // Manual calls: Wait for user audio before responding (NO createResponse here)
         console.log(`[GREETING] Manual outbound - waiting for user audio (NO response.create)`);
       }
     }
 
-    // Validation function for voice responses
+    // Validation function
     function validateVoiceResponse(
       aiResponse: string, 
       toolOutput: { toolName: string; extractedFacts?: any }
@@ -2880,7 +1687,6 @@ Start speaking IMMEDIATELY with your greeting - the user has just answered the p
       
       const facts = toolOutput.extractedFacts;
       
-      // Validate task counts
       if (facts.type === 'task_list' || facts.type === 'today_tasks') {
         const actualCount = facts.count ?? 0;
         
@@ -2914,7 +1720,6 @@ Start speaking IMMEDIATELY with your greeting - the user has just answered the p
     async function handleFunctionCall(msg: any) {
       if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN) return;
 
-      // Start filler timer for natural conversation during tool calls
       if (fillerManager) {
         fillerManager.startTool(msg.name);
       }
@@ -2923,7 +1728,6 @@ Start speaking IMMEDIATELY with your greeting - the user has just answered the p
         let args = JSON.parse(msg.arguments);
         const functionName = msg.name;
         
-        // For web_search, override with user's verbatim transcript (prevents AI date-rewriting)
         if (functionName === 'web_search' && lastUserTranscript) {
           console.log(`[BRIDGE] web_search - OpenAI query: "${args.query}"`);
           console.log(`[BRIDGE] web_search - Overriding with verbatim: "${lastUserTranscript}"`);
@@ -2932,7 +1736,6 @@ Start speaking IMMEDIATELY with your greeting - the user has just answered the p
         
         console.log(`[BRIDGE] Executing function via execute-tool: ${functionName}`, args);
 
-        // Use centralized tool execution
         const result = await executeTool(functionName, args, userId, {
           timezone: userTimezone,
           userProfile,
@@ -2940,27 +1743,23 @@ Start speaking IMMEDIATELY with your greeting - the user has just answered the p
           streamSid
         });
 
-        // Cancel pending fillers since we have the result
         if (fillerManager) {
           fillerManager.endTool();
         }
 
         console.log(`[BRIDGE] Function result:`, result);
         
-        // Log tool call to call_messages for review
         await saveCallMessage('tool', `Called ${functionName}`, undefined, {
           name: functionName,
           input: args,
           output: result
         });
         
-        // Store extracted facts for post-validation
         if (result.extractedFacts) {
           lastToolOutput = { toolName: functionName, extractedFacts: result.extractedFacts };
           console.log(`[BRIDGE] Stored extracted facts for validation:`, result.extractedFacts);
         }
 
-        // Send function output back to OpenAI
         openaiWs.send(JSON.stringify({
           type: "conversation.item.create",
           item: {
@@ -2971,23 +1770,20 @@ Start speaking IMMEDIATELY with your greeting - the user has just answered the p
         }));
         console.log(`[FUNCTION-OUTPUT] Sent result for ${functionName}`);
 
-        // Trigger response generation using wrapper
         createResponse('FUNCTION_RESULT', functionName);
 
       } catch (error) {
-        // Cancel pending fillers on error
         if (fillerManager) {
           fillerManager.endTool();
         }
         
         console.error("[BRIDGE] Function call error:", error);
         
-        // Log error for debugging visibility
         await logError(supabase, 'function_call_failed', String(error), {
           sessionId: callSessionId,
           userId,
           stage: 'function_execution',
-          functionName,
+          functionName: msg.name,
           stack: error instanceof Error ? error.stack : undefined
         });
         
@@ -2999,7 +1795,7 @@ Start speaking IMMEDIATELY with your greeting - the user has just answered the p
             output: JSON.stringify({ success: false, error: String(error) })
           }
         }));
-        createResponse('FUNCTION_RESULT', `${functionName} (error)`);
+        createResponse('FUNCTION_RESULT', `${msg.name} (error)`);
       }
     }
 
@@ -3007,5 +1803,5 @@ Start speaking IMMEDIATELY with your greeting - the user has just answered the p
   }
 
   // Non-WebSocket request
-  return new Response("Twilio-OpenAI Realtime Bridge v7 - Pre-Connect Architecture with AgendaManager", { status: 200 });
+  return new Response("Twilio-OpenAI Realtime Bridge v8 - Modular Architecture", { status: 200 });
 });
