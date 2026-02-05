@@ -105,6 +105,114 @@ const DEFAULT_SCHEDULED_CALLS: ScheduledCall[] = [
     enabled: true,
     callType: 'eod_wrapup',
     context: "Daily summary. Summarize what was completed, what still needs to be done, priorities for tomorrow, and ask about evening focus areas."
+  },
+  // Window Transition Calls (disabled by default)
+  {
+    id: 'window_morning',
+    name: 'Morning Kickstart',
+    time: '06:00',
+    enabled: false,
+    callType: 'custom',
+    commsMode: 'phone',
+    context: `[WINDOW:morning]
+Morning kickstart call.
+
+BRANCH 1 (morning tasks exist):
+- Greet: "Hello Sir."
+- List morning tasks for this time window
+- List all remaining tasks for the rest of the day
+- Ask: "Would you like to confirm these for today, adjust them, or skip?"
+- If confirm: "Understood. I will call you back later. Goodbye."
+- If adjust: Capture edits, confirm changes.
+
+BRANCH 2 (no morning tasks):
+- Greet: "Hello Sir."
+- Say: "I am just calling to help you get started with your day. I will call you back in a few hours. Goodbye."`
+  },
+  {
+    id: 'window_business',
+    name: 'Business Hours Start',
+    time: '09:00',
+    enabled: false,
+    callType: 'custom',
+    commsMode: 'phone',
+    context: `[WINDOW:business_hours]
+Business hours start call.
+
+BRANCH 1 (tasks in next 3 hours):
+- Greet: "Hello Sir."
+- List tasks for the next few hours
+- Ask: "Which one do you want to start with?"
+
+BRANCH 2 (no tasks):
+- Greet: "Hello Sir."
+- Topic jog: Share main business-hour topics being worked on
+- Ask: "Do you want to work on any of these right now?"
+- If yes: List tasks under that topic, capture selection, schedule them`
+  },
+  {
+    id: 'window_afternoon',
+    name: 'Daily Wrap-up',
+    time: '17:00',
+    enabled: false,
+    callType: 'custom',
+    commsMode: 'phone',
+    context: `[WINDOW:after_work]
+End of day wrap-up call.
+
+WRAP-UP FLOW:
+- Greet: "Hello Sir."
+- Ask: "Any tasks completed today that I should mark done?"
+- Ask: "Any tasks blocked or to move to another day?"
+- Update statuses accordingly
+
+BRANCH 1 (after-work tasks exist):
+- Remind about after-work tasks
+- Ask: "Do you want to keep these as-is, adjust them, or skip?"
+
+BRANCH 2 (no after-work tasks):
+- Topic jog with after-work topics
+- Ask: "Do you want to work on any of these during this time window?"`
+  },
+  {
+    id: 'window_evening',
+    name: 'Evening Start',
+    time: '19:00',
+    enabled: false,
+    callType: 'custom',
+    commsMode: 'phone',
+    context: `[WINDOW:evening]
+Evening start call.
+
+BRANCH 1 (evening tasks exist):
+- Greet: "Hello Sir, I hope you are enjoying your evening."
+- List evening tasks
+- Ask: "Do you want to confirm, adjust, or skip?"
+
+BRANCH 2 (no evening tasks):
+- Greet: "Hello Sir, I hope you are enjoying your evening."
+- Topic jog with evening topics
+- Ask: "Do you want to work on any of these tonight?"`
+  },
+  {
+    id: 'window_weekend',
+    name: 'Weekend Morning',
+    time: '10:00',
+    enabled: false,
+    callType: 'custom',
+    commsMode: 'phone',
+    context: `[WINDOW:weekends]
+Weekend morning call (Saturday/Sunday only).
+
+BRANCH 1 (weekend tasks for today):
+- Greet: "Hello Sir, I hope you get a chance to enjoy your weekend."
+- List today's weekend tasks
+- Ask: "Do you want to confirm, adjust, or skip?"
+
+BRANCH 2 (no weekend tasks):
+- Greet: "Hello Sir, I hope you get a chance to enjoy your weekend."
+- Topic jog with life/weekend topics
+- Ask: "Do you want to work on any of these today?"`
   }
 ];
 

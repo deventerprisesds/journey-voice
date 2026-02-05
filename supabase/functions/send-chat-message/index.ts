@@ -53,6 +53,25 @@ async function logActivity(
   }
 }
 
+// Map categories to window affinities
+const CATEGORY_WINDOW_MAPPING: Record<string, string[]> = {
+  'CAREER': ['business_hours'],
+  'PROF_EDUCATION': ['after_work', 'evening', 'weekends'],
+  'EDUCATION': ['business_hours', 'after_work'],
+  'VENTURES': ['after_work', 'evening', 'weekends'],
+  'LIFE': ['morning', 'after_work', 'evening', 'weekends'],
+  'PERSONAL': ['morning', 'after_work', 'evening', 'weekends'],
+};
+
+// Window time ranges
+const WINDOW_RANGES: Record<string, { start: number; end: number }> = {
+  morning: { start: 6, end: 9 },
+  business_hours: { start: 9, end: 17 },
+  after_work: { start: 17, end: 19 },
+  evening: { start: 19, end: 22 },
+  weekends: { start: 10, end: 20 }
+};
+
 // Get today's tasks for briefing context
 async function getTodaysBriefing(supabase: any, userId: string): Promise<string> {
   const today = new Date();
@@ -86,8 +105,162 @@ async function getTodaysBriefing(supabase: any, userId: string): Promise<string>
   return briefing;
 }
 
+// Get tasks for a specific time window
+async function getTasksForWindow(
+  supabase: any, 
+  userId: string, 
+  window: string
+): Promise<any[]> {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const { data, error } = await supabase
+    .from('tasks')
+    .select('id, title, start_time, priority, category, status')
+    .eq('user_id', userId)
+    .neq('status', 'BLOCKED')
+    .neq('status', 'DONE')
+    .not('title', 'ilike', '%test%')
+    .or(`start_time.gte.${today.toISOString()},due_date.gte.${today.toISOString().split('T')[0]}`)
+    .order('start_time', { ascending: true, nullsFirst: false });
+
+  if (error || !data) return [];
+
+  const windowRange = WINDOW_RANGES[window];
+  if (!windowRange) return data;
+
+  return data.filter((task: any) => {
+    const category = task.category || 'LIFE';
+    const categoryWindows = CATEGORY_WINDOW_MAPPING[category] || ['flexible'];
+    
+    if (!categoryWindows.includes(window) && !categoryWindows.includes('flexible')) {
+      return false;
+    }
+
+    if (task.start_time) {
+      const taskHour = new Date(task.start_time).getHours();
+      return taskHour >= windowRange.start && taskHour < windowRange.end;
+    }
+
+    return true;
+  });
+}
+
+// Get topics for memory jog fallback
+async function getTopicsForWindow(
+  supabase: any, 
+  userId: string, 
+  window: string
+): Promise<any[]> {
+  const { data } = await supabase
+    .from('task_topic_index')
+    .select('topic_name, topic_summary, example_tasks')
+    .eq('user_id', userId)
+    .contains('window_affinity', [window])
+    .order('task_count', { ascending: false })
+    .limit(5);
+  
+  return data || [];
+}
+
+// Format task list
+function formatTaskList(tasks: any[]): string {
+  if (tasks.length === 0) return 'No tasks scheduled';
+  
+  return tasks.slice(0, 10).map((t: any, i: number) => {
+    const time = t.start_time ? new Date(t.start_time).toLocaleTimeString('en-US', { 
+      hour: 'numeric', minute: '2-digit', hour12: true 
+    }) : 'Unscheduled';
+    return `${i + 1}. ${t.title} (${time})`;
+  }).join('\n');
+}
+
+// Build window transition context
+async function buildWindowTransitionContext(
+  context: string,
+  userId: string, 
+  window: string,
+  supabase: any
+): Promise<string> {
+  const windowTasks = await getTasksForWindow(supabase, userId, window);
+  
+  let allDayTasks: any[] = [];
+  if (window === 'morning') {
+    const { data: dayTasks } = await supabase
+      .from('tasks')
+      .select('id, title, start_time, priority, category, status')
+      .eq('user_id', userId)
+      .neq('status', 'BLOCKED')
+      .neq('status', 'DONE')
+      .not('title', 'ilike', '%test%')
+      .gte('start_time', new Date().toISOString())
+      .order('start_time', { ascending: true });
+    
+    allDayTasks = (dayTasks || []).filter((t: any) => {
+      if (!t.start_time) return false;
+      return new Date(t.start_time).getHours() >= 9;
+    });
+  }
+
+  const windowLabel = window === 'morning' ? 'Morning'
+    : window === 'business_hours' ? 'Business Hours'
+    : window === 'after_work' ? 'After Work'
+    : window === 'evening' ? 'Evening'
+    : 'Weekend';
+
+  if (windowTasks.length > 0 || (window === 'morning' && allDayTasks.length > 0)) {
+    const taskList = formatTaskList(windowTasks);
+    const restOfDayList = window === 'morning' && allDayTasks.length > 0 ? formatTaskList(allDayTasks) : '';
+
+    let message = `[SYSTEM INITIATED] ${windowLabel} Check-in (Tasks Available)
+
+Here are your ${windowLabel.toLowerCase()} tasks:
+${taskList}`;
+
+    if (restOfDayList) {
+      message += `\n\nRest of day overview:\n${restOfDayList}`;
+    }
+
+    message += `\n\nWould you like to confirm these, adjust them, or skip?`;
+    return message;
+  } else {
+    const topics = await getTopicsForWindow(supabase, userId, window);
+    
+    if (window === 'morning') {
+      return `[SYSTEM INITIATED] ${windowLabel} Check-in
+
+Good morning! I'm just checking in to help you get started with your day. I'll follow up in a few hours to go over your plans.`;
+    }
+
+    if (topics.length === 0) {
+      return `[SYSTEM INITIATED] ${windowLabel} Check-in
+
+You have no scheduled tasks for the ${windowLabel.toLowerCase()} window. Would you like me to help you plan something?`;
+    }
+
+    const topicList = topics.map((t: any) => `- ${t.topic_name}: ${t.topic_summary || 'Various tasks'}`).join('\n');
+    
+    return `[SYSTEM INITIATED] ${windowLabel} Check-in (Topic Jog)
+
+You have no scheduled items for the ${windowLabel.toLowerCase()} window. To jog your memory, here are the main topics you've been working on:
+
+${topicList}
+
+Do you want to work on any of these right now?`;
+  }
+}
+
 // Build contextual instructions based on call type
 async function buildCallContext(callType: string, context: string | undefined, userId: string, supabase: any): Promise<string> {
+  // Check for window marker
+  const windowMatch = context?.match(/\[WINDOW:(\w+)\]/);
+  
+  if (windowMatch) {
+    const window = windowMatch[1];
+    console.log(`[SEND-CHAT] Detected window transition: ${window}`);
+    return buildWindowTransitionContext(context, userId, window, supabase);
+  }
+
   const briefing = await getTodaysBriefing(supabase, userId);
   const userContext = context || '';
   

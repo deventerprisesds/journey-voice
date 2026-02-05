@@ -3356,6 +3356,85 @@ export type Database = {
           },
         ]
       }
+      task_topic_index: {
+        Row: {
+          created_at: string | null
+          example_tasks: string[] | null
+          id: string
+          task_count: number | null
+          topic_name: string
+          topic_summary: string | null
+          updated_at: string | null
+          user_id: string
+          window_affinity: string[] | null
+        }
+        Insert: {
+          created_at?: string | null
+          example_tasks?: string[] | null
+          id?: string
+          task_count?: number | null
+          topic_name: string
+          topic_summary?: string | null
+          updated_at?: string | null
+          user_id: string
+          window_affinity?: string[] | null
+        }
+        Update: {
+          created_at?: string | null
+          example_tasks?: string[] | null
+          id?: string
+          task_count?: number | null
+          topic_name?: string
+          topic_summary?: string | null
+          updated_at?: string | null
+          user_id?: string
+          window_affinity?: string[] | null
+        }
+        Relationships: []
+      }
+      task_topic_mappings: {
+        Row: {
+          created_at: string | null
+          id: string
+          task_id: string
+          topic_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          id?: string
+          task_id: string
+          topic_id: string
+        }
+        Update: {
+          created_at?: string | null
+          id?: string
+          task_id?: string
+          topic_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "task_topic_mappings_task_id_fkey"
+            columns: ["task_id"]
+            isOneToOne: false
+            referencedRelation: "notification_trace"
+            referencedColumns: ["task_id"]
+          },
+          {
+            foreignKeyName: "task_topic_mappings_task_id_fkey"
+            columns: ["task_id"]
+            isOneToOne: false
+            referencedRelation: "tasks"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "task_topic_mappings_topic_id_fkey"
+            columns: ["topic_id"]
+            isOneToOne: false
+            referencedRelation: "task_topic_index"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       tasks: {
         Row: {
           blocked_by: string[] | null
