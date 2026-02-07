@@ -1,176 +1,141 @@
 
-# Plan: Split Twilio Voice Functions into Deployable Modules
+# Plan: Fix Up Next Queue Overflow and Auto-Scheduling Bug
 
-## Problem Analysis
+## Problem Summary
 
-The `twilio-realtime-bridge` (3,011 lines) and `twilio-voice-handler` (1,538 lines) edge functions are failing to deploy due to "Bundle generation timed out" errors. The bundling process cannot handle files of this size within Supabase's deployment pipeline limits.
+Two critical bugs have been identified:
 
-## Solution: Modular Architecture
+### Issue 1: Up Next Queue Shows Too Many Items
+The `isRolledOver()` function in `FocusView.tsx` catches too many tasks because it doesn't validate that tasks have valid workflow statuses. 60+ tasks have corrupted category values (`PROF_EDUCATION`, `LIFE`, `VENTURES`, `CAREER`) stored in the `status` field.
 
-Split the monolithic functions into smaller, focused edge functions that can deploy successfully. The main WebSocket handler will remain as a thin orchestration layer that imports from shared modules and delegates to specialized edge functions via HTTP.
+### Issue 2: Tasks Not Auto-Scheduling
+Tasks created via the Focus View QuickTaskInput are not being auto-scheduled despite `auto_schedule: true` being passed. The root cause is a **JavaScript ReferenceError** in `batch-calendar-scheduler/index.ts`:
 
-## Architecture Overview
-
-```text
-┌─────────────────────────────────────────────────────────────────┐
-│                    twilio-realtime-bridge                        │
-│                    (~800 lines - WebSocket core)                 │
-├─────────────────────────────────────────────────────────────────┤
-│  • WebSocket handling (Twilio ↔ OpenAI)                         │
-│  • Audio routing (no transcoding - moved to shared)             │
-│  • Event dispatch to specialized modules                        │
-└───────────────┬─────────────────────────────────────────────────┘
-                │ imports from
-                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    _shared/ modules                              │
-├─────────────────────────────────────────────────────────────────┤
-│  config.ts (existing - 130 lines)                               │
-│  audio-codec.ts (NEW - ~100 lines)                              │
-│  tool-definitions.ts (NEW - ~200 lines)                         │
-│  persona.ts (NEW - ~150 lines)                                  │
-└─────────────────────────────────────────────────────────────────┘
-                │ calls via HTTP
-                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│              Specialized Edge Functions (existing)               │
-├─────────────────────────────────────────────────────────────────┤
-│  execute-tool           (tool execution)                        │
-│  elevenlabs-tts         (TTS generation)                        │
-│  rag-context-retrieval  (knowledge base)                        │
-│  agenda-manager         (call agenda state)                     │
-└─────────────────────────────────────────────────────────────────┘
+```
+"error": "targetDateObj is not defined"
 ```
 
-## Step-by-Step Implementation
-
-### Step 1: Create `_shared/audio-codec.ts` (~100 lines)
-Extract audio transcoding utilities from the bridge:
-- G.711 μ-law encoding/decoding tables and functions
-- Upsample 8kHz → 24kHz
-- Downsample 24kHz → 8kHz
-- Base64 ↔ Int16Array conversion
-- RMS amplitude calculation
-
-### Step 2: Create `_shared/tool-definitions.ts` (~200 lines)
-Extract tool definitions from the bridge:
-- All OpenAI function tool schemas (get_tasks, create_task, web_search, hang_up, etc.)
-- Exported as a reusable array
-
-### Step 3: Create `_shared/persona.ts` (~150 lines)
-Extract persona/instruction generation:
-- Default Iris persona string
-- `getTimeBasedGreeting()` function
-- `getCurrentTimeString()` function
-- `generateGreetingForCallType()` function
-- `loadUserInstructions()` function
-
-### Step 4: Create `_shared/session-manager.ts` (~150 lines)
-Extract session management logic:
-- PreConnectSession interface
-- `storePreConnectSession()` function
-- `getPreConnectSession()` function
-
-### Step 5: Create `_shared/agenda-wrapper.ts` (~100 lines)
-Extract agenda management wrappers:
-- SharedAgendaManager class (calls agenda-manager edge function)
-- AgendaManager legacy class (in-memory fallback)
-
-### Step 6: Refactor `twilio-realtime-bridge/index.ts` (~800 lines)
-Slim down to core WebSocket orchestration:
-- Import all utilities from `_shared/`
-- Keep only WebSocket event handlers
-- Keep audio pipeline routing
-- Keep OpenAI message handling
-- Remove all extracted utility code
-
-### Step 7: Refactor `twilio-voice-handler/index.ts` (~600 lines)
-Apply same pattern:
-- Import shared modules
-- Keep TwiML generation and routing logic
-- Remove duplicated utility code
-
-## Files to Create/Modify
-
-| File | Action | Est. Lines |
-|------|--------|------------|
-| `supabase/functions/_shared/audio-codec.ts` | CREATE | ~100 |
-| `supabase/functions/_shared/tool-definitions.ts` | CREATE | ~200 |
-| `supabase/functions/_shared/persona.ts` | CREATE | ~150 |
-| `supabase/functions/_shared/session-manager.ts` | CREATE | ~150 |
-| `supabase/functions/_shared/agenda-wrapper.ts` | CREATE | ~100 |
-| `supabase/functions/twilio-realtime-bridge/index.ts` | REFACTOR | ~800 |
-| `supabase/functions/twilio-voice-handler/index.ts` | REFACTOR | ~600 |
-
-## Deployment Strategy
-
-1. Deploy shared modules first (they don't deploy independently - they're bundled)
-2. Deploy refactored `twilio-voice-handler` (smaller, simpler)
-3. Deploy refactored `twilio-realtime-bridge` (main bridge)
-4. Test with a phone call to verify functionality
-
-## Risk Mitigation
-
-- **Import resolution**: Supabase bundler should handle `../_shared/` imports correctly (already works for `config.ts`)
-- **Incremental testing**: Deploy handler first (simpler) to validate the approach
-- **Rollback plan**: Keep original files backed up in git history
-- **Feature parity**: All functionality preserved, just reorganized
-
-## Technical Details
-
-### Audio Codec Module Extract
-From lines 13-120 of the current bridge, extract:
-```typescript
-// _shared/audio-codec.ts
-export const mulawToLinearTable: Int16Array = new Int16Array(256);
-// ... initialization code ...
-export function decodeMulaw(mulawData: Uint8Array): Int16Array { ... }
-export function encodeMulaw(pcmData: Int16Array): Uint8Array { ... }
-export function upsample8to24(pcm8k: Int16Array): Int16Array { ... }
-export function downsample24to8(pcm24k: Int16Array): Int16Array { ... }
-export function int16ToBase64(pcmData: Int16Array): string { ... }
-export function base64ToInt16(base64: string): Int16Array { ... }
-export function calculateRMSAmplitude(pcmData: Int16Array): number { ... }
-```
-
-### Tool Definitions Module Extract
-From lines 448-642 of the current bridge, extract:
-```typescript
-// _shared/tool-definitions.ts
-export function getToolDefinitions(): any[] {
-  return [
-    { type: "function", name: "get_tasks", ... },
-    { type: "function", name: "create_task", ... },
-    // ... all other tools ...
-  ];
+**Evidence from testing:**
+```json
+{
+  "message": "Created 1 task (scheduling was requested but no optimal slots found)",
+  "scheduled": 0,
+  "start_time": null
 }
 ```
 
-### Persona Module Extract
-From lines 122-420 of the current bridge, extract:
+The variable `targetDateObj` is referenced on lines 179, 224, and 229 but is never declared. The code creates `targetAsDate` on line 103 but never assigns it to `targetDateObj`.
+
+---
+
+## Technical Analysis
+
+### Root Cause 1: FocusView Filter Logic
+
+In `src/components/FocusView.tsx` lines 135-141:
 ```typescript
-// _shared/persona.ts
-export const DEFAULT_IRIS_PERSONA = `You are Iris...`;
-export function getTimeBasedGreeting(timezone: string): string { ... }
-export function getCurrentTimeString(timezone: string): string { ... }
-export function generateGreetingForCallType(...): string { ... }
-export async function loadUserInstructions(...): Promise<string> { ... }
+const isRolledOver = (t: Task): boolean => {
+  if (t.status === 'DONE' || t.status === 'DOING') return false;
+  if (!t.start_time) return false;
+  const startDate = parseISO(t.start_time);
+  return isPast(startDate) && !isToday(startDate);
+};
 ```
 
-## Success Criteria
+This only excludes `DONE` and `DOING`, allowing tasks with corrupted statuses like `PROF_EDUCATION`, `LIFE`, etc. to slip through if they have a past `start_time`.
 
-1. Both edge functions deploy without timeout errors
-2. Phone calls (inbound and outbound) work as before
-3. All tool calls function correctly
-4. ElevenLabs TTS integration unchanged
-5. Pre-connect session caching still works
-6. Agenda management persists across calls
+### Root Cause 2: Undefined Variable in Batch Scheduler
 
-## Timeline Estimate
+In `supabase/functions/batch-calendar-scheduler/index.ts`:
 
-- Shared modules creation: 4 tool calls
-- Bridge refactor: 2 tool calls
-- Handler refactor: 1 tool call
-- Deployment and testing: 1 tool call
+Line 103 creates `targetAsDate`:
+```typescript
+const targetAsDate = new Date(year, month - 1, day, 23, 59, 59, 999);
+```
 
-Total: ~8 implementation steps
+But line 179 references `targetDateObj` which doesn't exist:
+```typescript
+const targetDateStr = targetDateObj 
+  ? targetDateObj.toLocaleDateString('en-US', { timeZone: timezone, dateStyle: 'full' })
+  : 'today or tomorrow based on current time';
+```
+
+---
+
+## Solution
+
+### Part 1: Fix FocusView isRolledOver Function
+
+Update `isRolledOver()` to only include tasks with valid workflow statuses that should roll over:
+
+```typescript
+const isRolledOver = (t: Task): boolean => {
+  // Only valid workflow statuses can roll over
+  const rolloverStatuses = ['UP_NEXT', 'TODO', 'READY', 'BACKLOG'];
+  if (!rolloverStatuses.includes(t.status)) return false;
+  if (!t.start_time) return false;
+  
+  const startDate = parseISO(t.start_time);
+  // Past scheduled time AND not scheduled for today = rolled over
+  return isPast(startDate) && !isToday(startDate);
+};
+```
+
+### Part 2: Fix Batch Calendar Scheduler
+
+Declare `targetDateObj` and assign it properly:
+
+```typescript
+// After line 99, add:
+let targetDateObj: Date | null = null;
+
+// Inside the if (targetDate && allowOverflow) block, after line 103:
+targetDateObj = targetAsDate;
+
+// Inside the else if (targetDate) block, after line 111:
+targetDateObj = busySlotsEndDate;
+```
+
+### Part 3: Database Cleanup (Optional)
+
+Clean up tasks with corrupted status values:
+```sql
+UPDATE tasks 
+SET status = 'BACKLOG', updated_at = NOW()
+WHERE status IN ('PROF_EDUCATION', 'LIFE', 'VENTURES', 'CAREER', 'EDUCATION')
+AND status NOT IN ('BLOCKED', 'READY', 'UP_NEXT', 'DOING', 'DONE', 'BACKLOG', 'TODO');
+```
+
+---
+
+## Files to Modify
+
+| File | Change | Lines |
+|------|--------|-------|
+| `src/components/FocusView.tsx` | Update `isRolledOver()` to validate workflow status | 135-141 |
+| `supabase/functions/batch-calendar-scheduler/index.ts` | Declare and assign `targetDateObj` | ~99-115 |
+
+---
+
+## Implementation Steps
+
+1. **Fix batch-calendar-scheduler** - Declare `targetDateObj` variable and assign it properly in both conditional branches
+2. **Fix FocusView** - Update `isRolledOver()` to only include valid workflow statuses
+3. **Deploy and test** - Redeploy the batch scheduler and verify auto-scheduling works
+4. **Optional cleanup** - Run SQL to fix corrupted task statuses
+
+---
+
+## Expected Results After Fix
+
+1. QuickTaskInput tasks will be auto-scheduled with proper start_time/end_time
+2. Up Next queue will only show 9-15 tasks (valid UP_NEXT status + legitimate rolled-over tasks)
+3. Tasks with corrupted statuses will be excluded from the Up Next view
+
+---
+
+## Testing Plan
+
+1. Create a task via QuickTaskInput - verify it gets scheduled with a time slot
+2. Refresh Focus View - verify Up Next shows reasonable number of tasks
+3. Check batch-calendar-scheduler logs - verify no "targetDateObj is not defined" error
