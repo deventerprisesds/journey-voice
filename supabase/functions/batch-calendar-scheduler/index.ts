@@ -97,10 +97,13 @@ serve(async (req) => {
     // Otherwise, fetch for the next 14 days
     // Parse targetDateISO safely without new Date() UTC shift
     let busySlotsEndDate: Date;
+    let targetDateObj: Date | null = null;
+    
     if (targetDate && allowOverflow) {
       // Parse target date from YYYY-MM-DD string directly
       const [year, month, day] = targetDateISO.split('-').map(Number);
       const targetAsDate = new Date(year, month - 1, day, 23, 59, 59, 999);
+      targetDateObj = targetAsDate;
       // Get end of next day after target
       const nextDay = new Date(targetAsDate);
       nextDay.setDate(nextDay.getDate() + 2); // target + 1 day buffer
@@ -109,6 +112,7 @@ serve(async (req) => {
       // Just the target date - parse from string
       const [year, month, day] = targetDateISO.split('-').map(Number);
       busySlotsEndDate = new Date(year, month - 1, day, 23, 59, 59, 999);
+      targetDateObj = busySlotsEndDate;
     } else {
       // Default: 14 days
       busySlotsEndDate = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);

@@ -2142,12 +2142,14 @@ export type Database = {
           category: string
           confidence: number | null
           content: Json
+          content_hash: string | null
           course_id: string | null
           created_at: string
           highlight_importance: number | null
           id: string
           insight_type: string
           session_id: string
+          source_key: string | null
           subcategory: string
           timestamp: string
           transcript_segment_id: string | null
@@ -2157,12 +2159,14 @@ export type Database = {
           category?: string
           confidence?: number | null
           content: Json
+          content_hash?: string | null
           course_id?: string | null
           created_at?: string
           highlight_importance?: number | null
           id?: string
           insight_type: string
           session_id: string
+          source_key?: string | null
           subcategory?: string
           timestamp?: string
           transcript_segment_id?: string | null
@@ -2172,12 +2176,14 @@ export type Database = {
           category?: string
           confidence?: number | null
           content?: Json
+          content_hash?: string | null
           course_id?: string | null
           created_at?: string
           highlight_importance?: number | null
           id?: string
           insight_type?: string
           session_id?: string
+          source_key?: string | null
           subcategory?: string
           timestamp?: string
           transcript_segment_id?: string | null
@@ -3013,6 +3019,7 @@ export type Database = {
           created_at: string
           id: string
           question: string
+          question_hash: string | null
           session_id: string
           sources: Json | null
           user_id: string
@@ -3025,6 +3032,7 @@ export type Database = {
           created_at?: string
           id?: string
           question: string
+          question_hash?: string | null
           session_id: string
           sources?: Json | null
           user_id: string
@@ -3037,6 +3045,7 @@ export type Database = {
           created_at?: string
           id?: string
           question?: string
+          question_hash?: string | null
           session_id?: string
           sources?: Json | null
           user_id?: string

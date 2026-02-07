@@ -132,8 +132,11 @@ const FocusView: React.FC<FocusViewProps> = ({
   const doingTasks = tasks.filter(t => t.status === 'DOING');
   
   // Helper: Check if task is incomplete and was scheduled in the past (rolled over)
+  // Helper: Check if task is incomplete and was scheduled in the past (rolled over)
+  // Only valid workflow statuses can roll over - excludes corrupted category values
   const isRolledOver = (t: Task): boolean => {
-    if (t.status === 'DONE' || t.status === 'DOING') return false;
+    const rolloverStatuses = ['UP_NEXT', 'TODO', 'READY', 'BACKLOG'];
+    if (!rolloverStatuses.includes(t.status)) return false;
     if (!t.start_time) return false;
     const startDate = parseISO(t.start_time);
     // Past scheduled time AND not scheduled for today = rolled over
