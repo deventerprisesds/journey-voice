@@ -18,6 +18,7 @@ import Calendar from "./pages/Calendar";
 import Debug from "./pages/Debug";
 import NotFound from "./pages/NotFound";
 import DemoModeBadge from "./components/DemoModeBadge";
+import QuotaAlertBanner from "./components/QuotaAlertBanner";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { supabase } from "@/integrations/supabase/client";
 import { useEffect } from "react";
@@ -83,6 +84,7 @@ const App = () => {
               <CommsConsoleProvider>
                 <AssignmentSelectionProvider>
                   <DemoModeBadge />
+                  <QuotaAlertBanner />
                   <ErrorBoundary>
                     <Routes>
                       <Route path="/auth" element={<Auth />} />

@@ -471,6 +471,25 @@ USER: ${userName}`;
         console.warn('Could not parse OpenAI error response:', parseError);
       }
 
+      // Log quota errors for banner visibility
+      if (response.status === 429 || errorText.includes('quota') || errorText.includes('rate_limit')) {
+        try {
+          const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2');
+          const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+          await supabaseAdmin.from('error_log').insert({
+            source: 'edge_function',
+            component: 'generate-realtime-token',
+            error_type: 'quota_exceeded_openai',
+            error_message: 'OpenAI API quota exceeded - AI features unavailable',
+            user_id: userId || null,
+            context: { details: errorDetails, status: response.status }
+          });
+          console.log('[OPENAI] Logged quota error to error_log');
+        } catch (logError) {
+          console.error('[OPENAI] Failed to log quota error:', logError);
+        }
+      }
+
       // Return structured error for client handling
       return new Response(JSON.stringify({ 
         error: 'openai_api_error',

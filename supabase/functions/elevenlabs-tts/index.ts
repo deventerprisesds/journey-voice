@@ -1,10 +1,14 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { encode as base64Encode } from "https://deno.land/std@0.168.0/encoding/base64.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
+
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 // Preset ElevenLabs voices
 const PRESET_VOICES: Record<string, string> = {
@@ -75,6 +79,24 @@ serve(async (req) => {
     if (!response.ok) {
       const errorText = await response.text();
       console.error(`[ELEVENLABS-TTS] API error: ${response.status} - ${errorText}`);
+      
+      // Log quota errors for banner visibility
+      if (errorText.includes('quota_exceeded') || response.status === 401) {
+        try {
+          const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+          await supabase.from('error_log').insert({
+            source: 'edge_function',
+            component: 'elevenlabs-tts',
+            error_type: 'quota_exceeded_elevenlabs',
+            error_message: 'ElevenLabs quota exhausted - voice features unavailable',
+            context: { details: errorText, status: response.status }
+          });
+          console.log('[ELEVENLABS-TTS] Logged quota error to error_log table');
+        } catch (logError) {
+          console.error('[ELEVENLABS-TTS] Failed to log quota error:', logError);
+        }
+      }
+      
       return new Response(
         JSON.stringify({ error: `ElevenLabs API error: ${response.status}`, details: errorText }),
         { status: response.status, headers: { ...corsHeaders, "Content-Type": "application/json" } }
