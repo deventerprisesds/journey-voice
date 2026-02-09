@@ -268,6 +268,26 @@ serve(async (req) => {
           setTimeout(() => { isSendingTtsAudio = false; }, chunks.length * 20 + 500);
           if (!firstOutboundLogged) { firstOutboundLogged = true; }
         }
+      } else {
+        const errorText = await response.text();
+        console.error(`[ELEVENLABS] TTS API error: ${response.status} - ${errorText}`);
+        
+        // Log quota errors for banner visibility
+        if (errorText.includes('quota_exceeded') || response.status === 401) {
+          try {
+            await supabase.from('error_log').insert({
+              source: 'edge_function',
+              component: 'twilio-realtime-bridge',
+              error_type: 'quota_exceeded_elevenlabs',
+              error_message: 'ElevenLabs quota exhausted during phone call',
+              user_id: userId,
+              context: { details: errorText, status: response.status }
+            });
+            console.log('[ELEVENLABS] Logged quota error to error_log');
+          } catch (logError) {
+            console.error('[ELEVENLABS] Failed to log quota error:', logError);
+          }
+        }
       }
     } catch (error) {
       console.error('[ELEVENLABS] TTS error:', error);
