@@ -188,6 +188,8 @@ serve(async (req) => {
   // Tool output tracking
   let lastToolOutput: { toolName: string; extractedFacts?: any } | null = null;
   let lastUserTranscript: string | null = null;
+  let currentResponseText = '';
+  let currentResponseTrigger = '';
 
   const SPEECH_DEBOUNCE_MS = 300;
   let lastSpeechStartTime = 0;
@@ -198,6 +200,8 @@ serve(async (req) => {
     if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN) return;
     responseCreateCount++;
     responseStartTime = Date.now();
+    currentResponseText = '';
+    currentResponseTrigger = trigger;
     console.log(`[RESPONSE] #${responseCreateCount} triggered by: ${trigger}`);
     openaiWs.send(JSON.stringify({ type: "response.create" }));
   }
@@ -448,14 +452,25 @@ serve(async (req) => {
           break;
 
         case "response.audio.done":
-        case "response.done":
+          break;
+        case "response.done": {
           isAiSpeaking = false;
           currentResponseItemId = null;
           audioSamplesPlayed = 0;
           sentenceBuffer = '';
+          const latencyMs = responseStartTime ? Date.now() - responseStartTime : null;
+          console.log(`[RESPONSE-DONE] #${responseCreateCount} trigger=${currentResponseTrigger} latency=${latencyMs}ms text="${currentResponseText.substring(0, 200)}"`);
+          currentResponseText = '';
+          currentResponseTrigger = '';
+          break;
+        }
+
+        case "response.audio_transcript.delta":
+          if (msg.delta) currentResponseText += msg.delta;
           break;
 
         case "response.text.delta":
+          if (msg.delta) currentResponseText += msg.delta;
           if (ttsProvider === 'elevenlabs' && msg.delta) {
             sentenceBuffer += msg.delta;
             if (SENTENCE_ENDERS.test(sentenceBuffer)) {
