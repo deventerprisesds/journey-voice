@@ -74,7 +74,7 @@ interface ElevenLabsTTSResponse {
 // NOTE: VOICE_CONFIG, FILLER_CONFIG, SENTENCE_ENDERS imported from ./config.ts
 
 // Worker version for deployment verification
-const WORKER_VERSION = '2026-01-29-cf-v7f';
+const WORKER_VERSION = '2026-02-10-cf-v8';
 
 export class TwilioCallSession {
   private state: DurableObjectState;
