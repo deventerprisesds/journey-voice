@@ -431,11 +431,12 @@ serve(async (req) => {
             audioRingBuffer.length = 0;
           }
           
-          console.log(`[GREETING-TRACE] session.updated: preConnectedSession=${!!preConnectedSession}, greetingSent=${greetingSent}, waitingForUserHello=${waitingForUserHello}`);
-          if (preConnectedSession && greetingSent) {
+          console.log(`[GREETING-TRACE] session.updated: preConnectedSession=${!!preConnectedSession}, greetingSent=${greetingSent}, waitingForUserHello=${waitingForUserHello}, greetingContextInjected=${greetingContextInjected}`);
+          if (preConnectedSession && greetingSent && !greetingContextInjected) {
             injectAssistantMessage(preConnectedGreetingText);
-            injectSystemMessage(`[System: Scheduled call - greeting sent. ${callContext || ''}. Cover ALL agenda items.]`);
-            console.log(`[GREETING-TRACE] session.updated: injected greeting context (second path)`);
+            injectSystemMessage(`[System: Scheduled call - greeting already sent: "${preConnectedGreetingText}". SKIP the greeting step (step 1). ${callContext || ''}. Continue from step 2 onward. Cover ALL remaining agenda items.]`);
+            greetingContextInjected = true;
+            console.log(`[GREETING-TRACE] session.updated: injected greeting context (second path), greetingContextInjected=true`);
           } else if (!waitingForUserHello) {
             if (callDirection === 'inbound') sendInboundGreeting();
             else sendOutboundGreeting();
