@@ -327,14 +327,14 @@ Remember: Let the user lead the selection. Keep it conversational.`;
 }
 
 // Build structured context with clear agenda items the AI must cover
-async function buildCallContext(call: ScheduledCall, userId: string): Promise<string> {
+async function buildCallContext(call: ScheduledCall, userId: string, preferredGreeting: string = 'Sir'): Promise<string> {
   // Check for window marker in context
   const windowMatch = call.context?.match(/\[WINDOW:(\w+)\]/);
   
   if (windowMatch) {
     const window = windowMatch[1];
     console.log(`[BUILD-CONTEXT] Detected window transition call: ${window}`);
-    return buildWindowTransitionContext(call, userId, window);
+    return buildWindowTransitionContext(call, userId, window, preferredGreeting);
   }
 
   const briefing = await getTodaysBriefing(userId);
