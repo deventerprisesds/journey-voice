@@ -154,6 +154,9 @@ serve(async (req) => {
   let isSendingTtsAudio = false;
   let ttsAudioEndTime = 0;
   let recentAmplitudes: number[] = [];
+  let bargeInActive = false;
+  let bargeInRecoveryPending = false;
+  let greetingContextInjected = false;
   
   // Telemetry
   let twilioMediaFramesIn = 0;
