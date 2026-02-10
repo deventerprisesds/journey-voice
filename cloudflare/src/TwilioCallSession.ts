@@ -163,6 +163,12 @@ export class TwilioCallSession {
   private agendaPaused: boolean = false;
   private pausedForQuery: string | null = null;
 
+  // v8: Barge-in + agenda recovery + greeting guard (parity with Supabase bridge)
+  private bargeInActive: boolean = false;
+  private bargeInRecoveryPending: boolean = false;
+  private greetingContextInjected: boolean = false;
+  private lastUserTranscript: string = '';
+
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
     this.env = env;
