@@ -821,19 +821,64 @@ export class TwilioCallSession {
               break; // Don't treat as barge-in
             }
             
-            // 3. ElevenLabs mode: Always clear buffer and break (match Supabase lines 2508-2520)
-            // v7: Removed isAiSpeaking guard - Supabase doesn't have it
+            // 3. ElevenLabs mode: Full barge-in logic (v8 parity with Supabase bridge)
             if (this.ttsProvider === 'elevenlabs' && !this.elevenlabsFallbackActive) {
-              console.log('[CF] BARGE-IN: ElevenLabs mode - clearing Twilio buffer only');
+              console.log('[CF-BARGEIN] ElevenLabs mode - full interrupt logic');
+              
+              // Step 1: Clear Twilio audio buffer immediately
               if (this.streamSid && this.twilioWs?.readyState === WebSocket.OPEN) {
                 this.twilioWs.send(JSON.stringify({
                   event: 'clear',
                   streamSid: this.streamSid
                 }));
+                console.log('[CF-BARGEIN] Step 1: Twilio buffer cleared');
               }
+              
+              // Step 2: Send response.cancel to OpenAI to stop text generation
+              if (this.openaiWs?.readyState === WebSocket.OPEN) {
+                this.openaiWs.send(JSON.stringify({ type: 'response.cancel' }));
+                console.log('[CF-BARGEIN] Step 2: response.cancel sent to OpenAI');
+              }
+              
+              // Step 3: Set bargeInActive flag to discard late-arriving TTS chunks
+              this.bargeInActive = true;
+              console.log('[CF-BARGEIN] Step 3: bargeInActive = true');
+              
+              // Step 4: Clear text buffers
               this.textBuffer = '';
               this.isAiSpeaking = false;
-              break; // NO response.cancel for ElevenLabs - preserves OpenAI VAD state
+              this.isPlaying = false;
+              this.isSendingTtsAudio = false;
+              console.log('[CF-BARGEIN] Step 4: Buffers and flags cleared');
+              
+              // Step 5: Agenda tangent tracking
+              if (this.agendaItems.length > 0 && this.lastUserTranscript) {
+                this.pauseAgendaForTangent(this.lastUserTranscript);
+                this.bargeInRecoveryPending = true;
+                console.log('[CF-BARGEIN] Step 5: Agenda paused for tangent, bargeInRecoveryPending = true');
+              }
+              
+              // Step 6: Delayed second Twilio clear + flag reset (300ms catches late audio chunks)
+              setTimeout(() => {
+                if (this.streamSid && this.twilioWs?.readyState === WebSocket.OPEN) {
+                  this.twilioWs.send(JSON.stringify({
+                    event: 'clear',
+                    streamSid: this.streamSid
+                  }));
+                  console.log('[CF-BARGEIN] Step 6: Delayed Twilio buffer clear (300ms)');
+                }
+                this.bargeInActive = false;
+                console.log('[CF-BARGEIN] Step 6: bargeInActive = false (reset after 300ms)');
+              }, 300);
+              
+              // Log to activity for post-call auditing
+              this.logActivityToSupabase('connected', 'cf_elevenlabs_barge_in', {
+                had_text_buffer: this.textBuffer.length > 0,
+                agenda_paused: this.agendaPaused,
+                last_transcript: (this.lastUserTranscript || '').substring(0, 50)
+              });
+              
+              break;
             }
             
             // 4. OpenAI TTS mode: Cancel only if AI is speaking
