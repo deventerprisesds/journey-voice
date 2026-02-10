@@ -1,51 +1,77 @@
 
-# Fix Missing Window Transition Calls for Authenticated Accounts
 
-## Problem
+# Add saveCallMessage Persistence to twilio-realtime-bridge
 
-The 5 window transition calls (Morning Kickstart, Business Hours Start, Daily Wrap-up, Evening Start, Weekend Morning) exist in `DEFAULT_SCHEDULED_CALLS` in the code, but they were never synced to your real account (`3e9306b8...`). The load logic at line 292 does:
+## Changes to `supabase/functions/twilio-realtime-bridge/index.ts`
+
+### 1. User transcript persistence (lines 517-524)
+
+Comment out the manual increment (with rollback note) and add `saveCallMessage`:
 
 ```typescript
-setScheduledCalls(config.scheduled_calls && config.scheduled_calls.length > 0 
-  ? config.scheduled_calls    // <-- your account hits this branch
-  : DEFAULT_SCHEDULED_CALLS); // <-- never reached
+case "conversation.item.input_audio_transcription.completed":
+  const transcript = (msg.transcript || '').trim();
+  if (transcript) {
+    lastUserTranscript = transcript;
+    // messageIndex = messageIndex + 1; // NOTE: commented out - saveCallMessage increments internally. Restore if rolling back persistence.
+    console.log(`[USER] "${transcript}"`);
+    messageIndex = await saveCallMessage(supabase, {
+      callSessionId, userId, threadId, streamSid,
+      role: 'user', content: transcript, messageIndex
+    });
+  }
+  break;
 ```
 
-Since your account already had 7 saved calls, the defaults (which include the window calls) are ignored entirely.
+### 2. AI response persistence (lines 456-466)
 
-## Solution
-
-Modify the `loadConfig` function to **merge** any missing default calls into the user's saved calls. This ensures that when new default calls are added to the codebase, they automatically appear for existing users who already have saved configs.
-
-## Changes
-
-**File:** `src/components/VoiceAssistantSettings.tsx`
-
-### Update `loadConfig` merge logic (lines 292-294)
-
-Replace the simple either/or with a merge that checks for missing default call IDs:
+Add `saveCallMessage` before clearing `currentResponseText`:
 
 ```typescript
-// Merge: use saved calls but add any missing defaults
-const savedCalls = config.scheduled_calls || [];
-if (savedCalls.length > 0) {
-  const savedIds = new Set(savedCalls.map((c: ScheduledCall) => c.id));
-  const missingDefaults = DEFAULT_SCHEDULED_CALLS.filter(d => !savedIds.has(d.id));
-  setScheduledCalls([...savedCalls, ...missingDefaults]);
-} else {
-  setScheduledCalls(DEFAULT_SCHEDULED_CALLS);
+case "response.done": {
+  isAiSpeaking = false;
+  currentResponseItemId = null;
+  audioSamplesPlayed = 0;
+  sentenceBuffer = '';
+  const latencyMs = responseStartTime ? Date.now() - responseStartTime : null;
+  console.log(`[RESPONSE-DONE] #${responseCreateCount} trigger=${currentResponseTrigger} latency=${latencyMs}ms text="${currentResponseText.substring(0, 200)}"`);
+  // PERSIST AI response to call_messages + conversation_messages
+  if (currentResponseText.trim()) {
+    messageIndex = await saveCallMessage(supabase, {
+      callSessionId, userId, threadId, streamSid,
+      role: 'assistant', content: currentResponseText.trim(),
+      messageIndex, latencyMs: latencyMs ?? undefined
+    });
+  }
+  currentResponseText = '';
+  currentResponseTrigger = '';
+  break;
 }
 ```
 
-This way:
-- Existing saved calls are preserved as-is (times, enabled state, context edits)
-- Any new default calls not yet in the user's config are appended
-- The window transition calls will appear for all accounts on next load
+### 3. Tool call persistence (lines 550-556)
 
-### Also update `handleReset` (line 359)
+Add `saveCallMessage` after tool execution, before sending result to OpenAI:
 
-No change needed -- reset already sets `DEFAULT_SCHEDULED_CALLS` which includes the window calls.
+```typescript
+const result = await executeTool(...);
+fillerManager?.endTool();
 
-## Result
+if (result.extractedFacts) lastToolOutput = { ... };
 
-After this change, your authenticated account will immediately see all 5 window transition calls appended below your existing 7 calls in the Recurring Calls tab. Once you save, they'll persist to the database and the cron job will start firing them.
+// PERSIST tool call to call_messages
+messageIndex = await saveCallMessage(supabase, {
+  callSessionId, userId, threadId, streamSid,
+  role: 'tool', content: JSON.stringify(result).substring(0, 1000),
+  messageIndex, toolInfo: { name: msg.name, input: args, output: result }
+});
+
+openaiWs.send(...);
+createResponse('FUNCTION_RESULT');
+```
+
+### 4. Deploy both edge functions
+
+- `twilio-realtime-bridge` (with new persistence)
+- `twilio-scheduled-call` (redeploy to activate window transition branching)
+
