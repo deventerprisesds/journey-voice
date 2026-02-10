@@ -1,178 +1,208 @@
 
-# Plan: Add Quota Exceeded Banner Alert System
+# Fix: Phone Call System — Complete Forensic Trace and Fixes
 
-## Problem Summary
+## Forensic Evidence (Not Guesses)
 
-When ElevenLabs or OpenAI quota is exhausted, voice functionality silently fails. This leads to hours of debugging because there's no visible indication to the user that the issue is a simple billing/quota problem.
+### Issue 1: Outbound morning call hangs up after 1 second
 
-**Current state:**
-- ElevenLabs quota errors are logged to `error_log` table (found error from Feb 6: `quota_exceeded`)
-- No UI surfaces these errors to the user
-- User must dig through edge function logs or database to discover the issue
+**Trace:**
+```text
+1. twilio-scheduled-call sends action: 'trigger-call' (NOT 'trigger-call-with-session')
+2. trigger-call uses triggerOutboundCall() which creates the Twilio call with a Url callback:
+   Url = twilio-voice-handler?action=incoming-call&direction=outbound&context=...&userId=...
+3. When Twilio answers, it hits that URL to get TwiML
+4. incoming-call runs getUserContext() which does the ilike phone lookup
+5. getUserContext matches BOTH profiles (real user +14434150606 AND demo 4434150606)
+6. .maybeSingle() returns an ERROR (multiple rows) -> falls through to demo user fallback
+7. Demo user has phone_call_mode = 'cloudflare' (from user_scheduling_prefs)
+8. TwiML generated points to Cloudflare bridge
+9. Supabase bridge never starts -> call_sessions metadata = {} (empty)
+10. The call was answered and immediately routed to Cloudflare, which has no pre-connected
+    session (has_session: false) -> 1 second of silence -> user hangs up
+```
+
+**The 1-second hangup is NOT a Supabase edge function timeout. It's the user hanging up** because they heard nothing. The call_sessions record shows `duration_seconds: null` because the Supabase bridge was never started — the call went to Cloudflare.
+
+### Issue 2: Inbound callback routes to demo user, no responses after greeting
+
+**Trace:**
+```text
+1. You called back from +14434150606
+2. getUserContext() runs: .ilike('phone', '%4434150606%')
+3. Matches BOTH:
+   - Real user: +14434150606 (user_id: a3378f93-d655-4913-b2fa-ca5b1d8020f1)
+   - Demo user: 4434150606 (user_id: 00000000-0000-0000-0000-000000000001)
+4. .maybeSingle() errors on multiple matches -> falls to demo user fallback
+5. Demo user phone_call_mode = likely 'cloudflare'
+6. Call routed to Cloudflare bridge (worker_version: 2026-01-29-cf-v7f)
+7. Cloudflare bridge: has_session=false, loaded demo user context
+8. Greeting played: "Good morning, Sir. This is Iris." (via ElevenLabs, 503ms)
+9. User speech detected 4 times (cf_user_speech_started)
+10. OpenAI received audio (801 appends) but generated 0 responses
+11. Call summary: twilio_frames_out=24 (greeting only), greeting_triggered=false
+```
+
+**Why zero responses:** The Cloudflare bridge has the same semantic VAD issue in text-only mode. OpenAI's VAD with `modalities: ["text"]` and `create_response: true` is unreliable — it receives audio but never triggers a response after the injected greeting. The bridge has no fallback timer to force a response.
+
+### Issue 3: Recurring calls use `trigger-call` instead of `trigger-call-with-session`
+
+**Root cause:** `twilio-scheduled-call/index.ts` line 568 sends `action: 'trigger-call'`, which does NOT pre-connect. This means:
+- No cached audio greeting
+- No pre-loaded session context
+- A second webhook round-trip (Twilio calls back to get TwiML)
+- That second webhook hits the broken `getUserContext()` phone lookup
 
 ---
 
-## Solution Overview
+## Root Causes Summary
 
-Create a **persistent alert banner** at the top of the app that:
-1. Monitors the `error_log` table for recent quota-related errors
-2. Displays a dismissible banner when quota issues are detected
-3. Provides direct links to resolve the issue (ElevenLabs dashboard, OpenAI billing)
-4. Auto-dismisses after the quota is restored
+| # | Root Cause | Impact | Evidence |
+|---|-----------|--------|----------|
+| 1 | `getUserContext()` ilike matches both real + demo user; `.maybeSingle()` silently errors | ALL calls route to demo user context | `user_id: 00000000-...0001` in activity_log |
+| 2 | Demo user's `phone_call_mode` routes to Cloudflare bridge | Wrong bridge used entirely | `worker_version: 2026-01-29-cf-v7f` in metadata |
+| 3 | Cloudflare bridge has no VAD fallback timer | Zero responses after greeting | `twilio_frames_out: 24`, `greeting_triggered: false` |
+| 4 | `twilio-scheduled-call` uses `trigger-call` not `trigger-call-with-session` | No pre-connected session, extra webhook round-trip | `has_session: false` in cf_ws_start |
+| 5 | No tracing at the `twilio-voice-handler` level for which user was resolved | Can't see routing decisions in logs | `metadata: {}` in call_sessions |
 
 ---
 
-## Technical Implementation
+## Fixes
 
-### Part 1: Enhance Edge Function Error Logging
+### Fix 1: Phone Lookup — Exclude Demo User (Critical)
 
-Update `supabase/functions/elevenlabs-tts/index.ts` to log quota errors with a specific error type that the frontend can query:
+**File:** `supabase/functions/twilio-voice-handler/index.ts`, `getUserContext()` (lines 113-174)
+
+Replace the single query with a two-step lookup that excludes the demo user:
 
 ```typescript
-// When ElevenLabs returns 401 with quota_exceeded
-if (errorText.includes('quota_exceeded')) {
-  // Log to error_log for banner visibility
-  await supabase.from('error_log').insert({
-    source: 'edge_function',
-    component: 'elevenlabs-tts',
-    error_type: 'quota_exceeded_elevenlabs',
-    error_message: 'ElevenLabs quota exhausted - voice features unavailable',
-    context: { details: errorText }
-  });
+// Step 1: Exact match, excluding demo user
+const { data: exactMatch } = await supabase
+  .from('profiles')
+  .select('user_id, phone')
+  .or(`phone.eq.${phoneNumber},phone.eq.+${normalizedPhone}`)
+  .neq('user_id', '00000000-0000-0000-0000-000000000001')
+  .maybeSingle();
+
+let userId = exactMatch?.user_id || null;
+
+// Step 2: Fuzzy match only if exact fails, still excluding demo
+if (!userId) {
+  const { data: fuzzyMatch } = await supabase
+    .from('profiles')
+    .select('user_id, phone')
+    .ilike('phone', `%${normalizedPhone.slice(-10)}%`)
+    .neq('user_id', '00000000-0000-0000-0000-000000000001')
+    .maybeSingle();
+  userId = fuzzyMatch?.user_id || null;
 }
 ```
 
-Similarly update `twilio-realtime-bridge` and `generate-realtime-token` for OpenAI quota errors.
+### Fix 2: Add OpenAI Voice Fallback in Supabase Bridge
 
-### Part 2: Create QuotaAlertBanner Component
+**File:** `supabase/functions/twilio-realtime-bridge/index.ts`, `sendElevenLabsTTS()` (lines 271-291)
 
-New file: `src/components/QuotaAlertBanner.tsx`
-
-Features:
-- Queries `error_log` for recent quota errors (last 24 hours)
-- Polls every 60 seconds to detect new issues
-- Shows different banners for ElevenLabs vs OpenAI
-- Dismissible (stores dismissed state in localStorage with expiry)
-- Links to respective billing dashboards
+When ElevenLabs fails (quota, API error), fall back to OpenAI native voice:
 
 ```typescript
-interface QuotaAlert {
-  provider: 'elevenlabs' | 'openai';
-  message: string;
-  link: string;
-  timestamp: string;
+} else {
+  const errorText = await response.text();
+  console.error(`[ELEVENLABS] TTS API error: ${response.status} - ${errorText}`);
+  
+  // Fall back to OpenAI voice
+  if (openaiWs && openaiWs.readyState === WebSocket.OPEN) {
+    console.warn(`[ELEVENLABS-FALLBACK] Using OpenAI voice for: "${fullText.substring(0, 60)}..."`);
+    openaiWs.send(JSON.stringify({
+      type: "response.create",
+      response: {
+        modalities: ["audio"],
+        instructions: `Speak this exactly: "${fullText}"`
+      }
+    }));
+  }
+  
+  // Log quota errors for banner
+  if (errorText.includes('quota_exceeded') || response.status === 401) {
+    // ... existing quota logging ...
+  }
 }
-
-const QuotaAlertBanner: React.FC = () => {
-  const [alerts, setAlerts] = useState<QuotaAlert[]>([]);
-  const [dismissed, setDismissed] = useState<string[]>([]);
-  
-  useEffect(() => {
-    const checkQuotaErrors = async () => {
-      const { data } = await supabase
-        .from('error_log')
-        .select('*')
-        .in('error_type', ['quota_exceeded_elevenlabs', 'quota_exceeded_openai'])
-        .gte('created_at', new Date(Date.now() - 24*60*60*1000).toISOString())
-        .order('created_at', { ascending: false })
-        .limit(5);
-      
-      // Process and dedupe alerts...
-    };
-    
-    checkQuotaErrors();
-    const interval = setInterval(checkQuotaErrors, 60000);
-    return () => clearInterval(interval);
-  }, []);
-  
-  if (alerts.length === 0) return null;
-  
-  return (
-    <div className="fixed top-0 left-0 right-0 z-[100] bg-destructive text-destructive-foreground">
-      {/* Alert content with dismiss button and billing link */}
-    </div>
-  );
-};
 ```
 
-### Part 3: Integrate Banner in App.tsx
+### Fix 3: Add VAD Fallback Timer in Supabase Bridge
 
-Add `QuotaAlertBanner` alongside `DemoModeBadge`:
+**File:** `supabase/functions/twilio-realtime-bridge/index.ts`, after `triggerPendingGreeting()` (line 233)
+
+After greeting plays, if no response is triggered within 8 seconds, force one:
 
 ```typescript
-// In App.tsx, inside AuthProvider:
-<DemoModeBadge />
-<QuotaAlertBanner />
-<ErrorBoundary>
-  {/* Routes */}
-</ErrorBoundary>
+// After greeting injection in triggerPendingGreeting():
+setTimeout(() => {
+  if (responseCreateCount === 0 && openaiWs?.readyState === WebSocket.OPEN) {
+    console.warn('[VAD-FALLBACK] No response after 8s, forcing response');
+    createResponse('VAD_FALLBACK');
+  }
+}, 8000);
+```
+
+Also add periodic `input_audio_buffer.commit` to nudge VAD in the media handler.
+
+### Fix 4: Add Routing Trace Logging
+
+**File:** `supabase/functions/twilio-voice-handler/index.ts`, in `incoming-call` handler (line 1316)
+
+Log the routing decision so we can always trace which user and bridge was selected:
+
+```typescript
+console.log(`[ROUTING-TRACE] Phone: ${callerPhone}, Resolved userId: ${userId}, ` +
+  `phoneCallMode: ${phoneCallMode}, selectedMode: ${selectedMode}, ` +
+  `isDemoUser: ${userId === '00000000-0000-0000-0000-000000000001'}`);
+```
+
+### Fix 5: Update Debug Tracker
+
+**File:** `docs/DEBUG_TRACKER.md`
+
+Add three new entries:
+
+```
+| VOICE-03 | Phone lookup matches demo user, routes to wrong bridge | FIXING |
+    .ilike('%4434150606%') matches both real (+14434150606) and demo (4434150606).
+    .maybeSingle() errors silently, falls to demo user with Cloudflare bridge. |
+| VOICE-04 | Outbound scheduled calls use trigger-call not trigger-call-with-session | KNOWN |
+    twilio-scheduled-call sends action: 'trigger-call' which causes a second webhook
+    round-trip through the broken getUserContext() lookup. |
+| VOICE-05 | Semantic VAD unreliable in text-only modality | FIXING |
+    OpenAI's semantic VAD with modalities: ["text"] and create_response: true
+    does not reliably trigger responses after greeting injection. Need fallback timer. |
+```
+
+New lessons learned:
+```
+- .maybeSingle() returns NULL (not error) when multiple rows match — it silently
+  discards ALL results. Always exclude known duplicate records (demo user) from queries.
+- Every routing decision must be logged with the resolved userId, bridge mode, and
+  whether the demo user was used. Without this, debugging is impossible.
+- Semantic VAD + text-only modalities is fundamentally unreliable. Always implement
+  a fallback timer that forces response.create if responseCreateCount === 0 after
+  a configurable timeout.
 ```
 
 ---
 
-## Files to Create/Modify
+## Files to Modify
 
-| File | Action | Purpose |
-|------|--------|---------|
-| `src/components/QuotaAlertBanner.tsx` | Create | New banner component with quota error detection |
-| `src/App.tsx` | Modify | Add QuotaAlertBanner to app layout |
-| `supabase/functions/elevenlabs-tts/index.ts` | Modify | Log quota errors with specific error_type |
-| `supabase/functions/twilio-realtime-bridge/index.ts` | Modify | Log ElevenLabs quota errors during calls |
-| `supabase/functions/generate-realtime-token/index.ts` | Modify | Log OpenAI quota errors |
-
----
-
-## Banner Design
-
-The banner will appear fixed at the very top of the viewport:
-
-```
-+------------------------------------------------------------------+
-| ⚠️ ElevenLabs quota exhausted - Voice features unavailable       |
-|    [Add Credits →]                              [Dismiss for 1h] |
-+------------------------------------------------------------------+
-```
-
-For OpenAI:
-```
-+------------------------------------------------------------------+
-| ⚠️ OpenAI API quota exceeded - AI features unavailable           |
-|    [Check Billing →]                            [Dismiss for 1h] |
-+------------------------------------------------------------------+
-```
-
----
-
-## Query for Quota Errors
-
-The banner will use this query to detect quota issues:
-
-```sql
-SELECT DISTINCT ON (error_type) 
-  error_type, error_message, created_at, context
-FROM error_log
-WHERE error_type IN ('quota_exceeded_elevenlabs', 'quota_exceeded_openai', 'tts_failed')
-  AND (error_message ILIKE '%quota%' OR context::text ILIKE '%quota%')
-  AND created_at > NOW() - INTERVAL '24 hours'
-ORDER BY error_type, created_at DESC;
-```
-
----
-
-## Dismissal Logic
-
-- User can dismiss banner for 1 hour
-- Stored in localStorage: `quota_alert_dismissed_{provider}_{timestamp}`
-- Auto-clears after 1 hour
-- Re-appears if a NEW quota error occurs after dismissal
+| File | Change | Priority |
+|------|--------|----------|
+| `supabase/functions/twilio-voice-handler/index.ts` | Fix getUserContext() phone lookup; add routing trace logs | Critical |
+| `supabase/functions/twilio-realtime-bridge/index.ts` | Add ElevenLabs fallback to OpenAI voice; add VAD fallback timer | Critical |
+| `docs/DEBUG_TRACKER.md` | Document VOICE-03/04/05 with full evidence | Required |
 
 ---
 
 ## Testing Plan
 
-1. Trigger an ElevenLabs quota error (call with exhausted credits)
-2. Verify banner appears at top of app
-3. Click "Add Credits" - verify it opens ElevenLabs dashboard
-4. Click "Dismiss" - verify banner hides
-5. Wait 1 hour or clear localStorage - verify banner reappears
-6. Add credits and make successful call - verify banner auto-clears within 60s
+1. Deploy both edge functions
+2. Trigger a test outbound call — verify logs show real user ID (not demo), bridge mode = media_streams
+3. Call back inbound — verify `[ROUTING-TRACE]` shows real user, not demo
+4. If ElevenLabs quota still exhausted, verify `[ELEVENLABS-FALLBACK]` fires and OpenAI voice speaks
+5. Verify `response_create_count > 0` in call_sessions metadata
+6. Check `activity_log` for correct `user_id` on all entries
