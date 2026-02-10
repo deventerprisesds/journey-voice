@@ -218,11 +218,11 @@ async function buildWindowTransitionContext(
   
   if (windowTasks.length > 0 || (window === 'morning' && allDayTasks.length > 0)) {
     // BRANCH 1: Tasks exist
-    return buildBranch1Context(call.name, windowTasks, allDayTasks, window);
+    return buildBranch1Context(call.name, windowTasks, allDayTasks, window, preferredGreeting);
   } else {
     // BRANCH 2: No tasks - topic jog fallback
     const topics = await getTopicsForWindow(supabase, userId, window);
-    return buildBranch2Context(call.name, topics, window);
+    return buildBranch2Context(call.name, topics, window, preferredGreeting);
   }
 }
 
