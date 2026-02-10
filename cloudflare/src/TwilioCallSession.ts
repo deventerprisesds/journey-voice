@@ -74,7 +74,7 @@ interface ElevenLabsTTSResponse {
 // NOTE: VOICE_CONFIG, FILLER_CONFIG, SENTENCE_ENDERS imported from ./config.ts
 
 // Worker version for deployment verification
-const WORKER_VERSION = '2026-01-29-cf-v7f';
+const WORKER_VERSION = '2026-02-10-cf-v8';
 
 export class TwilioCallSession {
   private state: DurableObjectState;
@@ -162,6 +162,12 @@ export class TwilioCallSession {
   private currentAgendaIndex: number = 0;
   private agendaPaused: boolean = false;
   private pausedForQuery: string | null = null;
+
+  // v8: Barge-in + agenda recovery + greeting guard (parity with Supabase bridge)
+  private bargeInActive: boolean = false;
+  private bargeInRecoveryPending: boolean = false;
+  private greetingContextInjected: boolean = false;
+  private lastUserTranscript: string = '';
 
   constructor(state: DurableObjectState, env: Env) {
     this.state = state;
@@ -740,7 +746,10 @@ export class TwilioCallSession {
                 preview: (data.delta || '').substring(0, 50)
               });
             }
-            await this.handleTextDelta(data);
+            // v8: NO await - fire-and-forget (parity with Supabase line 510)
+            // Awaiting blocks the WebSocket loop, preventing barge-in signals from being processed
+            console.log('[CF-TTS] handleTextDelta fire-and-forget, bargeInActive:', this.bargeInActive);
+            this.handleTextDelta(data);
           }
           break;
 
@@ -768,6 +777,27 @@ export class TwilioCallSession {
           // v7b: Reset truncation tracking state (parity with Supabase)
           this.currentResponseItemId = null;
           this.audioSamplesPlayed = 0;
+
+          // v8: Agenda tangent recovery (parity with Supabase lines 480-492)
+          if (this.agendaPaused && this.bargeInRecoveryPending) {
+            const hint = this.getAgendaResumeHint();
+            console.log(`[CF-AGENDA] response.done: agendaPaused=${this.agendaPaused}, bargeInRecoveryPending=${this.bargeInRecoveryPending}, hint=${hint}`);
+            if (hint) {
+              console.log(`[CF-AGENDA] RESUME: Injecting hint: ${hint}`);
+              this.openaiWs?.send(JSON.stringify({
+                type: 'conversation.item.create',
+                item: {
+                  type: 'message',
+                  role: 'system',
+                  content: [{ type: 'input_text',
+                    text: `[RESUME] ${hint}. Continue with this agenda item naturally. Cover ALL remaining agenda items.` }]
+                }
+              }));
+              this.openaiWs?.send(JSON.stringify({ type: 'response.create' }));
+            }
+            this.resumeAgenda();
+            this.bargeInRecoveryPending = false;
+          }
           break;
 
         // Phase 1B + Phase 8: Speech started with VAD barge-in guards (parity with Supabase bridge)
@@ -791,19 +821,64 @@ export class TwilioCallSession {
               break; // Don't treat as barge-in
             }
             
-            // 3. ElevenLabs mode: Always clear buffer and break (match Supabase lines 2508-2520)
-            // v7: Removed isAiSpeaking guard - Supabase doesn't have it
+            // 3. ElevenLabs mode: Full barge-in logic (v8 parity with Supabase bridge)
             if (this.ttsProvider === 'elevenlabs' && !this.elevenlabsFallbackActive) {
-              console.log('[CF] BARGE-IN: ElevenLabs mode - clearing Twilio buffer only');
+              console.log('[CF-BARGEIN] ElevenLabs mode - full interrupt logic');
+              
+              // Step 1: Clear Twilio audio buffer immediately
               if (this.streamSid && this.twilioWs?.readyState === WebSocket.OPEN) {
                 this.twilioWs.send(JSON.stringify({
                   event: 'clear',
                   streamSid: this.streamSid
                 }));
+                console.log('[CF-BARGEIN] Step 1: Twilio buffer cleared');
               }
+              
+              // Step 2: Send response.cancel to OpenAI to stop text generation
+              if (this.openaiWs?.readyState === WebSocket.OPEN) {
+                this.openaiWs.send(JSON.stringify({ type: 'response.cancel' }));
+                console.log('[CF-BARGEIN] Step 2: response.cancel sent to OpenAI');
+              }
+              
+              // Step 3: Set bargeInActive flag to discard late-arriving TTS chunks
+              this.bargeInActive = true;
+              console.log('[CF-BARGEIN] Step 3: bargeInActive = true');
+              
+              // Step 4: Clear text buffers
               this.textBuffer = '';
               this.isAiSpeaking = false;
-              break; // NO response.cancel for ElevenLabs - preserves OpenAI VAD state
+              this.isPlaying = false;
+              this.isSendingTtsAudio = false;
+              console.log('[CF-BARGEIN] Step 4: Buffers and flags cleared');
+              
+              // Step 5: Agenda tangent tracking
+              if (this.agendaItems.length > 0 && this.lastUserTranscript) {
+                this.pauseAgendaForTangent(this.lastUserTranscript);
+                this.bargeInRecoveryPending = true;
+                console.log('[CF-BARGEIN] Step 5: Agenda paused for tangent, bargeInRecoveryPending = true');
+              }
+              
+              // Step 6: Delayed second Twilio clear + flag reset (300ms catches late audio chunks)
+              setTimeout(() => {
+                if (this.streamSid && this.twilioWs?.readyState === WebSocket.OPEN) {
+                  this.twilioWs.send(JSON.stringify({
+                    event: 'clear',
+                    streamSid: this.streamSid
+                  }));
+                  console.log('[CF-BARGEIN] Step 6: Delayed Twilio buffer clear (300ms)');
+                }
+                this.bargeInActive = false;
+                console.log('[CF-BARGEIN] Step 6: bargeInActive = false (reset after 300ms)');
+              }, 300);
+              
+              // Log to activity for post-call auditing
+              this.logActivityToSupabase('connected', 'cf_elevenlabs_barge_in', {
+                had_text_buffer: this.textBuffer.length > 0,
+                agenda_paused: this.agendaPaused,
+                last_transcript: (this.lastUserTranscript || '').substring(0, 50)
+              });
+              
+              break;
             }
             
             // 4. OpenAI TTS mode: Cancel only if AI is speaking
@@ -834,6 +909,10 @@ export class TwilioCallSession {
         case 'conversation.item.input_audio_transcription.completed':
           const transcript = data.transcript || '';
           console.log(`[CF] User said: "${transcript}"`);
+          // v8: Track last user transcript for agenda tangent tracking
+          if (transcript.trim()) {
+            this.lastUserTranscript = transcript;
+          }
           await this.logActivityToSupabase('connected', 'cf_transcription', {
             transcript: transcript.substring(0, 200)
           });
@@ -1087,23 +1166,24 @@ You: "Looking that up..." [then call web_search tool]`;
           }
         }));
         
-        // Inject system context for OpenAI to understand the state
-        const now = new Date().toLocaleString('en-US', { timeZone: this.timezone });
-        const contextMsg = `[System: You just spoke the greeting: "${greeting}"
-The user is now listening and may respond. Current time: ${now}.
-Wait for the user's response, then continue the conversation naturally.
-${this.ragContext ? `Context: ${this.ragContext}` : ''}]`;
-        
-        this.openaiWs?.send(JSON.stringify({
-          type: 'conversation.item.create',
-          item: {
-            type: 'message',
-            role: 'system',
-            content: [{ type: 'input_text', text: contextMsg }]
-          }
-        }));
-        
-        console.log('[CF] Injected post-greeting context for cached audio path');
+        // v8: Guard against double context injection
+        if (!this.greetingContextInjected) {
+          this.greetingContextInjected = true;
+          const now = new Date().toLocaleString('en-US', { timeZone: this.timezone });
+          const contextMsg = `[System: PRE-CONNECTED CALL - You already greeted the user with: "${greeting}". SKIP the greeting step (step 1) in the agenda -- it is already done. Current time: ${now}. ${this.ragContext ? `Context: ${this.ragContext}` : ''} Continue from step 2 onward. Cover remaining agenda items before ending.]`;
+          
+          this.openaiWs?.send(JSON.stringify({
+            type: 'conversation.item.create',
+            item: {
+              type: 'message',
+              role: 'system',
+              content: [{ type: 'input_text', text: contextMsg }]
+            }
+          }));
+          console.log('[CF-GREETING] Injected post-greeting context for cached audio path (greetingContextInjected=true)');
+        } else {
+          console.log('[CF-GREETING] SKIPPED duplicate context injection for cached audio path');
+        }
         this.isPlaying = false;
         return;
       } catch (error) {
@@ -1139,23 +1219,24 @@ ${this.ragContext ? `Context: ${this.ragContext}` : ''}]`;
           }
         }));
 
-        // v7f: Inject system context explaining the state (critical for OpenAI to respond)
-        const now = new Date().toLocaleString('en-US', { timeZone: this.timezone });
-        const contextMsg = `[System: You just spoke the greeting: "${greeting}"
-The user is now listening and may respond. Current time: ${now}.
-Wait for the user's response, then continue the conversation naturally.
-${this.ragContext ? `Context: ${this.ragContext}` : ''}]`;
+        // v8: Guard against double context injection
+        if (!this.greetingContextInjected) {
+          this.greetingContextInjected = true;
+          const now = new Date().toLocaleString('en-US', { timeZone: this.timezone });
+          const contextMsg = `[System: PRE-CONNECTED CALL - You already greeted the user with: "${greeting}". SKIP the greeting step (step 1) in the agenda -- it is already done. Current time: ${now}. ${this.ragContext ? `Context: ${this.ragContext}` : ''} Continue from step 2 onward. Cover remaining agenda items before ending.]`;
 
-        this.openaiWs?.send(JSON.stringify({
-          type: 'conversation.item.create',
-          item: {
-            type: 'message',
-            role: 'system',
-            content: [{ type: 'input_text', text: contextMsg }]
-          }
-        }));
-
-        console.log('[CF] Injected post-greeting system context for OpenAI');
+          this.openaiWs?.send(JSON.stringify({
+            type: 'conversation.item.create',
+            item: {
+              type: 'message',
+              role: 'system',
+              content: [{ type: 'input_text', text: contextMsg }]
+            }
+          }));
+          console.log('[CF-GREETING] Injected post-greeting context for ElevenLabs path (greetingContextInjected=true)');
+        } else {
+          console.log('[CF-GREETING] SKIPPED duplicate context injection for ElevenLabs path');
+        }
         
         await this.logAttempt('greeting', 'success', {
           source: 'elevenlabs_direct',
@@ -1246,6 +1327,11 @@ ${this.ragContext ? `Context: ${this.ragContext}` : ''}]`;
   }
 
   private async sendToElevenLabs(text: string) {
+    // v8: Barge-in guard - discard late-arriving TTS chunks
+    if (this.bargeInActive) {
+      console.log('[CF-TTS] Barge-in active, discarding ElevenLabs TTS chunk:', text.substring(0, 40));
+      return;
+    }
     if (!this.twilioWs || !this.streamSid) return;
 
     const startTime = Date.now();
@@ -1709,6 +1795,11 @@ ${this.ragContext ? `Context: ${this.ragContext}` : ''}]`;
     this.currentAgendaIndex = 0;
     this.agendaPaused = false;
     this.pausedForQuery = null;
+    // v8: Reset barge-in and greeting state
+    this.bargeInActive = false;
+    this.bargeInRecoveryPending = false;
+    this.greetingContextInjected = false;
+    this.lastUserTranscript = '';
   }
 
   // ==================== Phase 5: Smart Filler Manager ====================
@@ -1798,11 +1889,14 @@ ${this.ragContext ? `Context: ${this.ragContext}` : ''}]`;
       this.helloFallbackTimer = null;
     }
     
-    console.log(`[CF] Triggering greeting from: ${source}`);
+    console.log(`[CF-GREETING] Triggering greeting from: ${source}, greetingContextInjected=${this.greetingContextInjected}`);
     await this.logActivityToSupabase('connected', 'cf_hello_trigger', {
       source,
       wait_duration_ms: Date.now() - this.callStartTime
     });
+    
+    // v8: Set greeting guard flag
+    this.greetingContextInjected = true;
     
     // Now send the greeting
     await this.sendGreeting();
