@@ -290,7 +290,7 @@ function buildBranch2Context(
     return `CALL TYPE: ${callName} (No Tasks)
 
 [CALL AGENDA]
-1. Greet: "Hello Sir."
+1. Greet: "Hello ${preferredGreeting}."
 2. Say: "I am just calling to help you get started with your day. I will call you back in a few hours to go over plans. Goodbye."
 
 Remember: Keep it brief and encouraging.`;
