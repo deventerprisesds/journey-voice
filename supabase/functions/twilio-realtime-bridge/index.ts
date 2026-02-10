@@ -66,7 +66,7 @@ async function handlePreConnect(params: {
   }
 
   const timeGreeting = getTimeBasedGreeting(timezone);
-  const userName = profile?.first_name || 'sir';
+  const userName = profile?.preferred_greeting || profile?.first_name || 'sir';
   const greetingText = generateGreetingForCallType(context, timeGreeting, userName);
   const instructions = await loadUserInstructions(SUPABASE_URL, SUPABASE_SERVICE_KEY, userId, ragContext, profile, timezone);
 
