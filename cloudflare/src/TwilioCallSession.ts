@@ -777,6 +777,27 @@ export class TwilioCallSession {
           // v7b: Reset truncation tracking state (parity with Supabase)
           this.currentResponseItemId = null;
           this.audioSamplesPlayed = 0;
+
+          // v8: Agenda tangent recovery (parity with Supabase lines 480-492)
+          if (this.agendaPaused && this.bargeInRecoveryPending) {
+            const hint = this.getAgendaResumeHint();
+            console.log(`[CF-AGENDA] response.done: agendaPaused=${this.agendaPaused}, bargeInRecoveryPending=${this.bargeInRecoveryPending}, hint=${hint}`);
+            if (hint) {
+              console.log(`[CF-AGENDA] RESUME: Injecting hint: ${hint}`);
+              this.openaiWs?.send(JSON.stringify({
+                type: 'conversation.item.create',
+                item: {
+                  type: 'message',
+                  role: 'system',
+                  content: [{ type: 'input_text',
+                    text: `[RESUME] ${hint}. Continue with this agenda item naturally. Cover ALL remaining agenda items.` }]
+                }
+              }));
+              this.openaiWs?.send(JSON.stringify({ type: 'response.create' }));
+            }
+            this.resumeAgenda();
+            this.bargeInRecoveryPending = false;
+          }
           break;
 
         // Phase 1B + Phase 8: Speech started with VAD barge-in guards (parity with Supabase bridge)
