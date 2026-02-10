@@ -394,7 +394,7 @@ serve(async (req) => {
 
     openaiWs.onopen = () => console.log("[OPENAI] Connected");
 
-    openaiWs.onmessage = (event) => {
+    openaiWs.onmessage = async (event) => {
       const msg = JSON.parse(event.data);
       
       switch (msg.type) {

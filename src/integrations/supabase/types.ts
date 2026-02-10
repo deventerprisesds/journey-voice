@@ -1789,6 +1789,7 @@ export type Database = {
           created_at: string
           digital_products: string[] | null
           extracted_at: string
+          extraction_version: string | null
           file_name: string
           file_path: string
           formulas: string[] | null
@@ -1807,6 +1808,7 @@ export type Database = {
           study_questions: Json | null
           topic_id: string
           user_id: string
+          v2_extraction_data: Json | null
         }
         Insert: {
           assignment_guidance?: string | null
@@ -1827,6 +1829,7 @@ export type Database = {
           created_at?: string
           digital_products?: string[] | null
           extracted_at?: string
+          extraction_version?: string | null
           file_name: string
           file_path: string
           formulas?: string[] | null
@@ -1845,6 +1848,7 @@ export type Database = {
           study_questions?: Json | null
           topic_id: string
           user_id: string
+          v2_extraction_data?: Json | null
         }
         Update: {
           assignment_guidance?: string | null
@@ -1865,6 +1869,7 @@ export type Database = {
           created_at?: string
           digital_products?: string[] | null
           extracted_at?: string
+          extraction_version?: string | null
           file_name?: string
           file_path?: string
           formulas?: string[] | null
@@ -1883,6 +1888,7 @@ export type Database = {
           study_questions?: Json | null
           topic_id?: string
           user_id?: string
+          v2_extraction_data?: Json | null
         }
         Relationships: []
       }
