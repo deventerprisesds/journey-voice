@@ -1,33 +1,74 @@
 
-# Refactor: Window-Specific Call Scripts with Task-Driven Topic Groups
 
-## Status: ✅ IMPLEMENTED
+# Fix: Double Greeting, Barge-in, and Task Hallucination
 
-All changes applied to `supabase/functions/twilio-scheduled-call/index.ts`.
+## Three bugs, two files.
 
-### What was done
+---
 
-1. **Replaced `getTopicsForWindow`** with `getTopicGroupsFromWindowTasks` and `getTopicGroupsFromAllTasks` — topic groups are now built from actual window-aligned tasks via JOIN through `task_topic_mappings` → `task_topic_index`, ranked by recency, priority density, and task count.
+## Bug 1: Double Greeting
 
-2. **Replaced `buildBranch1Context` and `buildBranch2Context`** with a single `buildWindowContext` function that switches on window and produces per-window agenda queues with the exact conversation flows from the spec.
+**Root cause:** `buildWindowContext` in `twilio-scheduled-call/index.ts` always emits `GREETING: Address user as "..."` and `1. Greet user` as the first agenda item. But for pre-connected calls, the bridge already plays cached audio and injects a "skip step 1" system message. The AI sees conflicting instructions and often follows the agenda's explicit greeting step.
 
-3. **Updated `buildWindowTransitionContext`** to fetch both tier 1 (window-aligned) and tier 2 (all tasks) topic groups, detect weekend day name, and pass everything to `buildWindowContext`.
+**Fix in `twilio-scheduled-call/index.ts`:**
+Add a note to every context that says: "NOTE: If a cached greeting has already been played, step 1 is already complete. A system message will confirm this -- skip it and start from step 2." This aligns the context with what the bridge injects, instead of contradicting it.
 
-4. **Updated `buildCallContext`** to map legacy call types (`morning_standup` → `morning`, `midday_checkin` → `business_hours`, `eod_wrapup` → `after_work`) through the same window logic. Custom calls remain unchanged.
+Update the `AGENDA_HEADER` constant to include:
 
-5. **Added `AGENDA_HEADER`** convention — every context string instructs the AI to treat items as a queue in priority order, drive naturally, and not read verbatim.
+```
+NOTE: On pre-connected calls, a cached audio greeting plays automatically before
+you receive this context. A system message will confirm this happened. When you see
+that confirmation, step 1 (greeting) is already done -- skip it entirely and start
+from the next item. Do NOT greet the user again.
+```
 
-### Per-window flows implemented
+---
 
-- **6 AM Morning Kickstart**: Confirm/adjust tasks or brief nudge (no topic jog)
-- **9 AM Business Hours**: "Which one to start with?" or two-tier topic jog
-- **5 PM Daily Wrap**: Phase 1 status wrapup + Phase 2 after-work tasks or topic jog
-- **7 PM Evening**: Confirm/adjust or two-tier topic jog (evening tone)
-- **Weekend 10 AM**: Saturday/Sunday detection, LIFE-focused topic jog
+## Bug 2: No Barge-in During ElevenLabs TTS
 
-### What did NOT change
+**Root cause:** In `twilio-realtime-bridge/index.ts`, the barge-in logic at `input_audio_buffer.speech_started` (line 534) only checks `isAiSpeaking`. This flag is set on `response.audio.delta` (line 447) which only fires for OpenAI native audio. When using ElevenLabs, audio is sent via `sendElevenLabsTTS` which sets `isSendingTtsAudio` instead. The barge-in gate never opens during ElevenLabs playback.
 
-- `getTasksForWindow`, `CATEGORY_WINDOW_MAPPING`, `WINDOW_RANGES`
-- `formatTaskList` helper (preserved, plus new `formatTopicGroups`)
-- All tool definitions, execute-tool, bridge files, agenda manager
-- Pre-caching flow, processRecurringCalls, serve handler
+**Fix in `twilio-realtime-bridge/index.ts`:**
+Change the barge-in condition from:
+
+```typescript
+if (isAiSpeaking) {
+```
+
+to:
+
+```typescript
+if (isAiSpeaking || isSendingTtsAudio) {
+```
+
+This ensures barge-in triggers whenever audio is being sent to Twilio, regardless of whether it came from OpenAI native audio or ElevenLabs TTS.
+
+---
+
+## Bug 3: Task Hallucination in Topic Jog
+
+**Root cause:** When the "No Tasks -- Topic Jog" branch fires, the context presents topic group names and tells the AI to "use get_tasks to drill into that topic." But there is no explicit prohibition against inventing tasks. The AI sees topic names like "Financial Management" and fabricates specific tasks under them instead of calling the tool.
+
+**Fix in `twilio-scheduled-call/index.ts`:**
+Add a strict anti-hallucination rule to the `AGENDA_HEADER`:
+
+```
+CRITICAL: NEVER invent, assume, or fabricate task names or details.
+Only present tasks that are either:
+  (a) explicitly listed in this context as data, OR
+  (b) returned by the get_tasks tool at runtime.
+If you do not have task data, you MUST call get_tasks before describing any tasks to the user.
+Topic group names are for memory jogging only -- do NOT guess what tasks are in them.
+```
+
+---
+
+## Summary of Changes
+
+| File | Change |
+|------|--------|
+| `supabase/functions/twilio-scheduled-call/index.ts` | Update `AGENDA_HEADER` with cached-greeting awareness and anti-hallucination rules |
+| `supabase/functions/twilio-realtime-bridge/index.ts` | Change barge-in condition to include `isSendingTtsAudio` |
+
+Two files. Three targeted fixes. No structural changes.
+
