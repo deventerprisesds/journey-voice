@@ -909,6 +909,10 @@ export class TwilioCallSession {
         case 'conversation.item.input_audio_transcription.completed':
           const transcript = data.transcript || '';
           console.log(`[CF] User said: "${transcript}"`);
+          // v8: Track last user transcript for agenda tangent tracking
+          if (transcript.trim()) {
+            this.lastUserTranscript = transcript;
+          }
           await this.logActivityToSupabase('connected', 'cf_transcription', {
             transcript: transcript.substring(0, 200)
           });
