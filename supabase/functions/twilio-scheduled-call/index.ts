@@ -294,15 +294,16 @@ Remember: Keep it brief and encouraging.`;
   }
 
   if (topics.length === 0) {
-    return `CALL TYPE: ${callName} (No Tasks or Topics)
+    return `CALL TYPE: ${callName} (Open Schedule)
 
-[CALL AGENDA]
+[CALL AGENDA - CONVERSATIONAL, DO NOT RUSH]
 1. Greet: "Hello Sir."
-2. Say: "You have no scheduled tasks for the ${windowLabel.toLowerCase()} window. Would you like me to help you plan something?"
-3. If yes: Ask what they'd like to work on and help schedule it.
-4. If no: "Understood. I will check back at the next scheduled call. Goodbye."
+2. Say: "Your schedule is open for the ${windowLabel.toLowerCase()} window. What are you thinking about working on? I can help you get something scheduled."
+3. Have a natural conversation about what they might want to focus on. Ask follow-up questions. Explore priorities.
+4. If they mention something specific: Help them think through timing and next steps. Offer to create a task or schedule it.
+5. If they genuinely want to keep it open: "Sounds good. Enjoy the free time. I will check back at the next scheduled call."
 
-Remember: Keep it helpful but not pushy.`;
+IMPORTANT: Do NOT rush to end the call. This is a planning conversation, not a notification. Take your time. Ask questions. Be curious about their plans.`;
   }
 
   const topicList = topics.map((t: any) => 
