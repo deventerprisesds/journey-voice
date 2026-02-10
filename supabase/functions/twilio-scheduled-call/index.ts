@@ -276,7 +276,8 @@ Remember: Keep it natural and conversational. Cover all agenda items before endi
 function buildBranch2Context(
   callName: string,
   topics: any[],
-  window: string
+  window: string,
+  preferredGreeting: string = 'Sir'
 ): string {
   const windowLabel = window === 'morning' ? 'Morning'
     : window === 'business_hours' ? 'Business Hours'
