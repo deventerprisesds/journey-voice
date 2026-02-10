@@ -137,26 +137,127 @@ async function getTasksForWindow(
   });
 }
 
-// Get topics for "memory jog" fallback
-async function getTopicsForWindow(
-  supabase: any, 
-  userId: string, 
+// Get topic groups built FROM actual window-aligned tasks (not static window_affinity)
+async function getTopicGroupsFromWindowTasks(
+  supabase: any,
+  userId: string,
   window: string
 ): Promise<any[]> {
-  const { data, error } = await supabase
-    .from('task_topic_index')
-    .select('topic_name, topic_summary, example_tasks')
-    .eq('user_id', userId)
-    .contains('window_affinity', [window])
-    .order('task_count', { ascending: false })
-    .limit(5);
-  
+  // Get categories that map to this window
+  const windowCategories = Object.entries(CATEGORY_WINDOW_MAPPING)
+    .filter(([_, windows]) => windows.includes(window))
+    .map(([cat]) => cat);
+
+  if (windowCategories.length === 0) return [];
+
+  const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+
+  const { data, error } = await supabase.rpc('get_topic_groups_for_tasks', {
+    p_user_id: userId,
+    p_categories: windowCategories,
+    p_recency_cutoff: fourteenDaysAgo
+  }).limit(5);
+
+  // Fallback: if RPC doesn't exist, do it manually with multiple queries
   if (error) {
-    console.error('[WINDOW-CONTEXT] Error fetching topics:', error);
-    return [];
+    console.log('[TOPIC-GROUPS] RPC not available, using manual join approach');
+    return getTopicGroupsManual(supabase, userId, windowCategories);
   }
 
   return data || [];
+}
+
+// Get topic groups from ALL open tasks (fallback when window-specific is empty)
+async function getTopicGroupsFromAllTasks(
+  supabase: any,
+  userId: string
+): Promise<any[]> {
+  return getTopicGroupsManual(supabase, userId, null);
+}
+
+// Manual topic grouping: query tasks → mappings → topics
+async function getTopicGroupsManual(
+  supabase: any,
+  userId: string,
+  categories: string[] | null
+): Promise<any[]> {
+  // Step 1: Get open tasks (optionally filtered by category)
+  let query = supabase
+    .from('tasks')
+    .select('id, title, category, priority, updated_at')
+    .eq('user_id', userId)
+    .neq('status', 'BLOCKED')
+    .neq('status', 'DONE')
+    .not('title', 'ilike', '%test%');
+
+  if (categories && categories.length > 0) {
+    query = query.in('category', categories);
+  }
+
+  const { data: tasks, error: tasksErr } = await query;
+  if (tasksErr || !tasks || tasks.length === 0) return [];
+
+  const taskIds = tasks.map((t: any) => t.id);
+
+  // Step 2: Get topic mappings for these tasks
+  const { data: mappings, error: mapErr } = await supabase
+    .from('task_topic_mappings')
+    .select('task_id, topic_id')
+    .in('task_id', taskIds);
+
+  if (mapErr || !mappings || mappings.length === 0) return [];
+
+  const topicIds = [...new Set(mappings.map((m: any) => m.topic_id))];
+
+  // Step 3: Get topic details
+  const { data: topics, error: topErr } = await supabase
+    .from('task_topic_index')
+    .select('id, topic_name, topic_summary')
+    .in('id', topicIds);
+
+  if (topErr || !topics || topics.length === 0) return [];
+
+  // Step 4: Build grouped + ranked results
+  const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+  const taskMap = new Map(tasks.map((t: any) => [t.id, t]));
+  const topicTaskMap = new Map<string, string[]>();
+
+  for (const m of mappings) {
+    if (!topicTaskMap.has(m.topic_id)) topicTaskMap.set(m.topic_id, []);
+    topicTaskMap.get(m.topic_id)!.push(m.task_id);
+  }
+
+  const results = topics.map((topic: any) => {
+    const tIds = topicTaskMap.get(topic.id) || [];
+    const topicTasks = tIds.map((id: string) => taskMap.get(id)).filter(Boolean);
+    const taskCount = topicTasks.length;
+    const recency = topicTasks.filter((t: any) => new Date(t.updated_at) >= fourteenDaysAgo).length;
+    const priorityDensity = topicTasks.filter((t: any) => t.priority === 'HIGH' || t.priority === 'URGENT').length;
+
+    return {
+      topic_name: topic.topic_name,
+      topic_summary: topic.topic_summary,
+      task_count: taskCount,
+      recency,
+      priority_density: priorityDensity
+    };
+  });
+
+  // Sort: recency DESC, priority_density DESC, task_count DESC
+  results.sort((a: any, b: any) =>
+    b.recency - a.recency || b.priority_density - a.priority_density || b.task_count - a.task_count
+  );
+
+  return results.slice(0, 5);
+}
+
+// Format topic groups for context
+function formatTopicGroups(topics: any[]): string {
+  if (topics.length === 0) return '';
+  return topics.map((t: any, i: number) => {
+    const suffix = t.priority_density > 0 ? ` [${t.priority_density} high-priority]` : '';
+    return `${i + 1}. ${t.topic_name} (${t.task_count} tasks)${suffix}`;
+  }).join('\n');
 }
 
 // Format task list for context
@@ -174,7 +275,13 @@ function formatTaskList(tasks: any[]): string {
   }).join('\n');
 }
 
-// Build window transition context with branching
+// Context header instructing AI to drive naturally
+const AGENDA_HEADER = `IMPORTANT: The items below are your agenda queue in priority order.
+Cover them in sequence but drive the conversation naturally.
+Do NOT read these items verbatim -- use your own words.
+Use your available tools for any changes the user requests.`;
+
+// Build window transition context with per-window scripts
 async function buildWindowTransitionContext(
   call: ScheduledCall, 
   userId: string, 
@@ -196,134 +303,227 @@ async function buildWindowTransitionContext(
   
   console.log(`[WINDOW-CONTEXT] Window: ${window}, Found ${windowTasks.length} tasks for user ${userId}`);
   
-  // Special handling for morning window: get all tasks for rest of day
-  let allDayTasks: any[] = [];
-  if (window === 'morning') {
-    const { data: dayTasks } = await supabase
-      .from('tasks')
-      .select('id, title, start_time, priority, category, status')
-      .eq('user_id', userId)
-      .neq('status', 'BLOCKED')
-      .neq('status', 'DONE')
-      .not('title', 'ilike', '%test%')
-      .gte('start_time', new Date().toISOString())
-      .order('start_time', { ascending: true });
-    
-    allDayTasks = (dayTasks || []).filter((t: any) => {
-      if (!t.start_time) return false;
-      const taskHour = new Date(t.start_time).getHours();
-      return taskHour >= 9; // After morning window
-    });
-  }
-  
-  if (windowTasks.length > 0 || (window === 'morning' && allDayTasks.length > 0)) {
-    // BRANCH 1: Tasks exist
-    return buildBranch1Context(call.name, windowTasks, allDayTasks, window, preferredGreeting);
-  } else {
-    // BRANCH 2: No tasks - topic jog fallback
-    const topics = await getTopicsForWindow(supabase, userId, window);
-    return buildBranch2Context(call.name, topics, window, preferredGreeting);
-  }
+  // Get tier 1 topic groups (from window-aligned tasks) and tier 2 fallback (all tasks)
+  const [tier1Topics, tier2Topics] = await Promise.all([
+    getTopicGroupsFromWindowTasks(supabase, userId, window),
+    getTopicGroupsFromAllTasks(supabase, userId)
+  ]);
+
+  console.log(`[WINDOW-CONTEXT] Tier 1 topics: ${tier1Topics.length}, Tier 2 topics: ${tier2Topics.length}`);
+
+  // Detect weekend day name
+  const dayName = new Date().toLocaleDateString('en-US', { weekday: 'long' });
+
+  return buildWindowContext(
+    window, windowTasks, tier1Topics, tier2Topics, preferredGreeting, dayName
+  );
 }
 
-// Build Branch 1 context (tasks exist)
-function buildBranch1Context(
-  callName: string, 
-  windowTasks: any[], 
-  allDayTasks: any[],
+// Single function that produces per-window agenda context
+function buildWindowContext(
   window: string,
-  preferredGreeting: string = 'Sir'
+  tasks: any[],
+  tier1Topics: any[],
+  tier2Topics: any[],
+  preferredGreeting: string,
+  dayName: string
 ): string {
-  const windowTaskList = formatTaskList(windowTasks);
-  const restOfDayList = allDayTasks.length > 0 ? formatTaskList(allDayTasks) : '';
-  
-  const windowLabel = window === 'morning' ? 'Morning'
-    : window === 'business_hours' ? 'Business Hours'
-    : window === 'after_work' ? 'After Work'
-    : window === 'evening' ? 'Evening'
-    : 'Weekend';
+  const hasTasks = tasks.length > 0;
+  const taskList = formatTaskList(tasks);
+  const tier1List = formatTopicGroups(tier1Topics);
+  const tier2List = formatTopicGroups(tier2Topics);
 
-  let context = `CALL TYPE: ${callName} (Tasks Available)
+  switch (window) {
+    // ─── 6:00 AM — Morning Kickstart ─────────────────────────
+    case 'morning':
+      if (hasTasks) {
+        return `${AGENDA_HEADER}
 
-[CALL AGENDA - MUST COVER ALL]
-1. Greet: "Hello ${preferredGreeting}."
-2. Share ${windowLabel.toLowerCase()} tasks:
-${windowTaskList}
-`;
+CALL: Morning Kickstart (Tasks Available)
+GREETING: Address user as "${preferredGreeting}"
 
-  if (window === 'morning' && restOfDayList) {
-    context += `
-3. Share rest of day overview:
-${restOfDayList}
-4. Ask: "Would you like to confirm these for today, adjust them, or skip?"
-5. If confirm: "Understood. I will call you back later. Goodbye."
-6. If adjust: Capture edits, confirm changes.`;
-  } else {
-    context += `
-3. Ask: "Which one do you want to start with?" or "Would you like to confirm, adjust, or skip?"
-4. If confirm: Acknowledge and close.
-5. If adjust: Capture edits, confirm changes.`;
+AGENDA QUEUE:
+1. Greet user
+2. Remind them of their morning tasks:
+${taskList}
+3. Ask: confirm these for this morning, adjust, or skip?
+4. If CONFIRM → Acknowledge, mention you will call back later to go over plans. Close.
+5. If ADJUST → Capture edits using reschedule_task or update_task. Confirm changes. Close.`;
+      } else {
+        return `${AGENDA_HEADER}
+
+CALL: Morning Kickstart (No Tasks)
+GREETING: Address user as "${preferredGreeting}"
+
+AGENDA QUEUE:
+1. Greet user
+2. Brief nudge: the day is starting, you will call back in a few hours to go over plans. Close.
+
+NOTE: No topic jog for morning. Keep this call lightweight.`;
+      }
+
+    // ─── 9:00 AM — Business Hours Execution ──────────────────
+    case 'business_hours':
+      if (hasTasks) {
+        return `${AGENDA_HEADER}
+
+CALL: Business Hours Execution (Tasks Available)
+GREETING: Address user as "${preferredGreeting}"
+
+AGENDA QUEUE:
+1. Greet user
+2. If user goes on a tangent, handle it, then return to the plan
+3. Present business-hours tasks:
+${taskList}
+4. Ask: "Which one do you want to start with?"
+5. If they pick one → mark in progress via update_task`;
+      } else {
+        return `${AGENDA_HEADER}
+
+CALL: Business Hours Execution (No Tasks — Topic Jog)
+GREETING: Address user as "${preferredGreeting}"
+
+AGENDA QUEUE:
+1. Greet user
+2. Tell them they have no scheduled items for the next few hours
+${tier1List ? `3. Present these business-hour topic groups to jog memory:
+${tier1List}
+4. Ask if they want to work on any of these right now
+5. If YES → Use get_tasks to drill into that topic. Help them select tasks. Use parse_and_create_tasks to schedule into available slots. Confirm.
+6. If NO → Acknowledge, mention next check-in. Close.` : `3. Say: "I don't see any potential items for business hours. Do you want to look for items across the entire board?"
+4. If YES → Present these broader topic groups:
+${tier2List || '(No topics found across the board either)'}
+   Use get_tasks to drill into selected topic. Help select tasks. Use parse_and_create_tasks to schedule. Confirm.
+5. If NO → Acknowledge, mention next check-in. Close.`}`;
+      }
+
+    // ─── 5:00 PM — Daily Wrap + After-Work ───────────────────
+    case 'after_work':
+      const phase2 = hasTasks
+        ? `PHASE 2 — After-Work Items:
+5. Present after-work tasks:
+${taskList}
+6. Ask: keep as-is, adjust, or skip?
+7. If ADJUST → Capture edits via tools. Confirm.`
+        : tier1List
+        ? `PHASE 2 — After-Work Topic Jog:
+5. Tell them they have no scheduled after-work items
+6. Present these after-work topic groups to jog memory:
+${tier1List}
+7. Ask if they want to work on any of these during this time window
+8. If YES → Use get_tasks to drill in. Help select. Use parse_and_create_tasks to schedule. Confirm.
+9. If NO → Acknowledge. Close.`
+        : `PHASE 2 — After-Work Topic Jog (Broadened):
+5. Say: "I don't see any potential items for after work. Do you want to look for items across the entire board?"
+6. If YES → Present these broader topic groups:
+${tier2List || '(No topics found)'}
+   Use get_tasks to drill in. Help select. Use parse_and_create_tasks to schedule. Confirm.
+7. If NO → Acknowledge. Close.`;
+
+      return `${AGENDA_HEADER}
+
+CALL: Daily Wrap + After-Work (Two Phases)
+GREETING: Address user as "${preferredGreeting}"
+
+PHASE 1 — Status Wrapup:
+1. Greet user
+2. Say you want to review how today went and capture status updates
+3. Ask: any tasks completed today to mark done? → Use update_task with status DONE
+4. Ask: any tasks blocked or to move to another day? → Use update_task or reschedule_task
+
+${phase2}
+
+CLOSE: Confirm you captured their updates.`;
+
+    // ─── 7:00 PM — Evening Work Items ────────────────────────
+    case 'evening':
+      if (hasTasks) {
+        return `${AGENDA_HEADER}
+
+CALL: Evening Work Items (Tasks Available)
+GREETING: Address user as "${preferredGreeting}" — warm evening tone
+
+AGENDA QUEUE:
+1. Greet user warmly (evening tone)
+2. Present evening tasks:
+${taskList}
+3. Ask: confirm, adjust, or skip?
+4. If ADJUST → Capture edits via tools. Confirm.
+
+CLOSE: Wish them a good evening.`;
+      } else {
+        return `${AGENDA_HEADER}
+
+CALL: Evening Work Items (No Tasks — Topic Jog)
+GREETING: Address user as "${preferredGreeting}" — warm evening tone
+
+AGENDA QUEUE:
+1. Greet user warmly (evening tone)
+2. Tell them they have no scheduled evening items
+${tier1List ? `3. Present these evening topic groups to jog memory:
+${tier1List}
+4. Ask if they want to work on any of these tonight
+5. If YES → Use get_tasks to drill in. Help select. Use parse_and_create_tasks to schedule. Confirm.
+6. If NO → Acknowledge.` : `3. Say: "I don't see any potential items for this evening. Do you want to look for items across the entire board?"
+4. If YES → Present these broader topic groups:
+${tier2List || '(No topics found)'}
+   Use get_tasks to drill in. Help select. Use parse_and_create_tasks to schedule. Confirm.
+5. If NO → Acknowledge.`}
+
+CLOSE: Wish them a good evening.`;
+      }
+
+    // ─── Weekend 10:00 AM — Saturday/Sunday ──────────────────
+    case 'weekends':
+      if (hasTasks) {
+        return `${AGENDA_HEADER}
+
+CALL: Weekend Check-in — ${dayName} (Tasks Available)
+GREETING: Address user as "${preferredGreeting}" — relaxed weekend tone
+
+AGENDA QUEUE:
+1. Greet user (weekend tone, reference ${dayName})
+2. Present weekend tasks for today:
+${taskList}
+3. Ask: confirm, adjust, or skip?
+4. If ADJUST → Capture edits via tools. Confirm.
+
+CLOSE: Wish them an enjoyable weekend.`;
+      } else {
+        return `${AGENDA_HEADER}
+
+CALL: Weekend Check-in — ${dayName} (No Tasks — Topic Jog)
+GREETING: Address user as "${preferredGreeting}" — relaxed weekend tone
+
+AGENDA QUEUE:
+1. Greet user (weekend tone, reference ${dayName})
+2. Tell them they have no scheduled items for today
+${tier1List ? `3. Present these life/weekend topic groups to jog memory:
+${tier1List}
+4. Ask if they want to work on any of these today
+5. If YES → Use get_tasks to drill in. Help select. Use parse_and_create_tasks to schedule. Confirm.
+6. If NO → Acknowledge.` : `3. Say: "I don't see any potential items for today. Do you want to look for items across the entire board?"
+4. If YES → Present these broader topic groups:
+${tier2List || '(No topics found)'}
+   Use get_tasks to drill in. Help select. Use parse_and_create_tasks to schedule. Confirm.
+5. If NO → Acknowledge.`}
+
+CLOSE: Wish them an enjoyable weekend.`;
+      }
+
+    default:
+      return `${AGENDA_HEADER}
+
+CALL: Scheduled Check-in
+GREETING: Address user as "${preferredGreeting}"
+
+AGENDA QUEUE:
+1. Greet user
+2. Ask what they would like to focus on
+3. Help them plan and schedule using available tools
+
+CLOSE: Confirm any updates captured.`;
   }
-
-  context += `
-
-Remember: Keep it natural and conversational. Cover all agenda items before ending.`;
-
-  return context;
-}
-
-// Build Branch 2 context (no tasks - topic jog)
-function buildBranch2Context(
-  callName: string,
-  topics: any[],
-  window: string,
-  preferredGreeting: string = 'Sir'
-): string {
-  const windowLabel = window === 'morning' ? 'Morning'
-    : window === 'business_hours' ? 'Business Hours'
-    : window === 'after_work' ? 'After Work'
-    : window === 'evening' ? 'Evening'
-    : 'Weekend';
-
-  if (window === 'morning') {
-    // Morning with no tasks: brief wake-up nudge
-    return `CALL TYPE: ${callName} (No Tasks)
-
-[CALL AGENDA]
-1. Greet: "Hello ${preferredGreeting}."
-2. Say: "I am just calling to help you get started with your day. I will call you back in a few hours to go over plans. Goodbye."
-
-Remember: Keep it brief and encouraging.`;
-  }
-
-  if (topics.length === 0) {
-    return `CALL TYPE: ${callName} (Open Schedule)
-
-[CALL AGENDA - CONVERSATIONAL, DO NOT RUSH]
-1. Greet: "Hello ${preferredGreeting}."
-2. Say: "Your schedule is open for the ${windowLabel.toLowerCase()} window. What are you thinking about working on? I can help you get something scheduled."
-3. Have a natural conversation about what they might want to focus on. Ask follow-up questions. Explore priorities.
-4. If they mention something specific: Help them think through timing and next steps. Offer to create a task or schedule it.
-5. If they genuinely want to keep it open: "Sounds good. Enjoy the free time. I will check back at the next scheduled call."
-
-IMPORTANT: Do NOT rush to end the call. This is a planning conversation, not a notification. Take your time. Ask questions. Be curious about their plans.`;
-  }
-
-  const topicList = topics.map((t: any) => 
-    `- ${t.topic_name}: ${t.topic_summary || 'Various tasks'}`
-  ).join('\n');
-
-  return `CALL TYPE: ${callName} (Topic Jog)
-
-[CALL AGENDA - MUST COVER ALL]
-1. Greet: "Hello ${preferredGreeting}."
-2. Topic jog: "You have no scheduled items for the ${windowLabel.toLowerCase()} window. To jog your memory, here are the main topics you have been working on:
-${topicList}
-Do you want to work on any of these right now?"
-3. If yes to a topic: List real tasks under that topic, ask which to include, push to scheduler.
-4. If no: "Understood. I will check back at the next scheduled call. Goodbye."
-
-Remember: Let the user lead the selection. Keep it conversational.`;
 }
 
 // Build structured context with clear agenda items the AI must cover
@@ -337,70 +537,26 @@ async function buildCallContext(call: ScheduledCall, userId: string, preferredGr
     return buildWindowTransitionContext(call, userId, window, preferredGreeting);
   }
 
-  const briefing = await getTodaysBriefing(userId);
-  
-  // Base context from user's custom configuration
-  const userContext = call.context || '';
-  
-  switch (call.callType) {
-    case 'morning_standup':
-      return `CALL TYPE: Morning Stand-up
-      
-[CALL AGENDA - MUST COVER ALL]
-1. Greet warmly and mention it's the morning check-in
-2. Share today's schedule overview: ${briefing}
-3. Highlight any high-priority or urgent tasks
-4. Ask if there's anything they want to add to today's schedule
-5. Ask if there are any blockers or concerns for today
-6. Offer encouragement and wish them a productive day
+  // Legacy call types → map to windows and use the same per-window logic
+  const legacyWindowMap: Record<string, string> = {
+    'morning_standup': 'morning',
+    'midday_checkin': 'business_hours',
+    'eod_wrapup': 'after_work'
+  };
 
-USER NOTES: ${userContext}
-
-Remember: Cover ALL 6 agenda items naturally before ending the call.`;
-
-    case 'midday_checkin':
-      return `CALL TYPE: Midday Check-in
-
-[CALL AGENDA - MUST COVER ALL]
-1. Greet and mention it's the midday check-in
-2. Ask how the day is going so far
-3. Check on progress: ${briefing}
-4. Ask if anything is blocking progress or needs rescheduling
-5. Ask if they need any help or want to reprioritize
-6. Offer a quick motivational note before ending
-
-USER NOTES: ${userContext}
-
-Remember: Cover ALL 6 agenda items naturally before ending the call.`;
-
-    case 'eod_wrapup':
-      return `CALL TYPE: End of Day Wrap-up
-
-[CALL AGENDA - MUST COVER ALL]
-1. Greet and acknowledge the end of the workday
-2. Summarize what was accomplished today: ${briefing}
-3. Note any tasks that weren't completed and ask if they should be rescheduled
-4. Ask what the top priorities should be for tomorrow
-5. Ask if there's anything specific they want to tackle tonight or first thing tomorrow
-6. Wish them a good evening and encourage rest/downtime
-
-USER NOTES: ${userContext}
-
-Remember: Cover ALL 6 agenda items naturally before ending the call.`;
-
-    case 'custom':
-    default:
-      if (!userContext) {
-        return 'CALL TYPE: Custom Scheduled Call\n\n[CALL AGENDA]\n1. Greet the user\n2. Ask what they need help with\n\nThis is a user-scheduled call - follow their lead.';
-      }
-      
-      return `CALL TYPE: Custom Scheduled Call
-
-[CALL AGENDA - FROM USER CONFIGURATION]
-${userContext}
-
-Interpret the user notes above as your agenda. Cover all mentioned topics before ending the call.`;
+  const mappedWindow = legacyWindowMap[call.callType];
+  if (mappedWindow) {
+    console.log(`[BUILD-CONTEXT] Legacy callType ${call.callType} → window ${mappedWindow}`);
+    return buildWindowTransitionContext(call, userId, mappedWindow, preferredGreeting);
   }
+
+  // Custom calls remain unchanged
+  const userContext = call.context || '';
+  if (!userContext) {
+    return `${AGENDA_HEADER}\n\nCALL: Custom Scheduled Call\n\nAGENDA QUEUE:\n1. Greet the user\n2. Ask what they need help with\n\nThis is a user-scheduled call — follow their lead.`;
+  }
+  
+  return `${AGENDA_HEADER}\n\nCALL: Custom Scheduled Call\n\n[AGENDA FROM USER CONFIGURATION]\n${userContext}\n\nInterpret the user notes above as your agenda. Cover all mentioned topics before ending the call.`;
 }
 
 // Check if current time matches scheduled time (±1 minute tolerance)
