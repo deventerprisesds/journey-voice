@@ -525,19 +525,53 @@ serve(async (req) => {
 
         case "input_audio_buffer.speech_started":
           const now = Date.now();
-          console.log(`[VAD-TRACE] speech_started at ${now - callStartTime}ms into call, responseCreateCount=${responseCreateCount}, greetingSent=${greetingSent}`);
+          console.log(`[VAD-TRACE] speech_started at ${now - callStartTime}ms into call, responseCreateCount=${responseCreateCount}, greetingSent=${greetingSent}, isAiSpeaking=${isAiSpeaking}`);
           if (now - lastSpeechStartTime < SPEECH_DEBOUNCE_MS) break;
           lastSpeechStartTime = now;
           
           if (waitingForUserHello) { triggerPendingGreeting('vad'); break; }
           
           if (isAiSpeaking) {
+            // Clear Twilio audio buffer immediately
             if (streamSid) twilioWs.send(JSON.stringify({ event: "clear", streamSid }));
+            
+            // Cancel OpenAI response generation (works for both TTS providers)
+            if (openaiWs?.readyState === WebSocket.OPEN) {
+              openaiWs.send(JSON.stringify({ type: "response.cancel" }));
+              console.log(`[BARGE-IN] Sent response.cancel to OpenAI`);
+            }
+            
+            // For OpenAI native audio, also truncate for clean VAD state
             if (ttsProvider !== 'elevenlabs' && currentResponseItemId && openaiWs?.readyState === WebSocket.OPEN) {
               openaiWs.send(JSON.stringify({ type: "conversation.item.truncate", item_id: currentResponseItemId, content_index: 0, audio_end_ms: Math.floor(audioSamplesPlayed / 24) }));
             }
+            
+            // For ElevenLabs: set barge-in flag to discard late-arriving TTS chunks
+            if (ttsProvider === 'elevenlabs') {
+              bargeInActive = true;
+              sentenceBuffer = '';
+              pendingTextBuffer = '';
+              isProcessingElevenLabsTTS = false;
+              console.log(`[BARGE-IN] ElevenLabs: bargeInActive=true, cleared sentence/pending buffers`);
+              // Delayed second clear to catch late audio chunks, then reset flag
+              setTimeout(() => {
+                if (streamSid && twilioWs.readyState === WebSocket.OPEN) {
+                  twilioWs.send(JSON.stringify({ event: "clear", streamSid }));
+                }
+                bargeInActive = false;
+                console.log(`[BARGE-IN] bargeInActive reset to false after 300ms`);
+              }, 300);
+            }
+            
             isAiSpeaking = false;
             sentenceBuffer = '';
+            
+            // Track tangent in agenda manager
+            if (sharedAgendaManager && lastUserTranscript) {
+              sharedAgendaManager.pauseForQuery(lastUserTranscript).catch(e => console.error('[AGENDA] pauseForQuery error:', e));
+              bargeInRecoveryPending = true;
+              console.log(`[AGENDA] Paused for tangent: "${lastUserTranscript?.substring(0, 50)}..."`);
+            }
           }
           break;
 
