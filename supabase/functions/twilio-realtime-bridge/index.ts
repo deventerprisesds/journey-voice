@@ -531,7 +531,7 @@ serve(async (req) => {
           
           if (waitingForUserHello) { triggerPendingGreeting('vad'); break; }
           
-          if (isAiSpeaking) {
+          if (isAiSpeaking || isSendingTtsAudio) {
             // Clear Twilio audio buffer immediately
             if (streamSid) twilioWs.send(JSON.stringify({ event: "clear", streamSid }));
             

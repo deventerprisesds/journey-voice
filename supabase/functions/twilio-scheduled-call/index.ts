@@ -279,7 +279,19 @@ function formatTaskList(tasks: any[]): string {
 const AGENDA_HEADER = `IMPORTANT: The items below are your agenda queue in priority order.
 Cover them in sequence but drive the conversation naturally.
 Do NOT read these items verbatim -- use your own words.
-Use your available tools for any changes the user requests.`;
+Use your available tools for any changes the user requests.
+
+NOTE: On pre-connected calls, a cached audio greeting plays automatically before
+you receive this context. A system message will confirm this happened. When you see
+that confirmation, step 1 (greeting) is already done -- skip it entirely and start
+from the next item. Do NOT greet the user again.
+
+CRITICAL: NEVER invent, assume, or fabricate task names or details.
+Only present tasks that are either:
+  (a) explicitly listed in this context as data, OR
+  (b) returned by the get_tasks tool at runtime.
+If you do not have task data, you MUST call get_tasks before describing any tasks to the user.
+Topic group names are for memory jogging only -- do NOT guess what tasks are in them.`;
 
 // Build window transition context with per-window scripts
 async function buildWindowTransitionContext(
