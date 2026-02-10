@@ -354,7 +354,7 @@ serve(async (req) => {
     if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN || greetingSent) return;
     greetingSent = true;
     const greeting = getTimeBasedGreeting(userTimezone);
-    const userName = userProfile?.first_name || 'sir';
+    const userName = userProfile?.preferred_greeting || userProfile?.first_name || 'sir';
     injectSystemMessage(`[System: Inbound call from ${userName}. Current time: ${getCurrentTimeString(userTimezone)}. Greet with "${greeting}, ${userName}. What can I help you with?"]`);
     createResponse('INBOUND_GREETING');
   }
