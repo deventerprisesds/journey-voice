@@ -248,6 +248,7 @@ serve(async (req) => {
 
   // ElevenLabs TTS
   async function sendElevenLabsTTS(text: string) {
+    if (bargeInActive) { console.log('[ELEVENLABS] Barge-in active, discarding TTS chunk'); return; }
     if (!streamSid || twilioWs.readyState !== WebSocket.OPEN || isProcessingElevenLabsTTS) {
       if (isProcessingElevenLabsTTS) pendingTextBuffer += ' ' + text;
       return;
