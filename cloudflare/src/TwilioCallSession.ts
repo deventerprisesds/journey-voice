@@ -1882,11 +1882,14 @@ ${this.ragContext ? `Context: ${this.ragContext}` : ''}]`;
       this.helloFallbackTimer = null;
     }
     
-    console.log(`[CF] Triggering greeting from: ${source}`);
+    console.log(`[CF-GREETING] Triggering greeting from: ${source}, greetingContextInjected=${this.greetingContextInjected}`);
     await this.logActivityToSupabase('connected', 'cf_hello_trigger', {
       source,
       wait_duration_ms: Date.now() - this.callStartTime
     });
+    
+    // v8: Set greeting guard flag
+    this.greetingContextInjected = true;
     
     // Now send the greeting
     await this.sendGreeting();
