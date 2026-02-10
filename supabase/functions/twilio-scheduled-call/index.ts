@@ -231,7 +231,8 @@ function buildBranch1Context(
   callName: string, 
   windowTasks: any[], 
   allDayTasks: any[],
-  window: string
+  window: string,
+  preferredGreeting: string = 'Sir'
 ): string {
   const windowTaskList = formatTaskList(windowTasks);
   const restOfDayList = allDayTasks.length > 0 ? formatTaskList(allDayTasks) : '';
