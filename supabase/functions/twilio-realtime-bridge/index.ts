@@ -236,9 +236,10 @@ serve(async (req) => {
       greetingSent = true;
       firstOutboundLogged = true;
       injectAssistantMessage(preConnectedGreetingText);
-      const contextMsg = `[System: PRE-CONNECTED CALL - You just said: "${preConnectedGreetingText}". ${callContext || ''}. Cover ALL agenda items before ending.]`;
+      const contextMsg = `[System: PRE-CONNECTED CALL - You already greeted the user with: "${preConnectedGreetingText}". SKIP the greeting step (step 1) in the agenda -- it is already done. ${callContext || ''}. Continue from step 2 onward. Cover ALL remaining agenda items before ending.]`;
       injectSystemMessage(contextMsg);
-      console.log(`[GREETING-TRACE] triggerPendingGreeting(${source}): injected greeting context. greetingSent=${greetingSent}`);
+      greetingContextInjected = true;
+      console.log(`[GREETING-TRACE] triggerPendingGreeting(${source}): injected greeting context. greetingSent=${greetingSent}, greetingContextInjected=true`);
     } else if (pendingGreetingMode === 'openai') {
       sendOutboundGreeting();
     }
