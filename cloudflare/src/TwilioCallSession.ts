@@ -746,7 +746,10 @@ export class TwilioCallSession {
                 preview: (data.delta || '').substring(0, 50)
               });
             }
-            await this.handleTextDelta(data);
+            // v8: NO await - fire-and-forget (parity with Supabase line 510)
+            // Awaiting blocks the WebSocket loop, preventing barge-in signals from being processed
+            console.log('[CF-TTS] handleTextDelta fire-and-forget, bargeInActive:', this.bargeInActive);
+            this.handleTextDelta(data);
           }
           break;
 
