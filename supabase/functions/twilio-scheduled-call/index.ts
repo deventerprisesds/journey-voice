@@ -316,7 +316,7 @@ IMPORTANT: Do NOT rush to end the call. This is a planning conversation, not a n
   return `CALL TYPE: ${callName} (Topic Jog)
 
 [CALL AGENDA - MUST COVER ALL]
-1. Greet: "Hello Sir."
+1. Greet: "Hello ${preferredGreeting}."
 2. Topic jog: "You have no scheduled items for the ${windowLabel.toLowerCase()} window. To jog your memory, here are the main topics you have been working on:
 ${topicList}
 Do you want to work on any of these right now?"
