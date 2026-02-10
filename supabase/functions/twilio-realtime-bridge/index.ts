@@ -362,7 +362,7 @@ serve(async (req) => {
   function sendOutboundGreeting() {
     if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN || greetingSent) return;
     greetingSent = true;
-    const userName = userProfile?.first_name || 'sir';
+    const userName = userProfile?.preferred_greeting || userProfile?.first_name || 'sir';
     const isScheduled = callContext && (callContext.includes('[CALL AGENDA]') || callContext.includes('CALL TYPE:'));
     if (isScheduled && callContext) {
       injectSystemMessage(`[System: SCHEDULED CALL to ${userName}. ${callContext}. Start with greeting, cover ALL agenda items before ending.]`);
