@@ -476,6 +476,21 @@ serve(async (req) => {
               });
             } catch (e) { console.error('[PERSIST] assistant save error:', e); }
           }
+          
+          // AGENDA TANGENT RECOVERY: After AI responds to a tangent, nudge back to agenda
+          if (sharedAgendaManager && bargeInRecoveryPending) {
+            try {
+              const hint = await sharedAgendaManager.getResumeHint();
+              if (hint) {
+                console.log(`[AGENDA-RESUME] Injecting resume hint: ${hint}`);
+                injectSystemMessage(`[RESUME] ${hint}. Continue with this agenda item naturally. Remember to cover ALL remaining agenda items before ending the call.`);
+                createResponse('AGENDA_RESUME');
+              }
+              await sharedAgendaManager.resume();
+            } catch (e) { console.error('[AGENDA-RESUME] Error:', e); }
+            bargeInRecoveryPending = false;
+          }
+          
           currentResponseText = '';
           currentResponseTrigger = '';
           break;
