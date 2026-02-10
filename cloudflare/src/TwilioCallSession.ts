@@ -1795,6 +1795,11 @@ You: "Looking that up..." [then call web_search tool]`;
     this.currentAgendaIndex = 0;
     this.agendaPaused = false;
     this.pausedForQuery = null;
+    // v8: Reset barge-in and greeting state
+    this.bargeInActive = false;
+    this.bargeInRecoveryPending = false;
+    this.greetingContextInjected = false;
+    this.lastUserTranscript = '';
   }
 
   // ==================== Phase 5: Smart Filler Manager ====================

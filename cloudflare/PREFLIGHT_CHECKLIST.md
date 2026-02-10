@@ -40,6 +40,10 @@ Before claiming feature parity, verify these functions exist:
 | 2026-01-29 | Missing getTimeBasedGreeting() | TwilioCallSession.ts | Port from Supabase |
 | 2026-01-29 | Echo flags not cleared after ElevenLabs | TwilioCallSession.ts | Add explicit clearing |
 | 2026-01-29 | Used response.cancel instead of truncate | TwilioCallSession.ts | Use conversation.item.truncate |
+| 2026-02-10 | `await handleTextDelta` blocked WS loop | TwilioCallSession.ts | Remove await (fire-and-forget like Supabase) |
+| 2026-02-10 | ElevenLabs barge-in skipped response.cancel | TwilioCallSession.ts | Add full interrupt: cancel + bargeInActive flag + delayed clear |
+| 2026-02-10 | Agenda tangent functions never called | TwilioCallSession.ts | Wire pauseAgendaForTangent + getResumeHint into event handlers |
+| 2026-02-10 | No double greeting guard | TwilioCallSession.ts | Add greetingContextInjected flag |
 
 ---
 
