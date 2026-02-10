@@ -178,7 +178,8 @@ function formatTaskList(tasks: any[]): string {
 async function buildWindowTransitionContext(
   call: ScheduledCall, 
   userId: string, 
-  window: string
+  window: string,
+  preferredGreeting: string = 'Sir'
 ): Promise<string> {
   const supabase = createClient(supabaseUrl, supabaseServiceKey);
   
@@ -217,11 +218,11 @@ async function buildWindowTransitionContext(
   
   if (windowTasks.length > 0 || (window === 'morning' && allDayTasks.length > 0)) {
     // BRANCH 1: Tasks exist
-    return buildBranch1Context(call.name, windowTasks, allDayTasks, window);
+    return buildBranch1Context(call.name, windowTasks, allDayTasks, window, preferredGreeting);
   } else {
     // BRANCH 2: No tasks - topic jog fallback
     const topics = await getTopicsForWindow(supabase, userId, window);
-    return buildBranch2Context(call.name, topics, window);
+    return buildBranch2Context(call.name, topics, window, preferredGreeting);
   }
 }
 
@@ -230,7 +231,8 @@ function buildBranch1Context(
   callName: string, 
   windowTasks: any[], 
   allDayTasks: any[],
-  window: string
+  window: string,
+  preferredGreeting: string = 'Sir'
 ): string {
   const windowTaskList = formatTaskList(windowTasks);
   const restOfDayList = allDayTasks.length > 0 ? formatTaskList(allDayTasks) : '';
@@ -244,7 +246,7 @@ function buildBranch1Context(
   let context = `CALL TYPE: ${callName} (Tasks Available)
 
 [CALL AGENDA - MUST COVER ALL]
-1. Greet: "Hello Sir."
+1. Greet: "Hello ${preferredGreeting}."
 2. Share ${windowLabel.toLowerCase()} tasks:
 ${windowTaskList}
 `;
@@ -274,7 +276,8 @@ Remember: Keep it natural and conversational. Cover all agenda items before endi
 function buildBranch2Context(
   callName: string,
   topics: any[],
-  window: string
+  window: string,
+  preferredGreeting: string = 'Sir'
 ): string {
   const windowLabel = window === 'morning' ? 'Morning'
     : window === 'business_hours' ? 'Business Hours'
@@ -287,7 +290,7 @@ function buildBranch2Context(
     return `CALL TYPE: ${callName} (No Tasks)
 
 [CALL AGENDA]
-1. Greet: "Hello Sir."
+1. Greet: "Hello ${preferredGreeting}."
 2. Say: "I am just calling to help you get started with your day. I will call you back in a few hours to go over plans. Goodbye."
 
 Remember: Keep it brief and encouraging.`;
@@ -297,7 +300,7 @@ Remember: Keep it brief and encouraging.`;
     return `CALL TYPE: ${callName} (Open Schedule)
 
 [CALL AGENDA - CONVERSATIONAL, DO NOT RUSH]
-1. Greet: "Hello Sir."
+1. Greet: "Hello ${preferredGreeting}."
 2. Say: "Your schedule is open for the ${windowLabel.toLowerCase()} window. What are you thinking about working on? I can help you get something scheduled."
 3. Have a natural conversation about what they might want to focus on. Ask follow-up questions. Explore priorities.
 4. If they mention something specific: Help them think through timing and next steps. Offer to create a task or schedule it.
@@ -313,7 +316,7 @@ IMPORTANT: Do NOT rush to end the call. This is a planning conversation, not a n
   return `CALL TYPE: ${callName} (Topic Jog)
 
 [CALL AGENDA - MUST COVER ALL]
-1. Greet: "Hello Sir."
+1. Greet: "Hello ${preferredGreeting}."
 2. Topic jog: "You have no scheduled items for the ${windowLabel.toLowerCase()} window. To jog your memory, here are the main topics you have been working on:
 ${topicList}
 Do you want to work on any of these right now?"
@@ -324,14 +327,14 @@ Remember: Let the user lead the selection. Keep it conversational.`;
 }
 
 // Build structured context with clear agenda items the AI must cover
-async function buildCallContext(call: ScheduledCall, userId: string): Promise<string> {
+async function buildCallContext(call: ScheduledCall, userId: string, preferredGreeting: string = 'Sir'): Promise<string> {
   // Check for window marker in context
   const windowMatch = call.context?.match(/\[WINDOW:(\w+)\]/);
   
   if (windowMatch) {
     const window = windowMatch[1];
     console.log(`[BUILD-CONTEXT] Detected window transition call: ${window}`);
-    return buildWindowTransitionContext(call, userId, window);
+    return buildWindowTransitionContext(call, userId, window, preferredGreeting);
   }
 
   const briefing = await getTodaysBriefing(userId);
@@ -478,14 +481,15 @@ async function processRecurringCalls(): Promise<{ processed: number; triggered: 
     const currentHHMM = getTimeInTimezone(now, timezone);
     console.log(`[RECURRING] User ${userId}: timezone=${timezone}, current time=${currentHHMM}`);
 
-    // Get user's phone number from profiles
+    // Get user's phone number and preferred greeting from profiles
     const { data: profile } = await supabase
       .from('profiles')
-      .select('phone')
+      .select('phone, preferred_greeting')
       .eq('user_id', userId)
       .maybeSingle();
 
     const phoneNumber = profile?.phone;
+    const preferredGreeting = profile?.preferred_greeting || 'Sir';
     if (!phoneNumber) {
       console.log(`[RECURRING] User ${userId}: No phone number configured, skipping`);
       continue;
@@ -557,7 +561,7 @@ async function processRecurringCalls(): Promise<{ processed: number; triggered: 
             }
           } else {
             // Default: phone call via twilio-voice-handler
-            const context = await buildCallContext(call, userId);
+            const context = await buildCallContext(call, userId, preferredGreeting);
 
             const response = await fetch(`${supabaseUrl}/functions/v1/twilio-voice-handler`, {
               method: 'POST',

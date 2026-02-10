@@ -66,7 +66,7 @@ async function handlePreConnect(params: {
   }
 
   const timeGreeting = getTimeBasedGreeting(timezone);
-  const userName = profile?.first_name || 'sir';
+  const userName = profile?.preferred_greeting || profile?.first_name || 'sir';
   const greetingText = generateGreetingForCallType(context, timeGreeting, userName);
   const instructions = await loadUserInstructions(SUPABASE_URL, SUPABASE_SERVICE_KEY, userId, ragContext, profile, timezone);
 
@@ -154,6 +154,9 @@ serve(async (req) => {
   let isSendingTtsAudio = false;
   let ttsAudioEndTime = 0;
   let recentAmplitudes: number[] = [];
+  let bargeInActive = false;
+  let bargeInRecoveryPending = false;
+  let greetingContextInjected = false;
   
   // Telemetry
   let twilioMediaFramesIn = 0;
@@ -233,9 +236,10 @@ serve(async (req) => {
       greetingSent = true;
       firstOutboundLogged = true;
       injectAssistantMessage(preConnectedGreetingText);
-      const contextMsg = `[System: PRE-CONNECTED CALL - You just said: "${preConnectedGreetingText}". ${callContext || ''}. Cover ALL agenda items before ending.]`;
+      const contextMsg = `[System: PRE-CONNECTED CALL - You already greeted the user with: "${preConnectedGreetingText}". SKIP the greeting step (step 1) in the agenda -- it is already done. ${callContext || ''}. Continue from step 2 onward. Cover ALL remaining agenda items before ending.]`;
       injectSystemMessage(contextMsg);
-      console.log(`[GREETING-TRACE] triggerPendingGreeting(${source}): injected greeting context. greetingSent=${greetingSent}`);
+      greetingContextInjected = true;
+      console.log(`[GREETING-TRACE] triggerPendingGreeting(${source}): injected greeting context. greetingSent=${greetingSent}, greetingContextInjected=true`);
     } else if (pendingGreetingMode === 'openai') {
       sendOutboundGreeting();
     }
@@ -245,6 +249,7 @@ serve(async (req) => {
 
   // ElevenLabs TTS
   async function sendElevenLabsTTS(text: string) {
+    if (bargeInActive) { console.log('[ELEVENLABS] Barge-in active, discarding TTS chunk'); return; }
     if (!streamSid || twilioWs.readyState !== WebSocket.OPEN || isProcessingElevenLabsTTS) {
       if (isProcessingElevenLabsTTS) pendingTextBuffer += ' ' + text;
       return;
@@ -349,7 +354,7 @@ serve(async (req) => {
     if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN || greetingSent) return;
     greetingSent = true;
     const greeting = getTimeBasedGreeting(userTimezone);
-    const userName = userProfile?.first_name || 'sir';
+    const userName = userProfile?.preferred_greeting || userProfile?.first_name || 'sir';
     injectSystemMessage(`[System: Inbound call from ${userName}. Current time: ${getCurrentTimeString(userTimezone)}. Greet with "${greeting}, ${userName}. What can I help you with?"]`);
     createResponse('INBOUND_GREETING');
   }
@@ -357,7 +362,7 @@ serve(async (req) => {
   function sendOutboundGreeting() {
     if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN || greetingSent) return;
     greetingSent = true;
-    const userName = userProfile?.first_name || 'sir';
+    const userName = userProfile?.preferred_greeting || userProfile?.first_name || 'sir';
     const isScheduled = callContext && (callContext.includes('[CALL AGENDA]') || callContext.includes('CALL TYPE:'));
     if (isScheduled && callContext) {
       injectSystemMessage(`[System: SCHEDULED CALL to ${userName}. ${callContext}. Start with greeting, cover ALL agenda items before ending.]`);
@@ -426,11 +431,12 @@ serve(async (req) => {
             audioRingBuffer.length = 0;
           }
           
-          console.log(`[GREETING-TRACE] session.updated: preConnectedSession=${!!preConnectedSession}, greetingSent=${greetingSent}, waitingForUserHello=${waitingForUserHello}`);
-          if (preConnectedSession && greetingSent) {
+          console.log(`[GREETING-TRACE] session.updated: preConnectedSession=${!!preConnectedSession}, greetingSent=${greetingSent}, waitingForUserHello=${waitingForUserHello}, greetingContextInjected=${greetingContextInjected}`);
+          if (preConnectedSession && greetingSent && !greetingContextInjected) {
             injectAssistantMessage(preConnectedGreetingText);
-            injectSystemMessage(`[System: Scheduled call - greeting sent. ${callContext || ''}. Cover ALL agenda items.]`);
-            console.log(`[GREETING-TRACE] session.updated: injected greeting context (second path)`);
+            injectSystemMessage(`[System: Scheduled call - greeting already sent: "${preConnectedGreetingText}". SKIP the greeting step (step 1). ${callContext || ''}. Continue from step 2 onward. Cover ALL remaining agenda items.]`);
+            greetingContextInjected = true;
+            console.log(`[GREETING-TRACE] session.updated: injected greeting context (second path), greetingContextInjected=true`);
           } else if (!waitingForUserHello) {
             if (callDirection === 'inbound') sendInboundGreeting();
             else sendOutboundGreeting();
@@ -470,6 +476,21 @@ serve(async (req) => {
               });
             } catch (e) { console.error('[PERSIST] assistant save error:', e); }
           }
+          
+          // AGENDA TANGENT RECOVERY: After AI responds to a tangent, nudge back to agenda
+          if (sharedAgendaManager && bargeInRecoveryPending) {
+            try {
+              const hint = await sharedAgendaManager.getResumeHint();
+              if (hint) {
+                console.log(`[AGENDA-RESUME] Injecting resume hint: ${hint}`);
+                injectSystemMessage(`[RESUME] ${hint}. Continue with this agenda item naturally. Remember to cover ALL remaining agenda items before ending the call.`);
+                createResponse('AGENDA_RESUME');
+              }
+              await sharedAgendaManager.resume();
+            } catch (e) { console.error('[AGENDA-RESUME] Error:', e); }
+            bargeInRecoveryPending = false;
+          }
+          
           currentResponseText = '';
           currentResponseTrigger = '';
           break;
@@ -504,19 +525,53 @@ serve(async (req) => {
 
         case "input_audio_buffer.speech_started":
           const now = Date.now();
-          console.log(`[VAD-TRACE] speech_started at ${now - callStartTime}ms into call, responseCreateCount=${responseCreateCount}, greetingSent=${greetingSent}`);
+          console.log(`[VAD-TRACE] speech_started at ${now - callStartTime}ms into call, responseCreateCount=${responseCreateCount}, greetingSent=${greetingSent}, isAiSpeaking=${isAiSpeaking}`);
           if (now - lastSpeechStartTime < SPEECH_DEBOUNCE_MS) break;
           lastSpeechStartTime = now;
           
           if (waitingForUserHello) { triggerPendingGreeting('vad'); break; }
           
           if (isAiSpeaking) {
+            // Clear Twilio audio buffer immediately
             if (streamSid) twilioWs.send(JSON.stringify({ event: "clear", streamSid }));
+            
+            // Cancel OpenAI response generation (works for both TTS providers)
+            if (openaiWs?.readyState === WebSocket.OPEN) {
+              openaiWs.send(JSON.stringify({ type: "response.cancel" }));
+              console.log(`[BARGE-IN] Sent response.cancel to OpenAI`);
+            }
+            
+            // For OpenAI native audio, also truncate for clean VAD state
             if (ttsProvider !== 'elevenlabs' && currentResponseItemId && openaiWs?.readyState === WebSocket.OPEN) {
               openaiWs.send(JSON.stringify({ type: "conversation.item.truncate", item_id: currentResponseItemId, content_index: 0, audio_end_ms: Math.floor(audioSamplesPlayed / 24) }));
             }
+            
+            // For ElevenLabs: set barge-in flag to discard late-arriving TTS chunks
+            if (ttsProvider === 'elevenlabs') {
+              bargeInActive = true;
+              sentenceBuffer = '';
+              pendingTextBuffer = '';
+              isProcessingElevenLabsTTS = false;
+              console.log(`[BARGE-IN] ElevenLabs: bargeInActive=true, cleared sentence/pending buffers`);
+              // Delayed second clear to catch late audio chunks, then reset flag
+              setTimeout(() => {
+                if (streamSid && twilioWs.readyState === WebSocket.OPEN) {
+                  twilioWs.send(JSON.stringify({ event: "clear", streamSid }));
+                }
+                bargeInActive = false;
+                console.log(`[BARGE-IN] bargeInActive reset to false after 300ms`);
+              }, 300);
+            }
+            
             isAiSpeaking = false;
             sentenceBuffer = '';
+            
+            // Track tangent in agenda manager
+            if (sharedAgendaManager && lastUserTranscript) {
+              sharedAgendaManager.pauseForQuery(lastUserTranscript).catch(e => console.error('[AGENDA] pauseForQuery error:', e));
+              bargeInRecoveryPending = true;
+              console.log(`[AGENDA] Paused for tangent: "${lastUserTranscript?.substring(0, 50)}..."`);
+            }
           }
           break;
 
