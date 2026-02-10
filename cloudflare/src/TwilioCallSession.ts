@@ -1325,6 +1325,11 @@ ${this.ragContext ? `Context: ${this.ragContext}` : ''}]`;
   }
 
   private async sendToElevenLabs(text: string) {
+    // v8: Barge-in guard - discard late-arriving TTS chunks
+    if (this.bargeInActive) {
+      console.log('[CF-TTS] Barge-in active, discarding ElevenLabs TTS chunk:', text.substring(0, 40));
+      return;
+    }
     if (!this.twilioWs || !this.streamSid) return;
 
     const startTime = Date.now();
