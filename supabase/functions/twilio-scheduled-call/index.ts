@@ -246,7 +246,7 @@ function buildBranch1Context(
   let context = `CALL TYPE: ${callName} (Tasks Available)
 
 [CALL AGENDA - MUST COVER ALL]
-1. Greet: "Hello Sir."
+1. Greet: "Hello ${preferredGreeting}."
 2. Share ${windowLabel.toLowerCase()} tasks:
 ${windowTaskList}
 `;
