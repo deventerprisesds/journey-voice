@@ -178,7 +178,8 @@ function formatTaskList(tasks: any[]): string {
 async function buildWindowTransitionContext(
   call: ScheduledCall, 
   userId: string, 
-  window: string
+  window: string,
+  preferredGreeting: string = 'Sir'
 ): Promise<string> {
   const supabase = createClient(supabaseUrl, supabaseServiceKey);
   
