@@ -481,14 +481,15 @@ async function processRecurringCalls(): Promise<{ processed: number; triggered: 
     const currentHHMM = getTimeInTimezone(now, timezone);
     console.log(`[RECURRING] User ${userId}: timezone=${timezone}, current time=${currentHHMM}`);
 
-    // Get user's phone number from profiles
+    // Get user's phone number and preferred greeting from profiles
     const { data: profile } = await supabase
       .from('profiles')
-      .select('phone')
+      .select('phone, preferred_greeting')
       .eq('user_id', userId)
       .maybeSingle();
 
     const phoneNumber = profile?.phone;
+    const preferredGreeting = profile?.preferred_greeting || 'Sir';
     if (!phoneNumber) {
       console.log(`[RECURRING] User ${userId}: No phone number configured, skipping`);
       continue;
