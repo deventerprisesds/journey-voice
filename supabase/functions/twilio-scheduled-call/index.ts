@@ -561,7 +561,7 @@ async function processRecurringCalls(): Promise<{ processed: number; triggered: 
             }
           } else {
             // Default: phone call via twilio-voice-handler
-            const context = await buildCallContext(call, userId);
+            const context = await buildCallContext(call, userId, preferredGreeting);
 
             const response = await fetch(`${supabaseUrl}/functions/v1/twilio-voice-handler`, {
               method: 'POST',
