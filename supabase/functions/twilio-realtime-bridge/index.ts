@@ -460,6 +460,16 @@ serve(async (req) => {
           sentenceBuffer = '';
           const latencyMs = responseStartTime ? Date.now() - responseStartTime : null;
           console.log(`[RESPONSE-DONE] #${responseCreateCount} trigger=${currentResponseTrigger} latency=${latencyMs}ms text="${currentResponseText.substring(0, 200)}"`);
+          // PERSIST AI response to call_messages + conversation_messages
+          if (currentResponseText.trim() && callSessionId && userId) {
+            try {
+              messageIndex = await saveCallMessage(supabase, {
+                callSessionId, userId, threadId, streamSid,
+                role: 'assistant', content: currentResponseText.trim(),
+                messageIndex, latencyMs: latencyMs ?? undefined
+              });
+            } catch (e) { console.error('[PERSIST] assistant save error:', e); }
+          }
           currentResponseText = '';
           currentResponseTrigger = '';
           break;
@@ -518,8 +528,16 @@ serve(async (req) => {
           const transcript = (msg.transcript || '').trim();
           if (transcript) {
             lastUserTranscript = transcript;
-            messageIndex = messageIndex + 1;
+            // messageIndex = messageIndex + 1; // NOTE: commented out - saveCallMessage increments internally. Restore if rolling back persistence.
             console.log(`[USER] "${transcript}"`);
+            if (callSessionId && userId) {
+              try {
+                messageIndex = await saveCallMessage(supabase, {
+                  callSessionId, userId, threadId, streamSid,
+                  role: 'user', content: transcript, messageIndex
+                });
+              } catch (e) { console.error('[PERSIST] user save error:', e); }
+            }
           }
           break;
 
@@ -551,6 +569,17 @@ serve(async (req) => {
       fillerManager?.endTool();
 
       if (result.extractedFacts) lastToolOutput = { toolName: msg.name, extractedFacts: result.extractedFacts };
+
+      // PERSIST tool call to call_messages
+      if (callSessionId && userId) {
+        try {
+          messageIndex = await saveCallMessage(supabase, {
+            callSessionId, userId, threadId, streamSid,
+            role: 'tool', content: JSON.stringify(result).substring(0, 1000),
+            messageIndex, toolInfo: { name: msg.name, input: args, output: result }
+          });
+        } catch (e) { console.error('[PERSIST] tool save error:', e); }
+      }
 
       openaiWs.send(JSON.stringify({ type: "conversation.item.create", item: { type: "function_call_output", call_id: msg.call_id, output: JSON.stringify(result) } }));
       createResponse('FUNCTION_RESULT');
