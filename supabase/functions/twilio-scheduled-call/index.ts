@@ -300,7 +300,7 @@ Remember: Keep it brief and encouraging.`;
     return `CALL TYPE: ${callName} (Open Schedule)
 
 [CALL AGENDA - CONVERSATIONAL, DO NOT RUSH]
-1. Greet: "Hello Sir."
+1. Greet: "Hello ${preferredGreeting}."
 2. Say: "Your schedule is open for the ${windowLabel.toLowerCase()} window. What are you thinking about working on? I can help you get something scheduled."
 3. Have a natural conversation about what they might want to focus on. Ask follow-up questions. Explore priorities.
 4. If they mention something specific: Help them think through timing and next steps. Offer to create a task or schedule it.
