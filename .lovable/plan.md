@@ -1,155 +1,69 @@
 
-# Fix: Phone Call System — Complete Forensic Trace and Fixes
 
-## Forensic Evidence (Not Guesses)
+# Fix: Phone Routing + ElevenLabs Error Announcement + Better Logging
 
-### Issue 1: Outbound morning call hangs up after 1 second
+## Scope (Reduced)
 
-**Trace:**
-```text
-1. twilio-scheduled-call sends action: 'trigger-call' (NOT 'trigger-call-with-session')
-2. trigger-call uses triggerOutboundCall() which creates the Twilio call with a Url callback:
-   Url = twilio-voice-handler?action=incoming-call&direction=outbound&context=...&userId=...
-3. When Twilio answers, it hits that URL to get TwiML
-4. incoming-call runs getUserContext() which does the ilike phone lookup
-5. getUserContext matches BOTH profiles (real user +14434150606 AND demo 4434150606)
-6. .maybeSingle() returns an ERROR (multiple rows) -> falls through to demo user fallback
-7. Demo user has phone_call_mode = 'cloudflare' (from user_scheduling_prefs)
-8. TwiML generated points to Cloudflare bridge
-9. Supabase bridge never starts -> call_sessions metadata = {} (empty)
-10. The call was answered and immediately routed to Cloudflare, which has no pre-connected
-    session (has_session: false) -> 1 second of silence -> user hangs up
-```
+Only fixing the two **proven** issues. The VAD issue remains under investigation — we won't add a speculative timer until we understand it better.
 
-**The 1-second hangup is NOT a Supabase edge function timeout. It's the user hanging up** because they heard nothing. The call_sessions record shows `duration_seconds: null` because the Supabase bridge was never started — the call went to Cloudflare.
-
-### Issue 2: Inbound callback routes to demo user, no responses after greeting
-
-**Trace:**
-```text
-1. You called back from +14434150606
-2. getUserContext() runs: .ilike('phone', '%4434150606%')
-3. Matches BOTH:
-   - Real user: +14434150606 (user_id: a3378f93-d655-4913-b2fa-ca5b1d8020f1)
-   - Demo user: 4434150606 (user_id: 00000000-0000-0000-0000-000000000001)
-4. .maybeSingle() errors on multiple matches -> falls to demo user fallback
-5. Demo user phone_call_mode = likely 'cloudflare'
-6. Call routed to Cloudflare bridge (worker_version: 2026-01-29-cf-v7f)
-7. Cloudflare bridge: has_session=false, loaded demo user context
-8. Greeting played: "Good morning, Sir. This is Iris." (via ElevenLabs, 503ms)
-9. User speech detected 4 times (cf_user_speech_started)
-10. OpenAI received audio (801 appends) but generated 0 responses
-11. Call summary: twilio_frames_out=24 (greeting only), greeting_triggered=false
-```
-
-**Why zero responses:** The Cloudflare bridge has the same semantic VAD issue in text-only mode. OpenAI's VAD with `modalities: ["text"]` and `create_response: true` is unreliable — it receives audio but never triggers a response after the injected greeting. The bridge has no fallback timer to force a response.
-
-### Issue 3: Recurring calls use `trigger-call` instead of `trigger-call-with-session`
-
-**Root cause:** `twilio-scheduled-call/index.ts` line 568 sends `action: 'trigger-call'`, which does NOT pre-connect. This means:
-- No cached audio greeting
-- No pre-loaded session context
-- A second webhook round-trip (Twilio calls back to get TwiML)
-- That second webhook hits the broken `getUserContext()` phone lookup
+| Fix | Issue | Confidence |
+|-----|-------|------------|
+| 1 | Phone lookup matches demo user, routes to wrong bridge | Proven — forensic evidence in logs |
+| 2 | ElevenLabs failures are silent — no audio at all | Proven — zero audio_frames_out on quota days |
+| 3 | Better routing/bridge logging | Required — can't debug what we can't see |
 
 ---
 
-## Root Causes Summary
+## Fix 1: Phone Lookup — Exclude Demo User
 
-| # | Root Cause | Impact | Evidence |
-|---|-----------|--------|----------|
-| 1 | `getUserContext()` ilike matches both real + demo user; `.maybeSingle()` silently errors | ALL calls route to demo user context | `user_id: 00000000-...0001` in activity_log |
-| 2 | Demo user's `phone_call_mode` routes to Cloudflare bridge | Wrong bridge used entirely | `worker_version: 2026-01-29-cf-v7f` in metadata |
-| 3 | Cloudflare bridge has no VAD fallback timer | Zero responses after greeting | `twilio_frames_out: 24`, `greeting_triggered: false` |
-| 4 | `twilio-scheduled-call` uses `trigger-call` not `trigger-call-with-session` | No pre-connected session, extra webhook round-trip | `has_session: false` in cf_ws_start |
-| 5 | No tracing at the `twilio-voice-handler` level for which user was resolved | Can't see routing decisions in logs | `metadata: {}` in call_sessions |
+**File:** `supabase/functions/twilio-voice-handler/index.ts` (lines 113-174)
 
----
-
-## Fixes
-
-### Fix 1: Phone Lookup — Exclude Demo User (Critical)
-
-**File:** `supabase/functions/twilio-voice-handler/index.ts`, `getUserContext()` (lines 113-174)
-
-Replace the single query with a two-step lookup that excludes the demo user:
+The current query on line 120-124 uses a single `.or()` with `.maybeSingle()` that matches both the real user and demo user. Replace with two-step lookup:
 
 ```typescript
-// Step 1: Exact match, excluding demo user
-const { data: exactMatch } = await supabase
-  .from('profiles')
-  .select('user_id, phone')
-  .or(`phone.eq.${phoneNumber},phone.eq.+${normalizedPhone}`)
-  .neq('user_id', '00000000-0000-0000-0000-000000000001')
-  .maybeSingle();
+async function getUserContext(phoneNumber: string): Promise<...> {
+  const supabase = createClient(supabaseUrl, supabaseServiceKey);
+  const normalizedPhone = phoneNumber.replace(/\D/g, '');
+  const DEMO_USER_ID = '00000000-0000-0000-0000-000000000001';
+  
+  console.log(`[getUserContext] Looking up phone: ${phoneNumber} (normalized: ${normalizedPhone})`);
 
-let userId = exactMatch?.user_id || null;
-
-// Step 2: Fuzzy match only if exact fails, still excluding demo
-if (!userId) {
-  const { data: fuzzyMatch } = await supabase
+  // Step 1: Exact match, excluding demo user
+  const { data: exactMatch, error: exactError } = await supabase
     .from('profiles')
     .select('user_id, phone')
-    .ilike('phone', `%${normalizedPhone.slice(-10)}%`)
-    .neq('user_id', '00000000-0000-0000-0000-000000000001')
+    .or(`phone.eq.${phoneNumber},phone.eq.+${normalizedPhone}`)
+    .neq('user_id', DEMO_USER_ID)
     .maybeSingle();
-  userId = fuzzyMatch?.user_id || null;
+
+  let userId = exactMatch?.user_id || null;
+  console.log(`[getUserContext] Exact match: ${userId || 'none'}${exactError ? ` (error: ${exactError.message})` : ''}`);
+
+  // Step 2: Fuzzy match only if exact fails, still excluding demo
+  if (!userId) {
+    const last10 = normalizedPhone.slice(-10);
+    const { data: fuzzyMatch, error: fuzzyError } = await supabase
+      .from('profiles')
+      .select('user_id, phone')
+      .ilike('phone', `%${last10}%`)
+      .neq('user_id', DEMO_USER_ID)
+      .maybeSingle();
+    
+    userId = fuzzyMatch?.user_id || null;
+    console.log(`[getUserContext] Fuzzy match (%${last10}%): ${userId || 'none'}${fuzzyError ? ` (error: ${fuzzyError.message})` : ''}`);
+  }
+
+  // Step 3: Only fall back to demo if NO real user found
+  if (!userId) {
+    console.warn(`[getUserContext] No real user found, falling back to demo user`);
+    // ... existing demo fallback logic (lines 129-152) ...
+  }
+
+  // ... rest unchanged ...
 }
 ```
 
-### Fix 2: Add OpenAI Voice Fallback in Supabase Bridge
-
-**File:** `supabase/functions/twilio-realtime-bridge/index.ts`, `sendElevenLabsTTS()` (lines 271-291)
-
-When ElevenLabs fails (quota, API error), fall back to OpenAI native voice:
-
-```typescript
-} else {
-  const errorText = await response.text();
-  console.error(`[ELEVENLABS] TTS API error: ${response.status} - ${errorText}`);
-  
-  // Fall back to OpenAI voice
-  if (openaiWs && openaiWs.readyState === WebSocket.OPEN) {
-    console.warn(`[ELEVENLABS-FALLBACK] Using OpenAI voice for: "${fullText.substring(0, 60)}..."`);
-    openaiWs.send(JSON.stringify({
-      type: "response.create",
-      response: {
-        modalities: ["audio"],
-        instructions: `Speak this exactly: "${fullText}"`
-      }
-    }));
-  }
-  
-  // Log quota errors for banner
-  if (errorText.includes('quota_exceeded') || response.status === 401) {
-    // ... existing quota logging ...
-  }
-}
-```
-
-### Fix 3: Add VAD Fallback Timer in Supabase Bridge
-
-**File:** `supabase/functions/twilio-realtime-bridge/index.ts`, after `triggerPendingGreeting()` (line 233)
-
-After greeting plays, if no response is triggered within 8 seconds, force one:
-
-```typescript
-// After greeting injection in triggerPendingGreeting():
-setTimeout(() => {
-  if (responseCreateCount === 0 && openaiWs?.readyState === WebSocket.OPEN) {
-    console.warn('[VAD-FALLBACK] No response after 8s, forcing response');
-    createResponse('VAD_FALLBACK');
-  }
-}, 8000);
-```
-
-Also add periodic `input_audio_buffer.commit` to nudge VAD in the media handler.
-
-### Fix 4: Add Routing Trace Logging
-
-**File:** `supabase/functions/twilio-voice-handler/index.ts`, in `incoming-call` handler (line 1316)
-
-Log the routing decision so we can always trace which user and bridge was selected:
+Also add a `[ROUTING-TRACE]` log after line 1316 in the incoming-call handler:
 
 ```typescript
 console.log(`[ROUTING-TRACE] Phone: ${callerPhone}, Resolved userId: ${userId}, ` +
@@ -157,34 +71,90 @@ console.log(`[ROUTING-TRACE] Phone: ${callerPhone}, Resolved userId: ${userId}, 
   `isDemoUser: ${userId === '00000000-0000-0000-0000-000000000001'}`);
 ```
 
-### Fix 5: Update Debug Tracker
+---
+
+## Fix 2: ElevenLabs Failure — Announce the Error Over the Phone
+
+**File:** `supabase/functions/twilio-realtime-bridge/index.ts` (lines 271-291)
+
+After the existing error logging block, add an OpenAI audio response that **tells the user what failed** instead of staying silent:
+
+```typescript
+// After line 290 (existing quota logging), before the closing brace:
+
+// ANNOUNCE the error to the user — never be silent
+if (openaiWs && openaiWs.readyState === WebSocket.OPEN) {
+  let errorDescription: string;
+  if (errorText.includes('quota_exceeded')) {
+    errorDescription = 'ElevenLabs voice quota is exhausted. Voice features are unavailable until credits are added.';
+  } else if (response.status === 401) {
+    errorDescription = 'ElevenLabs authentication failed. The API key may be invalid or expired.';
+  } else {
+    errorDescription = `ElevenLabs voice service returned error ${response.status}. Voice output is temporarily unavailable.`;
+  }
+  
+  console.warn(`[ELEVENLABS-ERROR-ANNOUNCE] Speaking error to user: ${errorDescription}`);
+  openaiWs.send(JSON.stringify({
+    type: "response.create",
+    response: {
+      modalities: ["audio"],
+      instructions: `Tell the user exactly this: "${errorDescription}"`
+    }
+  }));
+}
+```
+
+Also add the same pattern in the `catch` block (line 292-293) for unexpected errors:
+
+```typescript
+} catch (error) {
+  console.error('[ELEVENLABS] TTS error:', error);
+  // Announce unexpected errors too
+  if (openaiWs && openaiWs.readyState === WebSocket.OPEN) {
+    openaiWs.send(JSON.stringify({
+      type: "response.create",
+      response: {
+        modalities: ["audio"],
+        instructions: `Tell the user: "I encountered a voice system error: ${error.message || 'unknown error'}. Voice output may be affected."`
+      }
+    }));
+  }
+}
+```
+
+---
+
+## Fix 3: Enhanced Bridge Logging for VAD Investigation
+
+**File:** `supabase/functions/twilio-realtime-bridge/index.ts`
+
+Add targeted logging to help us understand the VAD issue on future calls without guessing:
+
+- Log when `input_audio_buffer.speech_started` and `speech_stopped` events arrive from OpenAI
+- Log when `response.create` is triggered (and by what — VAD auto, manual, filler, etc.)
+- Log `responseCreateCount` at 5s intervals after greeting so we can see the timeline
+- Log the OpenAI session config that was sent (specifically `turn_detection` and `modalities`) to confirm what mode we're actually in
+
+These are log-only changes — no behavior changes for VAD until we have the data.
+
+---
+
+## Fix 4: Update Debug Tracker
 
 **File:** `docs/DEBUG_TRACKER.md`
 
-Add three new entries:
+Add entries:
 
 ```
 | VOICE-03 | Phone lookup matches demo user, routes to wrong bridge | FIXING |
-    .ilike('%4434150606%') matches both real (+14434150606) and demo (4434150606).
-    .maybeSingle() errors silently, falls to demo user with Cloudflare bridge. |
-| VOICE-04 | Outbound scheduled calls use trigger-call not trigger-call-with-session | KNOWN |
-    twilio-scheduled-call sends action: 'trigger-call' which causes a second webhook
-    round-trip through the broken getUserContext() lookup. |
-| VOICE-05 | Semantic VAD unreliable in text-only modality | FIXING |
-    OpenAI's semantic VAD with modalities: ["text"] and create_response: true
-    does not reliably trigger responses after greeting injection. Need fallback timer. |
+| VOICE-04 | ElevenLabs failures produce zero audio output | FIXING |
+| VOICE-05 | Semantic VAD not triggering responses in text-only mode | INVESTIGATING |
 ```
 
-New lessons learned:
-```
-- .maybeSingle() returns NULL (not error) when multiple rows match — it silently
-  discards ALL results. Always exclude known duplicate records (demo user) from queries.
-- Every routing decision must be logged with the resolved userId, bridge mode, and
-  whether the demo user was used. Without this, debugging is impossible.
-- Semantic VAD + text-only modalities is fundamentally unreliable. Always implement
-  a fallback timer that forces response.create if responseCreateCount === 0 after
-  a configurable timeout.
-```
+Lessons learned:
+- `.maybeSingle()` returns null when multiple rows match. Always exclude demo user from phone lookups.
+- Every routing decision must be logged with userId, bridge mode, and demo user flag.
+- Fallbacks must announce failures audibly — never be silent.
 
 ---
 
@@ -192,17 +162,15 @@ New lessons learned:
 
 | File | Change | Priority |
 |------|--------|----------|
-| `supabase/functions/twilio-voice-handler/index.ts` | Fix getUserContext() phone lookup; add routing trace logs | Critical |
-| `supabase/functions/twilio-realtime-bridge/index.ts` | Add ElevenLabs fallback to OpenAI voice; add VAD fallback timer | Critical |
-| `docs/DEBUG_TRACKER.md` | Document VOICE-03/04/05 with full evidence | Required |
+| `supabase/functions/twilio-voice-handler/index.ts` | Two-step phone lookup excluding demo user; routing trace log | Critical |
+| `supabase/functions/twilio-realtime-bridge/index.ts` | ElevenLabs error announcement; enhanced VAD investigation logging | Critical |
+| `docs/DEBUG_TRACKER.md` | Document VOICE-03/04/05 | Required |
 
 ---
 
 ## Testing Plan
 
 1. Deploy both edge functions
-2. Trigger a test outbound call — verify logs show real user ID (not demo), bridge mode = media_streams
-3. Call back inbound — verify `[ROUTING-TRACE]` shows real user, not demo
-4. If ElevenLabs quota still exhausted, verify `[ELEVENLABS-FALLBACK]` fires and OpenAI voice speaks
-5. Verify `response_create_count > 0` in call_sessions metadata
-6. Check `activity_log` for correct `user_id` on all entries
+2. Trigger an inbound call — verify `[ROUTING-TRACE]` shows real user ID, not demo
+3. If ElevenLabs quota is exhausted, verify you HEAR the error message on the call
+4. Review bridge logs for new VAD tracing data to inform the next fix
