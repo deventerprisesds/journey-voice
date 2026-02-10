@@ -231,6 +231,7 @@ serve(async (req) => {
       injectAssistantMessage(preConnectedGreetingText);
       const contextMsg = `[System: PRE-CONNECTED CALL - You just said: "${preConnectedGreetingText}". ${callContext || ''}. Cover ALL agenda items before ending.]`;
       injectSystemMessage(contextMsg);
+      console.log(`[GREETING-TRACE] triggerPendingGreeting(${source}): injected greeting context. greetingSent=${greetingSent}`);
     } else if (pendingGreetingMode === 'openai') {
       sendOutboundGreeting();
     }
@@ -421,9 +422,11 @@ serve(async (req) => {
             audioRingBuffer.length = 0;
           }
           
+          console.log(`[GREETING-TRACE] session.updated: preConnectedSession=${!!preConnectedSession}, greetingSent=${greetingSent}, waitingForUserHello=${waitingForUserHello}`);
           if (preConnectedSession && greetingSent) {
             injectAssistantMessage(preConnectedGreetingText);
             injectSystemMessage(`[System: Scheduled call - greeting sent. ${callContext || ''}. Cover ALL agenda items.]`);
+            console.log(`[GREETING-TRACE] session.updated: injected greeting context (second path)`);
           } else if (!waitingForUserHello) {
             if (callDirection === 'inbound') sendInboundGreeting();
             else sendOutboundGreeting();
