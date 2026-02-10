@@ -1166,23 +1166,24 @@ You: "Looking that up..." [then call web_search tool]`;
           }
         }));
         
-        // Inject system context for OpenAI to understand the state
-        const now = new Date().toLocaleString('en-US', { timeZone: this.timezone });
-        const contextMsg = `[System: You just spoke the greeting: "${greeting}"
-The user is now listening and may respond. Current time: ${now}.
-Wait for the user's response, then continue the conversation naturally.
-${this.ragContext ? `Context: ${this.ragContext}` : ''}]`;
-        
-        this.openaiWs?.send(JSON.stringify({
-          type: 'conversation.item.create',
-          item: {
-            type: 'message',
-            role: 'system',
-            content: [{ type: 'input_text', text: contextMsg }]
-          }
-        }));
-        
-        console.log('[CF] Injected post-greeting context for cached audio path');
+        // v8: Guard against double context injection
+        if (!this.greetingContextInjected) {
+          this.greetingContextInjected = true;
+          const now = new Date().toLocaleString('en-US', { timeZone: this.timezone });
+          const contextMsg = `[System: PRE-CONNECTED CALL - You already greeted the user with: "${greeting}". SKIP the greeting step (step 1) in the agenda -- it is already done. Current time: ${now}. ${this.ragContext ? `Context: ${this.ragContext}` : ''} Continue from step 2 onward. Cover remaining agenda items before ending.]`;
+          
+          this.openaiWs?.send(JSON.stringify({
+            type: 'conversation.item.create',
+            item: {
+              type: 'message',
+              role: 'system',
+              content: [{ type: 'input_text', text: contextMsg }]
+            }
+          }));
+          console.log('[CF-GREETING] Injected post-greeting context for cached audio path (greetingContextInjected=true)');
+        } else {
+          console.log('[CF-GREETING] SKIPPED duplicate context injection for cached audio path');
+        }
         this.isPlaying = false;
         return;
       } catch (error) {
