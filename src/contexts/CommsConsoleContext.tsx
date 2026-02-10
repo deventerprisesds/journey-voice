@@ -402,6 +402,27 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
               return prev;
             }
             
+            // Replace temporary local message with DB version
+            const tempIndex = prev.findIndex(m =>
+              m.role === newMessage.role &&
+              m.content === newMessage.content &&
+              (m.id.startsWith('assistant-') || m.id.startsWith('user-'))
+            );
+            
+            if (tempIndex !== -1) {
+              console.log('[CommsConsole] Realtime: Replacing temp message', prev[tempIndex].id, '→', newMessage.id);
+              const updated = [...prev];
+              updated[tempIndex] = {
+                id: newMessage.id,
+                role: newMessage.role as 'user' | 'assistant' | 'system',
+                content: newMessage.content,
+                source: (newMessage.source || 'chat') as CommunicationMode,
+                assistant_id: newMessage.assistant_id,
+                created_at: newMessage.created_at,
+              };
+              return updated;
+            }
+            
             return [...prev, {
               id: newMessage.id,
               role: newMessage.role as 'user' | 'assistant' | 'system',
