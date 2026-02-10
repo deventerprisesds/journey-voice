@@ -1,151 +1,155 @@
 
+# Refactor: Window-Specific Call Scripts with Task-Driven Topic Groups
 
-# Sync Cloudflare Bridge: Barge-In, Async Fix, Agenda Wiring, Greeting Guard
+## Summary
 
-## Overview
+Replace the generic `buildBranch1Context`, `buildBranch2Context`, and `buildCallContext` in `supabase/functions/twilio-scheduled-call/index.ts` with per-window call flows that match the original spec. Topic groups are built from actual window-aligned tasks (not static `window_affinity`), with a "look across the entire board?" fallback.
 
-The Supabase bridge was fixed in the previous message. The Cloudflare bridge has the same bugs plus an additional async/await blocking issue. This plan ports all fixes to the Cloudflare bridge so both modes behave identically.
+The AI receives these as queued agenda items with accept order -- not verbatim scripts. The AI drives the conversation naturally.
 
----
+## Single File Changed
 
-## Problem Summary
+`supabase/functions/twilio-scheduled-call/index.ts`
 
-| Issue | Supabase Bridge | Cloudflare Bridge |
-|-------|----------------|-------------------|
-| ElevenLabs barge-in | FIXED (response.cancel + bargeInActive) | BROKEN (line 806: "NO response.cancel") |
-| Async TTS blocking | FIXED (fire-and-forget sendElevenLabsTTS) | BROKEN (await handleTextDelta blocks WebSocket loop) |
-| Agenda tangent tracking | FIXED (pauseForQuery on interrupt) | Dead code (functions exist, never called) |
-| Resume hints after tangent | FIXED (in response.done) | Missing from response.done handler |
-| Double greeting guard | FIXED (greetingContextInjected flag) | No guard |
-| preferred_greeting naming | FIXED | Already correct (line 1122) |
+## Changes
 
----
+### 1. Replace `getTopicsForWindow` (lines 141-160) with two new functions
 
-## Changes to `cloudflare/src/TwilioCallSession.ts`
+**`getTopicGroupsFromWindowTasks(supabase, userId, window)`**
+- Query open tasks (not BLOCKED, not DONE, not test) whose category maps to the current window via `CATEGORY_WINDOW_MAPPING`
+- JOIN `task_topic_mappings` on `task_id` then JOIN `task_topic_index` on `topic_id`
+- GROUP BY topic, count tasks per topic, count tasks updated in last 14 days (recency), count HIGH/URGENT tasks (priority density)
+- ORDER BY recency DESC, priority_density DESC, task_count DESC
+- LIMIT 5
 
-### Fix 1: Async/Await TTS Blocking (Critical - causes silence/delays)
+**`getTopicGroupsFromAllTasks(supabase, userId)`**
+- Same query but no category-window filter -- all open tasks
+- Same grouping, ranking, limit
+- Used as the "across the entire board" fallback
 
-**Line 743**: `await this.handleTextDelta(data)` blocks the WebSocket message handler. While TTS is being fetched from ElevenLabs, no other OpenAI events (including barge-in) can be processed.
+### 2. Replace `buildBranch1Context` (lines 230-273) and `buildBranch2Context` (lines 276-327)
 
-**Fix**: Remove `await` -- make it fire-and-forget like the Supabase bridge does at line 510. Add extensive logging around the non-awaited call for debugging visibility.
+Replace with a single `buildWindowContext` function that switches on `window` and produces per-window agenda items. Each window's context tells the AI the accept order (what to cover and in what sequence) but explicitly instructs it to drive the conversation naturally -- not repeat text verbatim.
 
-```text
-case 'response.text.delta':
-  if (this.ttsProvider === 'elevenlabs' && !this.elevenlabsFallbackActive) {
-    // ... first delta logging (keep existing) ...
-    this.handleTextDelta(data);  // NO await - fire-and-forget (parity with Supabase line 510)
-  }
-  break;
+#### 6:00 AM -- Morning Kickstart
+
+**Tasks exist:** Agenda queue:
+1. Greet user
+2. Remind them of morning tasks (provided as data)
+3. Ask: confirm, adjust, or skip
+4. If confirm: acknowledge, mention callback later. Close.
+5. If adjust: capture edits via tools (reschedule_task, update_task). Confirm. Close.
+
+**No tasks:** Agenda queue:
+1. Greet user
+2. Brief nudge -- day is starting, will call back in a few hours. Close.
+3. No topic jog. Keep lightweight.
+
+#### 9:00 AM -- Business Hours Execution
+
+**Tasks exist:** Agenda queue:
+1. Greet user
+2. Handle any tangent, then return to plan
+3. Present business-hours tasks (provided as data)
+4. Ask which one to start with
+5. If they pick one: mark in progress via update_task
+
+**No tasks -- Topic Jog (two tiers):**
+1. Greet user
+2. Present window-aligned topic groups (tier 1 data provided)
+3. Ask if they want to work on any
+4. If yes: use get_tasks to drill into that topic, help select, use parse_and_create_tasks to schedule
+5. If tier 1 was empty: ask "I don't see any potential items for business hours. Do you want to look for items across the entire board?"
+6. If yes to broadening: present tier 2 topic groups (all-tasks data provided). Same drill-down flow.
+7. If no: acknowledge, mention next check-in. Close.
+
+#### 5:00 PM -- Daily Wrap + After-Work (Two Phases)
+
+**Phase 1 -- Status Wrapup:** Agenda queue:
+1. Greet user
+2. Ask about completed tasks to mark done
+3. Ask about blocked tasks or items to reschedule
+4. Update statuses via tools
+
+**Phase 2 Branch 1 (after-work tasks exist):**
+5. Present after-work tasks (provided as data)
+6. Ask: keep as-is, adjust, or skip
+
+**Phase 2 Branch 2 (no after-work tasks) -- Topic Jog:**
+5. Present window-aligned topic groups (tier 1)
+6. If empty: "I don't see any potential items for after work. Do you want to look for items across the entire board?"
+7. Same drill-down flow as 9 AM
+
+Close: confirm updates captured.
+
+#### 7:00 PM -- Evening Work Items
+
+**Tasks exist:** Agenda queue:
+1. Greet user warmly (evening tone)
+2. Present evening tasks (provided as data)
+3. Ask: confirm, adjust, or skip
+
+**No tasks -- Topic Jog (two tiers):**
+1. Greet user
+2. Present evening-aligned topic groups (tier 1)
+3. If empty: "I don't see any potential items for this evening. Do you want to look for items across the entire board?"
+4. Same drill-down and scheduling flow
+
+Close: wish them a good evening.
+
+#### Weekend 10:00 AM -- Saturday/Sunday
+
+Detect current day name (Saturday or Sunday) and reference it.
+
+**Tasks exist:** Agenda queue:
+1. Greet user (weekend tone)
+2. Present weekend tasks for today (provided as data), referencing the day by name
+3. Ask: confirm, adjust, or skip
+
+**No tasks -- Topic Jog (two tiers, LIFE focus):**
+1. Greet user
+2. Present weekend/LIFE-aligned topic groups (tier 1)
+3. If empty: "I don't see any potential items for today. Do you want to look for items across the entire board?"
+4. Same drill-down and scheduling flow
+
+Close: enjoy the weekend.
+
+### 3. Update `buildWindowTransitionContext` (lines 178-227)
+
+- Call the new `getTopicGroupsFromWindowTasks` instead of `getTopicsForWindow`
+- Also call `getTopicGroupsFromAllTasks` as the tier 2 fallback data
+- Pass both tier 1 and tier 2 topic data into `buildWindowContext`
+- Add weekend day detection (Saturday vs Sunday)
+
+### 4. Replace `buildCallContext` switch cases (lines 345-403)
+
+The `morning_standup`, `midday_checkin`, `eod_wrapup` cases currently use generic 6-step numbered agendas. Replace them to route through window detection the same way window-transition calls do. The `[WINDOW:xxx]` marker already exists in `call.context` for window calls; for legacy call types without the marker, map them: `morning_standup` to `morning`, `midday_checkin` to `business_hours`, `eod_wrapup` to `after_work`. Custom calls remain unchanged.
+
+### 5. Context Format Convention
+
+Every context string will include a header block instructing the AI:
+
+```
+IMPORTANT: The items below are your agenda queue in priority order.
+Cover them in sequence but drive the conversation naturally.
+Do NOT read these items verbatim -- use your own words.
+Use your available tools for any changes the user requests.
 ```
 
-### Fix 2: ElevenLabs Barge-In (Lines 793-807)
+This ensures the AI treats the agenda as a queue to work through, not a script to recite.
 
-Replace the "clear buffer only, NO response.cancel" block with the full interrupt logic from the Supabase bridge:
+## What Does NOT Change
 
-1. Clear Twilio audio buffer (already done)
-2. Send `response.cancel` to OpenAI to stop text generation
-3. Add `private bargeInActive = false` property
-4. Set `bargeInActive = true` on interrupt, check in `sendToElevenLabs` to discard late chunks
-5. Clear `textBuffer` (sentence buffer)
-6. 300ms delayed second Twilio clear + flag reset
-7. Call `this.pauseAgendaForTangent(transcript)` (wiring the existing dead code)
+- `getTasksForWindow` (lines 88-138) -- still used for branch 1 task filtering
+- `CATEGORY_WINDOW_MAPPING` and `WINDOW_RANGES` constants
+- `formatTaskList` helper
+- All tool definitions (`_shared/tool-definitions.ts`)
+- `execute-tool/index.ts`
+- Bridge files (Supabase/Cloudflare)
+- Agenda manager / agenda wrapper
+- Pre-caching flow (buildCallContext runs once, result passed to bridge)
+- `processRecurringCalls` and the serve handler
 
-Add logging at every step for debugging visibility.
+## No New Dependencies
 
-### Fix 3: sendToElevenLabs Barge-In Guard (Line 1248)
-
-Add early exit at top of `sendToElevenLabs`:
-```text
-if (this.bargeInActive) {
-  console.log('[CF] Barge-in active, discarding ElevenLabs TTS chunk');
-  return;
-}
-```
-
-### Fix 4: Agenda Tangent Recovery in response.done (Lines 764-771)
-
-Add agenda recovery logic after the existing cleanup, mirroring the Supabase bridge's response.done handler:
-
-```text
-case 'response.done':
-  this.isPlaying = false;
-  this.isAiSpeaking = false;
-  this.currentResponseItemId = null;
-  this.audioSamplesPlayed = 0;
-  
-  // NEW: Agenda tangent recovery (parity with Supabase lines 480-492)
-  if (this.agendaPaused && this.bargeInRecoveryPending) {
-    const hint = this.getAgendaResumeHint();
-    if (hint) {
-      console.log(`[CF] AGENDA-RESUME: Injecting hint: ${hint}`);
-      // Inject system message to nudge AI back to agenda
-      this.openaiWs?.send(JSON.stringify({
-        type: 'conversation.item.create',
-        item: { type: 'message', role: 'system', 
-          content: [{ type: 'input_text', 
-            text: `[RESUME] ${hint}. Continue with this agenda item naturally. Cover ALL remaining agenda items.` }]
-        }
-      }));
-      // Trigger a response for the resume
-      this.openaiWs?.send(JSON.stringify({ type: 'response.create' }));
-    }
-    this.resumeAgenda();  // already defined, never called
-    this.bargeInRecoveryPending = false;
-  }
-  break;
-```
-
-New property: `private bargeInRecoveryPending = false;` -- set in the barge-in handler alongside `pauseAgendaForTangent`.
-
-### Fix 5: Double Greeting Guard
-
-Add `private greetingContextInjected = false;` property.
-
-In `triggerPendingGreeting()` (line 1789): Set `this.greetingContextInjected = true` after sending the greeting.
-
-In `sendGreeting()` context injection (lines 1090-1104 and 1142-1156): Add guard `if (!this.greetingContextInjected)` before injecting context, and update the system message to say "SKIP the greeting step (step 1) in the agenda."
-
-### Fix 6: Version Bump
-
-Per the preflight checklist, bump version in three files:
-- `cloudflare/src/index.ts` (line 6): `2026-01-29-cf-v7f` to `2026-02-10-cf-v8`
-- `cloudflare/src/TwilioCallSession.ts` (line 77): Same
-- `.github/workflows/deploy-cloudflare.yml`: Same
-
-### Fix 7: Extensive Debug Logging
-
-Add `console.log` breadcrumbs at every critical point for debugging since the Cloudflare worker is harder to debug than Supabase edge functions:
-
-- `[CF-BARGEIN]` prefix for all barge-in events
-- `[CF-AGENDA]` prefix for all agenda state changes  
-- `[CF-TTS]` prefix for all ElevenLabs TTS lifecycle (queued, sending, completed, discarded)
-- `[CF-GREETING]` prefix for greeting flow with flag states
-- Log `bargeInActive`, `bargeInRecoveryPending`, `agendaPaused` state in each handler
-- Activity log entries via `logActivityToSupabase` for post-call auditing
-
----
-
-## New Properties Added
-
-```text
-private bargeInActive: boolean = false;
-private bargeInRecoveryPending: boolean = false;
-private greetingContextInjected: boolean = false;
-```
-
-## Files Modified
-
-| File | Changes |
-|------|---------|
-| `cloudflare/src/TwilioCallSession.ts` | All 7 fixes above |
-| `cloudflare/src/index.ts` | Version bump only |
-| `.github/workflows/deploy-cloudflare.yml` | Version bump only |
-| `cloudflare/PREFLIGHT_CHECKLIST.md` | Add async/await and agenda wiring to Common Mistakes Log |
-
-## Deployment
-
-Cloudflare deploys via GitHub Actions on push to `main` when files under `cloudflare/` change. After Lovable commits these changes, the workflow runs automatically.
-
-## Rollback
-
-Revert the Lovable message to restore all files to their previous state. The next push to `main` will redeploy the previous Cloudflare version.
+No new edge functions, no database migrations, no new tools. Full reuse of existing `parse_and_create_tasks`, `update_task`, `reschedule_task`, `get_tasks`, and `schedule_task`.
