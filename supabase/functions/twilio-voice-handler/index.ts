@@ -112,28 +112,46 @@ const phoneTools = [
 // Get user context for the AI
 async function getUserContext(phoneNumber: string): Promise<{ userId: string | null; timezone: string; instructions: string; phoneCallMode: PhoneCallMode }> {
   const supabase = createClient(supabaseUrl, supabaseServiceKey);
+  const DEMO_USER_ID = '00000000-0000-0000-0000-000000000001';
   
   // Try to find user by phone number (normalize format)
   const normalizedPhone = phoneNumber.replace(/\D/g, '');
   console.log(`[getUserContext] Looking up phone: ${phoneNumber} (normalized: ${normalizedPhone})`);
   
-  const { data: profile } = await supabase
+  // Step 1: Exact match, excluding demo user
+  const { data: exactMatch, error: exactError } = await supabase
     .from('profiles')
     .select('user_id, phone')
-    .or(`phone.eq.${phoneNumber},phone.eq.+${normalizedPhone},phone.ilike.%${normalizedPhone.slice(-10)}%`)
+    .or(`phone.eq.${phoneNumber},phone.eq.+${normalizedPhone}`)
+    .neq('user_id', DEMO_USER_ID)
     .maybeSingle();
 
-  let userId = profile?.user_id || null;
+  let userId = exactMatch?.user_id || null;
+  console.log(`[getUserContext] Exact match: ${userId || 'none'}${exactError ? ` (error: ${exactError.message})` : ''}`);
 
-  // Fallback: If no phone match, use the demo user or first user with scheduling prefs
+  // Step 2: Fuzzy match only if exact fails, still excluding demo
   if (!userId) {
-    console.log('[getUserContext] No phone match, using fallback...');
+    const last10 = normalizedPhone.slice(-10);
+    const { data: fuzzyMatch, error: fuzzyError } = await supabase
+      .from('profiles')
+      .select('user_id, phone')
+      .ilike('phone', `%${last10}%`)
+      .neq('user_id', DEMO_USER_ID)
+      .maybeSingle();
     
-    // Try demo user first
+    userId = fuzzyMatch?.user_id || null;
+    console.log(`[getUserContext] Fuzzy match (%${last10}%): ${userId || 'none'}${fuzzyError ? ` (error: ${fuzzyError.message})` : ''}`);
+  }
+
+  // Step 3: Only fall back to demo if NO real user found
+  if (!userId) {
+    console.warn(`[getUserContext] No real user found for ${phoneNumber}, falling back to demo user`);
+    
+    // Try demo user
     const { data: demoCheck } = await supabase
       .from('user_scheduling_prefs')
       .select('user_id')
-      .eq('user_id', '00000000-0000-0000-0000-000000000001')
+      .eq('user_id', DEMO_USER_ID)
       .maybeSingle();
     
     if (demoCheck?.user_id) {
@@ -1314,6 +1332,7 @@ serve(async (req) => {
           timezone = context.timezone;
           phoneCallMode = context.phoneCallMode;
           console.log(`[incoming-call] ✅ Resolved userId=${userId}, timezone=${timezone}, phoneCallMode=${phoneCallMode}`);
+          console.log(`[ROUTING-TRACE] Phone: ${callerPhone}, Resolved userId: ${userId}, phoneCallMode: ${phoneCallMode}, isDemoUser: ${userId === '00000000-0000-0000-0000-000000000001'}`);
         }
 
         // Determine voice mode from user preference or URL override

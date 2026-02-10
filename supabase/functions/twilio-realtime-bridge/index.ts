@@ -288,9 +288,42 @@ serve(async (req) => {
             console.error('[ELEVENLABS] Failed to log quota error:', logError);
           }
         }
+        
+        // ANNOUNCE the error to the user — never be silent
+        if (openaiWs && openaiWs.readyState === WebSocket.OPEN) {
+          let errorDescription: string;
+          if (errorText.includes('quota_exceeded')) {
+            errorDescription = 'ElevenLabs voice quota is exhausted. Voice features are unavailable until credits are added.';
+          } else if (response.status === 401) {
+            errorDescription = 'ElevenLabs authentication failed. The API key may be invalid or expired.';
+          } else {
+            errorDescription = `ElevenLabs voice service returned error ${response.status}. Voice output is temporarily unavailable.`;
+          }
+          
+          console.warn(`[ELEVENLABS-ERROR-ANNOUNCE] Speaking error to user: ${errorDescription}`);
+          openaiWs.send(JSON.stringify({
+            type: "response.create",
+            response: {
+              modalities: ["audio"],
+              instructions: `Tell the user exactly this: "${errorDescription}"`
+            }
+          }));
+        }
       }
     } catch (error) {
       console.error('[ELEVENLABS] TTS error:', error);
+      // Announce unexpected errors too — never be silent
+      if (openaiWs && openaiWs.readyState === WebSocket.OPEN) {
+        const errMsg = error instanceof Error ? error.message : 'unknown error';
+        console.warn(`[ELEVENLABS-ERROR-ANNOUNCE] Speaking unexpected error to user: ${errMsg}`);
+        openaiWs.send(JSON.stringify({
+          type: "response.create",
+          response: {
+            modalities: ["audio"],
+            instructions: `Tell the user: "I encountered a voice system error: ${errMsg}. Voice output may be affected."`
+          }
+        }));
+      }
     } finally {
       isProcessingElevenLabsTTS = false;
       if (pendingTextBuffer.trim()) {
@@ -362,13 +395,15 @@ serve(async (req) => {
       switch (msg.type) {
         case "session.created":
           const modalities = ttsProvider === 'elevenlabs' ? ["text"] : ["text", "audio"];
+          const turnDetection = { type: "semantic_vad", eagerness: "low", create_response: true, interrupt_response: true };
+          console.log(`[OPENAI-SESSION] Configuring: modalities=${JSON.stringify(modalities)}, turn_detection=${JSON.stringify(turnDetection)}, ttsProvider=${ttsProvider}`);
           openaiWs!.send(JSON.stringify({
             type: "session.update",
             session: {
               modalities, instructions, voice: openaiVoice,
               input_audio_format: "pcm16", output_audio_format: "pcm16",
               input_audio_transcription: { model: "gpt-4o-mini-transcribe", language: "en" },
-              turn_detection: { type: "semantic_vad", eagerness: "low", create_response: true, interrupt_response: true },
+              turn_detection: turnDetection,
               tools: getToolDefinitions(), tool_choice: "auto"
             }
           }));
@@ -441,6 +476,7 @@ serve(async (req) => {
 
         case "input_audio_buffer.speech_started":
           const now = Date.now();
+          console.log(`[VAD-TRACE] speech_started at ${now - callStartTime}ms into call, responseCreateCount=${responseCreateCount}, greetingSent=${greetingSent}`);
           if (now - lastSpeechStartTime < SPEECH_DEBOUNCE_MS) break;
           lastSpeechStartTime = now;
           
@@ -454,6 +490,10 @@ serve(async (req) => {
             isAiSpeaking = false;
             sentenceBuffer = '';
           }
+          break;
+
+        case "input_audio_buffer.speech_stopped":
+          console.log(`[VAD-TRACE] speech_stopped at ${Date.now() - callStartTime}ms into call`);
           break;
 
         case "conversation.item.input_audio_transcription.completed":
