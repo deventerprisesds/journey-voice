@@ -289,9 +289,15 @@ const VoiceAssistantSettings: React.FC = () => {
       setElevenlabsVoiceId(config.elevenlabs_voice_id || 'EXAVITQu4vr4xnSDxMaL');
       setOpenaiVoice(config.openai_voice || 'alloy');
       setCustomVoices(config.custom_voices || []);
-      setScheduledCalls(config.scheduled_calls && config.scheduled_calls.length > 0 
-        ? config.scheduled_calls 
-        : DEFAULT_SCHEDULED_CALLS);
+      // Merge: use saved calls but add any missing defaults
+      const savedCalls = config.scheduled_calls || [];
+      if (savedCalls.length > 0) {
+        const savedIds = new Set(savedCalls.map((c: ScheduledCall) => c.id));
+        const missingDefaults = DEFAULT_SCHEDULED_CALLS.filter(d => !savedIds.has(d.id));
+        setScheduledCalls([...savedCalls, ...missingDefaults]);
+      } else {
+        setScheduledCalls(DEFAULT_SCHEDULED_CALLS);
+      }
       setRecurringCallsEnabled(config.recurring_calls_enabled ?? true);
       setPhoneCallMode(config.phone_call_mode || 'media_streams');
     } catch (error) {
