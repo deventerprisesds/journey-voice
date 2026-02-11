@@ -461,10 +461,9 @@ serve(async (req) => {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          userInput: '[SYSTEM INITIATED] Generate your opening message for this check-in.',
+          userInput: `[SYSTEM INITIATED CHECK-IN]\n\n${contextualInstructions}\n\nGenerate your opening message for this check-in based on the context above.`,
           userId,
           threadId: dbThreadId,
-          contextualInstructions,
           systemInitiated: true
         })
       });

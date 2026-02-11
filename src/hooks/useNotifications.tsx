@@ -71,7 +71,7 @@ export const useNotifications = () => {
       });
       
       // Get existing subscription
-      const existingSubscription = await registration.pushManager.getSubscription();
+      const existingSubscription = await (registration as any).pushManager.getSubscription();
       setSubscription(existingSubscription);
       
       if (existingSubscription) {
@@ -136,7 +136,7 @@ export const useNotifications = () => {
       
       // Check for existing subscription with potentially different VAPID key
       // This handles VAPID key rotation gracefully
-      const existingSubscription = await registration.pushManager.getSubscription();
+      const existingSubscription = await (registration as any).pushManager.getSubscription();
       
       if (existingSubscription) {
         // Always unsubscribe first to handle VAPID key changes
@@ -152,7 +152,7 @@ export const useNotifications = () => {
       }
       
       // Create new subscription with current VAPID key
-      const pushSubscription = await registration.pushManager.subscribe({
+      const pushSubscription = await (registration as any).pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey: urlBase64ToUint8Array(vapidPublicKey).buffer as ArrayBuffer
       });
@@ -246,7 +246,7 @@ export const useNotifications = () => {
       // 2. Get current SW registration and unsubscribe from any push
       console.log('[useNotifications] Step 2: Unsubscribing from push manager...');
       const registration = await navigator.serviceWorker.ready;
-      const existingSub = await registration.pushManager.getSubscription();
+      const existingSub = await (registration as any).pushManager.getSubscription();
       if (existingSub) {
         try {
           await existingSub.unsubscribe();
@@ -282,7 +282,7 @@ export const useNotifications = () => {
       const vapidPublicKey = await getVapidPublicKey();
       console.log('[useNotifications] Got VAPID key:', vapidPublicKey.substring(0, 20) + '...');
       
-      const pushSubscription = await registration.pushManager.subscribe({
+      const pushSubscription = await (registration as any).pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey: urlBase64ToUint8Array(vapidPublicKey).buffer as ArrayBuffer
       });
