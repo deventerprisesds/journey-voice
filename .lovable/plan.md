@@ -1,74 +1,56 @@
 
 
-# Fix: Double Greeting, Barge-in, and Task Hallucination
+# Fix: Persist Check-in Context in Chat Thread + Thread Continuity
 
-## Three bugs, two files.
+## Two Changes in One File
 
----
-
-## Bug 1: Double Greeting
-
-**Root cause:** `buildWindowContext` in `twilio-scheduled-call/index.ts` always emits `GREETING: Address user as "..."` and `1. Greet user` as the first agenda item. But for pre-connected calls, the bridge already plays cached audio and injects a "skip step 1" system message. The AI sees conflicting instructions and often follows the agenda's explicit greeting step.
-
-**Fix in `twilio-scheduled-call/index.ts`:**
-Add a note to every context that says: "NOTE: If a cached greeting has already been played, step 1 is already complete. A system message will confirm this -- skip it and start from step 2." This aligns the context with what the bridge injects, instead of contradicting it.
-
-Update the `AGENDA_HEADER` constant to include:
-
-```
-NOTE: On pre-connected calls, a cached audio greeting plays automatically before
-you receive this context. A system message will confirm this happened. When you see
-that confirmation, step 1 (greeting) is already done -- skip it entirely and start
-from the next item. Do NOT greet the user again.
-```
+**File:** `supabase/functions/send-chat-message/index.ts`
 
 ---
 
-## Bug 2: No Barge-in During ElevenLabs TTS
+## Change 1: Embed Context into the Thread Message (Not Ephemeral)
 
-**Root cause:** In `twilio-realtime-bridge/index.ts`, the barge-in logic at `input_audio_buffer.speech_started` (line 534) only checks `isAiSpeaking`. This flag is set on `response.audio.delta` (line 447) which only fires for OpenAI native audio. When using ElevenLabs, audio is sent via `sendElevenLabsTTS` which sets `isSendingTtsAudio` instead. The barge-in gate never opens during ElevenLabs playback.
+Currently at line 463-469, the call to `hybrid-assistant-api` sends:
 
-**Fix in `twilio-realtime-bridge/index.ts`:**
-Change the barge-in condition from:
+```
+userInput: '[SYSTEM INITIATED] Generate your opening message for this check-in.'
+contextualInstructions: <the full window context, tasks, topics>
+```
+
+The `contextualInstructions` get applied as `additional_instructions` on the OpenAI run, which is ephemeral -- it vanishes after the run completes. When the user replies, the next run has no idea what the check-in was about.
+
+**Fix:** Merge the context into `userInput` so it becomes a permanent message in the OpenAI thread:
 
 ```typescript
-if (isAiSpeaking) {
+body: JSON.stringify({
+  userInput: `[SYSTEM INITIATED CHECK-IN]\n\n${contextualInstructions}\n\nGenerate your opening message for this check-in based on the context above.`,
+  userId,
+  threadId: dbThreadId,
+  systemInitiated: true
+  // contextualInstructions removed -- now embedded in userInput
+})
 ```
 
-to:
+This means when the user asks "what is this about?", the AI can scroll back in the thread and see the full window context, task list, and agenda.
 
-```typescript
-if (isAiSpeaking || isSendingTtsAudio) {
-```
+## Change 2: Pass the OpenAI Thread ID (if available)
 
-This ensures barge-in triggers whenever audio is being sent to Twilio, regardless of whether it came from OpenAI native audio or ElevenLabs TTS.
+Currently `send-chat-message` passes `threadId: dbThreadId` (the Supabase row ID). The `hybrid-assistant-api` already looks up the `openai_thread_id` from this DB row, so thread continuity is already handled. No additional change needed here -- the existing flow correctly reuses the same OpenAI thread across messages.
 
 ---
 
-## Bug 3: Task Hallucination in Topic Jog
+## What Does NOT Change
 
-**Root cause:** When the "No Tasks -- Topic Jog" branch fires, the context presents topic group names and tells the AI to "use get_tasks to drill into that topic." But there is no explicit prohibition against inventing tasks. The AI sees topic names like "Financial Management" and fabricates specific tasks under them instead of calling the tool.
+- `hybrid-assistant-api` -- no changes needed; it already handles `userInput` with or without `contextualInstructions`
+- `buildCallContext` / `buildWindowTransitionContext` -- still generate the same context strings
+- Frontend chat hook -- no changes
+- Voice flows -- unaffected
 
-**Fix in `twilio-scheduled-call/index.ts`:**
-Add a strict anti-hallucination rule to the `AGENDA_HEADER`:
+## Regarding the Recurring Call Issue
 
-```
-CRITICAL: NEVER invent, assume, or fabricate task names or details.
-Only present tasks that are either:
-  (a) explicitly listed in this context as data, OR
-  (b) returned by the get_tasks tool at runtime.
-If you do not have task data, you MUST call get_tasks before describing any tasks to the user.
-Topic group names are for memory jogging only -- do NOT guess what tasks are in them.
-```
+Edge function logs for `twilio-scheduled-call` and `hybrid-assistant-api` returned empty -- no recent invocations were captured. Without logs from the most recent call, the specific failure (tools not being used, context not loaded) cannot be diagnosed from the server side. The fixes deployed in the previous round (anti-hallucination guardrails, barge-in, greeting dedup) are in place but may need a fresh call to validate. After this chat fix is deployed, a test of both a chat check-in and a phone call would confirm both paths.
 
----
+## Risk Assessment
 
-## Summary of Changes
-
-| File | Change |
-|------|--------|
-| `supabase/functions/twilio-scheduled-call/index.ts` | Update `AGENDA_HEADER` with cached-greeting awareness and anti-hallucination rules |
-| `supabase/functions/twilio-realtime-bridge/index.ts` | Change barge-in condition to include `isSendingTtsAudio` |
-
-Two files. Three targeted fixes. No structural changes.
+Low risk. The only behavioral change is that the system-initiated message stored in the OpenAI thread is richer (contains the full check-in context) instead of a bare "[SYSTEM INITIATED]" marker. All other context injection (persona, RAG, time anchor) continues to load via `additional_instructions` on every run as before.
 
