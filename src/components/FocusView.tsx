@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import { format, parseISO, isToday, isPast, formatDistanceToNow, addMinutes, startOfDay } from 'date-fns';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
@@ -21,7 +21,8 @@ import {
   ListOrdered,
   ChevronDown,
   ChevronUp,
-  CalendarPlus
+  CalendarPlus,
+  Plus
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Task } from '@/types/task';
@@ -33,6 +34,8 @@ import { useAuth } from '@/hooks/useAuth';
 import { useBatchScheduling } from '@/hooks/useBatchScheduling';
 import { getTimePartsInTimezone, localTimeToUtcISO, getDefaultTimezone } from '@/lib/date';
 import QuickTaskInput from './QuickTaskInput';
+import TaskCreationModal from './TaskCreationModal';
+import { getOrCreateDefaultBoardId } from '@/utils/demoData';
 
 interface FocusViewProps {
   tasks: Task[];
@@ -119,11 +122,21 @@ const FocusView: React.FC<FocusViewProps> = ({
 }) => {
   const [showAllUpNext, setShowAllUpNext] = useState(false);
   const [isTimelineExpanded, setIsTimelineExpanded] = useState(true);
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [createModalHour, setCreateModalHour] = useState<number>(9);
+  const [defaultBoardId, setDefaultBoardId] = useState<string>('');
   const today = new Date();
   const config = DEFAULT_SCHEDULING_CONFIG;
   
   const { user } = useAuth();
   const { scheduleBatch, updateTasksWithSchedule, isScheduling } = useBatchScheduling();
+
+  // Load default board ID
+  useEffect(() => {
+    if (user?.id) {
+      getOrCreateDefaultBoardId(user.id).then(setDefaultBoardId);
+    }
+  }, [user?.id]);
   
   // Get user timezone - use browser default as fallback
   const userTimezone = getDefaultTimezone();
@@ -442,9 +455,26 @@ const FocusView: React.FC<FocusViewProps> = ({
                                 <span className={cn("flex-shrink-0", style.textClass)}>{style.icon}</span>
                                 <span className={cn("font-medium text-sm truncate", style.textClass)}>{style.label}</span>
                               </div>
-                              <span className="text-xs text-muted-foreground flex-shrink-0 whitespace-nowrap">
-                                {config.timeWindows[windowName as keyof typeof config.timeWindows]?.start}:00 - {config.timeWindows[windowName as keyof typeof config.timeWindows]?.end}:00
-                              </span>
+                              <div className="flex items-center gap-1 flex-shrink-0">
+                                <span className="text-xs text-muted-foreground whitespace-nowrap">
+                                  {config.timeWindows[windowName as keyof typeof config.timeWindows]?.start}:00 - {config.timeWindows[windowName as keyof typeof config.timeWindows]?.end}:00
+                                </span>
+                                {windowName !== 'other' && (
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-6 w-6"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const windowStart = config.timeWindows[windowName as keyof typeof config.timeWindows]?.start ?? 9;
+                                      setCreateModalHour(windowStart);
+                                      setIsCreateModalOpen(true);
+                                    }}
+                                  >
+                                    <Plus className="h-3.5 w-3.5" />
+                                  </Button>
+                                )}
+                              </div>
                             </div>
                             
                             {/* Tasks in Window */}
@@ -733,6 +763,21 @@ const FocusView: React.FC<FocusViewProps> = ({
           </Card>
         </div>
       </div>
+      {user?.id && defaultBoardId && (
+        <TaskCreationModal
+          isOpen={isCreateModalOpen}
+          onClose={() => setIsCreateModalOpen(false)}
+          onTasksCreated={() => {
+            onTaskUpdate();
+            setIsCreateModalOpen(false);
+          }}
+          boardId={defaultBoardId}
+          userId={user.id}
+          initialDate={today}
+          initialHour={createModalHour}
+          initialMinute={0}
+        />
+      )}
     </DragDropContext>
   );
 };
