@@ -666,6 +666,19 @@ async function processRecurringCalls(): Promise<{ processed: number; triggered: 
     // Check each scheduled call
     for (const call of scheduledCalls) {
       if (!call.enabled) continue;
+
+      // Fix 2: Weekend day-of-week guard
+      const isWeekendCall = call.context?.includes('[WINDOW:weekends]');
+      if (isWeekendCall) {
+        const dayOfWeek = new Date().toLocaleDateString('en-US', { 
+          weekday: 'long', timeZone: timezone 
+        });
+        if (dayOfWeek !== 'Saturday' && dayOfWeek !== 'Sunday') {
+          console.log(`[RECURRING] Skipping weekend call "${call.name}" on ${dayOfWeek}`);
+          continue;
+        }
+      }
+
       processed++;
 
       if (isTimeMatch(currentHHMM, call.time)) {
@@ -728,31 +741,92 @@ async function processRecurringCalls(): Promise<{ processed: number; triggered: 
               errors.push(`User ${userId}: Failed to send ${commsMode} for ${call.name} - ${result.error}`);
             }
           } else {
-            // Default: phone call via twilio-voice-handler
+            // Fix 1: Route recurring phone calls through pre-connect session
+            // This avoids URL parameter truncation by storing full context in DB
             const context = await buildCallContext(call, userId, preferredGreeting);
+            console.log(`[RECURRING] User ${userId}: Built context for ${call.name}, length=${context.length}`);
 
-            const response = await fetch(`${supabaseUrl}/functions/v1/twilio-voice-handler`, {
-              method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${supabaseServiceKey}`,
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({
-                action: 'trigger-call',
-                userId,
-                context,
-                phoneNumber,
-              }),
-            });
+            let callTriggered = false;
 
-            const result = await response.json();
-            
-            if (result.success) {
-              triggered++;
-              console.log(`[RECURRING] User ${userId}: Call triggered successfully for ${call.name}`);
-            } else {
-              errors.push(`User ${userId}: Failed to trigger ${call.name} - ${result.error}`);
-              console.error(`[RECURRING] User ${userId}: Failed to trigger ${call.name}:`, result.error);
+            try {
+              // Step 1: Create pre-connect session (queries tasks, topics, RAG, generates greeting audio)
+              const preConnectResponse = await fetch(`${supabaseUrl}/functions/v1/twilio-realtime-bridge`, {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${supabaseServiceKey}`,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  mode: 'pre-connect',
+                  userId,
+                  context,
+                  timezone,
+                }),
+              });
+
+              const preConnectResult = await preConnectResponse.json();
+
+              if (preConnectResult.sessionId) {
+                console.log(`[RECURRING] User ${userId}: Pre-connect session created: ${preConnectResult.sessionId}`);
+
+                // Step 2: Trigger call with session ID (full context preserved in DB)
+                const callResponse = await fetch(`${supabaseUrl}/functions/v1/twilio-voice-handler`, {
+                  method: 'POST',
+                  headers: {
+                    'Authorization': `Bearer ${supabaseServiceKey}`,
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({
+                    action: 'trigger-call-with-session',
+                    userId,
+                    phoneNumber,
+                    sessionId: preConnectResult.sessionId,
+                    greetingText: preConnectResult.greetingText || '',
+                  }),
+                });
+
+                const callResult = await callResponse.json();
+
+                if (callResult.success) {
+                  callTriggered = true;
+                  triggered++;
+                  console.log(`[RECURRING] User ${userId}: Call triggered via pre-connect session for ${call.name}`);
+                } else {
+                  console.warn(`[RECURRING] User ${userId}: trigger-call-with-session failed for ${call.name}: ${callResult.error}`);
+                }
+              } else {
+                console.warn(`[RECURRING] User ${userId}: Pre-connect failed for ${call.name}: ${preConnectResult.error || 'no sessionId'}`);
+              }
+            } catch (preConnectError) {
+              console.warn(`[RECURRING] User ${userId}: Pre-connect exception for ${call.name}:`, preConnectError);
+            }
+
+            // Fallback: use legacy trigger-call if pre-connect path failed
+            if (!callTriggered) {
+              console.log(`[RECURRING] User ${userId}: Falling back to trigger-call for ${call.name}`);
+              const response = await fetch(`${supabaseUrl}/functions/v1/twilio-voice-handler`, {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${supabaseServiceKey}`,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  action: 'trigger-call',
+                  userId,
+                  context,
+                  phoneNumber,
+                }),
+              });
+
+              const result = await response.json();
+              
+              if (result.success) {
+                triggered++;
+                console.log(`[RECURRING] User ${userId}: Call triggered via fallback for ${call.name}`);
+              } else {
+                errors.push(`User ${userId}: Failed to trigger ${call.name} - ${result.error}`);
+                console.error(`[RECURRING] User ${userId}: Failed to trigger ${call.name}:`, result.error);
+              }
             }
           }
         } catch (error) {
