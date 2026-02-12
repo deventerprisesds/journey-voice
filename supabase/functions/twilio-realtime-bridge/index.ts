@@ -432,7 +432,7 @@ serve(async (req) => {
           }
           
           console.log(`[GREETING-TRACE] session.updated: preConnectedSession=${!!preConnectedSession}, greetingSent=${greetingSent}, waitingForUserHello=${waitingForUserHello}, greetingContextInjected=${greetingContextInjected}`);
-          if (preConnectedSession && greetingSent && !greetingContextInjected) {
+          if (preConnectedSession && greetingSent && !greetingContextInjected && !waitingForUserHello) {
             injectAssistantMessage(preConnectedGreetingText);
             injectSystemMessage(`[System: Scheduled call - greeting already sent: "${preConnectedGreetingText}". SKIP the greeting step (step 1). ${callContext || ''}. Continue from step 2 onward. Cover ALL remaining agenda items.]`);
             greetingContextInjected = true;
