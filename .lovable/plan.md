@@ -1,83 +1,156 @@
 
 
-# Fix: Route Recurring Calls Through Pre-Connect Session + Fix Double Greeting + Weekend Guard
+# Unify Call Context Pipeline + Fix Greeting Transcript + Fix Double Greeting
 
-## Summary
+## What Gets Preserved (Nothing Lost)
 
-You're right on all three points, and your suggestion about pre-computing at delivery time is exactly the solution. The `pre-connect` path already exists and does this -- it queries tasks, topics, RAG context, and pre-generates the greeting audio. But recurring calls aren't using it. They use the old `trigger-call` path which passes context as a URL parameter (line 1006 of `twilio-voice-handler`), which truncates your task lists and topic groups.
+The shared module will contain ALL of the following from `twilio-scheduled-call`:
 
-## Three Fixes
+| Feature | Source | Kept? |
+|---------|--------|-------|
+| `CATEGORY_WINDOW_MAPPING` (6 categories x windows) | twilio-scheduled-call L34-41 | Yes |
+| `WINDOW_RANGES` (morning/biz/after/evening/weekends) | twilio-scheduled-call L44-50 | Yes |
+| `AGENDA_HEADER` (anti-hallucination, natural flow) | twilio-scheduled-call L279-294 | Yes |
+| `getTasksForWindow()` (excludes test/blocked, filters by category) | twilio-scheduled-call L88-138 | Yes |
+| `getTopicGroupsFromWindowTasks()` (tier 1 window-aligned topics) | twilio-scheduled-call L141-168 | Yes |
+| `getTopicGroupsFromAllTasks()` (tier 2 fallback across all tasks) | twilio-scheduled-call L171-176 | Yes |
+| `getTopicGroupsManual()` (3-step join: tasks -> mappings -> topics, ranked) | twilio-scheduled-call L179-251 | Yes |
+| `formatTopicGroups()` + `formatTaskList()` | twilio-scheduled-call L255-276 | Yes |
+| `buildWindowContext()` (5 per-window scripts with task/topic/tier logic) | twilio-scheduled-call L335-538 | Yes |
+| `buildWindowTransitionContext()` (queries DB, builds context) | twilio-scheduled-call L297-332 | Yes |
+| `buildCallContext()` (window detection + legacy mapping + custom fallback) | twilio-scheduled-call L542-572 | Yes |
 
-### Fix 1: Route Recurring Calls Through Pre-Connect Session
+The `notification-delivery` version (lines 9-98) is **discarded entirely** -- it has nothing the strong version lacks.
 
-**File:** `supabase/functions/twilio-scheduled-call/index.ts` (lines 730-756)
+## What Gets Discarded from notification-delivery
 
-Replace the `trigger-call` path with a two-step flow:
+- Static "CALL TYPE: Morning Stand-up / [CALL AGENDA - MUST COVER ALL] / 1. Greet warmly..." scripts (lines 42-85) -- replaced by window-aware scripts with actual task lists
+- The generic `briefing` string ("X tasks scheduled for today") -- replaced by `formatTaskList()` which shows individual task names and times
+- The `switch(callId)` pattern -- replaced by window detection with legacy callType-to-window mapping
 
-1. Call `twilio-realtime-bridge` with `mode: 'pre-connect'` -- this pre-queries tasks, topics, RAG context, generates greeting audio, and stores everything in the `pre_connect_sessions` table (no size limit)
-2. Call `twilio-voice-handler` with `action: 'trigger-call-with-session'` and the session ID
+## Changes
 
-This is the same path already used for user-initiated calls from the app. The dynamic context (AGENDA_HEADER, task lists, topic groups) will be fully preserved because it's stored in a database row, not a URL parameter.
+### 1. Create shared module: `_shared/call-context-builder.ts`
+
+Extract from `twilio-scheduled-call/index.ts`:
+- All constants: `CATEGORY_WINDOW_MAPPING`, `WINDOW_RANGES`, `AGENDA_HEADER`
+- All functions: `getTasksForWindow`, `getTopicGroupsFromWindowTasks`, `getTopicGroupsFromAllTasks`, `getTopicGroupsManual`, `formatTopicGroups`, `formatTaskList`, `buildWindowContext`, `buildWindowTransitionContext`
+- The main `buildCallContext` function
+
+The function signature will accept a generic call descriptor:
 
 ```text
-// BEFORE (line 734):
-fetch('twilio-voice-handler', { action: 'trigger-call', context })
-// context gets URL-encoded and truncated
+interface CallDescriptor {
+  callType?: string;   // 'morning_standup' | 'midday_checkin' | 'eod_wrapup' | 'custom'
+  context?: string;    // User-configured context (may contain [WINDOW:xxx])
+  name?: string;       // Call name for logging
+}
 
-// AFTER:
-1. fetch('twilio-realtime-bridge', { mode: 'pre-connect', userId, context, agenda, timezone })
-   -> returns { sessionId, greetingText, audioBase64 }
-2. fetch('twilio-voice-handler', { action: 'trigger-call-with-session', sessionId, ... })
-   -> full context preserved in DB
+async function buildCallContext(
+  call: CallDescriptor,
+  userId: string,
+  supabaseUrl: string,
+  supabaseServiceKey: string,
+  preferredGreeting?: string
+): Promise<string>
 ```
 
-If pre-connect fails, fall back to `trigger-call` so calls still go through.
+This accepts both `ScheduledCall` objects (from twilio-scheduled-call) and `callConfig` objects (from notification-delivery) since both have `callType` and `context` fields.
 
-### Fix 2: Weekend Day-of-Week Guard
+### 2. Update `notification-delivery/index.ts`
 
-**File:** `supabase/functions/twilio-scheduled-call/index.ts` (inside the for-loop at line 667)
-
-Add a check: if the call's context contains `[WINDOW:weekends]` and today is not Saturday or Sunday, skip it. This prevents the weekend call from firing on a Tuesday.
+- Remove the local `buildCallContext` function (lines 9-98)
+- Import `buildCallContext` from `../_shared/call-context-builder.ts`
+- At line 267 and 329, adapt the call site:
 
 ```text
-const isWeekendCall = call.context?.includes('[WINDOW:weekends]');
-if (isWeekendCall) {
-  const dayOfWeek = new Date().toLocaleDateString('en-US', { 
-    weekday: 'long', timeZone: timezone 
-  });
-  if (dayOfWeek !== 'Saturday' && dayOfWeek !== 'Sunday') {
-    console.log(`[RECURRING] Skipping weekend call on ${dayOfWeek}`);
-    continue;
-  }
+// BEFORE (line 329):
+const context = await buildCallContext(callConfig, userId, supabaseClient);
+
+// AFTER:
+const context = await buildCallContext(
+  { callType: callConfig.call_id, context: callConfig.context, name: callConfig.call_name },
+  userId,
+  Deno.env.get('SUPABASE_URL')!,
+  Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
+  profile?.preferred_greeting || 'Sir'
+);
+```
+
+This means the notification-delivery pipeline now gets full window-aware context with task lists, topic groups, and anti-hallucination guardrails.
+
+### 3. Update `twilio-scheduled-call/index.ts`
+
+- Remove all the extracted functions (lines 33-572, roughly 540 lines)
+- Import from `../_shared/call-context-builder.ts`
+- Keep: `getTodaysBriefing`, `isTimeMatch`, `getTimeInTimezone`, `processRecurringCalls`, and the `serve` handler
+- Update the `buildCallContext` call at line 746 to use the shared import
+
+### 4. Persist cached greeting to call_messages (transcript visibility)
+
+**File:** `twilio-realtime-bridge/index.ts`
+
+Currently, the cached ElevenLabs greeting is played as raw audio but never saved to `call_messages`. This is why you can't see it in transcripts.
+
+In `triggerPendingGreeting` (around line 236-241), after playing cached audio:
+
+```text
+// NEW: Persist the cached greeting so it appears in transcripts
+if (callSessionId && userId) {
+  saveCallMessage(supabase, {
+    callSessionId, userId, threadId, streamSid,
+    role: 'assistant', content: preConnectedGreetingText,
+    messageIndex, latencyMs: 0
+  }).then(idx => { if (idx !== undefined) messageIndex = idx; })
+    .catch(e => console.error('[PERSIST] cached greeting save failed:', e));
 }
 ```
 
-### Fix 3: Eliminate Double Greeting
+Same for the inbound cached audio path at lines 695-703.
 
-**File:** `supabase/functions/twilio-realtime-bridge/index.ts` (lines 435-443)
+### 5. Fix double greeting definitively
 
-The race condition: `session.updated` fires and sees `greetingSent=true` but `greetingContextInjected=false`, so it injects a greeting context. Then `triggerPendingGreeting` fires and injects another one.
+**File:** `twilio-realtime-bridge/index.ts`
 
-Fix: In the `session.updated` handler, also check `waitingForUserHello`. If the session has a pre-connected greeting with cached audio, the greeting will be handled by the stream `start` event and `triggerPendingGreeting`. The `session.updated` path should not inject a second greeting.
-
+The `session.updated` handler (line 435) currently checks:
 ```text
-// BEFORE (line 435):
-if (preConnectedSession && greetingSent && !greetingContextInjected)
-
-// AFTER:
 if (preConnectedSession && greetingSent && !greetingContextInjected && !waitingForUserHello)
 ```
 
-This ensures only ONE code path injects the greeting context.
+Add `!cachedAudioBase64` guard:
+```text
+if (preConnectedSession && greetingSent && !greetingContextInjected && !waitingForUserHello && !cachedAudioBase64)
+```
 
-## What Does NOT Change
+When cached audio exists (all pre-connected ElevenLabs calls), the greeting context is ONLY injected by:
+- `triggerPendingGreeting` (outbound calls, line 238-241)
+- The stream `start` handler (inbound calls, lines 695-703 -- which also needs context injection added)
 
-- `persona.ts`, `tool-definitions.ts`, `call-session.ts` -- unchanged
-- `twilio-voice-handler` `trigger-call-with-session` handler -- already works correctly
-- Frontend code -- no changes
-- Chat flows -- unaffected
-- The `buildCallContext` / `buildWindowTransitionContext` functions -- still generate the same rich context, it just won't be truncated anymore
+The `session.updated` path becomes a fallback only for pre-connected sessions WITHOUT cached audio (OpenAI-voice calls).
 
-## Risk Assessment
+For the inbound path at lines 695-703, add context injection after playing cached audio (currently missing):
 
-Low risk. The `trigger-call-with-session` path is already production-tested for user-initiated calls. The only new behavior is that recurring calls use the same path. Fallback to `trigger-call` ensures no call is lost if pre-connect fails.
+```text
+// After line 702 (greetingSent = true):
+injectAssistantMessage(preConnectedGreetingText);
+injectSystemMessage(`[System: PRE-CONNECTED CALL - greeting already sent: "${preConnectedGreetingText}". SKIP step 1. ${callContext || ''}. Continue from step 2.]`);
+greetingContextInjected = true;
+```
+
+## Summary of File Changes
+
+| File | Action | Lines Affected |
+|------|--------|----------------|
+| `_shared/call-context-builder.ts` | NEW | ~300 lines (extracted from twilio-scheduled-call) |
+| `twilio-scheduled-call/index.ts` | SHRINK | Remove ~540 lines (33-572), add 1 import |
+| `notification-delivery/index.ts` | REPLACE | Remove lines 9-98 (weak buildCallContext), add import + adapt 2 call sites |
+| `twilio-realtime-bridge/index.ts` | EDIT | Add greeting persistence (2 locations), add `!cachedAudioBase64` guard, add inbound context injection |
+
+## Risk Mitigation
+
+- The shared module is a direct copy-paste of the proven `twilio-scheduled-call` functions -- no logic changes
+- `notification-delivery` gets strictly upgraded (weak to strong) -- no feature regression
+- The `CallDescriptor` interface is a subset of `ScheduledCall`, so existing callers work without changes
+- Both pipelines will produce identical context for the same call configuration
+- If the shared import fails to resolve, both functions will fail to deploy, making it immediately visible (not a silent regression)
+
