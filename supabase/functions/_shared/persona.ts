@@ -6,11 +6,14 @@
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { getToolNamesList } from "./tool-definitions.ts";
 
 /**
  * Default Iris persona (fallback if database is empty)
+ * The "Available functions" list is generated dynamically from tool-definitions.ts
  */
-export const DEFAULT_IRIS_PERSONA = `You are Iris, a knowledgeable and proactive executive assistant.
+export function getDefaultIrisPersona(): string {
+  return `You are Iris, a knowledgeable and proactive executive assistant.
 
 HONESTY - ABSOLUTE RULE (NEVER VIOLATE):
 - NEVER fabricate, invent, or assume factual data (scores, weather, news, prices, dates, statistics)
@@ -30,28 +33,20 @@ TOOL USAGE - CRITICAL:
 - ALWAYS use tools to get current data (get_tasks, get_today_tasks, web_search)
 - Never rely on pre-loaded context for dynamic information
 - For weather, sports, news, stocks, current events - use web_search immediately
+- When a user picks a topic group, ALWAYS call get_tasks_by_topic - NEVER guess the tasks
 
 Available functions:
-- get_tasks: Search/retrieve tasks with time/keyword filtering
-- get_today_tasks: Get today's scheduled tasks
-- create_task: Create new tasks (only when explicitly requested)
-- update_task: Modify existing tasks
-- reschedule_task: Move tasks to different date/time
-- schedule_task: Auto-schedule unscheduled tasks
-- unschedule_task: Remove from calendar
-- web_search: Real-time internet search for weather, news, sports, facts
-- send_email: Send emails
-- send_slack_message: Send Slack messages
-- create_outlook_event: Create Outlook calendar events
-- create_google_event: Create Google calendar events
-- hang_up: End the phone call gracefully
+${getToolNamesList()}
 
 IMPORTANT:
 - Only create tasks when explicitly requested
 - Use web_search for any real-time information
 - Keep responses concise and conversational
 - When user says goodbye, use the hang_up function`;
+}
 
+// Keep backward compat — consumers that reference DEFAULT_IRIS_PERSONA directly
+export const DEFAULT_IRIS_PERSONA = getDefaultIrisPersona();
 /**
  * Phone conversation style additions
  */
@@ -136,17 +131,42 @@ export function getCurrentTimeString(timezone: string = 'America/New_York'): str
  * Generate greeting text based on call type
  */
 export function generateGreetingForCallType(context: string, timeGreeting: string, userName: string): string {
-  if (context.includes('Morning Stand-up')) {
-    return `${timeGreeting}, ${userName}. This is your morning check-in.`;
-  } else if (context.includes('Midday Check-in')) {
-    return `${timeGreeting}, ${userName}. Just checking in on how your day is going.`;
-  } else if (context.includes('End of Day Wrap-up')) {
-    return `${timeGreeting}, ${userName}. Let's wrap up the day.`;
-  } else if (context.includes('Task reminder')) {
+  // Extract call name dynamically from the context (pattern: "CALL: <Name>")
+  const callMatch = context.match(/CALL:\s*([^\n(]+)/);
+  const callName = callMatch ? callMatch[1].trim() : '';
+
+  // Task reminder — explicit keyword
+  if (context.includes('Task reminder')) {
     return `${timeGreeting}, ${userName}. Quick reminder about an upcoming task.`;
   }
-  
-  // Default
+
+  // Dynamic: derive greeting from the call name + time of day
+  if (callName) {
+    // Morning calls
+    if (/morning|kickstart/i.test(callName)) {
+      return `${timeGreeting}, ${userName}. This is your morning check-in.`;
+    }
+    // Business hours / execution
+    if (/business|execution|midday/i.test(callName)) {
+      return `${timeGreeting}, ${userName}. Just checking in on how your day is going.`;
+    }
+    // End of day / wrap / after-work
+    if (/wrap|end of day|after.work/i.test(callName)) {
+      return `${timeGreeting}, ${userName}. Let's wrap up the day.`;
+    }
+    // Evening
+    if (/evening/i.test(callName)) {
+      return `${timeGreeting}, ${userName}. Checking in for the evening.`;
+    }
+    // Weekend
+    if (/weekend|saturday|sunday/i.test(callName)) {
+      return `${timeGreeting}, ${userName}. Happy weekend — let's see what's on the agenda.`;
+    }
+    // Any other named call — use the name naturally
+    return `${timeGreeting}, ${userName}. This is your ${callName.toLowerCase()} check-in.`;
+  }
+
+  // Fallback
   return `${timeGreeting}, ${userName}. This is Iris.`;
 }
 

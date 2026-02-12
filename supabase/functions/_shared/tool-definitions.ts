@@ -1,8 +1,11 @@
 /**
- * OpenAI Tool Definitions for Voice & Chat Interfaces
+ * OpenAI Tool Definitions — SINGLE SOURCE OF TRUTH
  * 
- * Centralized tool schemas for the Realtime API and Chat Completions API.
- * These definitions ensure feature parity across phone, voice, and chat interfaces.
+ * Every consumer (phone via twilio-realtime-bridge, in-app voice via
+ * generate-realtime-token, chat via execute-tool /definitions endpoint,
+ * and persona.ts system prompt) imports from THIS file.
+ *
+ * To add a tool: add it here. It propagates everywhere automatically.
  */
 
 export interface ToolDefinition {
@@ -17,11 +20,12 @@ export interface ToolDefinition {
 }
 
 /**
- * Get all tool definitions for OpenAI Realtime API
- * Used by twilio-realtime-bridge for phone calls
+ * Complete tool definitions for all AI interfaces.
+ * This is the ONLY place tools are defined.
  */
 export function getToolDefinitions(): ToolDefinition[] {
   return [
+    // ── TASK TOOLS ──────────────────────────────────────────────
     {
       type: "function",
       name: "get_tasks",
@@ -31,23 +35,30 @@ export function getToolDefinitions(): ToolDefinition[] {
         properties: {
           query: { type: "string", description: "Search query or keywords" },
           time_filter: { type: "string", description: "Time period like 'past week', 'yesterday'" },
-          status: { type: "string", enum: ["BACKLOG", "TODO", "DOING", "DONE"] }
+          status: { 
+            type: "string", 
+            enum: ["BACKLOG", "TODO", "READY", "UP_NEXT", "DOING", "DONE", "BLOCKED", "PLANNING"],
+            description: "Task workflow status. BACKLOG=not yet planned, TODO=planned but not started, READY=ready to work on, UP_NEXT=queued to start soon, DOING=in progress, DONE=completed, BLOCKED=waiting on something, PLANNING=needs more detail"
+          }
         }
       }
     },
     {
       type: "function",
-      name: "create_task",
-      description: "Create a new task. Use UPPERCASE for priority.",
+      name: "get_today_tasks",
+      description: "Get all tasks for today, including both scheduled and unscheduled tasks.",
+      parameters: { type: "object", properties: {} }
+    },
+    {
+      type: "function",
+      name: "get_tasks_by_topic",
+      description: "Get tasks belonging to a specific topic group. Use this when the user wants to drill into a topic group presented during a check-in call. ALWAYS call this instead of guessing what tasks are in a topic.",
       parameters: {
         type: "object",
         properties: {
-          title: { type: "string", description: "Task title" },
-          description: { type: "string", description: "Task description" },
-          priority: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "URGENT"] },
-          category: { type: "string", enum: ["LIFE", "CAREER", "VENTURES", "EDUCATION"] }
+          topic_name: { type: "string", description: "The topic group name to retrieve tasks for (e.g., 'Professional Networking', 'Career Development')" }
         },
-        required: ["title"]
+        required: ["topic_name"]
       }
     },
     {
@@ -60,18 +71,16 @@ export function getToolDefinitions(): ToolDefinition[] {
           task_id: { type: "string", description: "ID of the task to update" },
           title: { type: "string" },
           description: { type: "string" },
-          status: { type: "string", enum: ["BACKLOG", "TODO", "DOING", "DONE"] },
+          status: { 
+            type: "string", 
+            enum: ["BACKLOG", "TODO", "READY", "UP_NEXT", "DOING", "DONE", "BLOCKED", "PLANNING"],
+            description: "Task workflow status"
+          },
           priority: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "URGENT"] },
           category: { type: "string", enum: ["LIFE", "CAREER", "VENTURES", "EDUCATION"] }
         },
         required: ["task_id"]
       }
-    },
-    {
-      type: "function",
-      name: "get_today_tasks",
-      description: "Get all tasks for today, including both scheduled and unscheduled tasks.",
-      parameters: { type: "object", properties: {} }
     },
     {
       type: "function",
@@ -117,16 +126,29 @@ export function getToolDefinitions(): ToolDefinition[] {
     },
     {
       type: "function",
-      name: "send_slack_message",
-      description: "Send a Slack message to the user.",
+      name: "parse_and_create_tasks",
+      description: "Parse natural language into tasks using AI and create them. Handles multiple tasks, date parsing ('today', 'tomorrow', 'next week'), categories, priorities, and optional auto-scheduling. Use this when user describes tasks in conversational language rather than explicit field values.",
       parameters: {
         type: "object",
         properties: {
-          message: { type: "string", description: "The message to send" }
+          text: { 
+            type: "string", 
+            description: "Natural language task description. Can include multiple tasks, dates, priorities. Example: 'I need to get a haircut, work on the Nexus application, and meet with my MBA partner'" 
+          },
+          target_date: { 
+            type: "string", 
+            description: "Target date for tasks. Can be YYYY-MM-DD format or keywords like 'today', 'tomorrow'. Used when user specifies a day context." 
+          },
+          auto_schedule: { 
+            type: "boolean", 
+            description: "If true, automatically find optimal time slots for tasks based on user preferences and calendar. Default: true" 
+          }
         },
-        required: ["message"]
+        required: ["text"]
       }
     },
+
+    // ── COMMUNICATION TOOLS ────────────────────────────────────
     {
       type: "function",
       name: "send_email",
@@ -138,6 +160,78 @@ export function getToolDefinitions(): ToolDefinition[] {
           body: { type: "string", description: "Email body content" }
         },
         required: ["subject", "body"]
+      }
+    },
+    {
+      type: "function",
+      name: "send_slack_message",
+      description: "Send a message via Slack integration. ONLY use when user EXPLICITLY requests Slack (e.g., 'send me a Slack message', 'post to Slack', 'message me on Slack'). For general 'send me a message' requests, use send_chat_message instead.",
+      parameters: {
+        type: "object",
+        properties: {
+          message: { type: "string", description: "The message to send" }
+        },
+        required: ["message"]
+      }
+    },
+    {
+      type: "function",
+      name: "send_chat_message",
+      description: "Send a message to the user via the app's chat interface. This is the PRIMARY and DEFAULT way to message the user. Use for: immediate messages, reminders ('remind me in X minutes'), scheduled check-ins ('message me at 3pm'), or ANY request like 'message me', 'send me something', 'text me', 'notify me about X'. Prefer this over Slack/Email unless user explicitly requests those channels.",
+      parameters: {
+        type: "object",
+        properties: {
+          delay_minutes: { 
+            type: "number", 
+            description: "Minutes to wait before sending (e.g., 'in 5 minutes' = 5). If 0 or not provided, sends immediately." 
+          },
+          scheduled_time: { 
+            type: "string", 
+            description: "Specific time to send in HH:MM format (e.g., '15:00' for 3pm). Takes precedence over delay_minutes." 
+          },
+          message: { 
+            type: "string", 
+            description: "The message content to send. If not provided, AI will generate a contextual message." 
+          },
+          context: { 
+            type: "string", 
+            description: "Context for AI to generate a message if no specific message provided (e.g., 'check on task progress', 'daily reminder')" 
+          }
+        }
+      }
+    },
+    {
+      type: "function",
+      name: "create_outlook_event",
+      description: "Create an Outlook calendar event.",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string", description: "Event title" },
+          start_time: { type: "string", description: "Start time in ISO format" },
+          end_time: { type: "string", description: "End time in ISO format" },
+          duration: { type: "number", description: "Duration in minutes (if no end_time)" },
+          description: { type: "string", description: "Event description" },
+          reminder: { type: "string", description: "Reminder minutes before" }
+        },
+        required: ["title", "start_time"]
+      }
+    },
+    {
+      type: "function",
+      name: "create_google_event",
+      description: "Create a Google Calendar event.",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string", description: "Event title" },
+          start_time: { type: "string", description: "Start time in ISO format" },
+          end_time: { type: "string", description: "End time in ISO format" },
+          duration: { type: "number", description: "Duration in minutes (if no end_time)" },
+          description: { type: "string", description: "Event description" },
+          reminder: { type: "string", description: "Reminder minutes before" }
+        },
+        required: ["title", "start_time"]
       }
     },
     {
@@ -167,27 +261,18 @@ export function getToolDefinitions(): ToolDefinition[] {
         }
       }
     },
-    {
-      type: "function",
-      name: "hang_up",
-      description: "End the phone call gracefully. Use when the user says goodbye or indicates they're done.",
-      parameters: {
-        type: "object",
-        properties: {
-          farewell_message: { type: "string", description: "Optional farewell message to say before hanging up" }
-        }
-      }
-    },
+
+    // ── SEARCH TOOLS ───────────────────────────────────────────
     {
       type: "function",
       name: "web_search",
-      description: "Search the internet for REAL-TIME information using Tavily. CRITICAL: The 'query' parameter MUST be a VERBATIM transcription of what the user said - do NOT rephrase or convert temporal phrases like 'this weekend' or 'today' into specific dates.",
+      description: "Search the internet for REAL-TIME information using Tavily. CRITICAL INSTRUCTION: The 'query' parameter MUST be a VERBATIM transcription of what the user said - do NOT rephrase, summarize, or convert temporal phrases like 'this weekend' or 'today' into specific dates. Pass the EXACT words the user spoke.",
       parameters: {
         type: "object",
         properties: {
           query: { 
             type: "string", 
-            description: "The user's EXACT spoken words - pass verbatim without modification" 
+            description: "The user's EXACT spoken words - pass verbatim without any modification" 
           },
           topic: {
             type: "string",
@@ -204,100 +289,67 @@ export function getToolDefinitions(): ToolDefinition[] {
             enum: ["day", "week", "month", "year"],
             description: "Use 'day' for today/tonight, 'week' for this week/weekend. Only set if query implies time constraint."
           },
+          start_date: {
+            type: "string",
+            description: "Explicit start date in YYYY-MM-DD format. Only use if you can determine a specific date range."
+          },
+          end_date: {
+            type: "string",
+            description: "Explicit end date in YYYY-MM-DD format. Only use if you can determine a specific date range."
+          },
           include_domains: {
             type: "array",
             items: { type: "string" },
             description: "Optional: Domains to prioritize. Leave empty to search all sources."
+          },
+          exclude_domains: {
+            type: "array",
+            items: { type: "string" },
+            description: "Optional: Domains to exclude from results."
+          },
+          max_results: {
+            type: "integer",
+            description: "Number of results to return (1-20). Default 10."
           }
         },
         required: ["query"]
+      }
+    },
+
+    // ── PHONE/VOICE-ONLY TOOLS ─────────────────────────────────
+    {
+      type: "function",
+      name: "hang_up",
+      description: "End the phone call gracefully. Use when the user says goodbye or indicates they're done.",
+      parameters: {
+        type: "object",
+        properties: {
+          farewell_message: { type: "string", description: "Optional farewell message to say before hanging up" }
+        }
+      }
+    },
+    {
+      type: "function",
+      name: "disconnect",
+      description: "Disconnect the voice assistant when user says goodbye, 'that's all', 'disconnect', 'that will be all', 'thanks that's it', or similar phrases indicating they're done.",
+      parameters: {
+        type: "object",
+        properties: {
+          farewell_message: {
+            type: "string",
+            description: "Optional goodbye message to say before disconnecting"
+          }
+        }
       }
     }
   ];
 }
 
 /**
- * Get phone-specific tool definitions (subset for voice handler fallback)
- * Used by twilio-voice-handler for turn-based conversation
+ * Get tool names as a simple list (for persona prompt generation)
  */
-export function getPhoneToolDefinitions(): any[] {
-  return [
-    {
-      type: "function",
-      function: {
-        name: "get_today_tasks",
-        description: "Get all tasks scheduled for today",
-        parameters: { type: "object", properties: {}, required: [] }
-      }
-    },
-    {
-      type: "function",
-      function: {
-        name: "get_upcoming_tasks",
-        description: "Get upcoming tasks for the next few days",
-        parameters: { 
-          type: "object", 
-          properties: {
-            days: { type: "number", description: "Number of days to look ahead (default 3)" }
-          },
-          required: [] 
-        }
-      }
-    },
-    {
-      type: "function",
-      function: {
-        name: "create_task",
-        description: "Create a new task",
-        parameters: {
-          type: "object",
-          properties: {
-            title: { type: "string", description: "Task title" },
-            description: { type: "string", description: "Task description" },
-            due_date: { type: "string", description: "Due date in YYYY-MM-DD format" },
-            priority: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "CRITICAL"], description: "Task priority" }
-          },
-          required: ["title"]
-        }
-      }
-    },
-    {
-      type: "function",
-      function: {
-        name: "complete_task",
-        description: "Mark a task as completed",
-        parameters: {
-          type: "object",
-          properties: {
-            task_title: { type: "string", description: "Title or partial title of the task to complete" }
-          },
-          required: ["task_title"]
-        }
-      }
-    },
-    {
-      type: "function",
-      function: {
-        name: "reschedule_task",
-        description: "Reschedule a task to a different time",
-        parameters: {
-          type: "object",
-          properties: {
-            task_title: { type: "string", description: "Title or partial title of the task" },
-            new_date: { type: "string", description: "New date in YYYY-MM-DD format" },
-            new_time: { type: "string", description: "New time in HH:MM format (24h)" }
-          },
-          required: ["task_title", "new_date"]
-        }
-      }
-    },
-    {
-      type: "function",
-      function: {
-        name: "end_call",
-        description: "End the phone call when the user says goodbye or indicates they're done",
-        parameters: { type: "object", properties: {}, required: [] }
-      }
-    }
-  ];
+export function getToolNamesList(): string {
+  return getToolDefinitions()
+    .map(t => `- ${t.name}: ${t.description.split('.')[0]}`)
+    .join('\n');
 }

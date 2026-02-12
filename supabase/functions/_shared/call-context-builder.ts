@@ -50,9 +50,13 @@ from the next item. Do NOT greet the user again.
 CRITICAL: NEVER invent, assume, or fabricate task names or details.
 Only present tasks that are either:
   (a) explicitly listed in this context as data, OR
-  (b) returned by the get_tasks tool at runtime.
-If you do not have task data, you MUST call get_tasks before describing any tasks to the user.
-Topic group names are for memory jogging only -- do NOT guess what tasks are in them.`;
+  (b) returned by the get_tasks or get_tasks_by_topic tool at runtime.
+If you do not have task data, you MUST call the appropriate tool before describing any tasks to the user.
+
+TOPIC DRILL-DOWN RULE:
+Topic group names are for memory jogging only -- do NOT guess what tasks are in them.
+When the user selects a topic group, you MUST call get_tasks_by_topic with that topic name.
+If get_tasks_by_topic returns 0 tasks, tell the user "I don't have any active tasks under that topic right now" — do NOT invent tasks.`;
 
 // ── Task & Topic Fetchers ───────────────────────────────────────────
 
@@ -300,11 +304,11 @@ AGENDA QUEUE:
 ${tier1List ? `3. Present these business-hour topic groups to jog memory:
 ${tier1List}
 4. Ask if they want to work on any of these right now
-5. If YES → Use get_tasks to drill into that topic. Help them select tasks. Use parse_and_create_tasks to schedule into available slots. Confirm.
+5. If YES → Use get_tasks_by_topic to drill into that topic. Help them select tasks. Use parse_and_create_tasks to schedule into available slots. Confirm.
 6. If NO → Acknowledge, mention next check-in. Close.` : `3. Say: "I don't see any potential items for business hours. Do you want to look for items across the entire board?"
 4. If YES → Present these broader topic groups:
 ${tier2List || '(No topics found across the board either)'}
-   Use get_tasks to drill into selected topic. Help select tasks. Use parse_and_create_tasks to schedule. Confirm.
+   Use get_tasks_by_topic to drill into selected topic. Help select tasks. Use parse_and_create_tasks to schedule. Confirm.
 5. If NO → Acknowledge, mention next check-in. Close.`}`;
       }
 
@@ -322,13 +326,13 @@ ${taskList}
 6. Present these after-work topic groups to jog memory:
 ${tier1List}
 7. Ask if they want to work on any of these during this time window
-8. If YES → Use get_tasks to drill in. Help select. Use parse_and_create_tasks to schedule. Confirm.
+8. If YES → Use get_tasks_by_topic to drill in. Help select. Use parse_and_create_tasks to schedule. Confirm.
 9. If NO → Acknowledge. Close.`
         : `PHASE 2 — After-Work Topic Jog (Broadened):
 5. Say: "I don't see any potential items for after work. Do you want to look for items across the entire board?"
 6. If YES → Present these broader topic groups:
 ${tier2List || '(No topics found)'}
-   Use get_tasks to drill in. Help select. Use parse_and_create_tasks to schedule. Confirm.
+   Use get_tasks_by_topic to drill in. Help select. Use parse_and_create_tasks to schedule. Confirm.
 7. If NO → Acknowledge. Close.`;
 
       return `${AGENDA_HEADER}\n
@@ -372,11 +376,11 @@ AGENDA QUEUE:
 ${tier1List ? `3. Present these evening topic groups to jog memory:
 ${tier1List}
 4. Ask if they want to work on any of these tonight
-5. If YES → Use get_tasks to drill in. Help select. Use parse_and_create_tasks to schedule. Confirm.
+5. If YES → Use get_tasks_by_topic to drill in. Help select. Use parse_and_create_tasks to schedule. Confirm.
 6. If NO → Acknowledge.` : `3. Say: "I don't see any potential items for this evening. Do you want to look for items across the entire board?"
 4. If YES → Present these broader topic groups:
 ${tier2List || '(No topics found)'}
-   Use get_tasks to drill in. Help select. Use parse_and_create_tasks to schedule. Confirm.
+   Use get_tasks_by_topic to drill in. Help select. Use parse_and_create_tasks to schedule. Confirm.
 5. If NO → Acknowledge.`}
 
 CLOSE: Wish them a good evening.`;
@@ -408,11 +412,11 @@ AGENDA QUEUE:
 ${tier1List ? `3. Present these life/weekend topic groups to jog memory:
 ${tier1List}
 4. Ask if they want to work on any of these today
-5. If YES → Use get_tasks to drill in. Help select. Use parse_and_create_tasks to schedule. Confirm.
+5. If YES → Use get_tasks_by_topic to drill in. Help select. Use parse_and_create_tasks to schedule. Confirm.
 6. If NO → Acknowledge.` : `3. Say: "I don't see any potential items for today. Do you want to look for items across the entire board?"
 4. If YES → Present these broader topic groups:
 ${tier2List || '(No topics found)'}
-   Use get_tasks to drill in. Help select. Use parse_and_create_tasks to schedule. Confirm.
+   Use get_tasks_by_topic to drill in. Help select. Use parse_and_create_tasks to schedule. Confirm.
 5. If NO → Acknowledge.`}
 
 CLOSE: Wish them an enjoyable weekend.`;
