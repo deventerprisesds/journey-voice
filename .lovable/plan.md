@@ -1,156 +1,87 @@
 
 
-# Unify Call Context Pipeline + Fix Greeting Transcript + Fix Double Greeting
+# Fix Once, Apply Everywhere: Unified Tool Definitions + Dynamic Persona
 
-## What Gets Preserved (Nothing Lost)
+## The Core Problem
 
-The shared module will contain ALL of the following from `twilio-scheduled-call`:
+There are **4 separate places** that define what tools the AI can use, and they have all drifted apart:
 
-| Feature | Source | Kept? |
-|---------|--------|-------|
-| `CATEGORY_WINDOW_MAPPING` (6 categories x windows) | twilio-scheduled-call L34-41 | Yes |
-| `WINDOW_RANGES` (morning/biz/after/evening/weekends) | twilio-scheduled-call L44-50 | Yes |
-| `AGENDA_HEADER` (anti-hallucination, natural flow) | twilio-scheduled-call L279-294 | Yes |
-| `getTasksForWindow()` (excludes test/blocked, filters by category) | twilio-scheduled-call L88-138 | Yes |
-| `getTopicGroupsFromWindowTasks()` (tier 1 window-aligned topics) | twilio-scheduled-call L141-168 | Yes |
-| `getTopicGroupsFromAllTasks()` (tier 2 fallback across all tasks) | twilio-scheduled-call L171-176 | Yes |
-| `getTopicGroupsManual()` (3-step join: tasks -> mappings -> topics, ranked) | twilio-scheduled-call L179-251 | Yes |
-| `formatTopicGroups()` + `formatTaskList()` | twilio-scheduled-call L255-276 | Yes |
-| `buildWindowContext()` (5 per-window scripts with task/topic/tier logic) | twilio-scheduled-call L335-538 | Yes |
-| `buildWindowTransitionContext()` (queries DB, builds context) | twilio-scheduled-call L297-332 | Yes |
-| `buildCallContext()` (window detection + legacy mapping + custom fallback) | twilio-scheduled-call L542-572 | Yes |
+| Location | Tools | Used By |
+|----------|-------|---------|
+| `execute-tool/index.ts` | 17 tools (source of truth) | Chat, tool execution |
+| `_shared/tool-definitions.ts` | 12 tools (missing 5) | Phone calls (twilio-realtime-bridge) |
+| `generate-realtime-token/index.ts` | 16 tools hardcoded inline | In-app voice (WebRTC) |
+| `persona.ts` "Available functions" | Hardcoded text list (stale) | System prompt for all modes |
 
-The `notification-delivery` version (lines 9-98) is **discarded entirely** -- it has nothing the strong version lacks.
+Every time a tool is added or changed, it needs to be updated in 4 places. This is why improvements for one mode never reach the others.
 
-## What Gets Discarded from notification-delivery
+Additionally, `generateGreetingForCallType()` matches hardcoded strings like "Morning Stand-up" and "Midday Check-in" -- if you add a custom recurring call, it falls through to a generic greeting.
 
-- Static "CALL TYPE: Morning Stand-up / [CALL AGENDA - MUST COVER ALL] / 1. Greet warmly..." scripts (lines 42-85) -- replaced by window-aware scripts with actual task lists
-- The generic `briefing` string ("X tasks scheduled for today") -- replaced by `formatTaskList()` which shows individual task names and times
-- The `switch(callId)` pattern -- replaced by window detection with legacy callType-to-window mapping
+## Solution: Single Source, Consumed Everywhere
 
-## Changes
+### Step 1: Make `_shared/tool-definitions.ts` the single source of truth
 
-### 1. Create shared module: `_shared/call-context-builder.ts`
+Replace the 12-tool list in `getToolDefinitions()` with the full set from `execute-tool/index.ts` (17 tools + the new `get_tasks_by_topic`). This file is already imported by `twilio-realtime-bridge`, so phone calls get the fix automatically.
 
-Extract from `twilio-scheduled-call/index.ts`:
-- All constants: `CATEGORY_WINDOW_MAPPING`, `WINDOW_RANGES`, `AGENDA_HEADER`
-- All functions: `getTasksForWindow`, `getTopicGroupsFromWindowTasks`, `getTopicGroupsFromAllTasks`, `getTopicGroupsManual`, `formatTopicGroups`, `formatTaskList`, `buildWindowContext`, `buildWindowTransitionContext`
-- The main `buildCallContext` function
+Add a new export `getToolDefinitionsForRealtime()` that formats tools for the OpenAI Realtime API session config (the format `generate-realtime-token` needs). This replaces the inline 270-line hardcoded block.
 
-The function signature will accept a generic call descriptor:
+Remove `getPhoneToolDefinitions()` (the second divergent list in the same file that nobody should be using).
 
-```text
-interface CallDescriptor {
-  callType?: string;   // 'morning_standup' | 'midday_checkin' | 'eod_wrapup' | 'custom'
-  context?: string;    // User-configured context (may contain [WINDOW:xxx])
-  name?: string;       // Call name for logging
-}
+### Step 2: Make `generate-realtime-token` import from the shared file
 
-async function buildCallContext(
-  call: CallDescriptor,
-  userId: string,
-  supabaseUrl: string,
-  supabaseServiceKey: string,
-  preferredGreeting?: string
-): Promise<string>
-```
+Replace the ~270 lines of hardcoded tool definitions (lines 179-451) with a single import from `_shared/tool-definitions.ts`. The in-app voice assistant will then always have the same tools as phone calls.
 
-This accepts both `ScheduledCall` objects (from twilio-scheduled-call) and `callConfig` objects (from notification-delivery) since both have `callType` and `context` fields.
+Note: `generate-realtime-token` uses the format `{ type: "function", name: "...", ... }` (flat), same as `getToolDefinitions()` already returns. So the import is direct.
 
-### 2. Update `notification-delivery/index.ts`
+### Step 3: Make `execute-tool/index.ts` import from the shared file too
 
-- Remove the local `buildCallContext` function (lines 9-98)
-- Import `buildCallContext` from `../_shared/call-context-builder.ts`
-- At line 267 and 329, adapt the call site:
+The `/definitions` GET endpoint (line 2040) currently returns the local `toolDefinitions` array. Change it to import from `_shared/tool-definitions.ts` so `hybrid-assistant-api` (chat) also gets the same list. The local `toolDefinitions` const can be replaced with the import.
+
+This means all 3 consumers (phone, in-app voice, chat) now read from one file.
+
+### Step 4: Make `persona.ts` generate the "Available functions" list dynamically
+
+Instead of a hardcoded text list in `DEFAULT_IRIS_PERSONA`, import `getToolDefinitions()` and generate the list at runtime:
 
 ```text
-// BEFORE (line 329):
-const context = await buildCallContext(callConfig, userId, supabaseClient);
-
-// AFTER:
-const context = await buildCallContext(
-  { callType: callConfig.call_id, context: callConfig.context, name: callConfig.call_name },
-  userId,
-  Deno.env.get('SUPABASE_URL')!,
-  Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
-  profile?.preferred_greeting || 'Sir'
-);
+Available functions:
+${tools.map(t => `- ${t.name}: ${t.description}`).join('\n')}
 ```
 
-This means the notification-delivery pipeline now gets full window-aware context with task lists, topic groups, and anti-hallucination guardrails.
+This means adding a new tool to `tool-definitions.ts` automatically appears in the persona prompt across all modes. No manual updates.
 
-### 3. Update `twilio-scheduled-call/index.ts`
+### Step 5: Make `generateGreetingForCallType()` dynamic
 
-- Remove all the extracted functions (lines 33-572, roughly 540 lines)
-- Import from `../_shared/call-context-builder.ts`
-- Keep: `getTodaysBriefing`, `isTimeMatch`, `getTimeInTimezone`, `processRecurringCalls`, and the `serve` handler
-- Update the `buildCallContext` call at line 746 to use the shared import
+Instead of matching hardcoded call names, derive the greeting from the context and time of day:
 
-### 4. Persist cached greeting to call_messages (transcript visibility)
+- Extract the call name from the context string (look for "CALL: ..." pattern that `buildWindowContext` already injects)
+- Use `getTimeBasedGreeting()` (already exists) for tone
+- Generate a natural greeting that works for ANY call name, not just the 3 hardcoded ones
+- Keep a simple fallback for calls without context
 
-**File:** `twilio-realtime-bridge/index.ts`
+This way, if you add a "Weekly Review" or "Friday Planning" recurring call, the greeting adapts automatically.
 
-Currently, the cached ElevenLabs greeting is played as raw audio but never saved to `call_messages`. This is why you can't see it in transcripts.
+### Step 6: Add `get_tasks_by_topic` tool
 
-In `triggerPendingGreeting` (around line 236-241), after playing cached audio:
+Add it to `_shared/tool-definitions.ts` (one place) and add the handler in `execute-tool/index.ts`. Because of Steps 1-3, it automatically becomes available across phone, in-app voice, and chat.
 
-```text
-// NEW: Persist the cached greeting so it appears in transcripts
-if (callSessionId && userId) {
-  saveCallMessage(supabase, {
-    callSessionId, userId, threadId, streamSid,
-    role: 'assistant', content: preConnectedGreetingText,
-    messageIndex, latencyMs: 0
-  }).then(idx => { if (idx !== undefined) messageIndex = idx; })
-    .catch(e => console.error('[PERSIST] cached greeting save failed:', e));
-}
-```
+Update `AGENDA_HEADER` in `call-context-builder.ts` to reference `get_tasks_by_topic` instead of the generic `get_tasks` for topic drill-downs.
 
-Same for the inbound cached audio path at lines 695-703.
+### Step 7: Drop the VAD delay fix
 
-### 5. Fix double greeting definitively
+Per your feedback, the VAD clipping fix (adding a 300ms delay) is speculative and could compound into a poor experience. It will not be implemented. If VAD issues persist, they should be diagnosed with proper logging before attempting timing-based fixes.
 
-**File:** `twilio-realtime-bridge/index.ts`
+## Files Changed
 
-The `session.updated` handler (line 435) currently checks:
-```text
-if (preConnectedSession && greetingSent && !greetingContextInjected && !waitingForUserHello)
-```
+| File | Change |
+|------|--------|
+| `_shared/tool-definitions.ts` | Becomes THE single source: full 18-tool list (17 existing + get_tasks_by_topic). Remove `getPhoneToolDefinitions()`. |
+| `generate-realtime-token/index.ts` | Remove ~270 lines of inline tools. Import from `_shared/tool-definitions.ts`. |
+| `execute-tool/index.ts` | Import tool definitions from shared file. Add `get_tasks_by_topic` handler. Keep all execution logic. |
+| `_shared/persona.ts` | Remove hardcoded "Available functions" text. Import tool names dynamically from `_shared/tool-definitions.ts`. Make `generateGreetingForCallType()` derive greetings dynamically from context instead of matching hardcoded strings. |
+| `_shared/call-context-builder.ts` | Update `AGENDA_HEADER` to reference `get_tasks_by_topic` for topic drill-downs. |
 
-Add `!cachedAudioBase64` guard:
-```text
-if (preConnectedSession && greetingSent && !greetingContextInjected && !waitingForUserHello && !cachedAudioBase64)
-```
+## What This Guarantees
 
-When cached audio exists (all pre-connected ElevenLabs calls), the greeting context is ONLY injected by:
-- `triggerPendingGreeting` (outbound calls, line 238-241)
-- The stream `start` handler (inbound calls, lines 695-703 -- which also needs context injection added)
-
-The `session.updated` path becomes a fallback only for pre-connected sessions WITHOUT cached audio (OpenAI-voice calls).
-
-For the inbound path at lines 695-703, add context injection after playing cached audio (currently missing):
-
-```text
-// After line 702 (greetingSent = true):
-injectAssistantMessage(preConnectedGreetingText);
-injectSystemMessage(`[System: PRE-CONNECTED CALL - greeting already sent: "${preConnectedGreetingText}". SKIP step 1. ${callContext || ''}. Continue from step 2.]`);
-greetingContextInjected = true;
-```
-
-## Summary of File Changes
-
-| File | Action | Lines Affected |
-|------|--------|----------------|
-| `_shared/call-context-builder.ts` | NEW | ~300 lines (extracted from twilio-scheduled-call) |
-| `twilio-scheduled-call/index.ts` | SHRINK | Remove ~540 lines (33-572), add 1 import |
-| `notification-delivery/index.ts` | REPLACE | Remove lines 9-98 (weak buildCallContext), add import + adapt 2 call sites |
-| `twilio-realtime-bridge/index.ts` | EDIT | Add greeting persistence (2 locations), add `!cachedAudioBase64` guard, add inbound context injection |
-
-## Risk Mitigation
-
-- The shared module is a direct copy-paste of the proven `twilio-scheduled-call` functions -- no logic changes
-- `notification-delivery` gets strictly upgraded (weak to strong) -- no feature regression
-- The `CallDescriptor` interface is a subset of `ScheduledCall`, so existing callers work without changes
-- Both pipelines will produce identical context for the same call configuration
-- If the shared import fails to resolve, both functions will fail to deploy, making it immediately visible (not a silent regression)
+After this change, adding a new tool or a new recurring call type requires editing exactly **one file** (`_shared/tool-definitions.ts` for tools, or `user_scheduling_prefs.scheduled_calls` for call types). The change propagates to phone, in-app voice, and chat automatically. No more drift.
 
