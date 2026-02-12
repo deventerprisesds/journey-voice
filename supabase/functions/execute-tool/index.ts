@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { normalizeDueDate, normalizeDateTime, getTodayInTimezone } from "../_shared/timezone.ts";
+import { getToolDefinitions } from "../_shared/tool-definitions.ts";
 
 // ============================================================================
 // UTILITY: Proper error message extraction
@@ -26,325 +27,8 @@ const corsHeaders = {
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
-// ============================================================================
-// UNIFIED TOOL DEFINITIONS - Single source of truth for all AI interfaces
-// ============================================================================
-
-export const toolDefinitions = [
-  // TASK TOOLS
-  {
-    type: "function",
-    name: "get_tasks",
-    description: "Retrieve tasks and chat history. Can search by time period, keywords, or status.",
-    parameters: {
-      type: "object",
-      properties: {
-        query: { type: "string", description: "Search query or keywords" },
-        time_filter: { type: "string", description: "Time period like 'past week', 'yesterday'" },
-        status: { 
-          type: "string", 
-          enum: ["BACKLOG", "TODO", "READY", "UP_NEXT", "DOING", "DONE", "BLOCKED", "PLANNING"],
-          description: "Task workflow status. BACKLOG=not yet planned, TODO=planned but not started, READY=ready to work on, UP_NEXT=queued to start soon, DOING=in progress, DONE=completed, BLOCKED=waiting on something, PLANNING=needs more detail"
-        }
-      }
-    }
-  },
-  {
-    type: "function",
-    name: "get_today_tasks",
-    description: "Get all tasks for today, including both scheduled and unscheduled tasks.",
-    parameters: { type: "object", properties: {} }
-  },
-  // TEMPORARILY DISABLED FOR DEBUGGING - Forces AI to use parse_and_create_tasks
-  // which properly handles time parsing and auto-scheduling
-  // {
-  //   type: "function",
-  //   name: "create_task",
-  //   description: "Create a new task. Use UPPERCASE for priority.",
-  //   parameters: {
-  //     type: "object",
-  //     properties: {
-  //       title: { type: "string", description: "Task title" },
-  //       description: { type: "string", description: "Task description" },
-  //       priority: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "URGENT"] },
-  //       category: { type: "string", enum: ["LIFE", "CAREER", "VENTURES", "EDUCATION"] },
-  //       status: { 
-  //         type: "string", 
-  //         enum: ["BACKLOG", "TODO", "READY", "UP_NEXT", "DOING", "DONE", "BLOCKED", "PLANNING"],
-  //         description: "Task workflow status. BACKLOG=not yet planned, TODO=planned but not started, READY=ready to work on, UP_NEXT=queued to start soon, DOING=in progress, DONE=completed, BLOCKED=waiting on something, PLANNING=needs more detail. Defaults to BACKLOG."
-  //       }
-  //     },
-  //     required: ["title"]
-  //   }
-  // },
-  {
-    type: "function",
-    name: "update_task",
-    description: "Update an existing task's properties.",
-    parameters: {
-      type: "object",
-      properties: {
-        task_id: { type: "string", description: "ID of the task to update" },
-        title: { type: "string" },
-        description: { type: "string" },
-        status: { 
-          type: "string", 
-          enum: ["BACKLOG", "TODO", "READY", "UP_NEXT", "DOING", "DONE", "BLOCKED", "PLANNING"],
-          description: "Task workflow status. BACKLOG=not yet planned, TODO=planned but not started, READY=ready to work on, UP_NEXT=queued to start soon, DOING=in progress, DONE=completed, BLOCKED=waiting on something, PLANNING=needs more detail"
-        },
-        priority: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "URGENT"] },
-        category: { type: "string", enum: ["LIFE", "CAREER", "VENTURES", "EDUCATION"] }
-      },
-      required: ["task_id"]
-    }
-  },
-  {
-    type: "function",
-    name: "reschedule_task",
-    description: "Move a task to a different date or time.",
-    parameters: {
-      type: "object",
-      properties: {
-        task_id: { type: "string", description: "ID of the task to reschedule" },
-        new_date: { type: "string", description: "New date in YYYY-MM-DD format" },
-        new_start_time: { type: "string", description: "New start time in HH:MM format" },
-        reason: { type: "string" }
-      },
-      required: ["task_id", "new_date"]
-    }
-  },
-  {
-    type: "function",
-    name: "schedule_task",
-    description: "Schedule an unscheduled task to a specific date and time.",
-    parameters: {
-      type: "object",
-      properties: {
-        task_id: { type: "string", description: "ID of the task to schedule" },
-        date: { type: "string", description: "Date in YYYY-MM-DD format" },
-        start_time: { type: "string", description: "Start time in HH:MM format" },
-        duration_minutes: { type: "number" }
-      },
-      required: ["task_id"]
-    }
-  },
-  {
-    type: "function",
-    name: "unschedule_task",
-    description: "Remove a task from the calendar schedule.",
-    parameters: {
-      type: "object",
-      properties: {
-        task_id: { type: "string", description: "ID of the task to unschedule" }
-      },
-      required: ["task_id"]
-    }
-  },
-  {
-    type: "function",
-    name: "parse_and_create_tasks",
-    description: "Parse natural language into tasks using AI and create them. Handles multiple tasks, date parsing ('today', 'tomorrow', 'next week'), categories, priorities, and optional auto-scheduling. Use this when user describes tasks in conversational language rather than explicit field values.",
-    parameters: {
-      type: "object",
-      properties: {
-        text: { 
-          type: "string", 
-          description: "Natural language task description. Can include multiple tasks, dates, priorities. Example: 'I need to get a haircut, work on the Nexus application, and meet with my MBA partner'" 
-        },
-        target_date: { 
-          type: "string", 
-          description: "Target date for tasks. Can be YYYY-MM-DD format or keywords like 'today', 'tomorrow'. Used when user specifies a day context." 
-        },
-        auto_schedule: { 
-          type: "boolean", 
-          description: "If true, automatically find optimal time slots for tasks based on user preferences and calendar. Default: true" 
-        }
-      },
-      required: ["text"]
-    }
-  },
-
-  // COMMUNICATION TOOLS
-  {
-    type: "function",
-    name: "send_email",
-    description: "Send an email to the user.",
-    parameters: {
-      type: "object",
-      properties: {
-        subject: { type: "string", description: "Email subject" },
-        body: { type: "string", description: "Email body content" }
-      },
-      required: ["subject", "body"]
-    }
-  },
-  {
-    type: "function",
-    name: "send_slack_message",
-    description: "Send a message via Slack integration. ONLY use when user EXPLICITLY requests Slack (e.g., 'send me a Slack message', 'post to Slack', 'message me on Slack'). For general 'send me a message' requests, use send_chat_message instead.",
-    parameters: {
-      type: "object",
-      properties: {
-        message: { type: "string", description: "The message to send" }
-      },
-      required: ["message"]
-    }
-  },
-  {
-    type: "function",
-    name: "create_outlook_event",
-    description: "Create an Outlook calendar event.",
-    parameters: {
-      type: "object",
-      properties: {
-        title: { type: "string", description: "Event title" },
-        start_time: { type: "string", description: "Start time in ISO format" },
-        end_time: { type: "string", description: "End time in ISO format" },
-        duration: { type: "number", description: "Duration in minutes (if no end_time)" },
-        description: { type: "string", description: "Event description" },
-        reminder: { type: "string", description: "Reminder minutes before" }
-      },
-      required: ["title", "start_time"]
-    }
-  },
-  {
-    type: "function",
-    name: "create_google_event",
-    description: "Create a Google Calendar event.",
-    parameters: {
-      type: "object",
-      properties: {
-        title: { type: "string", description: "Event title" },
-        start_time: { type: "string", description: "Start time in ISO format" },
-        end_time: { type: "string", description: "End time in ISO format" },
-        duration: { type: "number", description: "Duration in minutes (if no end_time)" },
-        description: { type: "string", description: "Event description" },
-        reminder: { type: "string", description: "Reminder minutes before" }
-      },
-      required: ["title", "start_time"]
-    }
-  },
-  {
-    type: "function",
-    name: "create_calendar_event",
-    description: "Create a calendar event in Outlook or Google Calendar.",
-    parameters: {
-      type: "object",
-      properties: {
-        title: { type: "string", description: "Event title" },
-        start_time: { type: "string", description: "Start time in ISO format or HH:MM" },
-        end_time: { type: "string", description: "End time in ISO format or HH:MM" },
-        calendar: { type: "string", enum: ["outlook", "google"], description: "Which calendar to use" }
-      },
-      required: ["title", "start_time"]
-    }
-  },
-  {
-    type: "function",
-    name: "initiate_phone_call",
-    description: "Schedule a callback - useful for 'call me back in X minutes' requests.",
-    parameters: {
-      type: "object",
-      properties: {
-        delay_minutes: { type: "number", description: "Minutes to wait before calling back" },
-        context: { type: "string", description: "What the callback should be about" }
-      }
-    }
-  },
-  {
-    type: "function",
-    name: "send_chat_message",
-    description: "Send a message to the user via the app's chat interface. This is the PRIMARY and DEFAULT way to message the user. Use for: immediate messages, reminders ('remind me in X minutes'), scheduled check-ins ('message me at 3pm'), or ANY request like 'message me', 'send me something', 'text me', 'notify me about X'. Prefer this over Slack/Email unless user explicitly requests those channels.",
-    parameters: {
-      type: "object",
-      properties: {
-        delay_minutes: { 
-          type: "number", 
-          description: "Minutes to wait before sending (e.g., 'in 5 minutes' = 5). If 0 or not provided, sends immediately." 
-        },
-        scheduled_time: { 
-          type: "string", 
-          description: "Specific time to send in HH:MM format (e.g., '15:00' for 3pm). Takes precedence over delay_minutes." 
-        },
-        message: { 
-          type: "string", 
-          description: "The message content to send. If not provided, AI will generate a contextual message." 
-        },
-        context: { 
-          type: "string", 
-          description: "Context for AI to generate a message if no specific message provided (e.g., 'check on task progress', 'daily reminder')" 
-        }
-      }
-    }
-  },
-
-  // SEARCH TOOLS
-  {
-    type: "function",
-    name: "web_search",
-    description: "Search the internet for REAL-TIME information using Tavily. CRITICAL INSTRUCTION: The 'query' parameter MUST be a VERBATIM transcription of what the user said - do NOT rephrase, summarize, or convert temporal phrases like 'this weekend' or 'today' into specific dates. Pass the EXACT words the user spoke. Use the other parameters to configure the search appropriately.",
-    parameters: {
-      type: "object",
-      properties: {
-        query: { 
-          type: "string", 
-          description: "The user's EXACT spoken words - pass verbatim without any modification (e.g., if user says 'What are the NBA scores for this weekend?', pass EXACTLY that string)" 
-        },
-        topic: {
-          type: "string",
-          enum: ["general", "news", "finance"],
-          description: "Search category. Use 'news' for sports scores, current events, breaking news, real-time updates. Use 'finance' for stock prices, market data, financial news. Use 'general' for everything else."
-        },
-        search_depth: {
-          type: "string",
-          enum: ["basic", "advanced"],
-          description: "Search depth. Use 'advanced' for complex queries requiring high relevance (sports scores, specific facts). Use 'basic' for simple lookups."
-        },
-        time_range: {
-          type: "string",
-          enum: ["day", "week", "month", "year"],
-          description: "Relative time filter. Use 'day' for 'today/tonight', 'week' for 'this week/this weekend', 'month' for recent news, 'year' for broader searches. Only set if query implies a time constraint."
-        },
-        start_date: {
-          type: "string",
-          description: "Explicit start date in YYYY-MM-DD format. Only use if you can determine a specific date range from context. Leave empty if unsure."
-        },
-        end_date: {
-          type: "string",
-          description: "Explicit end date in YYYY-MM-DD format. Only use if you can determine a specific date range from context. Leave empty if unsure."
-        },
-        include_domains: {
-          type: "array",
-          items: { type: "string" },
-          description: "Optional: List of domains to prioritize (e.g., ['espn.com', 'nba.com'] for sports, ['reuters.com', 'bbc.com'] for news). Only provide if you have specific trusted sources for the query type. Leave empty to search all sources."
-        },
-        exclude_domains: {
-          type: "array",
-          items: { type: "string" },
-          description: "Optional: Domains to exclude from results. Leave empty unless there's a specific reason to exclude."
-        },
-        max_results: {
-          type: "integer",
-          description: "Number of results to return (1-20). Default 10. Use higher for broad queries, lower for specific lookups."
-        }
-      },
-      required: ["query"]
-    }
-  },
-
-  // PHONE-ONLY TOOLS (no-op for chat, active for phone)
-  {
-    type: "function",
-    name: "hang_up",
-    description: "End the phone call gracefully. Use when the user says goodbye or indicates they're done.",
-    parameters: {
-      type: "object",
-      properties: {
-        farewell_message: { type: "string", description: "Optional farewell message to say before hanging up" }
-      }
-    }
-  }
-];
+// Use shared tool definitions as single source of truth
+const toolDefinitions = getToolDefinitions();
 
 // ============================================================================
 // CENTRAL TIME ANCHOR - Used by all tools for consistent date/time
@@ -691,6 +375,10 @@ async function executeToolCall(
       // ============ SEARCH TOOLS ============
       case 'web_search':
         return await webSearch(args, context.timezone);
+
+      // ============ TOPIC DRILL-DOWN ============
+      case 'get_tasks_by_topic':
+        return await getTasksByTopic(supabase, userId, args);
 
       // ============ PHONE-ONLY TOOLS ============
       case 'hang_up':
@@ -1883,6 +1571,81 @@ interface WebSearchArgs {
   include_domains?: string[];
   exclude_domains?: string[];
   max_results?: number;
+}
+
+// ============================================================================
+// GET TASKS BY TOPIC - Topic drill-down to prevent hallucination
+// ============================================================================
+
+async function getTasksByTopic(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
+  const topicName = args.topic_name;
+  if (!topicName) {
+    return { success: false, error: "topic_name is required", message: "Please specify a topic name." };
+  }
+
+  try {
+    // Find the topic
+    const { data: topic } = await supabase
+      .from('task_topic_index')
+      .select('id, topic_name, topic_summary')
+      .eq('user_id', userId)
+      .ilike('topic_name', topicName)
+      .maybeSingle();
+
+    if (!topic) {
+      return {
+        success: true,
+        result: { tasks: [], count: 0 },
+        message: `No topic group found matching "${topicName}". The user may not have tasks classified under this topic.`
+      };
+    }
+
+    // Get task IDs from mappings
+    const { data: mappings } = await supabase
+      .from('task_topic_mappings')
+      .select('task_id')
+      .eq('topic_id', topic.id);
+
+    if (!mappings || mappings.length === 0) {
+      return {
+        success: true,
+        result: { tasks: [], count: 0, topic: topic.topic_name },
+        message: `Topic "${topic.topic_name}" exists but has no tasks mapped to it.`
+      };
+    }
+
+    // Fetch the actual tasks
+    const taskIds = mappings.map((m: any) => m.task_id);
+    const { data: tasks } = await supabase
+      .from('tasks')
+      .select('id, title, status, priority, category, due_date, start_time, description')
+      .in('id', taskIds)
+      .neq('status', 'DONE')
+      .neq('status', 'BLOCKED')
+      .not('title', 'ilike', '%test%')
+      .order('priority', { ascending: false });
+
+    console.log(`[GET-TASKS-BY-TOPIC] Topic "${topic.topic_name}": found ${tasks?.length || 0} open tasks`);
+
+    return {
+      success: true,
+      result: {
+        tasks: tasks || [],
+        count: tasks?.length || 0,
+        topic: topic.topic_name,
+        summary: topic.topic_summary
+      },
+      message: `Found ${tasks?.length || 0} open tasks under "${topic.topic_name}"`,
+      extractedFacts: { type: 'topic_drill_down', topic: topic.topic_name, taskCount: tasks?.length || 0 }
+    };
+  } catch (error) {
+    console.error('[GET-TASKS-BY-TOPIC] Error:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+      message: "Failed to retrieve tasks for that topic."
+    };
+  }
 }
 
 async function webSearch(args: WebSearchArgs, timezone?: string): Promise<ExecuteToolResponse> {
