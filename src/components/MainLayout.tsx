@@ -28,6 +28,7 @@ import {
   PanelRightOpen,
   MessageSquare,
   Target,
+  Layers,
 } from 'lucide-react';
 
 interface MainLayoutProps {
@@ -123,6 +124,11 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
       icon: CalendarDays,
       label: 'Agenda',
       path: '/agenda',
+    },
+    {
+      icon: Layers,
+      label: 'Priorities',
+      path: '/priorities',
     },
     {
       icon: Settings,
