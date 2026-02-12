@@ -240,6 +240,15 @@ serve(async (req) => {
       injectSystemMessage(contextMsg);
       greetingContextInjected = true;
       console.log(`[GREETING-TRACE] triggerPendingGreeting(${source}): injected greeting context. greetingSent=${greetingSent}, greetingContextInjected=true`);
+      // Persist the cached greeting so it appears in transcripts
+      if (callSessionId && userId) {
+        saveCallMessage(supabase, {
+          callSessionId, userId, threadId, streamSid,
+          role: 'assistant', content: preConnectedGreetingText,
+          messageIndex, latencyMs: 0
+        }).then(idx => { if (idx !== undefined) messageIndex = idx; })
+          .catch(e => console.error('[PERSIST] cached greeting save failed:', e));
+      }
     } else if (pendingGreetingMode === 'openai') {
       sendOutboundGreeting();
     }
@@ -431,8 +440,10 @@ serve(async (req) => {
             audioRingBuffer.length = 0;
           }
           
-          console.log(`[GREETING-TRACE] session.updated: preConnectedSession=${!!preConnectedSession}, greetingSent=${greetingSent}, waitingForUserHello=${waitingForUserHello}, greetingContextInjected=${greetingContextInjected}`);
-          if (preConnectedSession && greetingSent && !greetingContextInjected && !waitingForUserHello) {
+          console.log(`[GREETING-TRACE] session.updated: preConnectedSession=${!!preConnectedSession}, greetingSent=${greetingSent}, waitingForUserHello=${waitingForUserHello}, greetingContextInjected=${greetingContextInjected}, cachedAudioBase64=${!!cachedAudioBase64}`);
+          // Only inject greeting context here for pre-connected sessions WITHOUT cached audio (OpenAI-voice calls).
+          // When cached audio exists, greeting context is injected by triggerPendingGreeting (outbound) or stream start (inbound).
+          if (preConnectedSession && greetingSent && !greetingContextInjected && !waitingForUserHello && !cachedAudioBase64) {
             injectAssistantMessage(preConnectedGreetingText);
             injectSystemMessage(`[System: Scheduled call - greeting already sent: "${preConnectedGreetingText}". SKIP the greeting step (step 1). ${callContext || ''}. Continue from step 2 onward. Cover ALL remaining agenda items.]`);
             greetingContextInjected = true;
@@ -700,6 +711,20 @@ serve(async (req) => {
               });
               greetingSent = true;
               firstOutboundLogged = true;
+              // Inject greeting context for inbound pre-connected calls with cached audio
+              injectAssistantMessage(preConnectedGreetingText);
+              injectSystemMessage(`[System: PRE-CONNECTED CALL - greeting already sent: "${preConnectedGreetingText}". SKIP step 1. ${callContext || ''}. Continue from step 2.]`);
+              greetingContextInjected = true;
+              console.log(`[GREETING-TRACE] inbound cached audio: injected greeting context, greetingContextInjected=true`);
+              // Persist the cached greeting to transcripts
+              if (callSessionId && userId) {
+                saveCallMessage(supabase, {
+                  callSessionId, userId, threadId, streamSid,
+                  role: 'assistant', content: preConnectedGreetingText,
+                  messageIndex, latencyMs: 0
+                }).then(idx => { if (idx !== undefined) messageIndex = idx; })
+                  .catch(e => console.error('[PERSIST] inbound cached greeting save failed:', e));
+              }
             }
           }
         }
