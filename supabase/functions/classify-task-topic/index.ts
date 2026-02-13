@@ -247,6 +247,7 @@ serve(async (req) => {
           topic_name: classification.topic_name,
           topic_summary: classification.topic_summary,
           window_affinity: windowAffinity,
+          category_affinity: category,
           example_tasks: [task_title],
           task_count: 1
         })
@@ -276,6 +277,7 @@ serve(async (req) => {
               .update({
                 task_count: existingTopic.task_count + 1,
                 example_tasks: updatedExamples,
+                category_affinity: category,
                 updated_at: new Date().toISOString()
               })
               .eq('id', topicId);

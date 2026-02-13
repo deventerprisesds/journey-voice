@@ -1,0 +1,1 @@
+ALTER TABLE public.task_topic_index ADD COLUMN category_affinity text;

@@ -3373,6 +3373,7 @@ export type Database = {
       }
       task_topic_index: {
         Row: {
+          category_affinity: string | null
           created_at: string | null
           example_tasks: string[] | null
           id: string
@@ -3384,6 +3385,7 @@ export type Database = {
           window_affinity: string[] | null
         }
         Insert: {
+          category_affinity?: string | null
           created_at?: string | null
           example_tasks?: string[] | null
           id?: string
@@ -3395,6 +3397,7 @@ export type Database = {
           window_affinity?: string[] | null
         }
         Update: {
+          category_affinity?: string | null
           created_at?: string | null
           example_tasks?: string[] | null
           id?: string
