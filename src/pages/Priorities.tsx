@@ -176,18 +176,30 @@ const Priorities: React.FC = () => {
   useEffect(() => { loadData(); }, [loadData]);
 
   const handleDragEnd = useCallback(async (result: DropResult) => {
-    if (!result.destination || !user) return;
+    console.log('[DragEnd] Raw result:', JSON.stringify(result));
+    if (!result.destination || !user) {
+      console.log('[DragEnd] Abort: no destination or no user');
+      return;
+    }
     const { source, destination, type, draggableId } = result;
+    console.log('[DragEnd] Type:', type, 'From:', source.droppableId, '->', destination.droppableId);
 
     if (type === 'TASK') {
       // Task dragged between categories
       const srcCatKey = source.droppableId.replace('tasks-', '');
       const dstCatKey = destination.droppableId.replace('tasks-', '');
-      if (srcCatKey === dstCatKey && source.index === destination.index) return;
+      console.log('[DragEnd:TASK] srcCat:', srcCatKey, 'dstCat:', dstCatKey, 'srcIdx:', source.index, 'dstIdx:', destination.index);
+      if (srcCatKey === dstCatKey && source.index === destination.index) {
+        console.log('[DragEnd:TASK] Same position, ignoring');
+        return;
+      }
 
       // Find the task
       const srcCat = categories.find(c => c.key === srcCatKey);
-      if (!srcCat) return;
+      if (!srcCat) {
+        console.error('[DragEnd:TASK] Source category not found:', srcCatKey);
+        return;
+      }
       const allSrcTasks = [
         ...srcCat.topicGroups.flatMap(tg => tg.tasks),
         ...srcCat.uncategorizedTasks,
@@ -199,7 +211,11 @@ const Priorities: React.FC = () => {
         return true;
       });
       const task = dedupedSrcTasks[source.index];
-      if (!task) return;
+      if (!task) {
+        console.error('[DragEnd:TASK] Task not found at index:', source.index, 'total tasks:', dedupedSrcTasks.length);
+        return;
+      }
+      console.log('[DragEnd:TASK] Moving task:', task.id, task.title, 'from', srcCatKey, 'to', dstCatKey);
 
       // Optimistic update
       setCategories(prev => prev.map(cat => {
@@ -224,10 +240,14 @@ const Priorities: React.FC = () => {
       }));
 
       // Persist
-      const { error } = await supabase.from('tasks').update({ category: dstCatKey } as any).eq('id', task.id);
+      const { error, status, statusText } = await supabase.from('tasks').update({ category: dstCatKey } as any).eq('id', task.id);
+      console.log('[DragEnd:TASK] DB update result:', { error, status, statusText });
       if (error) {
+        console.error('[DragEnd:TASK] DB error, reloading:', error);
         toast.error('Failed to move task');
         loadData();
+      } else {
+        console.log('[DragEnd:TASK] Success');
       }
       return;
     }
@@ -235,8 +255,10 @@ const Priorities: React.FC = () => {
     // Group drag (type === 'GROUP')
     const srcCatKey = source.droppableId;
     const dstCatKey = destination.droppableId;
+    console.log('[DragEnd:GROUP] draggableId:', draggableId, 'srcCat:', srcCatKey, 'dstCat:', dstCatKey);
 
     if (srcCatKey === dstCatKey) {
+      console.log('[DragEnd:GROUP] Reorder within same column');
       // Reorder within same column
       setCategories(prev => prev.map(cat => {
         if (cat.key !== srcCatKey) return cat;
@@ -248,6 +270,7 @@ const Priorities: React.FC = () => {
       }));
     } else {
       // Move group to different category
+      console.log('[DragEnd:GROUP] Cross-column move from', srcCatKey, 'to', dstCatKey);
       let movedGroup: TopicGroupData | null = null;
 
       setCategories(prev => {
@@ -256,13 +279,17 @@ const Priorities: React.FC = () => {
             const groups = [...cat.topicGroups];
             const [removed] = groups.splice(source.index, 1);
             movedGroup = removed;
+            console.log('[DragEnd:GROUP] Removed group from source:', removed?.id, removed?.topic_name);
             localStorage.setItem(`priorities-order-${user.id}-${srcCatKey}`, JSON.stringify(groups.map(g => g.id)));
             return { ...cat, topicGroups: groups };
           }
           return cat;
         });
 
-        if (!movedGroup) return updated;
+        if (!movedGroup) {
+          console.error('[DragEnd:GROUP] movedGroup is null after splice');
+          return updated;
+        }
 
         return updated.map(cat => {
           if (cat.key === dstCatKey) {
@@ -277,20 +304,29 @@ const Priorities: React.FC = () => {
 
       // Persist category_affinity + update task categories
       const groupId = draggableId;
+      console.log('[DragEnd:GROUP] Updating topic_index category_affinity to', dstCatKey, 'for group', groupId);
       const res1 = await supabase.from('task_topic_index').update({ category_affinity: dstCatKey } as any).eq('id', groupId);
+      console.log('[DragEnd:GROUP] topic_index update:', { error: res1.error, status: res1.status, statusText: res1.statusText });
 
       // Also update all tasks in this group to the new category
       const srcCat = categories.find(c => c.key === srcCatKey);
       const group = srcCat?.topicGroups.find(g => g.id === groupId);
-      let res2: any = { error: null };
+      let res2: any = { error: null, status: null };
       if (group && group.tasks.length > 0) {
         const taskIds = group.tasks.map(t => t.id);
+        console.log('[DragEnd:GROUP] Updating', taskIds.length, 'tasks to category', dstCatKey);
         res2 = await supabase.from('tasks').update({ category: dstCatKey } as any).in('id', taskIds);
+        console.log('[DragEnd:GROUP] tasks update:', { error: res2.error, status: res2.status, statusText: res2.statusText });
+      } else {
+        console.log('[DragEnd:GROUP] No tasks to update (group not found or empty)');
       }
 
       if (res1.error || res2.error) {
+        console.error('[DragEnd:GROUP] DB error, reloading:', { res1Error: res1.error, res2Error: res2.error });
         toast.error('Failed to move group');
         loadData();
+      } else {
+        console.log('[DragEnd:GROUP] Success');
       }
     }
   }, [user, categories, loadData]);
