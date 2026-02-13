@@ -34,14 +34,18 @@ const AddTopicGroupDialog: React.FC<AddTopicGroupDialogProps> = ({
     if (!name.trim() || !user) return;
     setSaving(true);
     try {
-      const { error } = await supabase.from('task_topic_index').insert({
-        user_id: user.id,
-        topic_name: name.trim(),
-        topic_summary: `Topic group for ${categoryKey}`,
-        window_affinity: [categoryKey],
-      });
+      const { error } = await supabase.from('task_topic_index').upsert(
+        {
+          user_id: user.id,
+          topic_name: name.trim(),
+          topic_summary: `Topic group for ${categoryKey}`,
+          window_affinity: [categoryKey],
+          category_affinity: categoryKey,
+        } as any,
+        { onConflict: 'user_id,topic_name' }
+      );
       if (error) throw error;
-      toast.success(`Created "${name.trim()}" topic group`);
+      toast.success(`"${name.trim()}" topic group ready`);
       setName('');
       onOpenChange(false);
       onCreated();

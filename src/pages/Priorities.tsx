@@ -96,7 +96,7 @@ const Priorities: React.FC = () => {
       const assignedTaskIds = new Set<string>();
       mappings.forEach(m => assignedTaskIds.add(m.task_id));
 
-      // Determine majority category for each topic (with window_affinity fallback)
+      // Determine majority category for each topic (with category_affinity / window_affinity fallback)
       const topicCategoryMap = new Map<string, string>();
       topics.forEach((topic: any) => {
         const topicTasks = topicTasksMap.get(topic.id) || [];
@@ -108,7 +108,9 @@ const Priorities: React.FC = () => {
           });
           const majorCat = Object.entries(catCounts).sort((a, b) => b[1] - a[1])[0][0];
           topicCategoryMap.set(topic.id, majorCat);
-        } else if (topic.window_affinity && topic.window_affinity.length > 0) {
+        } else if (topic.category_affinity && categoryKeys.includes(topic.category_affinity)) {
+          topicCategoryMap.set(topic.id, topic.category_affinity);
+        } else if (topic.window_affinity && topic.window_affinity.length > 0 && categoryKeys.includes(topic.window_affinity[0])) {
           topicCategoryMap.set(topic.id, topic.window_affinity[0]);
         }
       });
