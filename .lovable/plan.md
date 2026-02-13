@@ -1,50 +1,50 @@
 
 
-# Backfill category_affinity for Existing Topic Groups
+# Fix Topic Group Creation in Demo Mode + Better Error Logging
 
-## What This Does
+## Root Cause
 
-Runs a one-time database migration to populate the `category_affinity` column for all existing topic groups that currently have it set to `null`. This will make previously invisible groups appear in their correct category columns on the Priorities page.
+The "Failed to create topic group" error is caused by **RLS policy rejection**. The INSERT policy on `task_topic_index` requires `user_id = auth.uid()`, but in Demo Mode there is no real Supabase auth session -- `auth.uid()` returns `null`, so the policy blocks the insert every time.
 
-## Migration
+The same issue affects `user_presence` (visible in the console logs).
 
-A single SQL migration with two passes:
+## Solution
 
-1. **Groups with mapped tasks**: Set `category_affinity` to the majority category of their associated tasks
-2. **Groups without tasks but with a category key stored in `window_affinity`**: Use that value as a fallback
+Two changes:
 
-No code changes are needed -- all application code already references `category_affinity` from the previous implementation.
+### 1. Add Demo-User RLS Policy (Database Migration)
 
-## Technical Details
+Add a permissive INSERT and UPDATE policy specifically for the demo user UUID (`00000000-0000-0000-0000-000000000001`). This is the same pattern used for other tables that work in demo mode.
+
+```sql
+-- Allow demo user to insert into task_topic_index
+CREATE POLICY "Demo user can insert topics"
+  ON task_topic_index FOR INSERT
+  WITH CHECK (user_id = '00000000-0000-0000-0000-000000000001'::uuid);
+
+-- Allow demo user to update own topics
+CREATE POLICY "Demo user can update topics"
+  ON task_topic_index FOR UPDATE
+  USING (user_id = '00000000-0000-0000-0000-000000000001'::uuid);
+
+-- Allow demo user to read own topics
+CREATE POLICY "Demo user can read topics"
+  ON task_topic_index FOR SELECT
+  USING (user_id = '00000000-0000-0000-0000-000000000001'::uuid);
+```
+
+### 2. Improve Error Handling in AddTopicGroupDialog
+
+Update the catch block to show the **actual** error message from Supabase instead of a generic "Failed to create topic group":
+
+- Show the specific Postgres error code and message in the toast
+- Distinguish between RLS violations (42501), duplicate key errors (23505), and other failures
+- Log full error details to console for debugging
+
+## Files Changed
 
 | File | Change |
 |------|--------|
-| New migration | Two `UPDATE` statements to backfill `category_affinity` from task data and `window_affinity` fallback |
-
-### SQL
-
-```sql
--- Pass 1: Groups WITH tasks -- use majority category
-UPDATE task_topic_index ti
-SET category_affinity = sub.majority_category
-FROM (
-  SELECT m.topic_id, t.category AS majority_category,
-         ROW_NUMBER() OVER (PARTITION BY m.topic_id ORDER BY COUNT(*) DESC) AS rn
-  FROM task_topic_mappings m
-  JOIN tasks t ON t.id = m.task_id
-  WHERE t.category IS NOT NULL
-  GROUP BY m.topic_id, t.category
-) sub
-WHERE sub.topic_id = ti.id AND sub.rn = 1 AND ti.category_affinity IS NULL;
-
--- Pass 2: Groups WITHOUT tasks but with valid category key in window_affinity
-UPDATE task_topic_index
-SET category_affinity = window_affinity[1]
-WHERE category_affinity IS NULL
-  AND array_length(window_affinity, 1) > 0
-  AND window_affinity[1] IN (
-    'CAREER', 'PROF_EDUCATION', 'EDUCATION',
-    'VENTURES', 'LIFE', 'PERSONAL'
-  );
-```
+| New migration | Add demo-user RLS policies for `task_topic_index` |
+| `src/components/priorities/AddTopicGroupDialog.tsx` | Show specific error messages: RLS violation vs duplicate vs unknown |
 
