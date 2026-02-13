@@ -67,7 +67,7 @@ const TopicGroupPanel: React.FC<TopicGroupPanelProps> = ({
       onRefresh();
     } catch (err: any) {
       toast.error('Failed to change category');
-      console.error(err);
+      console.error('[ChangeCategory] error:', err?.code, err?.message, err?.details, { taskId: task.id, newCategory });
     }
   };
 
@@ -85,7 +85,7 @@ const TopicGroupPanel: React.FC<TopicGroupPanelProps> = ({
       onRefresh();
     } catch (err: any) {
       toast.error('Failed to move task');
-      console.error(err);
+      console.error('[MoveToGroup] error:', err?.code, err?.message, err?.details, { taskId: task.id, targetTopicId });
     }
   };
 
@@ -97,7 +97,7 @@ const TopicGroupPanel: React.FC<TopicGroupPanelProps> = ({
       onRefresh();
     } catch (err: any) {
       toast.error('Failed to remove from group');
-      console.error(err);
+      console.error('[RemoveFromGroup] error:', err?.code, err?.message, err?.details, { taskId: task.id });
     }
   };
 
