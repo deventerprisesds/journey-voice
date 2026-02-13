@@ -177,25 +177,28 @@ serve(async (req) => {
     const topics = (existingTopics || []) as Topic[];
     const category = task_category || 'LIFE';
 
-    // Check if task is already mapped (for UPDATE operations)
-    if (operation === 'UPDATE') {
-      const { data: existingMapping } = await supabase
-        .from('task_topic_mappings')
-        .select('id, topic_id')
-        .eq('task_id', task_id)
-        .maybeSingle();
+    // Check if task is already mapped (skip only if mapping exists)
+    const { data: existingMapping } = await supabase
+      .from('task_topic_mappings')
+      .select('id, topic_id')
+      .eq('task_id', task_id)
+      .maybeSingle();
 
-      if (existingMapping) {
-        console.log('[CLASSIFY-TOPIC] Task already mapped, skipping re-classification');
-        return new Response(JSON.stringify({ 
-          success: true, 
-          skipped: true,
-          reason: 'already_mapped'
-        }), {
-          status: 200,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
+    if (existingMapping) {
+      console.log(`[CLASSIFY-TOPIC] Task already mapped (topic_id=${existingMapping.topic_id}), skipping`);
+      return new Response(JSON.stringify({ 
+        success: true, 
+        skipped: true,
+        reason: 'already_mapped'
+      }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // If UPDATE but no mapping exists, proceed with classification (retry)
+    if (operation === 'UPDATE') {
+      console.log('[CLASSIFY-TOPIC] UPDATE with no existing mapping — proceeding with classification');
     }
 
     // Classify the task

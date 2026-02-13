@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { DragDropContext, DropResult } from '@hello-pangea/dnd';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
-import { Layers, List } from 'lucide-react';
-import { supabase } from '@/integrations/supabase/client';
+import { Button } from '@/components/ui/button';
+import { Layers, List, Sparkles, Loader2 } from 'lucide-react';
+import { supabase, SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { DEFAULT_SCHEDULING_CONFIG, mergeSchedulingConfig } from '@/config/schedulingRules';
 import CategoryColumn from '@/components/priorities/CategoryColumn';
@@ -60,6 +61,75 @@ const Priorities: React.FC = () => {
   const [categories, setCategories] = useState<CategoryData[]>([]);
   const [allTopicGroupRefs, setAllTopicGroupRefs] = useState<TopicGroupRef[]>([]);
   const [loading, setLoading] = useState(true);
+  const [classifying, setClassifying] = useState(false);
+  const [unmappedCount, setUnmappedCount] = useState(0);
+  const autoClassifyRan = useRef(false);
+  const loadDataRef = useRef<() => Promise<void>>(() => Promise.resolve());
+
+  // Classify a single task via edge function
+  const classifySingleTask = useCallback(async (task: Task) => {
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/classify-task-topic`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': SUPABASE_PUBLISHABLE_KEY,
+      },
+      body: JSON.stringify({
+        task_id: task.id,
+        task_title: task.title,
+        task_category: task.category || 'LIFE',
+        user_id: task.user_id,
+        operation: 'INSERT',
+      }),
+    });
+    return res.json();
+  }, []);
+
+  // Bulk classify unmapped tasks
+  const classifyUnmapped = useCallback(async (limit?: number) => {
+    if (!user) return;
+    setClassifying(true);
+
+    try {
+      // Get all tasks and existing mappings
+      const [tasksRes, mappingsRes] = await Promise.all([
+        supabase.from('tasks').select('id, title, category, user_id').eq('user_id', user.id).not('status', 'in', '("DONE","BLOCKED")'),
+        supabase.from('task_topic_mappings').select('task_id'),
+      ]);
+
+      const tasks = (tasksRes.data || []) as unknown as Task[];
+      const mappedIds = new Set((mappingsRes.data || []).map(m => m.task_id));
+      let unmapped = tasks.filter(t => !mappedIds.has(t.id) && !t.title.toLowerCase().includes('test'));
+
+      if (limit) unmapped = unmapped.slice(0, limit);
+
+      if (unmapped.length === 0) {
+        if (!limit) toast.info('All tasks are already classified');
+        setClassifying(false);
+        return;
+      }
+
+      if (!limit) toast.info(`Classifying ${unmapped.length} tasks...`);
+
+      // Process in batches of 3 with 500ms delay
+      const BATCH = 3;
+      for (let i = 0; i < unmapped.length; i += BATCH) {
+        const batch = unmapped.slice(i, i + BATCH);
+        await Promise.all(batch.map(t => classifySingleTask(t)));
+        if (i + BATCH < unmapped.length) {
+          await new Promise(r => setTimeout(r, 500));
+        }
+      }
+
+      if (!limit) toast.success(`Classified ${unmapped.length} tasks`);
+      await loadDataRef.current();
+    } catch (err) {
+      console.error('[ClassifyUnmapped] Error:', err);
+      toast.error('Classification failed');
+    } finally {
+      setClassifying(false);
+    }
+  }, [user, classifySingleTask]);
 
   const loadData = useCallback(async () => {
     if (!user) return;
@@ -166,6 +236,10 @@ const Priorities: React.FC = () => {
 
       setAllTopicGroupRefs(refs);
       setCategories(catData);
+
+      // Track unmapped count for UI
+      const unmapped = tasks.filter(t => !assignedTaskIds.has(t.id) && !t.title.toLowerCase().includes('test'));
+      setUnmappedCount(unmapped.length);
     } catch (err) {
       console.error('Failed to load priorities data:', err);
     } finally {
@@ -173,7 +247,17 @@ const Priorities: React.FC = () => {
     }
   }, [user]);
 
+  loadDataRef.current = loadData;
   useEffect(() => { loadData(); }, [loadData]);
+
+  // Auto-classify up to 10 unmapped tasks on first load
+  useEffect(() => {
+    if (!loading && unmappedCount > 0 && !autoClassifyRan.current && !classifying) {
+      autoClassifyRan.current = true;
+      console.log(`[Priorities] Auto-classifying up to 10 of ${unmappedCount} unmapped tasks`);
+      classifyUnmapped(10);
+    }
+  }, [loading, unmappedCount, classifying, classifyUnmapped]);
 
   const handleDragEnd = useCallback(async (result: DropResult) => {
     console.log('[DragEnd] Raw result:', JSON.stringify(result));
@@ -354,6 +438,20 @@ const Priorities: React.FC = () => {
           <h1 className="text-2xl font-bold text-foreground">Priorities</h1>
           <p className="text-sm text-muted-foreground">{totalTasks} active tasks across {categories.length} categories</p>
         </div>
+        <div className="flex items-center gap-2">
+          {unmappedCount > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => classifyUnmapped()}
+              disabled={classifying}
+              className="gap-1.5"
+            >
+              {classifying ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              <span className="hidden sm:inline">Classify</span>
+              <span className="text-xs text-muted-foreground">({unmappedCount})</span>
+            </Button>
+          )}
         <ToggleGroup type="single" value={viewMode} onValueChange={(v) => v && setViewMode(v as 'group' | 'task')}>
           <ToggleGroupItem value="group" aria-label="Group view" className="gap-1.5">
             <Layers className="h-4 w-4" />
@@ -364,6 +462,7 @@ const Priorities: React.FC = () => {
             <span className="hidden sm:inline text-sm">Task</span>
           </ToggleGroupItem>
         </ToggleGroup>
+        </div>
       </div>
 
       <DragDropContext onDragEnd={handleDragEnd}>
