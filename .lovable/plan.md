@@ -1,82 +1,62 @@
 
 
-# Fix Priorities Dashboard: Reassign, Delete, and New Groups
+# Prevent Future Orphaned Topic Groups
 
-## Problems Identified
+## Root Cause
 
-1. **Tasks in wrong category/group**: No UI to change a task's category or move it between topic groups
-2. **Can't delete a group**: No delete option on topic group panels
-3. **New groups never appear**: When you create a group via "Add Group", it has zero tasks. The code assigns groups to categories based on the majority category of their mapped tasks -- a group with 0 tasks matches nothing and is invisible
+The `window_affinity` field on `task_topic_index` is being used for two different purposes:
 
-## Solution
+1. **Auto-classifier** (edge function) stores scheduling time windows: `["business_hours", "evening"]`
+2. **Priorities page** fallback logic treats it as a category key: `["CAREER"]`
+3. **Add Group dialog** stores category keys: `["EDUCATION"]`
 
-### Fix 1: Make new groups appear immediately
+When all tasks are removed from an auto-classified group, the fallback reads `window_affinity[0]` = `"business_hours"` -- which matches no category key, making the group invisible.
 
-When creating a topic group under a specific category, store the `window_affinity` field (which already exists on `task_topic_index`) with the category key. Then update the category-assignment logic in `Priorities.tsx` to check `window_affinity` as a fallback when a group has no tasks.
+## Solution: Add explicit `category_affinity` column
 
-**File: `AddTopicGroupDialog.tsx`**
-- Set `window_affinity` to `[categoryKey]` on insert so the group has an explicit category association
+Store the category key directly on each topic group so it never gets lost, regardless of whether the group has tasks or not.
 
-**File: `Priorities.tsx`**
-- Update the topic-to-category mapping logic: if a topic has mapped tasks, use majority category; if not, fall back to `window_affinity[0]`
+### Database Change
 
-### Fix 2: Add "Delete Group" to topic group panels
+Add a new column `category_affinity` (type `text`, nullable) to `task_topic_index`. This stores the category key (e.g., `"CAREER"`, `"EDUCATION"`) directly.
 
-**File: `TopicGroupPanel.tsx`**
-- Add a trash icon button (visible on hover or via a small dropdown menu) on each topic group header
-- On click, confirm with an AlertDialog, then delete the topic from `task_topic_index` (cascade will remove `task_topic_mappings` entries)
-- Call `onRefresh` to reload the dashboard
-- The "Uncategorized" pseudo-group cannot be deleted
+### Edge Function Update: `classify-task-topic`
 
-**Props change**: Add `onRefresh: () => void` and `isDeletable: boolean` props
+When creating or updating a topic, also set `category_affinity` to the task's category. This ensures every auto-classified group has an explicit category link from the start.
 
-### Fix 3: Allow reassigning tasks (category + topic group)
+### Priorities Page Update
 
-**File: `TopicGroupPanel.tsx`**
-- Add a click handler on each task row that opens a small popover or dropdown with:
-  - **Change Category**: Select from user's categories (updates `tasks.category`)
-  - **Move to Group**: Select from topic groups in the target category (updates `task_topic_mappings`)
-  - **Remove from Group**: Removes the `task_topic_mappings` entry (task becomes uncategorized)
+Change the fallback logic from checking `window_affinity[0]` to checking `category_affinity`:
 
-To keep it simple, use a `DropdownMenu` on each task row (triggered by a "..." button on hover).
+```text
+For each topic group:
+  1. Has mapped tasks? -> use majority category (existing logic)
+  2. Has category_affinity? -> use that
+  3. Has window_affinity matching a category key? -> use that (backward compat for manually created groups)
+  4. None of the above -> skip (true orphan)
+```
+
+### Add Group Dialog Update
+
+When creating/upserting a topic group, set `category_affinity = categoryKey` in addition to `window_affinity`.
+
+### Backfill Existing Groups
+
+Run a one-time update to set `category_affinity` for existing topic groups based on majority category of their current tasks, so nothing is lost.
 
 ## Files Changed
 
 | File | Change |
 |------|--------|
-| `src/components/priorities/AddTopicGroupDialog.tsx` | Set `window_affinity: [categoryKey]` on insert |
-| `src/pages/Priorities.tsx` | Use `window_affinity` as fallback for category assignment; pass available categories and topic groups to columns for reassignment |
-| `src/components/priorities/TopicGroupPanel.tsx` | Add delete group button; add task reassignment dropdown (change category, move to group, remove from group) |
-| `src/components/priorities/CategoryColumn.tsx` | Pass `onRefresh`, delete/reassign props through to TopicGroupPanel |
+| New migration | `ALTER TABLE task_topic_index ADD COLUMN category_affinity text;` |
+| `supabase/functions/classify-task-topic/index.ts` | Set `category_affinity` to the task's category when inserting/updating topic rows |
+| `src/pages/Priorities.tsx` | Use `category_affinity` as the primary fallback instead of `window_affinity[0]` |
+| `src/components/priorities/AddTopicGroupDialog.tsx` | Set `category_affinity` on insert/upsert |
 
-## Technical Details
+## Why This Prevents Future Orphans
 
-### Category assignment logic (updated)
-
-```text
-For each topic group:
-  1. If it has mapped tasks -> use majority category of those tasks
-  2. Else if window_affinity is set -> use window_affinity[0]
-  3. Else -> skip (orphan group, won't appear)
-```
-
-### Task reassignment
-
-When changing a task's category:
-- `UPDATE tasks SET category = ? WHERE id = ?`
-- Call `onRefresh()` to re-render
-
-When moving a task to a different group:
-- Delete existing `task_topic_mappings` row for this task
-- Insert new `task_topic_mappings` row with the target topic_id
-- Call `onRefresh()`
-
-When removing a task from a group:
-- Delete the `task_topic_mappings` row
-- Task becomes "Uncategorized" in its category column
-
-### Delete group
-
-- `DELETE FROM task_topic_index WHERE id = ?` (cascading deletes handle mappings)
-- Affected tasks become uncategorized in their category
+- Every topic group gets a `category_affinity` at creation time (whether auto-classified or manually created)
+- Even if all tasks are deleted from a group, the category link persists
+- The `window_affinity` field goes back to its original purpose: scheduling time windows
+- No more semantic mismatch between the two systems
 
