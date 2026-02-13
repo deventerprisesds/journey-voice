@@ -7,44 +7,28 @@ import { Plus } from 'lucide-react';
 import TopicGroupPanel from './TopicGroupPanel';
 import AddTopicGroupDialog from './AddTopicGroupDialog';
 import type { Task } from '@/types/task';
-
-interface TopicGroup {
-  id: string;
-  topic_name: string;
-  topic_summary: string | null;
-  task_count: number | null;
-  tasks: Task[];
-}
-
-interface CategoryData {
-  key: string;
-  label: string;
-  color: string;
-  topicGroups: TopicGroup[];
-  uncategorizedTasks: Task[];
-}
+import type { CategoryData, CategoryRef, TopicGroupRef } from '@/pages/Priorities';
 
 interface CategoryColumnProps {
   category: CategoryData;
   viewMode: 'group' | 'task';
   onRefresh: () => void;
+  allCategories: CategoryRef[];
+  allTopicGroupRefs: TopicGroupRef[];
 }
 
 const PRIORITY_ORDER = { URGENT: 0, HIGH: 1, MEDIUM: 2, LOW: 3 } as const;
 
-const CategoryColumn: React.FC<CategoryColumnProps> = ({ category, viewMode, onRefresh }) => {
+const CategoryColumn: React.FC<CategoryColumnProps> = ({
+  category, viewMode, onRefresh, allCategories, allTopicGroupRefs,
+}) => {
   const [addDialogOpen, setAddDialogOpen] = useState(false);
 
   const totalTasks = category.topicGroups.reduce((s, tg) => s + tg.tasks.length, 0) + category.uncategorizedTasks.length;
 
-  // Task view: flat sorted list
   const allTasks = React.useMemo(() => {
     if (viewMode !== 'task') return [];
-    const tasks = [
-      ...category.topicGroups.flatMap(tg => tg.tasks),
-      ...category.uncategorizedTasks,
-    ];
-    // Deduplicate by id
+    const tasks = [...category.topicGroups.flatMap(tg => tg.tasks), ...category.uncategorizedTasks];
     const seen = new Set<string>();
     return tasks.filter(t => {
       if (seen.has(t.id)) return false;
@@ -84,14 +68,19 @@ const CategoryColumn: React.FC<CategoryColumnProps> = ({ category, viewMode, onR
                         {...dragProvided.draggableProps}
                         {...dragProvided.dragHandleProps}
                       >
-                        <TopicGroupPanel topicGroup={tg} />
+                        <TopicGroupPanel
+                          topicGroup={tg}
+                          isDeletable
+                          onRefresh={onRefresh}
+                          allCategories={allCategories}
+                          allTopicGroupRefs={allTopicGroupRefs}
+                        />
                       </div>
                     )}
                   </Draggable>
                 ))}
                 {provided.placeholder}
 
-                {/* Uncategorized tasks */}
                 {category.uncategorizedTasks.length > 0 && (
                   <TopicGroupPanel
                     topicGroup={{
@@ -101,13 +90,16 @@ const CategoryColumn: React.FC<CategoryColumnProps> = ({ category, viewMode, onR
                       task_count: category.uncategorizedTasks.length,
                       tasks: category.uncategorizedTasks,
                     }}
+                    isDeletable={false}
+                    onRefresh={onRefresh}
+                    allCategories={allCategories}
+                    allTopicGroupRefs={allTopicGroupRefs}
                   />
                 )}
               </div>
             )}
           </Droppable>
         ) : (
-          // Task view: flat list
           <div className="space-y-1">
             {allTasks.map(task => (
               <TaskRow key={task.id} task={task} />
@@ -139,7 +131,6 @@ const CategoryColumn: React.FC<CategoryColumnProps> = ({ category, viewMode, onR
   );
 };
 
-// Simple task row for Task View
 const TaskRow: React.FC<{ task: Task }> = ({ task }) => {
   const priorityColors: Record<string, string> = {
     URGENT: 'bg-destructive/10 text-destructive',
