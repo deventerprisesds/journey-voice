@@ -467,6 +467,14 @@ const VoiceAssistantSettings: React.FC = () => {
     );
   };
 
+  const handleUpdateCallFallbackMode = (callId: string, fallbackMode: CommsMode) => {
+    setScheduledCalls(calls =>
+      calls.map(call =>
+        call.id === callId ? { ...call, fallbackMode } : call
+      )
+    );
+  };
+
   const handleUpdateCallAssistant = (callId: string, assistantId: string) => {
     setScheduledCalls(calls =>
       calls.map(call =>
@@ -939,7 +947,41 @@ const VoiceAssistantSettings: React.FC = () => {
                               </Select>
                             </>
                           )}
-                        </div>
+                          {/* Fallback mode selector - shown for phone calls */}
+                          {(call.commsMode || 'phone') === 'phone' && (
+                            <>
+                              <span className="text-muted-foreground">•</span>
+                              <span className="text-[10px] text-muted-foreground">Fallback:</span>
+                              <Select
+                                value={call.fallbackMode || 'app_message'}
+                                onValueChange={(value) => handleUpdateCallFallbackMode(call.id, value as CommsMode)}
+                              >
+                                <SelectTrigger className="h-6 w-24 text-xs border-none p-0 focus:ring-0 bg-transparent">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="app_message">
+                                    <div className="flex items-center gap-1.5">
+                                      <MessageSquare className="h-3 w-3" />
+                                      <span>Chat</span>
+                                    </div>
+                                  </SelectItem>
+                                  <SelectItem value="slack">
+                                    <div className="flex items-center gap-1.5">
+                                      <Hash className="h-3 w-3" />
+                                      <span>Slack</span>
+                                    </div>
+                                  </SelectItem>
+                                  <SelectItem value="email">
+                                    <div className="flex items-center gap-1.5">
+                                      <Mail className="h-3 w-3" />
+                                      <span>Email</span>
+                                    </div>
+                                  </SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </>
+                          )}
                       </div>
                     </div>
                     <div className="flex items-center gap-2">

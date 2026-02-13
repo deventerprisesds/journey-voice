@@ -17,8 +17,8 @@ export interface TopicGroupData {
   topic_summary: string | null;
   task_count: number | null;
   tasks: Task[];
+  children?: TopicGroupData[];
 }
-
 export interface CategoryData {
   key: string;
   label: string;
@@ -105,6 +105,30 @@ const Priorities: React.FC = () => {
     }
   }, [user, selectedTaskIds, clearSelection]);
 
+  const batchMoveToGroup = useCallback(async (targetTopicId: string, targetCategoryKey: string) => {
+    if (!user || selectedTaskIds.size === 0) return;
+    const ids = Array.from(selectedTaskIds);
+
+    try {
+      // Delete existing mappings
+      await supabase.from('task_topic_mappings').delete().in('task_id', ids);
+      // Insert new mappings
+      const mappings = ids.map(task_id => ({ task_id, topic_id: targetTopicId }));
+      const { error: insertError } = await supabase.from('task_topic_mappings').insert(mappings);
+      if (insertError) throw insertError;
+
+      // Update task categories to match the group's category
+      await supabase.from('tasks').update({ category: targetCategoryKey } as any).in('id', ids);
+
+      toast.success(`Moved ${ids.length} tasks to group`);
+      clearSelection();
+      loadDataRef.current();
+    } catch (err: any) {
+      toast.error('Failed to move tasks to group');
+      console.error('[batchMoveToGroup]', err);
+      loadDataRef.current();
+    }
+  }, [user, selectedTaskIds, clearSelection]);
   // Classify a single task via edge function
   const classifySingleTask = useCallback(async (task: Task) => {
     const res = await fetch(`${SUPABASE_URL}/functions/v1/classify-task-topic`, {
@@ -186,7 +210,16 @@ const Priorities: React.FC = () => {
       const config = userConfig ? mergeSchedulingConfig(userConfig) : DEFAULT_SCHEDULING_CONFIG;
 
       const categoryKeys = Object.keys(config.categoryMappings);
-      const topics = topicsRes.data || [];
+      const allTopics = topicsRes.data || [];
+      // Filter to top-level topics; children will be nested
+      const topics = allTopics.filter((t: any) => !t.parent_topic_id);
+      // Build children map for sub-groups
+      const childrenMap = new Map<string, any[]>();
+      allTopics.filter((t: any) => t.parent_topic_id).forEach((t: any) => {
+        const list = childrenMap.get(t.parent_topic_id) || [];
+        list.push(t);
+        childrenMap.set(t.parent_topic_id, list);
+      });
       const mappings = mappingsRes.data || [];
       const tasks = (tasksRes.data || []) as unknown as Task[];
 
@@ -208,7 +241,7 @@ const Priorities: React.FC = () => {
 
       // Determine majority category for each topic (with category_affinity / window_affinity fallback)
       const topicCategoryMap = new Map<string, string>();
-      topics.forEach((topic: any) => {
+      allTopics.forEach((topic: any) => {
         const topicTasks = topicTasksMap.get(topic.id) || [];
         if (topicTasks.length > 0) {
           const catCounts: Record<string, number> = {};
@@ -245,8 +278,18 @@ const Priorities: React.FC = () => {
               const pOrder: Record<string, number> = { URGENT: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
               return (pOrder[a.priority] ?? 3) - (pOrder[b.priority] ?? 3);
             }),
+            children: (childrenMap.get(t.id) || []).map((child: any) => ({
+              id: child.id,
+              topic_name: child.topic_name,
+              topic_summary: child.topic_summary,
+              task_count: child.task_count,
+              tasks: (topicTasksMap.get(child.id) || []).sort((a: Task, b: Task) => {
+                const pOrder: Record<string, number> = { URGENT: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
+                return (pOrder[a.priority] ?? 3) - (pOrder[b.priority] ?? 3);
+              }),
+              children: [],
+            })),
           }));
-
         catTopics.sort((a: any, b: any) => {
           const aIdx = savedOrder.indexOf(a.id);
           const bIdx = savedOrder.indexOf(b.id);
@@ -269,10 +312,9 @@ const Priorities: React.FC = () => {
         };
       });
 
-      const refs: TopicGroupRef[] = topics
+      const refs: TopicGroupRef[] = allTopics
         .filter((t: any) => topicCategoryMap.has(t.id))
         .map((t: any) => ({ id: t.id, topic_name: t.topic_name, categoryKey: topicCategoryMap.get(t.id)! }));
-
       setAllTopicGroupRefs(refs);
       setCategories(catData);
 

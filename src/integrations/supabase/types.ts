@@ -3377,6 +3377,7 @@ export type Database = {
           created_at: string | null
           example_tasks: string[] | null
           id: string
+          parent_topic_id: string | null
           task_count: number | null
           topic_name: string
           topic_summary: string | null
@@ -3389,6 +3390,7 @@ export type Database = {
           created_at?: string | null
           example_tasks?: string[] | null
           id?: string
+          parent_topic_id?: string | null
           task_count?: number | null
           topic_name: string
           topic_summary?: string | null
@@ -3401,6 +3403,7 @@ export type Database = {
           created_at?: string | null
           example_tasks?: string[] | null
           id?: string
+          parent_topic_id?: string | null
           task_count?: number | null
           topic_name?: string
           topic_summary?: string | null
@@ -3409,6 +3412,13 @@ export type Database = {
           window_affinity?: string[] | null
         }
         Relationships: [
+          {
+            foreignKeyName: "task_topic_index_parent_topic_id_fkey"
+            columns: ["parent_topic_id"]
+            isOneToOne: false
+            referencedRelation: "task_topic_index"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "task_topic_index_user_id_fkey"
             columns: ["user_id"]

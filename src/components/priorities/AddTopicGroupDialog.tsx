@@ -18,6 +18,7 @@ interface AddTopicGroupDialogProps {
   onOpenChange: (open: boolean) => void;
   categoryKey: string;
   onCreated: () => void;
+  parentTopicId?: string;
 }
 
 const AddTopicGroupDialog: React.FC<AddTopicGroupDialogProps> = ({
@@ -25,6 +26,7 @@ const AddTopicGroupDialog: React.FC<AddTopicGroupDialogProps> = ({
   onOpenChange,
   categoryKey,
   onCreated,
+  parentTopicId,
 }) => {
   const { user } = useAuth();
   const [name, setName] = useState('');
@@ -34,14 +36,18 @@ const AddTopicGroupDialog: React.FC<AddTopicGroupDialogProps> = ({
     if (!name.trim() || !user) return;
     setSaving(true);
     try {
+      const payload: any = {
+        user_id: user.id,
+        topic_name: name.trim(),
+        topic_summary: `Topic group for ${categoryKey}`,
+        window_affinity: [categoryKey],
+        category_affinity: categoryKey,
+      };
+      if (parentTopicId) {
+        payload.parent_topic_id = parentTopicId;
+      }
       const { error } = await supabase.from('task_topic_index').upsert(
-        {
-          user_id: user.id,
-          topic_name: name.trim(),
-          topic_summary: `Topic group for ${categoryKey}`,
-          window_affinity: [categoryKey],
-          category_affinity: categoryKey,
-        } as any,
+        payload,
         { onConflict: 'user_id,topic_name' }
       );
       if (error) throw error;
@@ -69,7 +75,7 @@ const AddTopicGroupDialog: React.FC<AddTopicGroupDialogProps> = ({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-sm">
         <DialogHeader>
-          <DialogTitle>New Topic Group</DialogTitle>
+          <DialogTitle>{parentTopicId ? 'New Sub-Group' : 'New Topic Group'}</DialogTitle>
         </DialogHeader>
         <div className="space-y-3 py-2">
           <div className="space-y-1.5">
@@ -78,7 +84,7 @@ const AddTopicGroupDialog: React.FC<AddTopicGroupDialogProps> = ({
               id="topic-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g., Professional Networking"
+              placeholder={parentTopicId ? 'e.g., Course A' : 'e.g., Professional Networking'}
               onKeyDown={(e) => e.key === 'Enter' && handleSave()}
             />
           </div>

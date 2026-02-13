@@ -21,8 +21,8 @@ interface ScheduledCall {
   callType: 'morning_standup' | 'midday_checkin' | 'eod_wrapup' | 'custom';
   context: string;
   commsMode?: CommsMode;
+  fallbackMode?: CommsMode;
 }
-
 interface ScheduledCallConfig {
   userId?: string;
   callType: 'morning_briefing' | 'task_reminder' | 'custom';
