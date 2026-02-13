@@ -50,8 +50,16 @@ const AddTopicGroupDialog: React.FC<AddTopicGroupDialogProps> = ({
       onOpenChange(false);
       onCreated();
     } catch (err: any) {
-      toast.error('Failed to create topic group');
-      console.error(err);
+      const code = err?.code;
+      const msg = err?.message || 'Unknown error';
+      console.error('[AddTopicGroup] Insert failed:', { code, msg, details: err?.details, hint: err?.hint, full: err });
+      if (code === '42501') {
+        toast.error(`Permission denied (RLS): ${msg}`);
+      } else if (code === '23505') {
+        toast.error(`Topic "${name.trim()}" already exists`);
+      } else {
+        toast.error(`Failed to create topic group: ${msg}`);
+      }
     } finally {
       setSaving(false);
     }
