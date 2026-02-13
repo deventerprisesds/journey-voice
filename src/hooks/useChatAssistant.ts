@@ -74,7 +74,30 @@ export function useChatAssistant(): UseChatAssistantReturn {
   const [realtimeStatus, setRealtimeStatus] = useState<string>('idle');
   const subscribeStartTimeRef = useRef<number | null>(null);
 
+  // ── Agenda state for tangent tracking (mirrors phone/voice SharedAgendaManager) ──
+  const activeAgendaThreadId = useRef<string | null>(null);
+  const agendaStep = useRef<'topic_selection' | 'task_selection' | 'scheduling' | null>(null);
+  const lastInteractiveContent = useRef<InteractiveContent | null>(null);
+
   const userId = user?.id || null;
+
+  // ── Agenda manager helper ──
+  const callAgendaManager = useCallback(async (operation: string, params: Record<string, unknown> = {}) => {
+    if (!user) return null;
+    const { data, error } = await supabase.functions.invoke('agenda-manager', {
+      body: {
+        operation,
+        threadId: activeAgendaThreadId.current,
+        userId: user.id,
+        ...params
+      }
+    });
+    if (error) {
+      console.error(`[useChatAssistant] agenda-manager ${operation} error:`, error);
+      return null;
+    }
+    return data;
+  }, [user]);
 
   // Load or create thread on mount
   useEffect(() => {
@@ -385,6 +408,20 @@ export function useChatAssistant(): UseChatAssistantReturn {
         ? `What would you like to focus on during ${windowLabel}? Here are your topic groups:`
         : `You don't have any topic groups right now. Try creating some tasks first!`;
 
+      // ── Wire agenda-manager: initialize + start_item(0) ──
+      if (topics.length > 0 && threadId) {
+        activeAgendaThreadId.current = threadId;
+        agendaStep.current = 'topic_selection';
+        const interactivePayload: InteractiveContent = { type: 'topic_selection', topics };
+        lastInteractiveContent.current = interactivePayload;
+
+        await callAgendaManager('initialize', {
+          context: '1. Select topic group\n2. Select tasks from topic\n3. Schedule selected tasks',
+          source: 'chat_checkin'
+        });
+        await callAgendaManager('start_item', { itemIndex: 0 });
+      }
+
       setMessages(prev => [...prev, {
         id: crypto.randomUUID(),
         role: 'assistant',
@@ -441,6 +478,15 @@ export function useChatAssistant(): UseChatAssistantReturn {
         ? `Here are the tasks under "${topicName}". Select which ones you'd like to schedule:`
         : `I don't have any active tasks under "${topicName}" right now.`;
 
+      // ── Wire agenda-manager: complete topic selection, advance to task selection ──
+      if (activeAgendaThreadId.current) {
+        await callAgendaManager('complete_item', {});
+        agendaStep.current = 'task_selection';
+        if (tasks.length > 0) {
+          lastInteractiveContent.current = { type: 'task_selection', tasks, selectedTopicName: topicName };
+        }
+      }
+
       setMessages(prev => [...prev, {
         id: crypto.randomUUID(),
         role: 'assistant',
@@ -485,6 +531,15 @@ export function useChatAssistant(): UseChatAssistantReturn {
           }
         });
         if (!error) successCount++;
+      }
+
+      // ── Wire agenda-manager: complete remaining items and clear ──
+      if (activeAgendaThreadId.current && successCount > 0) {
+        await callAgendaManager('complete_item', {}); // completes "Select tasks"
+        await callAgendaManager('complete_item', {}); // completes "Schedule selected tasks"
+        activeAgendaThreadId.current = null;
+        agendaStep.current = null;
+        lastInteractiveContent.current = null;
       }
 
       setMessages(prev => [...prev, {
@@ -532,6 +587,12 @@ export function useChatAssistant(): UseChatAssistantReturn {
     }]);
 
     try {
+      // ── Tangent detection: pause agenda if active ──
+      const isAgendaActive = !!activeAgendaThreadId.current;
+      if (isAgendaActive) {
+        await callAgendaManager('pause_for_tangent', { userQuery: content.trim() });
+      }
+
       await supabase.from('conversation_messages').insert({
         thread_id: threadId,
         user_id: user.id,
@@ -572,6 +633,21 @@ export function useChatAssistant(): UseChatAssistantReturn {
           : msg
       ));
 
+      // ── Tangent recovery: resume agenda and re-present interactive UI ──
+      if (isAgendaActive && lastInteractiveContent.current) {
+        const resumeData = await callAgendaManager('get_resume_hint', {});
+        if (resumeData?.hint) {
+          await callAgendaManager('resume', {});
+          setMessages(prev => [...prev, {
+            id: crypto.randomUUID(),
+            role: 'assistant',
+            content: resumeData.hint,
+            timestamp: new Date(),
+            interactive: lastInteractiveContent.current || undefined
+          }]);
+        }
+      }
+
       await supabase
         .from('ai_threads')
         .update({ updated_at: new Date().toISOString() })
@@ -589,7 +665,7 @@ export function useChatAssistant(): UseChatAssistantReturn {
     } finally {
       setIsLoading(false);
     }
-  }, [user, threadId]);
+  }, [user, threadId, callAgendaManager]);
 
   return {
     messages,
