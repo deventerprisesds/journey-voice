@@ -7,6 +7,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { DEFAULT_SCHEDULING_CONFIG, mergeSchedulingConfig } from '@/config/schedulingRules';
 import CategoryColumn from '@/components/priorities/CategoryColumn';
 import type { Task } from '@/types/task';
+import { toast } from 'sonner';
 
 export interface TopicGroupData {
   id: string;
@@ -174,21 +175,125 @@ const Priorities: React.FC = () => {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  const handleDragEnd = useCallback((result: DropResult) => {
+  const handleDragEnd = useCallback(async (result: DropResult) => {
     if (!result.destination || !user) return;
-    const { source, destination } = result;
-    if (source.droppableId !== destination.droppableId) return;
+    const { source, destination, type, draggableId } = result;
 
-    const catKey = source.droppableId;
-    setCategories(prev => prev.map(cat => {
-      if (cat.key !== catKey) return cat;
-      const groups = [...cat.topicGroups];
-      const [moved] = groups.splice(source.index, 1);
-      groups.splice(destination.index, 0, moved);
-      localStorage.setItem(`priorities-order-${user.id}-${catKey}`, JSON.stringify(groups.map(g => g.id)));
-      return { ...cat, topicGroups: groups };
-    }));
-  }, [user]);
+    if (type === 'TASK') {
+      // Task dragged between categories
+      const srcCatKey = source.droppableId.replace('tasks-', '');
+      const dstCatKey = destination.droppableId.replace('tasks-', '');
+      if (srcCatKey === dstCatKey && source.index === destination.index) return;
+
+      // Find the task
+      const srcCat = categories.find(c => c.key === srcCatKey);
+      if (!srcCat) return;
+      const allSrcTasks = [
+        ...srcCat.topicGroups.flatMap(tg => tg.tasks),
+        ...srcCat.uncategorizedTasks,
+      ];
+      const seen = new Set<string>();
+      const dedupedSrcTasks = allSrcTasks.filter(t => {
+        if (seen.has(t.id)) return false;
+        seen.add(t.id);
+        return true;
+      });
+      const task = dedupedSrcTasks[source.index];
+      if (!task) return;
+
+      // Optimistic update
+      setCategories(prev => prev.map(cat => {
+        if (cat.key === srcCatKey) {
+          return {
+            ...cat,
+            topicGroups: cat.topicGroups.map(tg => ({
+              ...tg,
+              tasks: tg.tasks.filter(t => t.id !== task.id),
+            })),
+            uncategorizedTasks: cat.uncategorizedTasks.filter(t => t.id !== task.id),
+          };
+        }
+        if (cat.key === dstCatKey) {
+          const updatedTask = { ...task, category: dstCatKey as Task['category'] };
+          return {
+            ...cat,
+            uncategorizedTasks: [...cat.uncategorizedTasks, updatedTask],
+          };
+        }
+        return cat;
+      }));
+
+      // Persist
+      const { error } = await supabase.from('tasks').update({ category: dstCatKey } as any).eq('id', task.id);
+      if (error) {
+        toast.error('Failed to move task');
+        loadData();
+      }
+      return;
+    }
+
+    // Group drag (type === 'GROUP')
+    const srcCatKey = source.droppableId;
+    const dstCatKey = destination.droppableId;
+
+    if (srcCatKey === dstCatKey) {
+      // Reorder within same column
+      setCategories(prev => prev.map(cat => {
+        if (cat.key !== srcCatKey) return cat;
+        const groups = [...cat.topicGroups];
+        const [moved] = groups.splice(source.index, 1);
+        groups.splice(destination.index, 0, moved);
+        localStorage.setItem(`priorities-order-${user.id}-${srcCatKey}`, JSON.stringify(groups.map(g => g.id)));
+        return { ...cat, topicGroups: groups };
+      }));
+    } else {
+      // Move group to different category
+      let movedGroup: TopicGroupData | null = null;
+
+      setCategories(prev => {
+        const updated = prev.map(cat => {
+          if (cat.key === srcCatKey) {
+            const groups = [...cat.topicGroups];
+            const [removed] = groups.splice(source.index, 1);
+            movedGroup = removed;
+            localStorage.setItem(`priorities-order-${user.id}-${srcCatKey}`, JSON.stringify(groups.map(g => g.id)));
+            return { ...cat, topicGroups: groups };
+          }
+          return cat;
+        });
+
+        if (!movedGroup) return updated;
+
+        return updated.map(cat => {
+          if (cat.key === dstCatKey) {
+            const groups = [...cat.topicGroups];
+            groups.splice(destination.index, 0, movedGroup!);
+            localStorage.setItem(`priorities-order-${user.id}-${dstCatKey}`, JSON.stringify(groups.map(g => g.id)));
+            return { ...cat, topicGroups: groups };
+          }
+          return cat;
+        });
+      });
+
+      // Persist category_affinity + update task categories
+      const groupId = draggableId;
+      const res1 = await supabase.from('task_topic_index').update({ category_affinity: dstCatKey } as any).eq('id', groupId);
+
+      // Also update all tasks in this group to the new category
+      const srcCat = categories.find(c => c.key === srcCatKey);
+      const group = srcCat?.topicGroups.find(g => g.id === groupId);
+      let res2: any = { error: null };
+      if (group && group.tasks.length > 0) {
+        const taskIds = group.tasks.map(t => t.id);
+        res2 = await supabase.from('tasks').update({ category: dstCatKey } as any).in('id', taskIds);
+      }
+
+      if (res1.error || res2.error) {
+        toast.error('Failed to move group');
+        loadData();
+      }
+    }
+  }, [user, categories, loadData]);
 
   const totalTasks = useMemo(() =>
     categories.reduce((sum, cat) =>

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Droppable, Draggable } from '@hello-pangea/dnd';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -26,7 +26,7 @@ const CategoryColumn: React.FC<CategoryColumnProps> = ({
 
   const totalTasks = category.topicGroups.reduce((s, tg) => s + tg.tasks.length, 0) + category.uncategorizedTasks.length;
 
-  const allTasks = React.useMemo(() => {
+  const allTasks = useMemo(() => {
     if (viewMode !== 'task') return [];
     const tasks = [...category.topicGroups.flatMap(tg => tg.tasks), ...category.uncategorizedTasks];
     const seen = new Set<string>();
@@ -57,16 +57,23 @@ const CategoryColumn: React.FC<CategoryColumnProps> = ({
 
       <CardContent className="px-3 pb-3 flex-1 space-y-1">
         {viewMode === 'group' ? (
-          <Droppable droppableId={category.key}>
-            {(provided) => (
-              <div ref={provided.innerRef} {...provided.droppableProps} className="space-y-1.5 min-h-[40px]">
+          <Droppable droppableId={category.key} type="GROUP">
+            {(provided, snapshot) => (
+              <div
+                ref={provided.innerRef}
+                {...provided.droppableProps}
+                className={`space-y-1.5 min-h-[40px] rounded-md transition-colors ${
+                  snapshot.isDraggingOver ? 'bg-accent/30' : ''
+                }`}
+              >
                 {category.topicGroups.map((tg, index) => (
                   <Draggable key={tg.id} draggableId={tg.id} index={index}>
-                    {(dragProvided) => (
+                    {(dragProvided, dragSnapshot) => (
                       <div
                         ref={dragProvided.innerRef}
                         {...dragProvided.draggableProps}
                         {...dragProvided.dragHandleProps}
+                        className={dragSnapshot.isDragging ? 'opacity-80 shadow-lg rounded-md' : ''}
                       >
                         <TopicGroupPanel
                           topicGroup={tg}
@@ -100,14 +107,35 @@ const CategoryColumn: React.FC<CategoryColumnProps> = ({
             )}
           </Droppable>
         ) : (
-          <div className="space-y-1">
-            {allTasks.map(task => (
-              <TaskRow key={task.id} task={task} />
-            ))}
-            {allTasks.length === 0 && (
-              <p className="text-xs text-muted-foreground text-center py-4">No tasks</p>
+          <Droppable droppableId={`tasks-${category.key}`} type="TASK">
+            {(provided, snapshot) => (
+              <div
+                ref={provided.innerRef}
+                {...provided.droppableProps}
+                className={`space-y-1 min-h-[40px] rounded-md transition-colors ${
+                  snapshot.isDraggingOver ? 'bg-accent/30' : ''
+                }`}
+              >
+                {allTasks.map((task, index) => (
+                  <Draggable key={task.id} draggableId={task.id} index={index}>
+                    {(dragProvided, dragSnapshot) => (
+                      <div
+                        ref={dragProvided.innerRef}
+                        {...dragProvided.draggableProps}
+                        {...dragProvided.dragHandleProps}
+                      >
+                        <TaskRow task={task} isDragging={dragSnapshot.isDragging} />
+                      </div>
+                    )}
+                  </Draggable>
+                ))}
+                {provided.placeholder}
+                {allTasks.length === 0 && (
+                  <p className="text-xs text-muted-foreground text-center py-4">No tasks</p>
+                )}
+              </div>
             )}
-          </div>
+          </Droppable>
         )}
 
         <Button
@@ -131,7 +159,7 @@ const CategoryColumn: React.FC<CategoryColumnProps> = ({
   );
 };
 
-const TaskRow: React.FC<{ task: Task }> = ({ task }) => {
+const TaskRow: React.FC<{ task: Task; isDragging?: boolean }> = ({ task, isDragging }) => {
   const priorityColors: Record<string, string> = {
     URGENT: 'bg-destructive/10 text-destructive',
     HIGH: 'bg-[hsl(var(--priority-high))]/10 text-[hsl(var(--priority-high))]',
@@ -140,7 +168,9 @@ const TaskRow: React.FC<{ task: Task }> = ({ task }) => {
   };
 
   return (
-    <div className="flex items-center gap-2 p-2 rounded-md hover:bg-muted/50 transition-colors text-sm">
+    <div className={`flex items-center gap-2 p-2 rounded-md hover:bg-muted/50 transition-colors text-sm cursor-grab ${
+      isDragging ? 'shadow-lg bg-card border border-border' : ''
+    }`}>
       <span className="flex-1 truncate text-foreground">{task.title}</span>
       <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${priorityColors[task.priority] || ''}`}>
         {task.priority}
