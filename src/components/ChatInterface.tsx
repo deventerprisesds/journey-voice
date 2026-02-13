@@ -3,8 +3,9 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sh
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Send, Bot, User, Loader2, Plus, X, Search, Cloud, Newspaper } from 'lucide-react';
+import { Send, Bot, User, Loader2, Plus, X, Search, Cloud, Newspaper, CalendarCheck } from 'lucide-react';
 import { useChatAssistant, ChatMessage } from '@/hooks/useChatAssistant';
+import ChatInteractiveMessage from '@/components/ChatInteractiveMessage';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
 
@@ -15,19 +16,20 @@ interface ChatInterfaceProps {
 }
 
 const ChatInterface: React.FC<ChatInterfaceProps> = ({ isOpen, onClose, onTaskUpdate }) => {
-  const { messages, isLoading, sendMessage, createNewThread } = useChatAssistant();
+  const {
+    messages, isLoading, sendMessage, createNewThread,
+    startWindowCheckIn, selectTopic, scheduleSelectedTasks
+  } = useChatAssistant();
   const [inputValue, setInputValue] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Auto-scroll to bottom when messages change or chat opens
   useEffect(() => {
     if (messagesEndRef.current) {
       messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [messages, isOpen]);
 
-  // Focus input when opened
   useEffect(() => {
     if (isOpen && inputRef.current) {
       setTimeout(() => inputRef.current?.focus(), 100);
@@ -36,12 +38,9 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ isOpen, onClose, onTaskUp
 
   const handleSend = async () => {
     if (!inputValue.trim() || isLoading) return;
-    
     const message = inputValue;
     setInputValue('');
     await sendMessage(message);
-    
-    // Trigger task update callback if message might have created/modified tasks
     if (onTaskUpdate && (
       message.toLowerCase().includes('task') ||
       message.toLowerCase().includes('create') ||
@@ -60,6 +59,19 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ isOpen, onClose, onTaskUp
 
   const handleNewConversation = async () => {
     await createNewThread();
+  };
+
+  const handleCheckIn = async () => {
+    await startWindowCheckIn();
+  };
+
+  const handleTopicSelect = async (topicName: string) => {
+    await selectTopic(topicName);
+  };
+
+  const handleScheduleTasks = async (taskIds: string[]) => {
+    await scheduleSelectedTasks(taskIds);
+    onTaskUpdate?.();
   };
 
   return (
@@ -110,8 +122,17 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ isOpen, onClose, onTaskUp
                 <p className="text-sm text-muted-foreground mb-4">
                   Ask me to send emails, Slack messages, create calendar events, or help with tasks.
                 </p>
-                {/* Quick action buttons for testing */}
                 <div className="flex flex-wrap gap-2 justify-center">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleCheckIn}
+                    disabled={isLoading}
+                    className="text-xs"
+                  >
+                    <CalendarCheck className="h-3 w-3 mr-1" />
+                    Check In
+                  </Button>
                   <Button
                     variant="outline"
                     size="sm"
@@ -152,10 +173,15 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ isOpen, onClose, onTaskUp
               </div>
             ) : (
               messages.map((message) => (
-                <MessageBubble key={message.id} message={message} />
+                <MessageBubble
+                  key={message.id}
+                  message={message}
+                  onTopicSelect={handleTopicSelect}
+                  onScheduleTasks={handleScheduleTasks}
+                  isLoading={isLoading}
+                />
               ))
             )}
-            {/* Scroll anchor */}
             <div ref={messagesEndRef} />
           </div>
         </ScrollArea>
@@ -163,13 +189,22 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ isOpen, onClose, onTaskUp
         {/* Input */}
         <div className="border-t bg-card p-4">
           <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={handleCheckIn}
+              disabled={isLoading}
+              title="Window Check-In"
+              className="shrink-0"
+            >
+              <CalendarCheck className="h-4 w-4" />
+            </Button>
             <Input
               ref={inputRef}
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="Type a message..."
-              
               className="flex-1"
             />
             <Button
@@ -193,14 +228,16 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ isOpen, onClose, onTaskUp
 
 interface MessageBubbleProps {
   message: ChatMessage;
+  onTopicSelect?: (topicName: string) => void;
+  onScheduleTasks?: (taskIds: string[]) => void;
+  isLoading?: boolean;
 }
 
-const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
+const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onTopicSelect, onScheduleTasks, isLoading }) => {
   const isUser = message.role === 'user';
 
   return (
     <div className={cn("flex gap-3", isUser && "flex-row-reverse")}>
-      {/* Avatar */}
       <div className={cn(
         "h-8 w-8 rounded-full flex items-center justify-center shrink-0",
         isUser ? "bg-primary" : "bg-muted"
@@ -212,7 +249,6 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
         )}
       </div>
 
-      {/* Content */}
       <div className={cn(
         "flex flex-col max-w-[80%]",
         isUser && "items-end"
@@ -232,6 +268,17 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
             <p className="text-sm whitespace-pre-wrap">{message.content}</p>
           )}
         </div>
+
+        {/* Interactive content (only on assistant messages) */}
+        {!isUser && message.interactive && (
+          <ChatInteractiveMessage
+            interactive={message.interactive}
+            onTopicSelect={onTopicSelect}
+            onScheduleTasks={onScheduleTasks}
+            disabled={isLoading}
+          />
+        )}
+
         <span className="text-xs text-muted-foreground mt-1 px-1">
           {format(message.timestamp, 'h:mm a')}
         </span>
