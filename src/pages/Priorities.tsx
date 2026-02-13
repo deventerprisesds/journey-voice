@@ -2,7 +2,8 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { DragDropContext, DropResult } from '@hello-pangea/dnd';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { Button } from '@/components/ui/button';
-import { Layers, List, Sparkles, Loader2 } from 'lucide-react';
+import { Layers, List, Sparkles, Loader2, X, ArrowRight } from 'lucide-react';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { supabase, SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { DEFAULT_SCHEDULING_CONFIG, mergeSchedulingConfig } from '@/config/schedulingRules';
@@ -63,8 +64,46 @@ const Priorities: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [classifying, setClassifying] = useState(false);
   const [unmappedCount, setUnmappedCount] = useState(0);
+  const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set());
   const autoClassifyRan = useRef(false);
   const loadDataRef = useRef<() => Promise<void>>(() => Promise.resolve());
+
+  const toggleTaskSelection = useCallback((taskId: string) => {
+    setSelectedTaskIds(prev => {
+      const next = new Set(prev);
+      if (next.has(taskId)) next.delete(taskId);
+      else next.add(taskId);
+      return next;
+    });
+  }, []);
+
+  const clearSelection = useCallback(() => setSelectedTaskIds(new Set()), []);
+
+  const batchMoveToCategory = useCallback(async (targetCategory: string) => {
+    if (!user || selectedTaskIds.size === 0) return;
+    const ids = Array.from(selectedTaskIds);
+    
+    // Optimistic update
+    setCategories(prev => prev.map(cat => ({
+      ...cat,
+      topicGroups: cat.topicGroups.map(tg => ({
+        ...tg,
+        tasks: tg.tasks.filter(t => !selectedTaskIds.has(t.id) || cat.key === targetCategory),
+      })),
+      uncategorizedTasks: cat.uncategorizedTasks.filter(t => !selectedTaskIds.has(t.id) || cat.key === targetCategory),
+    })));
+
+    // Persist
+    const { error } = await supabase.from('tasks').update({ category: targetCategory } as any).in('id', ids);
+    if (error) {
+      toast.error('Failed to move tasks');
+      loadDataRef.current();
+    } else {
+      toast.success(`Moved ${ids.length} tasks to ${CATEGORY_LABELS[targetCategory] || targetCategory}`);
+      clearSelection();
+      loadDataRef.current();
+    }
+  }, [user, selectedTaskIds, clearSelection]);
 
   // Classify a single task via edge function
   const classifySingleTask = useCallback(async (task: Task) => {
@@ -355,6 +394,12 @@ const Priorities: React.FC = () => {
     } else {
       // Move group to different category
       console.log('[DragEnd:GROUP] Cross-column move from', srcCatKey, 'to', dstCatKey);
+
+      // Capture group data BEFORE optimistic update (categories is stale after setCategories)
+      const srcCat = categories.find(c => c.key === srcCatKey);
+      const groupBeforeMove = srcCat?.topicGroups.find(g => g.id === draggableId);
+      const taskIdsToMove = groupBeforeMove?.tasks.map(t => t.id) || [];
+
       let movedGroup: TopicGroupData | null = null;
 
       setCategories(prev => {
@@ -363,17 +408,13 @@ const Priorities: React.FC = () => {
             const groups = [...cat.topicGroups];
             const [removed] = groups.splice(source.index, 1);
             movedGroup = removed;
-            console.log('[DragEnd:GROUP] Removed group from source:', removed?.id, removed?.topic_name);
             localStorage.setItem(`priorities-order-${user.id}-${srcCatKey}`, JSON.stringify(groups.map(g => g.id)));
             return { ...cat, topicGroups: groups };
           }
           return cat;
         });
 
-        if (!movedGroup) {
-          console.error('[DragEnd:GROUP] movedGroup is null after splice');
-          return updated;
-        }
+        if (!movedGroup) return updated;
 
         return updated.map(cat => {
           if (cat.key === dstCatKey) {
@@ -388,29 +429,18 @@ const Priorities: React.FC = () => {
 
       // Persist category_affinity + update task categories
       const groupId = draggableId;
-      console.log('[DragEnd:GROUP] Updating topic_index category_affinity to', dstCatKey, 'for group', groupId);
       const res1 = await supabase.from('task_topic_index').update({ category_affinity: dstCatKey } as any).eq('id', groupId);
-      console.log('[DragEnd:GROUP] topic_index update:', { error: res1.error, status: res1.status, statusText: res1.statusText });
 
-      // Also update all tasks in this group to the new category
-      const srcCat = categories.find(c => c.key === srcCatKey);
-      const group = srcCat?.topicGroups.find(g => g.id === groupId);
-      let res2: any = { error: null, status: null };
-      if (group && group.tasks.length > 0) {
-        const taskIds = group.tasks.map(t => t.id);
-        console.log('[DragEnd:GROUP] Updating', taskIds.length, 'tasks to category', dstCatKey);
-        res2 = await supabase.from('tasks').update({ category: dstCatKey } as any).in('id', taskIds);
-        console.log('[DragEnd:GROUP] tasks update:', { error: res2.error, status: res2.status, statusText: res2.statusText });
-      } else {
-        console.log('[DragEnd:GROUP] No tasks to update (group not found or empty)');
+      let res2: any = { error: null };
+      if (taskIdsToMove.length > 0) {
+        res2 = await supabase.from('tasks').update({ category: dstCatKey } as any).in('id', taskIdsToMove);
       }
 
       if (res1.error || res2.error) {
-        console.error('[DragEnd:GROUP] DB error, reloading:', { res1Error: res1.error, res2Error: res2.error });
         toast.error('Failed to move group');
         loadData();
       } else {
-        console.log('[DragEnd:GROUP] Success');
+        toast.success(`Moved group to ${CATEGORY_LABELS[dstCatKey] || dstCatKey}`);
       }
     }
   }, [user, categories, loadData]);
@@ -465,6 +495,31 @@ const Priorities: React.FC = () => {
         </div>
       </div>
 
+      {/* Batch action bar */}
+      {selectedTaskIds.size > 0 && (
+        <div className="sticky top-0 z-20 flex items-center gap-3 p-3 rounded-lg bg-primary text-primary-foreground shadow-lg">
+          <span className="text-sm font-medium">{selectedTaskIds.size} selected</span>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm" variant="secondary" className="gap-1.5">
+                <ArrowRight className="h-3.5 w-3.5" />
+                Move to…
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent>
+              {categoryRefs.map(cat => (
+                <DropdownMenuItem key={cat.key} onClick={() => batchMoveToCategory(cat.key)}>
+                  {cat.label}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Button size="sm" variant="ghost" className="ml-auto text-primary-foreground/80 hover:text-primary-foreground" onClick={clearSelection}>
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+      )}
+
       <DragDropContext onDragEnd={handleDragEnd}>
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {categories.map(cat => (
@@ -475,6 +530,8 @@ const Priorities: React.FC = () => {
               onRefresh={loadData}
               allCategories={categoryRefs}
               allTopicGroupRefs={allTopicGroupRefs}
+              selectedTaskIds={selectedTaskIds}
+              onToggleTaskSelection={toggleTaskSelection}
             />
           ))}
         </div>

@@ -32,6 +32,8 @@ interface TopicGroupPanelProps {
   onRefresh: () => void;
   allCategories: CategoryRef[];
   allTopicGroupRefs: TopicGroupRef[];
+  selectedTaskIds: Set<string>;
+  onToggleTaskSelection: (taskId: string) => void;
 }
 
 const PRIORITY_COLORS: Record<string, string> = {
@@ -42,7 +44,7 @@ const PRIORITY_COLORS: Record<string, string> = {
 };
 
 const TopicGroupPanel: React.FC<TopicGroupPanelProps> = ({
-  topicGroup, isDeletable, onRefresh, allCategories, allTopicGroupRefs,
+  topicGroup, isDeletable, onRefresh, allCategories, allTopicGroupRefs, selectedTaskIds, onToggleTaskSelection,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -142,8 +144,15 @@ const TopicGroupPanel: React.FC<TopicGroupPanelProps> = ({
           {topicGroup.tasks.map(task => (
             <div
               key={task.id}
-              className="flex items-center gap-2 p-1.5 rounded text-sm hover:bg-muted/30 transition-colors group/task"
+              className={`flex items-center gap-2 p-1.5 rounded text-sm hover:bg-muted/30 transition-colors group/task ${selectedTaskIds.has(task.id) ? 'bg-primary/10 ring-1 ring-primary/30' : ''}`}
             >
+              <input
+                type="checkbox"
+                checked={selectedTaskIds.has(task.id)}
+                onChange={() => onToggleTaskSelection(task.id)}
+                onClick={e => e.stopPropagation()}
+                className="h-3.5 w-3.5 rounded border-border accent-primary flex-shrink-0"
+              />
               <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${PRIORITY_COLORS[task.priority] ? 'bg-current ' + PRIORITY_COLORS[task.priority] : 'bg-muted-foreground'}`} />
               <span className="flex-1 truncate text-foreground/90">{task.title}</span>
               {task.due_date && (
