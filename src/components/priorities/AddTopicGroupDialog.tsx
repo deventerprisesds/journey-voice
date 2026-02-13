@@ -38,6 +38,7 @@ const AddTopicGroupDialog: React.FC<AddTopicGroupDialogProps> = ({
         user_id: user.id,
         topic_name: name.trim(),
         topic_summary: `Topic group for ${categoryKey}`,
+        window_affinity: [categoryKey],
       });
       if (error) throw error;
       toast.success(`Created "${name.trim()}" topic group`);
