@@ -1,65 +1,43 @@
 
 
-# Add Debug Logging to Drag-and-Drop Handler + Demo User Mapping Policies
+# Fix Topic Group Creation (Demo) and Category Changes
 
-## Problem
+## Two Issues
 
-Drag-and-drop of topic groups and tasks fails silently in your live authenticated environment. The RLS policies for authenticated users appear correct (SELECT, INSERT, UPDATE, DELETE all use `auth.uid()`), so the failure is happening somewhere in the `handleDragEnd` logic without any console output to diagnose it.
+### Issue 1: Topic group creation fails for demo user (error 23503)
+The `task_topic_index` table has a foreign key constraint `task_topic_index_user_id_fkey` referencing `auth.users(id)`. The demo user ID (`00000000-0000-0000-0000-000000000001`) does not exist in `auth.users`, so any INSERT into `task_topic_index` with that user_id is rejected by Postgres.
 
-## Solution
+**Fix**: Drop the foreign key constraint and replace it with one pointing to `public.profiles(user_id)` instead (where the demo user already has a row). This follows Supabase best practices -- public tables should not reference `auth.users` directly.
 
-### 1. Add comprehensive logging to `handleDragEnd` in `src/pages/Priorities.tsx`
+### Issue 2: "Failed to change category" for some columns
+The database `task_category` enum only contains: `LIFE`, `CAREER`, `VENTURES`, `EDUCATION`. The UI defines 6 categories including `PROF_EDUCATION` and `PERSONAL`, so updating a task to either of those values is rejected by Postgres.
 
-Insert `console.log` / `console.error` at every decision point:
+**Fix**: Add the two missing values to the enum.
 
-- Log the raw `DropResult` on entry (source, destination, type, draggableId)
-- Log which branch is taken (TASK vs GROUP, same-column vs cross-column)
-- Log the found task/group object before the optimistic update
-- Log the Supabase response after each `.update()` call, including `error`, `status`, `statusText`
-- Log when `loadData()` is triggered due to an error
+## Database Migration
 
-This will make the next failure fully diagnosable.
+```sql
+-- 1. Fix FK: point to profiles instead of auth.users
+ALTER TABLE public.task_topic_index
+  DROP CONSTRAINT task_topic_index_user_id_fkey;
 
-### 2. Add demo-user RLS policies for `task_topic_mappings` (Database Migration)
+ALTER TABLE public.task_topic_index
+  ADD CONSTRAINT task_topic_index_user_id_fkey
+  FOREIGN KEY (user_id) REFERENCES public.profiles(user_id) ON DELETE CASCADE;
 
-These are still missing from the previous migration and are needed for demo mode task dragging. Three policies on `task_topic_mappings` (SELECT, INSERT, DELETE) plus one DELETE policy on `task_topic_index` for the demo user.
+-- 2. Add missing category enum values
+ALTER TYPE public.task_category ADD VALUE IF NOT EXISTS 'PROF_EDUCATION';
+ALTER TYPE public.task_category ADD VALUE IF NOT EXISTS 'PERSONAL';
+```
+
+## Code Change
+
+**`src/components/priorities/TopicGroupPanel.tsx`** -- Add detailed error logging to `handleChangeCategory`, `handleMoveToGroup`, and `handleRemoveFromGroup` so future failures are immediately diagnosable (log error code, message, and details).
 
 ## Files Changed
 
 | File | Change |
 |------|--------|
-| `src/pages/Priorities.tsx` | Add `console.log` and `console.error` statements throughout `handleDragEnd` |
-| New migration | Add demo-user RLS policies for `task_topic_mappings` (SELECT, INSERT, DELETE) and `task_topic_index` (DELETE) |
+| New migration | Drop/recreate FK on `task_topic_index`, add enum values |
+| `src/components/priorities/TopicGroupPanel.tsx` | Add detailed error logging to all three action handlers |
 
-## Logging Example
-
-```typescript
-const handleDragEnd = useCallback(async (result: DropResult) => {
-  console.log('[DragEnd] Raw result:', JSON.stringify(result));
-  if (!result.destination || !user) {
-    console.log('[DragEnd] Abort: no destination or no user');
-    return;
-  }
-  const { source, destination, type, draggableId } = result;
-  console.log('[DragEnd] Type:', type, 'From:', source.droppableId, '->', destination.droppableId);
-
-  // ... in GROUP cross-column branch:
-  console.log('[DragEnd] Moving group', draggableId, 'from', srcCatKey, 'to', dstCatKey);
-  const res1 = await supabase.from('task_topic_index')
-    .update({ category_affinity: dstCatKey } as any).eq('id', groupId);
-  console.log('[DragEnd] topic_index update:', { error: res1.error, status: res1.status });
-
-  // ... after task update:
-  console.log('[DragEnd] tasks update:', { error: res2.error, status: res2.status });
-
-  if (res1.error || res2.error) {
-    console.error('[DragEnd] DB error, reloading', { res1Error: res1.error, res2Error: res2.error });
-    toast.error('Failed to move group');
-    loadData();
-  } else {
-    console.log('[DragEnd] Success, group moved');
-  }
-}, [user, categories, loadData]);
-```
-
-This ensures the next time a drag fails, we will have the exact Supabase response in the console to determine whether it is an RLS issue, a missing row, or something else.
