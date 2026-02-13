@@ -1,50 +1,65 @@
 
 
-# Fix Topic Group Creation in Demo Mode + Better Error Logging
+# Add Debug Logging to Drag-and-Drop Handler + Demo User Mapping Policies
 
-## Root Cause
+## Problem
 
-The "Failed to create topic group" error is caused by **RLS policy rejection**. The INSERT policy on `task_topic_index` requires `user_id = auth.uid()`, but in Demo Mode there is no real Supabase auth session -- `auth.uid()` returns `null`, so the policy blocks the insert every time.
-
-The same issue affects `user_presence` (visible in the console logs).
+Drag-and-drop of topic groups and tasks fails silently in your live authenticated environment. The RLS policies for authenticated users appear correct (SELECT, INSERT, UPDATE, DELETE all use `auth.uid()`), so the failure is happening somewhere in the `handleDragEnd` logic without any console output to diagnose it.
 
 ## Solution
 
-Two changes:
+### 1. Add comprehensive logging to `handleDragEnd` in `src/pages/Priorities.tsx`
 
-### 1. Add Demo-User RLS Policy (Database Migration)
+Insert `console.log` / `console.error` at every decision point:
 
-Add a permissive INSERT and UPDATE policy specifically for the demo user UUID (`00000000-0000-0000-0000-000000000001`). This is the same pattern used for other tables that work in demo mode.
+- Log the raw `DropResult` on entry (source, destination, type, draggableId)
+- Log which branch is taken (TASK vs GROUP, same-column vs cross-column)
+- Log the found task/group object before the optimistic update
+- Log the Supabase response after each `.update()` call, including `error`, `status`, `statusText`
+- Log when `loadData()` is triggered due to an error
 
-```sql
--- Allow demo user to insert into task_topic_index
-CREATE POLICY "Demo user can insert topics"
-  ON task_topic_index FOR INSERT
-  WITH CHECK (user_id = '00000000-0000-0000-0000-000000000001'::uuid);
+This will make the next failure fully diagnosable.
 
--- Allow demo user to update own topics
-CREATE POLICY "Demo user can update topics"
-  ON task_topic_index FOR UPDATE
-  USING (user_id = '00000000-0000-0000-0000-000000000001'::uuid);
+### 2. Add demo-user RLS policies for `task_topic_mappings` (Database Migration)
 
--- Allow demo user to read own topics
-CREATE POLICY "Demo user can read topics"
-  ON task_topic_index FOR SELECT
-  USING (user_id = '00000000-0000-0000-0000-000000000001'::uuid);
-```
-
-### 2. Improve Error Handling in AddTopicGroupDialog
-
-Update the catch block to show the **actual** error message from Supabase instead of a generic "Failed to create topic group":
-
-- Show the specific Postgres error code and message in the toast
-- Distinguish between RLS violations (42501), duplicate key errors (23505), and other failures
-- Log full error details to console for debugging
+These are still missing from the previous migration and are needed for demo mode task dragging. Three policies on `task_topic_mappings` (SELECT, INSERT, DELETE) plus one DELETE policy on `task_topic_index` for the demo user.
 
 ## Files Changed
 
 | File | Change |
 |------|--------|
-| New migration | Add demo-user RLS policies for `task_topic_index` |
-| `src/components/priorities/AddTopicGroupDialog.tsx` | Show specific error messages: RLS violation vs duplicate vs unknown |
+| `src/pages/Priorities.tsx` | Add `console.log` and `console.error` statements throughout `handleDragEnd` |
+| New migration | Add demo-user RLS policies for `task_topic_mappings` (SELECT, INSERT, DELETE) and `task_topic_index` (DELETE) |
 
+## Logging Example
+
+```typescript
+const handleDragEnd = useCallback(async (result: DropResult) => {
+  console.log('[DragEnd] Raw result:', JSON.stringify(result));
+  if (!result.destination || !user) {
+    console.log('[DragEnd] Abort: no destination or no user');
+    return;
+  }
+  const { source, destination, type, draggableId } = result;
+  console.log('[DragEnd] Type:', type, 'From:', source.droppableId, '->', destination.droppableId);
+
+  // ... in GROUP cross-column branch:
+  console.log('[DragEnd] Moving group', draggableId, 'from', srcCatKey, 'to', dstCatKey);
+  const res1 = await supabase.from('task_topic_index')
+    .update({ category_affinity: dstCatKey } as any).eq('id', groupId);
+  console.log('[DragEnd] topic_index update:', { error: res1.error, status: res1.status });
+
+  // ... after task update:
+  console.log('[DragEnd] tasks update:', { error: res2.error, status: res2.status });
+
+  if (res1.error || res2.error) {
+    console.error('[DragEnd] DB error, reloading', { res1Error: res1.error, res2Error: res2.error });
+    toast.error('Failed to move group');
+    loadData();
+  } else {
+    console.log('[DragEnd] Success, group moved');
+  }
+}, [user, categories, loadData]);
+```
+
+This ensures the next time a drag fails, we will have the exact Supabase response in the console to determine whether it is an RLS issue, a missing row, or something else.
