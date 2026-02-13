@@ -3408,7 +3408,15 @@ export type Database = {
           user_id?: string
           window_affinity?: string[] | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "task_topic_index_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["user_id"]
+          },
+        ]
       }
       task_topic_mappings: {
         Row: {
@@ -4126,7 +4134,13 @@ export type Database = {
         | "PUSH"
         | "OUTLOOK_EVENT"
         | "GOOGLE_EVENT"
-      task_category: "LIFE" | "CAREER" | "VENTURES" | "EDUCATION"
+      task_category:
+        | "LIFE"
+        | "CAREER"
+        | "VENTURES"
+        | "EDUCATION"
+        | "PROF_EDUCATION"
+        | "PERSONAL"
       task_priority: "LOW" | "MEDIUM" | "HIGH" | "URGENT"
       task_source: "CHAT" | "EMBA_SHEET" | "MIT_SHEET" | "MANUAL"
       task_status:
@@ -4288,7 +4302,14 @@ export const Constants = {
         "OUTLOOK_EVENT",
         "GOOGLE_EVENT",
       ],
-      task_category: ["LIFE", "CAREER", "VENTURES", "EDUCATION"],
+      task_category: [
+        "LIFE",
+        "CAREER",
+        "VENTURES",
+        "EDUCATION",
+        "PROF_EDUCATION",
+        "PERSONAL",
+      ],
       task_priority: ["LOW", "MEDIUM", "HIGH", "URGENT"],
       task_source: ["CHAT", "EMBA_SHEET", "MIT_SHEET", "MANUAL"],
       task_status: [
