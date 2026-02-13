@@ -1460,7 +1460,7 @@ serve(async (req) => {
 
         console.log('=== STATUS CALLBACK ===', JSON.stringify(statusData));
 
-        // Handle missed calls - send Slack fallback with agenda
+        // Handle missed calls - send fallback notification
         const missedStatuses = ['no-answer', 'busy', 'failed', 'canceled'];
         const voicemailIndicators = ['machine_start', 'machine_end_beep', 'machine_end_silence', 'machine_end_other', 'fax'];
         
@@ -1468,7 +1468,7 @@ serve(async (req) => {
         const isVoicemail = voicemailIndicators.includes(statusData.answeredBy);
         
         if (isMissed || isVoicemail) {
-          console.log(`[status-callback] 📱 Call ${isMissed ? 'missed' : 'hit voicemail'} - triggering Slack fallback`);
+          console.log(`[status-callback] 📱 Call ${isMissed ? 'missed' : 'hit voicemail'} - triggering fallback`);
           
           try {
             const supabase = createClient(supabaseUrl, supabaseServiceKey);
@@ -1480,7 +1480,6 @@ serve(async (req) => {
               .eq('session_id', statusData.callSid)
               .maybeSingle();
             
-            // Also check by user phone if no session found
             let userId = session?.user_id;
             let context = session?.context || '';
             let agenda = session?.agenda || [];
@@ -1491,7 +1490,25 @@ serve(async (req) => {
             }
             
             if (userId) {
-              // Format the agenda for Slack
+              // Look up user's fallbackMode from scheduled_calls config
+              let fallbackMode: string = 'app_message'; // default to chat
+              const { data: prefs } = await supabase
+                .from('user_scheduling_prefs')
+                .select('scheduled_calls')
+                .eq('user_id', userId)
+                .maybeSingle();
+
+              if (prefs?.scheduled_calls && Array.isArray(prefs.scheduled_calls)) {
+                // Find any call with a configured fallbackMode
+                for (const call of prefs.scheduled_calls as any[]) {
+                  if (call.fallbackMode) {
+                    fallbackMode = call.fallbackMode;
+                    break;
+                  }
+                }
+              }
+              console.log(`[status-callback] Using fallbackMode: ${fallbackMode}`);
+
               const agendaItems = Array.isArray(agenda) 
                 ? agenda.map((item: { title?: string; time?: string }) => 
                     `• ${item.title || 'Task'}${item.time ? ` (${item.time})` : ''}`
@@ -1501,35 +1518,60 @@ serve(async (req) => {
               const missedReason = isVoicemail 
                 ? `hit voicemail (${statusData.answeredBy})`
                 : `was ${statusData.callStatus}`;
-              
-              const slackMessage = `📞 *Missed Call Alert*\n\nYour scheduled call ${missedReason}.\n\n${context ? `*Context:* ${context}\n\n` : ''}${agendaItems ? `*Today's Agenda:*\n${agendaItems}` : 'No agenda items scheduled.'}`;
-              
-              // Send via unified notification pipeline
-              const { error: notifyError } = await supabase.functions.invoke('send-unified-notification', {
-                body: {
-                  user_id: userId,
-                  channels: ['SLACK'],
-                  title: 'Missed Call from Iris',
-                  body: slackMessage,
-                  metadata: {
-                    callSid: statusData.callSid,
-                    callStatus: statusData.callStatus,
-                    answeredBy: statusData.answeredBy,
-                    source: 'missed-call-fallback'
-                  }
+
+              if (fallbackMode === 'app_message') {
+                // Send via chat message
+                const chatBody = `📞 **Missed Call Alert**\n\nYour scheduled call ${missedReason}.\n\n${context ? `**Context:** ${context}\n\n` : ''}${agendaItems ? `**Today's Agenda:**\n${agendaItems}` : 'No agenda items scheduled.'}`;
+                
+                const response = await fetch(`${supabaseUrl}/functions/v1/send-chat-message`, {
+                  method: 'POST',
+                  headers: {
+                    'Authorization': `Bearer ${supabaseServiceKey}`,
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({
+                    userId,
+                    message: chatBody,
+                    sendPush: true,
+                  }),
+                });
+                const result = await response.json();
+                if (result.success) {
+                  console.log('[status-callback] ✅ Chat fallback sent successfully');
+                } else {
+                  console.error('[status-callback] ❌ Failed to send chat fallback:', result.error);
                 }
-              });
-              
-              if (notifyError) {
-                console.error('[status-callback] ❌ Failed to send Slack fallback:', notifyError);
               } else {
-                console.log('[status-callback] ✅ Slack fallback sent successfully');
+                // Send via unified notification (slack / email)
+                const channel = fallbackMode === 'email' ? 'email' : 'SLACK';
+                const slackMessage = `📞 *Missed Call Alert*\n\nYour scheduled call ${missedReason}.\n\n${context ? `*Context:* ${context}\n\n` : ''}${agendaItems ? `*Today's Agenda:*\n${agendaItems}` : 'No agenda items scheduled.'}`;
+                
+                const { error: notifyError } = await supabase.functions.invoke('send-unified-notification', {
+                  body: {
+                    user_id: userId,
+                    channels: [channel],
+                    title: 'Missed Call from Iris',
+                    body: slackMessage,
+                    metadata: {
+                      callSid: statusData.callSid,
+                      callStatus: statusData.callStatus,
+                      answeredBy: statusData.answeredBy,
+                      source: 'missed-call-fallback'
+                    }
+                  }
+                });
+                
+                if (notifyError) {
+                  console.error(`[status-callback] ❌ Failed to send ${channel} fallback:`, notifyError);
+                } else {
+                  console.log(`[status-callback] ✅ ${channel} fallback sent successfully`);
+                }
               }
             } else {
               console.log('[status-callback] ⚠️ No user found for missed call fallback');
             }
           } catch (fallbackError) {
-            console.error('[status-callback] ❌ Error in Slack fallback:', fallbackError);
+            console.error('[status-callback] ❌ Error in fallback:', fallbackError);
           }
         }
 
@@ -1537,7 +1579,6 @@ serve(async (req) => {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
-
       default:
         return new Response(JSON.stringify({ error: `Unknown action: ${action}` }), {
           status: 400,

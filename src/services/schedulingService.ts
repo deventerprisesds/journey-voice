@@ -34,9 +34,9 @@ export interface ScheduledCall {
   callType: 'morning_standup' | 'midday_checkin' | 'eod_wrapup' | 'custom';
   context: string;
   commsMode?: CommsMode; // Delivery method (default: 'phone')
+  fallbackMode?: CommsMode; // Fallback when primary fails (default: 'app_message')
   assistantId?: string;  // Which assistant sends the message (for chat/phone modes)
 }
-
 // Communication mode for delivery method
 export type CommsMode = 'phone' | 'app_message' | 'slack' | 'email';
 

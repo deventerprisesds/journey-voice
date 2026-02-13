@@ -12,19 +12,12 @@ import {
   AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
   AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { ChevronRight, ChevronDown, GripVertical, Trash2, MoreHorizontal, ArrowRight, FolderMinus } from 'lucide-react';
+import { ChevronRight, ChevronDown, GripVertical, Trash2, MoreHorizontal, ArrowRight, FolderMinus, Plus } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import type { Task } from '@/types/task';
-import type { CategoryRef, TopicGroupRef } from '@/pages/Priorities';
-
-interface TopicGroupData {
-  id: string;
-  topic_name: string;
-  topic_summary: string | null;
-  task_count: number | null;
-  tasks: Task[];
-}
+import type { CategoryRef, TopicGroupRef, TopicGroupData } from '@/pages/Priorities';
+import AddTopicGroupDialog from './AddTopicGroupDialog';
 
 interface TopicGroupPanelProps {
   topicGroup: TopicGroupData;
@@ -34,6 +27,8 @@ interface TopicGroupPanelProps {
   allTopicGroupRefs: TopicGroupRef[];
   selectedTaskIds: Set<string>;
   onToggleTaskSelection: (taskId: string) => void;
+  depth?: number;
+  categoryKey?: string;
 }
 
 const PRIORITY_COLORS: Record<string, string> = {
@@ -45,9 +40,11 @@ const PRIORITY_COLORS: Record<string, string> = {
 
 const TopicGroupPanel: React.FC<TopicGroupPanelProps> = ({
   topicGroup, isDeletable, onRefresh, allCategories, allTopicGroupRefs, selectedTaskIds, onToggleTaskSelection,
+  depth = 0, categoryKey,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [addSubGroupOpen, setAddSubGroupOpen] = useState(false);
 
   const handleDeleteGroup = async () => {
     try {
@@ -75,9 +72,7 @@ const TopicGroupPanel: React.FC<TopicGroupPanelProps> = ({
 
   const handleMoveToGroup = async (task: Task, targetTopicId: string) => {
     try {
-      // Remove existing mapping
       await supabase.from('task_topic_mappings').delete().eq('task_id', task.id);
-      // Insert new mapping
       const { error } = await supabase.from('task_topic_mappings').insert({
         task_id: task.id,
         topic_id: targetTopicId,
@@ -104,14 +99,16 @@ const TopicGroupPanel: React.FC<TopicGroupPanelProps> = ({
   };
 
   const isUncategorized = topicGroup.id.startsWith('uncategorized-');
+  const children = topicGroup.children || [];
+  const totalTaskCount = topicGroup.tasks.length + children.reduce((sum, c) => sum + c.tasks.length, 0);
 
   return (
     <>
       <Collapsible open={isOpen} onOpenChange={setIsOpen}>
-        <div className="flex items-center group">
+        <div className="flex items-center group" style={{ paddingLeft: depth > 0 ? `${depth * 16}px` : undefined }}>
           <CollapsibleTrigger asChild>
             <button className="flex-1 flex items-center gap-1.5 p-2 rounded-md hover:bg-muted/50 transition-colors text-left">
-              {!isUncategorized && (
+              {!isUncategorized && depth === 0 && (
                 <GripVertical className="h-3.5 w-3.5 text-muted-foreground/40 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
               )}
               {isOpen ? (
@@ -119,16 +116,45 @@ const TopicGroupPanel: React.FC<TopicGroupPanelProps> = ({
               ) : (
                 <ChevronRight className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
               )}
-              <span className="flex-1 text-sm font-medium text-foreground truncate">
+              <span className={`flex-1 text-sm font-medium text-foreground truncate ${depth > 0 ? 'text-muted-foreground' : ''}`}>
                 {topicGroup.topic_name}
               </span>
               <Badge variant="secondary" className="text-[10px] px-1.5 py-0 font-normal">
-                {topicGroup.tasks.length}
+                {totalTaskCount}
               </Badge>
             </button>
           </CollapsibleTrigger>
 
-          {isDeletable && (
+          {!isUncategorized && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground"
+                >
+                  <MoreHorizontal className="h-3.5 w-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-44">
+                <DropdownMenuItem onClick={() => setAddSubGroupOpen(true)}>
+                  <Plus className="h-3.5 w-3.5 mr-2" />
+                  Add Sub-Group
+                </DropdownMenuItem>
+                {isDeletable && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={() => setDeleteDialogOpen(true)} className="text-destructive">
+                      <Trash2 className="h-3.5 w-3.5 mr-2" />
+                      Delete Group
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+
+          {isDeletable && isUncategorized && (
             <Button
               variant="ghost"
               size="icon"
@@ -140,7 +166,24 @@ const TopicGroupPanel: React.FC<TopicGroupPanelProps> = ({
           )}
         </div>
 
-        <CollapsibleContent className="pl-8 pr-2 pb-1 space-y-0.5">
+        <CollapsibleContent className={`pr-2 pb-1 space-y-0.5 ${depth > 0 ? '' : 'pl-8'}`} style={{ paddingLeft: depth > 0 ? `${(depth + 1) * 16 + 32}px` : undefined }}>
+          {/* Render child sub-groups first */}
+          {children.map(child => (
+            <TopicGroupPanel
+              key={child.id}
+              topicGroup={child}
+              isDeletable={true}
+              onRefresh={onRefresh}
+              allCategories={allCategories}
+              allTopicGroupRefs={allTopicGroupRefs}
+              selectedTaskIds={selectedTaskIds}
+              onToggleTaskSelection={onToggleTaskSelection}
+              depth={depth + 1}
+              categoryKey={categoryKey}
+            />
+          ))}
+
+          {/* Render tasks */}
           {topicGroup.tasks.map(task => (
             <div
               key={task.id}
@@ -222,7 +265,7 @@ const TopicGroupPanel: React.FC<TopicGroupPanelProps> = ({
               </DropdownMenu>
             </div>
           ))}
-          {topicGroup.tasks.length === 0 && (
+          {topicGroup.tasks.length === 0 && children.length === 0 && (
             <p className="text-xs text-muted-foreground py-1">No tasks</p>
           )}
         </CollapsibleContent>
@@ -244,6 +287,14 @@ const TopicGroupPanel: React.FC<TopicGroupPanelProps> = ({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <AddTopicGroupDialog
+        open={addSubGroupOpen}
+        onOpenChange={setAddSubGroupOpen}
+        categoryKey={categoryKey || ''}
+        onCreated={onRefresh}
+        parentTopicId={topicGroup.id}
+      />
     </>
   );
 };
