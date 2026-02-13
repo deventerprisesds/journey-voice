@@ -1,43 +1,51 @@
 
 
-# Fix Topic Group Creation (Demo) and Category Changes
+# Fix: Auto-Classify Uncategorized Tasks and Backfill Existing Ones
 
-## Two Issues
+## Problem
 
-### Issue 1: Topic group creation fails for demo user (error 23503)
-The `task_topic_index` table has a foreign key constraint `task_topic_index_user_id_fkey` referencing `auth.users(id)`. The demo user ID (`00000000-0000-0000-0000-000000000001`) does not exist in `auth.users`, so any INSERT into `task_topic_index` with that user_id is rejected by Postgres.
+81 of 98 active tasks for the real user (and 19/19 for demo) sit in "Uncategorized" because:
 
-**Fix**: Drop the foreign key constraint and replace it with one pointing to `public.profiles(user_id)` instead (where the demo user already has a row). This follows Supabase best practices -- public tables should not reference `auth.users` directly.
+1. **No backfill** -- The `classify-task-topic` trigger was added *after* most tasks already existed, so they were never sent through the AI classifier.
+2. **UPDATE skips mapped tasks** -- Correct, but tasks that failed classification (e.g., the demo user FK error we just fixed) are never retried.
+3. **No bulk mechanism** -- There is no "classify all unmapped tasks" action in the UI.
 
-### Issue 2: "Failed to change category" for some columns
-The database `task_category` enum only contains: `LIFE`, `CAREER`, `VENTURES`, `EDUCATION`. The UI defines 6 categories including `PROF_EDUCATION` and `PERSONAL`, so updating a task to either of those values is rejected by Postgres.
+## Solution
 
-**Fix**: Add the two missing values to the enum.
+### 1. Add a "Classify Uncategorized" button to the Priorities page
 
-## Database Migration
+A small button in the page header that triggers bulk classification of all unmapped tasks. It will call the existing `classify-task-topic` edge function in a loop (with a small delay to avoid rate limits) for every unmapped task.
 
-```sql
--- 1. Fix FK: point to profiles instead of auth.users
-ALTER TABLE public.task_topic_index
-  DROP CONSTRAINT task_topic_index_user_id_fkey;
+This gives the user an on-demand way to process the backlog without modifying the trigger behavior.
 
-ALTER TABLE public.task_topic_index
-  ADD CONSTRAINT task_topic_index_user_id_fkey
-  FOREIGN KEY (user_id) REFERENCES public.profiles(user_id) ON DELETE CASCADE;
+### 2. Auto-trigger classification on page load for unmapped tasks
 
--- 2. Add missing category enum values
-ALTER TYPE public.task_category ADD VALUE IF NOT EXISTS 'PROF_EDUCATION';
-ALTER TYPE public.task_category ADD VALUE IF NOT EXISTS 'PERSONAL';
-```
+When the Priorities page loads and detects unmapped tasks, automatically kick off background classification for up to 10 unmapped tasks per load (to avoid overwhelming the API). This runs silently and refreshes the data when done.
 
-## Code Change
+### 3. Update the edge function to handle retries
 
-**`src/components/priorities/TopicGroupPanel.tsx`** -- Add detailed error logging to `handleChangeCategory`, `handleMoveToGroup`, and `handleRemoveFromGroup` so future failures are immediately diagnosable (log error code, message, and details).
+Remove the early-return for UPDATE operations when the task has no existing mapping. Currently the function checks for existing mappings on UPDATE and skips -- but this means tasks that *failed* classification (like the FK error) never get retried. The fix: only skip if a mapping actually exists; if not, proceed with classification even on UPDATE.
+
+## Technical Plan
+
+### File: `supabase/functions/classify-task-topic/index.ts`
+- Remove the UPDATE early-return when no mapping exists (lines 181-199). Instead, only skip if a valid mapping IS found. This is already the current behavior, but I'll add a log so it's clear the function proceeds for unmapped UPDATE operations.
+
+### File: `src/pages/Priorities.tsx`
+- Add a `classifyUnmapped` function that:
+  1. Collects all tasks not in `task_topic_mappings`
+  2. Calls `classify-task-topic` for each (batched, 3 at a time with 500ms delays)
+  3. Refreshes data when complete
+- Add a "Classify" button next to the view toggle that shows the count of unmapped tasks
+- Auto-trigger for small batches on page load when unmapped count > 0
+
+### File: New utility or inline in Priorities
+- Helper to call the classify edge function for a single task
 
 ## Files Changed
 
 | File | Change |
 |------|--------|
-| New migration | Drop/recreate FK on `task_topic_index`, add enum values |
-| `src/components/priorities/TopicGroupPanel.tsx` | Add detailed error logging to all three action handlers |
+| `src/pages/Priorities.tsx` | Add "Classify Uncategorized" button and auto-classify logic on load |
+| `supabase/functions/classify-task-topic/index.ts` | Clarify UPDATE handling -- proceed with classification for unmapped tasks on UPDATE |
 
