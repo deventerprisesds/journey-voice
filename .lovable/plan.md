@@ -1,113 +1,82 @@
 
 
-# Prioritization Dashboard — 3x2+ Grid Layout
+# Fix Priorities Dashboard: Reassign, Delete, and New Groups
 
-## Layout Specification
+## Problems Identified
 
-```text
-DESKTOP (xl+): 3 columns, categories fill left-to-right, top-to-bottom
-Minimum 2 rows means at least 4 categories visible (or empty slots in row 2)
+1. **Tasks in wrong category/group**: No UI to change a task's category or move it between topic groups
+2. **Can't delete a group**: No delete option on topic group panels
+3. **New groups never appear**: When you create a group via "Add Group", it has zero tasks. The code assigns groups to categories based on the majority category of their mapped tasks -- a group with 0 tasks matches nothing and is invisible
 
-+--[Left Nav]--+------------[Main Content]-------------+--[Assistant]--+
-|              |                                        |               |
-|              |  Priorities                [Group|Task] |               |
-|              |                                        |               |
-|              |  +-- CAREER --+ +- PROF ED -+ +- VENTURES -+          |
-|              |  | > Network  | | > DataSci | | > StartupX |          |
-|              |  |   - Task 1 | |   - Task 5| |   - Task 9 |          |
-|              |  | > CareerDev| | > CertPrep| |            |          |
-|              |  |   - Task 3 | |   - Task 7| | + Add Group|          |
-|              |  | + Add Group| | + Add Grp | |            |          |
-|              |  +------------+ +----------+ +------------+          |
-|              |                                        |               |
-|              |  +-- LIFE ----+ +- EDUCATION+ +- PERSONAL -+          |
-|              |  | > Home     | | > Courses | | > Health   |          |
-|              |  |   - Task 10| |   - Task 12|   - Task 14|          |
-|              |  | + Add Group| | + Add Grp | | + Add Group|          |
-|              |  +------------+ +----------+ +------------+          |
-|              |                                        |               |
-+--------------+----------------------------------------+---------------+
+## Solution
 
-TABLET (md): 2 columns, categories wrap into more rows
+### Fix 1: Make new groups appear immediately
 
-+-- CAREER -------+ +-- PROF ED ------+
-| ...              | | ...             |
-+-----------------+ +-----------------+
-+-- VENTURES -----+ +-- LIFE ---------+
-| ...              | | ...             |
-+-----------------+ +-----------------+
-+-- EDUCATION ----+ +-- PERSONAL -----+
-| ...              | | ...             |
-+-----------------+ +-----------------+
+When creating a topic group under a specific category, store the `window_affinity` field (which already exists on `task_topic_index`) with the category key. Then update the category-assignment logic in `Priorities.tsx` to check `window_affinity` as a fallback when a group has no tasks.
 
-MOBILE: Single column, full-width stacked cards
+**File: `AddTopicGroupDialog.tsx`**
+- Set `window_affinity` to `[categoryKey]` on insert so the group has an explicit category association
 
-+-- CAREER -------------------+
-| > Professional Networking    |
-|   - Task 1          HIGH     |
-|   - Task 2          MED      |
-| > Career Development         |
-|   - Task 3                   |
-| + Add Group                  |
-+-----------------------------+
-+-- PROF ED ------------------+
-| ...                          |
-+-----------------------------+
-```
+**File: `Priorities.tsx`**
+- Update the topic-to-category mapping logic: if a topic has mapped tasks, use majority category; if not, fall back to `window_affinity[0]`
 
-## Key Design Decisions
+### Fix 2: Add "Delete Group" to topic group panels
 
-- Grid: `grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4`
-- With 6 default categories (CAREER, PROF_EDUCATION, EDUCATION, VENTURES, LIFE, PERSONAL), you get a natural 3x2 grid on desktop
-- If a user has fewer than 4 categories, the second row still renders (may have 1-3 items)
-- If more than 6, additional rows wrap naturally
-- Each category is a Card with a colored top border accent
-- Category order follows the key order from `categoryMappings` in the user's scheduling config
-- On mobile, each category card is full-width with compact padding
+**File: `TopicGroupPanel.tsx`**
+- Add a trash icon button (visible on hover or via a small dropdown menu) on each topic group header
+- On click, confirm with an AlertDialog, then delete the topic from `task_topic_index` (cascade will remove `task_topic_mappings` entries)
+- Call `onRefresh` to reload the dashboard
+- The "Uncategorized" pseudo-group cannot be deleted
 
-## Technical Plan
+**Props change**: Add `onRefresh: () => void` and `isDeletable: boolean` props
 
-### New Files
+### Fix 3: Allow reassigning tasks (category + topic group)
 
-| File | Purpose |
-|------|---------|
-| `src/pages/Priorities.tsx` | Main page: loads user config for categories, fetches topic groups + tasks, renders the responsive grid, handles drag-and-drop reordering of topic groups within categories |
-| `src/components/priorities/CategoryColumn.tsx` | Card for one category: header with name/color/count, Droppable zone, list of TopicGroupPanels, Add Group button |
-| `src/components/priorities/TopicGroupPanel.tsx` | Collapsible + Draggable panel: topic name, task count, expandable task list with priority badges and due dates, click-to-edit via TaskDetailModal |
-| `src/components/priorities/AddTopicGroupDialog.tsx` | Dialog to create a new topic group under a specific category, inserts into `task_topic_index` |
+**File: `TopicGroupPanel.tsx`**
+- Add a click handler on each task row that opens a small popover or dropdown with:
+  - **Change Category**: Select from user's categories (updates `tasks.category`)
+  - **Move to Group**: Select from topic groups in the target category (updates `task_topic_mappings`)
+  - **Remove from Group**: Removes the `task_topic_mappings` entry (task becomes uncategorized)
 
-### Modified Files
+To keep it simple, use a `DropdownMenu` on each task row (triggered by a "..." button on hover).
+
+## Files Changed
 
 | File | Change |
 |------|--------|
-| `src/App.tsx` | Add route: `/priorities` pointing to new Priorities page |
-| `src/components/MainLayout.tsx` | Add "Priorities" nav item with `Layers` icon between Agenda and Settings in the `navItems` array |
+| `src/components/priorities/AddTopicGroupDialog.tsx` | Set `window_affinity: [categoryKey]` on insert |
+| `src/pages/Priorities.tsx` | Use `window_affinity` as fallback for category assignment; pass available categories and topic groups to columns for reassignment |
+| `src/components/priorities/TopicGroupPanel.tsx` | Add delete group button; add task reassignment dropdown (change category, move to group, remove from group) |
+| `src/components/priorities/CategoryColumn.tsx` | Pass `onRefresh`, delete/reassign props through to TopicGroupPanel |
 
-### Data Flow
+## Technical Details
 
-1. Load user's `categoryMappings` from `user_scheduling_prefs` (keys become the section headers)
-2. Fall back to `DEFAULT_SCHEDULING_CONFIG.categoryMappings` if no user config
-3. Fetch `task_topic_index` for the user's topic groups
-4. Fetch `task_topic_mappings` to link tasks to topic groups
-5. Fetch active tasks (exclude DONE/BLOCKED)
-6. Assign each topic group to a category based on majority category of its mapped tasks
-7. Unmapped tasks go into an "Uncategorized" panel per category
-8. Topic groups with no category-matched tasks go into an "Other" column at the end
+### Category assignment logic (updated)
 
-### View Toggle (Group vs Task)
+```text
+For each topic group:
+  1. If it has mapped tasks -> use majority category of those tasks
+  2. Else if window_affinity is set -> use window_affinity[0]
+  3. Else -> skip (orphan group, won't appear)
+```
 
-- **Group View** (default): 3-col grid of category cards, each containing collapsible topic group panels with nested tasks
-- **Task View**: Same 3-col grid but each category card shows a flat sorted task list (no topic group nesting), sorted by priority then due date
+### Task reassignment
 
-### Responsive Behavior Summary
+When changing a task's category:
+- `UPDATE tasks SET category = ? WHERE id = ?`
+- Call `onRefresh()` to re-render
 
-| Breakpoint | Columns | Notes |
-|------------|---------|-------|
-| < 768px (mobile) | 1 | Full-width stacked cards, compact padding, touch-friendly tap targets |
-| 768-1279px (tablet) | 2 | Cards wrap into rows of 2 |
-| 1280px+ (desktop) | 3 | 3-column grid, minimum 2 rows with 6 default categories |
+When moving a task to a different group:
+- Delete existing `task_topic_mappings` row for this task
+- Insert new `task_topic_mappings` row with the target topic_id
+- Call `onRefresh()`
 
-### Reorder Persistence
+When removing a task from a group:
+- Delete the `task_topic_mappings` row
+- Task becomes "Uncategorized" in its category column
 
-Topic group order within a category stored in `localStorage` keyed by `priorities-order-{userId}-{category}`. Future enhancement: add `position` column to `task_topic_index`.
+### Delete group
+
+- `DELETE FROM task_topic_index WHERE id = ?` (cascading deletes handle mappings)
+- Affected tasks become uncategorized in their category
 
