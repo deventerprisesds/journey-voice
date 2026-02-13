@@ -15,12 +15,14 @@ interface CategoryColumnProps {
   onRefresh: () => void;
   allCategories: CategoryRef[];
   allTopicGroupRefs: TopicGroupRef[];
+  selectedTaskIds: Set<string>;
+  onToggleTaskSelection: (taskId: string) => void;
 }
 
 const PRIORITY_ORDER = { URGENT: 0, HIGH: 1, MEDIUM: 2, LOW: 3 } as const;
 
 const CategoryColumn: React.FC<CategoryColumnProps> = ({
-  category, viewMode, onRefresh, allCategories, allTopicGroupRefs,
+  category, viewMode, onRefresh, allCategories, allTopicGroupRefs, selectedTaskIds, onToggleTaskSelection,
 }) => {
   const [addDialogOpen, setAddDialogOpen] = useState(false);
 
@@ -81,6 +83,8 @@ const CategoryColumn: React.FC<CategoryColumnProps> = ({
                           onRefresh={onRefresh}
                           allCategories={allCategories}
                           allTopicGroupRefs={allTopicGroupRefs}
+                          selectedTaskIds={selectedTaskIds}
+                          onToggleTaskSelection={onToggleTaskSelection}
                         />
                       </div>
                     )}
@@ -101,6 +105,8 @@ const CategoryColumn: React.FC<CategoryColumnProps> = ({
                     onRefresh={onRefresh}
                     allCategories={allCategories}
                     allTopicGroupRefs={allTopicGroupRefs}
+                    selectedTaskIds={selectedTaskIds}
+                    onToggleTaskSelection={onToggleTaskSelection}
                   />
                 )}
               </div>
@@ -124,7 +130,7 @@ const CategoryColumn: React.FC<CategoryColumnProps> = ({
                         {...dragProvided.draggableProps}
                         {...dragProvided.dragHandleProps}
                       >
-                        <TaskRow task={task} isDragging={dragSnapshot.isDragging} />
+                        <TaskRow task={task} isDragging={dragSnapshot.isDragging} isSelected={selectedTaskIds.has(task.id)} onToggle={() => onToggleTaskSelection(task.id)} />
                       </div>
                     )}
                   </Draggable>
@@ -159,7 +165,7 @@ const CategoryColumn: React.FC<CategoryColumnProps> = ({
   );
 };
 
-const TaskRow: React.FC<{ task: Task; isDragging?: boolean }> = ({ task, isDragging }) => {
+const TaskRow: React.FC<{ task: Task; isDragging?: boolean; isSelected?: boolean; onToggle?: () => void }> = ({ task, isDragging, isSelected, onToggle }) => {
   const priorityColors: Record<string, string> = {
     URGENT: 'bg-destructive/10 text-destructive',
     HIGH: 'bg-[hsl(var(--priority-high))]/10 text-[hsl(var(--priority-high))]',
@@ -170,7 +176,14 @@ const TaskRow: React.FC<{ task: Task; isDragging?: boolean }> = ({ task, isDragg
   return (
     <div className={`flex items-center gap-2 p-2 rounded-md hover:bg-muted/50 transition-colors text-sm cursor-grab ${
       isDragging ? 'shadow-lg bg-card border border-border' : ''
-    }`}>
+    } ${isSelected ? 'bg-primary/10 ring-1 ring-primary/30' : ''}`}>
+      <input
+        type="checkbox"
+        checked={!!isSelected}
+        onChange={onToggle}
+        onClick={e => e.stopPropagation()}
+        className="h-3.5 w-3.5 rounded border-border accent-primary flex-shrink-0"
+      />
       <span className="flex-1 truncate text-foreground">{task.title}</span>
       <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${priorityColors[task.priority] || ''}`}>
         {task.priority}
