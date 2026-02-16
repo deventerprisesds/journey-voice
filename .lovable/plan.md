@@ -1,87 +1,90 @@
 
-# Fix: Voicemail Fallback to Chat Not Firing
 
-## Root Cause Analysis
+# Make Iris Self-Aware: `get_my_config` Introspection Tool
 
-Three bugs prevent the fallback from ever working:
+## What the plan already covers (confirmed correct)
 
-### Bug 1: Session ID Mismatch
-The status-callback (line 1480) queries `pre_connect_sessions` using `statusData.callSid` (Twilio's Call SID, e.g., `CA1234...`). But the session was stored with a custom `sessionId` (a UUID generated before the call). These are completely different values, so the lookup **always returns null**, meaning `userId`, `context`, and `agenda` are all lost.
+The five `section` values in the original plan are solid:
 
-**Fix**: When the Twilio call is created (line 948-949), we already log the CallSid and sessionId. We need to **store the CallSid alongside the session** so the status-callback can find it. The cleanest approach: add a `call_sid` column to `pre_connect_sessions` and update it after the Twilio API responds.
+| Section | Source | Data |
+|---------|--------|------|
+| `scheduled_calls` | `user_scheduling_prefs.scheduled_calls` | All recurring calls: name, time, enabled, context/script, commsMode |
+| `call_history` | `call_sessions` | Last 10 calls: started_at, ended_at, duration, direction, call_context |
+| `topic_groups` | `task_topic_index` | All topic groups: name, summary, task_count, category_affinity |
+| `notification_prefs` | `notification_prefs` | Quiet hours, channel settings, reminder toggles |
+| `full_config` | All above + `config`, `core_instructions` | Complete dump |
 
-### Bug 2: Session Deleted Before Status-Callback
-`getPreConnectSession` (session-manager.ts line 87) deletes the session after the call connects (one-time use). The status-callback fires **after** the call ends, so the session is already gone.
+## What's missing -- 3 additional sections
 
-**Fix**: Don't delete the session on retrieval. Instead, rely on the existing TTL-based cleanup (`cleanupExpiredSessions`). Extend the TTL from 2 minutes to 30 minutes to survive the full call lifecycle.
+### 1. `calendar_connections` (new section)
+When a user asks "Is my Outlook connected?" or "Which calendars do I have?", Iris has no way to check.
 
-### Bug 3: No Answering Machine Detection
-The Twilio call creation does not include the `MachineDetection` parameter, so `AnsweredBy` is always null in the status-callback. Voicemail is never detected -- only `no-answer`/`busy`/`failed` statuses trigger fallback.
+Source: `calendar_connections` (excluding token columns)
+Returns: provider, email, is_active, expires_at, connected_services
 
-**Fix**: Add `MachineDetection=DetectMessageEnd` to the Twilio API call parameters.
+### 2. `pending_notifications` (new section)
+When a user asks "Do I have any reminders coming up?" or "What notifications are queued?", Iris is blind.
 
-## Changes
+Source: `scheduled_notifications` where `delivered_at IS NULL AND failed_at IS NULL`
+Returns: title, body, notification_type, scheduled_for (next 10 pending)
 
-### Database Migration
+### 3. `my_profile` (new section)
+When a user asks "What's my phone number on file?" or "What name do you have for me?", Iris has to guess.
 
-```sql
-ALTER TABLE public.pre_connect_sessions
-ADD COLUMN IF NOT EXISTS call_sid TEXT;
+Source: `profiles`
+Returns: full_name, first_name, email, phone, job_title, company, preferred_greeting
+
+## Final tool definition (8 sections total)
+
+```
+section enum: [
+  "scheduled_calls",
+  "call_history", 
+  "topic_groups",
+  "notification_prefs",
+  "calendar_connections",
+  "pending_notifications",
+  "my_profile",
+  "full_config"
+]
 ```
 
-### File: `supabase/functions/twilio-voice-handler/index.ts`
+## Technical details
 
-1. **triggerOutboundCallWithSession** (after line 948): After getting `callData.sid` from Twilio, update the `pre_connect_sessions` row to store the `call_sid`:
-   ```typescript
-   // Store CallSid so status-callback can find this session
-   const supabase = createClient(supabaseUrl, supabaseServiceKey);
-   await supabase.from('pre_connect_sessions')
-     .update({ call_sid: callData.sid })
-     .eq('session_id', sessionId);
-   ```
-
-2. **triggerOutboundCallWithSession** (line 916-924): Add `MachineDetection` parameter:
-   ```typescript
-   requestBody.append('MachineDetection', 'DetectMessageEnd');
-   ```
-
-3. **status-callback** (line 1477-1481): Change the session lookup to query by `call_sid` instead of `session_id`:
-   ```typescript
-   const { data: session } = await supabase
-     .from('pre_connect_sessions')
-     .select('user_id, context, agenda, greeting_text, timezone')
-     .eq('call_sid', statusData.callSid)
-     .maybeSingle();
-   ```
-
-4. **Also handle `triggerOutboundCall`** (the non-session path): Apply the same `MachineDetection` parameter so all outbound calls support voicemail detection.
-
-### File: `supabase/functions/_shared/session-manager.ts`
-
-1. **getPreConnectSession** (line 87): Remove the delete-on-retrieval behavior. Change it to just return the data without deleting.
-2. **storePreConnectSession** (line 57): Increase TTL from 2 minutes to 30 minutes to survive the full call lifecycle:
-   ```typescript
-   expires_at: new Date(Date.now() + 1800000).toISOString() // 30 min TTL
-   ```
-
-### File: `supabase/functions/twilio-scheduled-call/index.ts`
-
-No changes needed -- this function creates sessions and triggers calls, which already use `storePreConnectSession`. The fix is downstream.
-
-## Expected Behavior After Fix
-
-1. Scheduled call fires at 6 AM
-2. Twilio dials the user's phone; `MachineDetection=DetectMessageEnd` is enabled
-3. Phone is dead / goes to voicemail: Twilio reports `CallStatus=no-answer` or `AnsweredBy=machine_start`
-4. Status-callback fires: queries `pre_connect_sessions` by `call_sid`, finds the session with full agenda/context
-5. Reads user's `fallbackMode` from `user_scheduling_prefs` (defaults to `app_message`)
-6. Calls `send-chat-message` with the agenda summary
-7. User turns phone on, opens app, sees the missed-call chat message with their schedule
-
-## Files Changed
+### Files changed
 
 | File | Change |
 |------|--------|
-| **Migration** | Add `call_sid TEXT` column to `pre_connect_sessions` |
-| `supabase/functions/twilio-voice-handler/index.ts` | Store `call_sid` after Twilio API call; fix session lookup to use `call_sid`; add `MachineDetection` param |
-| `supabase/functions/_shared/session-manager.ts` | Remove delete-on-retrieval; extend TTL to 30 min |
+| `supabase/functions/_shared/tool-definitions.ts` | Add `get_my_config` tool definition with 8-value enum |
+| `supabase/functions/execute-tool/index.ts` | Add `get_my_config` case in switch + `getMyConfig()` handler with sub-queries per section |
+
+### Handler implementation summary
+
+The `getMyConfig` function will:
+
+1. Accept `section` argument
+2. Switch on section value
+3. Query the appropriate table(s) filtered by `userId`
+4. For `full_config`: run all queries and merge results
+5. Strip sensitive fields (tokens, internal IDs) before returning
+6. Return with `extractedFacts.type = 'other'`
+
+### No other files need changes
+
+- `persona.ts` auto-generates the tool list from `tool-definitions.ts`
+- `hybrid-assistant-api` picks up tools via the `/definitions` endpoint
+- Voice and phone bridges inherit automatically
+- No frontend changes needed
+
+## What this unlocks
+
+After this change, Iris can answer all of these correctly:
+
+- "What is my 6am call about?" -- queries `scheduled_calls`
+- "When was my last call?" -- queries `call_history`
+- "Is my Outlook connected?" -- queries `calendar_connections`
+- "What reminders do I have coming up?" -- queries `pending_notifications`
+- "How are my tasks organized?" -- queries `topic_groups`
+- "What name do you have for me?" -- queries `my_profile`
+- "Tell me everything about my setup" -- queries `full_config`
+
