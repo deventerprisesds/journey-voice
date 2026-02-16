@@ -2477,6 +2477,7 @@ export type Database = {
         Row: {
           agenda: Json | null
           audio_base64: string | null
+          call_sid: string | null
           context: string | null
           created_at: string | null
           expires_at: string | null
@@ -2497,6 +2498,7 @@ export type Database = {
         Insert: {
           agenda?: Json | null
           audio_base64?: string | null
+          call_sid?: string | null
           context?: string | null
           created_at?: string | null
           expires_at?: string | null
@@ -2517,6 +2519,7 @@ export type Database = {
         Update: {
           agenda?: Json | null
           audio_base64?: string | null
+          call_sid?: string | null
           context?: string | null
           created_at?: string | null
           expires_at?: string | null

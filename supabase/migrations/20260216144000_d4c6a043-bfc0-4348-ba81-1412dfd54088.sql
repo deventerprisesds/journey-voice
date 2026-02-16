@@ -1,0 +1,1 @@
+ALTER TABLE public.pre_connect_sessions ADD COLUMN IF NOT EXISTS call_sid TEXT;

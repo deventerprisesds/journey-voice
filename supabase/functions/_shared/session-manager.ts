@@ -54,7 +54,7 @@ export async function storePreConnectSession(
       rag_context: session.ragContext,
       instructions: session.instructions,
       thread_id: session.threadId,
-      expires_at: new Date(Date.now() + 120000).toISOString() // 2 min TTL
+      expires_at: new Date(Date.now() + 1800000).toISOString() // 30 min TTL
     });
   
   if (error) {
@@ -83,9 +83,8 @@ export async function getPreConnectSession(
     return null;
   }
   
-  // Delete after retrieval (one-time use)
-  await supabase.from('pre_connect_sessions').delete().eq('session_id', sessionId);
-  
+  // No longer delete on retrieval - session persists for status-callback fallback
+  // Cleanup happens via TTL-based cleanupExpiredSessions()
   console.log(`[SESSION-MANAGER] ✅ Retrieved session ${sessionId} from database with ${data.audio_base64?.length || 0} bytes audio`);
   
   return {
