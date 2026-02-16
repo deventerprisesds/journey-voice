@@ -1,70 +1,87 @@
 
+# Fix: Voicemail Fallback to Chat Not Firing
 
-# Fix: Chat Check-In Context Grounding and Tool Guardrails
+## Root Cause Analysis
 
-## Problem
+Three bugs prevent the fallback from ever working:
 
-When a scheduled check-in fires, the AI correctly lists the day's tasks. But when the user asks a follow-up question ("What are the tasks you speak of?"), the AI loses context because:
+### Bug 1: Session ID Mismatch
+The status-callback (line 1480) queries `pre_connect_sessions` using `statusData.callSid` (Twilio's Call SID, e.g., `CA1234...`). But the session was stored with a custom `sessionId` (a UUID generated before the call). These are completely different values, so the lookup **always returns null**, meaning `userId`, `context`, and `agenda` are all lost.
 
-1. The follow-up message is sent to `hybrid-assistant-api` with no reference to the active check-in
-2. The OpenAI thread contains old conversation history about unrelated tasks (e.g., "AI presentation")
-3. The AI hallucinates context from old messages and executes destructive tool calls (unscheduling tasks) when the user only asked a question
+**Fix**: When the Twilio call is created (line 948-949), we already log the CallSid and sessionId. We need to **store the CallSid alongside the session** so the status-callback can find it. The cleanest approach: add a `call_sid` column to `pre_connect_sessions` and update it after the Twilio API responds.
 
-## Solution: Two Changes
+### Bug 2: Session Deleted Before Status-Callback
+`getPreConnectSession` (session-manager.ts line 87) deletes the session after the call connects (one-time use). The status-callback fires **after** the call ends, so the session is already gone.
 
-### 1. Inject Check-In Context Into Follow-Up Messages
+**Fix**: Don't delete the session on retrieval. Instead, rely on the existing TTL-based cleanup (`cleanupExpiredSessions`). Extend the TTL from 2 minutes to 30 minutes to survive the full call lifecycle.
 
-**File: `src/hooks/useChatAssistant.ts` (sendMessage function, ~line 604)**
+### Bug 3: No Answering Machine Detection
+The Twilio call creation does not include the `MachineDetection` parameter, so `AnsweredBy` is always null in the status-callback. Voicemail is never detected -- only `no-answer`/`busy`/`failed` statuses trigger fallback.
 
-When the user sends a free-form message while an agenda is active (`activeAgendaThreadId.current` is set), prepend a grounding instruction to the `userInput` sent to `hybrid-assistant-api`:
+**Fix**: Add `MachineDetection=DetectMessageEnd` to the Twilio API call parameters.
 
-```
-[ACTIVE CHECK-IN CONTEXT]
-The user is currently in a {agendaStep} step of their check-in.
-The assistant just presented {description of lastInteractiveContent}.
-The user's message below is likely a follow-up question about this check-in.
-Do NOT execute any task modification tools (unschedule_task, update_task, move_to_backlog, etc.)
-unless the user EXPLICITLY asks you to change something.
-Respond conversationally based on the current check-in context.
+## Changes
 
-User message: {actual message}
-```
+### Database Migration
 
-This ensures that when the user says "What are the tasks you speak of?", the AI knows they're referring to the tasks it just listed, not to old thread history.
-
-### 2. Store Check-In Task Context for Reference
-
-**File: `src/hooks/useChatAssistant.ts`**
-
-Add a new ref: `checkInTaskContext` that stores a summary of what was presented during the check-in (task names, times, etc.). This gets populated in `startWindowCheckIn` and cleared in `scheduleSelectedTasks` or when the agenda ends.
-
-When building the grounding instruction, include the actual task data:
-```
-The check-in listed these scheduled tasks:
-1. Test Cook Dinner - 12:15 AM, 60 min
-2. Test Evening Courses - 2:30 AM, ~23h30m
-
-The user is asking about THESE tasks. Answer from this context.
+```sql
+ALTER TABLE public.pre_connect_sessions
+ADD COLUMN IF NOT EXISTS call_sid TEXT;
 ```
 
-This prevents the AI from calling `get_todays_tasks` or other tools and returning different data.
+### File: `supabase/functions/twilio-voice-handler/index.ts`
+
+1. **triggerOutboundCallWithSession** (after line 948): After getting `callData.sid` from Twilio, update the `pre_connect_sessions` row to store the `call_sid`:
+   ```typescript
+   // Store CallSid so status-callback can find this session
+   const supabase = createClient(supabaseUrl, supabaseServiceKey);
+   await supabase.from('pre_connect_sessions')
+     .update({ call_sid: callData.sid })
+     .eq('session_id', sessionId);
+   ```
+
+2. **triggerOutboundCallWithSession** (line 916-924): Add `MachineDetection` parameter:
+   ```typescript
+   requestBody.append('MachineDetection', 'DetectMessageEnd');
+   ```
+
+3. **status-callback** (line 1477-1481): Change the session lookup to query by `call_sid` instead of `session_id`:
+   ```typescript
+   const { data: session } = await supabase
+     .from('pre_connect_sessions')
+     .select('user_id, context, agenda, greeting_text, timezone')
+     .eq('call_sid', statusData.callSid)
+     .maybeSingle();
+   ```
+
+4. **Also handle `triggerOutboundCall`** (the non-session path): Apply the same `MachineDetection` parameter so all outbound calls support voicemail detection.
+
+### File: `supabase/functions/_shared/session-manager.ts`
+
+1. **getPreConnectSession** (line 87): Remove the delete-on-retrieval behavior. Change it to just return the data without deleting.
+2. **storePreConnectSession** (line 57): Increase TTL from 2 minutes to 30 minutes to survive the full call lifecycle:
+   ```typescript
+   expires_at: new Date(Date.now() + 1800000).toISOString() // 30 min TTL
+   ```
+
+### File: `supabase/functions/twilio-scheduled-call/index.ts`
+
+No changes needed -- this function creates sessions and triggers calls, which already use `storePreConnectSession`. The fix is downstream.
+
+## Expected Behavior After Fix
+
+1. Scheduled call fires at 6 AM
+2. Twilio dials the user's phone; `MachineDetection=DetectMessageEnd` is enabled
+3. Phone is dead / goes to voicemail: Twilio reports `CallStatus=no-answer` or `AnsweredBy=machine_start`
+4. Status-callback fires: queries `pre_connect_sessions` by `call_sid`, finds the session with full agenda/context
+5. Reads user's `fallbackMode` from `user_scheduling_prefs` (defaults to `app_message`)
+6. Calls `send-chat-message` with the agenda summary
+7. User turns phone on, opens app, sees the missed-call chat message with their schedule
 
 ## Files Changed
 
 | File | Change |
 |------|--------|
-| `src/hooks/useChatAssistant.ts` | Add `checkInTaskContext` ref; modify `startWindowCheckIn` to store presented task data; modify `sendMessage` to prepend grounding context when agenda is active |
-
-## What Stays the Same
-
-- `hybrid-assistant-api` -- no changes needed (grounding is prepended to userInput)
-- `send-chat-message` -- no changes (initial check-in delivery is fine)
-- `agenda-manager` -- already wired, tangent pause/resume continues to work
-- Voice/phone flows -- unaffected
-
-## Expected Behavior After Fix
-
-1. Scheduled check-in fires: "Today you have these tasks: Test Cook Dinner at 12:15 AM..."
-2. User asks: "What are the tasks you speak of?"
-3. AI receives grounding: knows the user is asking about the check-in tasks, does NOT call tools
-4. AI responds: "Those are your two scheduled tasks for today -- Test Cook Dinner at 12:15 AM and Test Evening Courses at 2:30 AM. Would you like to adjust either of them?"
+| **Migration** | Add `call_sid TEXT` column to `pre_connect_sessions` |
+| `supabase/functions/twilio-voice-handler/index.ts` | Store `call_sid` after Twilio API call; fix session lookup to use `call_sid`; add `MachineDetection` param |
+| `supabase/functions/_shared/session-manager.ts` | Remove delete-on-retrieval; extend TTL to 30 min |
