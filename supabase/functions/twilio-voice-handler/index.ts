@@ -1480,8 +1480,35 @@ serve(async (req) => {
         const isMissed = missedStatuses.includes(statusData.callStatus);
         const isVoicemail = voicemailIndicators.includes(statusData.answeredBy);
         
-        if (isMissed || isVoicemail) {
-          console.log(`[status-callback] 📱 Call ${isMissed ? 'missed' : 'hit voicemail'} - triggering fallback`);
+        // Detect short-duration completed calls as likely voicemail/declined
+        // When a user declines, carrier voicemail answers → AI talks to voicemail briefly → completed
+        // MachineDetection often reports AnsweredBy=human in this case
+        const callDuration = parseInt(statusData.callDuration || '0', 10);
+        const isShortCompleted = statusData.callStatus === 'completed' && callDuration > 0 && callDuration < 45;
+        
+        // Only treat short-completed as voicemail if there's a pre-connect session (scheduled call)
+        let isLikelyVoicemail = false;
+        if (isShortCompleted && !isMissed && !isVoicemail) {
+          try {
+            const supabaseCheck = createClient(supabaseUrl, supabaseServiceKey);
+            const { data: sessionCheck } = await supabaseCheck
+              .from('pre_connect_sessions')
+              .select('session_id')
+              .eq('call_sid', statusData.callSid)
+              .maybeSingle();
+            isLikelyVoicemail = !!sessionCheck;
+            if (isLikelyVoicemail) {
+              console.log(`[status-callback] 📱 Short completed call (${callDuration}s) with pre-connect session - treating as voicemail`);
+            }
+          } catch (e) {
+            console.error('[status-callback] Error checking pre_connect_sessions:', e);
+          }
+        }
+        
+        console.log(`[status-callback] Detection: isMissed=${isMissed}, isVoicemail=${isVoicemail}, isLikelyVoicemail=${isLikelyVoicemail}, duration=${callDuration}s, answeredBy=${statusData.answeredBy}`);
+        
+        if (isMissed || isVoicemail || isLikelyVoicemail) {
+          console.log(`[status-callback] 📱 Call ${isMissed ? 'missed' : isVoicemail ? 'hit voicemail' : `short-completed (${callDuration}s)`} - triggering fallback`);
           
           try {
             const supabase = createClient(supabaseUrl, supabaseServiceKey);
