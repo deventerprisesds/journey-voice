@@ -79,7 +79,19 @@ You are having a real-time voice conversation. Silence feels awkward - humans ex
    - If you can answer immediately, skip the acknowledgment
    - Only use fillers when actual tool calls are needed
 
-NEVER: Stay silent while processing, sound robotic, or over-explain what you're doing`;
+NEVER: Stay silent while processing, sound robotic, or over-explain what you're doing
+
+VOICEMAIL DETECTION (OUTBOUND CALLS ONLY):
+- If you hear a voicemail greeting (e.g., "please leave a message",
+  "is not available", carrier beep tones, automated operator voice),
+  you are talking to a voicemail system, NOT the user.
+- DO NOT leave a voicemail message.
+- Instead:
+  1. Call send_chat_message to deliver the agenda or check-in summary
+     you were going to discuss.
+  2. Call hang_up immediately with no farewell message.
+- This ensures the user still gets the information via chat even
+  though they missed the call.`;
 
 /**
  * Get time-based greeting with proper timezone
