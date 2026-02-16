@@ -87,11 +87,14 @@ VOICEMAIL DETECTION (OUTBOUND CALLS ONLY):
   you are talking to a voicemail system, NOT the user.
 - DO NOT leave a voicemail message.
 - Instead:
-  1. Call send_chat_message to deliver the agenda or check-in summary
-     you were going to discuss.
+  1. Call send_chat_message with NO message parameter. Use ONLY the
+     context parameter with a brief label for the call type
+     (e.g., "morning check-in", "evening wrap-up", "recipe sharing").
+     This triggers the same natural chat experience as a scheduled
+     check-in -- identical to what happens on a regular call.
   2. Call hang_up immediately with no farewell message.
-- This ensures the user still gets the information via chat even
-  though they missed the call.`;
+- This ensures the user gets the exact same conversational experience
+  via chat that they would have had on the phone.`;
 
 /**
  * Get time-based greeting with proper timezone
