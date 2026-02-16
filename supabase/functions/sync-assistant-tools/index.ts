@@ -1,11 +1,13 @@
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { getToolDefinitions } from "../_shared/tool-definitions.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
+
+const SUPABASE_URL = 'https://wwxgajrtmslzklnyplah.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind3eGdhanJ0bXNsemtsbnlwbGFoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg0MDI3MzIsImV4cCI6MjA3Mzk3ODczMn0._M_B3093_wjfFe4vwXmKXVCcw-QG5UhRAT4-H-aGoHE';
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -23,8 +25,22 @@ serve(async (req) => {
       }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
-    const defs = getToolDefinitions();
-    const tools = defs.map(t => ({
+    // Fetch tool definitions from the execute-tool endpoint instead of importing the large shared module
+    const defsResponse = await fetch(`${SUPABASE_URL}/functions/v1/execute-tool/definitions`, {
+      headers: { 'apikey': SUPABASE_ANON_KEY },
+    });
+
+    if (!defsResponse.ok) {
+      const errText = await defsResponse.text();
+      return new Response(JSON.stringify({
+        success: false,
+        error: `Failed to fetch tool definitions: ${defsResponse.status}`,
+        details: errText,
+      }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
+    const { tools: defs } = await defsResponse.json();
+    const tools = (defs as any[]).map(t => ({
       type: "function" as const,
       function: {
         name: t.name,
