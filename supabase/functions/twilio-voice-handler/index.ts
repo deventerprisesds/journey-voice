@@ -1560,8 +1560,20 @@ serve(async (req) => {
                 : `was ${statusData.callStatus}`;
 
               if (fallbackMode === 'app_message') {
-                // Send via chat message
-                const chatBody = `📞 **Missed Call Alert**\n\nYour scheduled call ${missedReason}.\n\n${context ? `**Context:** ${context}\n\n` : ''}${agendaItems ? `**Today's Agenda:**\n${agendaItems}` : 'No agenda items scheduled.'}`;
+                // Use generateFromContext to produce a natural conversational check-in
+                // identical to what happens on a regular scheduled app_message call
+                // Extract a brief context label from the raw call context
+                let contextLabel = 'scheduled check-in';
+                if (context) {
+                  // Try to extract a human-readable label from the context
+                  const callMatch = context.match(/CALL:\s*(.+)/);
+                  if (callMatch) {
+                    contextLabel = callMatch[1].trim().toLowerCase();
+                  } else if (context.length < 100) {
+                    contextLabel = context;
+                  }
+                }
+                console.log(`[status-callback] Sending chat fallback via generateFromContext, label: "${contextLabel}"`);
                 
                 const response = await fetch(`${supabaseUrl}/functions/v1/send-chat-message`, {
                   method: 'POST',
@@ -1571,13 +1583,13 @@ serve(async (req) => {
                   },
                   body: JSON.stringify({
                     userId,
-                    message: chatBody,
+                    generateFromContext: { callType: 'custom', context: contextLabel },
                     sendPush: true,
                   }),
                 });
                 const result = await response.json();
                 if (result.success) {
-                  console.log('[status-callback] ✅ Chat fallback sent successfully');
+                  console.log('[status-callback] ✅ Chat fallback sent successfully via generateFromContext');
                 } else {
                   console.error('[status-callback] ❌ Failed to send chat fallback:', result.error);
                 }
