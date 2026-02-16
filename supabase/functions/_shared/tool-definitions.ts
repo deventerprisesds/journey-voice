@@ -6,6 +6,9 @@
  * and persona.ts system prompt) imports from THIS file.
  *
  * To add a tool: add it here. It propagates everywhere automatically.
+ *
+ * IMPORTANT: After adding a new tool, run the sync-assistant-tools
+ * edge function to update the OpenAI Assistant's static tool list.
  */
 
 export interface ToolDefinition {
