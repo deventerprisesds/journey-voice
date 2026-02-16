@@ -316,6 +316,24 @@ export function getToolDefinitions(): ToolDefinition[] {
       }
     },
 
+    // ── INTROSPECTION TOOLS ───────────────────────────────────
+    {
+      type: "function",
+      name: "get_my_config",
+      description: "Get information about the user's assistant configuration, scheduled/recurring calls, notification preferences, topic groups, call history, calendar connections, pending notifications, or profile. Use this when the user asks about their setup, calls, schedules, connections, reminders, or how things are configured.",
+      parameters: {
+        type: "object",
+        properties: {
+          section: {
+            type: "string",
+            enum: ["scheduled_calls", "call_history", "topic_groups", "notification_prefs", "calendar_connections", "pending_notifications", "my_profile", "full_config"],
+            description: "Which config section to retrieve. 'scheduled_calls' = recurring call schedule with names, times, and scripts. 'call_history' = recent past calls. 'topic_groups' = how tasks are organized into topics. 'notification_prefs' = notification settings. 'calendar_connections' = connected calendars (Outlook, Google). 'pending_notifications' = upcoming queued reminders. 'my_profile' = user's name, phone, email. 'full_config' = everything including core instructions."
+          }
+        },
+        required: ["section"]
+      }
+    },
+
     // ── PHONE/VOICE-ONLY TOOLS ─────────────────────────────────
     {
       type: "function",

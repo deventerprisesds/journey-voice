@@ -380,6 +380,10 @@ async function executeToolCall(
       case 'get_tasks_by_topic':
         return await getTasksByTopic(supabase, userId, args);
 
+      // ============ INTROSPECTION ============
+      case 'get_my_config':
+        return await getMyConfig(supabase, userId, args);
+
       // ============ PHONE-ONLY TOOLS ============
       case 'hang_up':
         // For chat interface, this is a no-op
@@ -1783,6 +1787,134 @@ async function webSearch(args: WebSearchArgs, timezone?: string): Promise<Execut
       error: extractErrorMessage(error),
       message: "I encountered an error while searching."
     };
+  }
+}
+
+// ============================================================================
+// INTROSPECTION: getMyConfig
+// ============================================================================
+
+async function getMyConfig(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
+  const section = args.section || 'full_config';
+  console.log(`[GET_MY_CONFIG] Section: ${section}, User: ${userId}`);
+
+  const results: Record<string, any> = {};
+
+  const fetchScheduledCalls = async () => {
+    const { data } = await supabase
+      .from('user_scheduling_prefs')
+      .select('scheduled_calls, config, core_instructions, timezone')
+      .eq('user_id', userId)
+      .maybeSingle();
+    return data;
+  };
+
+  const fetchCallHistory = async () => {
+    const { data } = await supabase
+      .from('call_sessions')
+      .select('started_at, ended_at, duration_seconds, direction, call_context, from_number, to_number')
+      .eq('user_id', userId)
+      .order('started_at', { ascending: false })
+      .limit(10);
+    return data || [];
+  };
+
+  const fetchTopicGroups = async () => {
+    const { data } = await supabase
+      .from('task_topic_index')
+      .select('topic_name, summary, task_count, category_affinity, updated_at')
+      .eq('user_id', userId)
+      .order('task_count', { ascending: false });
+    return data || [];
+  };
+
+  const fetchNotificationPrefs = async () => {
+    const { data } = await supabase
+      .from('notification_prefs')
+      .select('*')
+      .eq('user_id', userId)
+      .maybeSingle();
+    return data;
+  };
+
+  const fetchCalendarConnections = async () => {
+    const { data } = await supabase
+      .from('calendar_connections')
+      .select('provider, provider_account_email, is_active, expires_at, connected_services, created_at, updated_at')
+      .eq('user_id', userId);
+    return data || [];
+  };
+
+  const fetchPendingNotifications = async () => {
+    const { data } = await supabase
+      .from('scheduled_notifications')
+      .select('title, body, notification_type, scheduled_for')
+      .eq('user_id', userId)
+      .is('delivered_at', null)
+      .is('failed_at', null)
+      .order('scheduled_for', { ascending: true })
+      .limit(10);
+    return data || [];
+  };
+
+  const fetchProfile = async () => {
+    const { data } = await supabase
+      .from('profiles')
+      .select('full_name, first_name, last_name, email, phone, job_title, company, preferred_greeting, avatar_url')
+      .eq('user_id', userId)
+      .maybeSingle();
+    return data;
+  };
+
+  try {
+    if (section === 'full_config') {
+      const [prefs, history, topics, notifPrefs, calendars, pending, profile] = await Promise.all([
+        fetchScheduledCalls(),
+        fetchCallHistory(),
+        fetchTopicGroups(),
+        fetchNotificationPrefs(),
+        fetchCalendarConnections(),
+        fetchPendingNotifications(),
+        fetchProfile()
+      ]);
+      results.scheduled_calls = prefs?.scheduled_calls || [];
+      results.scheduling_config = prefs?.config || {};
+      results.core_instructions = prefs?.core_instructions || '';
+      results.timezone = prefs?.timezone || 'America/New_York';
+      results.call_history = history;
+      results.topic_groups = topics;
+      results.notification_prefs = notifPrefs || {};
+      results.calendar_connections = calendars;
+      results.pending_notifications = pending;
+      results.my_profile = profile || {};
+    } else if (section === 'scheduled_calls') {
+      const prefs = await fetchScheduledCalls();
+      results.scheduled_calls = prefs?.scheduled_calls || [];
+      results.timezone = prefs?.timezone || 'America/New_York';
+    } else if (section === 'call_history') {
+      results.call_history = await fetchCallHistory();
+    } else if (section === 'topic_groups') {
+      results.topic_groups = await fetchTopicGroups();
+    } else if (section === 'notification_prefs') {
+      results.notification_prefs = await fetchNotificationPrefs() || {};
+    } else if (section === 'calendar_connections') {
+      results.calendar_connections = await fetchCalendarConnections();
+    } else if (section === 'pending_notifications') {
+      results.pending_notifications = await fetchPendingNotifications();
+    } else if (section === 'my_profile') {
+      results.my_profile = await fetchProfile() || {};
+    } else {
+      return { success: false, error: `Unknown section: ${section}` };
+    }
+
+    return {
+      success: true,
+      result: results,
+      extractedFacts: { type: 'other' as const }
+    };
+  } catch (error) {
+    console.error('[GET_MY_CONFIG] Error:', error);
+    return { success: false, error: extractErrorMessage(error) };
   }
 }
 
