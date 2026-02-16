@@ -1,113 +1,70 @@
 
 
-# Three Fixes: Batch Group Move, Sub-Groups, and Voicemail Chat Fallback
+# Fix: Chat Check-In Context Grounding and Tool Guardrails
 
-## Issue 1: Batch Move to Topic Group
+## Problem
 
-Currently the sticky action bar only shows "Move to [Category]". There is no option to batch-move selected tasks into a specific topic group.
+When a scheduled check-in fires, the AI correctly lists the day's tasks. But when the user asks a follow-up question ("What are the tasks you speak of?"), the AI loses context because:
 
-### Changes
+1. The follow-up message is sent to `hybrid-assistant-api` with no reference to the active check-in
+2. The OpenAI thread contains old conversation history about unrelated tasks (e.g., "AI presentation")
+3. The AI hallucinates context from old messages and executes destructive tool calls (unscheduling tasks) when the user only asked a question
 
-**File: `src/pages/Priorities.tsx`**
-- Add a `batchMoveToGroup` function that:
-  1. Deletes existing `task_topic_mappings` for all selected task IDs
-  2. Inserts new mappings pointing to the target topic group
-  3. Optionally updates the task category to match the group's `category_affinity`
-- Add a second dropdown in the sticky action bar: "Move to Group..." listing all topic groups (grouped by category for clarity)
+## Solution: Two Changes
 
-**File: `src/pages/Priorities.tsx` (action bar, lines 498-521)**
-- Add a second `DropdownMenu` next to the existing "Move to..." category button
-- Label: "Move to Group..."
-- Items: `allTopicGroupRefs` grouped by category sub-headers
+### 1. Inject Check-In Context Into Follow-Up Messages
 
----
+**File: `src/hooks/useChatAssistant.ts` (sendMessage function, ~line 604)**
 
-## Issue 2: Sub-Groups (Hierarchical Topic Groups)
+When the user sends a free-form message while an agenda is active (`activeAgendaThreadId.current` is set), prepend a grounding instruction to the `userInput` sent to `hybrid-assistant-api`:
 
-You want to support structures like MIT > Course A > Task 1 without breaking chat/voice. The approach: add a `parent_topic_id` column to `task_topic_index` so groups can nest. The UI renders nested groups with indentation. Chat and voice continue to work because they query topics by `user_id` -- the parent relationship is purely a UI/organizational concern.
+```
+[ACTIVE CHECK-IN CONTEXT]
+The user is currently in a {agendaStep} step of their check-in.
+The assistant just presented {description of lastInteractiveContent}.
+The user's message below is likely a follow-up question about this check-in.
+Do NOT execute any task modification tools (unschedule_task, update_task, move_to_backlog, etc.)
+unless the user EXPLICITLY asks you to change something.
+Respond conversationally based on the current check-in context.
 
-### Database Migration
-
-Add `parent_topic_id` to `task_topic_index`:
-
-```sql
-ALTER TABLE public.task_topic_index
-ADD COLUMN parent_topic_id UUID REFERENCES public.task_topic_index(id) ON DELETE SET NULL;
+User message: {actual message}
 ```
 
-### UI Changes
+This ensures that when the user says "What are the tasks you speak of?", the AI knows they're referring to the tasks it just listed, not to old thread history.
 
-**File: `src/pages/Priorities.tsx` (loadData)**
-- When building `catTopics`, organize topics into a tree: top-level topics have `parent_topic_id = null`, children are nested under their parent
-- Pass a `children` array to each `TopicGroupData`
+### 2. Store Check-In Task Context for Reference
 
-**File: `src/components/priorities/TopicGroupPanel.tsx`**
-- Accept an optional `children: TopicGroupData[]` prop
-- Render child groups indented inside the collapsible content, above the task list
-- Each child is itself a `TopicGroupPanel` (recursive), allowing arbitrary nesting
-- Add a "Add Sub-Group" option in the group's context menu (the "..." button or a new one)
+**File: `src/hooks/useChatAssistant.ts`**
 
-**File: `src/components/priorities/AddTopicGroupDialog.tsx`**
-- Accept an optional `parentTopicId` prop
-- When saving, include `parent_topic_id` in the upsert payload
+Add a new ref: `checkInTaskContext` that stores a summary of what was presented during the check-in (task names, times, etc.). This gets populated in `startWindowCheckIn` and cleared in `scheduleSelectedTasks` or when the agenda ends.
 
-### Chat/Voice Impact: None
-- `get_tasks_by_topic` queries `task_topic_mappings` by topic name -- sub-groups are just additional topic names
-- The agenda manager and check-in flow present topic groups as a flat list of names -- this still works. If a parent has no direct tasks but has children, the chat will show the children as separate selectable topics
-- No changes to `tool-definitions.ts`, `persona.ts`, or `call-context-builder.ts`
+When building the grounding instruction, include the actual task data:
+```
+The check-in listed these scheduled tasks:
+1. Test Cook Dinner - 12:15 AM, 60 min
+2. Test Evening Courses - 2:30 AM, ~23h30m
 
----
-
-## Issue 3: Voicemail Fallback to Chat (Not Just Slack)
-
-The `status-callback` in `twilio-voice-handler` currently hardcodes `channels: ['SLACK']` when a call is missed or goes to voicemail. It should respect the user's configured fallback preference and default to `app_message` (chat) instead of Slack.
-
-### Changes
-
-**File: `supabase/functions/twilio-voice-handler/index.ts` (status-callback, lines 1446-1534)**
-
-Current behavior (line 1508):
-```typescript
-channels: ['SLACK'],  // hardcoded
+The user is asking about THESE tasks. Answer from this context.
 ```
 
-Fix:
-1. Look up the user's `scheduled_calls` config from `user_scheduling_prefs` to find the `fallbackMode` for the specific call that was missed
-2. If no `fallbackMode` is configured, default to `'app_message'` (chat)
-3. Route based on the fallback mode:
-   - `'app_message'`: Call `send-chat-message` edge function to deliver the agenda as a chat message (same pattern as `twilio-scheduled-call` uses for `commsMode: 'app_message'`)
-   - `'slack'`: Current behavior (call `send-unified-notification` with `channels: ['SLACK']`)
-   - `'email'`: Call `send-unified-notification` with `channels: ['email']`
+This prevents the AI from calling `get_todays_tasks` or other tools and returning different data.
 
-**File: `src/components/VoiceAssistantSettings.tsx`**
-- Add a `fallbackMode` field to each scheduled call card (dropdown: App Message, Slack, Email)
-- Default to `'app_message'`
-
-**File: `src/services/schedulingService.ts`**
-- Add `fallbackMode?: CommsMode` to the `ScheduledCall` interface
-
-**File: `supabase/functions/twilio-scheduled-call/index.ts`**
-- Add `fallbackMode` to the `ScheduledCall` interface (for type consistency)
-
----
-
-## Summary of Files Changed
+## Files Changed
 
 | File | Change |
 |------|--------|
-| `src/pages/Priorities.tsx` | Add `batchMoveToGroup`, second dropdown in action bar, tree-building logic in `loadData` |
-| `src/components/priorities/TopicGroupPanel.tsx` | Accept `children` prop, render sub-groups recursively, "Add Sub-Group" action |
-| `src/components/priorities/AddTopicGroupDialog.tsx` | Accept `parentTopicId` prop, include in upsert |
-| `supabase/functions/twilio-voice-handler/index.ts` | Look up user fallbackMode in status-callback, route to chat/slack/email accordingly |
-| `src/components/VoiceAssistantSettings.tsx` | Add fallbackMode selector per scheduled call |
-| `src/services/schedulingService.ts` | Add `fallbackMode` to `ScheduledCall` type |
-| `supabase/functions/twilio-scheduled-call/index.ts` | Add `fallbackMode` to interface |
-| **Migration** | `ALTER TABLE task_topic_index ADD COLUMN parent_topic_id UUID REFERENCES task_topic_index(id) ON DELETE SET NULL` |
+| `src/hooks/useChatAssistant.ts` | Add `checkInTaskContext` ref; modify `startWindowCheckIn` to store presented task data; modify `sendMessage` to prepend grounding context when agenda is active |
 
 ## What Stays the Same
 
-- Chat interactive check-in flow and agenda manager -- unaffected
-- Voice/phone call flows -- unaffected
-- `tool-definitions.ts`, `persona.ts`, `call-context-builder.ts` -- no changes needed
-- `classify-task-topic` edge function -- unaffected (assigns to flat topics, sub-grouping is manual)
+- `hybrid-assistant-api` -- no changes needed (grounding is prepended to userInput)
+- `send-chat-message` -- no changes (initial check-in delivery is fine)
+- `agenda-manager` -- already wired, tangent pause/resume continues to work
+- Voice/phone flows -- unaffected
 
+## Expected Behavior After Fix
+
+1. Scheduled check-in fires: "Today you have these tasks: Test Cook Dinner at 12:15 AM..."
+2. User asks: "What are the tasks you speak of?"
+3. AI receives grounding: knows the user is asking about the check-in tasks, does NOT call tools
+4. AI responds: "Those are your two scheduled tasks for today -- Test Cook Dinner at 12:15 AM and Test Evening Courses at 2:30 AM. Would you like to adjust either of them?"
