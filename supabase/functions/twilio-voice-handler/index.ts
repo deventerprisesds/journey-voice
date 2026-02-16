@@ -923,6 +923,8 @@ async function triggerOutboundCallWithSession(
     requestBody.append('StatusCallbackEvent', 'answered');
     requestBody.append('StatusCallbackEvent', 'completed');
     requestBody.append('StatusCallbackMethod', 'POST');
+    requestBody.append('MachineDetection', 'DetectMessageEnd');
+    requestBody.append('MachineDetectionTimeout', '5');
 
     const response = await fetch(apiUrl, {
       method: 'POST',
@@ -947,6 +949,17 @@ async function triggerOutboundCallWithSession(
 
     const callData = JSON.parse(responseText);
     console.log(`=== PRE-CONNECTED CALL INITIATED === SID: ${callData.sid}, Session: ${sessionId}`);
+
+    // Store CallSid so status-callback can find this session for voicemail fallback
+    try {
+      const supabaseClient = createClient(supabaseUrl, supabaseServiceKey);
+      await supabaseClient.from('pre_connect_sessions')
+        .update({ call_sid: callData.sid })
+        .eq('session_id', sessionId);
+      console.log(`[triggerOutboundCallWithSession] Stored call_sid ${callData.sid} for session ${sessionId}`);
+    } catch (e) {
+      console.error(`[triggerOutboundCallWithSession] Failed to store call_sid:`, e);
+    }
 
     return { success: true, call_sid: callData.sid, debug };
   } catch (error) {
@@ -1473,11 +1486,11 @@ serve(async (req) => {
           try {
             const supabase = createClient(supabaseUrl, supabaseServiceKey);
             
-            // Look up the pre-connect session to get the agenda/context
+            // Look up the pre-connect session by call_sid (stored after Twilio API call)
             const { data: session } = await supabase
               .from('pre_connect_sessions')
               .select('user_id, context, agenda, greeting_text, timezone')
-              .eq('session_id', statusData.callSid)
+              .eq('call_sid', statusData.callSid)
               .maybeSingle();
             
             let userId = session?.user_id;
