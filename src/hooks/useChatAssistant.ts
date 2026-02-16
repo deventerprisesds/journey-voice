@@ -78,6 +78,7 @@ export function useChatAssistant(): UseChatAssistantReturn {
   const activeAgendaThreadId = useRef<string | null>(null);
   const agendaStep = useRef<'topic_selection' | 'task_selection' | 'scheduling' | null>(null);
   const lastInteractiveContent = useRef<InteractiveContent | null>(null);
+  const checkInTaskContext = useRef<string | null>(null);
 
   const userId = user?.id || null;
 
@@ -422,6 +423,11 @@ export function useChatAssistant(): UseChatAssistantReturn {
         await callAgendaManager('start_item', { itemIndex: 0 });
       }
 
+      // Store check-in context for grounding follow-up messages
+      if (topics.length > 0) {
+        checkInTaskContext.current = `Window: ${windowLabel}. Topics presented: ${topics.map(t => `${t.topic_name} (${t.task_count} tasks, ${t.priority_density} urgent)`).join(', ')}`;
+      }
+
       setMessages(prev => [...prev, {
         id: crypto.randomUUID(),
         role: 'assistant',
@@ -484,6 +490,8 @@ export function useChatAssistant(): UseChatAssistantReturn {
         agendaStep.current = 'task_selection';
         if (tasks.length > 0) {
           lastInteractiveContent.current = { type: 'task_selection', tasks, selectedTopicName: topicName };
+          // Enrich check-in context with task details
+          checkInTaskContext.current = `Topic: ${topicName}. Tasks: ${tasks.map(t => `${t.title} (${t.priority})`).join(', ')}`;
         }
       }
 
@@ -540,6 +548,7 @@ export function useChatAssistant(): UseChatAssistantReturn {
         activeAgendaThreadId.current = null;
         agendaStep.current = null;
         lastInteractiveContent.current = null;
+        checkInTaskContext.current = null;
       }
 
       setMessages(prev => [...prev, {
@@ -601,9 +610,32 @@ export function useChatAssistant(): UseChatAssistantReturn {
         source: 'chat'
       });
 
+      // Build grounded userInput when agenda is active
+      let groundedInput = content.trim();
+      if (isAgendaActive) {
+        const stepLabel = agendaStep.current || 'unknown';
+        const lastContent = lastInteractiveContent.current;
+        const lastContentDesc = lastContent?.type === 'topic_selection'
+          ? `topic selection chips (${lastContent.topics?.map(t => t.topic_name).join(', ')})`
+          : lastContent?.type === 'task_selection'
+            ? `task checklist for "${lastContent.selectedTopicName}" (${lastContent.tasks?.map(t => t.title).join(', ')})`
+            : 'a confirmation';
+        const taskContext = checkInTaskContext.current || 'No specific task context stored.';
+
+        groundedInput = `[ACTIVE CHECK-IN CONTEXT]
+The user is currently in the "${stepLabel}" step of their check-in.
+The assistant just presented: ${lastContentDesc}.
+Check-in context: ${taskContext}
+The user's message below is likely a follow-up question about this check-in.
+Do NOT execute any task modification tools (unschedule_task, update_task, move_to_backlog, etc.) unless the user EXPLICITLY asks you to change something.
+Respond conversationally based on the current check-in context.
+
+User message: ${content.trim()}`;
+      }
+
       const { data, error } = await supabase.functions.invoke('hybrid-assistant-api', {
         body: {
-          userInput: content.trim(),
+          userInput: groundedInput,
           userId: user.id,
           threadId: threadId
         }
