@@ -231,7 +231,7 @@ export async function getTopicGroupsManual(
 
   const { data: topics, error: topErr } = await supabase
     .from('task_topic_index')
-    .select('id, topic_name, topic_summary')
+    .select('id, topic_name, topic_summary, position')
     .in('id', topicIds);
 
   if (topErr || !topics || topics.length === 0) return [];
@@ -255,6 +255,7 @@ export async function getTopicGroupsManual(
     return {
       topic_name: topic.topic_name,
       topic_summary: topic.topic_summary,
+      position: topic.position ?? 0,
       task_count: taskCount,
       recency,
       priority_density: priorityDensity
@@ -262,7 +263,7 @@ export async function getTopicGroupsManual(
   });
 
   results.sort((a: any, b: any) =>
-    b.recency - a.recency || b.priority_density - a.priority_density || b.task_count - a.task_count
+    a.position - b.position || b.priority_density - a.priority_density || b.recency - a.recency || b.task_count - a.task_count
   );
 
   return results.slice(0, 5);

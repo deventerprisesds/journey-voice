@@ -422,17 +422,31 @@ const Priorities: React.FC = () => {
     const dstCatKey = destination.droppableId;
     console.log('[DragEnd:GROUP] draggableId:', draggableId, 'srcCat:', srcCatKey, 'dstCat:', dstCatKey);
 
+    // Helper to persist positions to database
+    const persistPositions = async (groups: TopicGroupData[]) => {
+      const updates = groups.map((g, i) =>
+        supabase.from('task_topic_index').update({ position: i } as any).eq('id', g.id)
+      );
+      await Promise.all(updates);
+    };
+
     if (srcCatKey === dstCatKey) {
       console.log('[DragEnd:GROUP] Reorder within same column');
       // Reorder within same column
+      let reorderedGroups: TopicGroupData[] = [];
       setCategories(prev => prev.map(cat => {
         if (cat.key !== srcCatKey) return cat;
         const groups = [...cat.topicGroups];
         const [moved] = groups.splice(source.index, 1);
         groups.splice(destination.index, 0, moved);
         localStorage.setItem(`priorities-order-${user.id}-${srcCatKey}`, JSON.stringify(groups.map(g => g.id)));
+        reorderedGroups = groups;
         return { ...cat, topicGroups: groups };
       }));
+      // Persist positions to DB
+      if (reorderedGroups.length > 0) {
+        persistPositions(reorderedGroups).catch(err => console.error('[DragEnd:GROUP] Position persist error:', err));
+      }
     } else {
       // Move group to different category
       console.log('[DragEnd:GROUP] Cross-column move from', srcCatKey, 'to', dstCatKey);
@@ -443,6 +457,8 @@ const Priorities: React.FC = () => {
       const taskIdsToMove = groupBeforeMove?.tasks.map(t => t.id) || [];
 
       let movedGroup: TopicGroupData | null = null;
+      let srcGroups: TopicGroupData[] = [];
+      let dstGroups: TopicGroupData[] = [];
 
       setCategories(prev => {
         const updated = prev.map(cat => {
@@ -451,6 +467,7 @@ const Priorities: React.FC = () => {
             const [removed] = groups.splice(source.index, 1);
             movedGroup = removed;
             localStorage.setItem(`priorities-order-${user.id}-${srcCatKey}`, JSON.stringify(groups.map(g => g.id)));
+            srcGroups = groups;
             return { ...cat, topicGroups: groups };
           }
           return cat;
@@ -463,15 +480,22 @@ const Priorities: React.FC = () => {
             const groups = [...cat.topicGroups];
             groups.splice(destination.index, 0, movedGroup!);
             localStorage.setItem(`priorities-order-${user.id}-${dstCatKey}`, JSON.stringify(groups.map(g => g.id)));
+            dstGroups = groups;
             return { ...cat, topicGroups: groups };
           }
           return cat;
         });
       });
 
-      // Persist category_affinity + update task categories
+      // Persist category_affinity + positions + update task categories
       const groupId = draggableId;
       const res1 = await supabase.from('task_topic_index').update({ category_affinity: dstCatKey } as any).eq('id', groupId);
+
+      // Persist positions for both source and destination columns
+      const positionPromises: Promise<any>[] = [];
+      if (srcGroups.length > 0) positionPromises.push(persistPositions(srcGroups));
+      if (dstGroups.length > 0) positionPromises.push(persistPositions(dstGroups));
+      Promise.all(positionPromises).catch(err => console.error('[DragEnd:GROUP] Position persist error:', err));
 
       let res2: any = { error: null };
       if (taskIdsToMove.length > 0) {

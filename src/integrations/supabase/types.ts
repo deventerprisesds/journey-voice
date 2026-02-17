@@ -3381,6 +3381,7 @@ export type Database = {
           example_tasks: string[] | null
           id: string
           parent_topic_id: string | null
+          position: number | null
           task_count: number | null
           topic_name: string
           topic_summary: string | null
@@ -3394,6 +3395,7 @@ export type Database = {
           example_tasks?: string[] | null
           id?: string
           parent_topic_id?: string | null
+          position?: number | null
           task_count?: number | null
           topic_name: string
           topic_summary?: string | null
@@ -3407,6 +3409,7 @@ export type Database = {
           example_tasks?: string[] | null
           id?: string
           parent_topic_id?: string | null
+          position?: number | null
           task_count?: number | null
           topic_name?: string
           topic_summary?: string | null
