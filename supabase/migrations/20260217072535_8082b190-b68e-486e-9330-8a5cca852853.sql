@@ -1,0 +1,1 @@
+ALTER TABLE task_topic_index ADD COLUMN position integer DEFAULT 0;
