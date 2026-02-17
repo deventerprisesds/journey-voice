@@ -10,13 +10,49 @@ const DEMO_EMBA_USER_IDS = [
 export async function fetchPendingAssignments(
   userId: string,
   includeEmba: boolean = true,
-  includeMit: boolean = true
+  includeMit: boolean = true,
+  importMode: 'upcoming' | 'full' = 'upcoming'
 ): Promise<Task[]> {
   const assignments: Task[] = [];
 
   try {
-    // Fetch EMBA assignments (between last weekend end and next weekend end)
+    // Fetch EMBA assignments
     if (includeEmba) {
+      if (importMode === 'full') {
+        // Full import: get all assignments, no date filtering
+        let embaQuery = supabase
+          .from('assignments')
+          .select('*');
+        
+        const isDemo = DEMO_EMBA_USER_IDS.includes(userId);
+        embaQuery = isDemo
+          ? embaQuery.in('user_id', DEMO_EMBA_USER_IDS)
+          : embaQuery.eq('user_id', userId);
+        
+        const { data: embaAssignments } = await embaQuery.order('due_date', { ascending: true });
+
+        if (embaAssignments) {
+          assignments.push(
+            ...embaAssignments.map((assignment) => ({
+              id: assignment.id,
+              title: assignment.title,
+              description: assignment.description || '',
+              status: 'PROF_EDUCATION' as const,
+              category: 'PROF_EDUCATION' as const,
+              priority: assignment.priority as 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT',
+              due_date: assignment.due_date,
+              estimate_minutes: 90,
+              user_id: assignment.user_id,
+              board_id: '',
+              created_at: assignment.created_at,
+              updated_at: assignment.updated_at,
+              is_scheduled: false,
+              position: 0
+            }))
+          );
+        }
+      } else {
+      // Upcoming mode: between last weekend end and next weekend end
       // Prepare today's date (YYYY-MM-DD) for date-only comparisons
       const todayStr = new Date().toISOString().split('T')[0];
       const isDemo = DEMO_EMBA_USER_IDS.includes(userId);
@@ -101,20 +137,25 @@ export async function fetchPendingAssignments(
           );
         }
       }
+      }
     }
 
     // Fetch MIT assignments (next 2 weeks, exclude office hours)
     if (includeMit) {
-      const twoWeeksFromNow = new Date();
-      twoWeeksFromNow.setDate(twoWeeksFromNow.getDate() + 14);
-
-      const { data: mitAssignments } = await supabase
+      let mitQuery = supabase
         .from('assignments_mit')
         .select('*')
         .eq('user_id', userId)
-        .lte('due_date', twoWeeksFromNow.toISOString())
         .not('title', 'ilike', '%office hour%')
         .order('due_date', { ascending: true });
+
+      if (importMode === 'upcoming') {
+        const twoWeeksFromNow = new Date();
+        twoWeeksFromNow.setDate(twoWeeksFromNow.getDate() + 14);
+        mitQuery = mitQuery.lte('due_date', twoWeeksFromNow.toISOString());
+      }
+
+      const { data: mitAssignments } = await mitQuery;
 
       if (mitAssignments) {
         assignments.push(

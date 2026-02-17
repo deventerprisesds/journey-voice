@@ -58,24 +58,15 @@ async function logActivity(
   }
 }
 
-// Map categories to window affinities
-const CATEGORY_WINDOW_MAPPING: Record<string, string[]> = {
-  'CAREER': ['business_hours'],
-  'PROF_EDUCATION': ['after_work', 'evening', 'weekends'],
-  'EDUCATION': ['business_hours', 'after_work'],
-  'VENTURES': ['after_work', 'evening', 'weekends'],
-  'LIFE': ['morning', 'after_work', 'evening', 'weekends'],
-  'PERSONAL': ['morning', 'after_work', 'evening', 'weekends'],
-};
+// ── LEGACY CODE: Preserved for rollback (USE_SHARED_CONTEXT = false) ──
+// The following ~270 lines of window/category/context logic are duplicates
+// of call-context-builder.ts and are only used when USE_SHARED_CONTEXT = false.
+// Currently disabled. Kept for emergency rollback.
+// See: CATEGORY_WINDOW_MAPPING, WINDOW_RANGES, getTodaysBriefing,
+// getTasksForWindow, getTopicsForWindow, formatTaskList,
+// buildWindowTransitionContext, buildCallContext, buildLegacyContext
 
-// Window time ranges
-const WINDOW_RANGES: Record<string, { start: number; end: number }> = {
-  morning: { start: 6, end: 9 },
-  business_hours: { start: 9, end: 17 },
-  after_work: { start: 17, end: 19 },
-  evening: { start: 19, end: 22 },
-  weekends: { start: 10, end: 20 }
-};
+/* --- BEGIN LEGACY CODE (commented out for clarity) ---
 
 // Get today's tasks for briefing context
 async function getTodaysBriefing(supabase: any, userId: string): Promise<string> {
@@ -332,7 +323,7 @@ ${userContext}
 
 Start with a friendly greeting and address the context above.`;
   }
-}
+--- END LEGACY CODE */
 
 // Truncate text for notification body
 function truncateText(text: string, maxLength: number): string {
@@ -445,6 +436,35 @@ serve(async (req) => {
 
     if (!content && generateFromContext) {
       callType = generateFromContext.callType;
+      
+      // Deduplication: check if a system-initiated message was already sent within 90 seconds
+      const { data: recentSystemMsg } = await supabase
+        .from('conversation_messages')
+        .select('id, created_at')
+        .eq('user_id', userId)
+        .eq('role', 'assistant')
+        .eq('source', 'chat')
+        .gte('created_at', new Date(Date.now() - 90 * 1000).toISOString())
+        .not('metadata', 'is', null)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      
+      if (recentSystemMsg) {
+        console.log(`[SEND-CHAT-MESSAGE] Dedup: recent system message ${recentSystemMsg.id} found, skipping`);
+        await logActivity(supabase, userId, 'chat_send', 'completed', 'deduplicated', {
+          existingMessageId: recentSystemMsg.id,
+          existingCreatedAt: recentSystemMsg.created_at
+        });
+        return new Response(JSON.stringify({
+          success: true,
+          deduplicated: true,
+          existingMessageId: recentSystemMsg.id
+        }), {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
       
       // V2: Use shared module for context building (with rollback flag)
       let contextualInstructions: string;
@@ -566,7 +586,7 @@ serve(async (req) => {
     if (sendPush) {
       const { data: presence, error: presenceError } = await supabase
         .from('user_presence')
-        .select('is_active, active_context')
+        .select('is_active, active_context, last_seen_at')
         .eq('user_id', userId)
         .maybeSingle();
       
@@ -583,10 +603,16 @@ serve(async (req) => {
         activeContext: presenceData.active_context
       });
       
-      // Skip push if user is active in chat
+      // Skip push if user is actively in chat (with staleness guard)
       if (presence?.is_active && presence?.active_context === 'chat') {
-        console.log('[SEND-CHAT-MESSAGE] User active in chat, skipping push notification');
-        shouldSendPush = false;
+        const lastSeen = presence?.last_seen_at ? new Date(presence.last_seen_at) : null;
+        const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000);
+        if (lastSeen && lastSeen > fiveMinAgo) {
+          console.log('[SEND-CHAT-MESSAGE] User genuinely active in chat, skipping push notification');
+          shouldSendPush = false;
+        } else {
+          console.log(`[SEND-CHAT-MESSAGE] Presence stale (last_seen: ${lastSeen?.toISOString()}), sending push anyway`);
+        }
       }
     }
 

@@ -32,7 +32,7 @@ export function getToolDefinitions(): ToolDefinition[] {
     {
       type: "function",
       name: "get_tasks",
-      description: "Retrieve tasks and chat history. Can search by time period, keywords, or status.",
+      description: "PRIMARY task retrieval tool. Returns tasks with topic_group labels and current time window context. Handles all queries: today (time_filter='today'), this week, by category, by status, by keyword. Use this for ANY task query.",
       parameters: {
         type: "object",
         properties: {
@@ -54,17 +54,17 @@ export function getToolDefinitions(): ToolDefinition[] {
     {
       type: "function",
       name: "get_today_tasks",
-      description: "Get all tasks for today, including both scheduled and unscheduled tasks.",
+      description: "Alias for get_tasks with time_filter='today'. Returns same enriched format with topic_group labels. Prefer get_tasks directly for consistency.",
       parameters: { type: "object", properties: {} }
     },
     {
       type: "function",
       name: "get_tasks_by_topic",
-      description: "Get tasks belonging to a specific topic group. Use this when the user wants to drill into a topic group presented during a check-in call. ALWAYS call this instead of guessing what tasks are in a topic.",
+      description: "DRILL-DOWN tool. Use after get_tasks to explore a specific topic group in depth. Requires EXACT topic_name from get_tasks results or get_my_config(section='topic_groups'). NEVER guess topic names.",
       parameters: {
         type: "object",
         properties: {
-          topic_name: { type: "string", description: "The topic group name to retrieve tasks for (e.g., 'Professional Networking', 'Career Development')" }
+          topic_name: { type: "string", description: "The EXACT topic group name from get_tasks results or get_my_config. Never guess or fabricate topic names." }
         },
         required: ["topic_name"]
       }

@@ -422,6 +422,9 @@ async function handleStreamingRequest(
     // Prepend data integrity guardrails
     parts.unshift(`DATA INTEGRITY RULES:
 - NEVER fabricate task names. Use EXACT titles from tool results or pre-loaded context.
+- get_tasks is your PRIMARY retrieval tool. It returns topic_group labels and current time window on every task. Use it for ALL queries.
+- get_tasks_by_topic is for drilling into a specific topic group. Only use EXACT topic names from tool results.
+- NEVER invent topic/group names. If a task has no topic_group, call it "Uncategorized".
 - For "what can I work on": use get_tasks(status: "ACTIVE").
 - For life-area queries ("life tasks", "career items"): use get_tasks with the category filter.
 - For ready-now queries: use get_tasks(status: "WORKABLE").

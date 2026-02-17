@@ -13,6 +13,7 @@ import { RefreshCw, CheckCircle2, AlertCircle, FileSpreadsheet, Bug, ChevronDown
 import { cn } from '@/lib/utils';
 import { formatDistanceToNow } from 'date-fns';
 import { createTasksFromAssignments, createTasksFromMitAssignments } from '@/utils/assignmentSync';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 interface SyncConfig {
   id: string;
@@ -51,6 +52,7 @@ export function AssignmentSyncSettings() {
   const [mitSheetUrl, setMitSheetUrl] = useState('https://docs.google.com/spreadsheets/d/1P6NyWVhxuuNUu-7dN7KX3GDuVddYWNLOLQ4QCEVcNlc/edit?gid=1544435511#gid=1544435511');
   const [showDebug, setShowDebug] = useState(false);
   const [debugLogs, setDebugLogs] = useState<string[]>([]);
+  const [importMode, setImportMode] = useState<'upcoming' | 'full'>('upcoming');
 
   // Get effective user ID - use demo ID if no auth
   const effectiveUserId = user?.id || DEMO_USER_ID;
@@ -261,7 +263,7 @@ export function AssignmentSyncSettings() {
       await loadSyncLogs();
 
       if (data?.assignmentIds && data.assignmentIds.length > 0) {
-        await createTasksFromAssignments(data.assignmentIds, effectiveUserId);
+        await createTasksFromAssignments(data.assignmentIds, effectiveUserId, importMode);
         toast({
           title: "EMBA Tasks Created",
           description: `${data.assignmentIds.length} assignments converted to tasks.`
@@ -302,7 +304,7 @@ export function AssignmentSyncSettings() {
       await loadSyncLogs();
 
       if (data?.assignmentIds && data.assignmentIds.length > 0) {
-        await createTasksFromMitAssignments(data.assignmentIds, effectiveUserId);
+        await createTasksFromMitAssignments(data.assignmentIds, effectiveUserId, importMode);
         toast({
           title: "MIT Tasks Created",
           description: `${data.assignmentIds.length} assignments converted to tasks.`
@@ -451,7 +453,26 @@ export function AssignmentSyncSettings() {
 
         <Separator />
 
-        {/* Sync Buttons */}
+        {/* Import Mode */}
+        <div className="space-y-2">
+          <Label>Import Mode</Label>
+          <Select value={importMode} onValueChange={(v) => setImportMode(v as 'upcoming' | 'full')}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="upcoming">Upcoming Only (this + next week → Up Next)</SelectItem>
+              <SelectItem value="full">Full Import (all past → Ready, future → Up Next)</SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">
+            {importMode === 'upcoming' 
+              ? 'Imports this and next week\'s assignments to the Up Next lane'
+              : 'Imports all assignments. Past-due → Ready lane, future → Up Next lane'}
+          </p>
+        </div>
+
+        <Separator />
         <div className="grid grid-cols-2 gap-3">
           <Button 
             onClick={handleSyncEmba}
