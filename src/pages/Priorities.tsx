@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { DragDropContext, DropResult } from '@hello-pangea/dnd';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { Button } from '@/components/ui/button';
-import { Layers, List, Sparkles, Loader2, X, ArrowRight } from 'lucide-react';
+import { Layers, List, Sparkles, Loader2, X, ArrowRight, CircleDot } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { supabase, SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
@@ -102,6 +102,19 @@ const Priorities: React.FC = () => {
       loadDataRef.current();
     } else {
       toast.success(`Moved ${ids.length} tasks to ${CATEGORY_LABELS[targetCategory] || targetCategory}`);
+      clearSelection();
+      loadDataRef.current();
+    }
+  }, [user, selectedTaskIds, clearSelection]);
+
+  const batchChangeStatus = useCallback(async (targetStatus: string) => {
+    if (!user || selectedTaskIds.size === 0) return;
+    const ids = Array.from(selectedTaskIds);
+    const { error } = await supabase.from('tasks').update({ status: targetStatus } as any).in('id', ids);
+    if (error) {
+      toast.error('Failed to update status');
+    } else {
+      toast.success(`Updated ${ids.length} tasks to ${targetStatus.replace('_', ' ')}`);
       clearSelection();
       loadDataRef.current();
     }
@@ -606,6 +619,29 @@ const Priorities: React.FC = () => {
                   </React.Fragment>
                 );
               })}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm" variant="secondary" className="gap-1.5">
+                <CircleDot className="h-3.5 w-3.5" />
+                Status…
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent>
+              {[
+                { value: 'TODO', label: 'To Do' },
+                { value: 'READY', label: 'Ready' },
+                { value: 'UP_NEXT', label: 'Up Next' },
+                { value: 'DOING', label: 'Doing' },
+                { value: 'DONE', label: 'Done' },
+                { value: 'BLOCKED', label: 'Blocked' },
+                { value: 'BACKLOG', label: 'Backlog' },
+              ].map(s => (
+                <DropdownMenuItem key={s.value} onClick={() => batchChangeStatus(s.value)}>
+                  {s.label}
+                </DropdownMenuItem>
+              ))}
             </DropdownMenuContent>
           </DropdownMenu>
           <Button size="sm" variant="ghost" className="ml-auto text-primary-foreground/80 hover:text-primary-foreground" onClick={clearSelection}>
