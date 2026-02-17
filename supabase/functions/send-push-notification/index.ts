@@ -124,8 +124,8 @@ serve(async (req) => {
         // Ensure messageData is accessible at data.messageData
         messageData: data?.messageData || null,
       },
-      icon: '/favicon.ico',
-      badge: '/favicon.ico',
+      icon: '/icons/iris-icon-192.png',
+      badge: '/icons/iris-badge-72.png',
       tag: data?.notificationId || data?.messageId || 'default',
       requireInteraction: true,
     });

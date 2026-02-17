@@ -1,6 +1,6 @@
 // Service Worker for Push Notifications
 // Increment this on each deploy to bust old caches
-const CACHE_VERSION = 'v5';
+const CACHE_VERSION = 'v6';
 const CACHE_NAME = `task-manager-${CACHE_VERSION}`;
 const urlsToCache = [
   '/',
@@ -94,34 +94,34 @@ self.addEventListener('push', (event) => {
       notificationData = {
         title: 'Task Reminder',
         body: event.data.text() || 'You have a task due soon!',
-        icon: '/favicon.ico',
-        badge: '/favicon.ico'
+        icon: '/icons/iris-icon-192.png',
+        badge: '/icons/iris-badge-72.png'
       };
     }
   } else {
     notificationData = {
       title: 'Task Manager',
       body: 'You have a new notification!',
-      icon: '/favicon.ico',
-      badge: '/favicon.ico'
+      icon: '/icons/iris-icon-192.png',
+      badge: '/icons/iris-badge-72.png'
     };
   }
 
   const notificationOptions = {
     body: notificationData.body,
-    icon: notificationData.icon || '/favicon.ico',
-    badge: notificationData.badge || '/favicon.ico',
+    icon: notificationData.icon || '/icons/iris-icon-192.png',
+    badge: notificationData.badge || '/icons/iris-badge-72.png',
     data: notificationData.data || {},
     actions: notificationData.actions || [
       {
         action: 'view',
         title: 'View Task',
-        icon: '/favicon.ico'
+        icon: '/icons/iris-icon-192.png'
       },
       {
         action: 'dismiss',
         title: 'Dismiss',
-        icon: '/favicon.ico'
+        icon: '/icons/iris-icon-192.png'
       }
     ],
     requireInteraction: notificationData.requireInteraction || false,
