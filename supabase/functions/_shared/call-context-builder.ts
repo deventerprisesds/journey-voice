@@ -8,6 +8,10 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
+// ── Rollback Flag ──────────────────────────────────────────────────
+// Flip to false for instant revert to current (V1) scripts
+const USE_V2_SCRIPTS = true;
+
 // ── Generic call descriptor accepted by both pipelines ──────────────
 export interface CallDescriptor {
   callType?: string;   // 'morning_standup' | 'midday_checkin' | 'eod_wrapup' | 'custom'
@@ -38,7 +42,7 @@ export const WINDOW_RANGES: Record<string, { start: number; end: number }> = {
 
 // Context header instructing AI to drive naturally
 export const AGENDA_HEADER = `IMPORTANT: The items below are your agenda queue in priority order.
-Cover them in sequence but drive the conversation naturally.
+Work through them in order, but adapt naturally to the conversation.
 Do NOT read these items verbatim -- use your own words.
 Use your available tools for any changes the user requests.
 
@@ -56,7 +60,18 @@ If you do not have task data, you MUST call the appropriate tool before describi
 TOPIC DRILL-DOWN RULE:
 Topic group names are for memory jogging only -- do NOT guess what tasks are in them.
 When the user selects a topic group, you MUST call get_tasks_by_topic with that topic name.
-If get_tasks_by_topic returns 0 tasks, tell the user "I don't have any active tasks under that topic right now" — do NOT invent tasks.`;
+If get_tasks_by_topic returns 0 tasks, tell the user "I don't have any active tasks under that topic right now" — do NOT invent tasks.
+
+TANGENT HANDLING:
+When the user goes off-topic or asks an unrelated question, handle it fully --
+answer their question, use tools if needed, take your time.
+The system tracks your agenda progress automatically via an AgendaManager.
+When a tangent ends, you will receive a [RESUME] message indicating which
+agenda item to return to. When you see [RESUME], transition back naturally --
+do not say "getting back to the agenda." Weave back into the flow.
+You are responsible for covering ALL agenda items before closing the call.
+If the user wants to end early, briefly mention any uncovered items and
+confirm they want to skip them.`;
 
 // ── Today's Briefing ────────────────────────────────────────────────
 
@@ -277,9 +292,9 @@ export function formatTaskList(tasks: any[]): string {
   }).join('\\n');
 }
 
-// ── Per-Window Context Builder ──────────────────────────────────────
+// ── V1 Per-Window Context Builder (ORIGINAL — preserved for rollback) ──
 
-export function buildWindowContext(
+function buildWindowContextV1(
   window: string,
   tasks: any[],
   tier1Topics: any[],
@@ -293,7 +308,6 @@ export function buildWindowContext(
   const tier2List = formatTopicGroups(tier2Topics);
 
   switch (window) {
-    // ─── 6:00 AM — Morning Kickstart ─────────────────────────
     case 'morning':
       if (hasTasks) {
         return `${AGENDA_HEADER}\n
@@ -319,7 +333,6 @@ AGENDA QUEUE:
 NOTE: No topic jog for morning. Keep this call lightweight.`;
       }
 
-    // ─── 9:00 AM — Business Hours Execution ──────────────────
     case 'business_hours':
       if (hasTasks) {
         return `${AGENDA_HEADER}\n
@@ -352,7 +365,6 @@ ${tier2List || '(No topics found across the board either)'}
 5. If NO → Acknowledge, mention next check-in. Close.`}`;
       }
 
-    // ─── 5:00 PM — Daily Wrap + After-Work ───────────────────
     case 'after_work': {
       const phase2 = hasTasks
         ? `PHASE 2 — After-Work Items:
@@ -390,7 +402,6 @@ ${phase2}
 CLOSE: Confirm you captured their updates.`;
     }
 
-    // ─── 7:00 PM — Evening Work Items ────────────────────────
     case 'evening':
       if (hasTasks) {
         return `${AGENDA_HEADER}\n
@@ -426,7 +437,6 @@ ${tier2List || '(No topics found)'}
 CLOSE: Wish them a good evening.`;
       }
 
-    // ─── Weekend 10:00 AM — Saturday/Sunday ──────────────────
     case 'weekends':
       if (hasTasks) {
         return `${AGENDA_HEADER}\n
@@ -474,6 +484,224 @@ AGENDA QUEUE:
 
 CLOSE: Confirm any updates captured.`;
   }
+}
+
+// ── V2 Per-Window Context Builder (Example-style prompts, topic group reframing) ──
+
+function buildWindowContextV2(
+  window: string,
+  tasks: any[],
+  tier1Topics: any[],
+  tier2Topics: any[],
+  preferredGreeting: string,
+  dayName: string
+): string {
+  const hasTasks = tasks.length > 0;
+  const taskList = formatTaskList(tasks);
+  const tier1List = formatTopicGroups(tier1Topics);
+  const tier2List = formatTopicGroups(tier2Topics);
+
+  switch (window) {
+    // ─── 6:00 AM — Morning Kickstart ─────────────────────────
+    case 'morning':
+      if (hasTasks) {
+        return `${AGENDA_HEADER}\n
+CALL: Morning Kickstart (Tasks Available)
+GREETING: Address user as "${preferredGreeting}"
+
+AGENDA QUEUE:
+1. Greet user
+2. Briefly present their morning tasks, e.g. "You've got ${tasks.length} thing${tasks.length > 1 ? 's' : ''} this morning: [names and times]":
+${taskList}
+3. Ask something like: "Want to confirm these for this morning, adjust anything, or skip?"
+4. If CONFIRM → Acknowledge, mention you will call back later to go over plans. Close.
+5. If ADJUST → Capture edits using reschedule_task or update_task. Confirm changes. Close.`;
+      } else {
+        return `${AGENDA_HEADER}\n
+CALL: Morning Kickstart (No Tasks)
+GREETING: Address user as "${preferredGreeting}"
+
+AGENDA QUEUE:
+1. Greet user
+2. Brief nudge: the day is starting, you will call back in a few hours to go over plans. Close.
+
+NOTE: No topic jog for morning. Keep this call lightweight.`;
+      }
+
+    // ─── 9:00 AM — Business Hours Execution ──────────────────
+    case 'business_hours':
+      if (hasTasks) {
+        return `${AGENDA_HEADER}\n
+CALL: Business Hours Execution (Tasks Available)
+GREETING: Address user as "${preferredGreeting}"
+
+AGENDA QUEUE:
+1. Greet user
+2. Present their business-hours lineup succinctly, e.g. "Here's what's lined up: [task names with times]":
+${taskList}
+3. Ask something like: "Which one do you want to start with?"
+4. If they pick one → mark in progress via update_task`;
+      } else {
+        return `${AGENDA_HEADER}\n
+CALL: Business Hours Execution (No Tasks — Topic Jog)
+GREETING: Address user as "${preferredGreeting}"
+
+AGENDA QUEUE:
+1. Greet user
+2. Tell them they have no scheduled items for the next few hours
+${tier1List ? `3. There are open items that fit this time window, grouped under these areas. Present them naturally, e.g. "You've got X open items under [area], Y under [area] -- want to dig into any of these?":
+${tier1List}
+   These are topic groups -- each contains tasks relevant to this window.
+4. Ask something like: "Any of these areas you want to dig into right now?"
+5. If YES → Use get_tasks_by_topic to drill into that area and present the actual tasks. Help them select tasks. Use parse_and_create_tasks to schedule into available slots. Confirm.
+6. If NO → Acknowledge, mention next check-in. Close.` : `3. Say something like: "Nothing specific lined up for business hours -- want me to look across your whole board?"
+4. If YES → Present these broader topic groups:
+${tier2List || '(No topics found across the board either)'}
+   Use get_tasks_by_topic to drill into selected topic. Help select tasks. Use parse_and_create_tasks to schedule. Confirm.
+5. If NO → Acknowledge, mention next check-in. Close.`}`;
+      }
+
+    // ─── 5:00 PM — Daily Wrap + After-Work ───────────────────
+    case 'after_work': {
+      const phase2 = hasTasks
+        ? `PHASE 2 — After-Work Items:
+5. Present after-work tasks succinctly, e.g. "For this evening you've got: [task names with times]":
+${taskList}
+6. Ask something like: "Keep these as-is, adjust anything, or skip?"
+7. If ADJUST → Capture edits via tools. Confirm.`
+        : tier1List
+        ? `PHASE 2 — After-Work Topic Jog:
+5. Tell them they have no scheduled after-work items
+6. There are open items that fit this time window, grouped under these areas. Present them naturally with counts:
+${tier1List}
+   These are topic groups -- each contains tasks relevant to this window.
+7. Ask something like: "Any of these areas you want to dig into right now?"
+8. If YES → Use get_tasks_by_topic to drill in and present the actual tasks. Help select. Use parse_and_create_tasks to schedule. Confirm.
+9. If NO → Acknowledge. Close.`
+        : `PHASE 2 — After-Work Topic Jog (Broadened):
+5. Say something like: "Nothing specific lined up for after work -- want me to look across your whole board?"
+6. If YES → Present these broader topic groups:
+${tier2List || '(No topics found)'}
+   Use get_tasks_by_topic to drill in. Help select. Use parse_and_create_tasks to schedule. Confirm.
+7. If NO → Acknowledge. Close.`;
+
+      return `${AGENDA_HEADER}\n
+CALL: Daily Wrap + After-Work (Two Phases)
+GREETING: Address user as "${preferredGreeting}"
+
+PHASE 1 — Status Wrapup:
+1. Greet user
+2. Say something like: "Let's do a quick wrap on today before we look at what's next."
+3. Ask something like: "Anything you got done today I can mark off?" → Use update_task with status DONE
+4. Ask something like: "Anything blocked or need to move to another day?" → Use update_task or reschedule_task
+
+${phase2}
+
+CLOSE: Confirm you captured their updates.`;
+    }
+
+    // ─── 7:00 PM — Evening Work Items ────────────────────────
+    case 'evening':
+      if (hasTasks) {
+        return `${AGENDA_HEADER}\n
+CALL: Evening Work Items (Tasks Available)
+GREETING: Address user as "${preferredGreeting}" — warm evening tone
+
+AGENDA QUEUE:
+1. Greet user warmly (evening tone)
+2. Present evening tasks succinctly, e.g. "Tonight you've got: [task names]":
+${taskList}
+3. Ask something like: "Good to go with these, or want to change anything?"
+4. If ADJUST → Capture edits via tools. Confirm.
+
+CLOSE: Wish them a good evening.`;
+      } else {
+        return `${AGENDA_HEADER}\n
+CALL: Evening Work Items (No Tasks — Topic Jog)
+GREETING: Address user as "${preferredGreeting}" — warm evening tone
+
+AGENDA QUEUE:
+1. Greet user warmly (evening tone)
+2. Tell them they have no scheduled evening items
+${tier1List ? `3. There are open items that fit this time window, grouped under these areas. Present them naturally with counts:
+${tier1List}
+   These are topic groups -- each contains tasks relevant to this window.
+4. Ask something like: "Any of these you want to work on tonight?"
+5. If YES → Use get_tasks_by_topic to drill in and present the actual tasks. Help select. Use parse_and_create_tasks to schedule. Confirm.
+6. If NO → Acknowledge.` : `3. Say something like: "Nothing specific lined up for this evening -- want me to look across your whole board?"
+4. If YES → Present these broader topic groups:
+${tier2List || '(No topics found)'}
+   Use get_tasks_by_topic to drill in. Help select. Use parse_and_create_tasks to schedule. Confirm.
+5. If NO → Acknowledge.`}
+
+CLOSE: Wish them a good evening.`;
+      }
+
+    // ─── Weekend 10:00 AM — Saturday/Sunday ──────────────────
+    case 'weekends':
+      if (hasTasks) {
+        return `${AGENDA_HEADER}\n
+CALL: Weekend Check-in — ${dayName} (Tasks Available)
+GREETING: Address user as "${preferredGreeting}" — relaxed weekend tone
+
+AGENDA QUEUE:
+1. Greet user (weekend tone, reference ${dayName})
+2. Present weekend tasks succinctly, e.g. "For today you've got: [task names]":
+${taskList}
+3. Ask something like: "Want to keep this plan, adjust, or take the day off?"
+4. If ADJUST → Capture edits via tools. Confirm.
+
+CLOSE: Wish them an enjoyable weekend.`;
+      } else {
+        return `${AGENDA_HEADER}\n
+CALL: Weekend Check-in — ${dayName} (No Tasks — Topic Jog)
+GREETING: Address user as "${preferredGreeting}" — relaxed weekend tone
+
+AGENDA QUEUE:
+1. Greet user (weekend tone, reference ${dayName})
+2. Tell them they have no scheduled items for today
+${tier1List ? `3. There are open items that fit this time window, grouped under these areas. Present them naturally with counts:
+${tier1List}
+   These are topic groups -- each contains tasks relevant to this window.
+4. Ask something like: "Any of these areas you want to dig into today?"
+5. If YES → Use get_tasks_by_topic to drill in and present the actual tasks. Help select. Use parse_and_create_tasks to schedule. Confirm.
+6. If NO → Acknowledge.` : `3. Say something like: "Nothing specific lined up for today -- want me to look across your whole board?"
+4. If YES → Present these broader topic groups:
+${tier2List || '(No topics found)'}
+   Use get_tasks_by_topic to drill in. Help select. Use parse_and_create_tasks to schedule. Confirm.
+5. If NO → Acknowledge.`}
+
+CLOSE: Wish them an enjoyable weekend.`;
+      }
+
+    default:
+      return `${AGENDA_HEADER}\n
+CALL: Scheduled Check-in
+GREETING: Address user as "${preferredGreeting}"
+
+AGENDA QUEUE:
+1. Greet user
+2. Ask what they would like to focus on
+3. Help them plan and schedule using available tools
+
+CLOSE: Confirm any updates captured.`;
+  }
+}
+
+// ── Router: delegates to V1 or V2 based on flag ─────────────────────
+
+export function buildWindowContext(
+  window: string,
+  tasks: any[],
+  tier1Topics: any[],
+  tier2Topics: any[],
+  preferredGreeting: string,
+  dayName: string
+): string {
+  if (USE_V2_SCRIPTS) {
+    return buildWindowContextV2(window, tasks, tier1Topics, tier2Topics, preferredGreeting, dayName);
+  }
+  return buildWindowContextV1(window, tasks, tier1Topics, tier2Topics, preferredGreeting, dayName);
 }
 
 // ── Window Transition Context (queries DB, builds context) ──────────

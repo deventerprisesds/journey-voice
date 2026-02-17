@@ -7,6 +7,14 @@ import { getTopicGroupsManual } from "../_shared/call-context-builder.ts";
 // ── Rollback Flag for shared topic ranking ──────────────────────────
 const USE_SHARED_TOPICS = true;
 
+// ── Rollback Flag for V2 task filters (category + status groups) ────
+const USE_V2_TASK_FILTERS = true;
+
+const STATUS_GROUPS: Record<string, string[]> = {
+  'ACTIVE': ['BACKLOG', 'TODO', 'READY', 'UP_NEXT', 'DOING', 'PLANNING'],
+  'WORKABLE': ['READY', 'UP_NEXT', 'DOING'],
+};
+
 // ============================================================================
 // UTILITY: Proper error message extraction
 // ============================================================================
@@ -423,9 +431,24 @@ async function getTasks(supabase: any, userId: string, args: any, timezone: stri
     
     let query = supabase.from('tasks').select('*').eq('user_id', userId);
     
-    // Apply status filter
+    // Apply status filter (V2: support group aliases ACTIVE/WORKABLE)
     if (args.status) {
-      query = query.eq('status', args.status.toUpperCase());
+      const upper = args.status.toUpperCase();
+      if (USE_V2_TASK_FILTERS) {
+        const group = STATUS_GROUPS[upper];
+        if (group) {
+          query = query.in('status', group);
+        } else {
+          query = query.eq('status', upper);
+        }
+      } else {
+        query = query.eq('status', upper);
+      }
+    }
+
+    // Apply category filter (V2 only)
+    if (USE_V2_TASK_FILTERS && args.category) {
+      query = query.eq('category', args.category.toUpperCase());
     }
     
     // Apply date filtering if time_filter provided
