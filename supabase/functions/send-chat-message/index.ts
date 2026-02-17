@@ -1,5 +1,10 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { buildCallContext as sharedBuildCallContext } from '../_shared/call-context-builder.ts';
+
+// ── Rollback Flag ──────────────────────────────────────────────────
+// Set to false to revert to legacy local context building
+const USE_SHARED_CONTEXT = true;
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -440,12 +445,27 @@ serve(async (req) => {
 
     if (!content && generateFromContext) {
       callType = generateFromContext.callType;
-      const contextualInstructions = await buildCallContext(
-        callType,
-        generateFromContext.context,
-        userId,
-        supabase
-      );
+      
+      // V2: Use shared module for context building (with rollback flag)
+      let contextualInstructions: string;
+      if (USE_SHARED_CONTEXT) {
+        console.log('[SEND-CHAT-MESSAGE] Using shared call-context-builder');
+        contextualInstructions = await sharedBuildCallContext(
+          { callType: callType, context: generateFromContext.context },
+          userId,
+          supabaseUrl,
+          supabaseServiceKey
+        );
+      } else {
+        // Legacy local path (preserved for rollback)
+        console.log('[SEND-CHAT-MESSAGE] Using legacy local buildCallContext');
+        contextualInstructions = await buildCallContext(
+          callType,
+          generateFromContext.context,
+          userId,
+          supabase
+        );
+      }
 
       console.log('[SEND-CHAT-MESSAGE] Generating AI response with context');
       

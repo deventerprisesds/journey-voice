@@ -1,70 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { buildCallContext } from '../_shared/call-context-builder.ts';
-
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
-
-const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-
-// Communication mode for recurring calls
-type CommsMode = 'phone' | 'app_message' | 'slack' | 'email';
-
-interface ScheduledCall {
-  id: string;
-  name: string;
-  time: string; // HH:mm format
-  enabled: boolean;
-  callType: 'morning_standup' | 'midday_checkin' | 'eod_wrapup' | 'custom';
-  context: string;
-  commsMode?: CommsMode;
-  fallbackMode?: CommsMode;
-}
-interface ScheduledCallConfig {
-  userId?: string;
-  callType: 'morning_briefing' | 'task_reminder' | 'custom';
-  context?: string;
-  trigger?: string;
-  checkRecurring?: boolean;
-}
-
-// Get today's tasks for briefing context
-async function getTodaysBriefing(userId: string): Promise<string> {
-  const supabase = createClient(supabaseUrl, supabaseServiceKey);
-  
-  const today = new Date();
-  const startOfDay = new Date(today.setHours(0, 0, 0, 0)).toISOString();
-  const endOfDay = new Date(today.setHours(23, 59, 59, 999)).toISOString();
-
-  const { data: tasks, error } = await supabase
-    .from('tasks')
-    .select('title, start_time, priority, category, status')
-    .eq('user_id', userId)
-    .gte('start_time', startOfDay)
-    .lte('start_time', endOfDay)
-    .order('start_time', { ascending: true });
-
-  if (error || !tasks || tasks.length === 0) {
-    return 'your daily schedule';
-  }
-
-  const taskCount = tasks.length;
-  const highPriorityCount = tasks.filter(t => t.priority === 'HIGH' || t.priority === 'URGENT').length;
-  const completedCount = tasks.filter(t => t.status === 'DONE').length;
-  
-  let briefing = `${taskCount} task${taskCount > 1 ? 's' : ''} scheduled for today`;
-  if (highPriorityCount > 0) {
-    briefing += `, including ${highPriorityCount} high priority item${highPriorityCount > 1 ? 's' : ''}`;
-  }
-  if (completedCount > 0) {
-    briefing += `. ${completedCount} already completed`;
-  }
-  
-  return briefing;
-}
+import { buildCallContext, getTodaysBriefing } from '../_shared/call-context-builder.ts';
 
 // Check if current time matches scheduled time (±1 minute tolerance)
 function isTimeMatch(currentHHMM: string, scheduledTime: string): boolean {
@@ -376,7 +312,8 @@ serve(async (req) => {
     let context = config.context || '';
     
     if (config.callType === 'morning_briefing' && config.userId) {
-      context = await getTodaysBriefing(config.userId);
+      const briefingSupabase = createClient(supabaseUrl, supabaseServiceKey);
+      context = await getTodaysBriefing(briefingSupabase, config.userId);
     } else if (config.callType === 'morning_briefing') {
       context = 'your morning schedule briefing';
     }
