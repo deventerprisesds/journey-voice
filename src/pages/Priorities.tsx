@@ -32,6 +32,7 @@ export interface TopicGroupRef {
   id: string;
   topic_name: string;
   categoryKey: string;
+  parentTopicId?: string;
 }
 
 export interface CategoryRef {
@@ -327,9 +328,16 @@ const Priorities: React.FC = () => {
         };
       });
 
+      // Ensure children inherit parent's category if they don't have their own
+      allTopics.filter((t: any) => t.parent_topic_id).forEach((t: any) => {
+        if (!topicCategoryMap.has(t.id) && topicCategoryMap.has(t.parent_topic_id)) {
+          topicCategoryMap.set(t.id, topicCategoryMap.get(t.parent_topic_id)!);
+        }
+      });
+
       const refs: TopicGroupRef[] = allTopics
         .filter((t: any) => topicCategoryMap.has(t.id))
-        .map((t: any) => ({ id: t.id, topic_name: t.topic_name, categoryKey: topicCategoryMap.get(t.id)! }));
+        .map((t: any) => ({ id: t.id, topic_name: t.topic_name, categoryKey: topicCategoryMap.get(t.id)!, parentTopicId: t.parent_topic_id || undefined }));
       setAllTopicGroupRefs(refs);
       setCategories(catData);
 
@@ -606,15 +614,24 @@ const Priorities: React.FC = () => {
               {categoryRefs.map(cat => {
                 const groupsInCat = allTopicGroupRefs.filter(g => g.categoryKey === cat.key);
                 if (groupsInCat.length === 0) return null;
+                const parents = groupsInCat.filter(g => !g.parentTopicId);
+                const childrenOf = (pid: string) => groupsInCat.filter(g => g.parentTopicId === pid);
                 return (
                   <React.Fragment key={cat.key}>
                     <DropdownMenuItem disabled className="text-xs font-semibold text-muted-foreground uppercase">
                       {cat.label}
                     </DropdownMenuItem>
-                    {groupsInCat.map(g => (
-                      <DropdownMenuItem key={g.id} onClick={() => batchMoveToGroup(g.id, g.categoryKey)} className="pl-6">
-                        {g.topic_name}
-                      </DropdownMenuItem>
+                    {parents.map(g => (
+                      <React.Fragment key={g.id}>
+                        <DropdownMenuItem onClick={() => batchMoveToGroup(g.id, g.categoryKey)} className="pl-6">
+                          {g.topic_name}
+                        </DropdownMenuItem>
+                        {childrenOf(g.id).map(child => (
+                          <DropdownMenuItem key={child.id} onClick={() => batchMoveToGroup(child.id, child.categoryKey)} className="pl-10 text-sm">
+                            {child.topic_name}
+                          </DropdownMenuItem>
+                        ))}
+                      </React.Fragment>
                     ))}
                   </React.Fragment>
                 );
