@@ -1,237 +1,154 @@
 
 
-# Final Deduplication + Rollback Safety Plan
+# Rollback-Safe Script Refinement + Category Filter
 
-## Two Concerns Addressed
+## What This Plan Does
 
-### 1. Rollback Safety: The V2 Bypass Pattern
+Four changes deployed in parallel with the existing code, controlled by a single flag per function so you can instantly revert if calls get worse.
 
-Following your established preference for additive/bypass solutions, here is the rollback strategy:
+## Rollback Strategy
 
-**Phase 1: Deploy shared-aware code alongside old code (not replacing it)**
-
-- In `send-chat-message/index.ts`, add a `USE_SHARED_CONTEXT = true` flag at the top of the file
-- When `true`, it delegates to the shared `call-context-builder.ts`
-- When `false`, it falls back to the existing local logic (untouched)
-- This means if performance worsens or topics are wrong, you flip one constant to `false` and redeploy -- instant rollback with zero code changes
+Each changed file gets a version flag at the top:
 
 ```text
-const USE_SHARED_CONTEXT = true;  // flip to false to rollback
-
-if (USE_SHARED_CONTEXT) {
-  // New: delegates to shared module
-} else {
-  // Old: local logic preserved exactly as-is
-}
+const USE_V2_SCRIPTS = true;   // flip to false = instant rollback to current behavior
 ```
 
-- Same flag pattern for `execute-tool/index.ts` topic groups and scheduled_calls
-- Old functions are NOT deleted -- they stay in the file, just bypassed
+The old `buildWindowContext` function is renamed to `buildWindowContextV1` (untouched). The new version is `buildWindowContextV2`. The main export calls whichever the flag selects. Old code is never deleted until you confirm the new version works.
 
-**Phase 2: After validation in production (you confirm topics make sense across 2-3 check-ins), remove the old code paths**
+Same pattern for `execute-tool`: the old `getTasks` logic stays inline, the new category/status-group logic is behind `USE_V2_TASK_FILTERS`.
 
-This means the rollback window is unlimited -- the old code stays until you explicitly approve its removal.
-
-### 2. Window-Appropriate Tasks Leading to Topic Groups
-
-You are correct that the plan was missing this. Here is the actual flow you want:
-
-```text
-Current time -> Determine window (e.g. "evening")
-    -> Fetch tasks whose category maps to this window (LIFE, PERSONAL, VENTURES, PROF_EDUCATION)
-    -> From THOSE tasks, derive topic groups (ranked by recency, priority density, task count)
-    -> Present: "Here are your evening topics ranked by importance"
-    -> User picks a topic -> drill down with get_tasks_by_topic
-```
-
-The shared module (`call-context-builder.ts`) already does this correctly for phone calls via `buildWindowTransitionContext`:
-1. Calls `getTasksForWindow()` -- filters tasks by category-to-window mapping
-2. Calls `getTopicGroupsFromWindowTasks()` -- derives topics from those window-aligned tasks
-3. Falls back to `getTopicGroupsFromAllTasks()` (tier 2) if tier 1 is empty
-
-But the shared module's **custom call path** (lines 505-524) skips all of this -- it just passes raw user context through with no tasks or topics. This is why the voicemail fallback and custom chat check-ins produce random suggestions.
-
-**The fix**: Enhance the shared module's custom call path to also determine the current window and include window-appropriate tasks and topic groups, then have `send-chat-message` use it.
+Once you confirm across 2-3 check-ins that calls are better, we remove the V1 code.
 
 ---
 
-## Complete Change List
+## Change 1: Script Refinements in `call-context-builder.ts`
 
-### File 1: `_shared/call-context-builder.ts` -- Enhance custom call path + add `getTodaysBriefing`
+**What stays identical:** All `If CONFIRM / If ADJUST / If NO / If YES` branches. All pre-loaded task lists and topic group data. The overall structure of each window.
 
-**Add `getTodaysBriefing` export** (~30 lines) so both `send-chat-message` and `twilio-scheduled-call` stop maintaining their own copies.
+**What changes (verbatim lines become examples):**
 
-**Enhance the custom call path** (lines 505-524) to determine the current time window and include window-appropriate tasks and topic groups:
+| Window | Current Line | Becomes |
+|--------|-------------|---------|
+| Morning (tasks) | `Ask: confirm these for this morning, adjust, or skip?` | `Ask something like: "Want to confirm these for this morning, adjust anything, or skip?"` |
+| Morning (tasks) | `Remind them of their morning tasks:` | `Briefly present their morning tasks, e.g. "You've got [N] things this morning: [names and times]":` |
+| Business hours (tasks) | `Present business-hours tasks:` | `Present their business-hours lineup succinctly, e.g. "Here's what's lined up: [task names with times]":` |
+| Business hours (tasks) | `Ask: "Which one do you want to start with?"` | `Ask something like: "Which one do you want to start with?"` |
+| Business hours (no tasks) | `Present these business-hour topic groups to jog memory:` | `There are open items that fit this time window, grouped under these areas. Present them naturally, e.g. "You've got 5 open items under Career Development, 3 under Project Alpha -- want to dig into any of these?":` |
+| Business hours (no tasks) | `Ask if they want to work on any of these right now` | `Ask something like: "Any of these areas you want to dig into right now?"` |
+| Business hours (no tasks, tier2) | `Say: "I don't see any potential items..."` | `Say something like: "Nothing specific lined up for business hours -- want me to look across your whole board?"` |
+| After work phase 1 | `Say you want to review how today went...` | `Say something like: "Let's do a quick wrap on today before we look at what's next."` |
+| After work phase 1 | `Ask: any tasks completed today to mark done?` | `Ask something like: "Anything you got done today I can mark off?"` |
+| After work phase 1 | `Ask: any tasks blocked or to move to another day?` | `Ask something like: "Anything blocked or need to move to another day?"` |
+| After work phase 2 | `Ask: keep as-is, adjust, or skip?` | `Ask something like: "Keep these as-is, adjust anything, or skip?"` |
+| After work (no tasks) | Same topic group reframing as business hours | Same pattern |
+| Evening (tasks) | `Ask: confirm, adjust, or skip?` | `Ask something like: "Good to go with these, or want to change anything?"` |
+| Evening (no tasks) | Same topic group reframing | Same pattern |
+| Weekends (tasks) | `Ask: confirm, adjust, or skip?` | `Ask something like: "Want to keep this plan, adjust, or take the day off?"` |
+| Weekends (no tasks) | Same topic group reframing | Same pattern |
 
-```
-// Custom calls: determine current window and include context
-case 'custom':
-default:
-  const supabase = createClient(supabaseUrl, supabaseServiceKey);
-  const { data: prefs } = await supabase
-    .from('user_scheduling_prefs')
-    .select('timezone')
-    .eq('user_id', userId)
-    .maybeSingle();
-  const tz = prefs?.timezone || 'America/New_York';
-  
-  // Determine current window from user's timezone
-  const currentHour = parseInt(new Date().toLocaleString('en-US', {
-    timeZone: tz, hour: '2-digit', hour12: false
-  }), 10);
-  
-  let currentWindow = 'business_hours';
-  if (currentHour < 9) currentWindow = 'morning';
-  else if (currentHour >= 17 && currentHour < 19) currentWindow = 'after_work';
-  else if (currentHour >= 19 && currentHour < 22) currentWindow = 'evening';
-  // weekend detection via day-of-week could be added
-  
-  // Fetch window-appropriate tasks and derive topic groups
-  const windowTasks = await getTasksForWindow(supabase, userId, currentWindow, tz);
-  const [tier1, tier2] = await Promise.all([
-    getTopicGroupsFromWindowTasks(supabase, userId, currentWindow),
-    getTopicGroupsFromAllTasks(supabase, userId)
-  ]);
-  
-  const topicsToShow = tier1.length > 0 ? tier1 : tier2;
-  const topicSection = topicsToShow.length > 0
-    ? '\n\nACTIVE TOPICS for this time window (ranked by recency and priority):\n' +
-      formatTopicGroups(topicsToShow)
-    : '';
-  const taskSection = windowTasks.length > 0
-    ? '\n\nTASKS for current window:\n' + formatTaskList(windowTasks)
-    : '';
-  
-  return `${AGENDA_HEADER}\n
-CALL: Custom Scheduled Check-in
-WINDOW: ${currentWindow}
+Also remove line 331 (`2. If user goes on a tangent, handle it, then return to the plan`) from business_hours -- tangent handling belongs in `AGENDA_HEADER`, not as an agenda item.
 
-[USER CONTEXT]
-${userContext}
-${taskSection}${topicSection}
+**Topic group reframing (all no-task windows):** Instead of "Present these topic groups to jog memory" followed by "Ask if they want to work on any," the new phrasing positions topic groups as containers for time-relevant tasks: "There are open items that fit this time window, grouped under these areas." The example phrasing shows the AI how to present them succinctly with counts.
 
-Start with a friendly greeting addressing the user context.
-Then present the topic groups and ask which the user wants to explore.
-Use get_tasks_by_topic to drill into their selection.`;
+## Change 2: Agenda and Tangent Awareness in `AGENDA_HEADER`
+
+Append to the existing `AGENDA_HEADER` (after the current TOPIC DRILL-DOWN RULE):
+
+```text
+TANGENT HANDLING:
+When the user goes off-topic or asks an unrelated question, handle it fully --
+answer their question, use tools if needed, take your time.
+The system tracks your agenda progress automatically via an AgendaManager.
+When a tangent ends, you will receive a [RESUME] message indicating which
+agenda item to return to. When you see [RESUME], transition back naturally --
+do not say "getting back to the agenda." Weave back into the flow.
+You are responsible for covering ALL agenda items before closing the call.
+If the user wants to end early, briefly mention any uncovered items and
+confirm they want to skip them.
 ```
 
-This ensures that ALL call types -- including custom/voicemail fallback -- get window-appropriate tasks leading to ranked topic groups.
+Also change line 41 from `Cover them in sequence` to `Work through them in order, but adapt naturally to the conversation.`
 
-### File 2: `send-chat-message/index.ts` -- Use shared module with rollback flag
+## Change 3: Add `category` and Status Groups to `get_tasks`
 
-**Add rollback flag** at top:
+**File: `_shared/tool-definitions.ts`**
+
+Add to `get_tasks` parameters:
+
+```text
+category: enum [LIFE, CAREER, VENTURES, PROF_EDUCATION, EDUCATION, PERSONAL]
+  -- "Life area filter. Use for area-specific queries."
+
+status: add ACTIVE and WORKABLE to existing enum
+  -- ACTIVE = everything not DONE/BLOCKED
+  -- WORKABLE = READY + UP_NEXT + DOING
 ```
-const USE_SHARED_CONTEXT = true;
-```
 
-**Keep all existing local functions** (lines 57-329) untouched.
+**File: `execute-tool/index.ts`**
 
-**Modify `buildCallContext` call** (line 443) to conditionally use shared:
-```
-let contextualInstructions: string;
-if (USE_SHARED_CONTEXT) {
-  // Import shared module
-  const { buildCallContext: sharedBuildCallContext } = await import('../_shared/call-context-builder.ts');
-  contextualInstructions = await sharedBuildCallContext(
-    { callType: callType, context: generateFromContext.context },
-    userId,
-    supabaseUrl,
-    supabaseServiceKey
-  );
-} else {
-  // Legacy local path (preserved for rollback)
-  contextualInstructions = await buildCallContext(callType, generateFromContext.context, userId, supabase);
+In `getTasks` function (around line 427), replace the simple `.eq('status', ...)` with:
+
+```text
+STATUS_GROUPS = {
+  ACTIVE: [BACKLOG, TODO, READY, UP_NEXT, DOING, PLANNING],
+  WORKABLE: [READY, UP_NEXT, DOING]
 }
+
+If status is a group alias -> use .in('status', group)
+If status is a single value -> use .eq('status', value) as before
+
+If category provided -> add .eq('category', value)
 ```
 
-This is the minimum change -- one conditional branch at the call site. All old code stays.
+Behind `USE_V2_TASK_FILTERS` flag -- old single-status `.eq()` logic preserved for rollback.
 
-### File 3: `execute-tool/index.ts` -- Fix `fetchTopicGroups` + `scheduled_calls`
+## Change 4: Chat Guardrails in `hybrid-assistant-api`
 
-**`fetchTopicGroups` (lines 1822-1829)**: Replace simple `task_count DESC` with the shared `getTopicGroupsManual` function which ranks by recency, priority density, and task count. With rollback flag:
+**File: `hybrid-assistant-api/index.ts`**
 
+Prepend to `additionalInstructions` (line 422, before `parts.join`):
+
+```text
+DATA INTEGRITY RULES:
+- NEVER fabricate task names. Use EXACT titles from tool results or pre-loaded context.
+- For "what can I work on": use get_tasks(status: "ACTIVE").
+- For life-area queries ("life tasks", "career items"): use get_tasks with the category filter.
+- For ready-now queries: use get_tasks(status: "WORKABLE").
+- Always call a tool BEFORE listing tasks you don't already have in context.
 ```
-const USE_SHARED_TOPICS = true;
-
-const fetchTopicGroups = async () => {
-  if (USE_SHARED_TOPICS) {
-    const { getTopicGroupsManual } = await import('../_shared/call-context-builder.ts');
-    return getTopicGroupsManual(supabase, userId, null);
-  }
-  // Legacy fallback
-  const { data } = await supabase
-    .from('task_topic_index')
-    .select('topic_name, summary, task_count, category_affinity, updated_at')
-    .eq('user_id', userId)
-    .order('task_count', { ascending: false });
-  return data || [];
-};
-```
-
-**`scheduled_calls` section (lines 1890-1893)**: Add `fetchPendingNotifications()`:
-
-```
-} else if (section === 'scheduled_calls') {
-  const [prefs, pending] = await Promise.all([
-    fetchScheduledCalls(),
-    fetchPendingNotifications()
-  ]);
-  results.scheduled_calls = prefs?.scheduled_calls || [];
-  results.timezone = prefs?.timezone || 'America/New_York';
-  
-  const pendingCalls = (pending || []).filter(
-    (n: any) => n.notification_type === 'scheduled_call'
-  );
-  results.upcoming_scheduled_calls = pendingCalls.map((n: any) => ({
-    name: n.title,
-    scheduled_for: n.scheduled_for,
-  }));
-  if (pendingCalls.length > 0) {
-    results.next_upcoming_call = {
-      name: pendingCalls[0].title,
-      scheduled_for: pendingCalls[0].scheduled_for,
-    };
-  }
-}
-```
-
-### File 4: `twilio-scheduled-call/index.ts` -- Replace local `getTodaysBriefing`
-
-Add import, remove local copy (lines 35-67), replace usage with shared version. With rollback safety: the function already imports from the shared module (line 3), so this is low-risk.
-
-### File 5: `classify-task-topic/index.ts` -- Import shared constant
-
-Replace local `CATEGORY_WINDOW_MAPPING` (lines 14-21) with import from shared. Lowest-risk change since the values are identical.
 
 ---
 
 ## Deployment Sequence
 
-1. Deploy `_shared/call-context-builder.ts` changes (enhanced custom path + getTodaysBriefing export)
-2. Deploy `classify-task-topic` (constant import -- lowest risk, validates shared imports work)
-3. Deploy `execute-tool` (topic ranking + scheduled_calls fix)
-4. Deploy `twilio-scheduled-call` (getTodaysBriefing import)
-5. Deploy `send-chat-message` (the big one -- delegates to shared module)
-
-Each step is independently testable. If any step causes issues, the rollback flag is flipped for that function only.
+1. Deploy `execute-tool` (category filter + status groups behind flag)
+2. Deploy `hybrid-assistant-api` (guardrails)
+3. Deploy `twilio-realtime-bridge` (picks up script + AGENDA_HEADER changes via shared module import)
+4. Call `sync-assistant-tools` to update OpenAI Assistant with new `category` and status params
 
 ## Validation
 
-After deployment, trigger a chat check-in at the current time window and verify:
-- Topics are ranked by recency and priority, not random
-- Topics correspond to categories appropriate for the current window
-- Custom calls include task and topic context
-- `get_my_config(scheduled_calls)` returns actual pending calls from the notification queue
+- Trigger a scheduled call and verify: examples guide tone but branches still drive flow
+- Test a no-tasks window: confirm topic groups are presented as "areas with tasks underneath"
+- Test tangent: go off-topic mid-call, confirm [RESUME] weaves back naturally
+- Test `get_tasks(category: "CAREER", status: "WORKABLE")` via chat
 
-## Summary
+## Rollback
 
-| File | Risk | Rollback | Lines Changed |
-|------|------|----------|---------------|
-| `_shared/call-context-builder.ts` | Low | N/A (additive) | +50 |
-| `classify-task-topic/index.ts` | Minimal | Revert import | -7, +1 |
-| `execute-tool/index.ts` | Low | Flag | ~20 |
-| `twilio-scheduled-call/index.ts` | Low | Revert import | -35, +3 |
-| `send-chat-message/index.ts` | Medium | Flag (old code preserved) | +15 |
+If any calls feel worse:
+- Flip `USE_V2_SCRIPTS = false` in `call-context-builder.ts` -- instant revert to current scripts
+- Flip `USE_V2_TASK_FILTERS = false` in `execute-tool` -- reverts to single-status `.eq()` only
+- Redeploy the affected function (under 30 seconds)
 
-Functions to redeploy: `send-chat-message`, `execute-tool`, `twilio-scheduled-call`, `classify-task-topic`
+Old code stays in the files until you explicitly approve removal.
+
+## Files Changed
+
+| File | Risk | Rollback |
+|------|------|----------|
+| `_shared/call-context-builder.ts` | Low | `USE_V2_SCRIPTS` flag |
+| `_shared/tool-definitions.ts` | Low | Additive only (new params) |
+| `execute-tool/index.ts` | Low | `USE_V2_TASK_FILTERS` flag |
+| `hybrid-assistant-api/index.ts` | Minimal | Remove prepended text |
 
