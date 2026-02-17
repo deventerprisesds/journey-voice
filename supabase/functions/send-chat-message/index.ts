@@ -470,11 +470,25 @@ serve(async (req) => {
       let contextualInstructions: string;
       if (USE_SHARED_CONTEXT) {
         console.log('[SEND-CHAT-MESSAGE] Using shared call-context-builder');
+        
+        // Fetch preferred_greeting from user profile
+        let preferredGreeting = 'Sir';
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('preferred_greeting')
+          .eq('user_id', userId)
+          .maybeSingle();
+        if (profile?.preferred_greeting) {
+          preferredGreeting = profile.preferred_greeting;
+        }
+        console.log(`[SEND-CHAT-MESSAGE] Using preferred_greeting: "${preferredGreeting}"`);
+        
         contextualInstructions = await sharedBuildCallContext(
           { callType: callType, context: generateFromContext.context },
           userId,
           supabaseUrl,
-          supabaseServiceKey
+          supabaseServiceKey,
+          preferredGreeting
         );
       } else {
         // Legacy local path (preserved for rollback)

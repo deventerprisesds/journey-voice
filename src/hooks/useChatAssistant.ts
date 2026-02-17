@@ -613,13 +613,8 @@ export function useChatAssistant(): UseChatAssistantReturn {
         await callAgendaManager('pause_for_tangent', { userQuery: content.trim() });
       }
 
-      await supabase.from('conversation_messages').insert({
-        thread_id: threadId,
-        user_id: user.id,
-        role: 'user',
-        content: userMessage.content,
-        source: 'chat'
-      });
+      // User message is now saved server-side by hybrid-assistant-api
+      // Just display it optimistically in the UI (already done above with userMessage)
 
       // Build grounded userInput when agenda is active
       let groundedInput = content.trim();
@@ -655,19 +650,14 @@ User message: ${content.trim()}`;
       if (error) throw error;
 
       const assistantContent = data?.response || 'I apologize, but I couldn\'t process your request.';
+      const assistantMessageId = data?.assistantMessageId || loadingId;
 
-      const { data: savedMessage } = await supabase.from('conversation_messages').insert({
-        thread_id: threadId,
-        user_id: user.id,
-        role: 'assistant',
-        content: assistantContent,
-        source: 'chat'
-      }).select().single();
-
+      // Update the loading placeholder with the real response
+      // Messages are saved server-side; realtime subscription handles deduplication
       setMessages(prev => prev.map(msg => 
         msg.id === loadingId 
           ? { 
-              id: savedMessage?.id || loadingId, 
+              id: assistantMessageId, 
               role: 'assistant' as const, 
               content: assistantContent, 
               timestamp: new Date(),
@@ -677,7 +667,7 @@ User message: ${content.trim()}`;
       ));
 
       // Push notification if user left while AI was thinking
-      await maybeSendPush(assistantContent, savedMessage?.id || loadingId, 'success');
+      await maybeSendPush(assistantContent, assistantMessageId, 'success');
 
       // ── Tangent recovery: resume agenda and re-present interactive UI ──
       if (isAgendaActive && lastInteractiveContent.current) {
@@ -694,14 +684,10 @@ User message: ${content.trim()}`;
         }
       }
 
-      await supabase
-        .from('ai_threads')
-        .update({ updated_at: new Date().toISOString() })
-        .eq('id', threadId);
+      // Thread timestamp is now updated server-side
 
     } catch (error) {
-      console.error('Error sending message:', error);
-      const errorContent = 'Sorry, I encountered an error processing your request. Please try again.';
+      const errorContent = 'I may still be processing your request. Check back shortly.';
       setMessages(prev => prev.filter(msg => msg.id !== loadingId));
       const errorMsgId = crypto.randomUUID();
       setMessages(prev => [...prev, {

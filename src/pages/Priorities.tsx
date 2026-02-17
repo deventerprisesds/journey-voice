@@ -582,6 +582,32 @@ const Priorities: React.FC = () => {
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm" variant="secondary" className="gap-1.5">
+                <Layers className="h-3.5 w-3.5" />
+                Group…
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent className="max-h-64 overflow-y-auto">
+              {categoryRefs.map(cat => {
+                const groupsInCat = allTopicGroupRefs.filter(g => g.categoryKey === cat.key);
+                if (groupsInCat.length === 0) return null;
+                return (
+                  <React.Fragment key={cat.key}>
+                    <DropdownMenuItem disabled className="text-xs font-semibold text-muted-foreground uppercase">
+                      {cat.label}
+                    </DropdownMenuItem>
+                    {groupsInCat.map(g => (
+                      <DropdownMenuItem key={g.id} onClick={() => batchMoveToGroup(g.id, g.categoryKey)} className="pl-6">
+                        {g.topic_name}
+                      </DropdownMenuItem>
+                    ))}
+                  </React.Fragment>
+                );
+              })}
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button size="sm" variant="ghost" className="ml-auto text-primary-foreground/80 hover:text-primary-foreground" onClick={clearSelection}>
             <X className="h-4 w-4" />
           </Button>

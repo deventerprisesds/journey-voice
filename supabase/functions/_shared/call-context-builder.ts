@@ -495,12 +495,14 @@ function buildWindowContextV2(
   tier1Topics: any[],
   tier2Topics: any[],
   preferredGreeting: string,
-  dayName: string
+  dayName: string,
+  userGuidance: string = ''
 ): string {
   const hasTasks = tasks.length > 0;
   const taskList = formatTaskList(tasks);
   const tier1List = formatTopicGroups(tier1Topics);
   const tier2List = formatTopicGroups(tier2Topics);
+  const styleDirective = userGuidance ? `\nSTYLE: ${userGuidance}` : '';
 
   switch (window) {
     // ─── 6:00 AM — Morning Kickstart ─────────────────────────
@@ -508,7 +510,7 @@ function buildWindowContextV2(
       if (hasTasks) {
         return `${AGENDA_HEADER}\n
 CALL: Morning Kickstart (Tasks Available)
-GREETING: Address user as "${preferredGreeting}"
+GREETING: Address user as "${preferredGreeting}"${styleDirective}
 
 AGENDA QUEUE:
 1. Greet user
@@ -520,7 +522,7 @@ ${taskList}
       } else {
         return `${AGENDA_HEADER}\n
 CALL: Morning Kickstart (No Tasks)
-GREETING: Address user as "${preferredGreeting}"
+GREETING: Address user as "${preferredGreeting}"${styleDirective}
 
 AGENDA QUEUE:
 1. Greet user
@@ -534,7 +536,7 @@ NOTE: No topic jog for morning. Keep this call lightweight.`;
       if (hasTasks) {
         return `${AGENDA_HEADER}\n
 CALL: Business Hours Execution (Tasks Available)
-GREETING: Address user as "${preferredGreeting}"
+GREETING: Address user as "${preferredGreeting}"${styleDirective}
 
 AGENDA QUEUE:
 1. Greet user
@@ -545,7 +547,7 @@ ${taskList}
       } else {
         return `${AGENDA_HEADER}\n
 CALL: Business Hours Execution (No Tasks — Topic Jog)
-GREETING: Address user as "${preferredGreeting}"
+GREETING: Address user as "${preferredGreeting}"${styleDirective}
 
 AGENDA QUEUE:
 1. Greet user
@@ -588,7 +590,7 @@ ${tier2List || '(No topics found)'}
 
       return `${AGENDA_HEADER}\n
 CALL: Daily Wrap + After-Work (Two Phases)
-GREETING: Address user as "${preferredGreeting}"
+GREETING: Address user as "${preferredGreeting}"${styleDirective}
 
 PHASE 1 — Status Wrapup:
 1. Greet user
@@ -606,7 +608,7 @@ CLOSE: Confirm you captured their updates.`;
       if (hasTasks) {
         return `${AGENDA_HEADER}\n
 CALL: Evening Work Items (Tasks Available)
-GREETING: Address user as "${preferredGreeting}" — warm evening tone
+GREETING: Address user as "${preferredGreeting}" — warm evening tone${styleDirective}
 
 AGENDA QUEUE:
 1. Greet user warmly (evening tone)
@@ -619,7 +621,7 @@ CLOSE: Wish them a good evening.`;
       } else {
         return `${AGENDA_HEADER}\n
 CALL: Evening Work Items (No Tasks — Topic Jog)
-GREETING: Address user as "${preferredGreeting}" — warm evening tone
+GREETING: Address user as "${preferredGreeting}" — warm evening tone${styleDirective}
 
 AGENDA QUEUE:
 1. Greet user warmly (evening tone)
@@ -643,7 +645,7 @@ CLOSE: Wish them a good evening.`;
       if (hasTasks) {
         return `${AGENDA_HEADER}\n
 CALL: Weekend Check-in — ${dayName} (Tasks Available)
-GREETING: Address user as "${preferredGreeting}" — relaxed weekend tone
+GREETING: Address user as "${preferredGreeting}" — relaxed weekend tone${styleDirective}
 
 AGENDA QUEUE:
 1. Greet user (weekend tone, reference ${dayName})
@@ -656,7 +658,7 @@ CLOSE: Wish them an enjoyable weekend.`;
       } else {
         return `${AGENDA_HEADER}\n
 CALL: Weekend Check-in — ${dayName} (No Tasks — Topic Jog)
-GREETING: Address user as "${preferredGreeting}" — relaxed weekend tone
+GREETING: Address user as "${preferredGreeting}" — relaxed weekend tone${styleDirective}
 
 AGENDA QUEUE:
 1. Greet user (weekend tone, reference ${dayName})
@@ -678,7 +680,7 @@ CLOSE: Wish them an enjoyable weekend.`;
     default:
       return `${AGENDA_HEADER}\n
 CALL: Scheduled Check-in
-GREETING: Address user as "${preferredGreeting}"
+GREETING: Address user as "${preferredGreeting}"${styleDirective}
 
 AGENDA QUEUE:
 1. Greet user
@@ -697,10 +699,11 @@ export function buildWindowContext(
   tier1Topics: any[],
   tier2Topics: any[],
   preferredGreeting: string,
-  dayName: string
+  dayName: string,
+  userGuidance: string = ''
 ): string {
   if (USE_V2_SCRIPTS) {
-    return buildWindowContextV2(window, tasks, tier1Topics, tier2Topics, preferredGreeting, dayName);
+    return buildWindowContextV2(window, tasks, tier1Topics, tier2Topics, preferredGreeting, dayName, userGuidance);
   }
   return buildWindowContextV1(window, tasks, tier1Topics, tier2Topics, preferredGreeting, dayName);
 }
@@ -713,7 +716,8 @@ export async function buildWindowTransitionContext(
   window: string,
   supabaseUrl: string,
   supabaseServiceKey: string,
-  preferredGreeting: string = 'Sir'
+  preferredGreeting: string = 'Sir',
+  userGuidance: string = ''
 ): Promise<string> {
   const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
@@ -737,7 +741,7 @@ export async function buildWindowTransitionContext(
 
   const dayName = new Date().toLocaleDateString('en-US', { weekday: 'long' });
 
-  return buildWindowContext(window, windowTasks, tier1Topics, tier2Topics, preferredGreeting, dayName);
+  return buildWindowContext(window, windowTasks, tier1Topics, tier2Topics, preferredGreeting, dayName, userGuidance);
 }
 
 // ── Main Entry Point ────────────────────────────────────────────────
@@ -754,8 +758,13 @@ export async function buildCallContext(
 
   if (windowMatch) {
     const window = windowMatch[1];
-    console.log(`[BUILD-CONTEXT] Detected window transition call: ${window}`);
-    return buildWindowTransitionContext(call, userId, window, supabaseUrl, supabaseServiceKey, preferredGreeting);
+    // Extract user guidance: everything after the [WINDOW:xxx] line
+    const windowLineEnd = call.context!.indexOf('\n', call.context!.indexOf(windowMatch[0]));
+    const userGuidance = windowLineEnd !== -1
+      ? call.context!.substring(windowLineEnd + 1).trim()
+      : '';
+    console.log(`[BUILD-CONTEXT] Detected window transition call: ${window}, userGuidance: "${userGuidance.substring(0, 80)}"`);
+    return buildWindowTransitionContext(call, userId, window, supabaseUrl, supabaseServiceKey, preferredGreeting, userGuidance);
   }
 
   // Legacy call types → map to windows and use the same per-window logic
