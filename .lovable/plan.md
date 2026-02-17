@@ -1,84 +1,80 @@
 
+# Two Fixes: Shared Action Confirmation + Voicemail Duration Bug
 
-# Add Priority Page Ordering to AI Context
+## Fix 1: Action Confirmation Guardrail (All Modes)
 
-## What This Does
+### The Problem
+The confirmation rule was only going to be added to `hybrid-assistant-api` (chat). But per the "fix once, apply everywhere" principle, this needs to apply to phone calls and in-app voice too.
 
-When you drag-and-drop topic groups on the Priorities page, that order will be saved to the database and used by the AI when presenting topics during calls. Currently, drag order only lives in localStorage and the AI uses its own algorithm (recency > priority density > task count). After this change, your manual ordering takes precedence.
+### The Solution
+Add the confirmation rule to **`_shared/persona.ts`** in the `getDefaultIrisPersona()` function, right after the existing TOOL USAGE section. This is the shared persona consumed by all three modes (phone, voice, chat), so the rule propagates everywhere automatically.
 
-## Changes
+**New block added to `persona.ts` (after TOOL USAGE section, before "Available functions"):**
 
-### 1. Database Migration
-
-Add a `position` column to `task_topic_index`:
-
-```sql
-ALTER TABLE task_topic_index ADD COLUMN position integer DEFAULT 0;
+```
+ACTION CONFIRMATION (CRITICAL):
+- Before making ANY destructive or state-changing action (marking tasks done,
+  rescheduling, moving to backlog, deleting, creating), tell the user what
+  you plan to do and WAIT for their confirmation.
+- Do NOT execute the tool until the user says yes/confirms.
+- Example: "I'll mark 'Transfer $40k' as done and move the duplicate to
+  backlog -- sound right?"
+- Exception: Read-only actions (get_tasks, web_search, get_today_tasks)
+  do not need confirmation.
 ```
 
-This defaults to 0, so existing topics keep working with the current algorithm until you manually reorder them on the Priorities page.
+Also **remove** the chat-only version from `hybrid-assistant-api/index.ts` DATA INTEGRITY RULES to avoid duplication, since the shared persona now covers it.
 
-### 2. Priorities Page -- Persist Drag Order to Database
-
-**File: `src/pages/Priorities.tsx`**
-
-When topic groups are reordered (within same category or cross-category), in addition to saving to localStorage, write positions to the database:
-
-- **Within-category reorder (line 425-435):** After the splice/reorder, batch-update all groups in that category with their new position index.
-- **Cross-category move (line 436-487):** After moving the group, batch-update positions for both the source and destination category groups.
-
-```typescript
-// Helper function to persist positions
-const persistPositions = async (groups: TopicGroupData[]) => {
-  const updates = groups.map((g, i) => 
-    supabase.from('task_topic_index').update({ position: i }).eq('id', g.id)
-  );
-  await Promise.all(updates);
-};
-```
-
-Called after every drag-end that involves groups.
-
-### 3. AI Ranking -- Use Position as Primary Sort
-
-**File: `supabase/functions/_shared/call-context-builder.ts`**
-
-Update `getTopicGroupsManual` to:
-
-1. Fetch the `position` column alongside `id, topic_name, topic_summary` (line 234)
-2. Include `position` in the results object (line 255)
-3. Update the sort (line 264) to:
-
-```typescript
-results.sort((a, b) =>
-  a.position - b.position ||
-  b.priority_density - a.priority_density ||
-  b.recency - a.recency ||
-  b.task_count - a.task_count
-);
-```
-
-Sort order: **user position** (lower = higher priority) then priority density then recency then task count.
-
-Since all existing topics default to `position: 0`, they will tie on position and fall through to the existing algorithm -- no behavior change until you manually reorder.
-
-## Files Changed
-
+### Files Changed
 | File | Change |
 |------|--------|
-| Migration SQL | Add `position integer DEFAULT 0` to `task_topic_index` |
-| `src/pages/Priorities.tsx` | Persist drag-and-drop positions to database via batch update |
-| `supabase/functions/_shared/call-context-builder.ts` | Fetch `position`, sort by it first in ranking algorithm |
+| `_shared/persona.ts` | Add ACTION CONFIRMATION block to shared persona |
+| `hybrid-assistant-api/index.ts` | Remove duplicate (DATA INTEGRITY RULES stays, just no confirmation rule there) |
+
+---
+
+## Fix 2: Voicemail Fallback for Ultra-Short Calls
+
+### The Problem
+The current code at line 1487 requires `callDuration > 0`:
+```
+callDuration > 0 && callDuration < 45
+```
+
+When you decline a call in under 5 seconds, Twilio often reports `callDuration = 0` with `callStatus = 'completed'`. The `> 0` check filters these out, so the fallback never triggers. The logs confirm only the 35-second call produced a status-callback detection -- the shorter call was silently ignored.
+
+### The Fix
+**File: `supabase/functions/twilio-voice-handler/index.ts` (line 1487)**
+
+Change:
+```
+callDuration > 0 && callDuration < 45
+```
+To:
+```
+callDuration < 10
+```
+
+This removes the `> 0` floor so that 0-second declined calls are caught, and lowers the ceiling to 10 seconds so that legitimate short conversations (like the 35-second one you had) are not falsely treated as voicemail.
+
+A 0-second `completed` call with a pre-connect session is almost certainly a decline-to-voicemail. The pre-connect session check (lines 1491-1499) still acts as the safety gate -- only scheduled calls trigger fallback, not random short calls.
+
+### Files Changed
+| File | Change |
+|------|--------|
+| `twilio-voice-handler/index.ts` | Line 1487: remove `> 0`, change `< 45` to `< 10` |
+
+---
 
 ## Deployment
 
-1. Run migration (add column)
-2. Deploy `twilio-realtime-bridge` (picks up ranking change via shared module)
-3. Reorder topics on Priorities page to set positions
-4. Next call will reflect your ordering
+1. Deploy `twilio-voice-handler` (duration fix)
+2. Deploy `twilio-realtime-bridge` (picks up persona change via shared module)
+3. Run `sync-assistant-tools` (syncs updated persona to OpenAI Assistant for chat)
+4. Deploy `hybrid-assistant-api` (remove duplicate confirmation rule)
 
-## Technical Notes
+## Validation
 
-- The `position` column uses absolute indices (0, 1, 2...) per category, matching how `localStorage` already tracks order
-- Batch updates use `Promise.all` for speed -- one small update per group in the reordered category
-- No rollback flag needed here -- default `0` means the existing algorithm controls until you manually set positions
+- Decline a scheduled call instantly -- should trigger chat fallback
+- Ask the chat assistant to "mark X as done" -- should ask for confirmation first
+- On a phone call, ask to reschedule something -- should confirm before executing
