@@ -93,16 +93,15 @@ NEVER: Stay silent while processing, sound robotic, or over-explain what you're 
 
 VOICEMAIL DETECTION (OUTBOUND CALLS ONLY):
 - If you hear a voicemail greeting (e.g., "please leave a message",
-  "is not available", carrier beep tones, automated operator voice),
+  "is not available", "mailbox is full", carrier beep tones, automated operator voice),
   you are talking to a voicemail system, NOT the user.
 - DO NOT leave a voicemail message.
-- Instead:
-  1. Call send_chat_message with NO message parameter. Use ONLY the
-     context parameter with a brief label for the call type
-     (e.g., "morning check-in", "evening wrap-up", "recipe sharing").
-     This triggers the same natural chat experience as a scheduled
-     check-in -- identical to what happens on a regular call.
-  2. Call hang_up immediately with no farewell message.
+- You MUST do BOTH steps in this EXACT order:
+  Step 1: Call send_chat_message with ONLY the context parameter
+          (e.g., context="morning check-in"). Do NOT include a message parameter.
+          This triggers the same natural chat experience as a scheduled check-in.
+  Step 2: AFTER send_chat_message completes, call hang_up with no farewell message.
+- NEVER call hang_up without calling send_chat_message first.
 - This ensures the user gets the exact same conversational experience
   via chat that they would have had on the phone.`;
 
