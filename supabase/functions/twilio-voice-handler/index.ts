@@ -1491,15 +1491,65 @@ serve(async (req) => {
         if (isShortCompleted && !isMissed && !isVoicemail) {
           try {
             const supabaseCheck = createClient(supabaseUrl, supabaseServiceKey);
+            // Primary: lookup by call_sid
             const { data: sessionCheck } = await supabaseCheck
               .from('pre_connect_sessions')
-              .select('session_id')
+              .select('session_id, user_id')
               .eq('call_sid', statusData.callSid)
               .maybeSingle();
-            isLikelyVoicemail = !!sessionCheck;
-            if (isLikelyVoicemail) {
-              console.log(`[status-callback] 📱 Short completed call (${callDuration}s) with pre-connect session - treating as voicemail`);
+            
+            if (sessionCheck) {
+              isLikelyVoicemail = true;
+              console.log(`[status-callback] 📱 Short completed call (${callDuration}s) with pre-connect session (call_sid match) - treating as voicemail`);
+            } else if (statusData.to) {
+              // Fallback: lookup by phone number + recent timestamp (handles race condition)
+              const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+              const normalizedTo = statusData.to.replace(/\D/g, '');
+              
+              const { data: profileMatch } = await supabaseCheck
+                .from('profiles')
+                .select('user_id')
+                .or(`phone.eq.${statusData.to},phone.eq.+${normalizedTo},phone.ilike.%${normalizedTo.slice(-10)}%`)
+                .limit(1)
+                .maybeSingle();
+              
+              if (profileMatch?.user_id) {
+                const { data: recentSession } = await supabaseCheck
+                  .from('pre_connect_sessions')
+                  .select('session_id, user_id')
+                  .eq('user_id', profileMatch.user_id)
+                  .gte('created_at', fiveMinAgo)
+                  .is('call_sid', null)
+                  .order('created_at', { ascending: false })
+                  .limit(1)
+                  .maybeSingle();
+                
+                if (recentSession) {
+                  isLikelyVoicemail = true;
+                  // Store the call_sid for future reference
+                  await supabaseCheck.from('pre_connect_sessions')
+                    .update({ call_sid: statusData.callSid })
+                    .eq('session_id', recentSession.session_id);
+                  console.log(`[status-callback] 📱 Short completed call (${callDuration}s) matched via phone fallback - treating as voicemail`);
+                }
+              }
             }
+            
+            // Persistent logging for debugging
+            await supabaseCheck.from('activity_log').insert({
+              user_id: sessionCheck?.user_id || '00000000-0000-0000-0000-000000000001',
+              activity_type: 'voicemail_detection',
+              status: isLikelyVoicemail ? 'completed' : 'started',
+              stage: 'status_callback',
+              metadata: {
+                callSid: statusData.callSid,
+                callDuration,
+                answeredBy: statusData.answeredBy,
+                isMissed, isVoicemail, isLikelyVoicemail,
+                lookupMethod: sessionCheck ? 'call_sid' : 'phone_fallback',
+                timestamp: new Date().toISOString()
+              }
+            }).then(() => {}).catch(() => {});
           } catch (e) {
             console.error('[status-callback] Error checking pre_connect_sessions:', e);
           }

@@ -2,7 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { normalizeDueDate, normalizeDateTime, getTodayInTimezone } from "../_shared/timezone.ts";
 import { getToolDefinitions } from "../_shared/tool-definitions.ts";
-import { getTopicGroupsManual } from "../_shared/call-context-builder.ts";
+import { getTopicGroupsManual, WINDOW_RANGES, CATEGORY_WINDOW_MAPPING } from "../_shared/call-context-builder.ts";
 
 // ── Rollback Flag for shared topic ranking ──────────────────────────
 const USE_SHARED_TOPICS = true;
@@ -243,6 +243,7 @@ interface ExtractedFacts {
   rawAnswer?: string;
   source?: string;
   taskTitle?: string;
+  topicGroups?: string[];
 }
 
 interface ExecuteToolResponse {
@@ -422,6 +423,101 @@ async function executeToolCall(
 }
 
 // ============================================================================
+// TOPIC + WINDOW ENRICHMENT - Attaches topic_group labels to tasks
+// ============================================================================
+
+function detectCurrentWindowServer(timezone: string): { window: string; categories: string[] } {
+  const now = new Date();
+  const timeStr = now.toLocaleString('en-US', { timeZone: timezone, hour: 'numeric', hour12: false });
+  const hour = parseInt(timeStr, 10);
+  const dayStr = now.toLocaleString('en-US', { timeZone: timezone, weekday: 'short' });
+  const isWeekend = dayStr === 'Sat' || dayStr === 'Sun';
+
+  let window = 'evening';
+  if (isWeekend) {
+    window = 'weekends';
+  } else {
+    for (const [w, range] of Object.entries(WINDOW_RANGES)) {
+      if (w === 'weekends') continue;
+      if (hour >= range.start && hour < range.end) { window = w; break; }
+    }
+  }
+
+  const categories = Object.entries(CATEGORY_WINDOW_MAPPING)
+    .filter(([_, windows]) => windows.includes(window))
+    .map(([cat]) => cat);
+
+  return { window, categories };
+}
+
+async function enrichTasksWithTopics(
+  supabase: any,
+  tasks: any[],
+  userId: string,
+  timezone: string
+): Promise<any> {
+  const count = tasks.length;
+  const scheduled = tasks.filter((t: any) => t.is_scheduled === true).length;
+  const unscheduled = count - scheduled;
+
+  // Get topic mappings for returned tasks
+  let topicLookup: Record<string, string> = {};
+  if (tasks.length > 0) {
+    try {
+      const taskIds = tasks.map((t: any) => t.id);
+      const { data: mappings } = await supabase
+        .from('task_topic_mappings')
+        .select('task_id, topic_id')
+        .in('task_id', taskIds);
+
+      if (mappings && mappings.length > 0) {
+        const topicIds = [...new Set(mappings.map((m: any) => m.topic_id))];
+        const { data: topics } = await supabase
+          .from('task_topic_index')
+          .select('id, topic_name')
+          .in('id', topicIds);
+
+        if (topics) {
+          const topicNameMap = new Map(topics.map((t: any) => [t.id, t.topic_name]));
+          for (const m of mappings) {
+            topicLookup[m.task_id] = topicNameMap.get(m.topic_id) || 'Uncategorized';
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[ENRICH] Topic lookup failed:', e);
+    }
+  }
+
+  // Attach topic_group to each task
+  const enrichedTasks = tasks.map((t: any) => ({
+    ...t,
+    topic_group: topicLookup[t.id] || 'Uncategorized'
+  }));
+
+  // Get current window context
+  const { window: currentWindow, categories: windowCategories } = detectCurrentWindowServer(timezone);
+
+  // Get ranked topic groups
+  let topicGroups: any[] = [];
+  try {
+    topicGroups = await getTopicGroupsManual(supabase, userId, null);
+  } catch (e) {
+    console.warn('[ENRICH] Topic groups fetch failed:', e);
+  }
+
+  return {
+    tasks: enrichedTasks,
+    count,
+    scheduled,
+    unscheduled,
+    current_window: currentWindow,
+    window_categories: windowCategories,
+    topic_groups: topicGroups
+  };
+}
+
+// ============================================================================
 // TASK FUNCTIONS
 // ============================================================================
 
@@ -529,11 +625,14 @@ async function getTasks(supabase: any, userId: string, args: any, timezone: stri
     
     console.log(`[GET_TASKS] Found ${count} tasks (${scheduled} scheduled, ${unscheduled} unscheduled)`);
     
+    // Enrich tasks with topic_group labels
+    const enrichedTasks = await enrichTasksWithTopics(supabase, data || [], userId, timezone);
+    
     return { 
       success: true, 
-      result: { tasks: data || [], count, scheduled, unscheduled },
+      result: enrichedTasks,
       message: `Found ${count} tasks${args.time_filter ? ` for "${args.time_filter}"` : ''} (${scheduled} scheduled, ${unscheduled} unscheduled)`,
-      extractedFacts: { type: 'task_list', count, scheduled, unscheduled }
+      extractedFacts: { type: 'task_list', count, scheduled, unscheduled, topicGroups: enrichedTasks.topic_groups?.map((t: any) => t.topic_name) || [] }
     };
   } catch (error) {
     console.error('[GET_TASKS] Error:', error);
@@ -643,10 +742,13 @@ async function getTodayTasks(supabase: any, userId: string, timezone?: string): 
     
     console.log(`[GET_TODAY_TASKS] Found ${scheduled.length} scheduled, ${unscheduled.length} unscheduled`);
     
+    // Enrich with topic groups
+    const enrichedTasks = await enrichTasksWithTopics(supabase, allTasks, userId, tz);
+    
     return { 
       success: true, 
       result: { 
-        tasks: allTasks,
+        ...enrichedTasks,
         scheduled,
         unscheduled,
         date: todayStr,
@@ -657,7 +759,8 @@ async function getTodayTasks(supabase: any, userId: string, timezone?: string): 
         type: 'today_tasks', 
         count: allTasks.length, 
         scheduled: scheduled.length, 
-        unscheduled: unscheduled.length 
+        unscheduled: unscheduled.length,
+        topicGroups: enrichedTasks.topic_groups?.map((t: any) => t.topic_name) || []
       }
     };
   } catch (error) {

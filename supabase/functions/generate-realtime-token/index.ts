@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { getToolDefinitions, getToolNamesList } from "../_shared/tool-definitions.ts";
+import { getDefaultIrisPersona, PHONE_CONVERSATION_STYLE, getCurrentTimeString, loadUserProfile } from "../_shared/persona.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -47,20 +48,8 @@ serve(async (req) => {
     console.log('Generating ephemeral token for user:', userId);
 
     // Load user's AI instructions and TTS preferences from scheduling preferences
-    let coreInstructions = `You are a helpful task management assistant. You can help users create, update, and manage their tasks through voice commands.
-
-When users ask about historical information like "tasks from last week" or "what did I work on yesterday", use the get_tasks function with appropriate time_filter parameters.
-
-Available functions:
-${getToolNamesList()}
-
-When users ask about "today's tasks" or "what's on my schedule today", use get_today_tasks.
-When users want to move tasks around, use reschedule_task with the new date/time.
-When users want to add unscheduled tasks to today, use schedule_task which will automatically find the best time slot.
-
-Always confirm actions you take and provide helpful feedback about task management.
-
-When the user says goodbye phrases like 'that's all', 'thanks that's it', 'disconnect', 'that will be all', 'goodbye', or similar, call the disconnect function with a friendly farewell message.`;
+    // Use shared persona as default (single source of truth with persona.ts)
+    let coreInstructions = getDefaultIrisPersona();
 
     let realtimeExtensions = '';
     let schedulingPhilosophy = '';

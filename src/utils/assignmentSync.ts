@@ -26,7 +26,8 @@ function statusForCategory(category: string): 'BACKLOG' | 'TODO' | 'LIFE' | 'CAR
  */
 export async function createTasksFromAssignments(
   assignmentIds: string[], 
-  userId: string
+  userId: string,
+  importMode: 'upcoming' | 'full' = 'upcoming'
 ): Promise<void> {
   try {
     // Fetch all the assignments
@@ -59,33 +60,28 @@ export async function createTasksFromAssignments(
     }
 
     for (const assignment of assignments) {
-      // Check if task already exists for this assignment (multi-strategy)
+      // Check if task already exists for this assignment (optimized: filter by scheduling_context)
       const { data: existingTasks } = await supabase
         .from('tasks')
         .select('id, scheduling_context, title, due_date')
         .eq('user_id', userId)
-        .eq('board_id', defaultBoard.id);
+        .eq('board_id', defaultBoard.id)
+        .contains('scheduling_context', [`assignment_id:${assignment.id}`]);
 
-      // Check if assignment is already converted
-      const existingTask = existingTasks?.find(task => {
-        // Strategy 1: Check scheduling_context array for assignment_id
-        const contextArray = Array.isArray(task.scheduling_context) ? task.scheduling_context : [];
-        const hasAssignmentId = contextArray.some((ctx: any) => 
-          typeof ctx === 'string' && ctx.includes(`assignment_id:${assignment.id}`)
-        );
-        
-        // Strategy 2: Exact title + due_date match with imported flag (fallback)
-        const titleDueDateMatch = 
-          task.title === assignment.title && 
-          task.due_date === assignment.due_date &&
-          contextArray.some((ctx: any) => typeof ctx === 'string' && ctx.includes('source:imported_assignment'));
-        
-        return hasAssignmentId || titleDueDateMatch;
-      });
-
-      if (existingTask) {
+      // If any match found, skip
+      if (existingTasks && existingTasks.length > 0) {
         console.log(`Task already exists for assignment ${assignment.id}, skipping`);
         continue;
+      }
+
+      // Determine status based on import mode and due date
+      const now = new Date();
+      const dueDate = assignment.due_date ? new Date(assignment.due_date) : null;
+      let taskStatus: string;
+      if (importMode === 'full') {
+        taskStatus = (dueDate && dueDate < now) ? 'READY' : 'UP_NEXT';
+      } else {
+        taskStatus = 'UP_NEXT';
       }
 
       // Create new task from assignment with proper enums
@@ -97,7 +93,7 @@ export async function createTasksFromAssignments(
         due_date: assignment.due_date,
         board_id: defaultBoard.id,
         user_id: userId,
-        status: statusForCategory('EDUCATION'),
+        status: taskStatus,
         scheduling_context: [
           'source:imported_assignment',
           `assignment_id:${assignment.id}`,
@@ -173,7 +169,8 @@ export async function createTasksFromAssignments(
  */
 export async function createTasksFromMitAssignments(
   assignmentIds: string[], 
-  userId: string
+  userId: string,
+  importMode: 'upcoming' | 'full' = 'upcoming'
 ): Promise<void> {
   try {
     // Fetch all the MIT assignments
@@ -206,33 +203,27 @@ export async function createTasksFromMitAssignments(
     }
 
     for (const assignment of assignments) {
-      // Check if task already exists for this MIT assignment (multi-strategy)
+      // Check if task already exists (optimized: filter by scheduling_context)
       const { data: existingTasks } = await supabase
         .from('tasks')
         .select('id, scheduling_context, title, due_date')
         .eq('user_id', userId)
-        .eq('board_id', defaultBoard.id);
+        .eq('board_id', defaultBoard.id)
+        .contains('scheduling_context', [`mit_assignment_id:${assignment.id}`]);
 
-      // Check if assignment is already converted
-      const existingTask = existingTasks?.find(task => {
-        // Strategy 1: Check scheduling_context array for mit_assignment_id
-        const contextArray = Array.isArray(task.scheduling_context) ? task.scheduling_context : [];
-        const hasAssignmentId = contextArray.some((ctx: any) => 
-          typeof ctx === 'string' && ctx.includes(`mit_assignment_id:${assignment.id}`)
-        );
-        
-        // Strategy 2: Exact title + due_date match with imported flag (fallback)
-        const titleDueDateMatch = 
-          task.title === assignment.title && 
-          task.due_date === assignment.due_date &&
-          contextArray.some((ctx: any) => typeof ctx === 'string' && ctx.includes('source:imported_assignment'));
-        
-        return hasAssignmentId || titleDueDateMatch;
-      });
-
-      if (existingTask) {
+      if (existingTasks && existingTasks.length > 0) {
         console.log(`Task already exists for MIT assignment ${assignment.id}, skipping`);
         continue;
+      }
+
+      // Determine status based on import mode and due date
+      const now = new Date();
+      const dueDate = assignment.due_date ? new Date(assignment.due_date) : null;
+      let taskStatus: string;
+      if (importMode === 'full') {
+        taskStatus = (dueDate && dueDate < now) ? 'READY' : 'UP_NEXT';
+      } else {
+        taskStatus = 'UP_NEXT';
       }
 
       // Create new task from MIT assignment with proper enums
@@ -244,7 +235,7 @@ export async function createTasksFromMitAssignments(
         due_date: assignment.due_date,
         board_id: defaultBoard.id,
         user_id: userId,
-        status: statusForCategory('EDUCATION'),
+        status: taskStatus,
         scheduling_context: [
           'source:imported_mit_assignment',
           `mit_assignment_id:${assignment.id}`,

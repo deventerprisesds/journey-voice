@@ -22,36 +22,9 @@ export interface ChatMessage {
   interactive?: InteractiveContent;
 }
 
-// Window ranges (mirrored from call-context-builder.ts)
-const WINDOW_RANGES: Record<string, { start: number; end: number }> = {
-  morning: { start: 6, end: 9 },
-  business_hours: { start: 9, end: 17 },
-  after_work: { start: 17, end: 19 },
-  evening: { start: 19, end: 22 },
-  weekends: { start: 10, end: 20 }
-};
-
-const CATEGORY_WINDOW_MAPPING: Record<string, string[]> = {
-  'CAREER': ['business_hours'],
-  'PROF_EDUCATION': ['after_work', 'evening', 'weekends'],
-  'EDUCATION': ['business_hours', 'after_work'],
-  'VENTURES': ['after_work', 'evening', 'weekends'],
-  'LIFE': ['morning', 'after_work', 'evening', 'weekends'],
-  'PERSONAL': ['morning', 'after_work', 'evening', 'weekends'],
-};
-
-function detectCurrentWindow(): string {
-  const now = new Date();
-  const day = now.getDay();
-  const hour = now.getHours();
-
-  if (day === 0 || day === 6) return 'weekends';
-  for (const [window, range] of Object.entries(WINDOW_RANGES)) {
-    if (window === 'weekends') continue;
-    if (hour >= range.start && hour < range.end) return window;
-  }
-  return 'evening'; // fallback
-}
+// Window detection moved to server-side (call-context-builder.ts is the single source of truth)
+// Kept minimal client-side version only for startWindowCheckIn UI hints
+import { detectCurrentWindow, getWindowCategories } from '@/lib/timeWindows';
 
 interface UseChatAssistantReturn {
   messages: ChatMessage[];
@@ -295,9 +268,7 @@ export function useChatAssistant(): UseChatAssistantReturn {
 
     try {
       const window = detectCurrentWindow();
-      const windowCategories = Object.entries(CATEGORY_WINDOW_MAPPING)
-        .filter(([_, windows]) => windows.includes(window))
-        .map(([cat]) => cat);
+      const windowCategories = getWindowCategories(window);
 
       // Fetch topic groups (same pattern as getTopicGroupsManual in call-context-builder)
       let query = supabase
@@ -664,6 +635,36 @@ User message: ${content.trim()}`;
             }
           : msg
       ));
+
+      // Push notification if user left while AI was thinking
+      if (document.visibilityState === 'hidden' && savedMessage?.id) {
+        try {
+          await supabase.functions.invoke('send-push-notification', {
+            body: {
+              userId: user.id,
+              title: 'Iris',
+              body: assistantContent.substring(0, 100) + (assistantContent.length > 100 ? '...' : ''),
+              data: {
+                type: 'chat_message',
+                openCommsConsole: true,
+                threadId,
+                messageId: savedMessage.id,
+                messageData: {
+                  id: savedMessage.id,
+                  role: 'assistant',
+                  content: assistantContent,
+                  source: 'chat',
+                  created_at: new Date().toISOString(),
+                  thread_id: threadId
+                }
+              }
+            }
+          });
+          console.log('[useChatAssistant] Push notification sent (user away)');
+        } catch (pushErr) {
+          console.warn('[useChatAssistant] Push notification failed:', pushErr);
+        }
+      }
 
       // ── Tangent recovery: resume agenda and re-present interactive UI ──
       if (isAgendaActive && lastInteractiveContent.current) {
