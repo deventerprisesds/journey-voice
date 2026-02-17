@@ -1484,7 +1484,7 @@ serve(async (req) => {
         // When a user declines, carrier voicemail answers → AI talks to voicemail briefly → completed
         // MachineDetection often reports AnsweredBy=human in this case
         const callDuration = parseInt(statusData.callDuration || '0', 10);
-        const isShortCompleted = statusData.callStatus === 'completed' && callDuration > 0 && callDuration < 45;
+        const isShortCompleted = statusData.callStatus === 'completed' && callDuration < 10;
         
         // Only treat short-completed as voicemail if there's a pre-connect session (scheduled call)
         let isLikelyVoicemail = false;
