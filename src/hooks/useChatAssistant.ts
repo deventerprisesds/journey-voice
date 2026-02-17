@@ -566,6 +566,46 @@ export function useChatAssistant(): UseChatAssistantReturn {
       isLoading: true
     }]);
 
+    // ── Reusable push helper (covers success + error paths) ──
+    const maybeSendPush = async (messageContent: string, messageId: string, trigger: 'success' | 'error') => {
+      const isHidden = document.visibilityState === 'hidden';
+      logChat(user.id, `push_decision_${trigger}`, isHidden ? 'started' : 'completed', {
+        visibilityState: document.visibilityState,
+        action: isHidden ? 'sending_push' : 'skipped_visible',
+        threadId,
+        messageId
+      });
+
+      if (!isHidden) return;
+
+      try {
+        await supabase.functions.invoke('send-push-notification', {
+          body: {
+            userId: user.id,
+            title: 'Iris',
+            body: messageContent.substring(0, 100) + (messageContent.length > 100 ? '...' : ''),
+            data: {
+              type: 'chat_message',
+              openCommsConsole: true,
+              threadId,
+              messageId,
+              messageData: {
+                id: messageId,
+                role: 'assistant',
+                content: messageContent,
+                source: 'chat',
+                created_at: new Date().toISOString(),
+                thread_id: threadId
+              }
+            }
+          }
+        });
+        console.log(`[useChatAssistant] Push sent (${trigger}, user away)`);
+      } catch (pushErr) {
+        console.warn(`[useChatAssistant] Push failed (${trigger}):`, pushErr);
+      }
+    };
+
     try {
       // ── Tangent detection: pause agenda if active ──
       const isAgendaActive = !!activeAgendaThreadId.current;
@@ -637,34 +677,7 @@ User message: ${content.trim()}`;
       ));
 
       // Push notification if user left while AI was thinking
-      if (document.visibilityState === 'hidden' && savedMessage?.id) {
-        try {
-          await supabase.functions.invoke('send-push-notification', {
-            body: {
-              userId: user.id,
-              title: 'Iris',
-              body: assistantContent.substring(0, 100) + (assistantContent.length > 100 ? '...' : ''),
-              data: {
-                type: 'chat_message',
-                openCommsConsole: true,
-                threadId,
-                messageId: savedMessage.id,
-                messageData: {
-                  id: savedMessage.id,
-                  role: 'assistant',
-                  content: assistantContent,
-                  source: 'chat',
-                  created_at: new Date().toISOString(),
-                  thread_id: threadId
-                }
-              }
-            }
-          });
-          console.log('[useChatAssistant] Push notification sent (user away)');
-        } catch (pushErr) {
-          console.warn('[useChatAssistant] Push notification failed:', pushErr);
-        }
-      }
+      await maybeSendPush(assistantContent, savedMessage?.id || loadingId, 'success');
 
       // ── Tangent recovery: resume agenda and re-present interactive UI ──
       if (isAgendaActive && lastInteractiveContent.current) {
@@ -688,13 +701,18 @@ User message: ${content.trim()}`;
 
     } catch (error) {
       console.error('Error sending message:', error);
+      const errorContent = 'Sorry, I encountered an error processing your request. Please try again.';
       setMessages(prev => prev.filter(msg => msg.id !== loadingId));
+      const errorMsgId = crypto.randomUUID();
       setMessages(prev => [...prev, {
-        id: crypto.randomUUID(),
+        id: errorMsgId,
         role: 'assistant',
-        content: 'Sorry, I encountered an error processing your request. Please try again.',
+        content: errorContent,
         timestamp: new Date()
       }]);
+
+      // Push notification on error path so user knows the request failed
+      await maybeSendPush(errorContent, errorMsgId, 'error');
     } finally {
       setIsLoading(false);
     }
