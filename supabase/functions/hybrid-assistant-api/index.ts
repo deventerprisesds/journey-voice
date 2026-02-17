@@ -419,6 +419,13 @@ async function handleStreamingRequest(
     if (prefs.assistant_extensions) parts.push(prefs.assistant_extensions);
     if (prefs.config?.customAIInstructions) parts.push(`Scheduling Philosophy:\n${prefs.config.customAIInstructions}`);
     if (contextualInstructions) parts.push(contextualInstructions);
+    // Prepend data integrity guardrails
+    parts.unshift(`DATA INTEGRITY RULES:
+- NEVER fabricate task names. Use EXACT titles from tool results or pre-loaded context.
+- For "what can I work on": use get_tasks(status: "ACTIVE").
+- For life-area queries ("life tasks", "career items"): use get_tasks with the category filter.
+- For ready-now queries: use get_tasks(status: "WORKABLE").
+- Always call a tool BEFORE listing tasks you don't already have in context.`);
     additionalInstructions = parts.join('\n\n');
   } else {
     const currentDateTime = getCurrentTimeString(userTimezone);
