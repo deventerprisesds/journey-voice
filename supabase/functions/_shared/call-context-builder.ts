@@ -58,6 +58,46 @@ Topic group names are for memory jogging only -- do NOT guess what tasks are in 
 When the user selects a topic group, you MUST call get_tasks_by_topic with that topic name.
 If get_tasks_by_topic returns 0 tasks, tell the user "I don't have any active tasks under that topic right now" — do NOT invent tasks.`;
 
+// ── Today's Briefing ────────────────────────────────────────────────
+
+export async function getTodaysBriefing(
+  supabase: any,
+  userId: string
+): Promise<string> {
+  const today = new Date();
+  const startOfDay = new Date(today);
+  startOfDay.setHours(0, 0, 0, 0);
+  const endOfDay = new Date(today);
+  endOfDay.setHours(23, 59, 59, 999);
+
+  const { data: tasks, error } = await supabase
+    .from('tasks')
+    .select('title, start_time, priority, category, status')
+    .eq('user_id', userId)
+    .gte('start_time', startOfDay.toISOString())
+    .lte('start_time', endOfDay.toISOString())
+    .order('start_time', { ascending: true });
+
+  if (error || !tasks || tasks.length === 0) {
+    return 'your daily schedule';
+  }
+
+  const taskCount = tasks.length;
+  const highPriorityCount = tasks.filter((t: any) =>
+    t.priority === 'HIGH' || t.priority === 'URGENT'
+  ).length;
+  const completedCount = tasks.filter((t: any) => t.status === 'DONE').length;
+
+  let briefing = `${taskCount} task${taskCount > 1 ? 's' : ''} scheduled for today`;
+  if (highPriorityCount > 0) {
+    briefing += `, including ${highPriorityCount} high priority item${highPriorityCount > 1 ? 's' : ''}`;
+  }
+  if (completedCount > 0) {
+    briefing += `. ${completedCount} already completed`;
+  }
+  return briefing;
+}
+
 // ── Task & Topic Fetchers ───────────────────────────────────────────
 
 // Get tasks for a specific time window (excluding test and blocked)
@@ -502,24 +542,73 @@ export async function buildCallContext(
     return buildWindowTransitionContext(call, userId, mappedWindow, supabaseUrl, supabaseServiceKey, preferredGreeting);
   }
 
-  // Custom calls remain unchanged
+  // Custom calls: determine current window and include window-appropriate tasks + topics
   const userContext = call.context || '';
+  const supabase = createClient(supabaseUrl, supabaseServiceKey);
+  
+  // Get user timezone
+  const { data: prefs } = await supabase
+    .from('user_scheduling_prefs')
+    .select('timezone')
+    .eq('user_id', userId)
+    .maybeSingle();
+  const tz = prefs?.timezone || 'America/New_York';
+  
+  // Determine current window from user's timezone
+  const currentHour = parseInt(new Date().toLocaleString('en-US', {
+    timeZone: tz, hour: '2-digit', hour12: false
+  }), 10);
+  
+  let currentWindow = 'business_hours';
+  if (currentHour < 9) currentWindow = 'morning';
+  else if (currentHour >= 17 && currentHour < 19) currentWindow = 'after_work';
+  else if (currentHour >= 19 && currentHour < 22) currentWindow = 'evening';
+  
+  // Check for weekend
+  const dayOfWeek = new Date().toLocaleDateString('en-US', { weekday: 'long', timeZone: tz });
+  if (dayOfWeek === 'Saturday' || dayOfWeek === 'Sunday') currentWindow = 'weekends';
+
+  console.log(`[BUILD-CONTEXT] Custom call: determined window=${currentWindow}, hour=${currentHour}, day=${dayOfWeek}`);
+
+  // Fetch window-appropriate tasks and derive topic groups
+  const windowTasks = await getTasksForWindow(supabase, userId, currentWindow, tz);
+  const [tier1, tier2] = await Promise.all([
+    getTopicGroupsFromWindowTasks(supabase, userId, currentWindow),
+    getTopicGroupsFromAllTasks(supabase, userId)
+  ]);
+  
+  const topicsToShow = tier1.length > 0 ? tier1 : tier2;
+  const topicSection = topicsToShow.length > 0
+    ? '\n\nACTIVE TOPICS for this time window (ranked by recency and priority):\n' +
+      formatTopicGroups(topicsToShow)
+    : '';
+  const taskSection = windowTasks.length > 0
+    ? '\n\nTASKS for current window:\n' + formatTaskList(windowTasks)
+    : '';
+
   if (!userContext) {
     return `${AGENDA_HEADER}\n
-CALL: Custom Scheduled Call
+CALL: Custom Scheduled Check-in
+WINDOW: ${currentWindow}
+${taskSection}${topicSection}
 
 AGENDA QUEUE:
 1. Greet the user
-2. Ask what they need help with
+2. Present the topic groups above and ask which they want to explore
+3. Use get_tasks_by_topic to drill into their selection
 
 This is a user-scheduled call — follow their lead.`;
   }
 
   return `${AGENDA_HEADER}\n
-CALL: Custom Scheduled Call
+CALL: Custom Scheduled Check-in
+WINDOW: ${currentWindow}
 
-[AGENDA FROM USER CONFIGURATION]
+[USER CONTEXT]
 ${userContext}
+${taskSection}${topicSection}
 
-Interpret the user notes above as your agenda. Cover all mentioned topics before ending the call.`;
+Start with a friendly greeting addressing the user context.
+Then present the topic groups and ask which the user wants to explore.
+Use get_tasks_by_topic to drill into their selection.`;
 }

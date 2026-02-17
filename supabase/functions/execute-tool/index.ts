@@ -2,6 +2,10 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { normalizeDueDate, normalizeDateTime, getTodayInTimezone } from "../_shared/timezone.ts";
 import { getToolDefinitions } from "../_shared/tool-definitions.ts";
+import { getTopicGroupsManual } from "../_shared/call-context-builder.ts";
+
+// ── Rollback Flag for shared topic ranking ──────────────────────────
+const USE_SHARED_TOPICS = true;
 
 // ============================================================================
 // UTILITY: Proper error message extraction
@@ -1820,6 +1824,12 @@ async function getMyConfig(supabase: any, userId: string, args: any): Promise<Ex
   };
 
   const fetchTopicGroups = async () => {
+    if (USE_SHARED_TOPICS) {
+      // V2: Use shared ranking (recency + priority density + task count)
+      console.log('[GET_MY_CONFIG] Using shared topic ranking');
+      return getTopicGroupsManual(supabase, userId, null);
+    }
+    // Legacy fallback
     const { data } = await supabase
       .from('task_topic_index')
       .select('topic_name, summary, task_count, category_affinity, updated_at')
@@ -1888,9 +1898,27 @@ async function getMyConfig(supabase: any, userId: string, args: any): Promise<Ex
       results.pending_notifications = pending;
       results.my_profile = profile || {};
     } else if (section === 'scheduled_calls') {
-      const prefs = await fetchScheduledCalls();
+      const [prefs, pending] = await Promise.all([
+        fetchScheduledCalls(),
+        fetchPendingNotifications()
+      ]);
       results.scheduled_calls = prefs?.scheduled_calls || [];
       results.timezone = prefs?.timezone || 'America/New_York';
+      
+      // Include actual pending scheduled calls from the notification queue
+      const pendingCalls = (pending || []).filter(
+        (n: any) => n.notification_type === 'scheduled_call'
+      );
+      results.upcoming_scheduled_calls = pendingCalls.map((n: any) => ({
+        name: n.title,
+        scheduled_for: n.scheduled_for,
+      }));
+      if (pendingCalls.length > 0) {
+        results.next_upcoming_call = {
+          name: pendingCalls[0].title,
+          scheduled_for: pendingCalls[0].scheduled_for,
+        };
+      }
     } else if (section === 'call_history') {
       results.call_history = await fetchCallHistory();
     } else if (section === 'topic_groups') {

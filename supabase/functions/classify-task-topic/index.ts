@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { CATEGORY_WINDOW_MAPPING } from '../_shared/call-context-builder.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -9,16 +10,6 @@ const corsHeaders = {
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
 const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const openaiApiKey = Deno.env.get('OPENAI_API_KEY')!;
-
-// Map categories to default window affinities (from schedulingRules.ts)
-const CATEGORY_WINDOW_MAPPING: Record<string, string[]> = {
-  'CAREER': ['business_hours'],
-  'PROF_EDUCATION': ['after_work', 'evening', 'weekends'],
-  'EDUCATION': ['business_hours', 'after_work'],
-  'VENTURES': ['after_work', 'evening', 'weekends'],
-  'LIFE': ['morning', 'after_work', 'evening', 'weekends'],
-  'PERSONAL': ['morning', 'after_work', 'evening', 'weekends'],
-};
 
 interface ClassificationRequest {
   task_id: string;
