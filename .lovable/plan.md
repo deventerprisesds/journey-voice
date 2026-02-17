@@ -1,80 +1,47 @@
 
-# Two Fixes: Shared Action Confirmation + Voicemail Duration Bug
 
-## Fix 1: Action Confirmation Guardrail (All Modes)
+# Custom Notification Icons
 
-### The Problem
-The confirmation rule was only going to be added to `hybrid-assistant-api` (chat). But per the "fix once, apply everywhere" principle, this needs to apply to phone calls and in-app voice too.
+## What Changes
 
-### The Solution
-Add the confirmation rule to **`_shared/persona.ts`** in the `getDefaultIrisPersona()` function, right after the existing TOOL USAGE section. This is the shared persona consumed by all three modes (phone, voice, chat), so the rule propagates everywhere automatically.
+Replace the default favicon in push notifications with the Iris logo so notifications show your branded icon in the notification shade.
 
-**New block added to `persona.ts` (after TOOL USAGE section, before "Available functions"):**
+## Icon Selection
+
+- **Main icon** (192x192): The blue Iris logo on transparent background (`Screenshot_2026-02-05_141220.png`) -- this shows as the large icon in the notification panel and works well on both light and dark backgrounds
+- **Badge** (72x72): The white Iris logo on transparent background (`Screenshot_2026-01-28_140309-removebg-preview.png`) -- this is the small monochrome icon in the Android status bar
+
+## Changes
+
+### 1. Copy Icon Assets to `public/icons/`
 
 ```
-ACTION CONFIRMATION (CRITICAL):
-- Before making ANY destructive or state-changing action (marking tasks done,
-  rescheduling, moving to backlog, deleting, creating), tell the user what
-  you plan to do and WAIT for their confirmation.
-- Do NOT execute the tool until the user says yes/confirms.
-- Example: "I'll mark 'Transfer $40k' as done and move the duplicate to
-  backlog -- sound right?"
-- Exception: Read-only actions (get_tasks, web_search, get_today_tasks)
-  do not need confirmation.
+public/icons/iris-icon-192.png   <-- blue logo (from Screenshot_2026-02-05_141220.png)
+public/icons/iris-badge-72.png   <-- white logo (from Screenshot_2026-01-28_140309-removebg-preview.png)
 ```
 
-Also **remove** the chat-only version from `hybrid-assistant-api/index.ts` DATA INTEGRITY RULES to avoid duplication, since the shared persona now covers it.
+### 2. Update Push Payload (`send-push-notification/index.ts`)
 
-### Files Changed
+Line 127-128:
+```
+icon: '/favicon.ico'   -->  icon: '/icons/iris-icon-192.png'
+badge: '/favicon.ico'   -->  badge: '/icons/iris-badge-72.png'
+```
+
+### 3. Update Service Worker Fallbacks (`public/sw.js`)
+
+Update all fallback icon/badge references from `/favicon.ico` to the new paths, and bump `CACHE_VERSION` from `v5` to `v6`.
+
+## Files Changed
+
 | File | Change |
 |------|--------|
-| `_shared/persona.ts` | Add ACTION CONFIRMATION block to shared persona |
-| `hybrid-assistant-api/index.ts` | Remove duplicate (DATA INTEGRITY RULES stays, just no confirmation rule there) |
+| `public/icons/iris-icon-192.png` | New -- blue Iris logo for notification icon |
+| `public/icons/iris-badge-72.png` | New -- white Iris logo for status bar badge |
+| `send-push-notification/index.ts` | Update icon and badge paths |
+| `public/sw.js` | Update fallback icon paths, bump cache to v6 |
 
----
+## Note on Ringtones
 
-## Fix 2: Voicemail Fallback for Ultra-Short Calls
+Custom notification sounds are not supported by the Web Push API on Android Chrome -- the device always plays the default notification tone. This is a browser limitation. A native app wrapper (Capacitor) would be needed for custom ringtones.
 
-### The Problem
-The current code at line 1487 requires `callDuration > 0`:
-```
-callDuration > 0 && callDuration < 45
-```
-
-When you decline a call in under 5 seconds, Twilio often reports `callDuration = 0` with `callStatus = 'completed'`. The `> 0` check filters these out, so the fallback never triggers. The logs confirm only the 35-second call produced a status-callback detection -- the shorter call was silently ignored.
-
-### The Fix
-**File: `supabase/functions/twilio-voice-handler/index.ts` (line 1487)**
-
-Change:
-```
-callDuration > 0 && callDuration < 45
-```
-To:
-```
-callDuration < 10
-```
-
-This removes the `> 0` floor so that 0-second declined calls are caught, and lowers the ceiling to 10 seconds so that legitimate short conversations (like the 35-second one you had) are not falsely treated as voicemail.
-
-A 0-second `completed` call with a pre-connect session is almost certainly a decline-to-voicemail. The pre-connect session check (lines 1491-1499) still acts as the safety gate -- only scheduled calls trigger fallback, not random short calls.
-
-### Files Changed
-| File | Change |
-|------|--------|
-| `twilio-voice-handler/index.ts` | Line 1487: remove `> 0`, change `< 45` to `< 10` |
-
----
-
-## Deployment
-
-1. Deploy `twilio-voice-handler` (duration fix)
-2. Deploy `twilio-realtime-bridge` (picks up persona change via shared module)
-3. Run `sync-assistant-tools` (syncs updated persona to OpenAI Assistant for chat)
-4. Deploy `hybrid-assistant-api` (remove duplicate confirmation rule)
-
-## Validation
-
-- Decline a scheduled call instantly -- should trigger chat fallback
-- Ask the chat assistant to "mark X as done" -- should ask for confirmation first
-- On a phone call, ask to reschedule something -- should confirm before executing
