@@ -1,47 +1,28 @@
 
-
-# Custom Notification Icons
-
-## What Changes
-
-Replace the default favicon in push notifications with the Iris logo so notifications show your branded icon in the notification shade.
-
-## Icon Selection
-
-- **Main icon** (192x192): The blue Iris logo on transparent background (`Screenshot_2026-02-05_141220.png`) -- this shows as the large icon in the notification panel and works well on both light and dark backgrounds
-- **Badge** (72x72): The white Iris logo on transparent background (`Screenshot_2026-01-28_140309-removebg-preview.png`) -- this is the small monochrome icon in the Android status bar
+# Voicemail Fallback Fix: 45s Threshold + Stronger Instructions + Safety Net
 
 ## Changes
 
-### 1. Copy Icon Assets to `public/icons/`
+### 1. Restore 45-Second Threshold
+**File: `supabase/functions/twilio-voice-handler/index.ts` (line 1487)**
 
 ```
-public/icons/iris-icon-192.png   <-- blue logo (from Screenshot_2026-02-05_141220.png)
-public/icons/iris-badge-72.png   <-- white logo (from Screenshot_2026-01-28_140309-removebg-preview.png)
+callDuration < 10  -->  callDuration < 45
 ```
 
-### 2. Update Push Payload (`send-push-notification/index.ts`)
+### 2. Strengthen Voicemail Instructions
+**File: `supabase/functions/_shared/persona.ts` (lines 94-107)**
 
-Line 127-128:
-```
-icon: '/favicon.ico'   -->  icon: '/icons/iris-icon-192.png'
-badge: '/favicon.ico'   -->  badge: '/icons/iris-badge-72.png'
-```
+Replace with stricter wording that adds "mailbox is full" as a trigger phrase, uses "MUST do BOTH steps in this EXACT order", and adds "NEVER call hang_up without calling send_chat_message first."
 
-### 3. Update Service Worker Fallbacks (`public/sw.js`)
+### 3. Bridge Safety Net
+**File: `supabase/functions/_shared/tool-executor.ts`**
 
-Update all fallback icon/badge references from `/favicon.ico` to the new paths, and bump `CACHE_VERSION` from `v5` to `v6`.
+Add session-level tool tracking. When `hang_up` is called and `send_chat_message` was never called during the session, automatically fire `send_chat_message` with the call context before disconnecting. Adds:
+- `sessionToolHistory` Set to track tools called
+- `resetToolHistory()` export for session start
+- Safety net logic in `hang_up` handler
+- Optional `callContext` field on the context parameter
 
-## Files Changed
-
-| File | Change |
-|------|--------|
-| `public/icons/iris-icon-192.png` | New -- blue Iris logo for notification icon |
-| `public/icons/iris-badge-72.png` | New -- white Iris logo for status bar badge |
-| `send-push-notification/index.ts` | Update icon and badge paths |
-| `public/sw.js` | Update fallback icon paths, bump cache to v6 |
-
-## Note on Ringtones
-
-Custom notification sounds are not supported by the Web Push API on Android Chrome -- the device always plays the default notification tone. This is a browser limitation. A native app wrapper (Capacitor) would be needed for custom ringtones.
-
+### Deployment
+Deploy `twilio-voice-handler` and `twilio-realtime-bridge`, then run `sync-assistant-tools`.
