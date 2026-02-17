@@ -27,6 +27,7 @@ interface TopicGroupPanelProps {
   allTopicGroupRefs: TopicGroupRef[];
   selectedTaskIds: Set<string>;
   onToggleTaskSelection: (taskId: string) => void;
+  onOpenTask: (task: Task) => void;
   depth?: number;
   categoryKey?: string;
 }
@@ -39,7 +40,7 @@ const PRIORITY_COLORS: Record<string, string> = {
 };
 
 const TopicGroupPanel: React.FC<TopicGroupPanelProps> = ({
-  topicGroup, isDeletable, onRefresh, allCategories, allTopicGroupRefs, selectedTaskIds, onToggleTaskSelection,
+  topicGroup, isDeletable, onRefresh, allCategories, allTopicGroupRefs, selectedTaskIds, onToggleTaskSelection, onOpenTask,
   depth = 0, categoryKey,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -60,8 +61,11 @@ const TopicGroupPanel: React.FC<TopicGroupPanelProps> = ({
 
   const handleChangeCategory = async (task: Task, newCategory: string) => {
     try {
+      // Update category
       const { error } = await supabase.from('tasks').update({ category: newCategory as any }).eq('id', task.id);
       if (error) throw error;
+      // Remove from current topic group so it moves to Uncategorized in target column
+      await supabase.from('task_topic_mappings').delete().eq('task_id', task.id);
       toast.success(`Moved "${task.title}" to ${newCategory}`);
       onRefresh();
     } catch (err: any) {
@@ -178,6 +182,7 @@ const TopicGroupPanel: React.FC<TopicGroupPanelProps> = ({
               allTopicGroupRefs={allTopicGroupRefs}
               selectedTaskIds={selectedTaskIds}
               onToggleTaskSelection={onToggleTaskSelection}
+              onOpenTask={onOpenTask}
               depth={depth + 1}
               categoryKey={categoryKey}
             />
@@ -187,6 +192,7 @@ const TopicGroupPanel: React.FC<TopicGroupPanelProps> = ({
           {topicGroup.tasks.map(task => (
             <div
               key={task.id}
+              onDoubleClick={() => onOpenTask(task)}
               className={`flex items-center gap-2 p-1.5 rounded text-sm hover:bg-muted/30 transition-colors group/task ${selectedTaskIds.has(task.id) ? 'bg-primary/10 ring-1 ring-primary/30' : ''}`}
             >
               <input
@@ -224,7 +230,6 @@ const TopicGroupPanel: React.FC<TopicGroupPanelProps> = ({
                       {allCategories.map(cat => (
                         <DropdownMenuItem
                           key={cat.key}
-                          disabled={cat.key === task.category}
                           onClick={() => handleChangeCategory(task, cat.key)}
                         >
                           {cat.label}

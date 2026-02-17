@@ -8,6 +8,7 @@ import { supabase, SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from '@/integrations
 import { useAuth } from '@/hooks/useAuth';
 import { DEFAULT_SCHEDULING_CONFIG, mergeSchedulingConfig } from '@/config/schedulingRules';
 import CategoryColumn from '@/components/priorities/CategoryColumn';
+import TaskDetailModal from '@/components/TaskDetailModal';
 import type { Task } from '@/types/task';
 import { toast } from 'sonner';
 
@@ -65,6 +66,7 @@ const Priorities: React.FC = () => {
   const [classifying, setClassifying] = useState(false);
   const [unmappedCount, setUnmappedCount] = useState(0);
   const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set());
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const autoClassifyRan = useRef(false);
   const loadDataRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
@@ -598,10 +600,18 @@ const Priorities: React.FC = () => {
               allTopicGroupRefs={allTopicGroupRefs}
               selectedTaskIds={selectedTaskIds}
               onToggleTaskSelection={toggleTaskSelection}
+              onOpenTask={setSelectedTask}
             />
           ))}
         </div>
       </DragDropContext>
+
+      <TaskDetailModal
+        task={selectedTask}
+        isOpen={!!selectedTask}
+        onClose={() => setSelectedTask(null)}
+        onSave={() => { setSelectedTask(null); loadData(); }}
+      />
     </div>
   );
 };
