@@ -170,6 +170,27 @@ async function handleTrivialMessage(
   
   console.log(`[HYBRID] Fast path response: "${reply}"`);
   
+  // Save both messages server-side for trivial path
+  await Promise.all([
+    supabase.from('conversation_messages').insert({
+      thread_id: threadId,
+      user_id: userId,
+      role: 'user',
+      content: userInput,
+      source: 'chat'
+    }),
+    supabase.from('conversation_messages').insert({
+      thread_id: threadId,
+      user_id: userId,
+      role: 'assistant',
+      content: reply,
+      source: 'chat'
+    }),
+    supabase.from('ai_threads')
+      .update({ updated_at: new Date().toISOString() })
+      .eq('id', threadId)
+  ]);
+  
   return {
     success: true,
     response: reply,
@@ -1148,11 +1169,38 @@ ${contextualInstructions || ''}`;
       
       console.log('[HYBRID] ==========================================================');
 
+      // Save both messages server-side
+      const [userMsgResult, assistantMsgResult] = await Promise.all([
+        supabase.from('conversation_messages').insert({
+          thread_id: threadId,
+          user_id: userId,
+          role: 'user',
+          content: userInput,
+          source: 'chat'
+        }).select('id').single(),
+        supabase.from('conversation_messages').insert({
+          thread_id: threadId,
+          user_id: userId,
+          role: 'assistant',
+          content: finalResponse,
+          source: 'chat'
+        }).select('id').single()
+      ]);
+      
+      // Update thread timestamp
+      await supabase.from('ai_threads')
+        .update({ updated_at: new Date().toISOString() })
+        .eq('id', threadId);
+      
+      console.log(`[HYBRID] Saved messages server-side: user=${userMsgResult.data?.id}, assistant=${assistantMsgResult.data?.id}`);
+
       return {
         success: true,
         response: finalResponse,
         threadId: openaiThreadId,
-        runId
+        runId,
+        userMessageId: userMsgResult.data?.id,
+        assistantMessageId: assistantMsgResult.data?.id
       };
 
     } catch (error) {
