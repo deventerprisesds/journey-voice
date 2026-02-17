@@ -16,7 +16,7 @@ import { getTimeBasedGreeting, getCurrentTimeString, generateGreetingForCallType
 import { PreConnectSession, storePreConnectSession, getPreConnectSession } from "../_shared/session-manager.ts";
 import { SharedAgendaManager, AgendaManager } from "../_shared/agenda-wrapper.ts";
 import { logError, createCallSession, closeCallSession, saveCallMessage, SmartFillerManager, validateVoiceResponse } from "../_shared/call-session.ts";
-import { executeTool } from "../_shared/tool-executor.ts";
+import { executeTool, resetToolHistory } from "../_shared/tool-executor.ts";
 import { playCachedAudio } from "../_shared/tts-manager.ts";
 
 const BRIDGE_VERSION = `${GLOBAL_VERSION}-${FUNCTION_IDS.BRIDGE}`;
@@ -631,7 +631,7 @@ serve(async (req) => {
       let args = JSON.parse(msg.arguments);
       if (msg.name === 'web_search' && lastUserTranscript) args = { ...args, query: lastUserTranscript };
 
-      const result = await executeTool(msg.name, args, userId, { timezone: userTimezone, userProfile, twilioWs, streamSid, supabaseUrl: SUPABASE_URL, supabaseServiceKey: SUPABASE_SERVICE_KEY });
+      const result = await executeTool(msg.name, args, userId, { timezone: userTimezone, userProfile, twilioWs, streamSid, supabaseUrl: SUPABASE_URL, supabaseServiceKey: SUPABASE_SERVICE_KEY, callContext: callContext || undefined });
       fillerManager?.endTool();
 
       if (result.extractedFacts) lastToolOutput = { toolName: msg.name, extractedFacts: result.extractedFacts };
@@ -669,6 +669,7 @@ serve(async (req) => {
     switch (data.event) {
       case "start":
         streamSid = data.start.streamSid;
+        resetToolHistory(); // Reset tool tracking for new call session
         const customParams = data.start.customParameters || {};
         userId = customParams.userId || null;
         callDirection = customParams.direction || 'inbound';
