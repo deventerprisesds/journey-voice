@@ -93,7 +93,9 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
   targetDate
 }) => {
   const { toast } = useToast();
-  const [activeTab, setActiveTab] = useState<'ai' | 'manual' | 'assignments'>('ai');
+  const [activeTab, setActiveTab] = useState<'ai' | 'manual' | 'assignments'>(
+    (initialDate || (initialHour !== null && initialHour !== undefined)) ? 'manual' : 'ai'
+  );
   const { selectedAssignmentIds, setSelectedAssignmentIds, clearSelection } = useAssignmentSelection();
   const { scheduleBatch, updateTasksWithSchedule, isScheduling: isBatchScheduling } = useBatchScheduling();
   

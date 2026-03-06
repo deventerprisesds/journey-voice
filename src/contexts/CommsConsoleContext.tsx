@@ -1059,7 +1059,13 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
   // Connect voice with unified thread and assistant ID for cross-mode memory
   const connectVoice = useCallback(async () => {
-    await voiceAssistant.connectToAssistant(dbThreadId || undefined, currentAssistant?.id || undefined);
+    // Optimistic: signal connecting state immediately before async resolves
+    try {
+      await voiceAssistant.connectToAssistant(dbThreadId || undefined, currentAssistant?.id || undefined);
+    } catch (err) {
+      console.error('[CommsConsole] Voice connect failed:', err);
+      throw err;
+    }
   }, [voiceAssistant, dbThreadId, currentAssistant?.id]);
 
   const disconnectVoice = useCallback(() => {
