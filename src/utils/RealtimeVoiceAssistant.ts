@@ -912,6 +912,19 @@ export class RealtimeVoiceAssistant {
         break;
       case 'response.done':
         console.log('🎯 AI response completed');
+        // Graceful disconnect: wait for audio queue to drain, then disconnect
+        if (this.pendingDisconnect) {
+          const waitForAudioDrain = () => {
+            if (this.unifiedAudioQueue && (this.unifiedAudioQueue as any).isPlaying) {
+              // Audio still playing — check again in 200ms
+              setTimeout(waitForAudioDrain, 200);
+            } else {
+              // Audio done (or no queue) — disconnect after small buffer for final audio
+              setTimeout(() => this.disconnect(), 500);
+            }
+          };
+          waitForAudioDrain();
+        }
         break;
         
       // Transcript capture for persistence
@@ -1197,7 +1210,7 @@ export class RealtimeVoiceAssistant {
       let result;
       
       // Handle disconnect locally (WebRTC-specific action)
-      if (functionName === 'disconnect') {
+      if (functionName === 'disconnect' || functionName === 'hang_up') {
         result = await this.handleDisconnectTool(args);
       } else {
         // Route ALL other tools through centralized execute-tool for feature parity
@@ -2160,14 +2173,24 @@ export class RealtimeVoiceAssistant {
     }
   }
 
+  // Pending disconnect flag for graceful farewell completion
+  private pendingDisconnect = false;
+
   private async handleDisconnectTool(args: any) {
     console.log('🔴 Disconnect tool called with args:', args);
     this.onMessage?.({ 
       type: 'assistant.disconnect', 
       message: args.farewell_message || "Goodbye!" 
     });
-    // Give the assistant time to speak the farewell, then disconnect
-    setTimeout(() => this.disconnect(), 2000);
+    // Set flag — actual disconnect happens when response.done or audio queue empties
+    this.pendingDisconnect = true;
+    // Safety timeout: disconnect after 8s max in case response.done never fires
+    setTimeout(() => {
+      if (this.pendingDisconnect) {
+        console.log('🔴 Safety timeout — forcing disconnect after 8s');
+        this.disconnect();
+      }
+    }, 8000);
     return { success: true, message: "Disconnecting..." };
   }
 

@@ -198,6 +198,14 @@ serve(async (req) => {
   let lastSpeechStartTime = 0;
   const INTERRUPT_AMPLITUDE_THRESHOLD = 3000;
 
+  // Echo fingerprinting state for smart barge-in
+  let pendingBargeInCheck = false;
+  let lastAiOutputText = '';  // Accumulates AI speech for echo comparison
+  let ttsEndedAt = 0;  // Timestamp when TTS playback ended (for post-TTS echo window)
+  
+  // Known noise/filler patterns that occur during TTS echo
+  const ECHO_NOISE_PATTERNS = /^(hello|hi|hey|hmm|hm|mm|uh|um|ah|oh|yeah|okay|ok)\.?$/i;
+
   // Helper: Create response
   function createResponse(trigger: string) {
     if (!openaiWs || openaiWs.readyState !== WebSocket.OPEN) return;
@@ -240,6 +248,11 @@ serve(async (req) => {
       injectSystemMessage(contextMsg);
       greetingContextInjected = true;
       console.log(`[GREETING-TRACE] triggerPendingGreeting(${source}): injected greeting context. greetingSent=${greetingSent}, greetingContextInjected=true`);
+      // Mark greeting agenda item (item 0) as complete to prevent agenda reboot
+      if (sharedAgendaManager) {
+        sharedAgendaManager.completeCurrentItem().catch(e => console.error('[AGENDA] greeting complete error:', e));
+        console.log(`[AGENDA] Marked greeting (item 0) as complete`);
+      }
       // Persist the cached greeting so it appears in transcripts
       if (callSessionId && userId) {
         saveCallMessage(supabase, {
@@ -284,7 +297,7 @@ serve(async (req) => {
             twilioWs.send(JSON.stringify({ event: "media", streamSid, media: { payload: chunk } }));
           }
           ttsAudioEndTime = Date.now() + chunks.length * 20 + 500;
-          setTimeout(() => { isSendingTtsAudio = false; }, chunks.length * 20 + 500);
+          setTimeout(() => { isSendingTtsAudio = false; ttsEndedAt = Date.now(); }, chunks.length * 20 + 500);
           if (!firstOutboundLogged) { firstOutboundLogged = true; }
         }
       } else {
@@ -508,11 +521,20 @@ serve(async (req) => {
         }
 
         case "response.audio_transcript.delta":
-          if (msg.delta) currentResponseText += msg.delta;
+          if (msg.delta) {
+            currentResponseText += msg.delta;
+            lastAiOutputText += msg.delta;
+            // Keep only last 300 chars for echo fingerprinting
+            if (lastAiOutputText.length > 400) lastAiOutputText = lastAiOutputText.slice(-300);
+          }
           break;
 
         case "response.text.delta":
-          if (msg.delta) currentResponseText += msg.delta;
+          if (msg.delta) {
+            currentResponseText += msg.delta;
+            lastAiOutputText += msg.delta;
+            if (lastAiOutputText.length > 400) lastAiOutputText = lastAiOutputText.slice(-300);
+          }
           if (ttsProvider === 'elevenlabs' && msg.delta) {
             sentenceBuffer += msg.delta;
             if (SENTENCE_ENDERS.test(sentenceBuffer)) {
@@ -536,52 +558,23 @@ serve(async (req) => {
 
         case "input_audio_buffer.speech_started":
           const now = Date.now();
-          console.log(`[VAD-TRACE] speech_started at ${now - callStartTime}ms into call, responseCreateCount=${responseCreateCount}, greetingSent=${greetingSent}, isAiSpeaking=${isAiSpeaking}`);
+          console.log(`[VAD-TRACE] speech_started at ${now - callStartTime}ms into call, responseCreateCount=${responseCreateCount}, greetingSent=${greetingSent}, isAiSpeaking=${isAiSpeaking}, isSendingTtsAudio=${isSendingTtsAudio}`);
           if (now - lastSpeechStartTime < SPEECH_DEBOUNCE_MS) break;
           lastSpeechStartTime = now;
           
           if (waitingForUserHello) { triggerPendingGreeting('vad'); break; }
           
           if (isAiSpeaking || isSendingTtsAudio) {
-            // Clear Twilio audio buffer immediately
+            // SMART BARGE-IN: Don't cancel response yet — clear Twilio buffer for immediate silence,
+            // then wait for transcript to classify as echo vs real barge-in
             if (streamSid) twilioWs.send(JSON.stringify({ event: "clear", streamSid }));
+            pendingBargeInCheck = true;
+            console.log(`[BARGE-IN] Cleared Twilio buffer, waiting for transcript to classify (pendingBargeInCheck=true)`);
             
-            // Cancel OpenAI response generation (works for both TTS providers)
-            if (openaiWs?.readyState === WebSocket.OPEN) {
-              openaiWs.send(JSON.stringify({ type: "response.cancel" }));
-              console.log(`[BARGE-IN] Sent response.cancel to OpenAI`);
-            }
-            
-            // For OpenAI native audio, also truncate for clean VAD state
-            if (ttsProvider !== 'elevenlabs' && currentResponseItemId && openaiWs?.readyState === WebSocket.OPEN) {
-              openaiWs.send(JSON.stringify({ type: "conversation.item.truncate", item_id: currentResponseItemId, content_index: 0, audio_end_ms: Math.floor(audioSamplesPlayed / 24) }));
-            }
-            
-            // For ElevenLabs: set barge-in flag to discard late-arriving TTS chunks
+            // For ElevenLabs: stop sending new TTS chunks while we classify
             if (ttsProvider === 'elevenlabs') {
               bargeInActive = true;
-              sentenceBuffer = '';
-              pendingTextBuffer = '';
-              isProcessingElevenLabsTTS = false;
-              console.log(`[BARGE-IN] ElevenLabs: bargeInActive=true, cleared sentence/pending buffers`);
-              // Delayed second clear to catch late audio chunks, then reset flag
-              setTimeout(() => {
-                if (streamSid && twilioWs.readyState === WebSocket.OPEN) {
-                  twilioWs.send(JSON.stringify({ event: "clear", streamSid }));
-                }
-                bargeInActive = false;
-                console.log(`[BARGE-IN] bargeInActive reset to false after 300ms`);
-              }, 300);
-            }
-            
-            isAiSpeaking = false;
-            sentenceBuffer = '';
-            
-            // Track tangent in agenda manager
-            if (sharedAgendaManager && lastUserTranscript) {
-              sharedAgendaManager.pauseForQuery(lastUserTranscript).catch(e => console.error('[AGENDA] pauseForQuery error:', e));
-              bargeInRecoveryPending = true;
-              console.log(`[AGENDA] Paused for tangent: "${lastUserTranscript?.substring(0, 50)}..."`);
+              console.log(`[BARGE-IN] ElevenLabs: bargeInActive=true (pending classification)`);
             }
           }
           break;
@@ -593,9 +586,71 @@ serve(async (req) => {
         case "conversation.item.input_audio_transcription.completed":
           const transcript = (msg.transcript || '').trim();
           if (transcript) {
+            console.log(`[USER] "${transcript}" pendingBargeInCheck=${pendingBargeInCheck}`);
+            
+            // SMART BARGE-IN CLASSIFICATION
+            if (pendingBargeInCheck) {
+              pendingBargeInCheck = false;
+              const transcriptLower = transcript.toLowerCase().trim();
+              const aiOutputLower = lastAiOutputText.toLowerCase();
+              const isEcho = aiOutputLower.includes(transcriptLower);
+              const isNoise = ECHO_NOISE_PATTERNS.test(transcriptLower) && (isSendingTtsAudio || (Date.now() - ttsEndedAt < 500));
+              const isPostTtsEcho = (Date.now() - ttsEndedAt < 500) && isEcho;
+              
+              console.log(`[BARGE-IN-CLASSIFY] transcript="${transcriptLower}", isEcho=${isEcho}, isNoise=${isNoise}, isPostTtsEcho=${isPostTtsEcho}, isSendingTtsAudio=${isSendingTtsAudio}`);
+              
+              if (isEcho || isNoise || isPostTtsEcho) {
+                // ECHO/NOISE: Discard and resume AI speech
+                console.log(`[BARGE-IN-CLASSIFY] Classified as ECHO/NOISE — discarding, resuming AI`);
+                if (openaiWs?.readyState === WebSocket.OPEN) {
+                  openaiWs.send(JSON.stringify({ type: "input_audio_buffer.clear" }));
+                }
+                bargeInActive = false;
+                // Resume: don't cancel response, AI continues where it left off
+                // (Twilio buffer was cleared but OpenAI is still generating)
+                break;
+              }
+              
+              // REAL BARGE-IN: Execute full interrupt sequence
+              console.log(`[BARGE-IN-CLASSIFY] Classified as REAL barge-in — executing full interrupt`);
+              
+              // Cancel OpenAI response
+              if (openaiWs?.readyState === WebSocket.OPEN) {
+                openaiWs.send(JSON.stringify({ type: "response.cancel" }));
+                console.log(`[BARGE-IN] Sent response.cancel to OpenAI`);
+              }
+              
+              // For OpenAI native audio, truncate for clean VAD state
+              if (ttsProvider !== 'elevenlabs' && currentResponseItemId && openaiWs?.readyState === WebSocket.OPEN) {
+                openaiWs.send(JSON.stringify({ type: "conversation.item.truncate", item_id: currentResponseItemId, content_index: 0, audio_end_ms: Math.floor(audioSamplesPlayed / 24) }));
+              }
+              
+              // For ElevenLabs: clear buffers, delayed second clear
+              if (ttsProvider === 'elevenlabs') {
+                sentenceBuffer = '';
+                pendingTextBuffer = '';
+                isProcessingElevenLabsTTS = false;
+                setTimeout(() => {
+                  if (streamSid && twilioWs.readyState === WebSocket.OPEN) {
+                    twilioWs.send(JSON.stringify({ event: "clear", streamSid }));
+                  }
+                  bargeInActive = false;
+                  console.log(`[BARGE-IN] bargeInActive reset to false after 300ms`);
+                }, 300);
+              }
+              
+              isAiSpeaking = false;
+              sentenceBuffer = '';
+              
+              // Track tangent in agenda manager
+              if (sharedAgendaManager) {
+                sharedAgendaManager.pauseForQuery(transcript).catch(e => console.error('[AGENDA] pauseForQuery error:', e));
+                bargeInRecoveryPending = true;
+                console.log(`[AGENDA] Paused for tangent: "${transcript.substring(0, 50)}..."`);
+              }
+            }
+            
             lastUserTranscript = transcript;
-            // messageIndex = messageIndex + 1; // NOTE: commented out - saveCallMessage increments internally. Restore if rolling back persistence.
-            console.log(`[USER] "${transcript}"`);
             if (callSessionId && userId) {
               try {
                 messageIndex = await saveCallMessage(supabase, {
@@ -717,6 +772,10 @@ serve(async (req) => {
               injectSystemMessage(`[System: PRE-CONNECTED CALL - greeting already sent: "${preConnectedGreetingText}". SKIP step 1. ${callContext || ''}. Continue from step 2.]`);
               greetingContextInjected = true;
               console.log(`[GREETING-TRACE] inbound cached audio: injected greeting context, greetingContextInjected=true`);
+              // Mark greeting agenda item as complete
+              if (sharedAgendaManager) {
+                sharedAgendaManager.completeCurrentItem().catch(e => console.error('[AGENDA] greeting complete error:', e));
+              }
               // Persist the cached greeting to transcripts
               if (callSessionId && userId) {
                 saveCallMessage(supabase, {
