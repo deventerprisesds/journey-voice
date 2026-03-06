@@ -503,8 +503,28 @@ export class RealtimeVoiceAssistant {
       this.userId = user?.id || '00000000-0000-0000-0000-000000000001';
       console.log(`[VOICE] User ID: ${this.userId} (demo=${!user?.id})`);
       
-      // STEP 3: Log activity start BEFORE any async operations that might fail
-      await this.logActivity('started', 'token_fetch');
+      // STEP 3: Log activity start (non-blocking to save ~200-400ms)
+      this.logActivity('started', 'token_fetch').catch(() => {});
+      
+      // STEP 3b: Check for concurrent phone sessions (non-blocking warning)
+      try {
+        const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+        const { data: activePhoneSession } = await supabase
+          .from('pre_connect_sessions')
+          .select('session_id, call_sid')
+          .eq('user_id', this.userId)
+          .gte('created_at', fiveMinAgo)
+          .not('call_sid', 'is', null)
+          .limit(1)
+          .maybeSingle();
+
+        if (activePhoneSession) {
+          console.log('[VOICE] ⚠️ Concurrent phone session detected:', activePhoneSession.session_id);
+          this.onMessage?.({ type: 'concurrent_session_warning', sessionId: activePhoneSession.session_id } as any);
+        }
+      } catch (e) {
+        console.warn('[VOICE] Concurrent session check failed (non-blocking):', e);
+      }
       
       console.log('Getting ephemeral token...');
       

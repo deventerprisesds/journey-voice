@@ -35,6 +35,7 @@ async function scheduleNextOccurrence(supabaseClient: any, userId: string, callC
     const callTime = callConfig.call_time;
     const timezone = callConfig.timezone || 'America/New_York';
     const commsMode = callConfig.comms_mode || 'phone';
+    const daysOfWeek = callConfig.days_of_week || null;
 
     const { error } = await supabaseClient.rpc('schedule_next_call', {
       p_user_id: userId,
@@ -43,13 +44,14 @@ async function scheduleNextOccurrence(supabaseClient: any, userId: string, callC
       p_call_time: callTime,
       p_call_context: callConfig.context || '',
       p_timezone: timezone,
-      p_comms_mode: commsMode
+      p_comms_mode: commsMode,
+      p_days_of_week: daysOfWeek
     });
 
     if (error) {
       console.error(`Failed to schedule next occurrence for ${callConfig.call_name}:`, error);
     } else {
-      console.log(`📅 Scheduled next occurrence of ${callConfig.call_name} for tomorrow (mode: ${commsMode})`);
+      console.log(`📅 Scheduled next occurrence of ${callConfig.call_name} (mode: ${commsMode}, days: ${daysOfWeek ? JSON.stringify(daysOfWeek) : 'all'})`);
     }
   } catch (error) {
     console.error('Error scheduling next call occurrence:', error);
@@ -148,6 +150,27 @@ serve(async (req) => {
 
         const commsMode = callConfig.comms_mode || 'phone';
         console.log(`📞 Scheduled call comms_mode: ${commsMode}`);
+
+        // Day-of-week guard: skip if today is not in the allowed days
+        if (callConfig.days_of_week && Array.isArray(callConfig.days_of_week) && callConfig.days_of_week.length > 0) {
+          const tz = callConfig.timezone || 'America/New_York';
+          const nowStr = new Date().toLocaleDateString('en-US', { weekday: 'short', timeZone: tz });
+          const dayMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+          const todayNum = dayMap[nowStr.slice(0, 3)];
+
+          if (todayNum !== undefined && !callConfig.days_of_week.includes(todayNum)) {
+            console.log(`⏭️ Skipping "${callConfig.call_name}": today is day ${todayNum}, allowed: [${callConfig.days_of_week}]`);
+            await supabaseClient
+              .from('scheduled_notifications')
+              .update({
+                delivered_at: new Date().toISOString(),
+                failure_reason: 'wrong_day_of_week'
+              })
+              .eq('id', callNotification.id);
+            await scheduleNextOccurrence(supabaseClient, userId, callConfig);
+            continue;
+          }
+        }
 
         const { data: userPrefs } = await supabaseClient
           .from('user_scheduling_prefs')

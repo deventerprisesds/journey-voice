@@ -36,6 +36,7 @@ export interface ScheduledCall {
   commsMode?: CommsMode; // Delivery method (default: 'phone')
   fallbackMode?: CommsMode; // Fallback when primary fails (default: 'app_message')
   assistantId?: string;  // Which assistant sends the message (for chat/phone modes)
+  daysOfWeek?: number[]; // 0=Sun,1=Mon,2=Tue,3=Wed,4=Thu,5=Fri,6=Sat
 }
 // Communication mode for delivery method
 export type CommsMode = 'phone' | 'app_message' | 'slack' | 'email';

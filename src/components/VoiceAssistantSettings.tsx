@@ -88,7 +88,8 @@ const DEFAULT_SCHEDULED_CALLS: ScheduledCall[] = [
     time: '11:00',
     enabled: true,
     callType: 'morning_standup',
-    context: "Today's agenda review. Share what's scheduled for today, check on priorities, and see if any tasks need to be added."
+    context: "Today's agenda review. Share what's scheduled for today, check on priorities, and see if any tasks need to be added.",
+    daysOfWeek: [1, 2, 3, 4, 5],
   },
   {
     id: 'midday_checkin',
@@ -96,7 +97,8 @@ const DEFAULT_SCHEDULED_CALLS: ScheduledCall[] = [
     time: '12:30',
     enabled: true,
     callType: 'midday_checkin',
-    context: "Progress check. See how the day is going, ask if there's anything blocking progress, and if any help or rescheduling is needed."
+    context: "Progress check. See how the day is going, ask if there's anything blocking progress, and if any help or rescheduling is needed.",
+    daysOfWeek: [1, 2, 3, 4, 5],
   },
   {
     id: 'eod_wrapup',
@@ -104,7 +106,8 @@ const DEFAULT_SCHEDULED_CALLS: ScheduledCall[] = [
     time: '19:00',
     enabled: true,
     callType: 'eod_wrapup',
-    context: "Daily summary. Summarize what was completed, what still needs to be done, priorities for tomorrow, and ask about evening focus areas."
+    context: "Daily summary. Summarize what was completed, what still needs to be done, priorities for tomorrow, and ask about evening focus areas.",
+    daysOfWeek: [1, 2, 3, 4, 5],
   },
   // Window Transition Calls (disabled by default)
   {
@@ -114,7 +117,8 @@ const DEFAULT_SCHEDULED_CALLS: ScheduledCall[] = [
     enabled: false,
     callType: 'custom',
     commsMode: 'phone',
-    context: `[WINDOW:morning]`
+    context: `[WINDOW:morning]`,
+    daysOfWeek: [1, 2, 3, 4, 5],
   },
   {
     id: 'window_business',
@@ -123,7 +127,8 @@ const DEFAULT_SCHEDULED_CALLS: ScheduledCall[] = [
     enabled: false,
     callType: 'custom',
     commsMode: 'phone',
-    context: `[WINDOW:business_hours]`
+    context: `[WINDOW:business_hours]`,
+    daysOfWeek: [1, 2, 3, 4, 5],
   },
   {
     id: 'window_afternoon',
@@ -132,7 +137,8 @@ const DEFAULT_SCHEDULED_CALLS: ScheduledCall[] = [
     enabled: false,
     callType: 'custom',
     commsMode: 'phone',
-    context: `[WINDOW:after_work]`
+    context: `[WINDOW:after_work]`,
+    daysOfWeek: [1, 2, 3, 4, 5],
   },
   {
     id: 'window_evening',
@@ -141,7 +147,8 @@ const DEFAULT_SCHEDULED_CALLS: ScheduledCall[] = [
     enabled: false,
     callType: 'custom',
     commsMode: 'phone',
-    context: `[WINDOW:evening]`
+    context: `[WINDOW:evening]`,
+    daysOfWeek: [1, 2, 3, 4, 5],
   },
   {
     id: 'window_weekend',
@@ -150,7 +157,8 @@ const DEFAULT_SCHEDULED_CALLS: ScheduledCall[] = [
     enabled: false,
     callType: 'custom',
     commsMode: 'phone',
-    context: `[WINDOW:weekends]`
+    context: `[WINDOW:weekends]`,
+    daysOfWeek: [0, 6],
   }
 ];
 
@@ -232,7 +240,13 @@ const VoiceAssistantSettings: React.FC = () => {
       if (savedCalls.length > 0) {
         const savedIds = new Set(savedCalls.map((c: ScheduledCall) => c.id));
         const missingDefaults = DEFAULT_SCHEDULED_CALLS.filter(d => !savedIds.has(d.id));
-        setScheduledCalls([...savedCalls, ...missingDefaults]);
+        // Backfill daysOfWeek for saved calls that don't have it
+        const backfilled = savedCalls.map((c: ScheduledCall) => {
+          if (c.daysOfWeek) return c;
+          const def = DEFAULT_SCHEDULED_CALLS.find(d => d.id === c.id);
+          return { ...c, daysOfWeek: def?.daysOfWeek || [1, 2, 3, 4, 5] };
+        });
+        setScheduledCalls([...backfilled, ...missingDefaults]);
       } else {
         setScheduledCalls(DEFAULT_SCHEDULED_CALLS);
       }
@@ -413,6 +427,19 @@ const VoiceAssistantSettings: React.FC = () => {
     );
   };
 
+  const handleUpdateCallDaysOfWeek = (callId: string, day: number) => {
+    setScheduledCalls(calls =>
+      calls.map(call => {
+        if (call.id !== callId) return call;
+        const current = call.daysOfWeek || [1, 2, 3, 4, 5];
+        const updated = current.includes(day)
+          ? current.filter(d => d !== day)
+          : [...current, day].sort((a, b) => a - b);
+        return { ...call, daysOfWeek: updated };
+      })
+    );
+  };
+
   const handleUpdateCallAssistant = (callId: string, assistantId: string) => {
     setScheduledCalls(calls =>
       calls.map(call =>
@@ -437,6 +464,7 @@ const VoiceAssistantSettings: React.FC = () => {
       enabled: true,
       callType: 'custom',
       context: 'Custom check-in call.',
+      daysOfWeek: [1, 2, 3, 4, 5],
     };
 
     setScheduledCalls([...scheduledCalls, newCall]);
@@ -921,6 +949,34 @@ const VoiceAssistantSettings: React.FC = () => {
                             </>
                           )}
                         </div>
+                      </div>
+                      {/* Day-of-week chips */}
+                      <div className="flex items-center gap-1 mt-2 ml-12">
+                        {[
+                          { day: 1, label: 'M' },
+                          { day: 2, label: 'T' },
+                          { day: 3, label: 'W' },
+                          { day: 4, label: 'T' },
+                          { day: 5, label: 'F' },
+                          { day: 6, label: 'S' },
+                          { day: 0, label: 'S' },
+                        ].map(({ day, label }) => {
+                          const isActive = (call.daysOfWeek || [1, 2, 3, 4, 5]).includes(day);
+                          return (
+                            <button
+                              key={`${call.id}-day-${day}`}
+                              type="button"
+                              onClick={() => handleUpdateCallDaysOfWeek(call.id, day)}
+                              className={`w-6 h-6 rounded-full text-[10px] font-medium transition-colors ${
+                                isActive
+                                  ? 'bg-primary text-primary-foreground'
+                                  : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                              }`}
+                            >
+                              {label}
+                            </button>
+                          );
+                        })}
                       </div>
                     </div>
                     <div className="flex items-center gap-2">

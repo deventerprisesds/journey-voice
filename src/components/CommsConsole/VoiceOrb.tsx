@@ -101,7 +101,7 @@ const VoiceOrb: React.FC<VoiceOrbProps> = ({
         className={cn(
           'relative rounded-full shadow-lg transition-all duration-300',
           sizeClasses[size],
-          state === 'idle' && 'animate-pulse',
+          state === 'idle' && isConnected && 'animate-pulse',
           state === 'listening' && 'scale-105',
           state === 'speaking' && 'scale-110',
           state === 'processing' && 'scale-95'

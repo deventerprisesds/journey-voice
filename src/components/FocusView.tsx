@@ -150,10 +150,20 @@ const FocusView: React.FC<FocusViewProps> = ({
   const isRolledOver = (t: Task): boolean => {
     const rolloverStatuses = ['UP_NEXT', 'TODO', 'READY', 'BACKLOG'];
     if (!rolloverStatuses.includes(t.status)) return false;
-    if (!t.start_time) return false;
-    const startDate = parseISO(t.start_time);
-    // Past scheduled time AND not scheduled for today = rolled over
-    return isPast(startDate) && !isToday(startDate);
+    
+    const todayStart = startOfDay(new Date());
+    
+    // Path 1: Has a start_time from a past day
+    if (t.start_time) {
+      return parseISO(t.start_time) < todayStart;
+    }
+    
+    // Path 2: Has only a due_date that is in the past (before today)
+    if (t.due_date) {
+      return parseISO(t.due_date) < todayStart;
+    }
+    
+    return false;
   };
   
   const upNextTasks = tasks
