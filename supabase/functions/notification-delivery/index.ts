@@ -171,6 +171,8 @@ serve(async (req) => {
             continue;
           }
         }
+
+        const { data: userPrefs } = await supabaseClient
           .from('user_scheduling_prefs')
           .select('timezone')
           .eq('user_id', userId)
