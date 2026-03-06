@@ -1555,6 +1555,26 @@ serve(async (req) => {
           }
         }
         
+        // Additional detection: answeredBy=unknown (or missing) with pre_connect_session = forwarded/declined
+        if (!isLikelyVoicemail && !isMissed && !isVoicemail && 
+            statusData.callStatus === 'completed' && 
+            (statusData.answeredBy === 'unknown' || !statusData.answeredBy)) {
+          try {
+            const supabaseCheck2 = createClient(supabaseUrl, supabaseServiceKey);
+            const { data: unknownSession } = await supabaseCheck2
+              .from('pre_connect_sessions')
+              .select('session_id, user_id')
+              .eq('call_sid', statusData.callSid)
+              .maybeSingle();
+            if (unknownSession) {
+              isLikelyVoicemail = true;
+              console.log(`[status-callback] ⚠️ answeredBy=${statusData.answeredBy || 'missing'} with pre_connect_session — treating as forwarded/voicemail`);
+            }
+          } catch (e) {
+            console.error('[status-callback] Error in unknown-answered check:', e);
+          }
+        }
+        
         console.log(`[status-callback] Detection: isMissed=${isMissed}, isVoicemail=${isVoicemail}, isLikelyVoicemail=${isLikelyVoicemail}, duration=${callDuration}s, answeredBy=${statusData.answeredBy}`);
         
         if (isMissed || isVoicemail || isLikelyVoicemail) {
@@ -1625,23 +1645,62 @@ serve(async (req) => {
                 }
                 console.log(`[status-callback] Sending chat fallback via generateFromContext, label: "${contextLabel}"`);
                 
-                const response = await fetch(`${supabaseUrl}/functions/v1/send-chat-message`, {
-                  method: 'POST',
-                  headers: {
-                    'Authorization': `Bearer ${supabaseServiceKey}`,
-                    'Content-Type': 'application/json',
-                  },
-                  body: JSON.stringify({
-                    userId,
-                    generateFromContext: { callType: 'custom', context: contextLabel },
-                    sendPush: true,
-                  }),
-                });
-                const result = await response.json();
-                if (result.success) {
-                  console.log('[status-callback] ✅ Chat fallback sent successfully via generateFromContext');
+                // Dedup: check if AI already sent a message during this call
+                const threeMinAgo = new Date(Date.now() - 3 * 60 * 1000).toISOString();
+                const { data: recentMsg } = await supabase
+                  .from('conversation_messages')
+                  .select('id')
+                  .eq('user_id', userId)
+                  .eq('role', 'assistant')
+                  .gte('created_at', threeMinAgo)
+                  .limit(1)
+                  .maybeSingle();
+
+                if (recentMsg) {
+                  console.log(`[status-callback] ⏭️ Skipping chat fallback — recent assistant message found: ${recentMsg.id}`);
+                  await supabase.from('activity_log').insert({
+                    user_id: userId,
+                    activity_type: 'voicemail_fallback',
+                    status: 'skipped_duplicate',
+                    stage: 'status_callback',
+                    metadata: { callSid: statusData.callSid, callDuration, recentMsgId: recentMsg.id }
+                  }).then(() => {}).catch(() => {});
                 } else {
-                  console.error('[status-callback] ❌ Failed to send chat fallback:', result.error);
+                  const response = await fetch(`${supabaseUrl}/functions/v1/send-chat-message`, {
+                    method: 'POST',
+                    headers: {
+                      'Authorization': `Bearer ${supabaseServiceKey}`,
+                      'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                      userId,
+                      generateFromContext: { callType: 'custom', context: contextLabel },
+                      sendPush: true,
+                    }),
+                  });
+                  const result = await response.json();
+                  
+                  // Log the fallback result
+                  await supabase.from('activity_log').insert({
+                    user_id: userId,
+                    activity_type: 'voicemail_fallback',
+                    status: result.success ? 'completed' : 'error',
+                    stage: 'status_callback',
+                    metadata: {
+                      callSid: statusData.callSid,
+                      callDuration,
+                      contextLabel,
+                      success: result.success,
+                      error: result.error || null,
+                      httpStatus: response.status
+                    }
+                  }).then(() => {}).catch(() => {});
+                  
+                  if (result.success) {
+                    console.log('[status-callback] ✅ Chat fallback sent successfully via generateFromContext');
+                  } else {
+                    console.error('[status-callback] ❌ Failed to send chat fallback:', result.error);
+                  }
                 }
               } else {
                 // Send via unified notification (slack / email)
@@ -1674,6 +1733,21 @@ serve(async (req) => {
             }
           } catch (fallbackError) {
             console.error('[status-callback] ❌ Error in fallback:', fallbackError);
+            // Log the error for queryability
+            try {
+              const supabaseLog = createClient(supabaseUrl, supabaseServiceKey);
+              await supabaseLog.from('activity_log').insert({
+                user_id: '00000000-0000-0000-0000-000000000001',
+                activity_type: 'voicemail_fallback',
+                status: 'error',
+                stage: 'status_callback',
+                metadata: {
+                  callSid: statusData.callSid,
+                  callDuration,
+                  error: fallbackError instanceof Error ? fallbackError.message : String(fallbackError)
+                }
+              }).then(() => {}).catch(() => {});
+            } catch (_) {}
           }
         }
 
