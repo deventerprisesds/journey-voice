@@ -1,92 +1,140 @@
 
 
-# Revised Plan: Smart Barge-In That Handles "That's Incorrect"
+# Combined Plan: Task Drag-and-Drop Between Groups + Protect Manual Groups
 
-## Why the Word-Count Approach Fails
+## Overview
 
-"That's incorrect" is 2 words. "No." is 1 word. "Stop" is 1 word. All are clearly real barge-ins. A word-count threshold would suppress them — unacceptable.
+This plan combines all previously discussed but unimplemented changes into one deliverable:
 
-## How ChatGPT Handles This
+1. **Database**: Add `is_manual` column to `task_topic_index` and fix the cleanup trigger to skip manually created groups
+2. **Database**: Update `task_count` bookkeeping so it stays accurate
+3. **UI**: Enable dragging individual tasks between groups/subgroups in "group" view mode
+4. **UI**: Add "Ungroup" option to the batch toolbar
+5. **Code**: Set `is_manual = true` when users create groups via the dialog
+6. **Code**: Update `task_count` in `batchMoveToGroup` and `handleMoveToGroup`
 
-ChatGPT uses WebRTC with built-in **Acoustic Echo Cancellation (AEC)** in the browser. The browser's audio pipeline subtracts the AI's output from the mic input before it reaches VAD. Echo simply never reaches the model. That's why it "just works."
+---
 
-The Twilio phone bridge has **no AEC** — the phone speaker plays audio, the mic picks it up, and OpenAI's VAD sees it as speech. That's the fundamental difference.
+## 1. Database Migration
 
-## Better Approach: Echo Fingerprinting (Not Word Count)
+Add the `is_manual` column and replace the cleanup trigger function:
 
-Instead of counting words, we compare the transcript against what the AI **just said**. Echo transcripts are fragments of the AI's own recent output. Real barge-ins are novel content.
+```sql
+-- Add is_manual flag (false = auto-created by classifier, true = user-created)
+ALTER TABLE public.task_topic_index
+  ADD COLUMN IF NOT EXISTS is_manual boolean DEFAULT false;
 
-### Classification Logic
+-- Replace cleanup trigger: decrement counts, only auto-delete non-manual topics
+CREATE OR REPLACE FUNCTION public.cleanup_task_topic_on_delete()
+RETURNS TRIGGER AS $$
+BEGIN
+  UPDATE public.task_topic_index
+  SET task_count = task_count - 1, updated_at = now()
+  WHERE id IN (
+    SELECT topic_id FROM public.task_topic_mappings WHERE task_id = OLD.id
+  );
 
-When a transcript arrives during or within 500ms after TTS playback:
+  -- Only auto-delete system-generated (classifier) topics that hit zero
+  DELETE FROM public.task_topic_index
+  WHERE task_count <= 0
+    AND is_manual = false
+    AND id IN (
+      SELECT topic_id FROM public.task_topic_mappings WHERE task_id = OLD.id
+    );
 
-1. **Check if it's an echo:** Compare the transcript (lowercased, stripped) against the last ~200 chars of AI output text. If the transcript is a substring of recent AI output → **discard as echo**
-2. **Check if it's filler noise:** If transcript matches a known noise pattern (just "Hello", "Hmm", empty string, or single repeated phoneme) AND it arrived during active TTS → **discard**
-3. **Otherwise → real barge-in:** "That's incorrect", "Wait", "No", "Stop", "What about tomorrow" — all pass through and trigger full barge-in
-
-This means:
-- "That's incorrect" → not in AI's recent output → **real barge-in** ✓
-- "No" → not in AI's recent output → **real barge-in** ✓  
-- "...schedule, calendar" (echo of AI) → substring match → **discarded** ✓
-- "Hello" during TTS → filler noise pattern → **discarded** ✓
-
-### Implementation Flow
-
-```text
-speech_started (VAD fires)
-  │
-  ├─ If waitingForUserHello → trigger greeting (existing)
-  │
-  ├─ If isAiSpeaking OR isSendingTtsAudio:
-  │     • DON'T cancel response yet
-  │     • Set pendingBargeInCheck = true
-  │     • Clear Twilio audio buffer (stops playback immediately for responsiveness)
-  │     • Wait for transcript...
-  │
-  └─ Otherwise: normal user turn (existing)
-
-transcript arrives (conversation.item.input_audio_transcription.completed)
-  │
-  ├─ If pendingBargeInCheck:
-  │     • Run echo fingerprint check against lastAiOutputText
-  │     • If echo/noise → clear input_audio_buffer, DON'T cancel response,
-  │       send response.create to resume AI speech
-  │     • If real → execute full barge-in (response.cancel, agenda pause, etc.)
-  │     • Reset pendingBargeInCheck = false
-  │
-  └─ Otherwise: normal transcript handling (existing)
+  RETURN OLD;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 ```
 
-### Key Detail: Immediate Audio Stop, Deferred Cancel
+This means:
+- Classifier-created groups still get auto-cleaned when empty (existing behavior)
+- User-created groups/subgroups survive indefinitely until manually deleted
 
-When VAD fires during AI speech, we **immediately clear the Twilio playback buffer** so you don't keep hearing the AI while you're talking. But we **defer `response.cancel`** until we classify the transcript. If it turns out to be echo, we resume AI output seamlessly. If it's real, we cancel. This gives you the snappy interrupt feel without false triggers.
+---
 
-## Changes
+## 2. `AddTopicGroupDialog.tsx` -- Set `is_manual: true`
 
-### Change 1: `supabase/functions/twilio-realtime-bridge/index.ts`
+When a user creates a group or subgroup via the dialog, add `is_manual: true` to the upsert payload. This flags it as user-created and protects it from the cleanup trigger.
 
-**New state variables:**
-- `pendingBargeInCheck: boolean = false`
-- `lastAiOutputText: string = ''` (accumulate from `response.audio_transcript.delta`)
-- `ttsEndedAt: number = 0`
+---
 
-**Modify `speech_started` handler (line 545):** When `isAiSpeaking || isSendingTtsAudio`, set `pendingBargeInCheck = true` and clear Twilio buffer, but do NOT send `response.cancel` yet.
+## 3. Task Drag-and-Drop Between Groups (Group View Mode)
 
-**Modify transcript handler (line 593):** When `pendingBargeInCheck` is true, run echo classification before processing. Echo fingerprint: `lastAiOutputText.toLowerCase().includes(transcript.toLowerCase())`. If echo → discard + resume. If real → full barge-in.
+### `TopicGroupPanel.tsx`
 
-**Track AI output text:** In `response.audio_transcript.delta`, append to `lastAiOutputText`. On `response.done`, keep last 300 chars. On new `response.created`, reset.
+- Import `Droppable` and `Draggable` from `@hello-pangea/dnd`
+- Wrap the task list area inside each group panel with a `Droppable` component:
+  - `droppableId` = the topic group ID (e.g., `"group-{topicGroup.id}"`)
+  - `type` = `"TASK_IN_GROUP"`
+- Wrap each task row with a `Draggable`:
+  - `draggableId` = `"task-in-group-{task.id}"`
+  - The entire task row becomes the drag handle
+- Child sub-group panels remain as they are (rendered above the task droppable)
+- The "Uncategorized" pseudo-group also gets a droppable (`"group-uncategorized-{categoryKey}"`)
 
-**Post-TTS echo window:** When `isSendingTtsAudio` flips to false, set `ttsEndedAt = Date.now()`. In transcript handler, also apply echo check if within 500ms of `ttsEndedAt`.
+### `Priorities.tsx` (`handleDragEnd`)
 
-**Mark greeting agenda complete:** After `greetingContextInjected = true`, call `sharedAgendaManager.completeItem(0)`.
+Add a new branch at the top of `handleDragEnd` for `type === 'TASK_IN_GROUP'`:
 
-### Change 2: `src/utils/RealtimeVoiceAssistant.ts`
+```
+if (type === 'TASK_IN_GROUP') {
+  const taskId = extract from draggableId
+  const srcGroupId = extract from source.droppableId
+  const dstGroupId = extract from destination.droppableId
 
-**Handle `hang_up` tool:** Add `|| functionName === 'hang_up'` to the disconnect check (~line 1200).
+  if srcGroupId === dstGroupId: return (no-op)
 
-**Event-driven disconnect:** Replace `setTimeout(2000)` with listening for `response.done` / audio completion before calling `disconnect()`. Safety timeout of 8s.
+  // Delete old mapping
+  await supabase.from('task_topic_mappings').delete().eq('task_id', taskId)
 
-### Deployment
-- Deploy `twilio-realtime-bridge`
-- Frontend auto-deploys
+  if destination is an uncategorized group:
+    // Just remove mapping (task becomes uncategorized)
+  else:
+    // Insert new mapping to destination topic
+    await supabase.from('task_topic_mappings').insert({ task_id, topic_id: dstGroupId })
+    // Increment task_count on destination
+    // Decrement task_count on source (if it was a real group)
+
+  // Refresh data
+}
+```
+
+---
+
+## 4. `task_count` Bookkeeping
+
+### `batchMoveToGroup` in `Priorities.tsx`
+
+After deleting old mappings and inserting new ones:
+- Query old mappings first to find source topic IDs
+- Decrement `task_count` on each source topic
+- Increment `task_count` on the destination topic by the number of moved tasks
+
+### `handleMoveToGroup` in `TopicGroupPanel.tsx`
+
+After moving a single task:
+- Decrement `task_count` on the current group (`topicGroup.id`)
+- Increment `task_count` on the destination group
+
+---
+
+## 5. Batch Toolbar: "Ungroup" Button
+
+Add an "Ungroup" button to the batch action bar (between "Status..." and the close button):
+- Icon: `FolderMinus` from lucide-react
+- On click: deletes all `task_topic_mappings` for selected task IDs, decrements `task_count` on affected source topics
+- Shows toast: "Removed N tasks from their groups"
+- Clears selection and refreshes
+
+---
+
+## Files Changed
+
+| File | Change |
+|------|--------|
+| New migration | Add `is_manual` column; fix `cleanup_task_topic_on_delete` trigger |
+| `src/components/priorities/AddTopicGroupDialog.tsx` | Add `is_manual: true` to upsert payload |
+| `src/components/priorities/TopicGroupPanel.tsx` | Wrap tasks in `Droppable`/`Draggable` for `TASK_IN_GROUP` type; update `task_count` in `handleMoveToGroup` |
+| `src/pages/Priorities.tsx` | Handle `TASK_IN_GROUP` drag in `handleDragEnd`; update `task_count` in `batchMoveToGroup`; add "Ungroup" batch button |
 
