@@ -138,7 +138,7 @@ USER: ${userName}`;
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "gpt-4o-realtime-preview-2024-12-17",
+        model: "gpt-4o-realtime-preview-2025-06-03",
         voice: openaiVoice,  // Use user's selected OpenAI voice
         modalities: modalities,  // Dynamic based on TTS provider
         input_audio_format: "pcm16",
@@ -150,10 +150,10 @@ USER: ${userName}`;
           prompt: "tasks, schedule, calendar, reschedule, today, tomorrow, priorities"
         },
         // Use semantic VAD (AI-based) instead of server_vad (amplitude-based)
-        // This prevents background noise from triggering false speech detection
+        // "medium" eagerness balances responsiveness with letting user finish thoughts
         turn_detection: {
           type: "semantic_vad",
-          eagerness: "low",
+          eagerness: "medium",
           create_response: true,
           interrupt_response: true
         },

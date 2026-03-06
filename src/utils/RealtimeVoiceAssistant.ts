@@ -750,7 +750,7 @@ export class RealtimeVoiceAssistant {
 
       // Connect to OpenAI's Realtime API
       const baseUrl = "https://api.openai.com/v1/realtime";
-      const model = "gpt-4o-realtime-preview-2024-12-17";
+      const model = "gpt-4o-realtime-preview-2025-06-03";
       const sdpResponse = await fetch(`${baseUrl}?model=${model}`, {
         method: "POST",
         body: offer.sdp,
@@ -1074,24 +1074,12 @@ export class RealtimeVoiceAssistant {
       return;
     }
     
-    // For OpenAI TTS: Simplified, direct instruction (reduces "thinking" time)
-    this.dc.send(JSON.stringify({
-      type: 'conversation.item.create',
-      item: {
-        type: 'message',
-        role: 'user',
-        content: [{
-          type: 'input_text',
-          text: `Say exactly: "${greeting}, ${userName}! How can I help you?"`
-        }]
-      }
-    }));
-    
-    // Trigger AI response with audio
+    // For OpenAI TTS: Use response.create with direct instructions (avoids fake user message overhead)
     this.dc.send(JSON.stringify({
       type: 'response.create',
       response: {
-        modalities: ['text', 'audio']
+        modalities: ['text', 'audio'],
+        instructions: `Greet the user warmly. Say: "${greeting}, ${userName}! How can I help you?" — keep it short and natural.`
       }
     }));
   }
