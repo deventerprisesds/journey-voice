@@ -3858,6 +3858,14 @@ export type Database = {
         Args: { p_user_id: string; token_value: string }
         Returns: string
       }
+      get_admin_o365_tokens: {
+        Args: { p_connection_id: string; p_user_id: string }
+        Returns: {
+          access_token: string
+          expires_at: string
+          refresh_token: string
+        }[]
+      }
       get_calendar_connection_tokens: {
         Args: { _connection_id: string }
         Returns: {
@@ -3962,6 +3970,14 @@ export type Database = {
           scope: string
           updated_at: string
           user_id: string
+        }[]
+      }
+      get_trip_candidate: {
+        Args: { p_candidate_id: string }
+        Returns: {
+          candidate_id: string
+          candidate_type: string
+          display_name: string
         }[]
       }
       has_role: {
@@ -4131,6 +4147,69 @@ export type Database = {
         }
         Returns: boolean
       }
+      upsert_destination_intelligence:
+        | {
+            Args: {
+              p_candidate_id: string
+              p_destination_name: string
+              p_enrichment_status?: string
+              p_flight_estimate: number
+              p_hotel_estimate: number
+              p_pros: Json
+              p_summary: string
+              p_top_activities: Json
+              p_watchouts: Json
+            }
+            Returns: Json
+          }
+        | {
+            Args: {
+              p_best_for_tags?: Json
+              p_candidate_id: string
+              p_date_specific_insights?: Json
+              p_destination_name: string
+              p_enrichment_quality?: string
+              p_enrichment_status?: string
+              p_enrichment_warnings?: Json
+              p_evergreen_attractions?: Json
+              p_flight_estimate: number
+              p_flight_outlook?: string
+              p_hotel_estimate: number
+              p_less_ideal_for_tags?: Json
+              p_pros: Json
+              p_short_pitch?: string
+              p_summary: string
+              p_top_activities: Json
+              p_watchouts: Json
+              p_why_it_fits_this_group?: Json
+            }
+            Returns: Json
+          }
+        | {
+            Args: {
+              p_best_for_tags?: Json
+              p_candidate_id: string
+              p_date_specific_insights?: Json
+              p_destination_name: string
+              p_enrichment_quality?: string
+              p_enrichment_status?: string
+              p_enrichment_warnings?: Json
+              p_evergreen_attractions?: Json
+              p_flight_estimate: number
+              p_flight_outlook?: string
+              p_gallery_urls?: Json
+              p_hero_image_url?: string
+              p_hotel_estimate: number
+              p_less_ideal_for_tags?: Json
+              p_pros: Json
+              p_short_pitch?: string
+              p_summary: string
+              p_top_activities: Json
+              p_watchouts: Json
+              p_why_it_fits_this_group?: Json
+            }
+            Returns: Json
+          }
     }
     Enums: {
       app_role: "admin" | "user"
