@@ -650,7 +650,7 @@ export class TwilioCallSession {
     this.currentStage = 'cf_openai_connect';
     
     try {
-      const url = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01';
+      const url = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2025-06-03';
       
       this.openaiWs = new WebSocket(url, [
         'realtime',
