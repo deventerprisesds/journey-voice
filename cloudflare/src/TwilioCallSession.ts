@@ -421,6 +421,9 @@ export class TwilioCallSession {
       has_session: !!sessionId
     });
 
+    // Insert call_sessions row for tracking
+    await this.insertCallSession();
+
     // If we have a pre-connected session, fetch it and use its data
     if (sessionId) {
       this.currentStage = 'cf_preconnect_fetch';
