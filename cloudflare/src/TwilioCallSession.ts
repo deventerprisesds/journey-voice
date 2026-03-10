@@ -89,6 +89,7 @@ export class TwilioCallSession {
   private isPlaying: boolean = false;
   private toolDefinitions: any[] = [];
   private activityLogId: string | null = null;
+  private callSessionDbId: string | null = null;
   private currentStage: string = 'init';
 
   // Voice preferences
