@@ -285,6 +285,86 @@ export class TwilioCallSession {
     }
   }
 
+  // ==================== Call Sessions Logging ====================
+  // Insert/update call_sessions table for duration tracking (parity with Supabase bridge)
+
+  private async insertCallSession() {
+    if (!this.callSid || !this.userId) return;
+
+    try {
+      const response = await fetch(
+        `${this.env.SUPABASE_URL}/rest/v1/call_sessions`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${this.env.SUPABASE_SERVICE_KEY}`,
+            'apikey': this.env.SUPABASE_SERVICE_KEY,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=representation'
+          },
+          body: JSON.stringify({
+            user_id: this.userId,
+            call_sid: this.callSid,
+            stream_sid: this.streamSid,
+            direction: this.direction,
+            started_at: new Date().toISOString(),
+            tts_provider: this.ttsProvider,
+            metadata: {
+              worker_version: WORKER_VERSION,
+              bridge: 'cloudflare'
+            }
+          })
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data && data.length > 0) {
+          this.callSessionDbId = data[0].id;
+          console.log(`[CF] call_sessions row created: ${this.callSessionDbId}`);
+        }
+      } else {
+        console.error(`[CF] Failed to insert call_session: ${response.status}`);
+      }
+    } catch (error) {
+      console.error('[CF] Failed to insert call_session:', error);
+    }
+  }
+
+  private async updateCallSession(durationSeconds: number) {
+    if (!this.callSessionDbId) return;
+
+    try {
+      await fetch(
+        `${this.env.SUPABASE_URL}/rest/v1/call_sessions?id=eq.${this.callSessionDbId}`,
+        {
+          method: 'PATCH',
+          headers: {
+            'Authorization': `Bearer ${this.env.SUPABASE_SERVICE_KEY}`,
+            'apikey': this.env.SUPABASE_SERVICE_KEY,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=minimal'
+          },
+          body: JSON.stringify({
+            ended_at: new Date().toISOString(),
+            duration_seconds: durationSeconds,
+            metadata: {
+              worker_version: WORKER_VERSION,
+              bridge: 'cloudflare',
+              echo_filtered: this.echoFilteredCount,
+              twilio_frames_in: this.twilioMediaFramesIn,
+              twilio_frames_out: this.twilioMediaFramesOut,
+              messages_persisted: this.messageIndex
+            }
+          })
+        }
+      );
+      console.log(`[CF] call_sessions updated: duration=${durationSeconds}s`);
+    } catch (error) {
+      console.error('[CF] Failed to update call_session:', error);
+    }
+  }
+
   // ==================== Structured Attempt Logging ====================
   // Tracks greeting/tts/tool_call attempts with explicit success/fail status
   // to enable systematic debugging and prevent repeat issues
