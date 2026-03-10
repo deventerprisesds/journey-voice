@@ -1759,6 +1759,9 @@ You: "Looking that up..." [then call web_search tool]`;
       agenda_items_completed: agendaProgress.completed,
       agenda_complete: this.isAgendaComplete()
     });
+
+    // Update call_sessions with ended_at and duration
+    await this.updateCallSession(callDurationS);
     
     if (this.openaiWs) {
       this.openaiWs.close();
