@@ -4106,24 +4106,24 @@ export type Database = {
               p_call_name: string
               p_call_time: string
               p_comms_mode?: string
-              p_timezone?: string
-              p_user_id: string
-            }
-            Returns: string
-          }
-        | {
-            Args: {
-              p_call_context: string
-              p_call_id: string
-              p_call_name: string
-              p_call_time: string
-              p_comms_mode?: string
               p_days_of_week?: number[]
               p_timezone?: string
               p_user_id: string
             }
             Returns: string
           }
+      schedule_next_call_v1_backup: {
+        Args: {
+          p_call_context: string
+          p_call_id: string
+          p_call_name: string
+          p_call_time: string
+          p_comms_mode?: string
+          p_timezone?: string
+          p_user_id: string
+        }
+        Returns: string
+      }
       update_calendar_connection_purposes: {
         Args: { _connection_id: string; _purposes: string[] }
         Returns: boolean
