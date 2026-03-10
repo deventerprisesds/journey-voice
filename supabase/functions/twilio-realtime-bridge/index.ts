@@ -427,7 +427,7 @@ serve(async (req) => {
       switch (msg.type) {
         case "session.created":
           const modalities = ttsProvider === 'elevenlabs' ? ["text"] : ["text", "audio"];
-          const turnDetection = { type: "semantic_vad", eagerness: "low", create_response: true, interrupt_response: true };
+          const turnDetection = { type: "semantic_vad", eagerness: "medium", create_response: true, interrupt_response: true };
           console.log(`[OPENAI-SESSION] Configuring: modalities=${JSON.stringify(modalities)}, turn_detection=${JSON.stringify(turnDetection)}, ttsProvider=${ttsProvider}`);
           openaiWs!.send(JSON.stringify({
             type: "session.update",

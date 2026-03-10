@@ -975,7 +975,7 @@ export class TwilioCallSession {
         // Phase 1A: Use semantic_vad with create_response: true (parity with Supabase bridge)
         turn_detection: {
           type: 'semantic_vad',
-          eagerness: 'low',
+          eagerness: 'medium',
           create_response: true,
           interrupt_response: true,
         },
