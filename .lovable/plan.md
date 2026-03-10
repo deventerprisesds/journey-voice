@@ -1,61 +1,140 @@
 
 
-# Full Voice Parity Fix + Scheduling Chain Repair
+# Combined Plan: Task Drag-and-Drop Between Groups + Protect Manual Groups
 
-## Changes Overview
+## Overview
 
-Five targeted changes to bring all voice modes to WebRTC parity and fix the scheduling chain.
+This plan combines all previously discussed but unimplemented changes into one deliverable:
+
+1. **Database**: Add `is_manual` column to `task_topic_index` and fix the cleanup trigger to skip manually created groups
+2. **Database**: Update `task_count` bookkeeping so it stays accurate
+3. **UI**: Enable dragging individual tasks between groups/subgroups in "group" view mode
+4. **UI**: Add "Ungroup" option to the batch toolbar
+5. **Code**: Set `is_manual = true` when users create groups via the dialog
+6. **Code**: Update `task_count` in `batchMoveToGroup` and `handleMoveToGroup`
 
 ---
 
-## 1. Cloudflare Bridge: Model + VAD (fixes silence)
+## 1. Database Migration
 
-**File**: `cloudflare/src/TwilioCallSession.ts`
-
-- **Line 653**: `gpt-4o-realtime-preview-2024-10-01` → `gpt-4o-realtime-preview-2025-06-03`
-  - The Oct 2024 model does NOT support `semantic_vad`. This is why the bridge goes silent after greeting — OpenAI never detects end-of-speech.
-- **Line 978**: `eagerness: 'low'` → `eagerness: 'medium'`
-  - Matches WebRTC configuration for consistent turn-taking behavior.
-
-## 2. Supabase Bridge: Model + VAD
-
-**File**: `supabase/functions/twilio-realtime-bridge/index.ts`
-
-- **Line 420**: `gpt-4o-realtime-preview-2024-12-17` → `gpt-4o-realtime-preview-2025-06-03`
-- **Line 430**: `eagerness: "low"` → `eagerness: "medium"`
-
-## 3. Cloudflare Bridge: call_sessions Logging
-
-**File**: `cloudflare/src/TwilioCallSession.ts`
-
-Add a `callSessionDbId` property. In `handleStart()`, after setting up userId/callSid/streamSid, insert a row into `call_sessions` via Supabase REST (matching the fields from `_shared/call-session.ts`). In `cleanup()`, update that row with `ended_at` and `duration_seconds`. This fixes the NULL duration/ended_at gap.
-
-## 4. Inbound Call Pre-Connect Session
-
-**File**: `supabase/functions/twilio-voice-handler/index.ts`
-
-In the `incoming-call` case, when `selectedMode === 'cloudflare'`, before generating TwiML:
-1. Call `twilio-realtime-bridge` with `mode: 'pre-connect'` (same pattern as `notification-delivery`)
-2. If successful, use `generateCloudflareTwiMLWithSession()` instead of `generateCloudflareBridgeTwiML()`
-3. Fallback to cold-start TwiML if pre-connect fails
-
-This gives inbound calls the same warm-start experience as recurring calls (pre-cached greeting, pre-built instructions, pre-loaded context).
-
-## 5. SQL Migration: Rename Old schedule_next_call
-
-Rename the 7-parameter `schedule_next_call` to `schedule_next_call_v1_backup` so PostgREST can resolve the 8-parameter version without ambiguity. Then re-seed the queue.
+Add the `is_manual` column and replace the cleanup trigger function:
 
 ```sql
-ALTER FUNCTION public.schedule_next_call(uuid, text, text, time, text, text, text)
-RENAME TO schedule_next_call_v1_backup;
+-- Add is_manual flag (false = auto-created by classifier, true = user-created)
+ALTER TABLE public.task_topic_index
+  ADD COLUMN IF NOT EXISTS is_manual boolean DEFAULT false;
 
-UPDATE user_scheduling_prefs SET updated_at = now()
-WHERE scheduled_calls IS NOT NULL;
+-- Replace cleanup trigger: decrement counts, only auto-delete non-manual topics
+CREATE OR REPLACE FUNCTION public.cleanup_task_topic_on_delete()
+RETURNS TRIGGER AS $$
+BEGIN
+  UPDATE public.task_topic_index
+  SET task_count = task_count - 1, updated_at = now()
+  WHERE id IN (
+    SELECT topic_id FROM public.task_topic_mappings WHERE task_id = OLD.id
+  );
+
+  -- Only auto-delete system-generated (classifier) topics that hit zero
+  DELETE FROM public.task_topic_index
+  WHERE task_count <= 0
+    AND is_manual = false
+    AND id IN (
+      SELECT topic_id FROM public.task_topic_mappings WHERE task_id = OLD.id
+    );
+
+  RETURN OLD;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 ```
 
-## Deployment
+This means:
+- Classifier-created groups still get auto-cleaned when empty (existing behavior)
+- User-created groups/subgroups survive indefinitely until manually deleted
 
-- Cloudflare changes: require `npx wrangler deploy` after merge
-- Supabase bridge: auto-deployed via edge function deployment
-- SQL migration: applied through Lovable migration tool
+---
+
+## 2. `AddTopicGroupDialog.tsx` -- Set `is_manual: true`
+
+When a user creates a group or subgroup via the dialog, add `is_manual: true` to the upsert payload. This flags it as user-created and protects it from the cleanup trigger.
+
+---
+
+## 3. Task Drag-and-Drop Between Groups (Group View Mode)
+
+### `TopicGroupPanel.tsx`
+
+- Import `Droppable` and `Draggable` from `@hello-pangea/dnd`
+- Wrap the task list area inside each group panel with a `Droppable` component:
+  - `droppableId` = the topic group ID (e.g., `"group-{topicGroup.id}"`)
+  - `type` = `"TASK_IN_GROUP"`
+- Wrap each task row with a `Draggable`:
+  - `draggableId` = `"task-in-group-{task.id}"`
+  - The entire task row becomes the drag handle
+- Child sub-group panels remain as they are (rendered above the task droppable)
+- The "Uncategorized" pseudo-group also gets a droppable (`"group-uncategorized-{categoryKey}"`)
+
+### `Priorities.tsx` (`handleDragEnd`)
+
+Add a new branch at the top of `handleDragEnd` for `type === 'TASK_IN_GROUP'`:
+
+```
+if (type === 'TASK_IN_GROUP') {
+  const taskId = extract from draggableId
+  const srcGroupId = extract from source.droppableId
+  const dstGroupId = extract from destination.droppableId
+
+  if srcGroupId === dstGroupId: return (no-op)
+
+  // Delete old mapping
+  await supabase.from('task_topic_mappings').delete().eq('task_id', taskId)
+
+  if destination is an uncategorized group:
+    // Just remove mapping (task becomes uncategorized)
+  else:
+    // Insert new mapping to destination topic
+    await supabase.from('task_topic_mappings').insert({ task_id, topic_id: dstGroupId })
+    // Increment task_count on destination
+    // Decrement task_count on source (if it was a real group)
+
+  // Refresh data
+}
+```
+
+---
+
+## 4. `task_count` Bookkeeping
+
+### `batchMoveToGroup` in `Priorities.tsx`
+
+After deleting old mappings and inserting new ones:
+- Query old mappings first to find source topic IDs
+- Decrement `task_count` on each source topic
+- Increment `task_count` on the destination topic by the number of moved tasks
+
+### `handleMoveToGroup` in `TopicGroupPanel.tsx`
+
+After moving a single task:
+- Decrement `task_count` on the current group (`topicGroup.id`)
+- Increment `task_count` on the destination group
+
+---
+
+## 5. Batch Toolbar: "Ungroup" Button
+
+Add an "Ungroup" button to the batch action bar (between "Status..." and the close button):
+- Icon: `FolderMinus` from lucide-react
+- On click: deletes all `task_topic_mappings` for selected task IDs, decrements `task_count` on affected source topics
+- Shows toast: "Removed N tasks from their groups"
+- Clears selection and refreshes
+
+---
+
+## Files Changed
+
+| File | Change |
+|------|--------|
+| New migration | Add `is_manual` column; fix `cleanup_task_topic_on_delete` trigger |
+| `src/components/priorities/AddTopicGroupDialog.tsx` | Add `is_manual: true` to upsert payload |
+| `src/components/priorities/TopicGroupPanel.tsx` | Wrap tasks in `Droppable`/`Draggable` for `TASK_IN_GROUP` type; update `task_count` in `handleMoveToGroup` |
+| `src/pages/Priorities.tsx` | Handle `TASK_IN_GROUP` drag in `handleDragEnd`; update `task_count` in `batchMoveToGroup`; add "Ungroup" batch button |
 

@@ -417,7 +417,7 @@ serve(async (req) => {
       instructions = await loadUserInstructions(SUPABASE_URL, SUPABASE_SERVICE_KEY, userId, ragContext, userProfile, userTimezone);
     }
 
-    openaiWs = new WebSocket("wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17", ["realtime", `openai-insecure-api-key.${OPENAI_API_KEY}`, "openai-beta.realtime-v1"]);
+    openaiWs = new WebSocket("wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2025-06-03", ["realtime", `openai-insecure-api-key.${OPENAI_API_KEY}`, "openai-beta.realtime-v1"]);
 
     openaiWs.onopen = () => console.log("[OPENAI] Connected");
 
@@ -427,7 +427,7 @@ serve(async (req) => {
       switch (msg.type) {
         case "session.created":
           const modalities = ttsProvider === 'elevenlabs' ? ["text"] : ["text", "audio"];
-          const turnDetection = { type: "semantic_vad", eagerness: "low", create_response: true, interrupt_response: true };
+          const turnDetection = { type: "semantic_vad", eagerness: "medium", create_response: true, interrupt_response: true };
           console.log(`[OPENAI-SESSION] Configuring: modalities=${JSON.stringify(modalities)}, turn_detection=${JSON.stringify(turnDetection)}, ttsProvider=${ttsProvider}`);
           openaiWs!.send(JSON.stringify({
             type: "session.update",

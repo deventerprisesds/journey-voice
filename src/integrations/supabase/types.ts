@@ -4223,6 +4223,32 @@ export type Database = {
             }
             Returns: Json
           }
+      upsert_hotel_intelligence: {
+        Args: {
+          p_best_for_tags?: Json
+          p_date_specific_hotel_notes?: Json
+          p_enrichment_quality?: string
+          p_estimated_total_range_per_person?: string
+          p_evergreen_property_highlights?: Json
+          p_gallery_urls?: Json
+          p_hero_image_url?: string
+          p_hotel_candidate_id: string
+          p_hotel_group_label: string
+          p_hotel_name: string
+          p_less_ideal_for_tags?: Json
+          p_nearby_area_highlights?: Json
+          p_nightly_estimate_range?: string
+          p_parent_destination_name: string
+          p_primary_uniqueness_label?: string
+          p_pros?: Json
+          p_recommendation_strength?: string
+          p_short_pitch?: string
+          p_stay_estimate_range?: string
+          p_watchouts?: Json
+          p_why_it_fits_this_group?: Json
+        }
+        Returns: Json
+      }
     }
     Enums: {
       app_role: "admin" | "user"

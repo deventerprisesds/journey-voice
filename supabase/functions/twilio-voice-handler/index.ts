@@ -1376,7 +1376,58 @@ serve(async (req) => {
             console.warn('[incoming-call] ⚠️ Cloudflare endpoint not configured, falling back to Media Streams');
             twiml = generateRealtimeBridgeTwiML(contextParam, userId, callerPhone || undefined, directionParam, timezone);
           } else {
-            twiml = generateCloudflareBridgeTwiML(contextParam, userId, callerPhone || undefined, directionParam, timezone);
+            // Build lightweight pre-connect session for warm-start (parity with outbound calls)
+            let sessionId: string | null = null;
+            if (userId) {
+              try {
+                const supabase = createClient(supabaseUrl, supabaseServiceKey);
+                sessionId = crypto.randomUUID();
+                
+                // Parallel fetch: voice prefs, profile, and RAG context
+                const [voicePrefsResult, profileResult] = await Promise.all([
+                  supabase.from('user_scheduling_prefs')
+                    .select('tts_provider, openai_voice, elevenlabs_voice_id, timezone, core_instructions, realtime_extensions')
+                    .eq('user_id', userId)
+                    .maybeSingle(),
+                  supabase.from('profiles')
+                    .select('first_name, full_name, preferred_greeting')
+                    .eq('user_id', userId)
+                    .maybeSingle(),
+                ]);
+                
+                const voicePrefs = voicePrefsResult.data;
+                const profile = profileResult.data;
+                const instructions = [voicePrefs?.core_instructions, voicePrefs?.realtime_extensions].filter(Boolean).join('\n\n');
+                
+                // Store pre-connect session
+                await supabase.from('pre_connect_sessions').insert({
+                  session_id: sessionId,
+                  user_id: userId,
+                  context: contextParam || 'Inbound call',
+                  timezone: timezone,
+                  profile: profile,
+                  tts_provider: voicePrefs?.tts_provider || 'openai',
+                  voice_id: voicePrefs?.elevenlabs_voice_id || 'JBFqnCBsd6RMkjVDRZzb',
+                  openai_voice: voicePrefs?.openai_voice || 'alloy',
+                  instructions: instructions,
+                  greeting_text: '',
+                  audio_base64: '',
+                  phone_call_mode: 'cloudflare',
+                  expires_at: new Date(Date.now() + 300000).toISOString(), // 5 min TTL for inbound
+                });
+                
+                console.log(`[incoming-call] ✅ Pre-connect session created for inbound Cloudflare call: ${sessionId}`);
+              } catch (e) {
+                console.error('[incoming-call] Failed to create pre-connect session, falling back to cold start:', e);
+                sessionId = null;
+              }
+            }
+            
+            if (sessionId) {
+              twiml = generateCloudflareTwiMLWithSession(sessionId, contextParam || '', userId || undefined, timezone);
+            } else {
+              twiml = generateCloudflareBridgeTwiML(contextParam, userId, callerPhone || undefined, directionParam, timezone);
+            }
           }
         } else if (selectedMode === 'conversation_relay') {
           twiml = generateConversationRelayTwiML(contextParam, userId, callerPhone || undefined, directionParam, timezone);

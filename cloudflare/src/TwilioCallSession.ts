@@ -89,6 +89,7 @@ export class TwilioCallSession {
   private isPlaying: boolean = false;
   private toolDefinitions: any[] = [];
   private activityLogId: string | null = null;
+  private callSessionDbId: string | null = null;
   private currentStage: string = 'init';
 
   // Voice preferences
@@ -284,6 +285,86 @@ export class TwilioCallSession {
     }
   }
 
+  // ==================== Call Sessions Logging ====================
+  // Insert/update call_sessions table for duration tracking (parity with Supabase bridge)
+
+  private async insertCallSession() {
+    if (!this.callSid || !this.userId) return;
+
+    try {
+      const response = await fetch(
+        `${this.env.SUPABASE_URL}/rest/v1/call_sessions`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${this.env.SUPABASE_SERVICE_KEY}`,
+            'apikey': this.env.SUPABASE_SERVICE_KEY,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=representation'
+          },
+          body: JSON.stringify({
+            user_id: this.userId,
+            call_sid: this.callSid,
+            stream_sid: this.streamSid,
+            direction: this.direction,
+            started_at: new Date().toISOString(),
+            tts_provider: this.ttsProvider,
+            metadata: {
+              worker_version: WORKER_VERSION,
+              bridge: 'cloudflare'
+            }
+          })
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data && data.length > 0) {
+          this.callSessionDbId = data[0].id;
+          console.log(`[CF] call_sessions row created: ${this.callSessionDbId}`);
+        }
+      } else {
+        console.error(`[CF] Failed to insert call_session: ${response.status}`);
+      }
+    } catch (error) {
+      console.error('[CF] Failed to insert call_session:', error);
+    }
+  }
+
+  private async updateCallSession(durationSeconds: number) {
+    if (!this.callSessionDbId) return;
+
+    try {
+      await fetch(
+        `${this.env.SUPABASE_URL}/rest/v1/call_sessions?id=eq.${this.callSessionDbId}`,
+        {
+          method: 'PATCH',
+          headers: {
+            'Authorization': `Bearer ${this.env.SUPABASE_SERVICE_KEY}`,
+            'apikey': this.env.SUPABASE_SERVICE_KEY,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=minimal'
+          },
+          body: JSON.stringify({
+            ended_at: new Date().toISOString(),
+            duration_seconds: durationSeconds,
+            metadata: {
+              worker_version: WORKER_VERSION,
+              bridge: 'cloudflare',
+              echo_filtered: this.echoFilteredCount,
+              twilio_frames_in: this.twilioMediaFramesIn,
+              twilio_frames_out: this.twilioMediaFramesOut,
+              messages_persisted: this.messageIndex
+            }
+          })
+        }
+      );
+      console.log(`[CF] call_sessions updated: duration=${durationSeconds}s`);
+    } catch (error) {
+      console.error('[CF] Failed to update call_session:', error);
+    }
+  }
+
   // ==================== Structured Attempt Logging ====================
   // Tracks greeting/tts/tool_call attempts with explicit success/fail status
   // to enable systematic debugging and prevent repeat issues
@@ -419,6 +500,9 @@ export class TwilioCallSession {
       session_id_param: sessionId,
       has_session: !!sessionId
     });
+
+    // Insert call_sessions row for tracking
+    await this.insertCallSession();
 
     // If we have a pre-connected session, fetch it and use its data
     if (sessionId) {
@@ -650,7 +734,7 @@ export class TwilioCallSession {
     this.currentStage = 'cf_openai_connect';
     
     try {
-      const url = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01';
+      const url = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2025-06-03';
       
       this.openaiWs = new WebSocket(url, [
         'realtime',
@@ -975,7 +1059,7 @@ export class TwilioCallSession {
         // Phase 1A: Use semantic_vad with create_response: true (parity with Supabase bridge)
         turn_detection: {
           type: 'semantic_vad',
-          eagerness: 'low',
+          eagerness: 'medium',
           create_response: true,
           interrupt_response: true,
         },
@@ -1755,6 +1839,9 @@ You: "Looking that up..." [then call web_search tool]`;
       agenda_items_completed: agendaProgress.completed,
       agenda_complete: this.isAgendaComplete()
     });
+
+    // Update call_sessions with ended_at and duration
+    await this.updateCallSession(callDurationS);
     
     if (this.openaiWs) {
       this.openaiWs.close();
@@ -1775,6 +1862,7 @@ You: "Looking that up..." [then call web_search tool]`;
     this.ragContext = null;
     this.threadId = null;
     this.activityLogId = null;
+    this.callSessionDbId = null;
     this.elevenlabsFallbackActive = false;
     this.isSendingTtsAudio = false;
     this.ttsAudioEndTime = 0;
