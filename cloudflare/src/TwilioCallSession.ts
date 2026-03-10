@@ -1862,6 +1862,7 @@ You: "Looking that up..." [then call web_search tool]`;
     this.ragContext = null;
     this.threadId = null;
     this.activityLogId = null;
+    this.callSessionDbId = null;
     this.elevenlabsFallbackActive = false;
     this.isSendingTtsAudio = false;
     this.ttsAudioEndTime = 0;
