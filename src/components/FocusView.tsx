@@ -216,16 +216,21 @@ const FocusView: React.FC<FocusViewProps> = ({
     const dayOfWeek = today.getDay();
     const windows = config.timeWindows;
     
-    // Exact match first
-    if (windows.morning.days.includes(dayOfWeek) && taskHour >= windows.morning.start && taskHour < windows.morning.end) return 'morning';
-    if (windows.business_hours.days.includes(dayOfWeek) && taskHour >= windows.business_hours.start && taskHour < windows.business_hours.end) return 'business_hours';
-    if (windows.after_work.days.includes(dayOfWeek) && taskHour >= windows.after_work.start && taskHour < windows.after_work.end) return 'after_work';
-    if (windows.evening.days.includes(dayOfWeek) && taskHour >= windows.evening.start && taskHour < windows.evening.end) return 'evening';
+    let assignedWindow = 'after_work'; // default fallback
     
+    // Exact match first
+    if (windows.morning.days.includes(dayOfWeek) && taskHour >= windows.morning.start && taskHour < windows.morning.end) assignedWindow = 'morning';
+    else if (windows.business_hours.days.includes(dayOfWeek) && taskHour >= windows.business_hours.start && taskHour < windows.business_hours.end) assignedWindow = 'business_hours';
+    else if (windows.after_work.days.includes(dayOfWeek) && taskHour >= windows.after_work.start && taskHour < windows.after_work.end) assignedWindow = 'after_work';
+    else if (windows.evening.days.includes(dayOfWeek) && taskHour >= windows.evening.start && taskHour < windows.evening.end) assignedWindow = 'evening';
     // Nearest window fallback
-    if (taskHour < windows.morning.start) return 'morning';
-    if (taskHour >= windows.evening.end) return 'evening';
-    return 'after_work';
+    else if (taskHour < windows.morning.start) assignedWindow = 'morning';
+    else if (taskHour >= windows.evening.end) assignedWindow = 'evening';
+    
+    // === TRACE: Window assignment ===
+    console.log(`[WINDOW-ASSIGN] "${task.title}" [${task.category}] start_time=${task.start_time} → hour=${taskHour} (${userTimezone}) → window="${assignedWindow}"`);
+    
+    return assignedWindow;
   };
 
   const tasksByWindow: Record<string, Task[]> = {
@@ -526,6 +531,15 @@ const FocusView: React.FC<FocusViewProps> = ({
 
       // 6. Call batch scheduler
       const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      
+      // === TRACE CHECKPOINT A: Tasks sent to scheduler ===
+      console.log('=== AUTOFILL CHECKPOINT A: Tasks sent to scheduler ===');
+      topCandidates.forEach((t: any, i: number) => {
+        console.log(`  [${i}] id=${t.id} title="${t.title}" category=${t.category} priority=${t.priority}`);
+      });
+      console.log(`  timezone=${timezone}, targetDate=today`);
+      console.log('=====================================================');
+      
       const result = await scheduleBatch(
         topCandidates.map((t: any) => ({
           id: t.id,
@@ -540,12 +554,23 @@ const FocusView: React.FC<FocusViewProps> = ({
         new Date()
       );
 
+      // === TRACE CHECKPOINT B: Raw result from scheduler ===
+      console.log('=== AUTOFILL CHECKPOINT B: Scheduler result ===');
+      result.scheduled.forEach((s: any, i: number) => {
+        const matchedTask = topCandidates[s.taskIndex];
+        console.log(`  [${i}] taskIndex=${s.taskIndex} title="${matchedTask?.title}" start=${s.start_time} end=${s.end_time} reason=${s.reasoning}`);
+      });
+      console.log('================================================');
+
       // 7. Update tasks with pre_schedule_status preservation
       if (result.scheduled.length > 0) {
         for (const slot of result.scheduled) {
           const taskId = slot.taskId || topCandidates[slot.taskIndex]?.id;
           if (!taskId) continue;
           const candidate = topCandidates.find((c: any) => c.id === taskId) || topCandidates[slot.taskIndex];
+          
+          // === TRACE CHECKPOINT C: DB update before execution ===
+          console.log(`[AUTOFILL-SAVE] taskId=${taskId} title="${candidate?.title}" start_time=${slot.start_time} end_time=${slot.end_time}`);
           
           await supabase
             .from('tasks')
@@ -559,6 +584,21 @@ const FocusView: React.FC<FocusViewProps> = ({
             })
             .eq('id', taskId);
         }
+        
+        // === TRACE CHECKPOINT D: Post-save verification ===
+        const savedIds = result.scheduled
+          .map((s: any) => s.taskId || topCandidates[s.taskIndex]?.id)
+          .filter(Boolean);
+        const { data: verification } = await supabase
+          .from('tasks')
+          .select('id, title, category, start_time, end_time, is_scheduled')
+          .in('id', savedIds);
+        console.log('=== AUTOFILL CHECKPOINT D: Post-save DB verification ===');
+        (verification || []).forEach((t: any) => {
+          console.log(`  "${t.title}" [${t.category}]: start=${t.start_time} end=${t.end_time} scheduled=${t.is_scheduled}`);
+        });
+        console.log('=======================================================');
+        
         toast.success(`Auto-filled ${result.scheduled.length} tasks into today's schedule`);
         onTaskUpdate();
       } else {

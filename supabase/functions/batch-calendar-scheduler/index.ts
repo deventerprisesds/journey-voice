@@ -1,7 +1,7 @@
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { normalizeDateTime, getTodayInTimezone } from "../_shared/timezone.ts";
+import { normalizeDateTime, getTodayInTimezone, getTzOffsetMinutesAt } from "../_shared/timezone.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -91,7 +91,18 @@ serve(async (req) => {
       targetDateISO = targetDate;
     }
     
-    console.log(`[BATCH-SCHEDULER] Timezone: ${timezone}, todayISO: ${todayISO}, targetDateISO: ${targetDateISO}`);
+    // =============================================================
+    // DYNAMIC TIMEZONE OFFSET — replaces hardcoded -05:00
+    // Correctly handles DST (e.g., EDT = -04:00, EST = -05:00)
+    // =============================================================
+    const targetNoon = new Date(`${targetDateISO}T12:00:00Z`);
+    const offsetMin = getTzOffsetMinutesAt(targetNoon, timezone);
+    const offsetSign = offsetMin >= 0 ? '+' : '-';
+    const absH = String(Math.floor(Math.abs(offsetMin) / 60)).padStart(2, '0');
+    const absM = String(Math.abs(offsetMin) % 60).padStart(2, '0');
+    const tzOffset = `${offsetSign}${absH}:${absM}`; // e.g., "-04:00" for EDT, "-05:00" for EST
+    
+    console.log(`[BATCH-SCHEDULER] Timezone: ${timezone}, todayISO: ${todayISO}, targetDateISO: ${targetDateISO}, computed offset: ${tzOffset}`);
     
     // If allowOverflow, fetch busy slots for target date + next day
     // Otherwise, fetch for the next 14 days
@@ -279,7 +290,7 @@ TIMEZONE: ${timezone}
 
 ⚠️ IMPORTANT: ALL scheduled times MUST use date ${targetDateISO} or later.
 ⚠️ NEVER schedule anything before ${todayISO}.
-⚠️ Use ISO format for all times: "${targetDateISO}T10:00:00-05:00"
+⚠️ Use ISO format for all times: "${targetDateISO}T10:00:00${tzOffset}"
 ==============================================
 
 TASKS TO SCHEDULE:
@@ -328,15 +339,15 @@ ${overflowInstructions}
 
 CRITICAL TIME FORMAT REQUIREMENTS:
 - Return ALL times as ISO 8601 strings WITH EXPLICIT TIMEZONE OFFSET
-- Example for ${timezone}: "${targetDateISO}T12:00:00-05:00" (noon Eastern with offset)
-- Or use UTC with Z suffix: "${targetDateISO}T17:00:00Z" (same moment as noon Eastern)
+- Example for ${timezone}: "${targetDateISO}T12:00:00${tzOffset}" (noon in ${timezone} with offset)
+- Or use UTC with Z suffix — but the offset form is preferred
 - NEVER return naive timestamps like "${targetDateISO}T12:00:00" without offset
 - The offset must reflect the actual timezone (${timezone})
 
 Return a JSON array with one entry per task in order:
 [
-  { "taskIndex": 0, "start_time": "${targetDateISO}T10:00:00-05:00", "end_time": "${targetDateISO}T11:00:00-05:00", "reasoning": "brief reason" },
-  { "taskIndex": 1, "start_time": "${targetDateISO}T14:00:00-05:00", "end_time": "${targetDateISO}T15:00:00-05:00", "reasoning": "brief reason" },
+  { "taskIndex": 0, "start_time": "${targetDateISO}T10:00:00${tzOffset}", "end_time": "${targetDateISO}T11:00:00${tzOffset}", "reasoning": "brief reason" },
+  { "taskIndex": 1, "start_time": "${targetDateISO}T14:00:00${tzOffset}", "end_time": "${targetDateISO}T15:00:00${tzOffset}", "reasoning": "brief reason" },
   ...
 ]
 
