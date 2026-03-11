@@ -144,21 +144,56 @@ serve(async (req) => {
 
     console.log(`📊 Found ${existingBusySlots.length} existing busy slots`);
 
-    // Build category mappings info for AI
-    const defaultCategoryMappings: Record<string, { window: string; hours: string }> = {
-      CAREER: { window: 'business_hours', hours: '9am-5pm' },
-      PROF_EDUCATION: { window: 'after_work', hours: '5pm-10pm' },
-      EDUCATION: { window: 'after_work', hours: '5pm-10pm' },
-      VENTURES: { window: 'after_work', hours: '5pm-10pm' },
-      LIFE: { window: 'flexible', hours: '9am-10pm' },
+    // Build category mappings from user config (authoritative), falling back to defaults
+    const userTimeWindows = userConfig?.timeWindows || {
+      morning: { start: 6, end: 9 },
+      business_hours: { start: 9, end: 17 },
+      after_work: { start: 17, end: 22 },
+      evening: { start: 19, end: 22 },
+      flexible: { start: 9, end: 22 },
+      weekends: { start: 10, end: 20 },
     };
+
+    const userCategoryMappings = userConfig?.categoryMappings || {
+      CAREER: { defaultTimeWindow: ['business_hours'], estimatedDuration: 120 },
+      PROF_EDUCATION: { defaultTimeWindow: ['after_work', 'weekends'], estimatedDuration: 90 },
+      EDUCATION: { defaultTimeWindow: ['flexible'], estimatedDuration: 90 },
+      VENTURES: { defaultTimeWindow: ['after_work', 'weekends'], estimatedDuration: 120 },
+      LIFE: { defaultTimeWindow: ['flexible'], estimatedDuration: 60 },
+      PERSONAL: { defaultTimeWindow: ['flexible'], estimatedDuration: 60 },
+    };
+
+    // Helper to format hour range from time window config
+    const formatWindowHours = (windowName: string): string => {
+      const w = userTimeWindows[windowName];
+      if (!w) return windowName;
+      const fmtHr = (h: number) => {
+        if (h === 0) return '12am';
+        if (h < 12) return `${h}am`;
+        if (h === 12) return '12pm';
+        return `${h - 12}pm`;
+      };
+      return `${fmtHr(w.start)}-${fmtHr(w.end)}`;
+    };
+
+    // Build flat lookup for AI prompt per-task lines
+    const categoryWindowLookup: Record<string, { windows: string; hours: string }> = {};
+    for (const [cat, mapping] of Object.entries(userCategoryMappings)) {
+      const wins = Array.isArray(mapping.defaultTimeWindow) ? mapping.defaultTimeWindow : [mapping.defaultTimeWindow];
+      categoryWindowLookup[cat] = {
+        windows: wins.join(' or '),
+        hours: wins.map((w: string) => `${w}: ${formatWindowHours(w)}`).join(', '),
+      };
+    }
+
+    console.log('📋 Using category mappings from user config:', JSON.stringify(categoryWindowLookup));
 
     // Build the batch scheduling prompt
     const tasksList = tasks.map((task: TaskToSchedule, i: number) => {
       const duration = task.estimate_minutes || task.schedulingHints?.estimatedDuration || 60;
-      const categoryInfo = defaultCategoryMappings[task.category] || defaultCategoryMappings.LIFE;
+      const catInfo = categoryWindowLookup[task.category] || categoryWindowLookup.LIFE || { windows: 'flexible', hours: 'flexible: 9am-10pm' };
       return `${i + 1}. "${task.title}" 
-   - Category: ${task.category} (prefer ${categoryInfo.window}: ${categoryInfo.hours})
+   - Category: ${task.category} (prefer ${catInfo.windows}: ${catInfo.hours})
    - Priority: ${task.priority}
    - Duration: ${duration} minutes
    - Due: ${task.due_date || 'none'}`;
