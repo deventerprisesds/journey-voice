@@ -257,7 +257,7 @@ serve(async (req) => {
             rolled_over: rolledOverCount,
             candidates_evaluated: scoredCandidates.length,
             scheduled: scheduled.length,
-            target_date: tomorrowISO,
+            target_date: todayISO,
             processing_ms: Date.now() - startTime,
           },
         });
