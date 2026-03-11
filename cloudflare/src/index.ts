@@ -18,7 +18,7 @@ export default {
       return new Response(
         JSON.stringify({
           status: 'ok',
-          version: '2026-02-10-cf-v8',
+          version: '2026-03-11-cf-v9',
           timestamp: new Date().toISOString()
         }),
         {

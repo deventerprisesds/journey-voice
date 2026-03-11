@@ -50,7 +50,7 @@ jobs:
           
           # IMPORTANT: Update this when changing version in cloudflare/src/index.ts and TwilioCallSession.ts
           # See cloudflare/PREFLIGHT_CHECKLIST.md for version sync requirements
-          EXPECTED_VERSION="2026-02-10-cf-v8"
+          EXPECTED_VERSION="2026-03-11-cf-v9"
           
           if echo "$HEALTH_RESPONSE" | grep -q '"status":"ok"'; then
             echo "✅ Health check passed!"
