@@ -381,6 +381,12 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onStatusChange, onEdit, onSch
               Blocked ({task.blocked_by?.length})
             </Badge>
           )}
+          {task.pushed_count && task.pushed_count > 0 && (
+            <Badge variant="outline" className="text-xs bg-destructive/10 text-destructive border-destructive/20">
+              <RotateCcw className="h-3 w-3 mr-1" />
+              Pushed ×{task.pushed_count}
+            </Badge>
+          )}
         </div>
       </CardHeader>
 
