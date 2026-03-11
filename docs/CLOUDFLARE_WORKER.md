@@ -1,7 +1,7 @@
 # Cloudflare Worker — Twilio ↔ OpenAI Bridge
 
-> **Last updated:** 2026-03-08  
-> **Worker version:** `2026-02-10-cf-v8`  
+> **Last updated:** 2026-03-10  
+> **Worker version:** `2026-02-10-cf-v8` (model updated to `gpt-4o-realtime-preview-2025-06-03`)  
 > **Runtime:** Cloudflare Workers + Durable Objects  
 > **Endpoint:** `wss://twilio-openai-bridge.purple-bush-495e.workers.dev/call`
 
