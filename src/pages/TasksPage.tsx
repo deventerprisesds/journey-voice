@@ -4,6 +4,7 @@ import { useAuth } from '@/hooks/useAuth';
 import TabbedKanbanBoard from '@/components/TabbedKanbanBoard';
 import TaskGridView from '@/components/EnhancedTaskGridView';
 import FocusView from '@/components/FocusView';
+import WeeklyAgendaView from '@/components/WeeklyAgendaView';
 import TaskDetailModal from '@/components/TaskDetailModal';
 import ViewSwitcher, { ViewType } from '@/components/ViewSwitcher';
 import { supabase } from '@/integrations/supabase/client';
