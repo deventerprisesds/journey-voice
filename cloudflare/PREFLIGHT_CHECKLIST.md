@@ -44,6 +44,7 @@ Before claiming feature parity, verify these functions exist:
 | 2026-02-10 | ElevenLabs barge-in skipped response.cancel | TwilioCallSession.ts | Add full interrupt: cancel + bargeInActive flag + delayed clear |
 | 2026-02-10 | Agenda tangent functions never called | TwilioCallSession.ts | Wire pauseAgendaForTangent + getResumeHint into event handlers |
 | 2026-02-10 | No double greeting guard | TwilioCallSession.ts | Add greetingContextInjected flag |
+| 2026-03-11 | Version not bumped after model/VAD/logging changes | index.ts + TwilioCallSession.ts + workflow | Always bump version when changing ANY cloudflare/ code |
 
 ---
 
