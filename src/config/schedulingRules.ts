@@ -182,8 +182,25 @@ export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
       doctor: ['business_hours', 'LIFE'],
       dentist: ['business_hours', 'LIFE'],
       appointment: ['flexible', 'LIFE'],
+      
+      // Financial impact keywords
+      payment: ['business_hours', 'LIFE'],
+      invoice: ['business_hours', 'CAREER'],
+      bill: ['business_hours', 'LIFE'],
+      tax: ['business_hours', 'LIFE'],
+      budget: ['business_hours', 'CAREER'],
+      contract: ['business_hours', 'CAREER'],
+      
+      // Communications / people keywords
+      email: ['business_hours', 'CAREER'],
+      follow_up: ['business_hours', 'CAREER'],
+      respond: ['business_hours', 'CAREER'],
+      reply: ['business_hours', 'CAREER'],
+      text: ['business_hours', 'LIFE'],
+      message: ['business_hours', 'CAREER'],
     },
     priorityMappings: {
+      urgent: 4,
       high: 3,
       medium: 2,
       low: 1,
