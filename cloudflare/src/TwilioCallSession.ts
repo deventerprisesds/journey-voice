@@ -699,7 +699,7 @@ export class TwilioCallSession {
     } else if (context.includes('Task reminder')) {
       return `${timeGreeting}, ${userName}. Quick reminder about an upcoming task.`;
     }
-    return `${timeGreeting}, ${userName}. This is Iris.`;
+    return `${timeGreeting}, ${userName}. How can I help you?`;
   }
 
   private async fetchToolDefinitions() {
