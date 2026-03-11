@@ -33,8 +33,11 @@ Before modifying any subsystem, read the relevant documentation first:
 | `docs/CALENDAR_INTEGRATION.md` | OAuth flows, calendar sync, busy slot detection |
 | `docs/NOTIFICATIONS.md` | Push notifications, multi-channel delivery, presence tracking |
 | `docs/CLOUDFLARE_WORKER.md` | Cloudflare Workers, real-time audio relay |
+| `cloudflare/PREFLIGHT_CHECKLIST.md` | **MANDATORY** before ANY Cloudflare worker changes |
 
 ### Key Constraints
+
+- **Cloudflare version sync**: When changing ANY code in `cloudflare/`, bump the version string in ALL THREE files: `cloudflare/src/index.ts`, `cloudflare/src/TwilioCallSession.ts`, `.github/workflows/deploy-cloudflare.yml`. The CI health check will fail otherwise. See `cloudflare/PREFLIGHT_CHECKLIST.md`.
 
 - **Recurring calls**: `schedule_next_call` SQL function accepts `p_days_of_week INTEGER[]` and advances to next valid day. `sync_scheduled_calls` trigger extracts `daysOfWeek` from JSON. `notification-delivery` has a day-of-week guard that skips invalid days. All three must stay in sync.
 - **Notification dispatch**: `notification-delivery` owns the lifecycle. `send-unified-notification` only updates existing records, never creates new ones. See `docs/NOTIFICATIONS.md`.
