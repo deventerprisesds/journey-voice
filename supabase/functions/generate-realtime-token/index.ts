@@ -115,12 +115,39 @@ USER: ${userName}`;
       }
     }
 
-    // Combine instructions with personalization context
+    // Fetch RAG context for conversation continuity (matches chat + phone)
+    let ragContext = '';
+    try {
+      const { createClient: createRagClient } = await import('https://esm.sh/@supabase/supabase-js@2');
+      const supabaseRag = createRagClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+      const ragResponse = await supabaseRag.functions.invoke('rag-context-retrieval', {
+        body: {
+          action: 'get_context',
+          userInput: 'Starting a new voice session. What were we discussing recently?',
+          userId,
+          threadId: null,
+          assistantId: null
+        }
+      });
+      if (ragResponse.data?.context?.conversationContext?.length > 0) {
+        const memorySnippets = ragResponse.data.context.conversationContext
+          .slice(0, 5)
+          .map((c: any) => `[${c.message_type}]: ${c.content}`)
+          .join('\n');
+        ragContext = `\nCONVERSATION MEMORY (recent interactions across all channels):\n${memorySnippets}`;
+        console.log(`[RAG] Loaded ${ragContext.length} chars of memory context (${ragResponse.data.context.conversationContext.length} messages)`);
+      }
+    } catch (e) {
+      console.warn('[RAG] Failed to load context, continuing without memory:', e);
+    }
+
+    // Combine instructions with personalization context and RAG memory
     const fullInstructions = [
       coreInstructions,
       personalizationContext,
       realtimeExtensions,
-      schedulingPhilosophy
+      schedulingPhilosophy,
+      ragContext
     ].filter(Boolean).join('\n\n');
 
     // Determine modalities based on TTS provider
