@@ -647,12 +647,13 @@ const FocusView: React.FC<FocusViewProps> = ({
       );
 
       // === TRACE CHECKPOINT B: Raw result from scheduler ===
-      console.log('=== AUTOFILL CHECKPOINT B: Scheduler result ===');
-      result.scheduled.forEach((s: any, i: number) => {
-        const matchedTask = topCandidates[s.taskIndex];
-        console.log(`  [${i}] taskIndex=${s.taskIndex} title="${matchedTask?.title}" start=${s.start_time} end=${s.end_time} reason=${s.reasoning}`);
+      await writeTrace('AUTOFILL_B_RESULT', 'autofill_trace', {
+        scheduledCount: result.scheduled.length,
+        slots: result.scheduled.map((s: any, i: number) => {
+          const matchedTask = topCandidates[s.taskIndex];
+          return { idx: i, taskIndex: s.taskIndex, title: matchedTask?.title, category: matchedTask?.category, start: s.start_time, end: s.end_time, reason: s.reasoning };
+        }),
       });
-      console.log('================================================');
 
       // 7. Update tasks with pre_schedule_status preservation
       if (result.scheduled.length > 0) {
