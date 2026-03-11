@@ -339,8 +339,8 @@ ${overflowInstructions}
 
 CRITICAL TIME FORMAT REQUIREMENTS:
 - Return ALL times as ISO 8601 strings WITH EXPLICIT TIMEZONE OFFSET
-- Example for ${timezone}: "${targetDateISO}T12:00:00-05:00" (noon Eastern with offset)
-- Or use UTC with Z suffix: "${targetDateISO}T17:00:00Z" (same moment as noon Eastern)
+- Example for ${timezone}: "${targetDateISO}T12:00:00${tzOffset}" (noon in ${timezone} with offset)
+- Or use UTC with Z suffix — but the offset form is preferred
 - NEVER return naive timestamps like "${targetDateISO}T12:00:00" without offset
 - The offset must reflect the actual timezone (${timezone})
 
