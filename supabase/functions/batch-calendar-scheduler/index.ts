@@ -233,7 +233,7 @@ serve(async (req) => {
       const duration = task.estimate_minutes || task.schedulingHints?.estimatedDuration || 60;
       const catInfo = categoryWindowLookup[task.category] || categoryWindowLookup.LIFE || { windows: 'flexible', hours: 'flexible: 9am-10pm' };
       return `${i + 1}. "${task.title}" 
-   - Category: ${task.category} (MUST schedule within ${catInfo.windows}: ${catInfo.hours})
+   - Category: ${task.category} (default window: ${catInfo.windows}: ${catInfo.hours})
    - Priority: ${task.priority}
    - Duration: ${duration} minutes
    - Due: ${task.due_date || 'none'}`;
