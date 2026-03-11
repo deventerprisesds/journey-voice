@@ -292,9 +292,10 @@ SCHEDULING RULES (FOLLOW IN THIS EXACT ORDER):
 
 === RULE 1: STRICT WINDOW ENFORCEMENT (HARD CONSTRAINT) ===
 Each task MUST be placed within its category's designated time window. This is NOT a suggestion — it is a HARD CONSTRAINT. Do NOT place tasks outside their window under any circumstances.
+If a category's required window is fully booked, DO NOT place the task in a different window. Instead, mark it with reasoning "OVERFLOW - no available slot in required window" and leave start_time/end_time as empty strings.
 
-CATEGORY → REQUIRED TIME WINDOW:
-${Object.entries(userCategoryMappings).map(([cat, mapping]) => {
+CATEGORY → REQUIRED TIME WINDOW (already filtered for ${isWeekendDay ? 'weekend' : 'weekday'}):
+${Object.entries(filteredCategoryMappings).map(([cat, mapping]) => {
       const wins = Array.isArray(mapping.defaultTimeWindow) ? mapping.defaultTimeWindow : [mapping.defaultTimeWindow];
       const windowDescs = wins.map((w: string) => `${w}: ${formatWindowHours(w)}`).join(', OR ');
       return `- ${cat} tasks → ${windowDescs}`;
