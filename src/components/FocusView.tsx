@@ -663,7 +663,7 @@ const FocusView: React.FC<FocusViewProps> = ({
           const candidate = topCandidates.find((c: any) => c.id === taskId) || topCandidates[slot.taskIndex];
           
           // === TRACE CHECKPOINT C: DB update before execution ===
-          console.log(`[AUTOFILL-SAVE] taskId=${taskId} title="${candidate?.title}" start_time=${slot.start_time} end_time=${slot.end_time}`);
+          // (logged in batch at checkpoint D)
           
           await supabase
             .from('tasks')
