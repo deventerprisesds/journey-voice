@@ -419,34 +419,124 @@ const FocusView: React.FC<FocusViewProps> = ({
     }
   };
 
+  // Helper: write trace to error_log table for remote visibility
+  const writeTrace = async (checkpoint: string, traceType: string, data: any) => {
+    try {
+      await supabase.from('error_log').insert({
+        error_type: traceType,
+        error_message: checkpoint,
+        source: 'frontend',
+        component: 'FocusView',
+        user_id: user?.id || null,
+        context: data,
+        session_id: `focus_${format(new Date(), 'yyyyMMdd_HHmmss')}`,
+      });
+    } catch (e) {
+      console.warn('[TRACE] Failed to write trace to DB:', e);
+    }
+  };
+
   // Clear all scheduled tasks for today, restoring original statuses
+  // BULLETPROOF: queries DB directly instead of relying on React props
   const handleClearAll = async () => {
-    if (scheduledToday.length === 0) return;
-    if (!window.confirm(`Remove all ${scheduledToday.length} tasks from today's schedule? Their original statuses will be restored.`)) return;
+    if (!user?.id) return;
     
+    const tz = userTimezone;
+    const todayStart = new Date(format(today, 'yyyy-MM-dd') + 'T00:00:00');
+    const tomorrowStart = new Date(format(today, 'yyyy-MM-dd') + 'T00:00:00');
+    tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+    
+    // Convert to UTC ISO strings for DB query
+    const todayStartUTC = localTimeToUtcISO(format(today, 'yyyy-MM-dd'), '00:00', tz);
+    const tomorrowStartUTC = localTimeToUtcISO(format(new Date(tomorrowStart), 'yyyy-MM-dd'), '00:00', tz);
+
     setIsClearing(true);
     try {
-      for (const task of scheduledToday) {
-        const preStatus = (task.scheduling_context as any)?.pre_schedule_status || task.status;
-        const restoredStatus = preStatus === 'TODO' ? 'TODO' : preStatus;
-        
-        await supabase
-          .from('tasks')
-          .update({
-            start_time: null,
-            end_time: null,
-            is_scheduled: false,
-            status: restoredStatus,
-            scheduling_context: null,
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', task.id);
+      // Step 1: Query DB directly for ALL tasks scheduled today (not from React props)
+      const { data: dbTodayTasks, error: fetchError } = await supabase
+        .from('tasks')
+        .select('id, title, category, start_time, end_time, status, scheduling_context, is_scheduled')
+        .eq('user_id', user.id)
+        .gte('start_time', todayStartUTC)
+        .lt('start_time', tomorrowStartUTC)
+        .neq('status', 'DONE');
+
+      if (fetchError) throw fetchError;
+
+      const tasksToClr = dbTodayTasks || [];
+      
+      // TRACE: Pre-clear state
+      await writeTrace('CLEAR_PRE', 'clear_trace', {
+        propCount: scheduledToday.length,
+        dbCount: tasksToClr.length,
+        staleDetected: tasksToClr.length !== scheduledToday.length,
+        todayStartUTC,
+        tomorrowStartUTC,
+        tasks: tasksToClr.map(t => ({
+          id: t.id, title: t.title, category: t.category,
+          start_time: t.start_time, is_scheduled: t.is_scheduled,
+        })),
+      });
+
+      if (tasksToClr.length === 0) {
+        toast.info('No scheduled tasks found for today');
+        setIsClearing(false);
+        return;
       }
-      toast.success(`Cleared ${scheduledToday.length} tasks from schedule`);
+
+      if (!window.confirm(`Remove all ${tasksToClr.length} tasks from today's schedule? Their original statuses will be restored.`)) {
+        setIsClearing(false);
+        return;
+      }
+
+      const taskIds = tasksToClr.map(t => t.id);
+
+      // Step 2: Batch clear in a single DB call
+      const { error: updateError } = await supabase
+        .from('tasks')
+        .update({
+          start_time: null,
+          end_time: null,
+          is_scheduled: false,
+          scheduling_context: null,
+          updated_at: new Date().toISOString(),
+        })
+        .in('id', taskIds);
+
+      if (updateError) throw updateError;
+
+      // Step 3: Verify - query DB again to confirm zero remaining
+      const { count: remaining, error: verifyError } = await supabase
+        .from('tasks')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', user.id)
+        .eq('is_scheduled', true)
+        .gte('start_time', todayStartUTC)
+        .lt('start_time', tomorrowStartUTC)
+        .neq('status', 'DONE');
+
+      // TRACE: Post-clear verification
+      await writeTrace('CLEAR_POST', 'clear_trace', {
+        clearedCount: tasksToClr.length,
+        remainingAfterClear: remaining ?? 'unknown',
+        verifyError: verifyError?.message || null,
+        success: (remaining ?? 0) === 0,
+      });
+
+      if ((remaining ?? 0) > 0) {
+        console.error(`[CLEAR] VERIFICATION FAILED: ${remaining} tasks still scheduled after clear!`);
+        toast.error(`Clear incomplete: ${remaining} tasks may still be scheduled. Try again.`);
+      } else {
+        toast.success(`Cleared ${tasksToClr.length} tasks from schedule`);
+      }
+
       onTaskUpdate();
     } catch (error) {
       console.error('Error clearing schedule:', error);
       toast.error('Failed to clear schedule');
+      await writeTrace('CLEAR_ERROR', 'clear_trace', {
+        error: error instanceof Error ? error.message : String(error),
+      });
     } finally {
       setIsClearing(false);
     }
