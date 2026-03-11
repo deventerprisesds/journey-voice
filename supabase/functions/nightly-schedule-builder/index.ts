@@ -107,13 +107,31 @@ serve(async (req) => {
         console.log(`  📋 Rolled over ${rolledOverCount} tasks`);
 
         // ==========================================
-        // STEP 2: GATHER CANDIDATES for scheduling
+        // STEP 2: GATHER CANDIDATES from priority board
         // ==========================================
+        const { data: mappedTasks, error: mappedError } = await supabase
+          .from('task_topic_mappings')
+          .select('task_id')
+          .eq('user_id', userId);
+
+        if (mappedError) {
+          console.error(`❌ Error fetching topic mappings for ${userId}:`, mappedError);
+          continue;
+        }
+
+        const mappedIds = (mappedTasks || []).map((t: any) => t.task_id);
+
+        if (mappedIds.length === 0) {
+          console.log(`  ℹ️ No priority board tasks for ${userId}`);
+          results[userId] = { rolledOver: rolledOverCount, scheduled: 0 };
+          continue;
+        }
+
         const { data: candidates, error: candidatesError } = await supabase
           .from('tasks')
           .select('id, title, category, priority, estimate_minutes, due_date, pushed_count, status')
-          .eq('user_id', userId)
-          .in('status', ['UP_NEXT', 'READY', 'TODO', 'BACKLOG'])
+          .in('id', mappedIds)
+          .not('status', 'in', '("DONE","BLOCKED")')
           .is('is_scheduled', false)
           .is('completed_at', null)
           .order('created_at', { ascending: true })
