@@ -211,6 +211,7 @@ const TasksPage: React.FC = () => {
               <p className="text-xs md:text-sm text-muted-foreground hidden sm:block">
                 {currentView === 'kanban' ? 'Kanban Board' : 
                  currentView === 'grid' ? 'List View' : 
+                 currentView === 'week' ? 'Weekly Agenda' :
                  "Today's Command Center"}
               </p>
             </div>
