@@ -216,16 +216,21 @@ const FocusView: React.FC<FocusViewProps> = ({
     const dayOfWeek = today.getDay();
     const windows = config.timeWindows;
     
-    // Exact match first
-    if (windows.morning.days.includes(dayOfWeek) && taskHour >= windows.morning.start && taskHour < windows.morning.end) return 'morning';
-    if (windows.business_hours.days.includes(dayOfWeek) && taskHour >= windows.business_hours.start && taskHour < windows.business_hours.end) return 'business_hours';
-    if (windows.after_work.days.includes(dayOfWeek) && taskHour >= windows.after_work.start && taskHour < windows.after_work.end) return 'after_work';
-    if (windows.evening.days.includes(dayOfWeek) && taskHour >= windows.evening.start && taskHour < windows.evening.end) return 'evening';
+    let assignedWindow = 'after_work'; // default fallback
     
+    // Exact match first
+    if (windows.morning.days.includes(dayOfWeek) && taskHour >= windows.morning.start && taskHour < windows.morning.end) assignedWindow = 'morning';
+    else if (windows.business_hours.days.includes(dayOfWeek) && taskHour >= windows.business_hours.start && taskHour < windows.business_hours.end) assignedWindow = 'business_hours';
+    else if (windows.after_work.days.includes(dayOfWeek) && taskHour >= windows.after_work.start && taskHour < windows.after_work.end) assignedWindow = 'after_work';
+    else if (windows.evening.days.includes(dayOfWeek) && taskHour >= windows.evening.start && taskHour < windows.evening.end) assignedWindow = 'evening';
     // Nearest window fallback
-    if (taskHour < windows.morning.start) return 'morning';
-    if (taskHour >= windows.evening.end) return 'evening';
-    return 'after_work';
+    else if (taskHour < windows.morning.start) assignedWindow = 'morning';
+    else if (taskHour >= windows.evening.end) assignedWindow = 'evening';
+    
+    // === TRACE: Window assignment ===
+    console.log(`[WINDOW-ASSIGN] "${task.title}" [${task.category}] start_time=${task.start_time} → hour=${taskHour} (${userTimezone}) → window="${assignedWindow}"`);
+    
+    return assignedWindow;
   };
 
   const tasksByWindow: Record<string, Task[]> = {
