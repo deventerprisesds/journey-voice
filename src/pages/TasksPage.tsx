@@ -24,7 +24,7 @@ const TasksPage: React.FC = () => {
 
   // Sync view with URL param
   useEffect(() => {
-    if (viewParam && ['kanban', 'grid', 'focus'].includes(viewParam)) {
+    if (viewParam && ['kanban', 'grid', 'focus', 'week'].includes(viewParam)) {
       setCurrentView(viewParam);
     }
   }, [viewParam]);
