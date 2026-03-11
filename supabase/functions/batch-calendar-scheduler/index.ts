@@ -301,43 +301,60 @@ ${busySlotsStr}
 
 SCHEDULING RULES (FOLLOW IN THIS EXACT ORDER):
 
-=== RULE 1: STRICT WINDOW ENFORCEMENT (HARD CONSTRAINT) ===
-Each task MUST be placed within its category's designated time window. This is NOT a suggestion — it is a HARD CONSTRAINT. Do NOT place tasks outside their window under any circumstances.
-If a category's required window is fully booked, DO NOT place the task in a different window. Instead, mark it with reasoning "OVERFLOW - no available slot in required window" and leave start_time/end_time as empty strings.
+=== RULE 1: INTELLIGENT WINDOW ASSIGNMENT ===
+Category windows are the DEFAULT starting point, but you MUST override them when the task's NATURE demands it. Use your judgment to classify each task:
 
-CATEGORY → REQUIRED TIME WINDOW (already filtered for ${isWeekendDay ? 'weekend' : 'weekday'}):
+A) FINANCIAL IMPACT — tasks involving money (payments, transfers, fees, invoices, budgeting, bills, taxes, subscriptions, refunds, anything financial):
+   → FORCE to business_hours (${formatWindowHours('business_hours')}), EARLIEST available slot.
+   → Treat as HIGH priority regardless of the priority field.
+
+B) PEOPLE / COMMUNICATION — tasks involving contacting, replying to, or coordinating with other people (emails, texts, replies, follow-ups, calls, scheduling meetings, responding to someone):
+   → FORCE to business_hours (${formatWindowHours('business_hours')}), EARLIEST available slot.
+   → Treat as HIGH priority regardless of the priority field.
+
+C) TIME-SENSITIVE — tasks due within 48 hours, appointments, deadlines:
+   → EARLIEST available slot in the most appropriate window.
+
+D) ERRANDS & APPOINTMENTS — shopping, doctor, bank, groceries, post office:
+   → after_work (${formatWindowHours('after_work')}) or business_hours based on context.
+
+E) PHYSICAL / MORNING ROUTINES — workout, gym, breakfast, morning routine:
+   → morning (${formatWindowHours('morning')}).
+
+F) SOCIAL / EVENING — dinner, family, social, relaxation:
+   → evening (${formatWindowHours('evening')}).
+
+G) ALL OTHER TASKS — use their category's default window as listed above.
+
+EXAMPLES of correct reasoning:
+- "Reply to Travis' text" → category B (communication) → business_hours, early
+- "Make car payments" → category A (financial) → business_hours, early
+- "Email Aaron" → category B (communication) → business_hours, early
+- "Research Claude Business" → category G (default) → use VENTURES default window
+- "Pick up groceries" → category D (errand) → after_work
+
+AVAILABLE TIME WINDOWS (already filtered for ${isWeekendDay ? 'weekend' : 'weekday'}):
 ${Object.entries(filteredCategoryMappings).map(([cat, mapping]) => {
       const wins = Array.isArray(mapping.defaultTimeWindow) ? mapping.defaultTimeWindow : [mapping.defaultTimeWindow];
       const windowDescs = wins.map((w: string) => `${w}: ${formatWindowHours(w)}`).join(', OR ');
-      return `- ${cat} tasks → ${windowDescs}`;
+      return `- ${cat} default → ${windowDescs}`;
     }).join('\n')}
 
-=== RULE 2: KEYWORD OVERRIDE (TRUMPS CATEGORY WINDOW) ===
-If the task TITLE contains any of these keywords, override the category window:
-- "shopping", "mall", "grocery", "groceries", "errands" → after_work (5:00pm–10:00pm) regardless of category
-- "email", "emails", "meeting", "call", "interview", "review", "invoice", "contract" → business_hours (9:00am–5:00pm) regardless of category
-- "payment", "pay", "bill", "tax", "budget", "financial", "money", "transfer", "fee" → business_hours (9:00am–5:00pm) regardless of category — these are HIGH PRIORITY, schedule them EARLY in business_hours
-- "follow up", "follow-up", "respond", "reply", "message", "contact" → business_hours (9:00am–5:00pm) regardless of category — these are HIGH PRIORITY, schedule them EARLY in business_hours
-- "workout", "exercise", "gym", "breakfast", "morning routine" → morning (6:00am–9:00am) regardless of category
-- "dinner", "family", "social", "relax" → evening (7:00pm–10:00pm) regardless of category
-- "lunch", "brunch" → keep within 11:00am–1:30pm regardless of category
-- "doctor", "dentist", "bank", "post office" → business_hours (9:00am–5:00pm) regardless of category
-
-=== RULE 3: NO CONFLICTS ===
+=== RULE 2: NO CONFLICTS ===
 NEVER double-book — each task must not overlap with busy slots OR other scheduled tasks.
 
-=== RULE 4: PRIORITY WITHIN WINDOW ===
+=== RULE 3: PRIORITY WITHIN WINDOW ===
 Higher priority tasks get EARLIER slots WITHIN their designated window. Urgent > High > Medium > Low.
-ADDITIONAL: Tasks with FINANCIAL IMPACT (payment, bill, tax, invoice, transfer, fee, budget) or INTERPERSONAL COMMUNICATION (email, reply, follow-up, respond, call, message) keywords MUST be treated as HIGH priority regardless of their actual priority field — schedule them in the EARLIEST available slots within their window.
+Financial and communication tasks (categories A & B above) are always treated as HIGH priority.
 
-=== RULE 5: DUE DATES ===
+=== RULE 4: DUE DATES ===
 Respect due dates — schedule before deadline. Tasks due within 48 hours get priority placement.
 
-=== RULE 6: BUFFERS ===
+=== RULE 5: BUFFERS ===
 Leave 15-minute buffer between tasks when possible.
 
-=== RULE 7: OVERFLOW ===
-${targetDateObj ? `If a task cannot fit within its required window on ${targetDateISO} (window is full or no time left), mark it with reasoning "OVERFLOW: [window_name] full on ${targetDateISO}" and DO NOT schedule it. Do not force it into a different window.` : 'Schedule each task in its preferred time window based on category.'}
+=== RULE 6: OVERFLOW ===
+${targetDateObj ? `If a task cannot fit within its assigned window on ${targetDateISO} (window is full or no time left), mark it with reasoning "OVERFLOW: [window_name] full on ${targetDateISO}" and DO NOT schedule it. Do not force it into a different window.` : 'Schedule each task in its preferred time window based on category.'}
 ${overflowInstructions}
 
 CRITICAL TIME FORMAT REQUIREMENTS:
