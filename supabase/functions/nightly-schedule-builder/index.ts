@@ -196,7 +196,7 @@ serve(async (req) => {
           })),
           userId,
           timezone,
-          targetDate: tomorrowISO,
+          targetDate: todayISO,
           allowOverflow: true,
         };
 
