@@ -453,8 +453,7 @@ const FocusView: React.FC<FocusViewProps> = ({
                                 <span className="text-xs text-muted-foreground whitespace-nowrap">
                                   {config.timeWindows[windowName as keyof typeof config.timeWindows]?.start}:00 - {config.timeWindows[windowName as keyof typeof config.timeWindows]?.end}:00
                                 </span>
-                                {windowName !== 'other' && (
-                                  <Button
+                                <Button
                                     variant="ghost"
                                     size="icon"
                                     className="h-6 w-6"
@@ -467,7 +466,6 @@ const FocusView: React.FC<FocusViewProps> = ({
                                   >
                                     <Plus className="h-3.5 w-3.5" />
                                   </Button>
-                                )}
                               </div>
                             </div>
                             
