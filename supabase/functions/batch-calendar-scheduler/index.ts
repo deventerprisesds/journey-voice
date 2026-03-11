@@ -91,7 +91,18 @@ serve(async (req) => {
       targetDateISO = targetDate;
     }
     
-    console.log(`[BATCH-SCHEDULER] Timezone: ${timezone}, todayISO: ${todayISO}, targetDateISO: ${targetDateISO}`);
+    // =============================================================
+    // DYNAMIC TIMEZONE OFFSET — replaces hardcoded -05:00
+    // Correctly handles DST (e.g., EDT = -04:00, EST = -05:00)
+    // =============================================================
+    const targetNoon = new Date(`${targetDateISO}T12:00:00Z`);
+    const offsetMin = getTzOffsetMinutesAt(targetNoon, timezone);
+    const offsetSign = offsetMin >= 0 ? '+' : '-';
+    const absH = String(Math.floor(Math.abs(offsetMin) / 60)).padStart(2, '0');
+    const absM = String(Math.abs(offsetMin) % 60).padStart(2, '0');
+    const tzOffset = `${offsetSign}${absH}:${absM}`; // e.g., "-04:00" for EDT, "-05:00" for EST
+    
+    console.log(`[BATCH-SCHEDULER] Timezone: ${timezone}, todayISO: ${todayISO}, targetDateISO: ${targetDateISO}, computed offset: ${tzOffset}`);
     
     // If allowOverflow, fetch busy slots for target date + next day
     // Otherwise, fetch for the next 14 days
