@@ -261,9 +261,13 @@ serve(async (req) => {
 
         console.log(`  ✅ Scheduled ${scheduled.length} tasks`);
 
-        // Update tasks with their scheduled times
+        // Update tasks with their scheduled times, preserving pre-schedule status
         for (const slot of scheduled) {
           if (!slot.taskId) continue;
+          
+          // Find the candidate to store its original status
+          const candidate = topCandidates.find(c => c.id === slot.taskId);
+          const preScheduleStatus = candidate?.status || 'TODO';
           
           const { error: scheduleError } = await supabase
             .from('tasks')
@@ -271,6 +275,7 @@ serve(async (req) => {
               start_time: slot.start_time,
               end_time: slot.end_time,
               is_scheduled: true,
+              scheduling_context: { pre_schedule_status: preScheduleStatus },
               status: 'TODO',
               updated_at: now.toISOString(),
             })
