@@ -623,12 +623,14 @@ const FocusView: React.FC<FocusViewProps> = ({
       const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
       
       // === TRACE CHECKPOINT A: Tasks sent to scheduler ===
-      console.log('=== AUTOFILL CHECKPOINT A: Tasks sent to scheduler ===');
-      topCandidates.forEach((t: any, i: number) => {
-        console.log(`  [${i}] id=${t.id} title="${t.title}" category=${t.category} priority=${t.priority}`);
+      await writeTrace('AUTOFILL_A_SENT', 'autofill_trace', {
+        candidateCount: topCandidates.length,
+        skippedAlreadyScheduled: (candidates || []).length - unscheduledCandidates.length,
+        timezone,
+        tasks: topCandidates.map((t: any, i: number) => ({
+          idx: i, id: t.id, title: t.title, category: t.category, priority: t.priority, score: t._score,
+        })),
       });
-      console.log(`  timezone=${timezone}, targetDate=today`);
-      console.log('=====================================================');
       
       const result = await scheduleBatch(
         topCandidates.map((t: any) => ({
