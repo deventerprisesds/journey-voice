@@ -1,0 +1,1 @@
+UPDATE tasks SET start_time = start_time - interval '1 day', end_time = end_time - interval '1 day', due_date = '2026-03-11' WHERE user_id = '00000000-0000-0000-0000-000000000001' AND start_time::date = '2026-03-12';
