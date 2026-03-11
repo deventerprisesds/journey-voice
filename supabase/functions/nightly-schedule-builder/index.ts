@@ -121,8 +121,25 @@ serve(async (req) => {
 
         const mappedIds = (mappedTasks || []).map((t: any) => t.task_id);
 
-        if (mappedIds.length === 0) {
-          console.log(`  ℹ️ No priority board tasks for ${userId}`);
+        // Also fetch READY/UP_NEXT tasks regardless of priority board membership
+        const { data: readyUpNextTasks, error: readyError } = await supabase
+          .from('tasks')
+          .select('id')
+          .eq('user_id', userId)
+          .in('status', ['READY', 'UP_NEXT'])
+          .is('is_scheduled', false)
+          .is('completed_at', null);
+
+        if (readyError) {
+          console.error(`❌ Error fetching READY/UP_NEXT tasks for ${userId}:`, readyError);
+        }
+
+        // Merge and deduplicate candidate IDs
+        const readyIds = (readyUpNextTasks || []).map((t: any) => t.id);
+        const allCandidateIds = [...new Set([...mappedIds, ...readyIds])];
+
+        if (allCandidateIds.length === 0) {
+          console.log(`  ℹ️ No candidates (priority board or READY/UP_NEXT) for ${userId}`);
           results[userId] = { rolledOver: rolledOverCount, scheduled: 0 };
           continue;
         }
@@ -130,7 +147,7 @@ serve(async (req) => {
         const { data: candidates, error: candidatesError } = await supabase
           .from('tasks')
           .select('id, title, category, priority, estimate_minutes, due_date, pushed_count, status')
-          .in('id', mappedIds)
+          .in('id', allCandidateIds)
           .not('status', 'in', '("DONE","BLOCKED")')
           .is('is_scheduled', false)
           .is('completed_at', null)
@@ -188,8 +205,8 @@ serve(async (req) => {
           return 0;
         });
 
-        // Take top 20 candidates for scheduling
-        const topCandidates = scoredCandidates.slice(0, 20);
+        // Take top 25 candidates for scheduling (enough for ~16 usable hours)
+        const topCandidates = scoredCandidates.slice(0, 25);
 
         console.log(`  🎯 Top ${topCandidates.length} candidates selected:`);
         topCandidates.forEach((t, i) => {
@@ -244,9 +261,13 @@ serve(async (req) => {
 
         console.log(`  ✅ Scheduled ${scheduled.length} tasks`);
 
-        // Update tasks with their scheduled times
+        // Update tasks with their scheduled times, preserving pre-schedule status
         for (const slot of scheduled) {
           if (!slot.taskId) continue;
+          
+          // Find the candidate to store its original status
+          const candidate = topCandidates.find(c => c.id === slot.taskId);
+          const preScheduleStatus = candidate?.status || 'TODO';
           
           const { error: scheduleError } = await supabase
             .from('tasks')
@@ -254,6 +275,7 @@ serve(async (req) => {
               start_time: slot.start_time,
               end_time: slot.end_time,
               is_scheduled: true,
+              scheduling_context: { pre_schedule_status: preScheduleStatus },
               status: 'TODO',
               updated_at: now.toISOString(),
             })

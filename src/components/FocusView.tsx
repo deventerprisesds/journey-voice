@@ -23,7 +23,10 @@ import {
   ChevronUp,
   CalendarPlus,
   Plus,
-  RotateCcw
+  RotateCcw,
+  X,
+  Trash2,
+  RefreshCw
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Task } from '@/types/task';
@@ -119,6 +122,8 @@ const FocusView: React.FC<FocusViewProps> = ({
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [createModalHour, setCreateModalHour] = useState<number>(9);
   const [defaultBoardId, setDefaultBoardId] = useState<string>('');
+  const [isClearing, setIsClearing] = useState(false);
+  const [isRerunning, setIsRerunning] = useState(false);
   const today = new Date();
   const config = DEFAULT_SCHEDULING_CONFIG;
   
@@ -374,6 +379,83 @@ const FocusView: React.FC<FocusViewProps> = ({
     }
   };
 
+  // Remove a single task from schedule, restoring its original status
+  const handleRemoveFromSchedule = async (task: Task) => {
+    try {
+      const preStatus = (task.scheduling_context as any)?.pre_schedule_status || task.status;
+      const restoredStatus = preStatus === 'TODO' ? 'TODO' : preStatus;
+      
+      const { error } = await supabase
+        .from('tasks')
+        .update({
+          start_time: null,
+          end_time: null,
+          is_scheduled: false,
+          status: restoredStatus,
+          scheduling_context: null,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', task.id);
+
+      if (error) throw error;
+      toast.success(`"${task.title}" removed from schedule`);
+      onTaskUpdate();
+    } catch (error) {
+      console.error('Error removing task from schedule:', error);
+      toast.error('Failed to remove task');
+    }
+  };
+
+  // Clear all scheduled tasks for today, restoring original statuses
+  const handleClearAll = async () => {
+    if (scheduledToday.length === 0) return;
+    if (!window.confirm(`Remove all ${scheduledToday.length} tasks from today's schedule? Their original statuses will be restored.`)) return;
+    
+    setIsClearing(true);
+    try {
+      for (const task of scheduledToday) {
+        const preStatus = (task.scheduling_context as any)?.pre_schedule_status || task.status;
+        const restoredStatus = preStatus === 'TODO' ? 'TODO' : preStatus;
+        
+        await supabase
+          .from('tasks')
+          .update({
+            start_time: null,
+            end_time: null,
+            is_scheduled: false,
+            status: restoredStatus,
+            scheduling_context: null,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', task.id);
+      }
+      toast.success(`Cleared ${scheduledToday.length} tasks from schedule`);
+      onTaskUpdate();
+    } catch (error) {
+      console.error('Error clearing schedule:', error);
+      toast.error('Failed to clear schedule');
+    } finally {
+      setIsClearing(false);
+    }
+  };
+
+  // Re-run the nightly schedule builder on demand
+  const handleRerunSchedule = async () => {
+    setIsRerunning(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('nightly-schedule-builder');
+      if (error) throw error;
+      const scheduled = data?.results ? Object.values(data.results).reduce((sum: number, r: any) => sum + (r.scheduled || 0), 0) : 0;
+      toast.success(`Schedule rebuilt — ${scheduled} tasks scheduled`);
+      onTaskUpdate();
+    } catch (error) {
+      console.error('Error re-running schedule:', error);
+      toast.error('Failed to re-run schedule');
+    } finally {
+      setIsRerunning(false);
+    }
+  };
+
   // Get drop time slots for a window
   const getDropSlotsForWindow = (windowName: string) => {
     const window = config.timeWindows[windowName as keyof typeof config.timeWindows];
@@ -420,14 +502,38 @@ const FocusView: React.FC<FocusViewProps> = ({
                   <h2 className="text-lg font-semibold">Today's Schedule</h2>
                   <Badge variant="secondary">{scheduledToday.length} scheduled</Badge>
                 </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setIsTimelineExpanded(!isTimelineExpanded)}
-                  className="lg:hidden"
-                >
-                  {isTimelineExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                </Button>
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleClearAll}
+                    disabled={isClearing || scheduledToday.length === 0}
+                    className="text-xs h-7 text-destructive hover:text-destructive"
+                    title="Clear all tasks from today's schedule"
+                  >
+                    {isClearing ? <Clock className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3 mr-1" />}
+                    {!isClearing && 'Clear All'}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleRerunSchedule}
+                    disabled={isRerunning}
+                    className="text-xs h-7"
+                    title="Re-run the scheduler to fill today's slots"
+                  >
+                    {isRerunning ? <Clock className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3 mr-1" />}
+                    {!isRerunning && 'Re-run'}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setIsTimelineExpanded(!isTimelineExpanded)}
+                    className="lg:hidden"
+                  >
+                    {isTimelineExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                  </Button>
+                </div>
               </div>
             </CardHeader>
 
@@ -498,20 +604,36 @@ const FocusView: React.FC<FocusViewProps> = ({
                                               {task.title}
                                             </span>
                                           </div>
-                                          {task.status !== 'DOING' && task.status !== 'DONE' && (
-                                            <Button
-                                              variant="ghost"
-                                              size="icon"
-                                              className="h-7 w-7 flex-shrink-0 hover:bg-green-100 dark:hover:bg-green-900"
-                                              onClick={(e) => {
-                                                e.stopPropagation();
-                                                handleStartTask(task.id);
-                                              }}
-                                              title="Start working on this task"
-                                            >
-                                              <Play className="h-4 w-4 text-green-600" />
-                                            </Button>
-                                          )}
+                                          <div className="flex items-center gap-1 flex-shrink-0">
+                                            {task.status !== 'DOING' && task.status !== 'DONE' && (
+                                              <>
+                                                <Button
+                                                  variant="ghost"
+                                                  size="icon"
+                                                  className="h-7 w-7 hover:bg-destructive/10"
+                                                  onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    handleRemoveFromSchedule(task);
+                                                  }}
+                                                  title="Remove from schedule"
+                                                >
+                                                  <X className="h-4 w-4 text-muted-foreground hover:text-destructive" />
+                                                </Button>
+                                                <Button
+                                                  variant="ghost"
+                                                  size="icon"
+                                                  className="h-7 w-7 hover:bg-green-100 dark:hover:bg-green-900"
+                                                  onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    handleStartTask(task.id);
+                                                  }}
+                                                  title="Start working on this task"
+                                                >
+                                                  <Play className="h-4 w-4 text-green-600" />
+                                                </Button>
+                                              </>
+                                            )}
+                                          </div>
                                         </div>
                                         <div className="flex items-center gap-2 mt-1 flex-wrap">
                                           <Badge variant="outline" className={cn("text-xs", categoryColors[task.category])}>
