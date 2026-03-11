@@ -686,11 +686,12 @@ const FocusView: React.FC<FocusViewProps> = ({
           .from('tasks')
           .select('id, title, category, start_time, end_time, is_scheduled')
           .in('id', savedIds);
-        console.log('=== AUTOFILL CHECKPOINT D: Post-save DB verification ===');
-        (verification || []).forEach((t: any) => {
-          console.log(`  "${t.title}" [${t.category}]: start=${t.start_time} end=${t.end_time} scheduled=${t.is_scheduled}`);
+        await writeTrace('AUTOFILL_D_VERIFIED', 'autofill_trace', {
+          savedCount: savedIds.length,
+          verifiedTasks: (verification || []).map((t: any) => ({
+            title: t.title, category: t.category, start: t.start_time, end: t.end_time, scheduled: t.is_scheduled,
+          })),
         });
-        console.log('=======================================================');
         
         toast.success(`Auto-filled ${result.scheduled.length} tasks into today's schedule`);
         onTaskUpdate();
