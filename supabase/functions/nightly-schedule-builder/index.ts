@@ -200,7 +200,7 @@ serve(async (req) => {
           allowOverflow: true,
         };
 
-        console.log(`  🤖 Calling batch-calendar-scheduler for ${tomorrowISO}...`);
+        console.log(`  🤖 Calling batch-calendar-scheduler for ${todayISO}...`);
 
         const schedulerResponse = await fetch(
           `${supabaseUrl}/functions/v1/batch-calendar-scheduler`,
