@@ -8,7 +8,12 @@ When changing the worker version, ALL THREE files must be updated:
 - [ ] `cloudflare/src/TwilioCallSession.ts` (line ~77) - WORKER_VERSION constant
 - [ ] `.github/workflows/deploy-cloudflare.yml` (line ~51) - EXPECTED_VERSION
 
-### 2. State Management Parity
+### 2b. Greeting Function Parity
+The `generateGreetingForCallType` logic must match between:
+- [ ] `supabase/functions/_shared/persona.ts` (SOURCE OF TRUTH)
+- [ ] `cloudflare/src/TwilioCallSession.ts` (Cloudflare copy)
+
+
 When adding new features, verify Supabase bridge equivalents:
 - [ ] All state variables from Supabase exist in Cloudflare
 - [ ] State initialization matches Supabase

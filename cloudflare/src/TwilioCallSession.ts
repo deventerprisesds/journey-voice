@@ -688,18 +688,35 @@ export class TwilioCallSession {
     return {};
   }
 
-  // Copy from Supabase lines 1063-1077
+  // Synced from supabase/functions/_shared/persona.ts generateGreetingForCallType
   private generateGreetingForCallType(context: string, timeGreeting: string, userName: string): string {
-    if (context.includes('Morning Stand-up')) {
-      return `${timeGreeting}, ${userName}. This is your morning check-in.`;
-    } else if (context.includes('Midday Check-in')) {
-      return `${timeGreeting}, ${userName}. Just checking in on how your day is going.`;
-    } else if (context.includes('End of Day Wrap-up')) {
-      return `${timeGreeting}, ${userName}. Let's wrap up the day.`;
-    } else if (context.includes('Task reminder')) {
+    const callMatch = context.match(/CALL:\s*([^\n(]+)/);
+    const callName = callMatch ? callMatch[1].trim() : '';
+
+    if (context.includes('Task reminder')) {
       return `${timeGreeting}, ${userName}. Quick reminder about an upcoming task.`;
     }
-    return `${timeGreeting}, ${userName}. This is Iris.`;
+
+    if (callName) {
+      if (/morning|kickstart/i.test(callName)) {
+        return `${timeGreeting}, ${userName}. This is your morning check-in.`;
+      }
+      if (/business|execution|midday/i.test(callName)) {
+        return `${timeGreeting}, ${userName}. Just checking in on how your day is going.`;
+      }
+      if (/wrap|end of day|after.work/i.test(callName)) {
+        return `${timeGreeting}, ${userName}. Let's wrap up the day.`;
+      }
+      if (/evening/i.test(callName)) {
+        return `${timeGreeting}, ${userName}. Checking in for the evening.`;
+      }
+      if (/weekend|saturday|sunday/i.test(callName)) {
+        return `${timeGreeting}, ${userName}. Happy weekend — let's see what's on the agenda.`;
+      }
+      return `${timeGreeting}, ${userName}. This is your ${callName.toLowerCase()} check-in.`;
+    }
+
+    return `${timeGreeting}, ${userName}. How can I help you?`;
   }
 
   private async fetchToolDefinitions() {

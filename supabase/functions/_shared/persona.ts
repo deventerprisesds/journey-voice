@@ -213,8 +213,8 @@ export function generateGreetingForCallType(context: string, timeGreeting: strin
     return `${timeGreeting}, ${userName}. This is your ${callName.toLowerCase()} check-in.`;
   }
 
-  // Fallback
-  return `${timeGreeting}, ${userName}. This is Iris.`;
+  // Fallback (inbound or unknown call type)
+  return `${timeGreeting}, ${userName}. How can I help you?`;
 }
 
 /**
