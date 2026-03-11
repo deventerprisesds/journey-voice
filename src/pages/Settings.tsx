@@ -19,7 +19,8 @@ import {
   Wrench,
   FileSpreadsheet,
   Sparkles,
-  Home
+  Home,
+  ListChecks
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { useIsMobile } from '@/hooks/use-mobile';
@@ -32,11 +33,13 @@ import SchedulingSettings from '@/components/SchedulingSettings';
 import VoiceAssistantSettings from '@/components/VoiceAssistantSettings';
 import ProfileSettings from '@/components/ProfileSettings';
 import { AssignmentSyncSettings } from '@/components/AssignmentSyncSettings';
+import TaskCleanupSettings from '@/components/TaskCleanupSettings';
 import { useOAuthCallback } from '@/hooks/useOAuthCallback';
 
 const tabConfig = [
   { value: 'notifications', label: 'Notifications', icon: Bell },
   { value: 'scheduling', label: 'Scheduling', icon: SettingsIcon },
+  { value: 'tasks', label: 'Tasks', icon: ListChecks },
   { value: 'ai', label: 'AI Instructions', icon: Sparkles },
   { value: 'assignments', label: 'Assignments', icon: FileSpreadsheet },
   { value: 'testing', label: 'Testing', icon: Wrench },
@@ -152,6 +155,10 @@ const Settings: React.FC = () => {
 
           <TabsContent value="scheduling" className="mt-6">
             <SchedulingSettings />
+          </TabsContent>
+
+          <TabsContent value="tasks" className="mt-6">
+            <TaskCleanupSettings />
           </TabsContent>
 
           <TabsContent value="ai" className="mt-6">

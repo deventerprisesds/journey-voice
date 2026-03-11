@@ -422,7 +422,7 @@ const FocusView: React.FC<FocusViewProps> = ({
   // Helper: write trace to error_log table for remote visibility
   const writeTrace = async (checkpoint: string, traceType: string, data: any) => {
     try {
-      await supabase.from('error_log').insert({
+      const { error } = await supabase.from('error_log').insert({
         error_type: traceType,
         error_message: checkpoint,
         source: 'frontend',
@@ -431,6 +431,9 @@ const FocusView: React.FC<FocusViewProps> = ({
         context: data,
         session_id: `focus_${format(new Date(), 'yyyyMMdd_HHmmss')}`,
       });
+      if (error) {
+        console.warn('[TRACE] DB write failed:', error.message, error.details);
+      }
     } catch (e) {
       console.warn('[TRACE] Failed to write trace to DB:', e);
     }
@@ -609,7 +612,7 @@ const FocusView: React.FC<FocusViewProps> = ({
         return { ...t, _score: score };
       });
 
-      // Sort by score desc, then due_date asc, take top 25
+      // Sort by score desc, then due_date asc
       scored.sort((a: any, b: any) => {
         if (b._score !== a._score) return b._score - a._score;
         if (a.due_date && b.due_date) return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
@@ -617,7 +620,20 @@ const FocusView: React.FC<FocusViewProps> = ({
         if (b.due_date) return 1;
         return 0;
       });
-      const topCandidates = scored.slice(0, 25);
+
+      // Dedup by normalized title — keep only the highest-scored instance
+      const seenTitles = new Map<string, string>();
+      const dedupedCandidates = scored.filter((t: any) => {
+        const key = t.title.toLowerCase().trim();
+        if (seenTitles.has(key)) return false;
+        seenTitles.set(key, t.id);
+        return true;
+      });
+      const dupesRemoved = scored.length - dedupedCandidates.length;
+      if (dupesRemoved > 0) {
+        console.log(`[AUTOFILL] Dedup removed ${dupesRemoved} duplicate titles from ${scored.length} candidates`);
+      }
+      const topCandidates = dedupedCandidates.slice(0, 25);
 
       // 6. Call batch scheduler
       const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
