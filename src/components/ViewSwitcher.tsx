@@ -4,11 +4,12 @@ import { Badge } from '@/components/ui/badge';
 import { 
   LayoutGrid, 
   List,
-  Target
+  Target,
+  CalendarDays
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-export type ViewType = 'kanban' | 'grid' | 'focus';
+export type ViewType = 'kanban' | 'grid' | 'focus' | 'week';
 
 interface ViewSwitcherProps {
   currentView: ViewType;
