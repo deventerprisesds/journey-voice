@@ -439,18 +439,127 @@ const FocusView: React.FC<FocusViewProps> = ({
     }
   };
 
-  // Re-run the nightly schedule builder on demand
-  const handleRerunSchedule = async () => {
+  // Auto-fill open slots with priority candidates
+  const handleAutoFill = async () => {
+    if (!user?.id) return;
     setIsRerunning(true);
     try {
-      const { data, error } = await supabase.functions.invoke('nightly-schedule-builder');
-      if (error) throw error;
-      const scheduled = data?.results ? Object.values(data.results).reduce((sum: number, r: any) => sum + (r.scheduled || 0), 0) : 0;
-      toast.success(`Schedule rebuilt — ${scheduled} tasks scheduled`);
-      onTaskUpdate();
+      // 1. Fetch priority board task IDs
+      const { data: mappedTasks } = await supabase
+        .from('task_topic_mappings')
+        .select('task_id')
+        .eq('user_id', user.id);
+      const mappedIds = (mappedTasks || []).map((t: any) => t.task_id);
+
+      // 2. Fetch READY/UP_NEXT tasks (not already scheduled, not done)
+      const { data: readyTasks } = await supabase
+        .from('tasks')
+        .select('id')
+        .eq('user_id', user.id)
+        .in('status', ['READY', 'UP_NEXT'])
+        .neq('status', 'DONE')
+        .is('completed_at', null);
+      const readyIds = (readyTasks || []).map((t: any) => t.id);
+
+      // 3. Merge & dedupe
+      const allIds = [...new Set([...mappedIds, ...readyIds])];
+      if (allIds.length === 0) {
+        toast.info('No candidate tasks found to auto-fill');
+        return;
+      }
+
+      // 4. Fetch full candidate data (exclude already scheduled today & done/blocked)
+      const { data: candidates } = await supabase
+        .from('tasks')
+        .select('*')
+        .in('id', allIds)
+        .not('status', 'in', '("DONE","BLOCKED")')
+        .is('completed_at', null);
+
+      // Filter out tasks already scheduled for today
+      const unscheduledCandidates = (candidates || []).filter((t: any) => {
+        if (t.is_scheduled && t.start_time && isToday(parseISO(t.start_time))) return false;
+        return true;
+      });
+
+      if (unscheduledCandidates.length === 0) {
+        toast.info('All candidate tasks are already scheduled');
+        return;
+      }
+
+      // 5. Score candidates (same heuristics as nightly builder)
+      const priorityWeights: Record<string, number> = { URGENT: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
+      const scored = unscheduledCandidates.map((t: any) => {
+        let score = priorityWeights[t.priority] || 1;
+        score += (t.pushed_count || 0) * 0.5;
+        // Due-soon boost
+        if (t.due_date) {
+          const hoursUntilDue = (new Date(t.due_date).getTime() - Date.now()) / (1000 * 60 * 60);
+          if (hoursUntilDue <= 48) score += 3;
+          else if (hoursUntilDue <= 96) score += 1;
+        }
+        // UP_NEXT boost
+        if (t.status === 'UP_NEXT') score += 1;
+        // Keyword boost for financial/comms tasks
+        const titleLower = (t.title || '').toLowerCase();
+        if (/pay|invoice|bill|transfer|fee/.test(titleLower)) score += 2;
+        if (/email|reply|follow.?up|respond|call|message/.test(titleLower)) score += 1.5;
+        return { ...t, _score: score };
+      });
+
+      // Sort by score desc, then due_date asc, take top 25
+      scored.sort((a: any, b: any) => {
+        if (b._score !== a._score) return b._score - a._score;
+        if (a.due_date && b.due_date) return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
+        if (a.due_date) return -1;
+        if (b.due_date) return 1;
+        return 0;
+      });
+      const topCandidates = scored.slice(0, 25);
+
+      // 6. Call batch scheduler
+      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const result = await scheduleBatch(
+        topCandidates.map((t: any) => ({
+          id: t.id,
+          title: t.title,
+          category: t.category,
+          priority: t.priority,
+          estimate_minutes: t.estimate_minutes || 60,
+          due_date: t.due_date,
+        })),
+        user.id,
+        timezone,
+        new Date()
+      );
+
+      // 7. Update tasks with pre_schedule_status preservation
+      if (result.scheduled.length > 0) {
+        for (const slot of result.scheduled) {
+          const taskId = slot.taskId || topCandidates[slot.taskIndex]?.id;
+          if (!taskId) continue;
+          const candidate = topCandidates.find((c: any) => c.id === taskId) || topCandidates[slot.taskIndex];
+          
+          await supabase
+            .from('tasks')
+            .update({
+              start_time: slot.start_time,
+              end_time: slot.end_time,
+              is_scheduled: true,
+              scheduling_context: { pre_schedule_status: candidate?.status || 'TODO' },
+              status: 'TODO',
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', taskId);
+        }
+        toast.success(`Auto-filled ${result.scheduled.length} tasks into today's schedule`);
+        onTaskUpdate();
+      } else {
+        toast.info('No open slots available to fill');
+      }
     } catch (error) {
-      console.error('Error re-running schedule:', error);
-      toast.error('Failed to re-run schedule');
+      console.error('Error auto-filling schedule:', error);
+      toast.error('Failed to auto-fill schedule');
     } finally {
       setIsRerunning(false);
     }
