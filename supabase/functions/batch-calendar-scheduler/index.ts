@@ -205,9 +205,9 @@ serve(async (req) => {
       return `${fmtHr(w.start)}-${fmtHr(w.end)}`;
     };
 
-    // Build flat lookup for AI prompt per-task lines
+    // Build flat lookup for AI prompt per-task lines (using FILTERED mappings)
     const categoryWindowLookup: Record<string, { windows: string; hours: string }> = {};
-    for (const [cat, mapping] of Object.entries(userCategoryMappings)) {
+    for (const [cat, mapping] of Object.entries(filteredCategoryMappings)) {
       const wins = Array.isArray(mapping.defaultTimeWindow) ? mapping.defaultTimeWindow : [mapping.defaultTimeWindow];
       categoryWindowLookup[cat] = {
         windows: wins.join(' or '),
