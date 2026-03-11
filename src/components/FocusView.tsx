@@ -227,8 +227,8 @@ const FocusView: React.FC<FocusViewProps> = ({
     else if (taskHour < windows.morning.start) assignedWindow = 'morning';
     else if (taskHour >= windows.evening.end) assignedWindow = 'evening';
     
-    // === TRACE: Window assignment ===
-    console.log(`[WINDOW-ASSIGN] "${task.title}" [${task.category}] start_time=${task.start_time} → hour=${taskHour} (${userTimezone}) → window="${assignedWindow}"`);
+    // Window assignment logged to console only (high-frequency, not DB-traced)
+    console.log(`[WINDOW-ASSIGN] "${task.title}" [${task.category}] hour=${taskHour} → window="${assignedWindow}"`);
     
     return assignedWindow;
   };
@@ -419,34 +419,124 @@ const FocusView: React.FC<FocusViewProps> = ({
     }
   };
 
+  // Helper: write trace to error_log table for remote visibility
+  const writeTrace = async (checkpoint: string, traceType: string, data: any) => {
+    try {
+      await supabase.from('error_log').insert({
+        error_type: traceType,
+        error_message: checkpoint,
+        source: 'frontend',
+        component: 'FocusView',
+        user_id: user?.id || null,
+        context: data,
+        session_id: `focus_${format(new Date(), 'yyyyMMdd_HHmmss')}`,
+      });
+    } catch (e) {
+      console.warn('[TRACE] Failed to write trace to DB:', e);
+    }
+  };
+
   // Clear all scheduled tasks for today, restoring original statuses
+  // BULLETPROOF: queries DB directly instead of relying on React props
   const handleClearAll = async () => {
-    if (scheduledToday.length === 0) return;
-    if (!window.confirm(`Remove all ${scheduledToday.length} tasks from today's schedule? Their original statuses will be restored.`)) return;
+    if (!user?.id) return;
     
+    const tz = userTimezone;
+    const todayStart = new Date(format(today, 'yyyy-MM-dd') + 'T00:00:00');
+    const tomorrowStart = new Date(format(today, 'yyyy-MM-dd') + 'T00:00:00');
+    tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+    
+    // Convert to UTC ISO strings for DB query
+    const todayStartUTC = localTimeToUtcISO(format(today, 'yyyy-MM-dd'), '00:00', tz);
+    const tomorrowStartUTC = localTimeToUtcISO(format(new Date(tomorrowStart), 'yyyy-MM-dd'), '00:00', tz);
+
     setIsClearing(true);
     try {
-      for (const task of scheduledToday) {
-        const preStatus = (task.scheduling_context as any)?.pre_schedule_status || task.status;
-        const restoredStatus = preStatus === 'TODO' ? 'TODO' : preStatus;
-        
-        await supabase
-          .from('tasks')
-          .update({
-            start_time: null,
-            end_time: null,
-            is_scheduled: false,
-            status: restoredStatus,
-            scheduling_context: null,
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', task.id);
+      // Step 1: Query DB directly for ALL tasks scheduled today (not from React props)
+      const { data: dbTodayTasks, error: fetchError } = await supabase
+        .from('tasks')
+        .select('id, title, category, start_time, end_time, status, scheduling_context, is_scheduled')
+        .eq('user_id', user.id)
+        .gte('start_time', todayStartUTC)
+        .lt('start_time', tomorrowStartUTC)
+        .neq('status', 'DONE');
+
+      if (fetchError) throw fetchError;
+
+      const tasksToClr = dbTodayTasks || [];
+      
+      // TRACE: Pre-clear state
+      await writeTrace('CLEAR_PRE', 'clear_trace', {
+        propCount: scheduledToday.length,
+        dbCount: tasksToClr.length,
+        staleDetected: tasksToClr.length !== scheduledToday.length,
+        todayStartUTC,
+        tomorrowStartUTC,
+        tasks: tasksToClr.map(t => ({
+          id: t.id, title: t.title, category: t.category,
+          start_time: t.start_time, is_scheduled: t.is_scheduled,
+        })),
+      });
+
+      if (tasksToClr.length === 0) {
+        toast.info('No scheduled tasks found for today');
+        setIsClearing(false);
+        return;
       }
-      toast.success(`Cleared ${scheduledToday.length} tasks from schedule`);
+
+      if (!window.confirm(`Remove all ${tasksToClr.length} tasks from today's schedule? Their original statuses will be restored.`)) {
+        setIsClearing(false);
+        return;
+      }
+
+      const taskIds = tasksToClr.map(t => t.id);
+
+      // Step 2: Batch clear in a single DB call
+      const { error: updateError } = await supabase
+        .from('tasks')
+        .update({
+          start_time: null,
+          end_time: null,
+          is_scheduled: false,
+          scheduling_context: null,
+          updated_at: new Date().toISOString(),
+        })
+        .in('id', taskIds);
+
+      if (updateError) throw updateError;
+
+      // Step 3: Verify - query DB again to confirm zero remaining
+      const { count: remaining, error: verifyError } = await supabase
+        .from('tasks')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', user.id)
+        .eq('is_scheduled', true)
+        .gte('start_time', todayStartUTC)
+        .lt('start_time', tomorrowStartUTC)
+        .neq('status', 'DONE');
+
+      // TRACE: Post-clear verification
+      await writeTrace('CLEAR_POST', 'clear_trace', {
+        clearedCount: tasksToClr.length,
+        remainingAfterClear: remaining ?? 'unknown',
+        verifyError: verifyError?.message || null,
+        success: (remaining ?? 0) === 0,
+      });
+
+      if ((remaining ?? 0) > 0) {
+        console.error(`[CLEAR] VERIFICATION FAILED: ${remaining} tasks still scheduled after clear!`);
+        toast.error(`Clear incomplete: ${remaining} tasks may still be scheduled. Try again.`);
+      } else {
+        toast.success(`Cleared ${tasksToClr.length} tasks from schedule`);
+      }
+
       onTaskUpdate();
     } catch (error) {
       console.error('Error clearing schedule:', error);
       toast.error('Failed to clear schedule');
+      await writeTrace('CLEAR_ERROR', 'clear_trace', {
+        error: error instanceof Error ? error.message : String(error),
+      });
     } finally {
       setIsClearing(false);
     }
@@ -533,12 +623,14 @@ const FocusView: React.FC<FocusViewProps> = ({
       const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
       
       // === TRACE CHECKPOINT A: Tasks sent to scheduler ===
-      console.log('=== AUTOFILL CHECKPOINT A: Tasks sent to scheduler ===');
-      topCandidates.forEach((t: any, i: number) => {
-        console.log(`  [${i}] id=${t.id} title="${t.title}" category=${t.category} priority=${t.priority}`);
+      await writeTrace('AUTOFILL_A_SENT', 'autofill_trace', {
+        candidateCount: topCandidates.length,
+        skippedAlreadyScheduled: (candidates || []).length - unscheduledCandidates.length,
+        timezone,
+        tasks: topCandidates.map((t: any, i: number) => ({
+          idx: i, id: t.id, title: t.title, category: t.category, priority: t.priority, score: t._score,
+        })),
       });
-      console.log(`  timezone=${timezone}, targetDate=today`);
-      console.log('=====================================================');
       
       const result = await scheduleBatch(
         topCandidates.map((t: any) => ({
@@ -555,12 +647,13 @@ const FocusView: React.FC<FocusViewProps> = ({
       );
 
       // === TRACE CHECKPOINT B: Raw result from scheduler ===
-      console.log('=== AUTOFILL CHECKPOINT B: Scheduler result ===');
-      result.scheduled.forEach((s: any, i: number) => {
-        const matchedTask = topCandidates[s.taskIndex];
-        console.log(`  [${i}] taskIndex=${s.taskIndex} title="${matchedTask?.title}" start=${s.start_time} end=${s.end_time} reason=${s.reasoning}`);
+      await writeTrace('AUTOFILL_B_RESULT', 'autofill_trace', {
+        scheduledCount: result.scheduled.length,
+        slots: result.scheduled.map((s: any, i: number) => {
+          const matchedTask = topCandidates[s.taskIndex];
+          return { idx: i, taskIndex: s.taskIndex, title: matchedTask?.title, category: matchedTask?.category, start: s.start_time, end: s.end_time, reason: s.reasoning };
+        }),
       });
-      console.log('================================================');
 
       // 7. Update tasks with pre_schedule_status preservation
       if (result.scheduled.length > 0) {
@@ -570,7 +663,7 @@ const FocusView: React.FC<FocusViewProps> = ({
           const candidate = topCandidates.find((c: any) => c.id === taskId) || topCandidates[slot.taskIndex];
           
           // === TRACE CHECKPOINT C: DB update before execution ===
-          console.log(`[AUTOFILL-SAVE] taskId=${taskId} title="${candidate?.title}" start_time=${slot.start_time} end_time=${slot.end_time}`);
+          // (logged in batch at checkpoint D)
           
           await supabase
             .from('tasks')
@@ -593,11 +686,12 @@ const FocusView: React.FC<FocusViewProps> = ({
           .from('tasks')
           .select('id, title, category, start_time, end_time, is_scheduled')
           .in('id', savedIds);
-        console.log('=== AUTOFILL CHECKPOINT D: Post-save DB verification ===');
-        (verification || []).forEach((t: any) => {
-          console.log(`  "${t.title}" [${t.category}]: start=${t.start_time} end=${t.end_time} scheduled=${t.is_scheduled}`);
+        await writeTrace('AUTOFILL_D_VERIFIED', 'autofill_trace', {
+          savedCount: savedIds.length,
+          verifiedTasks: (verification || []).map((t: any) => ({
+            title: t.title, category: t.category, start: t.start_time, end: t.end_time, scheduled: t.is_scheduled,
+          })),
         });
-        console.log('=======================================================');
         
         toast.success(`Auto-filled ${result.scheduled.length} tasks into today's schedule`);
         onTaskUpdate();
