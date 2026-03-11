@@ -157,6 +157,10 @@ const Settings: React.FC = () => {
             <SchedulingSettings />
           </TabsContent>
 
+          <TabsContent value="tasks" className="mt-6">
+            <TaskCleanupSettings />
+          </TabsContent>
+
           <TabsContent value="ai" className="mt-6">
             <VoiceAssistantSettings />
           </TabsContent>
