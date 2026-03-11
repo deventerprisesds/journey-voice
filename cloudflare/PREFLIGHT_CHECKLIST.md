@@ -48,6 +48,18 @@ Before claiming feature parity, verify these functions exist:
 
 ---
 
+### 8. OpenAI Model Parity
+
+The realtime model must match between the two bridges:
+- [ ] `supabase/functions/twilio-realtime-bridge/index.ts` — Supabase bridge model
+- [ ] `cloudflare/src/TwilioCallSession.ts` — Cloudflare bridge model
+
+Current model: `gpt-4o-realtime-preview-2025-06-03`
+
+When OpenAI releases a new realtime model, update BOTH files simultaneously.
+
+
+
 ### 7. Timing & Voice Constants Synchronization
 
 When changing voice/timing values, sync across all locations:
