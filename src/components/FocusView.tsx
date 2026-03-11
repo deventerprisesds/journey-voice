@@ -81,13 +81,6 @@ const timeWindowStyles: Record<string, {
     borderClass: 'border-l-4 border-l-purple-400',
     textClass: 'text-purple-700 dark:text-purple-300'
   },
-  other: { 
-    icon: <Clock className="h-4 w-4" />, 
-    label: 'Other Times', 
-    bgClass: 'bg-gray-50 dark:bg-gray-950/20',
-    borderClass: 'border-l-4 border-l-gray-400',
-    textClass: 'text-gray-700 dark:text-gray-300'
-  },
 };
 
 // Priority colors matching TaskCard
@@ -203,27 +196,23 @@ const FocusView: React.FC<FocusViewProps> = ({
   });
 
   // Group scheduled tasks by time window using timezone-aware time extraction
-  const getTimeWindowForTask = (task: Task): string | null => {
-    if (!task.start_time) return null;
+  const getTimeWindowForTask = (task: Task): string => {
+    if (!task.start_time) return 'business_hours';
     
-    // Use timezone-aware time extraction
     const { hour: taskHour } = getTimePartsInTimezone(task.start_time, userTimezone);
     const dayOfWeek = today.getDay();
-    
     const windows = config.timeWindows;
-    if (windows.morning.days.includes(dayOfWeek) && taskHour >= windows.morning.start && taskHour < windows.morning.end) {
-      return 'morning';
-    }
-    if (windows.business_hours.days.includes(dayOfWeek) && taskHour >= windows.business_hours.start && taskHour < windows.business_hours.end) {
-      return 'business_hours';
-    }
-    if (windows.after_work.days.includes(dayOfWeek) && taskHour >= windows.after_work.start && taskHour < windows.after_work.end) {
-      return 'after_work';
-    }
-    if (windows.evening.days.includes(dayOfWeek) && taskHour >= windows.evening.start && taskHour < windows.evening.end) {
-      return 'evening';
-    }
-    return null;
+    
+    // Exact match first
+    if (windows.morning.days.includes(dayOfWeek) && taskHour >= windows.morning.start && taskHour < windows.morning.end) return 'morning';
+    if (windows.business_hours.days.includes(dayOfWeek) && taskHour >= windows.business_hours.start && taskHour < windows.business_hours.end) return 'business_hours';
+    if (windows.after_work.days.includes(dayOfWeek) && taskHour >= windows.after_work.start && taskHour < windows.after_work.end) return 'after_work';
+    if (windows.evening.days.includes(dayOfWeek) && taskHour >= windows.evening.start && taskHour < windows.evening.end) return 'evening';
+    
+    // Nearest window fallback
+    if (taskHour < windows.morning.start) return 'morning';
+    if (taskHour >= windows.evening.end) return 'evening';
+    return 'after_work';
   };
 
   const tasksByWindow: Record<string, Task[]> = {
@@ -231,17 +220,11 @@ const FocusView: React.FC<FocusViewProps> = ({
     business_hours: [],
     after_work: [],
     evening: [],
-    other: [],  // Catch-all for tasks outside defined windows
   };
 
   scheduledToday.forEach(task => {
     const window = getTimeWindowForTask(task);
-    if (window && tasksByWindow[window]) {
-      tasksByWindow[window].push(task);
-    } else {
-      // Tasks outside defined time windows go to "other" bucket
-      tasksByWindow['other'].push(task);
-    }
+    tasksByWindow[window].push(task);
   });
 
   // Schedule task at specific time using timezone-aware conversion
@@ -470,8 +453,7 @@ const FocusView: React.FC<FocusViewProps> = ({
                                 <span className="text-xs text-muted-foreground whitespace-nowrap">
                                   {config.timeWindows[windowName as keyof typeof config.timeWindows]?.start}:00 - {config.timeWindows[windowName as keyof typeof config.timeWindows]?.end}:00
                                 </span>
-                                {windowName !== 'other' && (
-                                  <Button
+                                <Button
                                     variant="ghost"
                                     size="icon"
                                     className="h-6 w-6"
@@ -484,7 +466,6 @@ const FocusView: React.FC<FocusViewProps> = ({
                                   >
                                     <Plus className="h-3.5 w-3.5" />
                                   </Button>
-                                )}
                               </div>
                             </div>
                             
