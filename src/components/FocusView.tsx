@@ -23,7 +23,10 @@ import {
   ChevronUp,
   CalendarPlus,
   Plus,
-  RotateCcw
+  RotateCcw,
+  X,
+  Trash2,
+  RefreshCw
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Task } from '@/types/task';
