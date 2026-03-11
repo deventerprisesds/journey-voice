@@ -39,6 +39,10 @@ Before modifying any subsystem, read the relevant documentation first:
 
 - **Cloudflare version sync**: When changing ANY code in `cloudflare/`, bump the version string in ALL THREE files: `cloudflare/src/index.ts`, `cloudflare/src/TwilioCallSession.ts`, `.github/workflows/deploy-cloudflare.yml`. The CI health check will fail otherwise. See `cloudflare/PREFLIGHT_CHECKLIST.md`.
 
+- **Voice config sync (3-file pattern)**: `supabase/functions/_shared/config.ts` is the source of truth for timing, filler, and voice constants. Changes must be mirrored to `cloudflare/src/config.ts` and `src/config/voiceConfig.ts`. See `cloudflare/PREFLIGHT_CHECKLIST.md` §7.
+
+- **OpenAI model parity**: The realtime model must match between `supabase/functions/twilio-realtime-bridge/index.ts` and `cloudflare/src/TwilioCallSession.ts`. Mismatches cause different voice behavior on different call routes.
+
 - **Recurring calls**: `schedule_next_call` SQL function accepts `p_days_of_week INTEGER[]` and advances to next valid day. `sync_scheduled_calls` trigger extracts `daysOfWeek` from JSON. `notification-delivery` has a day-of-week guard that skips invalid days. All three must stay in sync.
 - **Notification dispatch**: `notification-delivery` owns the lifecycle. `send-unified-notification` only updates existing records, never creates new ones. See `docs/NOTIFICATIONS.md`.
 - **Voice pipeline**: Never bypass `call-context-builder.ts` for call context. It's the single source of truth for task filtering + topic ranking. See `docs/VOICE_SYSTEM.md`.
