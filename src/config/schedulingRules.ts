@@ -213,6 +213,7 @@ export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
 3. Avoid all user's busy times
 4. Respect category defaults (CAREER during business_hours, EDUCATION/VENTURES after_work, LIFE flexible)
 5. If a suggested time is in the past or conflicted, propose the next logical occurrence
+6. ALWAYS prioritize: (a) tasks with due dates within 48 hours, (b) tasks involving people or communications (meetings, calls, emails, follow-ups), and (c) tasks with financial impact (payments, invoices, contracts). Schedule these earlier in the day and give them preference over same-priority tasks.
 
 Return your suggestion with reasoning that explains why this time makes sense for this specific activity.`, // Default AI instructions
 };

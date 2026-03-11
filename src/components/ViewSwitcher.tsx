@@ -35,6 +35,12 @@ const viewOptions = [
     label: 'Focus',
     icon: Target,
     description: "Today's command center"
+  },
+  {
+    value: 'week' as ViewType,
+    label: 'Week',
+    icon: CalendarDays,
+    description: "Weekly agenda view"
   }
 ];
 

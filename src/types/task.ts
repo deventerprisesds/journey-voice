@@ -32,6 +32,7 @@ export interface Task {
   scheduling_context?: any;
   assignment_url?: string;
   assignment_id?: string;
+  pushed_count?: number;
 }
 
 export interface CalendarConnection {

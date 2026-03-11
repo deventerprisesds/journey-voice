@@ -119,3 +119,6 @@ verify_jwt = false
 
 [functions.sync-assistant-tools]
 verify_jwt = false
+
+[functions.nightly-schedule-builder]
+verify_jwt = false
