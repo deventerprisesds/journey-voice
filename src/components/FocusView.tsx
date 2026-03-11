@@ -81,13 +81,6 @@ const timeWindowStyles: Record<string, {
     borderClass: 'border-l-4 border-l-purple-400',
     textClass: 'text-purple-700 dark:text-purple-300'
   },
-  other: { 
-    icon: <Clock className="h-4 w-4" />, 
-    label: 'Other Times', 
-    bgClass: 'bg-gray-50 dark:bg-gray-950/20',
-    borderClass: 'border-l-4 border-l-gray-400',
-    textClass: 'text-gray-700 dark:text-gray-300'
-  },
 };
 
 // Priority colors matching TaskCard
