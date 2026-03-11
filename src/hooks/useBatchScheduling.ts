@@ -53,7 +53,7 @@ export const useBatchScheduling = () => {
           tasks,
           userId,
           timezone,
-          targetDate: targetDate?.toISOString()
+          targetDate: targetDate ? targetDate.toISOString().split('T')[0] : undefined
         }
       });
 
