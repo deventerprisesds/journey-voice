@@ -446,7 +446,7 @@ const FocusView: React.FC<FocusViewProps> = ({
     try {
       // 1. Fetch priority board task IDs
       const { data: mappedTasks } = await supabase
-        .from('task_topic_mappings')
+        .from('task_topic_mappings' as any)
         .select('task_id')
         .eq('user_id', user.id);
       const mappedIds = (mappedTasks || []).map((t: any) => t.task_id);
