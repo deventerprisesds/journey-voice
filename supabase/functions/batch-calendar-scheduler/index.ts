@@ -290,7 +290,7 @@ TIMEZONE: ${timezone}
 
 ⚠️ IMPORTANT: ALL scheduled times MUST use date ${targetDateISO} or later.
 ⚠️ NEVER schedule anything before ${todayISO}.
-⚠️ Use ISO format for all times: "${targetDateISO}T10:00:00-05:00"
+⚠️ Use ISO format for all times: "${targetDateISO}T10:00:00${tzOffset}"
 ==============================================
 
 TASKS TO SCHEDULE:
