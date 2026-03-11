@@ -1,70 +1,140 @@
 
 
-## Problem Confirmed
+# Combined Plan: Task Drag-and-Drop Between Groups + Protect Manual Groups
 
-From the latest run (March 11, 2026 — a Wednesday):
+## Overview
 
-| VENTURES Task | Scheduled (ET) | Correct? |
-|---|---|---|
-| Answer all business emails | 10:00 AM | Yes (keyword override: "email" → business_hours) |
-| Update on entrepreneurial consulting... | 6:00 PM | **Wrong** — after_work, not business_hours |
-| Meet with potential entrepreneurial partner | 7:00 PM | **Wrong** — after_work, not business_hours |
+This plan combines all previously discussed but unimplemented changes into one deliverable:
 
-Your settings say VENTURES → `weekends or business_hours`. On a Wednesday, `weekends` is irrelevant, so the only valid window is `business_hours` (9am-5pm). The AI ignored this and placed them at 6-7 PM.
+1. **Database**: Add `is_manual` column to `task_topic_index` and fix the cleanup trigger to skip manually created groups
+2. **Database**: Update `task_count` bookkeeping so it stays accurate
+3. **UI**: Enable dragging individual tasks between groups/subgroups in "group" view mode
+4. **UI**: Add "Ungroup" option to the batch toolbar
+5. **Code**: Set `is_manual = true` when users create groups via the dialog
+6. **Code**: Update `task_count` in `batchMoveToGroup` and `handleMoveToGroup`
 
-**Two root causes in `supabase/functions/batch-calendar-scheduler/index.ts`:**
+---
 
-1. **Line 196**: Per-task line says `"prefer"` — the AI treats this as optional
-2. **No day-of-week filtering**: On a Wednesday, `weekends` is still listed as a valid option, confusing the AI. When business_hours fills up, the AI picks any available slot instead of reporting overflow.
+## 1. Database Migration
 
-## Changes — `supabase/functions/batch-calendar-scheduler/index.ts`
+Add the `is_manual` column and replace the cleanup trigger function:
 
-### A. Add day-of-week filtering (~line 164, after `userCategoryMappings`)
+```sql
+-- Add is_manual flag (false = auto-created by classifier, true = user-created)
+ALTER TABLE public.task_topic_index
+  ADD COLUMN IF NOT EXISTS is_manual boolean DEFAULT false;
 
-Determine if target date is a weekday or weekend. For each category, filter out inapplicable windows:
-- Weekday → remove `weekends`
-- Weekend → remove `morning`, `business_hours`, `after_work`
-- If all windows filtered out → fall back to `flexible`
+-- Replace cleanup trigger: decrement counts, only auto-delete non-manual topics
+CREATE OR REPLACE FUNCTION public.cleanup_task_topic_on_delete()
+RETURNS TRIGGER AS $$
+BEGIN
+  UPDATE public.task_topic_index
+  SET task_count = task_count - 1, updated_at = now()
+  WHERE id IN (
+    SELECT topic_id FROM public.task_topic_mappings WHERE task_id = OLD.id
+  );
 
-```typescript
-const dayOfWeek = targetDateObj.getDay(); // 0=Sun, 6=Sat
-const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+  -- Only auto-delete system-generated (classifier) topics that hit zero
+  DELETE FROM public.task_topic_index
+  WHERE task_count <= 0
+    AND is_manual = false
+    AND id IN (
+      SELECT topic_id FROM public.task_topic_mappings WHERE task_id = OLD.id
+    );
 
-// Filter windows applicable to this day
-const filteredCategoryMappings: Record<string, any> = {};
-for (const [cat, mapping] of Object.entries(userCategoryMappings)) {
-  const wins = Array.isArray(mapping.defaultTimeWindow) 
-    ? mapping.defaultTimeWindow : [mapping.defaultTimeWindow];
-  const validWins = wins.filter((w: string) => {
-    if (isWeekend && ['morning', 'business_hours', 'after_work'].includes(w)) return false;
-    if (!isWeekend && w === 'weekends') return false;
-    return true;
-  });
-  filteredCategoryMappings[cat] = {
-    ...mapping,
-    defaultTimeWindow: validWins.length > 0 ? validWins : ['flexible'],
-  };
+  RETURN OLD;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+```
+
+This means:
+- Classifier-created groups still get auto-cleaned when empty (existing behavior)
+- User-created groups/subgroups survive indefinitely until manually deleted
+
+---
+
+## 2. `AddTopicGroupDialog.tsx` -- Set `is_manual: true`
+
+When a user creates a group or subgroup via the dialog, add `is_manual: true` to the upsert payload. This flags it as user-created and protects it from the cleanup trigger.
+
+---
+
+## 3. Task Drag-and-Drop Between Groups (Group View Mode)
+
+### `TopicGroupPanel.tsx`
+
+- Import `Droppable` and `Draggable` from `@hello-pangea/dnd`
+- Wrap the task list area inside each group panel with a `Droppable` component:
+  - `droppableId` = the topic group ID (e.g., `"group-{topicGroup.id}"`)
+  - `type` = `"TASK_IN_GROUP"`
+- Wrap each task row with a `Draggable`:
+  - `draggableId` = `"task-in-group-{task.id}"`
+  - The entire task row becomes the drag handle
+- Child sub-group panels remain as they are (rendered above the task droppable)
+- The "Uncategorized" pseudo-group also gets a droppable (`"group-uncategorized-{categoryKey}"`)
+
+### `Priorities.tsx` (`handleDragEnd`)
+
+Add a new branch at the top of `handleDragEnd` for `type === 'TASK_IN_GROUP'`:
+
+```
+if (type === 'TASK_IN_GROUP') {
+  const taskId = extract from draggableId
+  const srcGroupId = extract from source.droppableId
+  const dstGroupId = extract from destination.droppableId
+
+  if srcGroupId === dstGroupId: return (no-op)
+
+  // Delete old mapping
+  await supabase.from('task_topic_mappings').delete().eq('task_id', taskId)
+
+  if destination is an uncategorized group:
+    // Just remove mapping (task becomes uncategorized)
+  else:
+    // Insert new mapping to destination topic
+    await supabase.from('task_topic_mappings').insert({ task_id, topic_id: dstGroupId })
+    // Increment task_count on destination
+    // Decrement task_count on source (if it was a real group)
+
+  // Refresh data
 }
 ```
 
-Use `filteredCategoryMappings` everywhere instead of `userCategoryMappings`.
+---
 
-### B. Change "prefer" to "MUST use" (line 196)
+## 4. `task_count` Bookkeeping
 
-```
-// Before
-(prefer ${catInfo.windows}: ${catInfo.hours})
-// After  
-(MUST schedule within ${catInfo.windows}: ${catInfo.hours})
-```
+### `batchMoveToGroup` in `Priorities.tsx`
 
-### C. Strengthen overflow instruction in RULE 1 (~line 265)
+After deleting old mappings and inserting new ones:
+- Query old mappings first to find source topic IDs
+- Decrement `task_count` on each source topic
+- Increment `task_count` on the destination topic by the number of moved tasks
 
-Add after the existing RULE 1 text:
-```
-If a category's required window is fully booked, DO NOT place the task in a different window. Instead, mark it with reasoning "OVERFLOW - no available slot in required window" and schedule it for the next valid day.
-```
+### `handleMoveToGroup` in `TopicGroupPanel.tsx`
 
-### Files Modified
-- `supabase/functions/batch-calendar-scheduler/index.ts` — day-of-week filtering, strict prompt language, overflow handling
+After moving a single task:
+- Decrement `task_count` on the current group (`topicGroup.id`)
+- Increment `task_count` on the destination group
+
+---
+
+## 5. Batch Toolbar: "Ungroup" Button
+
+Add an "Ungroup" button to the batch action bar (between "Status..." and the close button):
+- Icon: `FolderMinus` from lucide-react
+- On click: deletes all `task_topic_mappings` for selected task IDs, decrements `task_count` on affected source topics
+- Shows toast: "Removed N tasks from their groups"
+- Clears selection and refreshes
+
+---
+
+## Files Changed
+
+| File | Change |
+|------|--------|
+| New migration | Add `is_manual` column; fix `cleanup_task_topic_on_delete` trigger |
+| `src/components/priorities/AddTopicGroupDialog.tsx` | Add `is_manual: true` to upsert payload |
+| `src/components/priorities/TopicGroupPanel.tsx` | Wrap tasks in `Droppable`/`Draggable` for `TASK_IN_GROUP` type; update `task_count` in `handleMoveToGroup` |
+| `src/pages/Priorities.tsx` | Handle `TASK_IN_GROUP` drag in `handleDragEnd`; update `task_count` in `batchMoveToGroup`; add "Ungroup" batch button |
 

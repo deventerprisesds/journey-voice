@@ -163,6 +163,35 @@ serve(async (req) => {
       PERSONAL: { defaultTimeWindow: ['flexible'], estimatedDuration: 60 },
     };
 
+    // ===============================================
+    // DAY-OF-WEEK FILTERING: Remove inapplicable windows
+    // On a weekday, "weekends" is irrelevant.
+    // On a weekend, "business_hours"/"after_work"/"morning" are irrelevant.
+    // ===============================================
+    const targetDayOfWeek = targetDateObj
+      ? targetDateObj.getDay()
+      : now.getDay();
+    const isWeekendDay = targetDayOfWeek === 0 || targetDayOfWeek === 6;
+
+    const filteredCategoryMappings: Record<string, any> = {};
+    for (const [cat, mapping] of Object.entries(userCategoryMappings)) {
+      const wins: string[] = Array.isArray(mapping.defaultTimeWindow)
+        ? mapping.defaultTimeWindow
+        : [mapping.defaultTimeWindow];
+      const validWins = wins.filter((w: string) => {
+        if (isWeekendDay && ['morning', 'business_hours', 'after_work'].includes(w)) return false;
+        if (!isWeekendDay && w === 'weekends') return false;
+        return true;
+      });
+      filteredCategoryMappings[cat] = {
+        ...mapping,
+        defaultTimeWindow: validWins.length > 0 ? validWins : ['flexible'],
+      };
+    }
+
+    console.log(`📆 Day-of-week filter: ${isWeekendDay ? 'WEEKEND' : 'WEEKDAY'} (day=${targetDayOfWeek})`);
+    console.log('📋 Filtered category mappings:', JSON.stringify(filteredCategoryMappings));
+
     // Helper to format hour range from time window config
     const formatWindowHours = (windowName: string): string => {
       const w = userTimeWindows[windowName];
@@ -176,9 +205,9 @@ serve(async (req) => {
       return `${fmtHr(w.start)}-${fmtHr(w.end)}`;
     };
 
-    // Build flat lookup for AI prompt per-task lines
+    // Build flat lookup for AI prompt per-task lines (using FILTERED mappings)
     const categoryWindowLookup: Record<string, { windows: string; hours: string }> = {};
-    for (const [cat, mapping] of Object.entries(userCategoryMappings)) {
+    for (const [cat, mapping] of Object.entries(filteredCategoryMappings)) {
       const wins = Array.isArray(mapping.defaultTimeWindow) ? mapping.defaultTimeWindow : [mapping.defaultTimeWindow];
       categoryWindowLookup[cat] = {
         windows: wins.join(' or '),
@@ -193,7 +222,7 @@ serve(async (req) => {
       const duration = task.estimate_minutes || task.schedulingHints?.estimatedDuration || 60;
       const catInfo = categoryWindowLookup[task.category] || categoryWindowLookup.LIFE || { windows: 'flexible', hours: 'flexible: 9am-10pm' };
       return `${i + 1}. "${task.title}" 
-   - Category: ${task.category} (prefer ${catInfo.windows}: ${catInfo.hours})
+   - Category: ${task.category} (MUST schedule within ${catInfo.windows}: ${catInfo.hours})
    - Priority: ${task.priority}
    - Duration: ${duration} minutes
    - Due: ${task.due_date || 'none'}`;
@@ -263,9 +292,10 @@ SCHEDULING RULES (FOLLOW IN THIS EXACT ORDER):
 
 === RULE 1: STRICT WINDOW ENFORCEMENT (HARD CONSTRAINT) ===
 Each task MUST be placed within its category's designated time window. This is NOT a suggestion — it is a HARD CONSTRAINT. Do NOT place tasks outside their window under any circumstances.
+If a category's required window is fully booked, DO NOT place the task in a different window. Instead, mark it with reasoning "OVERFLOW - no available slot in required window" and leave start_time/end_time as empty strings.
 
-CATEGORY → REQUIRED TIME WINDOW:
-${Object.entries(userCategoryMappings).map(([cat, mapping]) => {
+CATEGORY → REQUIRED TIME WINDOW (already filtered for ${isWeekendDay ? 'weekend' : 'weekday'}):
+${Object.entries(filteredCategoryMappings).map(([cat, mapping]) => {
       const wins = Array.isArray(mapping.defaultTimeWindow) ? mapping.defaultTimeWindow : [mapping.defaultTimeWindow];
       const windowDescs = wins.map((w: string) => `${w}: ${formatWindowHours(w)}`).join(', OR ');
       return `- ${cat} tasks → ${windowDescs}`;
