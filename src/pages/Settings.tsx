@@ -33,6 +33,7 @@ import SchedulingSettings from '@/components/SchedulingSettings';
 import VoiceAssistantSettings from '@/components/VoiceAssistantSettings';
 import ProfileSettings from '@/components/ProfileSettings';
 import { AssignmentSyncSettings } from '@/components/AssignmentSyncSettings';
+import TaskCleanupSettings from '@/components/TaskCleanupSettings';
 import { useOAuthCallback } from '@/hooks/useOAuthCallback';
 
 const tabConfig = [
