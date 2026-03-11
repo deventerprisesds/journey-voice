@@ -181,10 +181,9 @@ serve(async (req) => {
         // ==========================================
         // STEP 4: Call batch-calendar-scheduler
         // ==========================================
-        // Calculate tomorrow's date in user's timezone
-        const tomorrow = new Date(now);
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        const tomorrowISO = tomorrow.toISOString().split('T')[0];
+        // Schedule for today (the scheduler runs at midnight, filling today's slots)
+        const todayDate = new Date(now);
+        const todayISO = todayDate.toISOString().split('T')[0];
 
         const schedulerPayload = {
           tasks: topCandidates.map(t => ({
