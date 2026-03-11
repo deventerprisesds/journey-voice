@@ -626,13 +626,13 @@ const FocusView: React.FC<FocusViewProps> = ({
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={handleRerunSchedule}
+                    onClick={handleAutoFill}
                     disabled={isRerunning}
                     className="text-xs h-7"
-                    title="Re-run the scheduler to fill today's slots"
+                    title="Auto-fill open slots with priority tasks"
                   >
-                    {isRerunning ? <Clock className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3 mr-1" />}
-                    {!isRerunning && 'Re-run'}
+                    {isRerunning ? <Clock className="h-3 w-3 animate-spin" /> : <CalendarPlus className="h-3 w-3 mr-1" />}
+                    {!isRerunning && 'Auto-fill'}
                   </Button>
                   <Button
                     variant="ghost"
