@@ -604,20 +604,36 @@ const FocusView: React.FC<FocusViewProps> = ({
                                               {task.title}
                                             </span>
                                           </div>
-                                          {task.status !== 'DOING' && task.status !== 'DONE' && (
-                                            <Button
-                                              variant="ghost"
-                                              size="icon"
-                                              className="h-7 w-7 flex-shrink-0 hover:bg-green-100 dark:hover:bg-green-900"
-                                              onClick={(e) => {
-                                                e.stopPropagation();
-                                                handleStartTask(task.id);
-                                              }}
-                                              title="Start working on this task"
-                                            >
-                                              <Play className="h-4 w-4 text-green-600" />
-                                            </Button>
-                                          )}
+                                          <div className="flex items-center gap-1 flex-shrink-0">
+                                            {task.status !== 'DOING' && task.status !== 'DONE' && (
+                                              <>
+                                                <Button
+                                                  variant="ghost"
+                                                  size="icon"
+                                                  className="h-7 w-7 hover:bg-destructive/10"
+                                                  onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    handleRemoveFromSchedule(task);
+                                                  }}
+                                                  title="Remove from schedule"
+                                                >
+                                                  <X className="h-4 w-4 text-muted-foreground hover:text-destructive" />
+                                                </Button>
+                                                <Button
+                                                  variant="ghost"
+                                                  size="icon"
+                                                  className="h-7 w-7 hover:bg-green-100 dark:hover:bg-green-900"
+                                                  onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    handleStartTask(task.id);
+                                                  }}
+                                                  title="Start working on this task"
+                                                >
+                                                  <Play className="h-4 w-4 text-green-600" />
+                                                </Button>
+                                              </>
+                                            )}
+                                          </div>
                                         </div>
                                         <div className="flex items-center gap-2 mt-1 flex-wrap">
                                           <Badge variant="outline" className={cn("text-xs", categoryColors[task.category])}>
