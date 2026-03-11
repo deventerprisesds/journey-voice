@@ -316,6 +316,8 @@ ${Object.entries(filteredCategoryMappings).map(([cat, mapping]) => {
 If the task TITLE contains any of these keywords, override the category window:
 - "shopping", "mall", "grocery", "groceries", "errands" → after_work (5:00pm–10:00pm) regardless of category
 - "email", "emails", "meeting", "call", "interview", "review", "invoice", "contract" → business_hours (9:00am–5:00pm) regardless of category
+- "payment", "pay", "bill", "tax", "budget", "financial", "money", "transfer", "fee" → business_hours (9:00am–5:00pm) regardless of category — these are HIGH PRIORITY, schedule them EARLY in business_hours
+- "follow up", "follow-up", "respond", "reply", "message", "contact" → business_hours (9:00am–5:00pm) regardless of category — these are HIGH PRIORITY, schedule them EARLY in business_hours
 - "workout", "exercise", "gym", "breakfast", "morning routine" → morning (6:00am–9:00am) regardless of category
 - "dinner", "family", "social", "relax" → evening (7:00pm–10:00pm) regardless of category
 - "lunch", "brunch" → keep within 11:00am–1:30pm regardless of category
