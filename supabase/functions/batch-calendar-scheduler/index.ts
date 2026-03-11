@@ -265,12 +265,11 @@ SCHEDULING RULES (FOLLOW IN THIS EXACT ORDER):
 Each task MUST be placed within its category's designated time window. This is NOT a suggestion — it is a HARD CONSTRAINT. Do NOT place tasks outside their window under any circumstances.
 
 CATEGORY → REQUIRED TIME WINDOW:
-- CAREER tasks → business_hours: 9:00am–5:00pm weekdays ONLY
-- PROF_EDUCATION tasks → after_work: 5:00pm–10:00pm weekdays, OR weekends: 10:00am–8:00pm
-- EDUCATION tasks → after_work: 5:00pm–10:00pm weekdays, OR weekends: 10:00am–8:00pm
-- VENTURES tasks → after_work: 5:00pm–10:00pm weekdays, OR weekends: 10:00am–8:00pm
-- LIFE tasks → flexible: 9:00am–10:00pm any day (but prefer after_work 5pm-10pm for errands/shopping)
-- PERSONAL tasks → flexible: 9:00am–10:00pm any day
+${Object.entries(userCategoryMappings).map(([cat, mapping]) => {
+      const wins = Array.isArray(mapping.defaultTimeWindow) ? mapping.defaultTimeWindow : [mapping.defaultTimeWindow];
+      const windowDescs = wins.map((w: string) => `${w}: ${formatWindowHours(w)}`).join(', OR ');
+      return `- ${cat} tasks → ${windowDescs}`;
+    }).join('\n')}
 
 === RULE 2: KEYWORD OVERRIDE (TRUMPS CATEGORY WINDOW) ===
 If the task TITLE contains any of these keywords, override the category window:

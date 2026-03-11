@@ -126,9 +126,16 @@ const FocusView: React.FC<FocusViewProps> = ({
   const [isClearing, setIsClearing] = useState(false);
   const [isRerunning, setIsRerunning] = useState(false);
   const today = new Date();
-  const config = DEFAULT_SCHEDULING_CONFIG;
+  const [config, setConfig] = useState<SchedulingConfig>(DEFAULT_SCHEDULING_CONFIG);
   
   const { user } = useAuth();
+
+  // Load user's authoritative scheduling config
+  useEffect(() => {
+    if (user?.id) {
+      loadUserSchedulingConfig(user.id).then(setConfig);
+    }
+  }, [user?.id]);
   const { scheduleBatch, updateTasksWithSchedule, isScheduling } = useBatchScheduling();
 
   // Load default board ID
