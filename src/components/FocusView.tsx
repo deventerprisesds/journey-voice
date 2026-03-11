@@ -22,7 +22,8 @@ import {
   ChevronDown,
   ChevronUp,
   CalendarPlus,
-  Plus
+  Plus,
+  RotateCcw
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Task } from '@/types/task';
