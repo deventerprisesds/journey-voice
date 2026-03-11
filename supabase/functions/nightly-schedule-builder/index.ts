@@ -181,10 +181,9 @@ serve(async (req) => {
         // ==========================================
         // STEP 4: Call batch-calendar-scheduler
         // ==========================================
-        // Calculate tomorrow's date in user's timezone
-        const tomorrow = new Date(now);
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        const tomorrowISO = tomorrow.toISOString().split('T')[0];
+        // Schedule for today (the scheduler runs at midnight, filling today's slots)
+        const todayDate = new Date(now);
+        const todayISO = todayDate.toISOString().split('T')[0];
 
         const schedulerPayload = {
           tasks: topCandidates.map(t => ({
@@ -197,11 +196,11 @@ serve(async (req) => {
           })),
           userId,
           timezone,
-          targetDate: tomorrowISO,
+          targetDate: todayISO,
           allowOverflow: true,
         };
 
-        console.log(`  🤖 Calling batch-calendar-scheduler for ${tomorrowISO}...`);
+        console.log(`  🤖 Calling batch-calendar-scheduler for ${todayISO}...`);
 
         const schedulerResponse = await fetch(
           `${supabaseUrl}/functions/v1/batch-calendar-scheduler`,
@@ -258,7 +257,7 @@ serve(async (req) => {
             rolled_over: rolledOverCount,
             candidates_evaluated: scoredCandidates.length,
             scheduled: scheduled.length,
-            target_date: tomorrowISO,
+            target_date: todayISO,
             processing_ms: Date.now() - startTime,
           },
         });
