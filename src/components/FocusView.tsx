@@ -32,7 +32,8 @@ import { cn } from '@/lib/utils';
 import { Task } from '@/types/task';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
-import { DEFAULT_SCHEDULING_CONFIG } from '@/config/schedulingRules';
+import { DEFAULT_SCHEDULING_CONFIG, type SchedulingConfig } from '@/config/schedulingRules';
+import { loadUserSchedulingConfig } from '@/services/schedulingService';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { useAuth } from '@/hooks/useAuth';
 import { useBatchScheduling } from '@/hooks/useBatchScheduling';
@@ -125,9 +126,16 @@ const FocusView: React.FC<FocusViewProps> = ({
   const [isClearing, setIsClearing] = useState(false);
   const [isRerunning, setIsRerunning] = useState(false);
   const today = new Date();
-  const config = DEFAULT_SCHEDULING_CONFIG;
+  const [config, setConfig] = useState<SchedulingConfig>(DEFAULT_SCHEDULING_CONFIG);
   
   const { user } = useAuth();
+
+  // Load user's authoritative scheduling config
+  useEffect(() => {
+    if (user?.id) {
+      loadUserSchedulingConfig(user.id).then(setConfig);
+    }
+  }, [user?.id]);
   const { scheduleBatch, updateTasksWithSchedule, isScheduling } = useBatchScheduling();
 
   // Load default board ID
