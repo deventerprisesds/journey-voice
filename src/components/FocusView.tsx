@@ -227,8 +227,8 @@ const FocusView: React.FC<FocusViewProps> = ({
     else if (taskHour < windows.morning.start) assignedWindow = 'morning';
     else if (taskHour >= windows.evening.end) assignedWindow = 'evening';
     
-    // === TRACE: Window assignment ===
-    console.log(`[WINDOW-ASSIGN] "${task.title}" [${task.category}] start_time=${task.start_time} → hour=${taskHour} (${userTimezone}) → window="${assignedWindow}"`);
+    // Window assignment logged to console only (high-frequency, not DB-traced)
+    console.log(`[WINDOW-ASSIGN] "${task.title}" [${task.category}] hour=${taskHour} → window="${assignedWindow}"`);
     
     return assignedWindow;
   };
