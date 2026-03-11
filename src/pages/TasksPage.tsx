@@ -253,6 +253,14 @@ const TasksPage: React.FC = () => {
                 onTaskUpdate={handleTaskUpdate}
               />
             )}
+            {currentView === 'week' && (
+              <WeeklyAgendaView
+                tasks={tasks}
+                onTaskEdit={handleTaskEdit}
+                onStatusChange={handleStatusChange}
+                onTaskUpdate={handleTaskUpdate}
+              />
+            )}
           </>
         )}
       </main>
