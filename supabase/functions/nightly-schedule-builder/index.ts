@@ -121,8 +121,25 @@ serve(async (req) => {
 
         const mappedIds = (mappedTasks || []).map((t: any) => t.task_id);
 
-        if (mappedIds.length === 0) {
-          console.log(`  ℹ️ No priority board tasks for ${userId}`);
+        // Also fetch READY/UP_NEXT tasks regardless of priority board membership
+        const { data: readyUpNextTasks, error: readyError } = await supabase
+          .from('tasks')
+          .select('id')
+          .eq('user_id', userId)
+          .in('status', ['READY', 'UP_NEXT'])
+          .is('is_scheduled', false)
+          .is('completed_at', null);
+
+        if (readyError) {
+          console.error(`❌ Error fetching READY/UP_NEXT tasks for ${userId}:`, readyError);
+        }
+
+        // Merge and deduplicate candidate IDs
+        const readyIds = (readyUpNextTasks || []).map((t: any) => t.id);
+        const allCandidateIds = [...new Set([...mappedIds, ...readyIds])];
+
+        if (allCandidateIds.length === 0) {
+          console.log(`  ℹ️ No candidates (priority board or READY/UP_NEXT) for ${userId}`);
           results[userId] = { rolledOver: rolledOverCount, scheduled: 0 };
           continue;
         }
@@ -130,7 +147,7 @@ serve(async (req) => {
         const { data: candidates, error: candidatesError } = await supabase
           .from('tasks')
           .select('id, title, category, priority, estimate_minutes, due_date, pushed_count, status')
-          .in('id', mappedIds)
+          .in('id', allCandidateIds)
           .not('status', 'in', '("DONE","BLOCKED")')
           .is('is_scheduled', false)
           .is('completed_at', null)
