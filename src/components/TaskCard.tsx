@@ -22,7 +22,8 @@ import {
   Trash2,
   ChevronDown,
   ListTodo,
-  ExternalLink
+  ExternalLink,
+  RotateCcw
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { Task, ChecklistItem } from '@/types/task';
