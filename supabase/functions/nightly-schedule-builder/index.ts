@@ -205,8 +205,8 @@ serve(async (req) => {
           return 0;
         });
 
-        // Take top 20 candidates for scheduling
-        const topCandidates = scoredCandidates.slice(0, 20);
+        // Take top 25 candidates for scheduling (enough for ~16 usable hours)
+        const topCandidates = scoredCandidates.slice(0, 25);
 
         console.log(`  🎯 Top ${topCandidates.length} candidates selected:`);
         topCandidates.forEach((t, i) => {
