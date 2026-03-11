@@ -1,53 +1,140 @@
 
 
-## Why Tasks Were Placed in Wrong Windows
+# Combined Plan: Task Drag-and-Drop Between Groups + Protect Manual Groups
 
-The root cause is on **line 228** of `batch-calendar-scheduler/index.ts`:
+## Overview
+
+This plan combines all previously discussed but unimplemented changes into one deliverable:
+
+1. **Database**: Add `is_manual` column to `task_topic_index` and fix the cleanup trigger to skip manually created groups
+2. **Database**: Update `task_count` bookkeeping so it stays accurate
+3. **UI**: Enable dragging individual tasks between groups/subgroups in "group" view mode
+4. **UI**: Add "Ungroup" option to the batch toolbar
+5. **Code**: Set `is_manual = true` when users create groups via the dialog
+6. **Code**: Update `task_count` in `batchMoveToGroup` and `handleMoveToGroup`
+
+---
+
+## 1. Database Migration
+
+Add the `is_manual` column and replace the cleanup trigger function:
+
+```sql
+-- Add is_manual flag (false = auto-created by classifier, true = user-created)
+ALTER TABLE public.task_topic_index
+  ADD COLUMN IF NOT EXISTS is_manual boolean DEFAULT false;
+
+-- Replace cleanup trigger: decrement counts, only auto-delete non-manual topics
+CREATE OR REPLACE FUNCTION public.cleanup_task_topic_on_delete()
+RETURNS TRIGGER AS $$
+BEGIN
+  UPDATE public.task_topic_index
+  SET task_count = task_count - 1, updated_at = now()
+  WHERE id IN (
+    SELECT topic_id FROM public.task_topic_mappings WHERE task_id = OLD.id
+  );
+
+  -- Only auto-delete system-generated (classifier) topics that hit zero
+  DELETE FROM public.task_topic_index
+  WHERE task_count <= 0
+    AND is_manual = false
+    AND id IN (
+      SELECT topic_id FROM public.task_topic_mappings WHERE task_id = OLD.id
+    );
+
+  RETURN OLD;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+```
+
+This means:
+- Classifier-created groups still get auto-cleaned when empty (existing behavior)
+- User-created groups/subgroups survive indefinitely until manually deleted
+
+---
+
+## 2. `AddTopicGroupDialog.tsx` -- Set `is_manual: true`
+
+When a user creates a group or subgroup via the dialog, add `is_manual: true` to the upsert payload. This flags it as user-created and protects it from the cleanup trigger.
+
+---
+
+## 3. Task Drag-and-Drop Between Groups (Group View Mode)
+
+### `TopicGroupPanel.tsx`
+
+- Import `Droppable` and `Draggable` from `@hello-pangea/dnd`
+- Wrap the task list area inside each group panel with a `Droppable` component:
+  - `droppableId` = the topic group ID (e.g., `"group-{topicGroup.id}"`)
+  - `type` = `"TASK_IN_GROUP"`
+- Wrap each task row with a `Draggable`:
+  - `draggableId` = `"task-in-group-{task.id}"`
+  - The entire task row becomes the drag handle
+- Child sub-group panels remain as they are (rendered above the task droppable)
+- The "Uncategorized" pseudo-group also gets a droppable (`"group-uncategorized-{categoryKey}"`)
+
+### `Priorities.tsx` (`handleDragEnd`)
+
+Add a new branch at the top of `handleDragEnd` for `type === 'TASK_IN_GROUP'`:
 
 ```
-1. ${targetDateObj ? `IMPORTANT: Schedule ALL tasks for ${targetDateISO} first. Start from current time if today, or from 9am if future date.` : 'Schedule each task in its preferred time window based on category'}
+if (type === 'TASK_IN_GROUP') {
+  const taskId = extract from draggableId
+  const srcGroupId = extract from source.droppableId
+  const dstGroupId = extract from destination.droppableId
+
+  if srcGroupId === dstGroupId: return (no-op)
+
+  // Delete old mapping
+  await supabase.from('task_topic_mappings').delete().eq('task_id', taskId)
+
+  if destination is an uncategorized group:
+    // Just remove mapping (task becomes uncategorized)
+  else:
+    // Insert new mapping to destination topic
+    await supabase.from('task_topic_mappings').insert({ task_id, topic_id: dstGroupId })
+    // Increment task_count on destination
+    // Decrement task_count on source (if it was a real group)
+
+  // Refresh data
+}
 ```
 
-When `nightly-schedule-builder` calls `batch-calendar-scheduler`, it **always passes `targetDate`**, which means `targetDateObj` is always truthy. This triggers the instruction:
+---
 
-> "IMPORTANT: Schedule ALL tasks for [date] first. Start from current time if today, or from 9am if future date."
+## 4. `task_count` Bookkeeping
 
-This tells the AI to **pack everything starting at 9am sequentially**, completely overriding the category-to-window mappings listed further down in the prompt. The AI reads "Schedule ALL tasks for today first" as a higher-priority directive than "CAREER goes in business_hours, LIFE goes in flexible." So it just slots tasks one after another from 9am regardless of category.
+### `batchMoveToGroup` in `Priorities.tsx`
 
-Additionally, `allowOverflow: true` (line 200) reinforces this "just fit them all in" behavior.
+After deleting old mappings and inserting new ones:
+- Query old mappings first to find source topic IDs
+- Decrement `task_count` on each source topic
+- Increment `task_count` on the destination topic by the number of moved tasks
 
-The category windows ARE listed in the prompt (lines 237-240), but they're presented as soft guidance while the "Schedule ALL" instruction reads as a hard constraint. The AI prioritizes the explicit directive over the category hints.
+### `handleMoveToGroup` in `TopicGroupPanel.tsx`
 
-### Fix: Enforce Window Constraints in the AI Prompt
+After moving a single task:
+- Decrement `task_count` on the current group (`topicGroup.id`)
+- Increment `task_count` on the destination group
 
-**File: `supabase/functions/batch-calendar-scheduler/index.ts`**
+---
 
-1. **Rewrite line 228** — Remove the "Schedule ALL tasks first" override. Replace with strict window enforcement:
+## 5. Batch Toolbar: "Ungroup" Button
 
-```
-SCHEDULING RULES:
-1. STRICT WINDOW ENFORCEMENT: Each task MUST be placed within its category's designated time window. This is a HARD constraint, not a suggestion.
-2. KEYWORD OVERRIDE: If a task title contains activity keywords, those override the category window:
-   - Shopping/mall/grocery/errands → after_work (5pm-10pm)
-   - Email/meeting/call/interview → business_hours (9am-5pm)  
-   - Workout/exercise/breakfast → morning (6am-9am)
-   - Dinner/family/social → evening (7pm-10pm)
-3. NEVER double-book - each task must not overlap with busy slots OR other tasks
-4. Higher priority tasks get earlier slots WITHIN their window
-5. Respect due dates - schedule before deadline
-6. Leave 15-minute buffer between tasks when possible
-```
+Add an "Ungroup" button to the batch action bar (between "Status..." and the close button):
+- Icon: `FolderMinus` from lucide-react
+- On click: deletes all `task_topic_mappings` for selected task IDs, decrements `task_count` on affected source topics
+- Shows toast: "Removed N tasks from their groups"
+- Clears selection and refreshes
 
-2. **Change the category mappings section** (lines 237-240) from informational to imperative, and include keyword scan examples.
+---
 
-3. **Remove or soften `allowOverflow`** — Instead of telling the AI to cram everything in, let tasks that genuinely don't fit remain unscheduled (to be handled by the bump queue later).
-
-### Summary of Changes
+## Files Changed
 
 | File | Change |
 |------|--------|
-| `supabase/functions/batch-calendar-scheduler/index.ts` | Rewrite AI prompt lines 206-256: enforce category windows as hard constraints, add keyword override rules, remove "Schedule ALL first" directive |
-| `supabase/functions/nightly-schedule-builder/index.ts` | Change `allowOverflow: true` → `allowOverflow: false` so unschedulable tasks stay in the queue instead of being force-fit into wrong windows |
-
-This is a prompt-only fix in the edge function — no schema changes needed. After deployment, the nightly scheduler (and any manual re-trigger) will respect the window rules.
+| New migration | Add `is_manual` column; fix `cleanup_task_topic_on_delete` trigger |
+| `src/components/priorities/AddTopicGroupDialog.tsx` | Add `is_manual: true` to upsert payload |
+| `src/components/priorities/TopicGroupPanel.tsx` | Wrap tasks in `Droppable`/`Draggable` for `TASK_IN_GROUP` type; update `task_count` in `handleMoveToGroup` |
+| `src/pages/Priorities.tsx` | Handle `TASK_IN_GROUP` drag in `handleDragEnd`; update `task_count` in `batchMoveToGroup`; add "Ungroup" batch button |
 

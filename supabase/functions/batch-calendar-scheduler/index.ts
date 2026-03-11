@@ -224,20 +224,43 @@ ${tasksList}
 EXISTING BUSY SLOTS (MUST AVOID):
 ${busySlotsStr}
 
-SCHEDULING RULES:
-1. ${targetDateObj ? `IMPORTANT: Schedule ALL tasks for ${targetDateISO} first. Start from current time if today, or from 9am if future date.` : 'Schedule each task in its preferred time window based on category'}
-2. NEVER double-book - each new task must not overlap with busy slots OR other new tasks
-3. Higher priority tasks should get better time slots
-4. Respect due dates - schedule before deadline
-5. Leave 15-minute buffer between tasks when possible
-6. ${targetDateObj ? `Try to fit all tasks on ${targetDateISO}` : 'Start from tomorrow if today is mostly over'}
-${overflowInstructions}
+SCHEDULING RULES (FOLLOW IN THIS EXACT ORDER):
 
-CATEGORY TIME WINDOWS:
-- CAREER: 9am-5pm weekdays (business_hours)
-- PROF_EDUCATION/EDUCATION: 5pm-10pm weekdays (after_work) 
-- VENTURES: 5pm-10pm weekdays (after_work)
-- LIFE: 9am-10pm any day (flexible)
+=== RULE 1: STRICT WINDOW ENFORCEMENT (HARD CONSTRAINT) ===
+Each task MUST be placed within its category's designated time window. This is NOT a suggestion — it is a HARD CONSTRAINT. Do NOT place tasks outside their window under any circumstances.
+
+CATEGORY → REQUIRED TIME WINDOW:
+- CAREER tasks → business_hours: 9:00am–5:00pm weekdays ONLY
+- PROF_EDUCATION tasks → after_work: 5:00pm–10:00pm weekdays, OR weekends: 10:00am–8:00pm
+- EDUCATION tasks → after_work: 5:00pm–10:00pm weekdays, OR weekends: 10:00am–8:00pm
+- VENTURES tasks → after_work: 5:00pm–10:00pm weekdays, OR weekends: 10:00am–8:00pm
+- LIFE tasks → flexible: 9:00am–10:00pm any day (but prefer after_work 5pm-10pm for errands/shopping)
+- PERSONAL tasks → flexible: 9:00am–10:00pm any day
+
+=== RULE 2: KEYWORD OVERRIDE (TRUMPS CATEGORY WINDOW) ===
+If the task TITLE contains any of these keywords, override the category window:
+- "shopping", "mall", "grocery", "groceries", "errands" → after_work (5:00pm–10:00pm) regardless of category
+- "email", "emails", "meeting", "call", "interview", "review", "invoice", "contract" → business_hours (9:00am–5:00pm) regardless of category
+- "workout", "exercise", "gym", "breakfast", "morning routine" → morning (6:00am–9:00am) regardless of category
+- "dinner", "family", "social", "relax" → evening (7:00pm–10:00pm) regardless of category
+- "lunch", "brunch" → keep within 11:00am–1:30pm regardless of category
+- "doctor", "dentist", "bank", "post office" → business_hours (9:00am–5:00pm) regardless of category
+
+=== RULE 3: NO CONFLICTS ===
+NEVER double-book — each task must not overlap with busy slots OR other scheduled tasks.
+
+=== RULE 4: PRIORITY WITHIN WINDOW ===
+Higher priority tasks get EARLIER slots WITHIN their designated window. Urgent > High > Medium > Low.
+
+=== RULE 5: DUE DATES ===
+Respect due dates — schedule before deadline. Tasks due within 48 hours get priority placement.
+
+=== RULE 6: BUFFERS ===
+Leave 15-minute buffer between tasks when possible.
+
+=== RULE 7: OVERFLOW ===
+${targetDateObj ? `If a task cannot fit within its required window on ${targetDateISO} (window is full or no time left), mark it with reasoning "OVERFLOW: [window_name] full on ${targetDateISO}" and DO NOT schedule it. Do not force it into a different window.` : 'Schedule each task in its preferred time window based on category.'}
+${overflowInstructions}
 
 CRITICAL TIME FORMAT REQUIREMENTS:
 - Return ALL times as ISO 8601 strings WITH EXPLICIT TIMEZONE OFFSET

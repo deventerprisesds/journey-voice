@@ -197,7 +197,7 @@ serve(async (req) => {
           userId,
           timezone,
           targetDate: todayISO,
-          allowOverflow: true,
+          allowOverflow: false,
         };
 
         console.log(`  🤖 Calling batch-calendar-scheduler for ${todayISO}...`);
