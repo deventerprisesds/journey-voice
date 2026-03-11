@@ -502,14 +502,38 @@ const FocusView: React.FC<FocusViewProps> = ({
                   <h2 className="text-lg font-semibold">Today's Schedule</h2>
                   <Badge variant="secondary">{scheduledToday.length} scheduled</Badge>
                 </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setIsTimelineExpanded(!isTimelineExpanded)}
-                  className="lg:hidden"
-                >
-                  {isTimelineExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                </Button>
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleClearAll}
+                    disabled={isClearing || scheduledToday.length === 0}
+                    className="text-xs h-7 text-destructive hover:text-destructive"
+                    title="Clear all tasks from today's schedule"
+                  >
+                    {isClearing ? <Clock className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3 mr-1" />}
+                    {!isClearing && 'Clear All'}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleRerunSchedule}
+                    disabled={isRerunning}
+                    className="text-xs h-7"
+                    title="Re-run the scheduler to fill today's slots"
+                  >
+                    {isRerunning ? <Clock className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3 mr-1" />}
+                    {!isRerunning && 'Re-run'}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setIsTimelineExpanded(!isTimelineExpanded)}
+                    className="lg:hidden"
+                  >
+                    {isTimelineExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                  </Button>
+                </div>
               </div>
             </CardHeader>
 
