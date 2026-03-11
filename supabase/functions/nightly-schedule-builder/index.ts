@@ -188,8 +188,8 @@ serve(async (req) => {
           return 0;
         });
 
-        // Take top 10 candidates for scheduling
-        const topCandidates = scoredCandidates.slice(0, 10);
+        // Take top 20 candidates for scheduling
+        const topCandidates = scoredCandidates.slice(0, 20);
 
         console.log(`  🎯 Top ${topCandidates.length} candidates selected:`);
         topCandidates.forEach((t, i) => {

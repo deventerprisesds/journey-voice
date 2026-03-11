@@ -220,17 +220,11 @@ const FocusView: React.FC<FocusViewProps> = ({
     business_hours: [],
     after_work: [],
     evening: [],
-    other: [],  // Catch-all for tasks outside defined windows
   };
 
   scheduledToday.forEach(task => {
     const window = getTimeWindowForTask(task);
-    if (window && tasksByWindow[window]) {
-      tasksByWindow[window].push(task);
-    } else {
-      // Tasks outside defined time windows go to "other" bucket
-      tasksByWindow['other'].push(task);
-    }
+    tasksByWindow[window].push(task);
   });
 
   // Schedule task at specific time using timezone-aware conversion
