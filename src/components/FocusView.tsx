@@ -531,6 +531,15 @@ const FocusView: React.FC<FocusViewProps> = ({
 
       // 6. Call batch scheduler
       const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      
+      // === TRACE CHECKPOINT A: Tasks sent to scheduler ===
+      console.log('=== AUTOFILL CHECKPOINT A: Tasks sent to scheduler ===');
+      topCandidates.forEach((t: any, i: number) => {
+        console.log(`  [${i}] id=${t.id} title="${t.title}" category=${t.category} priority=${t.priority}`);
+      });
+      console.log(`  timezone=${timezone}, targetDate=today`);
+      console.log('=====================================================');
+      
       const result = await scheduleBatch(
         topCandidates.map((t: any) => ({
           id: t.id,
@@ -545,12 +554,23 @@ const FocusView: React.FC<FocusViewProps> = ({
         new Date()
       );
 
+      // === TRACE CHECKPOINT B: Raw result from scheduler ===
+      console.log('=== AUTOFILL CHECKPOINT B: Scheduler result ===');
+      result.scheduled.forEach((s: any, i: number) => {
+        const matchedTask = topCandidates[s.taskIndex];
+        console.log(`  [${i}] taskIndex=${s.taskIndex} title="${matchedTask?.title}" start=${s.start_time} end=${s.end_time} reason=${s.reasoning}`);
+      });
+      console.log('================================================');
+
       // 7. Update tasks with pre_schedule_status preservation
       if (result.scheduled.length > 0) {
         for (const slot of result.scheduled) {
           const taskId = slot.taskId || topCandidates[slot.taskIndex]?.id;
           if (!taskId) continue;
           const candidate = topCandidates.find((c: any) => c.id === taskId) || topCandidates[slot.taskIndex];
+          
+          // === TRACE CHECKPOINT C: DB update before execution ===
+          console.log(`[AUTOFILL-SAVE] taskId=${taskId} title="${candidate?.title}" start_time=${slot.start_time} end_time=${slot.end_time}`);
           
           await supabase
             .from('tasks')
@@ -564,6 +584,21 @@ const FocusView: React.FC<FocusViewProps> = ({
             })
             .eq('id', taskId);
         }
+        
+        // === TRACE CHECKPOINT D: Post-save verification ===
+        const savedIds = result.scheduled
+          .map((s: any) => s.taskId || topCandidates[s.taskIndex]?.id)
+          .filter(Boolean);
+        const { data: verification } = await supabase
+          .from('tasks')
+          .select('id, title, category, start_time, end_time, is_scheduled')
+          .in('id', savedIds);
+        console.log('=== AUTOFILL CHECKPOINT D: Post-save DB verification ===');
+        (verification || []).forEach((t: any) => {
+          console.log(`  "${t.title}" [${t.category}]: start=${t.start_time} end=${t.end_time} scheduled=${t.is_scheduled}`);
+        });
+        console.log('=======================================================');
+        
         toast.success(`Auto-filled ${result.scheduled.length} tasks into today's schedule`);
         onTaskUpdate();
       } else {

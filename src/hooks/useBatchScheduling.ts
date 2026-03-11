@@ -101,6 +101,13 @@ export const useBatchScheduling = () => {
       };
 
       console.log(`✅ Batch scheduling complete: ${result.scheduled.length}/${result.tasksCount} tasks scheduled in ${result.processingTimeMs}ms`);
+      
+      // === TRACE: Raw edge function response ===
+      console.log('=== BATCH SCHEDULER RAW RESPONSE ===');
+      result.scheduled.forEach((s, i) => {
+        console.log(`  [${i}] taskIndex=${s.taskIndex} taskId=${s.taskId || 'N/A'} start=${s.start_time} end=${s.end_time} reason=${s.reasoning}`);
+      });
+      console.log('====================================');
 
       if (result.scheduled.length > 0) {
         toast({

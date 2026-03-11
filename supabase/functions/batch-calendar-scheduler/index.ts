@@ -346,8 +346,8 @@ CRITICAL TIME FORMAT REQUIREMENTS:
 
 Return a JSON array with one entry per task in order:
 [
-  { "taskIndex": 0, "start_time": "${targetDateISO}T10:00:00-05:00", "end_time": "${targetDateISO}T11:00:00-05:00", "reasoning": "brief reason" },
-  { "taskIndex": 1, "start_time": "${targetDateISO}T14:00:00-05:00", "end_time": "${targetDateISO}T15:00:00-05:00", "reasoning": "brief reason" },
+  { "taskIndex": 0, "start_time": "${targetDateISO}T10:00:00${tzOffset}", "end_time": "${targetDateISO}T11:00:00${tzOffset}", "reasoning": "brief reason" },
+  { "taskIndex": 1, "start_time": "${targetDateISO}T14:00:00${tzOffset}", "end_time": "${targetDateISO}T15:00:00${tzOffset}", "reasoning": "brief reason" },
   ...
 ]
 
