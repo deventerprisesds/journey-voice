@@ -1,89 +1,140 @@
 
 
-# Combined Plan: Auto-Fill Scheduling + Priority Rules Update
+# Combined Plan: Task Drag-and-Drop Between Groups + Protect Manual Groups
 
-## What This Solves
-Your schedule is empty every morning because the system is pull-based. This plan combines two changes:
-1. **Nightly auto-scheduler** that rolls over incomplete tasks and fills the week from your Priorities board
-2. **Priority scheduling rules** so time-sensitive, people/comms, and financial tasks get scheduled first
+## Overview
 
----
+This plan combines all previously discussed but unimplemented changes into one deliverable:
 
-## Phase 1: Update `schedulingRules.ts` (immediate)
-
-Update the config file with three additions:
-
-**A. New keywords** in `contextRules.keywords` (~line 135):
-- Financial: `payment`, `invoice`, `bill`, `tax`, `budget` → `['business_hours', 'LIFE']`
-- Comms: `email`, `follow_up`, `respond`, `reply`, `text` → `['business_hours', 'CAREER']`
-
-**B. New priority tier** in `priorityMappings` (~line 186):
-- Add `urgent: 4`
-
-**C. New AI instruction** appended to `customAIInstructions` (~line 192):
-```
-6. ALWAYS prioritize: (a) tasks with due dates within 48 hours, (b) tasks involving
-   people or communications (meetings, calls, emails, follow-ups), and (c) tasks with
-   financial impact (payments, invoices, contracts). Schedule these earlier in the day
-   and give them preference over same-priority tasks.
-```
+1. **Database**: Add `is_manual` column to `task_topic_index` and fix the cleanup trigger to skip manually created groups
+2. **Database**: Update `task_count` bookkeeping so it stays accurate
+3. **UI**: Enable dragging individual tasks between groups/subgroups in "group" view mode
+4. **UI**: Add "Ungroup" option to the batch toolbar
+5. **Code**: Set `is_manual = true` when users create groups via the dialog
+6. **Code**: Update `task_count` in `batchMoveToGroup` and `handleMoveToGroup`
 
 ---
 
-## Phase 2: Database Migration
+## 1. Database Migration
 
-Add `pushed_count` column to the `tasks` table:
+Add the `is_manual` column and replace the cleanup trigger function:
+
 ```sql
-ALTER TABLE public.tasks ADD COLUMN IF NOT EXISTS pushed_count integer DEFAULT 0;
+-- Add is_manual flag (false = auto-created by classifier, true = user-created)
+ALTER TABLE public.task_topic_index
+  ADD COLUMN IF NOT EXISTS is_manual boolean DEFAULT false;
+
+-- Replace cleanup trigger: decrement counts, only auto-delete non-manual topics
+CREATE OR REPLACE FUNCTION public.cleanup_task_topic_on_delete()
+RETURNS TRIGGER AS $$
+BEGIN
+  UPDATE public.task_topic_index
+  SET task_count = task_count - 1, updated_at = now()
+  WHERE id IN (
+    SELECT topic_id FROM public.task_topic_mappings WHERE task_id = OLD.id
+  );
+
+  -- Only auto-delete system-generated (classifier) topics that hit zero
+  DELETE FROM public.task_topic_index
+  WHERE task_count <= 0
+    AND is_manual = false
+    AND id IN (
+      SELECT topic_id FROM public.task_topic_mappings WHERE task_id = OLD.id
+    );
+
+  RETURN OLD;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+```
+
+This means:
+- Classifier-created groups still get auto-cleaned when empty (existing behavior)
+- User-created groups/subgroups survive indefinitely until manually deleted
+
+---
+
+## 2. `AddTopicGroupDialog.tsx` -- Set `is_manual: true`
+
+When a user creates a group or subgroup via the dialog, add `is_manual: true` to the upsert payload. This flags it as user-created and protects it from the cleanup trigger.
+
+---
+
+## 3. Task Drag-and-Drop Between Groups (Group View Mode)
+
+### `TopicGroupPanel.tsx`
+
+- Import `Droppable` and `Draggable` from `@hello-pangea/dnd`
+- Wrap the task list area inside each group panel with a `Droppable` component:
+  - `droppableId` = the topic group ID (e.g., `"group-{topicGroup.id}"`)
+  - `type` = `"TASK_IN_GROUP"`
+- Wrap each task row with a `Draggable`:
+  - `draggableId` = `"task-in-group-{task.id}"`
+  - The entire task row becomes the drag handle
+- Child sub-group panels remain as they are (rendered above the task droppable)
+- The "Uncategorized" pseudo-group also gets a droppable (`"group-uncategorized-{categoryKey}"`)
+
+### `Priorities.tsx` (`handleDragEnd`)
+
+Add a new branch at the top of `handleDragEnd` for `type === 'TASK_IN_GROUP'`:
+
+```
+if (type === 'TASK_IN_GROUP') {
+  const taskId = extract from draggableId
+  const srcGroupId = extract from source.droppableId
+  const dstGroupId = extract from destination.droppableId
+
+  if srcGroupId === dstGroupId: return (no-op)
+
+  // Delete old mapping
+  await supabase.from('task_topic_mappings').delete().eq('task_id', taskId)
+
+  if destination is an uncategorized group:
+    // Just remove mapping (task becomes uncategorized)
+  else:
+    // Insert new mapping to destination topic
+    await supabase.from('task_topic_mappings').insert({ task_id, topic_id: dstGroupId })
+    // Increment task_count on destination
+    // Decrement task_count on source (if it was a real group)
+
+  // Refresh data
+}
 ```
 
 ---
 
-## Phase 3: Nightly Auto-Scheduler Edge Function
+## 4. `task_count` Bookkeeping
 
-New edge function `nightly-schedule-builder` that:
+### `batchMoveToGroup` in `Priorities.tsx`
 
-1. **Rolls over incomplete tasks** — finds tasks where `start_time < now()` and status is not DONE, clears their `start_time`/`end_time`, sets `is_scheduled = false`, increments `pushed_count`
-2. **Gathers candidates** ordered by: pushed tasks first, then `UP_NEXT`, then `READY`/`TODO` sorted by priority weight and due date
-3. **Applies priority boost** — tasks matching comms/financial/deadline-within-48h keywords get sorted to the top
-4. **Calls `batch-calendar-scheduler`** internally with candidates for the next 5 weekdays, respecting busy slots from `external_calendar_events`
-5. **Logs** a `nightly_schedule_built` entry to `activity_log`
+After deleting old mappings and inserting new ones:
+- Query old mappings first to find source topic IDs
+- Decrement `task_count` on each source topic
+- Increment `task_count` on the destination topic by the number of moved tasks
 
-Triggered via `pg_cron` at 11 PM user timezone (reads from `user_scheduling_prefs.timezone`).
+### `handleMoveToGroup` in `TopicGroupPanel.tsx`
 
----
-
-## Phase 4: Weekly Agenda View (UI)
-
-New `WeeklyAgendaView` component accessible from the ViewSwitcher:
-
-- Mon–Sun columns (stacked cards on mobile since viewport is 411px)
-- Tasks grouped by time window (Morning / Business / After Work / Evening) using existing `timeWindowStyles` from FocusView
-- Empty slots shown as "Available" with quick-add
-- "Pushed ×N" badges on rolled-over tasks
-- Drag between days to reschedule (reuses `@hello-pangea/dnd` already installed)
+After moving a single task:
+- Decrement `task_count` on the current group (`topicGroup.id`)
+- Increment `task_count` on the destination group
 
 ---
 
-## Phase 5: Accountability Integration
+## 5. Batch Toolbar: "Ungroup" Button
 
-- **TaskCard + FocusView**: Show "Pushed ×N" badge when `pushed_count > 0`
-- **Iris voice**: During morning standup, mention tasks pushed 3+ times ("You've pushed 'Finish report' 3 times now — want to tackle it today or drop it?")
-- **Settings**: Add toggle "Auto-fill my schedule nightly" and "Max tasks per day" slider to SchedulingSettings
+Add an "Ungroup" button to the batch action bar (between "Status..." and the close button):
+- Icon: `FolderMinus` from lucide-react
+- On click: deletes all `task_topic_mappings` for selected task IDs, decrements `task_count` on affected source topics
+- Shows toast: "Removed N tasks from their groups"
+- Clears selection and refreshes
 
 ---
 
-## File Changes Summary
+## Files Changed
 
 | File | Change |
 |------|--------|
-| `src/config/schedulingRules.ts` | Add keywords, `urgent: 4`, updated AI instructions |
-| Migration SQL | Add `pushed_count` to tasks |
-| `supabase/functions/nightly-schedule-builder/index.ts` | New edge function |
-| `supabase/config.toml` | Add function config |
-| `src/components/WeeklyAgendaView.tsx` | New component |
-| `src/components/ViewSwitcher.tsx` | Add "Week Agenda" option |
-| `src/components/TaskCard.tsx` | Pushed badge |
-| `src/components/FocusView.tsx` | Pushed badge |
-| pg_cron SQL (via insert tool) | Schedule nightly job |
+| New migration | Add `is_manual` column; fix `cleanup_task_topic_on_delete` trigger |
+| `src/components/priorities/AddTopicGroupDialog.tsx` | Add `is_manual: true` to upsert payload |
+| `src/components/priorities/TopicGroupPanel.tsx` | Wrap tasks in `Droppable`/`Draggable` for `TASK_IN_GROUP` type; update `task_count` in `handleMoveToGroup` |
+| `src/pages/Priorities.tsx` | Handle `TASK_IN_GROUP` drag in `handleDragEnd`; update `task_count` in `batchMoveToGroup`; add "Ungroup" batch button |
 

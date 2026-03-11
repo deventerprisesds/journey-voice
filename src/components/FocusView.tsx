@@ -22,7 +22,8 @@ import {
   ChevronDown,
   ChevronUp,
   CalendarPlus,
-  Plus
+  Plus,
+  RotateCcw
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Task } from '@/types/task';
@@ -725,6 +726,12 @@ const FocusView: React.FC<FocusViewProps> = ({
                                     <span className="text-xs text-muted-foreground">
                                       Due {format(parseISO(task.due_date), 'MMM d')}
                                     </span>
+                                  )}
+                                  {task.pushed_count && task.pushed_count > 0 && (
+                                    <Badge variant="outline" className="text-xs bg-destructive/10 text-destructive border-destructive/20">
+                                      <RotateCcw className="h-3 w-3 mr-0.5" />
+                                      ×{task.pushed_count}
+                                    </Badge>
                                   )}
                                 </div>
                               </div>

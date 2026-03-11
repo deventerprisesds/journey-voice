@@ -4,6 +4,7 @@ import { useAuth } from '@/hooks/useAuth';
 import TabbedKanbanBoard from '@/components/TabbedKanbanBoard';
 import TaskGridView from '@/components/EnhancedTaskGridView';
 import FocusView from '@/components/FocusView';
+import WeeklyAgendaView from '@/components/WeeklyAgendaView';
 import TaskDetailModal from '@/components/TaskDetailModal';
 import ViewSwitcher, { ViewType } from '@/components/ViewSwitcher';
 import { supabase } from '@/integrations/supabase/client';
@@ -23,7 +24,7 @@ const TasksPage: React.FC = () => {
 
   // Sync view with URL param
   useEffect(() => {
-    if (viewParam && ['kanban', 'grid', 'focus'].includes(viewParam)) {
+    if (viewParam && ['kanban', 'grid', 'focus', 'week'].includes(viewParam)) {
       setCurrentView(viewParam);
     }
   }, [viewParam]);
@@ -210,6 +211,7 @@ const TasksPage: React.FC = () => {
               <p className="text-xs md:text-sm text-muted-foreground hidden sm:block">
                 {currentView === 'kanban' ? 'Kanban Board' : 
                  currentView === 'grid' ? 'List View' : 
+                 currentView === 'week' ? 'Weekly Agenda' :
                  "Today's Command Center"}
               </p>
             </div>
@@ -245,6 +247,14 @@ const TasksPage: React.FC = () => {
             )}
             {currentView === 'focus' && (
               <FocusView
+                tasks={tasks}
+                onTaskEdit={handleTaskEdit}
+                onStatusChange={handleStatusChange}
+                onTaskUpdate={handleTaskUpdate}
+              />
+            )}
+            {currentView === 'week' && (
+              <WeeklyAgendaView
                 tasks={tasks}
                 onTaskEdit={handleTaskEdit}
                 onStatusChange={handleStatusChange}

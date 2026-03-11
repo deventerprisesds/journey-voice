@@ -22,7 +22,8 @@ import {
   Trash2,
   ChevronDown,
   ListTodo,
-  ExternalLink
+  ExternalLink,
+  RotateCcw
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { Task, ChecklistItem } from '@/types/task';
@@ -378,6 +379,12 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onStatusChange, onEdit, onSch
             <Badge variant="destructive" className="text-xs">
               <AlertTriangle className="h-3 w-3 mr-1" />
               Blocked ({task.blocked_by?.length})
+            </Badge>
+          )}
+          {task.pushed_count && task.pushed_count > 0 && (
+            <Badge variant="outline" className="text-xs bg-destructive/10 text-destructive border-destructive/20">
+              <RotateCcw className="h-3 w-3 mr-1" />
+              Pushed ×{task.pushed_count}
             </Badge>
           )}
         </div>

@@ -4,11 +4,12 @@ import { Badge } from '@/components/ui/badge';
 import { 
   LayoutGrid, 
   List,
-  Target
+  Target,
+  CalendarDays
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-export type ViewType = 'kanban' | 'grid' | 'focus';
+export type ViewType = 'kanban' | 'grid' | 'focus' | 'week';
 
 interface ViewSwitcherProps {
   currentView: ViewType;
@@ -34,6 +35,12 @@ const viewOptions = [
     label: 'Focus',
     icon: Target,
     description: "Today's command center"
+  },
+  {
+    value: 'week' as ViewType,
+    label: 'Week',
+    icon: CalendarDays,
+    description: "Weekly agenda view"
   }
 ];
 

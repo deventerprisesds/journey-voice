@@ -3492,6 +3492,7 @@ export type Database = {
           id: string
           is_scheduled: boolean
           priority: Database["public"]["Enums"]["task_priority"]
+          pushed_count: number | null
           reminder_minutes: number | null
           scheduling_context: Json | null
           source_id: string | null
@@ -3515,6 +3516,7 @@ export type Database = {
           id?: string
           is_scheduled?: boolean
           priority?: Database["public"]["Enums"]["task_priority"]
+          pushed_count?: number | null
           reminder_minutes?: number | null
           scheduling_context?: Json | null
           source_id?: string | null
@@ -3538,6 +3540,7 @@ export type Database = {
           id?: string
           is_scheduled?: boolean
           priority?: Database["public"]["Enums"]["task_priority"]
+          pushed_count?: number | null
           reminder_minutes?: number | null
           scheduling_context?: Json | null
           source_id?: string | null

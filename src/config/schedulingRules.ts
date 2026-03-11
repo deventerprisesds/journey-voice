@@ -182,8 +182,25 @@ export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
       doctor: ['business_hours', 'LIFE'],
       dentist: ['business_hours', 'LIFE'],
       appointment: ['flexible', 'LIFE'],
+      
+      // Financial impact keywords
+      payment: ['business_hours', 'LIFE'],
+      invoice: ['business_hours', 'CAREER'],
+      bill: ['business_hours', 'LIFE'],
+      tax: ['business_hours', 'LIFE'],
+      budget: ['business_hours', 'CAREER'],
+      contract: ['business_hours', 'CAREER'],
+      
+      // Communications / people keywords
+      email: ['business_hours', 'CAREER'],
+      follow_up: ['business_hours', 'CAREER'],
+      respond: ['business_hours', 'CAREER'],
+      reply: ['business_hours', 'CAREER'],
+      text: ['business_hours', 'LIFE'],
+      message: ['business_hours', 'CAREER'],
     },
     priorityMappings: {
+      urgent: 4,
       high: 3,
       medium: 2,
       low: 1,
@@ -196,6 +213,7 @@ export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
 3. Avoid all user's busy times
 4. Respect category defaults (CAREER during business_hours, EDUCATION/VENTURES after_work, LIFE flexible)
 5. If a suggested time is in the past or conflicted, propose the next logical occurrence
+6. ALWAYS prioritize: (a) tasks with due dates within 48 hours, (b) tasks involving people or communications (meetings, calls, emails, follow-ups), and (c) tasks with financial impact (payments, invoices, contracts). Schedule these earlier in the day and give them preference over same-priority tasks.
 
 Return your suggestion with reasoning that explains why this time makes sense for this specific activity.`, // Default AI instructions
 };
