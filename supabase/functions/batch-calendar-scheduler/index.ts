@@ -163,6 +163,35 @@ serve(async (req) => {
       PERSONAL: { defaultTimeWindow: ['flexible'], estimatedDuration: 60 },
     };
 
+    // ===============================================
+    // DAY-OF-WEEK FILTERING: Remove inapplicable windows
+    // On a weekday, "weekends" is irrelevant.
+    // On a weekend, "business_hours"/"after_work"/"morning" are irrelevant.
+    // ===============================================
+    const targetDayOfWeek = targetDateObj
+      ? targetDateObj.getDay()
+      : now.getDay();
+    const isWeekendDay = targetDayOfWeek === 0 || targetDayOfWeek === 6;
+
+    const filteredCategoryMappings: Record<string, any> = {};
+    for (const [cat, mapping] of Object.entries(userCategoryMappings)) {
+      const wins: string[] = Array.isArray(mapping.defaultTimeWindow)
+        ? mapping.defaultTimeWindow
+        : [mapping.defaultTimeWindow];
+      const validWins = wins.filter((w: string) => {
+        if (isWeekendDay && ['morning', 'business_hours', 'after_work'].includes(w)) return false;
+        if (!isWeekendDay && w === 'weekends') return false;
+        return true;
+      });
+      filteredCategoryMappings[cat] = {
+        ...mapping,
+        defaultTimeWindow: validWins.length > 0 ? validWins : ['flexible'],
+      };
+    }
+
+    console.log(`📆 Day-of-week filter: ${isWeekendDay ? 'WEEKEND' : 'WEEKDAY'} (day=${targetDayOfWeek})`);
+    console.log('📋 Filtered category mappings:', JSON.stringify(filteredCategoryMappings));
+
     // Helper to format hour range from time window config
     const formatWindowHours = (windowName: string): string => {
       const w = userTimeWindows[windowName];
