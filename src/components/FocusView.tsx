@@ -451,13 +451,12 @@ const FocusView: React.FC<FocusViewProps> = ({
         .eq('user_id', user.id);
       const mappedIds = (mappedTasks || []).map((t: any) => t.task_id);
 
-      // 2. Fetch READY/UP_NEXT tasks (not already scheduled, not done)
+      // 2. Fetch READY/UP_NEXT/TODO tasks (TODO captures cleared tasks missing pre_schedule_status)
       const { data: readyTasks } = await supabase
         .from('tasks')
         .select('id')
         .eq('user_id', user.id)
-        .in('status', ['READY', 'UP_NEXT'])
-        .neq('status', 'DONE')
+        .in('status', ['READY', 'UP_NEXT', 'TODO'])
         .is('completed_at', null);
       const readyIds = (readyTasks || []).map((t: any) => t.id);
 
