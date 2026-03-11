@@ -379,6 +379,83 @@ const FocusView: React.FC<FocusViewProps> = ({
     }
   };
 
+  // Remove a single task from schedule, restoring its original status
+  const handleRemoveFromSchedule = async (task: Task) => {
+    try {
+      const preStatus = (task.scheduling_context as any)?.pre_schedule_status || task.status;
+      const restoredStatus = preStatus === 'TODO' ? 'TODO' : preStatus;
+      
+      const { error } = await supabase
+        .from('tasks')
+        .update({
+          start_time: null,
+          end_time: null,
+          is_scheduled: false,
+          status: restoredStatus,
+          scheduling_context: null,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', task.id);
+
+      if (error) throw error;
+      toast.success(`"${task.title}" removed from schedule`);
+      onTaskUpdate();
+    } catch (error) {
+      console.error('Error removing task from schedule:', error);
+      toast.error('Failed to remove task');
+    }
+  };
+
+  // Clear all scheduled tasks for today, restoring original statuses
+  const handleClearAll = async () => {
+    if (scheduledToday.length === 0) return;
+    if (!window.confirm(`Remove all ${scheduledToday.length} tasks from today's schedule? Their original statuses will be restored.`)) return;
+    
+    setIsClearing(true);
+    try {
+      for (const task of scheduledToday) {
+        const preStatus = (task.scheduling_context as any)?.pre_schedule_status || task.status;
+        const restoredStatus = preStatus === 'TODO' ? 'TODO' : preStatus;
+        
+        await supabase
+          .from('tasks')
+          .update({
+            start_time: null,
+            end_time: null,
+            is_scheduled: false,
+            status: restoredStatus,
+            scheduling_context: null,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', task.id);
+      }
+      toast.success(`Cleared ${scheduledToday.length} tasks from schedule`);
+      onTaskUpdate();
+    } catch (error) {
+      console.error('Error clearing schedule:', error);
+      toast.error('Failed to clear schedule');
+    } finally {
+      setIsClearing(false);
+    }
+  };
+
+  // Re-run the nightly schedule builder on demand
+  const handleRerunSchedule = async () => {
+    setIsRerunning(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('nightly-schedule-builder');
+      if (error) throw error;
+      const scheduled = data?.results ? Object.values(data.results).reduce((sum: number, r: any) => sum + (r.scheduled || 0), 0) : 0;
+      toast.success(`Schedule rebuilt — ${scheduled} tasks scheduled`);
+      onTaskUpdate();
+    } catch (error) {
+      console.error('Error re-running schedule:', error);
+      toast.error('Failed to re-run schedule');
+    } finally {
+      setIsRerunning(false);
+    }
+  };
+
   // Get drop time slots for a window
   const getDropSlotsForWindow = (windowName: string) => {
     const window = config.timeWindows[windowName as keyof typeof config.timeWindows];
