@@ -422,7 +422,7 @@ const FocusView: React.FC<FocusViewProps> = ({
   // Helper: write trace to error_log table for remote visibility
   const writeTrace = async (checkpoint: string, traceType: string, data: any) => {
     try {
-      await supabase.from('error_log').insert({
+      const { error } = await supabase.from('error_log').insert({
         error_type: traceType,
         error_message: checkpoint,
         source: 'frontend',
@@ -431,6 +431,9 @@ const FocusView: React.FC<FocusViewProps> = ({
         context: data,
         session_id: `focus_${format(new Date(), 'yyyyMMdd_HHmmss')}`,
       });
+      if (error) {
+        console.warn('[TRACE] DB write failed:', error.message, error.details);
+      }
     } catch (e) {
       console.warn('[TRACE] Failed to write trace to DB:', e);
     }
