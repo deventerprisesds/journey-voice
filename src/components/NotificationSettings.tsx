@@ -531,34 +531,30 @@ const NotificationSettings = () => {
       
       console.log('Testing Slack notification:', useCustomSlackWebhook ? 'using custom webhook' : 'using server secret');
       
-      const { data, error } = await supabase.functions.invoke('send-unified-notification', {
+      await supabase.functions.invoke('send-unified-notification', {
         body: {
           userId: user?.id || 'demo-user',
           title: '🧪 Test Slack Notification',
           body: 'Test Slack notification - Slack notifications will be sent here when enabled.',
           channels: ['SLACK'],
           data: { type: 'test_notification' },
+          // Only pass webhook if using custom mode, otherwise backend uses its secret
           slackWebhook: useCustomSlackWebhook ? slackWebhookUrl : undefined,
           userProfile: { email, phone }
         }
       });
 
-      if (error) throw error;
-
-      const slackResult = data?.channelResults?.slack;
-      if (slackResult?.success) {
-        toast({
-          title: "✓ Slack Delivered",
-          description: slackResult.details || "Check your Slack channel for the notification.",
-        });
-      } else {
-        throw new Error(slackResult?.error || 'Slack delivery failed - check webhook configuration');
-      }
-    } catch (error: any) {
+      toast({
+        title: "Test Slack notification sent",
+        description: useCustomSlackWebhook 
+          ? "Check your custom Slack channel for the notification."
+          : "Check your Slack channel for the notification (using server webhook).",
+      });
+    } catch (error) {
       console.error('Error sending test Slack notification:', error);
       toast({
-        title: "Slack Test Failed",
-        description: error.message || "Failed to send test Slack notification.",
+        title: "Error",
+        description: "Failed to send test Slack notification.",
         variant: "destructive",
       });
     }
@@ -587,7 +583,7 @@ const NotificationSettings = () => {
 
     setIsTestingPush(true);
     try {
-      const { data, error } = await supabase.functions.invoke('send-push-notification', {
+      const { error } = await supabase.functions.invoke('send-push-notification', {
         body: {
           userId: user?.id,
           title: '🧪 Test Push Notification',
@@ -598,24 +594,14 @@ const NotificationSettings = () => {
 
       if (error) throw error;
 
-      if (data?.success && data?.delivered > 0) {
-        toast({
-          title: "✓ Push Delivered",
-          description: `Sent to ${data.delivered} endpoint(s). If you don't see the notification, check your browser notification permissions.`,
-        });
-      } else if (data?.delivered === 0) {
-        toast({
-          title: "No Active Subscriptions",
-          description: "Push was sent but no subscriptions found. Try re-enabling push notifications.",
-          variant: "destructive",
-        });
-      } else {
-        throw new Error(data?.error || 'Push delivery failed');
-      }
+      toast({
+        title: "Test Push Sent",
+        description: "Check your browser/device for the notification.",
+      });
     } catch (error: any) {
       console.error('Error sending test push:', error);
       toast({
-        title: "Push Test Failed",
+        title: "Test Failed",
         description: error.message || "Could not send test push notification.",
         variant: "destructive",
       });

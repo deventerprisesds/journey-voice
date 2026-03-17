@@ -572,74 +572,7 @@ serve(async (req) => {
     }
     // ============== END OUTLOOK HANDLING ==============
 
-    // ============== HANDLE SLACK DIRECTLY ==============
-    if (remainingChannels.includes('SLACK')) {
-      const directSlackUrl = slackWebhook || Deno.env.get('SLACK_WEBHOOK_URL');
-      if (directSlackUrl) {
-        console.log('[Slack] Sending direct Slack notification...');
-        try {
-          const slackPayload = {
-            text: `*${title || 'Notification'}*\n${body || ''}`,
-          };
-          const slackResp = await fetch(directSlackUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(slackPayload),
-          });
-          const slackText = await slackResp.text();
-          if (slackResp.ok) {
-            console.log('[Slack] Direct delivery success:', slackText);
-            result.channelResults.slack = { success: true, details: 'Delivered directly via Slack webhook' };
-          } else {
-            console.error('[Slack] Direct delivery failed:', slackResp.status, slackText);
-            result.channelResults.slack = { success: false, error: `Slack webhook ${slackResp.status}: ${slackText}` };
-            result.errors.push(`Slack: ${slackResp.status} ${slackText}`);
-          }
-        } catch (slackErr: any) {
-          console.error('[Slack] Direct delivery error:', slackErr);
-          result.channelResults.slack = { success: false, error: slackErr.message };
-          result.errors.push(`Slack: ${slackErr.message}`);
-        }
-        remainingChannels = remainingChannels.filter(c => c !== 'SLACK');
-      }
-    }
-    // ============== END SLACK HANDLING ==============
-
-    // ============== HANDLE PUSH DIRECTLY ==============
-    if (remainingChannels.includes('PUSH')) {
-      console.log('[Push] Sending direct push notification...');
-      try {
-        const pushResp = await fetch(
-          `${Deno.env.get('SUPABASE_URL')}/functions/v1/send-push-notification`,
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
-            },
-            body: JSON.stringify({ userId, title, body, data }),
-          }
-        );
-        const pushResult = await pushResp.json();
-        if (pushResp.ok && pushResult?.success) {
-          console.log('[Push] Direct delivery success:', pushResult);
-          result.channelResults.push = { 
-            success: true, 
-            details: `Delivered to ${pushResult.delivered || 0} endpoint(s)` 
-          };
-        } else {
-          console.error('[Push] Direct delivery failed:', pushResult);
-          result.channelResults.push = { success: false, error: pushResult?.error || 'Push failed' };
-        }
-      } catch (pushErr: any) {
-        console.error('[Push] Direct delivery error:', pushErr);
-        result.channelResults.push = { success: false, error: pushErr.message };
-      }
-      remainingChannels = remainingChannels.filter(c => c !== 'PUSH');
-    }
-    // ============== END PUSH HANDLING ==============
-
-    // Only call external webhook for remaining channels (EMAIL, GOOGLE_EVENT)
+    // Only call external webhook for remaining channels
     if (remainingChannels.length > 0) {
       const webhookResult = await callUnifiedWebhook({
         userId,
