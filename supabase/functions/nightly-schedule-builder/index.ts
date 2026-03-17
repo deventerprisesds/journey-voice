@@ -27,6 +27,110 @@ function isDueSoon(dueDate: string | null, hoursThreshold = 48): boolean {
   return due <= cutoff;
 }
 
+// ==========================================
+// CAPACITY HELPERS
+// ==========================================
+
+interface TimeWindow {
+  start: number; // hour (0-23)
+  end: number;   // hour (0-23)
+  days: number[]; // 0=Sun, 1=Mon, ...6=Sat
+}
+
+interface WindowCapacity {
+  totalMinutes: number;
+  usedMinutes: number;
+  remainingMinutes: number;
+}
+
+/**
+ * Get active windows for the target day based on user config,
+ * then compute remaining capacity by subtracting already-scheduled items.
+ */
+function getActiveWindows(
+  timeWindows: Record<string, TimeWindow>,
+  targetDayOfWeek: number
+): Record<string, { start: number; end: number; totalMinutes: number }> {
+  const active: Record<string, { start: number; end: number; totalMinutes: number }> = {};
+  for (const [name, win] of Object.entries(timeWindows)) {
+    if (name === 'flexible') continue; // flexible is a fallback, not a real window
+    if (!win.days || !win.days.includes(targetDayOfWeek)) continue;
+    const total = (win.end - win.start) * 60;
+    if (total > 0) {
+      active[name] = { start: win.start, end: win.end, totalMinutes: total };
+    }
+  }
+  return active;
+}
+
+/**
+ * Calculate how many minutes of each window are already occupied
+ * by scheduled tasks (start_time/end_time overlap).
+ */
+function computeUsedMinutes(
+  scheduledTasks: Array<{ start_time: string; end_time: string; estimate_minutes?: number }>,
+  windows: Record<string, { start: number; end: number; totalMinutes: number }>,
+  targetDateStr: string, // YYYY-MM-DD
+  timezone: string
+): Record<string, WindowCapacity> {
+  const capacities: Record<string, WindowCapacity> = {};
+
+  for (const [name, win] of Object.entries(windows)) {
+    capacities[name] = {
+      totalMinutes: win.totalMinutes,
+      usedMinutes: 0,
+      remainingMinutes: win.totalMinutes,
+    };
+  }
+
+  for (const task of scheduledTasks) {
+    if (!task.start_time || !task.end_time) continue;
+    const taskStart = new Date(task.start_time);
+    const taskEnd = new Date(task.end_time);
+    const taskDuration = (taskEnd.getTime() - taskStart.getTime()) / 60000;
+
+    // Determine which hour the task starts in (in user's timezone)
+    const taskHour = parseInt(
+      taskStart.toLocaleString('en-US', { timeZone: timezone, hour: 'numeric', hour12: false })
+    );
+
+    // Find the window this task falls into
+    for (const [name, win] of Object.entries(windows)) {
+      if (taskHour >= win.start && taskHour < win.end) {
+        capacities[name].usedMinutes += taskDuration;
+        capacities[name].remainingMinutes = Math.max(
+          0,
+          capacities[name].totalMinutes - capacities[name].usedMinutes
+        );
+        break;
+      }
+    }
+  }
+
+  return capacities;
+}
+
+/**
+ * Determine the best window for a task based on its category and the user's categoryMappings.
+ * Returns ordered list of preferred windows.
+ */
+function getPreferredWindows(
+  category: string,
+  categoryMappings: Record<string, { defaultTimeWindow?: string[] }>,
+  activeWindowNames: string[]
+): string[] {
+  const mapping = categoryMappings[category];
+  if (!mapping?.defaultTimeWindow) return activeWindowNames; // fallback to any
+  
+  // Filter to only windows that are active today, preserving preference order
+  const preferred = mapping.defaultTimeWindow.filter(
+    (w: string) => w !== 'flexible' && activeWindowNames.includes(w)
+  );
+  
+  // If none of the preferred windows are active today, fall back to all active
+  return preferred.length > 0 ? preferred : activeWindowNames;
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -56,6 +160,9 @@ serve(async (req) => {
     for (const userPref of users) {
       const userId = userPref.user_id;
       const timezone = userPref.timezone || 'America/New_York';
+      const config = userPref.config || {};
+      const timeWindows: Record<string, TimeWindow> = config.timeWindows || {};
+      const categoryMappings: Record<string, any> = config.categoryMappings || {};
       
       console.log(`\n🌙 Processing nightly schedule for user ${userId} (${timezone})`);
       
@@ -107,10 +214,71 @@ serve(async (req) => {
         console.log(`  📋 Rolled over ${rolledOverCount} tasks`);
 
         // ==========================================
-        // STEP 2: GATHER CANDIDATES from priority board
+        // STEP 2: COMPUTE WINDOW CAPACITY
+        // ==========================================
+        const todayDate = new Date(now);
+        const todayISO = todayDate.toISOString().split('T')[0];
+        // Get day of week in user's timezone
+        const targetDayOfWeek = parseInt(
+          now.toLocaleString('en-US', { timeZone: timezone, weekday: 'short' })
+            .length > 0
+            ? new Date(now.toLocaleString('en-US', { timeZone: timezone })).getDay().toString()
+            : '0'
+        );
+
+        const activeWindows = getActiveWindows(timeWindows, targetDayOfWeek);
+        const activeWindowNames = Object.keys(activeWindows);
+        
+        if (activeWindowNames.length === 0) {
+          console.log(`  ℹ️ No active time windows for ${userId} on day ${targetDayOfWeek}`);
+          results[userId] = { rolledOver: rolledOverCount, scheduled: 0, reason: 'no_active_windows' };
+          continue;
+        }
+
+        // Fetch already-scheduled tasks for today to compute used capacity
+        const { data: todayScheduled } = await supabase
+          .from('tasks')
+          .select('start_time, end_time, estimate_minutes')
+          .eq('user_id', userId)
+          .eq('is_scheduled', true)
+          .gte('start_time', `${todayISO}T00:00:00`)
+          .lt('start_time', `${todayISO}T23:59:59`);
+
+        // Also fetch external calendar events for today
+        const { data: todayEvents } = await supabase
+          .from('external_calendar_events')
+          .select('start_time, end_time')
+          .eq('user_id', userId)
+          .gte('start_time', `${todayISO}T00:00:00`)
+          .lt('start_time', `${todayISO}T23:59:59`)
+          .eq('is_all_day', false);
+
+        const allScheduledItems = [
+          ...(todayScheduled || []),
+          ...(todayEvents || []).map(e => ({ ...e, estimate_minutes: undefined })),
+        ];
+
+        const windowCapacities = computeUsedMinutes(allScheduledItems, activeWindows, todayISO, timezone);
+        
+        const totalRemainingMinutes = Object.values(windowCapacities).reduce(
+          (sum, wc) => sum + wc.remainingMinutes, 0
+        );
+
+        console.log(`  📊 Window capacities for ${todayISO} (day ${targetDayOfWeek}):`);
+        for (const [name, cap] of Object.entries(windowCapacities)) {
+          console.log(`    ${name}: ${cap.remainingMinutes}/${cap.totalMinutes} min remaining`);
+        }
+
+        if (totalRemainingMinutes <= 0) {
+          console.log(`  ℹ️ No remaining capacity for ${userId} today`);
+          results[userId] = { rolledOver: rolledOverCount, scheduled: 0, reason: 'no_capacity' };
+          continue;
+        }
+
+        // ==========================================
+        // STEP 3: GATHER CANDIDATES from priority board + READY/UP_NEXT
         // ==========================================
         // Query tasks that have topic mappings (priority board members)
-        // Note: task_topic_mappings has no user_id column, so we query from tasks side
         const { data: mappedTasks, error: mappedError } = await supabase
           .from('tasks')
           .select('id, task_topic_mappings!inner(topic_id)')
@@ -124,12 +292,12 @@ serve(async (req) => {
 
         const mappedIds = (mappedTasks || []).map((t: any) => t.id);
 
-        // Also fetch READY/UP_NEXT tasks regardless of priority board membership
+        // Also fetch READY/UP_NEXT/TODO tasks regardless of priority board membership
         const { data: readyUpNextTasks, error: readyError } = await supabase
           .from('tasks')
           .select('id')
           .eq('user_id', userId)
-          .in('status', ['READY', 'UP_NEXT'])
+          .in('status', ['READY', 'UP_NEXT', 'TODO'])
           .is('is_scheduled', false)
           .is('completed_at', null);
 
@@ -147,6 +315,7 @@ serve(async (req) => {
           continue;
         }
 
+        // Fetch ALL eligible candidates (no arbitrary limit)
         const { data: candidates, error: candidatesError } = await supabase
           .from('tasks')
           .select('id, title, category, priority, estimate_minutes, due_date, pushed_count, status')
@@ -154,8 +323,7 @@ serve(async (req) => {
           .not('status', 'in', '("DONE","BLOCKED")')
           .is('is_scheduled', false)
           .is('completed_at', null)
-          .order('created_at', { ascending: true })
-          .limit(30);
+          .order('created_at', { ascending: true });
 
         if (candidatesError) {
           console.error(`❌ Error fetching candidates for ${userId}:`, candidatesError);
@@ -169,16 +337,21 @@ serve(async (req) => {
         }
 
         // ==========================================
-        // STEP 3: SORT with priority boost
+        // STEP 4: SCORE and FILL by window capacity
         // ==========================================
         const priorityWeight: Record<string, number> = { URGENT: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
         
         const scoredCandidates = candidates.map(task => {
           let score = priorityWeight[task.priority] || 1;
           
+          // Priority board boost (+10) — always outranks non-board tasks
+          if (mappedIds.includes(task.id)) {
+            score += 10;
+          }
+          
           // Boost pushed tasks (accountability)
           if (task.pushed_count && task.pushed_count > 0) {
-            score += Math.min(task.pushed_count, 3); // Cap at +3
+            score += Math.min(task.pushed_count, 3);
           }
           
           // Boost due-soon tasks
@@ -196,7 +369,7 @@ serve(async (req) => {
             score += 1;
           }
           
-          return { ...task, score };
+          return { ...task, score, isPriorityBoard: mappedIds.includes(task.id) };
         });
 
         // Sort by score descending, then by due_date ascending
@@ -208,37 +381,88 @@ serve(async (req) => {
           return 0;
         });
 
-        // Take top 25 candidates for scheduling (enough for ~16 usable hours)
-        const topCandidates = scoredCandidates.slice(0, 25);
+        // Walk through scored candidates, assign to windows until capacity is full
+        const selectedCandidates: typeof scoredCandidates = [];
+        const windowRemaining = { ...Object.fromEntries(
+          Object.entries(windowCapacities).map(([name, cap]) => [name, cap.remainingMinutes])
+        )};
 
-        console.log(`  🎯 Top ${topCandidates.length} candidates selected:`);
-        topCandidates.forEach((t, i) => {
-          console.log(`    ${i + 1}. "${t.title}" (score: ${t.score}, priority: ${t.priority}, pushed: ${t.pushed_count || 0})`);
+        for (const task of scoredCandidates) {
+          const duration = task.estimate_minutes || 
+            categoryMappings[task.category]?.estimatedDuration || 
+            60;
+          
+          // Find the best window for this task
+          const preferredWindows = getPreferredWindows(task.category, categoryMappings, activeWindowNames);
+          
+          let assigned = false;
+          for (const winName of preferredWindows) {
+            if ((windowRemaining[winName] || 0) >= duration) {
+              windowRemaining[winName] -= duration;
+              selectedCandidates.push(task);
+              assigned = true;
+              break;
+            }
+          }
+
+          if (!assigned) {
+            // Try any window with capacity as a last resort
+            for (const winName of activeWindowNames) {
+              if ((windowRemaining[winName] || 0) >= duration) {
+                windowRemaining[winName] -= duration;
+                selectedCandidates.push(task);
+                assigned = true;
+                break;
+              }
+            }
+          }
+
+          // Check if all windows are full
+          const totalRemaining = Object.values(windowRemaining).reduce((s, v) => s + v, 0);
+          if (totalRemaining <= 0) break;
+        }
+
+        console.log(`  🎯 ${selectedCandidates.length} candidates selected to fill capacity (from ${scoredCandidates.length} evaluated):`);
+        selectedCandidates.forEach((t, i) => {
+          console.log(`    ${i + 1}. "${t.title}" (score: ${t.score}, est: ${t.estimate_minutes || 60}m, board: ${t.isPriorityBoard})`);
         });
+        console.log(`  📊 Window fill status after selection:`);
+        for (const [name, remaining] of Object.entries(windowRemaining)) {
+          const cap = windowCapacities[name];
+          console.log(`    ${name}: ${remaining}/${cap.totalMinutes} min remaining`);
+        }
+
+        if (selectedCandidates.length === 0) {
+          console.log(`  ℹ️ No candidates fit available capacity for ${userId}`);
+          results[userId] = { rolledOver: rolledOverCount, scheduled: 0, reason: 'no_fit' };
+          continue;
+        }
 
         // ==========================================
-        // STEP 4: Call batch-calendar-scheduler
+        // STEP 5: Call batch-calendar-scheduler with capacity context
         // ==========================================
-        // Schedule for today (the scheduler runs at midnight, filling today's slots)
-        const todayDate = new Date(now);
-        const todayISO = todayDate.toISOString().split('T')[0];
-
         const schedulerPayload = {
-          tasks: topCandidates.map(t => ({
+          tasks: selectedCandidates.map(t => ({
             id: t.id,
             title: t.title,
             category: t.category,
             priority: t.priority,
-            estimate_minutes: t.estimate_minutes || 60,
+            estimate_minutes: t.estimate_minutes || categoryMappings[t.category]?.estimatedDuration || 60,
             due_date: t.due_date,
           })),
           userId,
           timezone,
           targetDate: todayISO,
           allowOverflow: false,
+          windowCapacity: Object.fromEntries(
+            Object.entries(windowCapacities).map(([name, cap]) => [
+              name,
+              { totalMinutes: cap.totalMinutes, remainingMinutes: cap.remainingMinutes, start: activeWindows[name].start, end: activeWindows[name].end }
+            ])
+          ),
         };
 
-        console.log(`  🤖 Calling batch-calendar-scheduler for ${todayISO}...`);
+        console.log(`  🤖 Calling batch-calendar-scheduler for ${todayISO} with ${selectedCandidates.length} tasks...`);
 
         const schedulerResponse = await fetch(
           `${supabaseUrl}/functions/v1/batch-calendar-scheduler`,
@@ -268,8 +492,7 @@ serve(async (req) => {
         for (const slot of scheduled) {
           if (!slot.taskId) continue;
           
-          // Find the candidate to store its original status
-          const candidate = topCandidates.find(c => c.id === slot.taskId);
+          const candidate = selectedCandidates.find(c => c.id === slot.taskId);
           const preScheduleStatus = candidate?.status || 'TODO';
           
           const { error: scheduleError } = await supabase
@@ -290,7 +513,7 @@ serve(async (req) => {
         }
 
         // ==========================================
-        // STEP 5: Log the run
+        // STEP 6: Log the run
         // ==========================================
         await supabase.from('activity_log').insert({
           user_id: userId,
@@ -299,8 +522,14 @@ serve(async (req) => {
           metadata: {
             rolled_over: rolledOverCount,
             candidates_evaluated: scoredCandidates.length,
+            candidates_selected: selectedCandidates.length,
             scheduled: scheduled.length,
             target_date: todayISO,
+            window_capacities: Object.fromEntries(
+              Object.entries(windowCapacities).map(([name, cap]) => [
+                name, `${cap.remainingMinutes}/${cap.totalMinutes}`
+              ])
+            ),
             processing_ms: Date.now() - startTime,
           },
         });
@@ -308,7 +537,13 @@ serve(async (req) => {
         results[userId] = {
           rolledOver: rolledOverCount,
           candidatesEvaluated: scoredCandidates.length,
+          candidatesSelected: selectedCandidates.length,
           scheduled: scheduled.length,
+          windowCapacities: Object.fromEntries(
+            Object.entries(windowCapacities).map(([name, cap]) => [
+              name, { remaining: cap.remainingMinutes, total: cap.totalMinutes }
+            ])
+          ),
         };
 
       } catch (userError) {
