@@ -832,6 +832,22 @@ async function callUnifiedWebhook(
     if (!response.ok) {
       const errorMsg = `Webhook failed: ${response.status} - ${responseText.substring(0, 200)}`;
       result.errors.push(errorMsg);
+
+      // TRACE 4: Post-webhook response (error)
+      supabaseClient.from('activity_log').insert({
+        user_id: payload.userId,
+        activity_type: 'notification_webhook_response',
+        session_id: traceCorrelationId,
+        status: 'error',
+        stage: 'post_webhook',
+        error_message: errorMsg.substring(0, 400),
+        metadata: {
+          httpStatus: response.status,
+          channels: payload.channels,
+          responsePreview: responseText.substring(0, 200),
+          timestamp: new Date().toISOString()
+        }
+      }).then(() => {}).catch(() => {});
       
       // Try to extract per-channel errors from response
       if (responseJson?.errors) {
