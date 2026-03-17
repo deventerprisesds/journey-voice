@@ -109,17 +109,20 @@ serve(async (req) => {
         // ==========================================
         // STEP 2: GATHER CANDIDATES from priority board
         // ==========================================
+        // Query tasks that have topic mappings (priority board members)
+        // Note: task_topic_mappings has no user_id column, so we query from tasks side
         const { data: mappedTasks, error: mappedError } = await supabase
-          .from('task_topic_mappings')
-          .select('task_id')
-          .eq('user_id', userId);
+          .from('tasks')
+          .select('id, task_topic_mappings!inner(topic_id)')
+          .eq('user_id', userId)
+          .is('completed_at', null)
+          .not('status', 'in', '("DONE","BLOCKED")');
 
         if (mappedError) {
-          console.error(`❌ Error fetching topic mappings for ${userId}:`, mappedError);
-          continue;
+          console.warn(`⚠️ Error fetching topic mappings for ${userId}, falling back to READY/UP_NEXT only:`, mappedError);
         }
 
-        const mappedIds = (mappedTasks || []).map((t: any) => t.task_id);
+        const mappedIds = (mappedTasks || []).map((t: any) => t.id);
 
         // Also fetch READY/UP_NEXT tasks regardless of priority board membership
         const { data: readyUpNextTasks, error: readyError } = await supabase
