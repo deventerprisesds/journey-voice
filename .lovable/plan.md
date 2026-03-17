@@ -1,70 +1,140 @@
 
-Goal: fix why channel test buttons appear to “fail” in live use, explain/clean duplicate delivery paths, and fix calendar reconnect errors.
 
-What I verified from your live project:
-1) The test buttons are reaching backend functions.
-- `send-unified-notification` logs show Email, Slack, Google Event, Outlook Event tests were invoked.
-- `send-push-notification` logs show push was sent successfully to 1 subscription.
+# Combined Plan: Task Drag-and-Drop Between Groups + Protect Manual Groups
 
-2) Current test UX is misleading.
-- `send-unified-notification` treats `n8n workflow started` as success, but that is only “queued,” not confirmed delivered.
-- UI currently shows success toast for Slack without checking per-channel delivery result in detail.
+## Overview
 
-3) Calendar reconnect error has a confirmed DB root cause.
-- `insert_calendar_connection_for_user` exists in two overloaded signatures (8-arg + 9-arg), which can cause PostgREST RPC ambiguity during OAuth token exchange.
+This plan combines all previously discussed but unimplemented changes into one deliverable:
 
-4) Yes, there are duplicate/parallel notification paths.
-- Immediate tests call edge functions directly from UI.
-- Scheduled reminders go through `notification-delivery`.
-- Slack/email/google depend on `UNIFIED_WEBHOOK_URL` (n8n), while push is sent directly via `send-push-notification`.
+1. **Database**: Add `is_manual` column to `task_topic_index` and fix the cleanup trigger to skip manually created groups
+2. **Database**: Update `task_count` bookkeeping so it stays accurate
+3. **UI**: Enable dragging individual tasks between groups/subgroups in "group" view mode
+4. **UI**: Add "Ungroup" option to the batch toolbar
+5. **Code**: Set `is_manual = true` when users create groups via the dialog
+6. **Code**: Update `task_count` in `batchMoveToGroup` and `handleMoveToGroup`
 
-Implementation plan:
-1) Fix calendar OAuth reconnect reliability (DB migration)
-- Drop legacy 8-arg `insert_calendar_connection_for_user` overload.
-- Keep only the 9-arg version (`_purposes` with default), so RPC resolution is unambiguous.
+---
 
-2) Make test results truthful in Notification Settings UI
-- Update `sendTestEmail/sendTestSlack/sendTestGoogleEvent/sendTestOutlookEvent/sendTestPush` to inspect returned payloads (`success`, `errors`, `channelResults`) and show:
-  - Delivered
-  - Queued (workflow started, unconfirmed)
-  - Failed (with concrete reason)
-- Stop showing optimistic success for Slack when only queueing occurred.
+## 1. Database Migration
 
-3) Add explicit delivery diagnostics for each test click
-- Persist a test entry in `delivery_logs` with channel + response summary so you can see exactly what happened after pressing each button.
-- Surface “last test status per channel” in the settings/testing area.
+Add the `is_manual` column and replace the cleanup trigger function:
 
-4) Reduce duplicate-source confusion (single canonical path for tests)
-- Route all channel tests through one unified test contract (including push), with consistent response format.
-- Keep push direct send under the hood, but report it through the same unified result object.
-- Clearly label channels as:
-  - Directly confirmed (push/outlook when API returns success)
-  - Queued via workflow (email/slack/google through n8n unless callback confirms final delivery)
+```sql
+-- Add is_manual flag (false = auto-created by classifier, true = user-created)
+ALTER TABLE public.task_topic_index
+  ADD COLUMN IF NOT EXISTS is_manual boolean DEFAULT false;
 
-5) Add downstream confirmation support (optional but recommended)
-- Use `notification-callback` from n8n to mark final delivered/failed state for email/slack/google tests.
-- This upgrades “workflow started” into true delivery visibility.
+-- Replace cleanup trigger: decrement counts, only auto-delete non-manual topics
+CREATE OR REPLACE FUNCTION public.cleanup_task_topic_on_delete()
+RETURNS TRIGGER AS $$
+BEGIN
+  UPDATE public.task_topic_index
+  SET task_count = task_count - 1, updated_at = now()
+  WHERE id IN (
+    SELECT topic_id FROM public.task_topic_mappings WHERE task_id = OLD.id
+  );
 
-Technical details:
-- DB fix:
-  - remove old signature: `insert_calendar_connection_for_user(uuid,text,text,text,text,text,text,timestamptz)`
-- Frontend:
-  - `src/components/NotificationSettings.tsx` (test handlers + toast logic)
-- Edge function:
-  - `supabase/functions/send-unified-notification/index.ts` (normalized result contract)
-  - optional: `supabase/functions/notification-callback/index.ts` integration from workflow
-- Optional observability:
-  - use `delivery_logs` consistently for manual tests too, not only scheduled flow.
+  -- Only auto-delete system-generated (classifier) topics that hit zero
+  DELETE FROM public.task_topic_index
+  WHERE task_count <= 0
+    AND is_manual = false
+    AND id IN (
+      SELECT topic_id FROM public.task_topic_mappings WHERE task_id = OLD.id
+    );
 
-Files to modify:
-- `supabase/migrations/*` (new migration for function overload cleanup)
-- `src/components/NotificationSettings.tsx`
-- `supabase/functions/send-unified-notification/index.ts`
-- (optional workflow confirmation path) `supabase/functions/notification-callback/index.ts`
+  RETURN OLD;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+```
 
-Verification after implementation:
-1) Reconnect Google calendar from live Settings (should complete without RPC ambiguity error).
-2) Run each Test button once and confirm each shows Delivered/Queued/Failed (not generic success).
-3) Confirm push test reports delivered count and endpoint count.
-4) Confirm Slack/Email result moves from queued to final status when callback arrives.
-5) Re-test on Samsung Internet and Chrome to confirm browser-specific behavior is visible in diagnostics.
+This means:
+- Classifier-created groups still get auto-cleaned when empty (existing behavior)
+- User-created groups/subgroups survive indefinitely until manually deleted
+
+---
+
+## 2. `AddTopicGroupDialog.tsx` -- Set `is_manual: true`
+
+When a user creates a group or subgroup via the dialog, add `is_manual: true` to the upsert payload. This flags it as user-created and protects it from the cleanup trigger.
+
+---
+
+## 3. Task Drag-and-Drop Between Groups (Group View Mode)
+
+### `TopicGroupPanel.tsx`
+
+- Import `Droppable` and `Draggable` from `@hello-pangea/dnd`
+- Wrap the task list area inside each group panel with a `Droppable` component:
+  - `droppableId` = the topic group ID (e.g., `"group-{topicGroup.id}"`)
+  - `type` = `"TASK_IN_GROUP"`
+- Wrap each task row with a `Draggable`:
+  - `draggableId` = `"task-in-group-{task.id}"`
+  - The entire task row becomes the drag handle
+- Child sub-group panels remain as they are (rendered above the task droppable)
+- The "Uncategorized" pseudo-group also gets a droppable (`"group-uncategorized-{categoryKey}"`)
+
+### `Priorities.tsx` (`handleDragEnd`)
+
+Add a new branch at the top of `handleDragEnd` for `type === 'TASK_IN_GROUP'`:
+
+```
+if (type === 'TASK_IN_GROUP') {
+  const taskId = extract from draggableId
+  const srcGroupId = extract from source.droppableId
+  const dstGroupId = extract from destination.droppableId
+
+  if srcGroupId === dstGroupId: return (no-op)
+
+  // Delete old mapping
+  await supabase.from('task_topic_mappings').delete().eq('task_id', taskId)
+
+  if destination is an uncategorized group:
+    // Just remove mapping (task becomes uncategorized)
+  else:
+    // Insert new mapping to destination topic
+    await supabase.from('task_topic_mappings').insert({ task_id, topic_id: dstGroupId })
+    // Increment task_count on destination
+    // Decrement task_count on source (if it was a real group)
+
+  // Refresh data
+}
+```
+
+---
+
+## 4. `task_count` Bookkeeping
+
+### `batchMoveToGroup` in `Priorities.tsx`
+
+After deleting old mappings and inserting new ones:
+- Query old mappings first to find source topic IDs
+- Decrement `task_count` on each source topic
+- Increment `task_count` on the destination topic by the number of moved tasks
+
+### `handleMoveToGroup` in `TopicGroupPanel.tsx`
+
+After moving a single task:
+- Decrement `task_count` on the current group (`topicGroup.id`)
+- Increment `task_count` on the destination group
+
+---
+
+## 5. Batch Toolbar: "Ungroup" Button
+
+Add an "Ungroup" button to the batch action bar (between "Status..." and the close button):
+- Icon: `FolderMinus` from lucide-react
+- On click: deletes all `task_topic_mappings` for selected task IDs, decrements `task_count` on affected source topics
+- Shows toast: "Removed N tasks from their groups"
+- Clears selection and refreshes
+
+---
+
+## Files Changed
+
+| File | Change |
+|------|--------|
+| New migration | Add `is_manual` column; fix `cleanup_task_topic_on_delete` trigger |
+| `src/components/priorities/AddTopicGroupDialog.tsx` | Add `is_manual: true` to upsert payload |
+| `src/components/priorities/TopicGroupPanel.tsx` | Wrap tasks in `Droppable`/`Draggable` for `TASK_IN_GROUP` type; update `task_count` in `handleMoveToGroup` |
+| `src/pages/Priorities.tsx` | Handle `TASK_IN_GROUP` drag in `handleDragEnd`; update `task_count` in `batchMoveToGroup`; add "Ungroup" batch button |
+
