@@ -393,16 +393,37 @@ serve(async (req) => {
       googleEvent
     }: NotificationPayload = await req.json();
 
+    const correlationId = notificationId || crypto.randomUUID();
+    
     console.log('Sending unified notification:', {
       userId,
       title,
       body,
       channels,
       notificationId,
+      correlationId,
       data,
       ...(outlookEvent && { outlookEvent }),
       ...(googleEvent && { googleEvent })
     });
+
+    // TRACE 1: Entry point
+    supabaseClient.from('activity_log').insert({
+      user_id: userId,
+      activity_type: 'notification_unified_entry',
+      session_id: correlationId,
+      status: 'started',
+      stage: 'entry',
+      metadata: {
+        channels,
+        notificationId,
+        title,
+        hasSlackWebhook: !!slackWebhook,
+        hasOutlookEvent: !!outlookEvent,
+        hasGoogleEvent: !!googleEvent,
+        timestamp: new Date().toISOString()
+      }
+    }).then(() => {}).catch(() => {});
 
     // Use provided user profile if available, otherwise fetch from database
     let profile = userProfile;
