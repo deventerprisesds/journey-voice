@@ -595,6 +595,23 @@ serve(async (req) => {
               notificationData.taskTitle = taskInfo.title;
             }
             
+            // TRACE: Pre-handoff to send-unified-notification
+            const handoffCorrelation = notificationIds[0] || crypto.randomUUID();
+            supabaseClient.from('activity_log').insert({
+              user_id: userId,
+              activity_type: 'notification_handoff_start',
+              session_id: handoffCorrelation,
+              status: 'started',
+              stage: 'delivery_to_unified',
+              metadata: {
+                channels: channelsForDelivery,
+                notificationIds,
+                batchSize: batchNotifications.length,
+                title,
+                timestamp: new Date().toISOString()
+              }
+            }).then(() => {}).catch(() => {});
+
             const { data: unifiedResult, error: unifiedError } = await supabaseClient.functions.invoke('send-unified-notification', {
               body: {
                 userId: userId,
@@ -605,6 +622,22 @@ serve(async (req) => {
                 notificationId: notificationIds[0]
               }
             });
+
+            // TRACE: Post-handoff result
+            supabaseClient.from('activity_log').insert({
+              user_id: userId,
+              activity_type: 'notification_handoff_end',
+              session_id: handoffCorrelation,
+              status: unifiedError ? 'error' : 'completed',
+              stage: 'delivery_to_unified',
+              error_message: unifiedError?.message || null,
+              metadata: {
+                channels: channelsForDelivery,
+                success: !unifiedError,
+                resultSummary: unifiedResult ? JSON.stringify(unifiedResult).substring(0, 300) : null,
+                timestamp: new Date().toISOString()
+              }
+            }).then(() => {}).catch(() => {});
 
             if (unifiedError) {
               console.error(`Unified notification failed: ${unifiedError.message}`);

@@ -844,6 +844,22 @@ async function callUnifiedWebhook(
       }
     } else {
       console.log('Unified webhook result:', responseJson);
+
+      // TRACE 3: Post-webhook response (success)
+      supabaseClient.from('activity_log').insert({
+        user_id: payload.userId,
+        activity_type: 'notification_webhook_response',
+        session_id: traceCorrelationId,
+        status: 'completed',
+        stage: 'post_webhook',
+        metadata: {
+          httpStatus: response.status,
+          channels: payload.channels,
+          responseMessage: responseJson?.message || null,
+          hasChannelResults: !!responseJson?.channelResults,
+          timestamp: new Date().toISOString()
+        }
+      }).then(() => {}).catch(() => {});
       
       // Parse n8n response for channel-specific results
       if (responseJson?.message === 'Workflow was started') {
