@@ -792,6 +792,24 @@ async function callUnifiedWebhook(
   const fullUrl = `${webhookUrl}?${queryParams.toString()}`;
   console.log('Calling unified webhook with GET:', fullUrl.substring(0, 200) + '...');
 
+  // TRACE 2: Pre-webhook dispatch
+  const traceCorrelationId = existingNotificationId || 'no-id';
+  supabaseClient.from('activity_log').insert({
+    user_id: payload.userId,
+    activity_type: 'notification_webhook_sent',
+    session_id: traceCorrelationId,
+    status: 'started',
+    stage: 'pre_webhook',
+    metadata: {
+      webhookUrlPrefix: webhookUrl.substring(0, 60),
+      channels: payload.channels,
+      hasSlack: payload.channels.includes('SLACK') || payload.channels.includes('slack'),
+      slackWebhookPrefix: payload.slackWebhook ? payload.slackWebhook.substring(0, 50) : null,
+      method: 'GET',
+      timestamp: new Date().toISOString()
+    }
+  }).then(() => {}).catch(() => {});
+
   try {
     const response = await fetch(fullUrl, {
       method: 'GET',
