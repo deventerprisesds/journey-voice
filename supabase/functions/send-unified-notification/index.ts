@@ -393,16 +393,37 @@ serve(async (req) => {
       googleEvent
     }: NotificationPayload = await req.json();
 
+    const correlationId = notificationId || crypto.randomUUID();
+    
     console.log('Sending unified notification:', {
       userId,
       title,
       body,
       channels,
       notificationId,
+      correlationId,
       data,
       ...(outlookEvent && { outlookEvent }),
       ...(googleEvent && { googleEvent })
     });
+
+    // TRACE 1: Entry point
+    supabaseClient.from('activity_log').insert({
+      user_id: userId,
+      activity_type: 'notification_unified_entry',
+      session_id: correlationId,
+      status: 'started',
+      stage: 'entry',
+      metadata: {
+        channels,
+        notificationId,
+        title,
+        hasSlackWebhook: !!slackWebhook,
+        hasOutlookEvent: !!outlookEvent,
+        hasGoogleEvent: !!googleEvent,
+        timestamp: new Date().toISOString()
+      }
+    }).then(() => {}).catch(() => {});
 
     // Use provided user profile if available, otherwise fetch from database
     let profile = userProfile;
@@ -771,6 +792,24 @@ async function callUnifiedWebhook(
   const fullUrl = `${webhookUrl}?${queryParams.toString()}`;
   console.log('Calling unified webhook with GET:', fullUrl.substring(0, 200) + '...');
 
+  // TRACE 2: Pre-webhook dispatch
+  const traceCorrelationId = existingNotificationId || 'no-id';
+  supabaseClient.from('activity_log').insert({
+    user_id: payload.userId,
+    activity_type: 'notification_webhook_sent',
+    session_id: traceCorrelationId,
+    status: 'started',
+    stage: 'pre_webhook',
+    metadata: {
+      webhookUrlPrefix: webhookUrl.substring(0, 60),
+      channels: payload.channels,
+      hasSlack: payload.channels.includes('SLACK') || payload.channels.includes('slack'),
+      slackWebhookPrefix: payload.slackWebhook ? payload.slackWebhook.substring(0, 50) : null,
+      method: 'GET',
+      timestamp: new Date().toISOString()
+    }
+  }).then(() => {}).catch(() => {});
+
   try {
     const response = await fetch(fullUrl, {
       method: 'GET',
@@ -793,6 +832,22 @@ async function callUnifiedWebhook(
     if (!response.ok) {
       const errorMsg = `Webhook failed: ${response.status} - ${responseText.substring(0, 200)}`;
       result.errors.push(errorMsg);
+
+      // TRACE 4: Post-webhook response (error)
+      supabaseClient.from('activity_log').insert({
+        user_id: payload.userId,
+        activity_type: 'notification_webhook_response',
+        session_id: traceCorrelationId,
+        status: 'error',
+        stage: 'post_webhook',
+        error_message: errorMsg.substring(0, 400),
+        metadata: {
+          httpStatus: response.status,
+          channels: payload.channels,
+          responsePreview: responseText.substring(0, 200),
+          timestamp: new Date().toISOString()
+        }
+      }).then(() => {}).catch(() => {});
       
       // Try to extract per-channel errors from response
       if (responseJson?.errors) {
@@ -805,6 +860,22 @@ async function callUnifiedWebhook(
       }
     } else {
       console.log('Unified webhook result:', responseJson);
+
+      // TRACE 3: Post-webhook response (success)
+      supabaseClient.from('activity_log').insert({
+        user_id: payload.userId,
+        activity_type: 'notification_webhook_response',
+        session_id: traceCorrelationId,
+        status: 'completed',
+        stage: 'post_webhook',
+        metadata: {
+          httpStatus: response.status,
+          channels: payload.channels,
+          responseMessage: responseJson?.message || null,
+          hasChannelResults: !!responseJson?.channelResults,
+          timestamp: new Date().toISOString()
+        }
+      }).then(() => {}).catch(() => {});
       
       // Parse n8n response for channel-specific results
       if (responseJson?.message === 'Workflow was started') {
