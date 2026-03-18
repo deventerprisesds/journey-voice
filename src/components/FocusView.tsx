@@ -209,6 +209,34 @@ const FocusView: React.FC<FocusViewProps> = ({
   });
 
   // Group scheduled tasks by time window using timezone-aware time extraction
+  // Check if a task violates its allowed time window
+  const isWindowViolation = (task: Task): { violation: boolean; actualWindow: string; allowedWindows: string[] } => {
+    if (!task.start_time) return { violation: false, actualWindow: '', allowedWindows: [] };
+    
+    const { hour: taskHour } = getTimePartsInTimezone(task.start_time, userTimezone);
+    const dayOfWeek = today.getDay();
+    const windows = config.timeWindows;
+    
+    // Find actual window
+    let actualWindow = 'unknown';
+    if (windows.morning.days.includes(dayOfWeek) && taskHour >= windows.morning.start && taskHour < windows.morning.end) actualWindow = 'morning';
+    else if (windows.business_hours.days.includes(dayOfWeek) && taskHour >= windows.business_hours.start && taskHour < windows.business_hours.end) actualWindow = 'business_hours';
+    else if (windows.after_work.days.includes(dayOfWeek) && taskHour >= windows.after_work.start && taskHour < windows.after_work.end) actualWindow = 'after_work';
+    else if (windows.evening.days.includes(dayOfWeek) && taskHour >= windows.evening.start && taskHour < windows.evening.end) actualWindow = 'evening';
+    
+    // Get allowed windows for this category
+    const catMapping = config.categoryMappings[task.category];
+    const allowedWindows = catMapping?.defaultTimeWindow || ['flexible'];
+    
+    // 'flexible' means any window is OK
+    if (allowedWindows.includes('flexible')) {
+      return { violation: false, actualWindow, allowedWindows };
+    }
+    
+    const violation = !allowedWindows.includes(actualWindow);
+    return { violation, actualWindow, allowedWindows };
+  };
+
   const getTimeWindowForTask = (task: Task): string => {
     if (!task.start_time) return 'business_hours';
     
@@ -218,17 +246,14 @@ const FocusView: React.FC<FocusViewProps> = ({
     
     let assignedWindow = 'after_work'; // default fallback
     
-    // Exact match first
+    // Exact match only — NO nearest-window snapping
     if (windows.morning.days.includes(dayOfWeek) && taskHour >= windows.morning.start && taskHour < windows.morning.end) assignedWindow = 'morning';
     else if (windows.business_hours.days.includes(dayOfWeek) && taskHour >= windows.business_hours.start && taskHour < windows.business_hours.end) assignedWindow = 'business_hours';
     else if (windows.after_work.days.includes(dayOfWeek) && taskHour >= windows.after_work.start && taskHour < windows.after_work.end) assignedWindow = 'after_work';
     else if (windows.evening.days.includes(dayOfWeek) && taskHour >= windows.evening.start && taskHour < windows.evening.end) assignedWindow = 'evening';
-    // Nearest window fallback
+    // If task is outside ALL windows (e.g., 5 AM), assign to nearest without snapping label
     else if (taskHour < windows.morning.start) assignedWindow = 'morning';
     else if (taskHour >= windows.evening.end) assignedWindow = 'evening';
-    
-    // Window assignment logged to console only (high-frequency, not DB-traced)
-    console.log(`[WINDOW-ASSIGN] "${task.title}" [${task.category}] hour=${taskHour} → window="${assignedWindow}"`);
     
     return assignedWindow;
   };

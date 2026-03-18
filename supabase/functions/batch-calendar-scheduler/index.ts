@@ -512,6 +512,7 @@ IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include tim
 
     return new Response(JSON.stringify({ 
       scheduled: scheduledTasks,
+      rejected: rejectedTasks,
       tasksCount: tasks.length,
       processingTimeMs: totalTime
     }), {
