@@ -297,9 +297,10 @@ serve(async (req) => {
           .from('tasks')
           .select('id')
           .eq('user_id', userId)
-          .in('status', ['READY', 'UP_NEXT', 'TODO'])
+          .in('status', ['READY', 'UP_NEXT', 'TODO', 'BACKLOG'])
           .is('is_scheduled', false)
-          .is('completed_at', null);
+          .is('completed_at', null)
+          .not('title', 'ilike', '%Test Task%');
 
         if (readyError) {
           console.error(`❌ Error fetching READY/UP_NEXT tasks for ${userId}:`, readyError);
