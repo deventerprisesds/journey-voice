@@ -512,9 +512,13 @@ serve(async (req) => {
 
         console.log(`  ✅ Scheduled ${scheduled.length} tasks`);
 
-        // Update tasks with their scheduled times, preserving pre-schedule status
+        // Update tasks with their scheduled times — ONLY if the scheduler returned valid times
+        let actuallyScheduled = 0;
         for (const slot of scheduled) {
-          if (!slot.taskId) continue;
+          if (!slot.taskId || !slot.start_time || !slot.end_time) {
+            console.log(`  ⏭️ Skipping task ${slot.taskId || 'unknown'}: no valid time slot returned`);
+            continue;
+          }
           
           const candidate = selectedCandidates.find(c => c.id === slot.taskId);
           const preScheduleStatus = candidate?.status || 'TODO';
@@ -533,8 +537,12 @@ serve(async (req) => {
 
           if (scheduleError) {
             console.error(`❌ Error scheduling task ${slot.taskId}:`, scheduleError);
+          } else {
+            actuallyScheduled++;
           }
         }
+        
+        console.log(`  ✅ Actually scheduled ${actuallyScheduled}/${scheduled.length} tasks (${scheduled.length - actuallyScheduled} had no time slot)`);
 
         // ==========================================
         // STEP 6: Log the run
