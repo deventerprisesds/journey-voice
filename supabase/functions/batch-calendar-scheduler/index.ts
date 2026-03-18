@@ -156,24 +156,11 @@ serve(async (req) => {
 
     console.log(`📊 Found ${existingBusySlots.length} existing busy slots`);
 
-    // Build category mappings from user config (authoritative), falling back to defaults
-    const userTimeWindows = userConfig?.timeWindows || {
-      morning: { start: 6, end: 9 },
-      business_hours: { start: 9, end: 17 },
-      after_work: { start: 17, end: 22 },
-      evening: { start: 19, end: 22 },
-      flexible: { start: 9, end: 22 },
-      weekends: { start: 10, end: 20 },
-    };
+    // Build category mappings from user config (authoritative), falling back to shared defaults
+    const { timeWindows: resolvedTimeWindows, categoryMappings: resolvedCategoryMappings } = resolveConfig(userConfig);
 
-    const userCategoryMappings = userConfig?.categoryMappings || {
-      CAREER: { defaultTimeWindow: ['business_hours'], estimatedDuration: 120 },
-      PROF_EDUCATION: { defaultTimeWindow: ['after_work', 'weekends'], estimatedDuration: 90 },
-      EDUCATION: { defaultTimeWindow: ['flexible'], estimatedDuration: 90 },
-      VENTURES: { defaultTimeWindow: ['after_work', 'weekends'], estimatedDuration: 120 },
-      LIFE: { defaultTimeWindow: ['flexible'], estimatedDuration: 60 },
-      PERSONAL: { defaultTimeWindow: ['flexible'], estimatedDuration: 60 },
-    };
+    const userTimeWindows = resolvedTimeWindows;
+    const userCategoryMappings = resolvedCategoryMappings;
 
     // ===============================================
     // DAY-OF-WEEK FILTERING: Remove inapplicable windows
