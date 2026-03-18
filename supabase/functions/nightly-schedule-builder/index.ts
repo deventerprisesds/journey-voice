@@ -322,6 +322,7 @@ serve(async (req) => {
           .select('id, title, category, priority, estimate_minutes, due_date, pushed_count, status')
           .in('id', allCandidateIds)
           .not('status', 'in', '("DONE","BLOCKED")')
+          .not('title', 'ilike', '%Test Task%')
           .is('is_scheduled', false)
           .is('completed_at', null)
           .order('created_at', { ascending: true });
