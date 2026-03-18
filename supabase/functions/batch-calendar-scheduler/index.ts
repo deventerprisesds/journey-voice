@@ -2,6 +2,7 @@ import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { normalizeDateTime, getTodayInTimezone, getTzOffsetMinutesAt } from "../_shared/timezone.ts";
+import { DEFAULT_TIME_WINDOWS, DEFAULT_CATEGORY_MAPPINGS, resolveConfig, validateTaskWindow } from "../_shared/scheduling-defaults.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
