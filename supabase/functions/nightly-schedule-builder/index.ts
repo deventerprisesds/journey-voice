@@ -409,15 +409,8 @@ serve(async (req) => {
           }
 
           if (!assigned) {
-            // Try any window with capacity as a last resort
-            for (const winName of activeWindowNames) {
-              if ((windowRemaining[winName] || 0) >= duration) {
-                windowRemaining[winName] -= duration;
-                selectedCandidates.push(task);
-                assigned = true;
-                break;
-              }
-            }
+            // Task doesn't fit any preferred window — mark as overflow, don't force into wrong window
+            console.log(`  ⚠️ "${task.title}" (${task.category}) doesn't fit any allowed window — skipping (OVERFLOW)`);
           }
 
           // Check if all windows are full
