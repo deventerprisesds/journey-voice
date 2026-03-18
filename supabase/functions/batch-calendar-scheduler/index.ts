@@ -2,6 +2,7 @@ import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { normalizeDateTime, getTodayInTimezone, getTzOffsetMinutesAt } from "../_shared/timezone.ts";
+import { DEFAULT_TIME_WINDOWS, DEFAULT_CATEGORY_MAPPINGS, resolveConfig, validateTaskWindow } from "../_shared/scheduling-defaults.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -155,24 +156,11 @@ serve(async (req) => {
 
     console.log(`📊 Found ${existingBusySlots.length} existing busy slots`);
 
-    // Build category mappings from user config (authoritative), falling back to defaults
-    const userTimeWindows = userConfig?.timeWindows || {
-      morning: { start: 6, end: 9 },
-      business_hours: { start: 9, end: 17 },
-      after_work: { start: 17, end: 22 },
-      evening: { start: 19, end: 22 },
-      flexible: { start: 9, end: 22 },
-      weekends: { start: 10, end: 20 },
-    };
+    // Build category mappings from user config (authoritative), falling back to shared defaults
+    const { timeWindows: resolvedTimeWindows, categoryMappings: resolvedCategoryMappings } = resolveConfig(userConfig);
 
-    const userCategoryMappings = userConfig?.categoryMappings || {
-      CAREER: { defaultTimeWindow: ['business_hours'], estimatedDuration: 120 },
-      PROF_EDUCATION: { defaultTimeWindow: ['after_work', 'weekends'], estimatedDuration: 90 },
-      EDUCATION: { defaultTimeWindow: ['flexible'], estimatedDuration: 90 },
-      VENTURES: { defaultTimeWindow: ['after_work', 'weekends'], estimatedDuration: 120 },
-      LIFE: { defaultTimeWindow: ['flexible'], estimatedDuration: 60 },
-      PERSONAL: { defaultTimeWindow: ['flexible'], estimatedDuration: 60 },
-    };
+    const userTimeWindows = resolvedTimeWindows;
+    const userCategoryMappings = resolvedCategoryMappings;
 
     // ===============================================
     // DAY-OF-WEEK FILTERING: Remove inapplicable windows
@@ -301,51 +289,30 @@ ${busySlotsStr}
 
 SCHEDULING RULES (FOLLOW IN THIS EXACT ORDER):
 
-=== RULE 1: INTELLIGENT WINDOW ASSIGNMENT ===
-Category windows are the DEFAULT starting point, but you MUST override them when the task's NATURE demands it. Use your judgment to classify each task:
+=== RULE 1: HARD WINDOW CONSTRAINTS (MANDATORY) ===
+Each task's category has ALLOWED time windows listed above. You MUST schedule every task within its allowed windows. This is NOT optional.
 
-A) FINANCIAL IMPACT — tasks involving money (payments, transfers, fees, invoices, budgeting, bills, taxes, subscriptions, refunds, anything financial):
-   → FORCE to business_hours (${formatWindowHours('business_hours')}), EARLIEST available slot.
-   → Treat as HIGH priority regardless of the priority field.
+- If a category says "after_work or weekends", the task MUST be placed in one of those windows.
+- If a category says "flexible", you may use any active window.
+- NEVER place a task outside its allowed windows, even if it seems logical.
+- If the allowed window is full, mark the task as OVERFLOW (see Rule 6).
 
-B) PEOPLE / COMMUNICATION — tasks involving contacting, replying to, or coordinating with other people (emails, texts, replies, follow-ups, calls, scheduling meetings, responding to someone):
-   → FORCE to business_hours (${formatWindowHours('business_hours')}), EARLIEST available slot.
-   → Treat as HIGH priority regardless of the priority field.
+=== RULE 2: PRIORITY RANKING WITHIN WINDOWS ===
+Within the allowed windows, use these heuristics to determine ORDER (earliest slot first):
 
-C) TIME-SENSITIVE — tasks due within 48 hours, appointments, deadlines:
-   → EARLIEST available slot in the most appropriate window.
+A) FINANCIAL IMPACT — tasks involving money (payments, bills, taxes, subscriptions):
+   → Schedule EARLIEST within the task's allowed windows. Treat as HIGH priority.
 
-D) ERRANDS & APPOINTMENTS — shopping, doctor, bank, groceries, post office:
-   → after_work (${formatWindowHours('after_work')}) or business_hours based on context.
+B) PEOPLE / COMMUNICATION — tasks involving contacting or coordinating with others:
+   → Schedule EARLIEST within the task's allowed windows. Treat as HIGH priority.
 
-E) PHYSICAL / MORNING ROUTINES — workout, gym, breakfast, morning routine:
-   → morning (${formatWindowHours('morning')}).
+C) TIME-SENSITIVE — tasks due within 48 hours:
+   → EARLIEST available slot within allowed windows.
 
-F) SOCIAL / EVENING — dinner, family, social, relaxation:
-   → evening (${formatWindowHours('evening')}).
+D) Higher priority tasks (URGENT > HIGH > MEDIUM > LOW) get earlier slots within their window.
 
-G) ALL OTHER TASKS — use their category's default window as listed above.
-
-EXAMPLES of correct reasoning:
-- "Reply to Travis' text" → category B (communication) → business_hours, early
-- "Make car payments" → category A (financial) → business_hours, early
-- "Email Aaron" → category B (communication) → business_hours, early
-- "Research Claude Business" → category G (default) → use VENTURES default window
-- "Pick up groceries" → category D (errand) → after_work
-
-AVAILABLE TIME WINDOWS (already filtered for ${isWeekendDay ? 'weekend' : 'weekday'}):
-${Object.entries(filteredCategoryMappings).map(([cat, mapping]) => {
-      const wins = Array.isArray(mapping.defaultTimeWindow) ? mapping.defaultTimeWindow : [mapping.defaultTimeWindow];
-      const windowDescs = wins.map((w: string) => `${w}: ${formatWindowHours(w)}`).join(', OR ');
-      return `- ${cat} default → ${windowDescs}`;
-    }).join('\n')}
-
-=== RULE 2: NO CONFLICTS ===
+=== RULE 3: NO CONFLICTS ===
 NEVER double-book — each task must not overlap with busy slots OR other scheduled tasks.
-
-=== RULE 3: PRIORITY WITHIN WINDOW ===
-Higher priority tasks get EARLIER slots WITHIN their designated window. Urgent > High > Medium > Low.
-Financial and communication tasks (categories A & B above) are always treated as HIGH priority.
 
 === RULE 4: DUE DATES ===
 Respect due dates — schedule before deadline. Tasks due within 48 hours get priority placement.
@@ -354,7 +321,7 @@ Respect due dates — schedule before deadline. Tasks due within 48 hours get pr
 Leave 15-minute buffer between tasks when possible.
 
 === RULE 6: OVERFLOW ===
-${targetDateObj ? `If a task cannot fit within its assigned window on ${targetDateISO} (window is full or no time left), mark it with reasoning "OVERFLOW: [window_name] full on ${targetDateISO}" and DO NOT schedule it. Do not force it into a different window.` : 'Schedule each task in its preferred time window based on category.'}
+${targetDateObj ? `If a task cannot fit within its ALLOWED windows on ${targetDateISO} (window is full or no time left), mark it with reasoning "OVERFLOW: [window_name] full on ${targetDateISO}" and DO NOT schedule it. Do NOT force it into a different window.` : 'Schedule each task in its allowed time window based on category.'}
 ${overflowInstructions}
 
 CRITICAL TIME FORMAT REQUIREMENTS:
@@ -491,9 +458,13 @@ IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include tim
     }
 
     // Map results back to task IDs, normalizing times as a safety net
-    // This catches any naive timestamps the AI might return despite prompt instructions
-    const scheduledTasks = scheduledResults.map(result => {
+    // Then validate each task against its allowed windows (HARD CONSTRAINT)
+    const scheduledTasks = [];
+    const rejectedTasks = [];
+    
+    for (const result of scheduledResults) {
       const originalTask = tasks[result.taskIndex];
+      if (!originalTask) continue;
       
       // Normalize times - if AI returned naive ISO, treat as local to user's timezone
       const normalizedStart = normalizeDateTime(result.start_time, timezone);
@@ -503,20 +474,45 @@ IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include tim
         console.log(`⚠️ Normalized start_time: ${result.start_time} → ${normalizedStart}`);
       }
       
-      return {
+      // POST-AI VALIDATION: Check if this task's scheduled time respects its allowed windows
+      const validation = validateTaskWindow(
+        normalizedStart,
+        originalTask.category,
+        userTimeWindows,
+        filteredCategoryMappings,
+        timezone
+      );
+      
+      if (!validation.valid) {
+        console.warn(`🚫 WINDOW VIOLATION: "${originalTask.title}" (${originalTask.category}) scheduled in "${validation.actualWindow}" but allowed: [${validation.allowedWindows.join(', ')}] — REJECTED`);
+        rejectedTasks.push({
+          taskId: originalTask.id,
+          taskIndex: result.taskIndex,
+          reason: `Window violation: placed in ${validation.actualWindow}, allowed: ${validation.allowedWindows.join(', ')}`,
+          reasoning: result.reasoning,
+        });
+        continue;
+      }
+      
+      scheduledTasks.push({
         taskId: originalTask?.id,
         taskIndex: result.taskIndex,
         start_time: normalizedStart,
         end_time: normalizedEnd,
         reasoning: result.reasoning,
-      };
-    });
+      });
+    }
+    
+    if (rejectedTasks.length > 0) {
+      console.log(`🚫 Post-AI validation rejected ${rejectedTasks.length} tasks for window violations`);
+    }
 
     const totalTime = Date.now() - startTime;
     console.log(`✅ Batch scheduling complete in ${totalTime}ms for ${tasks.length} tasks`);
 
     return new Response(JSON.stringify({ 
       scheduled: scheduledTasks,
+      rejected: rejectedTasks,
       tasksCount: tasks.length,
       processingTimeMs: totalTime
     }), {

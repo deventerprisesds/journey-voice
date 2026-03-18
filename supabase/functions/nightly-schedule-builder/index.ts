@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { DEFAULT_TIME_WINDOWS, DEFAULT_CATEGORY_MAPPINGS, resolveConfig, validateTaskWindow } from "../_shared/scheduling-defaults.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -162,29 +163,7 @@ serve(async (req) => {
       const timezone = userPref.timezone || 'America/New_York';
       const config = userPref.config || {};
       
-      // Default time windows if user hasn't configured any
-      const DEFAULT_TIME_WINDOWS: Record<string, TimeWindow> = {
-        morning: { start: 6, end: 9, days: [1, 2, 3, 4, 5] },
-        business_hours: { start: 9, end: 17, days: [1, 2, 3, 4, 5] },
-        after_work: { start: 17, end: 22, days: [1, 2, 3, 4, 5, 6] },
-        evening: { start: 19, end: 22, days: [0, 1, 2, 3, 4, 5, 6] },
-        weekends: { start: 10, end: 20, days: [0, 6] },
-      };
-      
-      const DEFAULT_CATEGORY_MAPPINGS: Record<string, any> = {
-        LIFE: { defaultTimeWindow: ['morning', 'after_work', 'weekends'], estimatedDuration: 30, defaultStatus: 'TODO' },
-        EDUCATION: { defaultTimeWindow: ['after_work', 'evening'], estimatedDuration: 75, defaultStatus: 'TODO' },
-        VENTURES: { defaultTimeWindow: ['business_hours', 'after_work'], estimatedDuration: 60, defaultStatus: 'TODO' },
-        CAREER: { defaultTimeWindow: ['business_hours'], estimatedDuration: 60, defaultStatus: 'TODO' },
-        PROF_EDUCATION: { defaultTimeWindow: ['business_hours', 'after_work'], estimatedDuration: 90, defaultStatus: 'TODO' },
-      };
-      
-      const timeWindows: Record<string, TimeWindow> = (config.timeWindows && Object.keys(config.timeWindows).length > 0)
-        ? config.timeWindows
-        : DEFAULT_TIME_WINDOWS;
-      const categoryMappings: Record<string, any> = (config.categoryMappings && Object.keys(config.categoryMappings).length > 0)
-        ? config.categoryMappings
-        : DEFAULT_CATEGORY_MAPPINGS;
+      const { timeWindows, categoryMappings } = resolveConfig(config);
       
       console.log(`\n🌙 Processing nightly schedule for user ${userId} (${timezone})`);
       
@@ -430,15 +409,8 @@ serve(async (req) => {
           }
 
           if (!assigned) {
-            // Try any window with capacity as a last resort
-            for (const winName of activeWindowNames) {
-              if ((windowRemaining[winName] || 0) >= duration) {
-                windowRemaining[winName] -= duration;
-                selectedCandidates.push(task);
-                assigned = true;
-                break;
-              }
-            }
+            // Task doesn't fit any preferred window — mark as overflow, don't force into wrong window
+            console.log(`  ⚠️ "${task.title}" (${task.category}) doesn't fit any allowed window — skipping (OVERFLOW)`);
           }
 
           // Check if all windows are full
