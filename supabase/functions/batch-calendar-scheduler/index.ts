@@ -458,9 +458,13 @@ IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include tim
     }
 
     // Map results back to task IDs, normalizing times as a safety net
-    // This catches any naive timestamps the AI might return despite prompt instructions
-    const scheduledTasks = scheduledResults.map(result => {
+    // Then validate each task against its allowed windows (HARD CONSTRAINT)
+    const scheduledTasks = [];
+    const rejectedTasks = [];
+    
+    for (const result of scheduledResults) {
       const originalTask = tasks[result.taskIndex];
+      if (!originalTask) continue;
       
       // Normalize times - if AI returned naive ISO, treat as local to user's timezone
       const normalizedStart = normalizeDateTime(result.start_time, timezone);
@@ -470,14 +474,38 @@ IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include tim
         console.log(`⚠️ Normalized start_time: ${result.start_time} → ${normalizedStart}`);
       }
       
-      return {
+      // POST-AI VALIDATION: Check if this task's scheduled time respects its allowed windows
+      const validation = validateTaskWindow(
+        normalizedStart,
+        originalTask.category,
+        userTimeWindows,
+        filteredCategoryMappings,
+        timezone
+      );
+      
+      if (!validation.valid) {
+        console.warn(`🚫 WINDOW VIOLATION: "${originalTask.title}" (${originalTask.category}) scheduled in "${validation.actualWindow}" but allowed: [${validation.allowedWindows.join(', ')}] — REJECTED`);
+        rejectedTasks.push({
+          taskId: originalTask.id,
+          taskIndex: result.taskIndex,
+          reason: `Window violation: placed in ${validation.actualWindow}, allowed: ${validation.allowedWindows.join(', ')}`,
+          reasoning: result.reasoning,
+        });
+        continue;
+      }
+      
+      scheduledTasks.push({
         taskId: originalTask?.id,
         taskIndex: result.taskIndex,
         start_time: normalizedStart,
         end_time: normalizedEnd,
         reasoning: result.reasoning,
-      };
-    });
+      });
+    }
+    
+    if (rejectedTasks.length > 0) {
+      console.log(`🚫 Post-AI validation rejected ${rejectedTasks.length} tasks for window violations`);
+    }
 
     const totalTime = Date.now() - startTime;
     console.log(`✅ Batch scheduling complete in ${totalTime}ms for ${tasks.length} tasks`);
