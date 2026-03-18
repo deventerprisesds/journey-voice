@@ -161,8 +161,30 @@ serve(async (req) => {
       const userId = userPref.user_id;
       const timezone = userPref.timezone || 'America/New_York';
       const config = userPref.config || {};
-      const timeWindows: Record<string, TimeWindow> = config.timeWindows || {};
-      const categoryMappings: Record<string, any> = config.categoryMappings || {};
+      
+      // Default time windows if user hasn't configured any
+      const DEFAULT_TIME_WINDOWS: Record<string, TimeWindow> = {
+        morning: { start: 6, end: 9, days: [1, 2, 3, 4, 5] },
+        business_hours: { start: 9, end: 17, days: [1, 2, 3, 4, 5] },
+        after_work: { start: 17, end: 22, days: [1, 2, 3, 4, 5, 6] },
+        evening: { start: 19, end: 22, days: [0, 1, 2, 3, 4, 5, 6] },
+        weekends: { start: 10, end: 20, days: [0, 6] },
+      };
+      
+      const DEFAULT_CATEGORY_MAPPINGS: Record<string, any> = {
+        LIFE: { defaultTimeWindow: ['morning', 'after_work', 'weekends'], estimatedDuration: 30, defaultStatus: 'TODO' },
+        EDUCATION: { defaultTimeWindow: ['after_work', 'evening'], estimatedDuration: 75, defaultStatus: 'TODO' },
+        VENTURES: { defaultTimeWindow: ['business_hours', 'after_work'], estimatedDuration: 60, defaultStatus: 'TODO' },
+        CAREER: { defaultTimeWindow: ['business_hours'], estimatedDuration: 60, defaultStatus: 'TODO' },
+        PROF_EDUCATION: { defaultTimeWindow: ['business_hours', 'after_work'], estimatedDuration: 90, defaultStatus: 'TODO' },
+      };
+      
+      const timeWindows: Record<string, TimeWindow> = (config.timeWindows && Object.keys(config.timeWindows).length > 0)
+        ? config.timeWindows
+        : DEFAULT_TIME_WINDOWS;
+      const categoryMappings: Record<string, any> = (config.categoryMappings && Object.keys(config.categoryMappings).length > 0)
+        ? config.categoryMappings
+        : DEFAULT_CATEGORY_MAPPINGS;
       
       console.log(`\n🌙 Processing nightly schedule for user ${userId} (${timezone})`);
       
@@ -297,9 +319,10 @@ serve(async (req) => {
           .from('tasks')
           .select('id')
           .eq('user_id', userId)
-          .in('status', ['READY', 'UP_NEXT', 'TODO'])
+          .in('status', ['READY', 'UP_NEXT', 'TODO', 'BACKLOG'])
           .is('is_scheduled', false)
-          .is('completed_at', null);
+          .is('completed_at', null)
+          .not('title', 'ilike', '%Test Task%');
 
         if (readyError) {
           console.error(`❌ Error fetching READY/UP_NEXT tasks for ${userId}:`, readyError);
@@ -321,6 +344,7 @@ serve(async (req) => {
           .select('id, title, category, priority, estimate_minutes, due_date, pushed_count, status')
           .in('id', allCandidateIds)
           .not('status', 'in', '("DONE","BLOCKED")')
+          .not('title', 'ilike', '%Test Task%')
           .is('is_scheduled', false)
           .is('completed_at', null)
           .order('created_at', { ascending: true });
@@ -488,9 +512,13 @@ serve(async (req) => {
 
         console.log(`  ✅ Scheduled ${scheduled.length} tasks`);
 
-        // Update tasks with their scheduled times, preserving pre-schedule status
+        // Update tasks with their scheduled times — ONLY if the scheduler returned valid times
+        let actuallyScheduled = 0;
         for (const slot of scheduled) {
-          if (!slot.taskId) continue;
+          if (!slot.taskId || !slot.start_time || !slot.end_time) {
+            console.log(`  ⏭️ Skipping task ${slot.taskId || 'unknown'}: no valid time slot returned`);
+            continue;
+          }
           
           const candidate = selectedCandidates.find(c => c.id === slot.taskId);
           const preScheduleStatus = candidate?.status || 'TODO';
@@ -509,8 +537,12 @@ serve(async (req) => {
 
           if (scheduleError) {
             console.error(`❌ Error scheduling task ${slot.taskId}:`, scheduleError);
+          } else {
+            actuallyScheduled++;
           }
         }
+        
+        console.log(`  ✅ Actually scheduled ${actuallyScheduled}/${scheduled.length} tasks (${scheduled.length - actuallyScheduled} had no time slot)`);
 
         // ==========================================
         // STEP 6: Log the run
@@ -547,8 +579,22 @@ serve(async (req) => {
         };
 
       } catch (userError) {
-        console.error(`❌ Error processing user ${userId}:`, userError);
-        results[userId] = { error: String(userError) };
+        const errMsg = userError instanceof Error ? userError.message : String(userError);
+        const errStack = userError instanceof Error ? userError.stack : 'no stack';
+        console.error(`❌ Error processing user ${userId}: ${errMsg}`);
+        console.error(`  Stack trace: ${errStack}`);
+        
+        // Log the failure so it's visible in activity_log
+        try {
+          await supabase.from('activity_log').insert({
+            user_id: userId,
+            activity_type: 'nightly_schedule_built',
+            status: 'error',
+            metadata: { error: errMsg, stack: errStack, processing_ms: Date.now() - startTime },
+          });
+        } catch (_) { /* best effort */ }
+        
+        results[userId] = { error: errMsg, stack: errStack };
       }
     }
 
