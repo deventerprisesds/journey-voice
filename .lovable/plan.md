@@ -1,140 +1,95 @@
 
+The mismatch is real. I found 5 separate causes, and they stack together:
 
-# Combined Plan: Task Drag-and-Drop Between Groups + Protect Manual Groups
+## Why tasks are breaking your window rules
 
-## Overview
+1. **Your backend is not actually using saved custom window settings for your user**
+   - In `user_scheduling_prefs`, your user record (`a3378f93-...`) currently has `config = null`.
+   - That means the schedulers are falling back to built-in defaults instead of enforcing your custom mappings.
 
-This plan combines all previously discussed but unimplemented changes into one deliverable:
+2. **The fallback defaults are inconsistent across the app**
+   - Frontend default config:
+     - `PROF_EDUCATION -> after_work/weekends`
+     - `EDUCATION -> flexible`
+   - `nightly-schedule-builder` fallback:
+     - `PROF_EDUCATION -> business_hours/after_work`
+     - `EDUCATION -> after_work/evening`
+   - So selection logic and placement logic are already starting from different rules.
 
-1. **Database**: Add `is_manual` column to `task_topic_index` and fix the cleanup trigger to skip manually created groups
-2. **Database**: Update `task_count` bookkeeping so it stays accurate
-3. **UI**: Enable dragging individual tasks between groups/subgroups in "group" view mode
-4. **UI**: Add "Ungroup" option to the batch toolbar
-5. **Code**: Set `is_manual = true` when users create groups via the dialog
-6. **Code**: Update `task_count` in `batchMoveToGroup` and `handleMoveToGroup`
+3. **`batch-calendar-scheduler` explicitly tells the AI to override category windows**
+   - Its prompt says category windows are only a “DEFAULT starting point”.
+   - It then forces:
+     - financial tasks -> `business_hours`
+     - communication tasks -> `business_hours`
+     - workouts -> `morning`
+   - So the current code is intentionally treating settings as soft preferences, not hard constraints.
 
----
+4. **There is no hard validator after the AI returns times**
+   - The scheduler accepts the AI’s times and writes them to the DB.
+   - It does **not** check whether each slot actually falls inside that task’s allowed windows.
 
-## 1. Database Migration
+5. **The Focus View visually hides violations**
+   - `FocusView.tsx` snaps out-of-window tasks into the nearest bucket.
+   - Example: a **5:00 AM** task is shown under **Morning** even though Morning starts at **6:00**.
+   - So some broken placements are being normalized in the UI instead of surfaced as invalid.
 
-Add the `is_manual` column and replace the cleanup trigger function:
+## Evidence from today’s schedule
 
-```sql
--- Add is_manual flag (false = auto-created by classifier, true = user-created)
-ALTER TABLE public.task_topic_index
-  ADD COLUMN IF NOT EXISTS is_manual boolean DEFAULT false;
+From the current board/data:
+- `PROF_EDUCATION` tasks at **5:00 AM** and **6:15 AM** are outside the configured/default allowed windows.
+- An `EDUCATION` task at **7:30 AM** is also outside the default `flexible` window if `flexible` starts at 9:00.
+- Several `LIFE` / `VENTURES` tasks during business hours are explained by the current “financial/comms override” logic, not by your settings.
 
--- Replace cleanup trigger: decrement counts, only auto-delete non-manual topics
-CREATE OR REPLACE FUNCTION public.cleanup_task_topic_on_delete()
-RETURNS TRIGGER AS $$
-BEGIN
-  UPDATE public.task_topic_index
-  SET task_count = task_count - 1, updated_at = now()
-  WHERE id IN (
-    SELECT topic_id FROM public.task_topic_mappings WHERE task_id = OLD.id
-  );
+## What to build to fix it
 
-  -- Only auto-delete system-generated (classifier) topics that hit zero
-  DELETE FROM public.task_topic_index
-  WHERE task_count <= 0
-    AND is_manual = false
-    AND id IN (
-      SELECT topic_id FROM public.task_topic_mappings WHERE task_id = OLD.id
-    );
+1. **Make one shared source of truth for scheduling config**
+   - Use the same defaults + merge behavior everywhere:
+     - frontend
+     - `nightly-schedule-builder`
+     - `batch-calendar-scheduler`
 
-  RETURN OLD;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
+2. **Fix settings persistence**
+   - Ensure the Scheduling Settings screen is actually saving `timeWindows` and `categoryMappings` into `user_scheduling_prefs.config` for the logged-in user.
+   - Add logging/guards so the scheduler warns when config is empty.
+
+3. **Change window rules from soft preferences to hard constraints**
+   - Saved category windows should be the allowed windows.
+   - Financial/comms/due-soon heuristics should only affect **priority order inside allowed windows**, not override them.
+
+4. **Add post-AI enforcement**
+   - After the AI returns slots:
+     - compute allowed windows for each task on that target day
+     - reject or mark `OVERFLOW` if the time falls outside allowed windows
+     - never persist an invalid slot
+
+5. **Actually use `windowCapacity`**
+   - `nightly-schedule-builder` sends it, but `batch-calendar-scheduler` currently ignores it.
+   - It should be included in the AI prompt and in server-side validation.
+
+6. **Stop masking violations in the UI**
+   - In `FocusView`, show an “Outside allowed window” state instead of snapping invalid tasks into Morning/Evening.
+   - That makes broken schedules obvious and debuggable.
+
+7. **Run a one-time cleanup**
+   - Audit today’s scheduled tasks
+   - unschedule only the tasks that violate the allowed windows
+   - rerun scheduling with strict enforcement
+
+## Files involved
+
+- `supabase/functions/nightly-schedule-builder/index.ts`
+- `supabase/functions/batch-calendar-scheduler/index.ts`
+- shared scheduling config in `supabase/functions/_shared/...`
+- `src/config/schedulingRules.ts`
+- `src/components/FocusView.tsx`
+
+## Recommended implementation rule
+
+```text
+Saved user settings = hard constraint
+Heuristics (financial/comms/due soon) = ranking only
+AI output outside allowed window = reject/overflow, never save
+UI must display violations instead of hiding them
 ```
 
-This means:
-- Classifier-created groups still get auto-cleaned when empty (existing behavior)
-- User-created groups/subgroups survive indefinitely until manually deleted
-
----
-
-## 2. `AddTopicGroupDialog.tsx` -- Set `is_manual: true`
-
-When a user creates a group or subgroup via the dialog, add `is_manual: true` to the upsert payload. This flags it as user-created and protects it from the cleanup trigger.
-
----
-
-## 3. Task Drag-and-Drop Between Groups (Group View Mode)
-
-### `TopicGroupPanel.tsx`
-
-- Import `Droppable` and `Draggable` from `@hello-pangea/dnd`
-- Wrap the task list area inside each group panel with a `Droppable` component:
-  - `droppableId` = the topic group ID (e.g., `"group-{topicGroup.id}"`)
-  - `type` = `"TASK_IN_GROUP"`
-- Wrap each task row with a `Draggable`:
-  - `draggableId` = `"task-in-group-{task.id}"`
-  - The entire task row becomes the drag handle
-- Child sub-group panels remain as they are (rendered above the task droppable)
-- The "Uncategorized" pseudo-group also gets a droppable (`"group-uncategorized-{categoryKey}"`)
-
-### `Priorities.tsx` (`handleDragEnd`)
-
-Add a new branch at the top of `handleDragEnd` for `type === 'TASK_IN_GROUP'`:
-
-```
-if (type === 'TASK_IN_GROUP') {
-  const taskId = extract from draggableId
-  const srcGroupId = extract from source.droppableId
-  const dstGroupId = extract from destination.droppableId
-
-  if srcGroupId === dstGroupId: return (no-op)
-
-  // Delete old mapping
-  await supabase.from('task_topic_mappings').delete().eq('task_id', taskId)
-
-  if destination is an uncategorized group:
-    // Just remove mapping (task becomes uncategorized)
-  else:
-    // Insert new mapping to destination topic
-    await supabase.from('task_topic_mappings').insert({ task_id, topic_id: dstGroupId })
-    // Increment task_count on destination
-    // Decrement task_count on source (if it was a real group)
-
-  // Refresh data
-}
-```
-
----
-
-## 4. `task_count` Bookkeeping
-
-### `batchMoveToGroup` in `Priorities.tsx`
-
-After deleting old mappings and inserting new ones:
-- Query old mappings first to find source topic IDs
-- Decrement `task_count` on each source topic
-- Increment `task_count` on the destination topic by the number of moved tasks
-
-### `handleMoveToGroup` in `TopicGroupPanel.tsx`
-
-After moving a single task:
-- Decrement `task_count` on the current group (`topicGroup.id`)
-- Increment `task_count` on the destination group
-
----
-
-## 5. Batch Toolbar: "Ungroup" Button
-
-Add an "Ungroup" button to the batch action bar (between "Status..." and the close button):
-- Icon: `FolderMinus` from lucide-react
-- On click: deletes all `task_topic_mappings` for selected task IDs, decrements `task_count` on affected source topics
-- Shows toast: "Removed N tasks from their groups"
-- Clears selection and refreshes
-
----
-
-## Files Changed
-
-| File | Change |
-|------|--------|
-| New migration | Add `is_manual` column; fix `cleanup_task_topic_on_delete` trigger |
-| `src/components/priorities/AddTopicGroupDialog.tsx` | Add `is_manual: true` to upsert payload |
-| `src/components/priorities/TopicGroupPanel.tsx` | Wrap tasks in `Droppable`/`Draggable` for `TASK_IN_GROUP` type; update `task_count` in `handleMoveToGroup` |
-| `src/pages/Priorities.tsx` | Handle `TASK_IN_GROUP` drag in `handleDragEnd`; update `task_count` in `batchMoveToGroup`; add "Ungroup" batch button |
-
+This will align the actual scheduler behavior with what you set in Settings, instead of letting the AI quietly “decide better.”
