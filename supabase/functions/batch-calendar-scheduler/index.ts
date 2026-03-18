@@ -289,51 +289,30 @@ ${busySlotsStr}
 
 SCHEDULING RULES (FOLLOW IN THIS EXACT ORDER):
 
-=== RULE 1: INTELLIGENT WINDOW ASSIGNMENT ===
-Category windows are the DEFAULT starting point, but you MUST override them when the task's NATURE demands it. Use your judgment to classify each task:
+=== RULE 1: HARD WINDOW CONSTRAINTS (MANDATORY) ===
+Each task's category has ALLOWED time windows listed above. You MUST schedule every task within its allowed windows. This is NOT optional.
 
-A) FINANCIAL IMPACT — tasks involving money (payments, transfers, fees, invoices, budgeting, bills, taxes, subscriptions, refunds, anything financial):
-   → FORCE to business_hours (${formatWindowHours('business_hours')}), EARLIEST available slot.
-   → Treat as HIGH priority regardless of the priority field.
+- If a category says "after_work or weekends", the task MUST be placed in one of those windows.
+- If a category says "flexible", you may use any active window.
+- NEVER place a task outside its allowed windows, even if it seems logical.
+- If the allowed window is full, mark the task as OVERFLOW (see Rule 6).
 
-B) PEOPLE / COMMUNICATION — tasks involving contacting, replying to, or coordinating with other people (emails, texts, replies, follow-ups, calls, scheduling meetings, responding to someone):
-   → FORCE to business_hours (${formatWindowHours('business_hours')}), EARLIEST available slot.
-   → Treat as HIGH priority regardless of the priority field.
+=== RULE 2: PRIORITY RANKING WITHIN WINDOWS ===
+Within the allowed windows, use these heuristics to determine ORDER (earliest slot first):
 
-C) TIME-SENSITIVE — tasks due within 48 hours, appointments, deadlines:
-   → EARLIEST available slot in the most appropriate window.
+A) FINANCIAL IMPACT — tasks involving money (payments, bills, taxes, subscriptions):
+   → Schedule EARLIEST within the task's allowed windows. Treat as HIGH priority.
 
-D) ERRANDS & APPOINTMENTS — shopping, doctor, bank, groceries, post office:
-   → after_work (${formatWindowHours('after_work')}) or business_hours based on context.
+B) PEOPLE / COMMUNICATION — tasks involving contacting or coordinating with others:
+   → Schedule EARLIEST within the task's allowed windows. Treat as HIGH priority.
 
-E) PHYSICAL / MORNING ROUTINES — workout, gym, breakfast, morning routine:
-   → morning (${formatWindowHours('morning')}).
+C) TIME-SENSITIVE — tasks due within 48 hours:
+   → EARLIEST available slot within allowed windows.
 
-F) SOCIAL / EVENING — dinner, family, social, relaxation:
-   → evening (${formatWindowHours('evening')}).
+D) Higher priority tasks (URGENT > HIGH > MEDIUM > LOW) get earlier slots within their window.
 
-G) ALL OTHER TASKS — use their category's default window as listed above.
-
-EXAMPLES of correct reasoning:
-- "Reply to Travis' text" → category B (communication) → business_hours, early
-- "Make car payments" → category A (financial) → business_hours, early
-- "Email Aaron" → category B (communication) → business_hours, early
-- "Research Claude Business" → category G (default) → use VENTURES default window
-- "Pick up groceries" → category D (errand) → after_work
-
-AVAILABLE TIME WINDOWS (already filtered for ${isWeekendDay ? 'weekend' : 'weekday'}):
-${Object.entries(filteredCategoryMappings).map(([cat, mapping]) => {
-      const wins = Array.isArray(mapping.defaultTimeWindow) ? mapping.defaultTimeWindow : [mapping.defaultTimeWindow];
-      const windowDescs = wins.map((w: string) => `${w}: ${formatWindowHours(w)}`).join(', OR ');
-      return `- ${cat} default → ${windowDescs}`;
-    }).join('\n')}
-
-=== RULE 2: NO CONFLICTS ===
+=== RULE 3: NO CONFLICTS ===
 NEVER double-book — each task must not overlap with busy slots OR other scheduled tasks.
-
-=== RULE 3: PRIORITY WITHIN WINDOW ===
-Higher priority tasks get EARLIER slots WITHIN their designated window. Urgent > High > Medium > Low.
-Financial and communication tasks (categories A & B above) are always treated as HIGH priority.
 
 === RULE 4: DUE DATES ===
 Respect due dates — schedule before deadline. Tasks due within 48 hours get priority placement.
@@ -342,7 +321,7 @@ Respect due dates — schedule before deadline. Tasks due within 48 hours get pr
 Leave 15-minute buffer between tasks when possible.
 
 === RULE 6: OVERFLOW ===
-${targetDateObj ? `If a task cannot fit within its assigned window on ${targetDateISO} (window is full or no time left), mark it with reasoning "OVERFLOW: [window_name] full on ${targetDateISO}" and DO NOT schedule it. Do not force it into a different window.` : 'Schedule each task in its preferred time window based on category.'}
+${targetDateObj ? `If a task cannot fit within its ALLOWED windows on ${targetDateISO} (window is full or no time left), mark it with reasoning "OVERFLOW: [window_name] full on ${targetDateISO}" and DO NOT schedule it. Do NOT force it into a different window.` : 'Schedule each task in its allowed time window based on category.'}
 ${overflowInstructions}
 
 CRITICAL TIME FORMAT REQUIREMENTS:
