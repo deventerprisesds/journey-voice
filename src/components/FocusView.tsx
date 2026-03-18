@@ -930,6 +930,17 @@ const FocusView: React.FC<FocusViewProps> = ({
                                           <Badge variant="outline" className={cn("text-xs", categoryColors[task.category])}>
                                             {task.category.toLowerCase()}
                                           </Badge>
+                                          {(() => {
+                                            const { violation, actualWindow, allowedWindows } = isWindowViolation(task);
+                                            if (violation) {
+                                              return (
+                                                <Badge variant="outline" className="text-xs bg-destructive/10 text-destructive border-destructive/20">
+                                                  ⚠ wrong window ({actualWindow} → {allowedWindows.join('/')})
+                                                </Badge>
+                                              );
+                                            }
+                                            return null;
+                                          })()}
                                           {task.estimate_minutes && (
                                             <span className="text-xs text-muted-foreground flex items-center gap-1">
                                               <Clock className="h-3 w-3" />
