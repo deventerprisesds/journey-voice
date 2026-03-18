@@ -549,8 +549,22 @@ serve(async (req) => {
         };
 
       } catch (userError) {
-        console.error(`❌ Error processing user ${userId}:`, userError);
-        results[userId] = { error: String(userError) };
+        const errMsg = userError instanceof Error ? userError.message : String(userError);
+        const errStack = userError instanceof Error ? userError.stack : 'no stack';
+        console.error(`❌ Error processing user ${userId}: ${errMsg}`);
+        console.error(`  Stack trace: ${errStack}`);
+        
+        // Log the failure so it's visible in activity_log
+        try {
+          await supabase.from('activity_log').insert({
+            user_id: userId,
+            activity_type: 'nightly_schedule_built',
+            status: 'error',
+            metadata: { error: errMsg, stack: errStack, processing_ms: Date.now() - startTime },
+          });
+        } catch (_) { /* best effort */ }
+        
+        results[userId] = { error: errMsg, stack: errStack };
       }
     }
 
