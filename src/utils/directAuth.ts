@@ -200,7 +200,7 @@ export async function fastPathGetSession(): Promise<Session | null> {
             refresh_token: refreshed.refresh_token,
             expires_in: refreshed.expires_in || 3600,
             expires_at: refreshed.expires_at || Math.floor(Date.now() / 1000) + 3600,
-            token_type: refreshed.token_type || 'bearer',
+            token_type: (refreshed.token_type || 'bearer') as 'bearer',
             user: refreshed.user!
           };
         }
