@@ -866,109 +866,164 @@ const FocusView: React.FC<FocusViewProps> = ({
                               </div>
                             </div>
                             
-                            {/* Tasks in Window */}
+                            {/* Tasks and Open Slots in Window */}
                             <div className="p-2 space-y-2">
-                              {windowTasks.length > 0 ? (
-                                windowTasks.map(task => (
-                                  <div 
-                                    key={task.id}
-                                    className="bg-card rounded-md p-3 shadow-sm border cursor-pointer hover:shadow-md transition-shadow"
-                                    onClick={() => onTaskEdit(task)}
-                                  >
-                                    <div className="flex items-start gap-2">
-                                      <Checkbox
-                                        checked={task.status === 'DONE'}
-                                        onCheckedChange={(checked) => {
-                                          if (checked) handleCompleteTask(task.id);
-                                          else onStatusChange(task.id, 'TODO');
-                                        }}
-                                        onClick={(e) => e.stopPropagation()}
-                                        className="mt-0.5 flex-shrink-0"
-                                      />
-                                      <div className="flex-1 min-w-0">
-                                        <div className="flex items-center justify-between gap-2">
-                                          <div className="flex items-center gap-2 min-w-0 flex-1">
-                                            <span className="text-xs text-muted-foreground flex-shrink-0">
-                                              {task.start_time && format(parseISO(task.start_time), 'h:mm a')}
-                                            </span>
-                                            <span className={cn("font-medium text-sm truncate", task.status === 'DONE' && 'line-through text-muted-foreground')}>
-                                              {task.title}
-                                            </span>
+                              {(() => {
+                                // Build a merged timeline: tasks at their slots + open slots
+                                const occupiedSlots = new Set<string>();
+                                windowTasks.forEach(task => {
+                                  if (task.start_time) {
+                                    const { hour, minute } = getTimePartsInTimezone(task.start_time, userTimezone);
+                                    // Mark the slot and subsequent slots based on duration
+                                    const durationMinutes = task.estimate_minutes || 60;
+                                    for (let m = 0; m < durationMinutes; m += 30) {
+                                      const slotMin = minute + m;
+                                      const slotHour = hour + Math.floor(slotMin / 60);
+                                      const slotMinute = slotMin % 60 < 30 ? 0 : 30;
+                                      occupiedSlots.add(`${slotHour}-${slotMinute}`);
+                                    }
+                                  }
+                                });
+
+                                const openSlots = dropSlots.filter(s => !occupiedSlots.has(`${s.hour}-${s.minute}`));
+
+                                // If no tasks and no slots, show simple placeholder
+                                if (windowTasks.length === 0 && openSlots.length === 0) {
+                                  return (
+                                    <div className="p-4 border-2 border-dashed rounded-md text-center text-sm text-muted-foreground border-muted">
+                                      No slots available
+                                    </div>
+                                  );
+                                }
+
+                                // Merge tasks and open slots into a sorted timeline
+                                type TimelineItem = { type: 'task'; task: Task; sortKey: number } | { type: 'slot'; slot: { hour: number; minute: number; label: string }; sortKey: number };
+                                const timeline: TimelineItem[] = [];
+
+                                windowTasks.forEach(task => {
+                                  const sortKey = task.start_time 
+                                    ? (() => { const { hour, minute } = getTimePartsInTimezone(task.start_time, userTimezone); return hour * 60 + minute; })()
+                                    : 0;
+                                  timeline.push({ type: 'task', task, sortKey });
+                                });
+
+                                openSlots.forEach(slot => {
+                                  timeline.push({ type: 'slot', slot, sortKey: slot.hour * 60 + slot.minute });
+                                });
+
+                                timeline.sort((a, b) => a.sortKey - b.sortKey);
+
+                                return timeline.map((item, idx) => {
+                                  if (item.type === 'task') {
+                                    const task = item.task;
+                                    return (
+                                      <div 
+                                        key={task.id}
+                                        className="bg-card rounded-md p-3 shadow-sm border cursor-pointer hover:shadow-md transition-shadow"
+                                        onClick={() => onTaskEdit(task)}
+                                      >
+                                        <div className="flex items-start gap-2">
+                                          <Checkbox
+                                            checked={task.status === 'DONE'}
+                                            onCheckedChange={(checked) => {
+                                              if (checked) handleCompleteTask(task.id);
+                                              else onStatusChange(task.id, 'TODO');
+                                            }}
+                                            onClick={(e) => e.stopPropagation()}
+                                            className="mt-0.5 flex-shrink-0"
+                                          />
+                                          <div className="flex-1 min-w-0">
+                                            <div className="flex items-center justify-between gap-2">
+                                              <div className="flex items-center gap-2 min-w-0 flex-1">
+                                                <span className="text-xs text-muted-foreground flex-shrink-0">
+                                                  {task.start_time && format(parseISO(task.start_time), 'h:mm a')}
+                                                </span>
+                                                <span className={cn("font-medium text-sm truncate", task.status === 'DONE' && 'line-through text-muted-foreground')}>
+                                                  {task.title}
+                                                </span>
+                                              </div>
+                                              <div className="flex items-center gap-1 flex-shrink-0">
+                                                {task.status !== 'DOING' && task.status !== 'DONE' && (
+                                                  <>
+                                                    <Button
+                                                      variant="ghost"
+                                                      size="icon"
+                                                      className="h-7 w-7 hover:bg-destructive/10"
+                                                      onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        handleRemoveFromSchedule(task);
+                                                      }}
+                                                      title="Remove from schedule"
+                                                    >
+                                                      <X className="h-4 w-4 text-muted-foreground hover:text-destructive" />
+                                                    </Button>
+                                                    <Button
+                                                      variant="ghost"
+                                                      size="icon"
+                                                      className="h-7 w-7 hover:bg-green-100 dark:hover:bg-green-900"
+                                                      onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        handleStartTask(task.id);
+                                                      }}
+                                                      title="Start working on this task"
+                                                    >
+                                                      <Play className="h-4 w-4 text-green-600" />
+                                                    </Button>
+                                                  </>
+                                                )}
+                                              </div>
+                                            </div>
+                                            <div className="flex items-center gap-2 mt-1 flex-wrap">
+                                              <Badge variant="outline" className={cn("text-xs", categoryColors[task.category])}>
+                                                {task.category.toLowerCase()}
+                                              </Badge>
+                                              {(() => {
+                                                const { violation, actualWindow, allowedWindows } = isWindowViolation(task);
+                                                if (violation) {
+                                                  return (
+                                                    <Badge variant="outline" className="text-xs bg-destructive/10 text-destructive border-destructive/20">
+                                                      ⚠ wrong window ({actualWindow} → {allowedWindows.join('/')})
+                                                    </Badge>
+                                                  );
+                                                }
+                                                return null;
+                                              })()}
+                                              {task.estimate_minutes && (
+                                                <span className="text-xs text-muted-foreground flex items-center gap-1">
+                                                  <Clock className="h-3 w-3" />
+                                                  {task.estimate_minutes}m
+                                                </span>
+                                              )}
+                                            </div>
                                           </div>
-                                          <div className="flex items-center gap-1 flex-shrink-0">
-                                            {task.status !== 'DOING' && task.status !== 'DONE' && (
-                                              <>
-                                                <Button
-                                                  variant="ghost"
-                                                  size="icon"
-                                                  className="h-7 w-7 hover:bg-destructive/10"
-                                                  onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    handleRemoveFromSchedule(task);
-                                                  }}
-                                                  title="Remove from schedule"
-                                                >
-                                                  <X className="h-4 w-4 text-muted-foreground hover:text-destructive" />
-                                                </Button>
-                                                <Button
-                                                  variant="ghost"
-                                                  size="icon"
-                                                  className="h-7 w-7 hover:bg-green-100 dark:hover:bg-green-900"
-                                                  onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    handleStartTask(task.id);
-                                                  }}
-                                                  title="Start working on this task"
-                                                >
-                                                  <Play className="h-4 w-4 text-green-600" />
-                                                </Button>
-                                              </>
-                                            )}
-                                          </div>
-                                        </div>
-                                        <div className="flex items-center gap-2 mt-1 flex-wrap">
-                                          <Badge variant="outline" className={cn("text-xs", categoryColors[task.category])}>
-                                            {task.category.toLowerCase()}
-                                          </Badge>
-                                          {(() => {
-                                            const { violation, actualWindow, allowedWindows } = isWindowViolation(task);
-                                            if (violation) {
-                                              return (
-                                                <Badge variant="outline" className="text-xs bg-destructive/10 text-destructive border-destructive/20">
-                                                  ⚠ wrong window ({actualWindow} → {allowedWindows.join('/')})
-                                                </Badge>
-                                              );
-                                            }
-                                            return null;
-                                          })()}
-                                          {task.estimate_minutes && (
-                                            <span className="text-xs text-muted-foreground flex items-center gap-1">
-                                              <Clock className="h-3 w-3" />
-                                              {task.estimate_minutes}m
-                                            </span>
-                                          )}
                                         </div>
                                       </div>
-                                    </div>
-                                  </div>
-                                ))
-                              ) : (
-                                <Droppable droppableId={`timeslot-${dropSlots[0]?.hour || config.timeWindows[windowName as keyof typeof config.timeWindows]?.start}-0`}>
-                                  {(provided, snapshot) => (
-                                    <div
-                                      ref={provided.innerRef}
-                                      {...provided.droppableProps}
-                                      className={cn(
-                                        "p-4 border-2 border-dashed rounded-md text-center text-sm text-muted-foreground transition-colors",
-                                        snapshot.isDraggingOver ? "border-primary bg-primary/5" : "border-muted"
+                                    );
+                                  }
+
+                                  // Open slot
+                                  const slot = item.slot;
+                                  return (
+                                    <Droppable key={`slot-${slot.hour}-${slot.minute}`} droppableId={`timeslot-${slot.hour}-${slot.minute}`}>
+                                      {(provided, snapshot) => (
+                                        <div
+                                          ref={provided.innerRef}
+                                          {...provided.droppableProps}
+                                          className={cn(
+                                            "p-2 border border-dashed rounded-md text-xs text-muted-foreground transition-colors flex items-center gap-2",
+                                            snapshot.isDraggingOver ? "border-primary bg-primary/5" : "border-muted/50"
+                                          )}
+                                        >
+                                          <Clock className="h-3 w-3 flex-shrink-0" />
+                                          <span>{slot.label}</span>
+                                          <span className="text-muted-foreground/50">— open</span>
+                                          {provided.placeholder}
+                                        </div>
                                       )}
-                                    >
-                                      <span>Drop task here to schedule</span>
-                                      {provided.placeholder}
-                                    </div>
-                                  )}
-                                </Droppable>
-                              )}
+                                    </Droppable>
+                                  );
+                                });
+                              })()}
                             </div>
                           </div>
                         );
