@@ -479,116 +479,117 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
           {dates.map((date, dateIndex) => {
             const items = layoutItemsForDate(date);
             return (
-              <div key={`overlay-${dateIndex}`} className="relative border-r">
-                {items.map((item, idx) => {
-                  const top = item.startMin * PX_PER_MINUTE + 1;
-                  const height = Math.max(12, (item.endMin - item.startMin) * PX_PER_MINUTE - 2);
-                  const width = 100 / item.columnsInGroup;
-                  const left = item.column * width;
+              <Droppable droppableId={`overlay-${dateIndex}`} isDropDisabled>
+                {(provided) => (
+                  <div ref={provided.innerRef} {...provided.droppableProps} className="relative border-r">
+                    {items.map((item, idx) => {
+                      const top = item.startMin * PX_PER_MINUTE + 1;
+                      const height = Math.max(12, (item.endMin - item.startMin) * PX_PER_MINUTE - 2);
+                      const width = 100 / item.columnsInGroup;
+                      const left = item.column * width;
 
-                  if (item.type === 'event') {
-                    const ev = item.raw as ExternalCalendarEvent;
-                    return (
-                      <div
-                        key={`ev-${idx}`}
-                        className="absolute rounded bg-purple-100 border-l-4 border-purple-500 px-2 py-1 text-xs shadow-sm pointer-events-auto"
-                        style={{ top, height, left: `${left}%`, width: `calc(${width}% - 2px)` }}
-                        title={`External Event: ${ev.title}`}
-                      >
-                        <div className="flex items-center gap-1 mb-0.5">
-                          <Calendar className="h-3 w-3 text-purple-600" />
-                          <span className="truncate font-medium text-purple-900">{ev.title}</span>
-                        </div>
-                        <div className="text-purple-700 text-xs flex items-center gap-1">
-                          <Clock className="h-2 w-2" />
-                          {formatTimeInTimezone(ev.start_time, timezone)} - {formatTimeInTimezone(ev.end_time, timezone)}
-                        </div>
-                      </div>
-                    );
-                  }
-
-                  const t = item.raw as Task;
-                  const categoryBorder = t.category ? categoryBorderColors[t.category] : '';
-                  
-                  // Make tasks draggable for rescheduling
-                  return (
-                    <Draggable key={t.id} draggableId={t.id} index={idx}>
-                      {(provided, snapshot) => (
-                        <div
-                          ref={provided.innerRef}
-                          {...provided.draggableProps}
-                          className={cn(
-                            "absolute rounded text-xs group cursor-pointer transition-opacity z-20 flex flex-col pointer-events-auto border-l-4",
-                            priorityColors[t.priority as keyof typeof priorityColors],
-                            categoryBorder,
-                            snapshot.isDragging ? 'opacity-70 shadow-lg' : 'hover:opacity-90'
-                          )}
-                          style={{ 
-                            top: snapshot.isDragging ? undefined : top, 
-                            height, 
-                            left: snapshot.isDragging ? undefined : `${left}%`, 
-                            width: `calc(${width}% - 2px)`, 
-                            padding: '4px',
-                            ...provided.draggableProps.style
-                          }}
-                          onClick={(e) => { e.stopPropagation(); if (!snapshot.isDragging) onTaskClick?.(t); }}
-                          title={t.title}
-                        >
-                          {/* Drag handle - visible on hover */}
-                          {onTaskReschedule && (
-                            <div 
-                              {...provided.dragHandleProps}
-                              className="absolute right-1 top-1 opacity-0 group-hover:opacity-100 transition-opacity z-30 cursor-grab active:cursor-grabbing touch-none"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <GripVertical className="h-3 w-3 text-white/70" />
+                      if (item.type === 'event') {
+                        const ev = item.raw as ExternalCalendarEvent;
+                        return (
+                          <div
+                            key={`ev-${idx}`}
+                            className="absolute rounded bg-purple-100 border-l-4 border-purple-500 px-2 py-1 text-xs shadow-sm pointer-events-auto"
+                            style={{ top, height, left: `${left}%`, width: `calc(${width}% - 2px)` }}
+                            title={`External Event: ${ev.title}`}
+                          >
+                            <div className="flex items-center gap-1 mb-0.5">
+                              <Calendar className="h-3 w-3 text-purple-600" />
+                              <span className="truncate font-medium text-purple-900">{ev.title}</span>
                             </div>
-                          )}
-                          
-                          {/* Checkbox overlay - visible on hover */}
-                          {onStatusChange && (
-                            <div 
-                              className="absolute left-1 top-1 opacity-0 group-hover:opacity-100 transition-opacity z-30"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <Checkbox
-                                checked={t.status === 'DONE'}
-                                onCheckedChange={(checked) => handleCheckboxChange(t.id, !!checked)}
-                                className="h-3 w-3 bg-white border-2"
-                              />
-                            </div>
-                          )}
-
-                          {/* Category badge */}
-                          {t.category && (
-                            <Badge 
-                              className={cn(
-                                "absolute top-0.5 right-4 text-[9px] px-1 py-0 h-4 font-medium",
-                                categoryColors[t.category]
-                              )}
-                            >
-                              {t.category}
-                            </Badge>
-                          )}
-
-                          <div className={cn(
-                            "font-medium leading-tight break-words pr-12",
-                            t.status === 'DONE' && "line-through opacity-60"
-                          )}>
-                            {t.title}
-                          </div>
-                          {t.start_time && t.end_time && (
-                            <div className="text-xs opacity-90 flex items-center gap-1 mt-auto">
+                            <div className="text-purple-700 text-xs flex items-center gap-1">
                               <Clock className="h-2 w-2" />
-                              {formatTimeInTimezone(t.start_time, timezone, { hour: 'numeric', minute: '2-digit' })} - {formatTimeInTimezone(t.end_time, timezone, { hour: 'numeric', minute: '2-digit' })}
+                              {formatTimeInTimezone(ev.start_time, timezone)} - {formatTimeInTimezone(ev.end_time, timezone)}
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      const t = item.raw as Task;
+                      const categoryBorder = t.category ? categoryBorderColors[t.category] : '';
+                      
+                      return (
+                        <Draggable key={t.id} draggableId={t.id} index={idx}>
+                          {(provided, snapshot) => (
+                            <div
+                              ref={provided.innerRef}
+                              {...provided.draggableProps}
+                              className={cn(
+                                "absolute rounded text-xs group cursor-pointer transition-opacity z-20 flex flex-col pointer-events-auto border-l-4",
+                                priorityColors[t.priority as keyof typeof priorityColors],
+                                categoryBorder,
+                                snapshot.isDragging ? 'opacity-70 shadow-lg' : 'hover:opacity-90'
+                              )}
+                              style={{ 
+                                top: snapshot.isDragging ? undefined : top, 
+                                height, 
+                                left: snapshot.isDragging ? undefined : `${left}%`, 
+                                width: `calc(${width}% - 2px)`, 
+                                padding: '4px',
+                                ...provided.draggableProps.style
+                              }}
+                              onClick={(e) => { e.stopPropagation(); if (!snapshot.isDragging) onTaskClick?.(t); }}
+                              title={t.title}
+                            >
+                              {onTaskReschedule && (
+                                <div 
+                                  {...provided.dragHandleProps}
+                                  className="absolute right-1 top-1 opacity-0 group-hover:opacity-100 transition-opacity z-30 cursor-grab active:cursor-grabbing touch-none"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <GripVertical className="h-3 w-3 text-white/70" />
+                                </div>
+                              )}
+                              
+                              {onStatusChange && (
+                                <div 
+                                  className="absolute left-1 top-1 opacity-0 group-hover:opacity-100 transition-opacity z-30"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <Checkbox
+                                    checked={t.status === 'DONE'}
+                                    onCheckedChange={(checked) => handleCheckboxChange(t.id, !!checked)}
+                                    className="h-3 w-3 bg-white border-2"
+                                  />
+                                </div>
+                              )}
+
+                              {t.category && (
+                                <Badge 
+                                  className={cn(
+                                    "absolute top-0.5 right-4 text-[9px] px-1 py-0 h-4 font-medium",
+                                    categoryColors[t.category]
+                                  )}
+                                >
+                                  {t.category}
+                                </Badge>
+                              )}
+
+                              <div className={cn(
+                                "font-medium leading-tight break-words pr-12",
+                                t.status === 'DONE' && "line-through opacity-60"
+                              )}>
+                                {t.title}
+                              </div>
+                              {t.start_time && t.end_time && (
+                                <div className="text-xs opacity-90 flex items-center gap-1 mt-auto">
+                                  <Clock className="h-2 w-2" />
+                                  {formatTimeInTimezone(t.start_time, timezone, { hour: 'numeric', minute: '2-digit' })} - {formatTimeInTimezone(t.end_time, timezone, { hour: 'numeric', minute: '2-digit' })}
+                                </div>
+                              )}
                             </div>
                           )}
-                        </div>
-                      )}
-                    </Draggable>
-                  );
-                })}
-              </div>
+                        </Draggable>
+                      );
+                    })}
+                    {provided.placeholder}
+                  </div>
+                )}
+              </Droppable>
             );
           })}
         </div>
