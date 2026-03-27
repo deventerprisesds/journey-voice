@@ -164,7 +164,7 @@ serve(async (req) => {
             .from('tasks')
             .update({
               assignment_id: assignment.id,
-              due_date: assignment.due_date ? `${assignment.due_date}T23:59:59Z` : null,
+              due_date: assignment.due_date ? new Date(assignment.due_date).toISOString().split('T')[0] + 'T23:59:59Z' : null,
               updated_at: now.toISOString(),
             })
             .eq('id', legacyTask.id);
