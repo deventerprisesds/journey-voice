@@ -216,7 +216,9 @@ const FocusView: React.FC<FocusViewProps> = ({
     return new Date(a.start_time).getTime() - new Date(b.start_time).getTime();
   });
 
-  // Group scheduled tasks by time window using timezone-aware time extraction
+  // Determine which windows to show based on day of week
+  const isWeekend = today.getDay() === 0 || today.getDay() === 6;
+  
   // Check if a task violates its allowed time window
   const isWindowViolation = (task: Task): { violation: boolean; actualWindow: string; allowedWindows: string[] } => {
     if (!task.start_time) return { violation: false, actualWindow: '', allowedWindows: [] };
@@ -227,10 +229,14 @@ const FocusView: React.FC<FocusViewProps> = ({
     
     // Find actual window
     let actualWindow = 'unknown';
-    if (windows.morning.days.includes(dayOfWeek) && taskHour >= windows.morning.start && taskHour < windows.morning.end) actualWindow = 'morning';
-    else if (windows.business_hours.days.includes(dayOfWeek) && taskHour >= windows.business_hours.start && taskHour < windows.business_hours.end) actualWindow = 'business_hours';
-    else if (windows.after_work.days.includes(dayOfWeek) && taskHour >= windows.after_work.start && taskHour < windows.after_work.end) actualWindow = 'after_work';
-    else if (windows.evening.days.includes(dayOfWeek) && taskHour >= windows.evening.start && taskHour < windows.evening.end) actualWindow = 'evening';
+    if (isWeekend && windows.weekends?.days?.includes(dayOfWeek) && taskHour >= windows.weekends.start && taskHour < windows.weekends.end) {
+      actualWindow = 'weekends';
+    } else if (!isWeekend) {
+      if (windows.morning.days.includes(dayOfWeek) && taskHour >= windows.morning.start && taskHour < windows.morning.end) actualWindow = 'morning';
+      else if (windows.business_hours.days.includes(dayOfWeek) && taskHour >= windows.business_hours.start && taskHour < windows.business_hours.end) actualWindow = 'business_hours';
+      else if (windows.after_work.days.includes(dayOfWeek) && taskHour >= windows.after_work.start && taskHour < windows.after_work.end) actualWindow = 'after_work';
+      else if (windows.evening.days.includes(dayOfWeek) && taskHour >= windows.evening.start && taskHour < windows.evening.end) actualWindow = 'evening';
+    }
     
     // Get allowed windows for this category
     const catMapping = config.categoryMappings[task.category];
@@ -246,11 +252,15 @@ const FocusView: React.FC<FocusViewProps> = ({
   };
 
   const getTimeWindowForTask = (task: Task): string => {
-    if (!task.start_time) return 'business_hours';
+    if (!task.start_time) return isWeekend ? 'weekends' : 'business_hours';
     
     const { hour: taskHour } = getTimePartsInTimezone(task.start_time, userTimezone);
     const dayOfWeek = today.getDay();
     const windows = config.timeWindows;
+    
+    if (isWeekend) {
+      return 'weekends'; // All tasks go to the single weekend window
+    }
     
     let assignedWindow = 'after_work'; // default fallback
     
@@ -266,16 +276,17 @@ const FocusView: React.FC<FocusViewProps> = ({
     return assignedWindow;
   };
 
-  const tasksByWindow: Record<string, Task[]> = {
-    morning: [],
-    business_hours: [],
-    after_work: [],
-    evening: [],
-  };
+  // Build the window list based on weekday vs weekend
+  const activeWindowNames = isWeekend ? ['weekends'] : ['morning', 'business_hours', 'after_work', 'evening'];
+  
+  const tasksByWindow: Record<string, Task[]> = {};
+  activeWindowNames.forEach(name => { tasksByWindow[name] = []; });
 
   scheduledToday.forEach(task => {
     const window = getTimeWindowForTask(task);
-    tasksByWindow[window].push(task);
+    if (tasksByWindow[window]) {
+      tasksByWindow[window].push(task);
+    }
   });
 
   // Schedule task at specific time using timezone-aware conversion
