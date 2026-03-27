@@ -126,14 +126,7 @@ async function syncCalendarEvents(supabaseClient: any, connectionId: string, sta
   
   const connection = tokenData[0];
 
-  // Verify connection has READ purpose
-  const { data: connInfo, error: connError } = await supabaseClient
-    .from('calendar_connections')
-    .select('purposes')
-    .eq('id', connectionId)
-    .single();
-
-  if (connError || !connInfo?.purposes?.includes('READ')) {
+  if (!connRecord?.purposes?.includes('READ')) {
     console.warn(`Connection ${connectionId} does not have READ purpose, skipping sync`);
     return new Response(
       JSON.stringify({ success: false, error: 'Connection does not have READ purpose' }),
