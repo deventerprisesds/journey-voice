@@ -101,11 +101,22 @@ async function getConnectionsByPurpose(supabaseClient: any, userId: string, purp
 }
 
 async function syncCalendarEvents(supabaseClient: any, connectionId: string, startDate: string, endDate: string) {
-  // Get calendar connection tokens securely
+  // Get connection info first (user_id needed for service-role-safe token decryption)
+  const { data: connRecord, error: connRecordError } = await supabaseClient
+    .from('calendar_connections')
+    .select('user_id, purposes')
+    .eq('id', connectionId)
+    .single();
+
+  if (connRecordError || !connRecord) {
+    throw new Error('Calendar connection not found');
+  }
+
+  // Get calendar connection tokens securely (service-role safe)
   const { data: tokenData, error: tokenError } = await supabaseClient
     .rpc('get_calendar_connection_tokens_service', {
       _connection_id: connectionId,
-      _user_id: null as any // will be resolved below
+      _user_id: connRecord.user_id
     });
 
   if (tokenError || !tokenData || tokenData.length === 0) {
