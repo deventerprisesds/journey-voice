@@ -220,7 +220,7 @@ serve(async (req) => {
     const tasksList = tasks.map((task: TaskToSchedule, i: number) => {
       const duration = task.estimate_minutes || task.schedulingHints?.estimatedDuration || 60;
       const catInfo = categoryWindowLookup[task.category] || categoryWindowLookup.LIFE || { windows: 'flexible', hours: 'flexible: 9am-10pm' };
-      return `${i + 1}. "${task.title}" 
+      return `${i}. "${task.title}" (taskIndex: ${i})
    - Category: ${task.category} (default window: ${catInfo.windows}: ${catInfo.hours})
    - Priority: ${task.priority}
    - Duration: ${duration} minutes
@@ -463,8 +463,17 @@ IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include tim
     const rejectedTasks = [];
     
     for (const result of scheduledResults) {
-      const originalTask = tasks[result.taskIndex];
-      if (!originalTask) continue;
+      // Handle off-by-one: AI sometimes returns 1-based index despite prompt saying 0-based
+      const rawIdx = result.taskIndex;
+      const idx = (rawIdx >= 1 && rawIdx > tasks.length - 1) ? rawIdx - 1 : rawIdx;
+      if (idx !== rawIdx) {
+        console.warn(`⚠️ Corrected taskIndex from ${rawIdx} to ${idx} (1-based → 0-based)`);
+      }
+      const originalTask = tasks[idx];
+      if (!originalTask) {
+        console.warn(`⚠️ No task found for taskIndex=${rawIdx} (corrected=${idx}), skipping`);
+        continue;
+      }
       
       // Normalize times - if AI returned naive ISO, treat as local to user's timezone
       const normalizedStart = normalizeDateTime(result.start_time, timezone);
