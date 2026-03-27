@@ -220,7 +220,7 @@ serve(async (req) => {
     const tasksList = tasks.map((task: TaskToSchedule, i: number) => {
       const duration = task.estimate_minutes || task.schedulingHints?.estimatedDuration || 60;
       const catInfo = categoryWindowLookup[task.category] || categoryWindowLookup.LIFE || { windows: 'flexible', hours: 'flexible: 9am-10pm' };
-      return `${i + 1}. "${task.title}" 
+      return `${i}. "${task.title}" (taskIndex: ${i})
    - Category: ${task.category} (default window: ${catInfo.windows}: ${catInfo.hours})
    - Priority: ${task.priority}
    - Duration: ${duration} minutes
