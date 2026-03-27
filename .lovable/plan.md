@@ -1,40 +1,66 @@
 
 
-# Fix Plan: Priority Logic, Stale Assignments, and Weekend Window Enforcement
+# Combined Plan: Fix Deployment + Calendar Connections
 
-## Problems Confirmed by Data
+## Issue 1: Published Site Still Shows Placeholder
 
-### Problem 1: Old/stale assignments dominating the schedule
-Saturday's schedule is filled with tasks due in **October 2025** and **February 2026** (e.g., "PLJ CTC Session 2 Assignment 1" due 2025-10-17, "Forum 3.3" due 2025-10-20). Meanwhile, the **actually upcoming** EMBA assignments (due March 30: "Project Management Tracker", "Draft Client Presentation") have no tasks created for them — `assignment_id` is `nil` on all scheduled tasks. The assignment sync is either not matching these or the old tasks were never archived.
+The build trigger comment (`// Build trigger: 2026-03-27`) was already added but the platform still says "Up to date." The preview works fine (console logs show 28 tasks loaded, demo mode active). The published URL serves the Lovable placeholder HTML.
 
-**Root cause**: The `nightly-assignment-sync` function filters assignments by `NOT status IN ('completed','graded','past due')`. The EMBA assignments table shows status = `upcoming` for the real due items — those should be synced. But the **old tasks** (due Oct 2025) were created long before the `assignment_id` column existed, so they have `assignment_id = NULL`. The sync function's dedup check (`eq('assignment_id', assignment.id)`) never finds them, so it doesn't archive them. They keep rolling over nightly with incrementing `pushed_count`.
+**Fix**: Make another trivial change to force a fresh build cycle. Update the build trigger timestamp to include time (e.g., `// Build trigger: 2026-03-27T16:30`). This will create a new build diff and re-enable the Update button.
 
-### Problem 2: Priority board boost not visible in scheduling order
-The score boost for priority board items (`+10` for `mappedIds`) is implemented in the nightly builder (line 380). However, looking at Saturday's actual schedule, old Forum posts (score ~1+3 pushed = 4) are placed before financial tasks like "Pay off credit cards" and people tasks like "Reply to career coach". The priority keyword boost (`+2`) exists but is too weak relative to pushed_count bonuses on ancient tasks.
+**File**: `src/App.tsx` line 1 -- change comment to include current time.
 
-**Root cause**: Tasks pushed 8-9 times get `+3` from pushed_count (capped at 3) plus their base priority. Old EDUCATION tasks with `pushed_count: 8` get score ~6-7, while a fresh LIFE task "Pay off credit cards" (financial keyword +2, priority LOW = +1) gets only ~3. The scoring doesn't sufficiently penalize staleness or boost intent-based priority.
+Additionally, suppress the PresenceTracking RLS errors for the demo user that spam the console every 30 seconds:
 
-### Problem 3: Weekend window not enforced for Saturday/Sunday
-Saturday March 28 shows tasks at 7:45 AM ET and 8:00 PM ET — both **outside** the weekends window (10 AM – 8 PM). The "After Work" header appears on Saturday in the screenshot. The batch-scheduler's day-of-week filtering correctly removes weekday windows from category mappings, but the **nightly builder's `getActiveWindows`** function checks `win.days.includes(targetDayOfWeek)`. Looking at the user config: `weekends: { start: 10, end: 20, days: [0, 6] }` — Saturday is day 6, Sunday is day 0. But `after_work` has `days: [1,2,3,4,5,6]` — **Saturday is included in after_work**! This means Saturday gets both `weekends` AND `after_work` windows active, breaking the weekend-only intent.
+**File**: `src/hooks/usePresenceTracking.ts` -- add early return when `userId` matches the demo user ID (`00000000-0000-0000-0000-000000000001`).
 
-## Fixes
+## Issue 2: Calendar Connection Fixes
 
-### Fix 1: Archive stale tasks and prevent recycling (nightly-schedule-builder)
-Add a staleness filter: tasks with `pushed_count >= 5` AND `due_date` more than 30 days in the past should be auto-archived (marked DONE with metadata). This prevents ancient assignments from consuming schedule capacity indefinitely.
+### 2a. Pass `connectionId` to enable silent token refresh
 
-**File**: `supabase/functions/nightly-schedule-builder/index.ts`
-- After rollover step (line ~240), add a staleness archival pass
-- Query tasks where `pushed_count >= 5` AND `due_date < 30 days ago` AND `status != 'DONE'`
-- Update them to `status: 'DONE'`, `completed_at: now`, `metadata: { archived_reason: 'stale_rollover' }`
-- Log count
+Currently `CalendarOAuthManager` in NotificationSettings receives no `connectionId`, so the refresh button never appears and silent token renewal is impossible.
 
-### Fix 2: Fix scoring to properly prioritize intent and recency (nightly-schedule-builder)
-Adjust the scoring formula:
-- **Financial/comms keyword**: boost from `+2` to `+5`
-- **Staleness penalty**: if `pushed_count > 3`, subtract `(pushed_count - 3)` from score (net effect: diminishing returns after 3 pushes)
-- **Due date relevance**: if `due_date` is more than 14 days in the past, apply `-3` penalty
-- Keep priority board boost at `+10`
+**File**: `src/components/NotificationSettings.tsx` (lines 1054, 1142)
+- Pass `connectionId={outlookConnection?.id}` and `connectionId={googleConnection?.id}` to each `CalendarOAuthManager`.
 
-**File**: `supabase/functions/nightly-schedule-builder/index.ts` (scoring section ~lines 376-388)
+**File**: `src/components/CalendarConnectionModal.tsx` (line 318)
+- Pass `connectionId={status.connectionId}` for expired connections.
 
-### Fix 3: Enforce weekend-only windows on Saturday and Sunday (scheduling-defaults +
+### 2b. Add pull toggle under each calendar connection
+
+Under each connected calendar in NotificationSettings, add a "Pull events for scheduling" toggle that updates the connection's `purposes` array (adding/removing `READ`).
+
+**File**: `src/components/NotificationSettings.tsx`
+- After each connected calendar section (lines 1072-1103 for Outlook, 1160+ for Google), add a toggle that calls `calendar-token-manager` with `action: 'update_purposes'`.
+
+### 2c. Add `list_calendars` action to edge function
+
+**File**: `supabase/functions/calendar-integration-manager/index.ts`
+- Add a `list_calendars` case in the switch that fetches calendar list from Google (`/users/me/calendarList`) or Microsoft (`/me/calendars`) using stored tokens.
+- Return calendar names and IDs to the UI.
+
+### 2d. Remove redundant Calendars tab from Settings
+
+**File**: `src/pages/Settings.tsx`
+- Remove `{ value: 'calendars', ... }` from `tabConfig` array.
+- Remove the `TabsContent value="calendars"` block (lines 170-193).
+- Remove imports for `CalendarConnectionModal` and `CalendarSelectionPanel`.
+- Remove `isCalendarModalOpen` state.
+
+## Files Changed
+
+| File | Change |
+|------|--------|
+| `src/App.tsx` | Update build trigger timestamp |
+| `src/hooks/usePresenceTracking.ts` | Skip writes for demo user |
+| `src/components/NotificationSettings.tsx` | Pass connectionId, add pull toggle |
+| `src/components/CalendarConnectionModal.tsx` | Pass connectionId for expired |
+| `src/pages/Settings.tsx` | Remove Calendars tab |
+| `supabase/functions/calendar-integration-manager/index.ts` | Add list_calendars action |
+
+## After Implementation
+1. Preview rebuilds with the new trigger
+2. Click Publish > Update to deploy
+3. Verify journey-voice.lovable.app loads the app
+4. Test calendar connection refresh and pull toggle in Settings > Notifications
+
