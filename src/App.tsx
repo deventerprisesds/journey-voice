@@ -43,38 +43,7 @@ const App = () => {
       bootId: bootTrace.getBootId()
     });
 
-    // Only run test-external-db in preview/development
-    if (!window.location.origin.includes('journey-voice.lovable.app')) {
-      const testExternalDb = async () => {
-        try {
-          console.log('Testing external database connection...');
-          const { data, error } = await supabase.functions.invoke('test-external-db');
-          
-          if (error) {
-            console.error('Test function error:', error);
-          } else {
-            console.log('External DB Test Results:', data);
-            console.log(`Overall Status: ${data?.overall_status}`);
-            console.log(`Summary: ${data?.summary}`);
-            
-            // Log individual test results
-            data?.tests?.forEach((test: any) => {
-              console.log(`${test.status === 'PASS' ? '✅' : '❌'} ${test.test}: ${test.message}`);
-              if (test.data) {
-                console.log('  Data:', test.data);
-              }
-              if (test.error) {
-                console.log('  Error:', test.error);
-              }
-            });
-          }
-        } catch (err) {
-          console.error('Failed to test external database:', err);
-        }
-      };
-
-      testExternalDb();
-    }
+    // test-external-db removed — invoke manually from Debug page if needed
   }, []);
 
   return (
