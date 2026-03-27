@@ -25,7 +25,9 @@ import { supabase } from "@/integrations/supabase/client";
 import { useEffect } from "react";
 import { bootTrace } from "@/utils/bootTrace";
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { retry: 1 } },
+});
 
 const App = () => {
   useEffect(() => {
