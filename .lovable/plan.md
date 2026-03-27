@@ -1,75 +1,54 @@
 
 
-# Fix: External Calendar Events Not Being Pulled Into Scheduling
+# Full Consolidated Plan: Stale Assignments, Scoring, Calendar Sync, Multi-Account & Per-Calendar Toggles
 
-## Problem
+## Problem Summary
 
-The `calendar-delta-sync` edge function exists and works, but **nothing ever calls it**:
-- The nightly builder reads from `external_calendar_events` table to detect busy slots, but that table is empty because no sync has run.
-- The frontend never invokes `calendar-delta-sync` — not on page load, not on a timer, not via subscription.
-- When you manually add a 1pm event to Outlook/Google, the app has no way to know about it until someone triggers a delta sync.
+1. **Old assignments (Oct 2025) dominate the schedule** — archival only targets `PROF_EDUCATION`, missing `EDUCATION` category; scoring boosts all overdue tasks (+5) instead of penalizing them; shared demo user IDs not used in assignment sync
+2. **No manual calendar sync button** — users can't force-pull external events on demand
+3. **Single account per provider** — `selectBestConnection` picks one connection; can't add multiple Outlook/Google accounts
+4. **No per-calendar pull toggles** — pull is all-or-nothing per connection; users need to toggle individual calendars (Work vs Family)
 
-## Fix
+---
 
-### 1. Nightly builder: invoke `calendar-delta-sync` before scheduling
+## Fix 1: Archive Stale EDUCATION Tasks + Shared User ID Sync
+
+**File**: `supabase/functions/nightly-assignment-sync/index.ts`
+
+- **Line 49**: Change `.eq('category', 'PROF_EDUCATION')` to `.in('category', ['PROF_EDUCATION', 'EDUCATION'])`
+- **Lines 89-95**: Add `DEMO_EMBA_USER_IDS` array and use `.in('user_id', ...)` for the `assignments` table when the user is a demo user (same pattern as `assignmentFetching.ts`)
+
+**Database migration**: One-time cleanup — archive all `EDUCATION` tasks with `due_date < '2026-01-01'` and `status != 'DONE'`
+
+## Fix 2: Fix Scoring — Stop Boosting Stale Overdue Tasks
 
 **File**: `supabase/functions/nightly-schedule-builder/index.ts`
 
-Before the week loop begins (around line 298), invoke `calendar-delta-sync` for the current user to pull in fresh external events:
+- **Lines 469-470**: Replace `task.due_date <= targetISO` blanket +5 boost with a "due within 7 days" check:
+  ```ts
+  if (task.due_date) {
+    const dueDate = new Date(task.due_date);
+    const sevenDaysOut = new Date(targetDate.getTime() + 7*86400000);
+    if (dueDate >= targetDate && dueDate <= sevenDaysOut) score += 5;
+  }
+  ```
+- **Lines 479-486**: Increase staleness penalty — tasks overdue 30+ days get `-10`, 14-30 days get `-3`
+- **Lines 253-293**: Add EDUCATION archival pass alongside existing stale archival
 
-```ts
-// Pull latest external calendar events before scheduling
-await supabase.functions.invoke('calendar-delta-sync', {
-  body: { user_id: userId }
-});
-console.log(`[nightly-builder] Delta sync completed for user ${userId}`);
-```
-
-This ensures the `external_calendar_events` table is up-to-date before the builder reads busy slots from it.
-
-### 2. Frontend: periodic sync on FocusView and CalendarModule mount
-
-**File**: `src/components/FocusView.tsx`
-
-Add a `useEffect` that calls `calendar-delta-sync` once on mount (and optionally every 15 minutes) when the user has active READ connections:
-
-```ts
-useEffect(() => {
-  const syncExternalEvents = async () => {
-    if (!user?.id) return;
-    try {
-      await supabase.functions.invoke('calendar-delta-sync', { body: { user_id: user.id } });
-    } catch (e) {
-      console.warn('Delta sync failed:', e);
-    }
-  };
-  syncExternalEvents();
-  const interval = setInterval(syncExternalEvents, 15 * 60 * 1000); // every 15 min
-  return () => clearInterval(interval);
-}, [user?.id]);
-```
-
-**File**: `src/components/CalendarModule.tsx`
-
-Same pattern — invoke delta sync on mount before loading events from the DB.
-
-### 3. FocusView: show external calendar events in Today's Schedule
+## Fix 3: Manual Sync Button in FocusView
 
 **File**: `src/components/FocusView.tsx`
 
-Currently `scheduledToday` only shows tasks. Add a query for `external_calendar_events` for today and render them alongside scheduled tasks in the timeline, marked as "External" with a distinct badge. This makes manually-added calendar events visible.
+Add a "Sync Calendar" button (RefreshCw icon, already imported) next to the existing toolbar buttons. On click:
+1. Calls `calendar-delta-sync` with the user's ID
+2. Reloads external events from DB
+3. Shows toast with count of events synced
 
-## Files to Change
+## Fix 4: Multi-Account Support in NotificationSettings
 
-| File | Change |
-|------|--------|
-| `supabase/functions/nightly-schedule-builder/index.ts` | Invoke `calendar-delta-sync` before the week loop |
-| `src/components/FocusView.tsx` | Periodic delta sync + display external events in today's schedule |
-| `src/components/CalendarModule.tsx` | Delta sync on mount before loading events |
+**File**: `src/components/NotificationSettings.tsx`
 
-## Result
-
-- External calendar events (manually added 1pm meetings, etc.) will be pulled into `external_calendar_events` table automatically
-- The nightly builder will see them as busy slots and avoid double-booking
-- The Focus View will display them so you can see your full day at a glance
-
+- Replace `outlookConnection` / `googleConnection` (single objects) with `outlookConnections` / `googleConnections` (arrays)
+- Remove `selectBestConnection` — render ALL active connections as separate cards
+- Each card shows email, push toggle, pull section with per-calendar toggles
+- "Add Another Account" OAuth button always visible at bottom of each provider section
