@@ -1262,27 +1262,25 @@ const NotificationSettings = () => {
               />
             </div>
             
-            {/* Show OAuth button if not connected or expired */}
-            {(!googleConnection || googleExpired) && (
-              <div className="mt-2 pl-8">
-                <CalendarOAuthManager
-                  provider="google"
-                  connectionId={googleConnection?.id}
-                  onSuccess={() => {
-                    loadCalendarConnections();
-                    toast({
-                      title: "Google Calendar Connected",
-                      description: "Your Google calendar is now connected for reminders.",
-                    });
-                  }}
-                  onError={(err) => toast({
-                    title: "Connection Failed",
-                    description: err,
-                    variant: "destructive",
-                  })}
-                />
-              </div>
-            )}
+            {/* Show OAuth button - always visible for adding accounts */}
+            <div className="mt-2 pl-8">
+              <CalendarOAuthManager
+                provider="google"
+                connectionId={googleExpired ? googleConnection?.id : undefined}
+                onSuccess={() => {
+                  loadCalendarConnections();
+                  toast({
+                    title: "Google Calendar Connected",
+                    description: "Your Google calendar is now connected for reminders.",
+                  });
+                }}
+                onError={(err) => toast({
+                  title: "Connection Failed",
+                  description: err,
+                  variant: "destructive",
+                })}
+              />
+            </div>
             
             {prefs.channels.includes('GOOGLE_EVENT') && googleConnection && !googleExpired && (
               <div className="space-y-2 mt-4 pl-8">
