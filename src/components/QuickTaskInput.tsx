@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { getDefaultTimezone } from '@/lib/date';
+import { logToErrorLog } from '@/utils/directLog';
 
 interface QuickTaskInputProps {
   onTaskCreated?: () => void;
