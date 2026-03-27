@@ -251,6 +251,27 @@ serve(async (req) => {
         console.log(`  📋 Rolled over ${rolledOverCount} tasks`);
 
         // ==========================================
+        // STEP 1.25: CLEAR SCHEDULING FROM COMPLETED TASKS
+        // DONE tasks with is_scheduled=true consume capacity — clear them
+        // ==========================================
+        const { data: doneTasks } = await supabase
+          .from('tasks')
+          .select('id, title')
+          .eq('user_id', userId)
+          .eq('status', 'DONE')
+          .eq('is_scheduled', true);
+
+        if (doneTasks && doneTasks.length > 0) {
+          for (const dt of doneTasks) {
+            await supabase.from('tasks').update({
+              start_time: null, end_time: null, is_scheduled: false,
+              updated_at: now.toISOString(),
+            }).eq('id', dt.id);
+          }
+          console.log(`  🧹 Cleared scheduling from ${doneTasks.length} completed tasks`);
+        }
+
+        // ==========================================
         // STEP 1.5: ARCHIVE STALE TASKS
         // Tasks pushed 5+ times with due_date > 30 days past are auto-archived
         // ==========================================
