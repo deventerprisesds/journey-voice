@@ -42,8 +42,7 @@ serve(async (req) => {
         .from(tableName)
         .select('id, title, due_date, description, category, priority, level_of_effort, status')
         .eq('user_id', userId)
-        .not('status', 'eq', 'completed')
-        .not('status', 'eq', 'graded')
+        .not('status', 'in', '("completed","graded","past due")')
         .lte('due_date', futureDateISO);
 
       if (error) {

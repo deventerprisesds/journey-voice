@@ -1275,7 +1275,8 @@ async function parseAndCreateTasks(
                     hour: 'numeric',
                     minute: '2-digit',
                     timeZone: tz
-                  })
+                  }),
+                  start_time: slot.start_time
                 });
                 console.log(`[PARSE_AND_CREATE] Scheduled "${task.title}" at ${slot.start_time} with status UP_NEXT`);
                 
@@ -1321,7 +1322,7 @@ async function parseAndCreateTasks(
       success: true,
       result: {
         created: createdTasks.length,
-        scheduled: scheduledResults.length,
+        scheduled: scheduledResults,
         tasks: createdTasks.map(t => ({
           id: t.id,
           title: t.title,

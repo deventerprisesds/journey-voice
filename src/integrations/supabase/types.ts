@@ -3479,6 +3479,7 @@ export type Database = {
       }
       tasks: {
         Row: {
+          assignment_id: string | null
           blocked_by: string[] | null
           board_id: string
           category: Database["public"]["Enums"]["task_category"]
@@ -3503,6 +3504,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          assignment_id?: string | null
           blocked_by?: string[] | null
           board_id: string
           category?: Database["public"]["Enums"]["task_category"]
@@ -3527,6 +3529,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          assignment_id?: string | null
           blocked_by?: string[] | null
           board_id?: string
           category?: Database["public"]["Enums"]["task_category"]
