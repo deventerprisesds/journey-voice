@@ -87,11 +87,14 @@ serve(async (req) => {
 
     // Helper: sync assignments from a table
     async function syncAssignments(tableName: string, source: string) {
+      // Only fetch assignments due within the last 30 days to 14 days ahead
+      // This avoids processing hundreds of ancient assignments and timing out
       const { data: assignments, error } = await supabase
         .from(tableName)
         .select('id, title, due_date, description, category, priority, level_of_effort, status')
         .eq('user_id', userId)
         .not('status', 'in', '("completed","graded","past due")')
+        .gte('due_date', thirtyDaysAgo)
         .lte('due_date', futureDateISO);
 
       if (error) {
