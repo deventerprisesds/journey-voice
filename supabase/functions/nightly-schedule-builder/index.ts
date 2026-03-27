@@ -479,11 +479,15 @@ serve(async (req) => {
               // Status boost
               if (task.status === 'UP_NEXT') score += 1;
               
-              // Staleness penalty: due_date > 14 days in the past
+              // Staleness penalty: overdue tasks get penalized
               if (task.due_date) {
                 const dueDate = new Date(task.due_date);
                 const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
-                if (dueDate < fourteenDaysAgo) {
+                const thirtyDaysAgoDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+                if (dueDate < thirtyDaysAgoDate) {
+                  score -= 10;
+                  console.log(`      📉 Heavy staleness penalty for "${task.title}" (due ${task.due_date}, 30+ days overdue)`);
+                } else if (dueDate < fourteenDaysAgo) {
                   score -= 3;
                   console.log(`      📉 Staleness penalty for "${task.title}" (due ${task.due_date})`);
                 }

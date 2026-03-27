@@ -46,7 +46,7 @@ serve(async (req) => {
       .from('tasks')
       .select('id, title, due_date, pushed_count')
       .eq('user_id', userId)
-      .eq('category', 'PROF_EDUCATION')
+      .in('category', ['PROF_EDUCATION', 'EDUCATION'])
       .is('assignment_id', null)
       .is('completed_at', null)
       .not('status', 'eq', 'DONE')
