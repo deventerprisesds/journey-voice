@@ -293,6 +293,44 @@ serve(async (req) => {
         }
 
         // ==========================================
+        // STEP 1.6: ARCHIVE STALE EDUCATION TASKS
+        // EDUCATION tasks overdue 30+ days (regardless of pushed_count)
+        // ==========================================
+        const { data: staleEduTasks, error: staleEduError } = await supabase
+          .from('tasks')
+          .select('id, title, due_date, category')
+          .eq('user_id', userId)
+          .in('category', ['EDUCATION', 'PROF_EDUCATION'])
+          .not('status', 'eq', 'DONE')
+          .is('completed_at', null)
+          .lt('due_date', thirtyDaysAgo);
+
+        let archivedEduCount = 0;
+        if (!staleEduError && staleEduTasks && staleEduTasks.length > 0) {
+          for (const stale of staleEduTasks) {
+            const { error: archError } = await supabase
+              .from('tasks')
+              .update({
+                status: 'DONE',
+                completed_at: now.toISOString(),
+                updated_at: now.toISOString(),
+                metadata: {
+                  archived_reason: 'stale_education',
+                  original_due_date: stale.due_date,
+                },
+              })
+              .eq('id', stale.id);
+
+            if (!archError) {
+              archivedEduCount++;
+              console.log(`  🗑️ Archived stale education: "${stale.title}" (due ${stale.due_date})`);
+            }
+          }
+        }
+        if (archivedEduCount > 0) {
+          console.log(`  🗑️ Archived ${archivedEduCount} stale education tasks`);
+        }
+
         // PULL EXTERNAL CALENDAR EVENTS BEFORE SCHEDULING
         // ==========================================
         try {
