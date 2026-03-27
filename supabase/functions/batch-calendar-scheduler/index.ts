@@ -162,6 +162,19 @@ serve(async (req) => {
     const userTimeWindows = resolvedTimeWindows;
     const userCategoryMappings = resolvedCategoryMappings;
 
+    // [CONFIG-TRACE] Log what config was resolved
+    console.log('[CONFIG-TRACE] Raw userConfig type:', typeof userConfig);
+    console.log('[CONFIG-TRACE] Raw userConfig keys:', userConfig ? Object.keys(userConfig) : 'null');
+    console.log('[CONFIG-TRACE] has categoryMappings:', !!userConfig?.categoryMappings);
+    if (userConfig?.categoryMappings) {
+      console.log('[CONFIG-TRACE] categoryMappings keys:', Object.keys(userConfig.categoryMappings));
+      console.log('[CONFIG-TRACE] EDUCATION mapping:', JSON.stringify(userConfig.categoryMappings.EDUCATION || userConfig.categoryMappings.PROF_EDUCATION));
+      console.log('[CONFIG-TRACE] LIFE mapping:', JSON.stringify(userConfig.categoryMappings.LIFE));
+      console.log('[CONFIG-TRACE] VENTURES mapping:', JSON.stringify(userConfig.categoryMappings.VENTURES));
+    }
+    console.log('[CONFIG-TRACE] resolved EDUCATION:', JSON.stringify(resolvedCategoryMappings.EDUCATION || resolvedCategoryMappings.PROF_EDUCATION));
+    console.log('[CONFIG-TRACE] using defaults?', resolvedCategoryMappings === DEFAULT_CATEGORY_MAPPINGS ? 'YES' : 'NO');
+
     // ===============================================
     // DAY-OF-WEEK FILTERING: Remove inapplicable windows
     // On a weekday, "weekends" is irrelevant.
