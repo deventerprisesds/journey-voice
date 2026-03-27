@@ -189,13 +189,15 @@ serve(async (req) => {
           else if (loe.includes('medium')) estimateMinutes = 90;
         }
 
-        // Get or create default board
-        const { data: board } = await supabase
+        // Get default board (use limit 1 in case of duplicates)
+        const { data: boards } = await supabase
           .from('boards')
           .select('id')
           .eq('user_id', userId)
           .eq('is_default', true)
-          .maybeSingle();
+          .limit(1);
+
+        const board = boards?.[0];
 
         if (!board) {
           console.error(`[ASSIGNMENT_SYNC] No default board for user ${userId}`);
