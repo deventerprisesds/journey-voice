@@ -1142,6 +1142,7 @@ const NotificationSettings = () => {
               <div className="mt-2 pl-8">
                 <CalendarOAuthManager
                   provider="google"
+                  connectionId={googleConnection?.id}
                   onSuccess={() => {
                     loadCalendarConnections();
                     toast({
