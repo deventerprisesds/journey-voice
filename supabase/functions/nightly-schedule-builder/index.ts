@@ -314,7 +314,7 @@ serve(async (req) => {
                 status: 'DONE',
                 completed_at: now.toISOString(),
                 updated_at: now.toISOString(),
-                metadata: {
+                scheduling_context: {
                   archived_reason: 'stale_education',
                   original_due_date: stale.due_date,
                 },
