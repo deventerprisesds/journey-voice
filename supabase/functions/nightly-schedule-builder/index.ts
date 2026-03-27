@@ -466,8 +466,12 @@ serve(async (req) => {
               // Due soon boost
               if (isDueSoon(task.due_date)) score += 3;
               
-              // Extra boost if due on or before this target day
-              if (task.due_date && task.due_date <= targetISO) score += 5;
+              // Boost only if due within 7 days (not blanket overdue boost)
+              if (task.due_date) {
+                const dueDate = new Date(task.due_date);
+                const sevenDaysOut = new Date(targetDate.getTime() + 7 * 86400000);
+                if (dueDate >= targetDate && dueDate <= sevenDaysOut) score += 5;
+              }
               
               // Intent-based keyword boost (financial, comms) — strong signal
               if (hasPriorityKeyword(task.title)) score += 5;
