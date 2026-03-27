@@ -29,7 +29,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { Task } from '@/types/task';
+import { Task, ExternalCalendarEvent } from '@/types/task';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { DEFAULT_SCHEDULING_CONFIG, type SchedulingConfig } from '@/config/schedulingRules';
@@ -133,6 +133,7 @@ const FocusView: React.FC<FocusViewProps> = ({
   const [defaultBoardId, setDefaultBoardId] = useState<string>('');
   const [isClearing, setIsClearing] = useState(false);
   const [isRerunning, setIsRerunning] = useState(false);
+  const [externalEvents, setExternalEvents] = useState<ExternalCalendarEvent[]>([]);
   const today = new Date();
   const [config, setConfig] = useState<SchedulingConfig>(DEFAULT_SCHEDULING_CONFIG);
   
@@ -151,6 +152,47 @@ const FocusView: React.FC<FocusViewProps> = ({
     if (user?.id) {
       getOrCreateDefaultBoardId(user.id).then(setDefaultBoardId);
     }
+  }, [user?.id]);
+
+  // Periodic delta sync + load external calendar events
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const syncAndLoadExternalEvents = async () => {
+      try {
+        // Trigger delta sync to pull latest from Google/Outlook
+        await supabase.functions.invoke('calendar-delta-sync', { body: { user_id: user.id } });
+        console.log('[FocusView] Delta sync completed');
+      } catch (e) {
+        console.warn('[FocusView] Delta sync failed (non-blocking):', e);
+      }
+
+      // Load external events for today from DB
+      try {
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+        const todayEnd = new Date();
+        todayEnd.setHours(23, 59, 59, 999);
+
+        const { data, error } = await supabase
+          .from('external_calendar_events')
+          .select('*')
+          .eq('user_id', user.id)
+          .gte('start_time', todayStart.toISOString())
+          .lte('start_time', todayEnd.toISOString());
+
+        if (!error && data) {
+          setExternalEvents(data as ExternalCalendarEvent[]);
+          console.log(`[FocusView] Loaded ${data.length} external events for today`);
+        }
+      } catch (e) {
+        console.warn('[FocusView] Failed to load external events:', e);
+      }
+    };
+
+    syncAndLoadExternalEvents();
+    const interval = setInterval(syncAndLoadExternalEvents, 15 * 60 * 1000); // every 15 min
+    return () => clearInterval(interval);
   }, [user?.id]);
   
   // Get user timezone - use browser default as fallback
@@ -811,7 +853,10 @@ const FocusView: React.FC<FocusViewProps> = ({
                 <div className="flex items-center gap-2">
                   <Calendar className="h-5 w-5 text-primary" />
                   <h2 className="text-lg font-semibold">Today's Schedule</h2>
-                  <Badge variant="secondary">{scheduledToday.length} scheduled</Badge>
+                  <Badge variant="secondary">{scheduledToday.length + externalEvents.length} items</Badge>
+                  {externalEvents.length > 0 && (
+                    <Badge variant="outline" className="text-xs">{externalEvents.length} external</Badge>
+                  )}
                 </div>
                 <div className="flex items-center gap-1">
                   <Button
@@ -917,8 +962,11 @@ const FocusView: React.FC<FocusViewProps> = ({
                                   );
                                 }
 
-                                // Merge tasks and open slots into a sorted timeline
-                                type TimelineItem = { type: 'task'; task: Task; sortKey: number } | { type: 'slot'; slot: { hour: number; minute: number; label: string }; sortKey: number };
+                                // Merge tasks, external events, and open slots into a sorted timeline
+                                type TimelineItem = 
+                                  | { type: 'task'; task: Task; sortKey: number } 
+                                  | { type: 'external'; event: ExternalCalendarEvent; sortKey: number }
+                                  | { type: 'slot'; slot: { hour: number; minute: number; label: string }; sortKey: number };
                                 const timeline: TimelineItem[] = [];
 
                                 windowTasks.forEach(task => {
@@ -926,6 +974,17 @@ const FocusView: React.FC<FocusViewProps> = ({
                                     ? (() => { const { hour, minute } = getTimePartsInTimezone(task.start_time, userTimezone); return hour * 60 + minute; })()
                                     : 0;
                                   timeline.push({ type: 'task', task, sortKey });
+                                });
+
+                                // Add external calendar events to this window
+                                const windowConfig = config.timeWindows[windowName as keyof typeof config.timeWindows];
+                                const wStart = windowConfig?.start ?? 0;
+                                const wEnd = windowConfig?.end ?? 24;
+                                externalEvents.forEach(evt => {
+                                  const { hour, minute } = getTimePartsInTimezone(evt.start_time, userTimezone);
+                                  if (hour >= wStart && hour < wEnd) {
+                                    timeline.push({ type: 'external', event: evt, sortKey: hour * 60 + minute });
+                                  }
                                 });
 
                                 openSlots.forEach(slot => {
@@ -1018,6 +1077,28 @@ const FocusView: React.FC<FocusViewProps> = ({
                                             </div>
                                           </div>
                                         </div>
+                                      </div>
+                                    );
+                                  }
+
+                                  if (item.type === 'external') {
+                                    const evt = item.event;
+                                    return (
+                                      <div
+                                        key={`ext-${evt.id}`}
+                                        className="bg-accent/50 rounded-md p-3 shadow-sm border border-accent"
+                                      >
+                                        <div className="flex items-center gap-2">
+                                          <Calendar className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                                          <span className="text-xs text-muted-foreground flex-shrink-0">
+                                            {format(parseISO(evt.start_time), 'h:mm a')} – {format(parseISO(evt.end_time), 'h:mm a')}
+                                          </span>
+                                          <span className="font-medium text-sm truncate">{evt.title}</span>
+                                          <Badge variant="outline" className="text-xs ml-auto flex-shrink-0">External</Badge>
+                                        </div>
+                                        {evt.location && (
+                                          <p className="text-xs text-muted-foreground mt-1 truncate">{evt.location}</p>
+                                        )}
                                       </div>
                                     );
                                   }

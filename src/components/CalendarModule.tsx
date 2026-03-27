@@ -64,6 +64,21 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
 
   const timeSlots = Array.from({ length: 17 }, (_, i) => i + 6); // 6 AM to 11 PM
 
+  // Delta sync on mount to pull latest external events
+  useEffect(() => {
+    const runDeltaSync = async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user?.id) return;
+        await supabase.functions.invoke('calendar-delta-sync', { body: { user_id: user.id } });
+        console.log('[CalendarModule] Delta sync completed on mount');
+      } catch (e) {
+        console.warn('[CalendarModule] Delta sync failed (non-blocking):', e);
+      }
+    };
+    runDeltaSync();
+  }, []);
+
   useEffect(() => {
     loadCalendarData();
   }, [currentDate, view]);
