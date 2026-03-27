@@ -1,6 +1,6 @@
 // Service Worker for Push Notifications
 // Increment this on each deploy to bust old caches
-const CACHE_VERSION = 'v6';
+const CACHE_VERSION = 'v7';
 const CACHE_NAME = `task-manager-${CACHE_VERSION}`;
 const urlsToCache = [
   '/',
@@ -10,6 +10,8 @@ const urlsToCache = [
 // Install event - cache resources
 self.addEventListener('install', (event) => {
   console.log('Service Worker installing, version:', CACHE_VERSION);
+  // Force the new SW to activate immediately
+  self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then((cache) => {
@@ -32,6 +34,9 @@ self.addEventListener('activate', (event) => {
           }
         })
       );
+    }).then(() => {
+      // Take control of all pages immediately
+      return self.clients.claim();
     })
   );
 });
