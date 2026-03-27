@@ -1124,7 +1124,7 @@ async function parseAndCreateTasks(
         description: task.description || null,
         priority: (task.priority || 'MEDIUM').toUpperCase(),
         category: (task.category || 'LIFE').toUpperCase(),
-        status: task.status || ((normalizedStartTime || normalizedDueDate) ? 'UP_NEXT' : 'BACKLOG'),
+        status: task.status || args.default_status || ((normalizedStartTime || normalizedDueDate) ? 'UP_NEXT' : 'BACKLOG'),
         due_date: normalizedDueDate,
         start_time: normalizedStartTime,
         end_time: normalizedEndTime,
