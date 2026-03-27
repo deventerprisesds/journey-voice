@@ -355,7 +355,8 @@ async function exchangeGoogleCode(supabaseClient: any, code: string, redirectUri
       _access_token: tokens.access_token,
       _refresh_token: tokens.refresh_token || null,
       _scope: tokens.scope || null,
-      _expires_at: expiresAt
+      _expires_at: expiresAt,
+      _purposes: ['READ', 'WRITE']
     });
   
   if (insertError) {
@@ -375,6 +376,23 @@ async function exchangeGoogleCode(supabaseClient: any, code: string, redirectUri
   }
   
   console.log(`Successfully stored Google connection: ${connectionId}`);
+
+  // Cleanup: Deactivate older active Google connections for this user
+  if (connectionId) {
+    const { error: cleanupError } = await supabaseClient
+      .from('calendar_connections')
+      .update({ is_active: false, updated_at: new Date().toISOString() })
+      .eq('user_id', userId)
+      .eq('provider', 'google')
+      .eq('is_active', true)
+      .neq('id', connectionId);
+
+    if (cleanupError) {
+      console.warn('[calendar-token-manager] Failed to cleanup old Google connections:', cleanupError);
+    } else {
+      console.log('[calendar-token-manager] Deactivated any older Google connections');
+    }
+  }
   
   return {
     success: true,
@@ -490,7 +508,8 @@ async function exchangeMicrosoftCode(supabaseClient: any, code: string, redirect
         _access_token: tokens.access_token,
         _refresh_token: tokens.refresh_token || null,
         _scope: tokens.scope || null,
-        _expires_at: expiresAt
+        _expires_at: expiresAt,
+        _purposes: ['READ', 'WRITE']
       });
     
     if (insertError) {
