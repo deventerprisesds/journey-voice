@@ -85,6 +85,13 @@ const timeWindowStyles: Record<string, {
     borderClass: 'border-l-4 border-l-purple-400',
     textClass: 'text-purple-700 dark:text-purple-300'
   },
+  weekends: {
+    icon: <Calendar className="h-4 w-4" />,
+    label: 'Weekend',
+    bgClass: 'bg-teal-50 dark:bg-teal-950/20',
+    borderClass: 'border-l-4 border-l-teal-400',
+    textClass: 'text-teal-700 dark:text-teal-300'
+  },
 };
 
 // Priority colors matching TaskCard
