@@ -100,10 +100,25 @@ const QuickTaskInput: React.FC<QuickTaskInputProps> = ({ onTaskCreated }) => {
       if (!data?.success) throw new Error(data?.error || 'Failed to create task');
 
       const createdCount = data.result?.tasks?.length || 1;
-      toast({
-        title: "Task Created",
-        description: `Added ${createdCount} task${createdCount !== 1 ? 's' : ''} to today's schedule`,
-      });
+      const scheduledCount = data.result?.scheduled?.length || 0;
+      const firstScheduled = data.result?.scheduled?.[0];
+      
+      if (scheduledCount > 0 && firstScheduled?.start_time) {
+        const startTime = new Date(firstScheduled.start_time).toLocaleTimeString('en-US', {
+          hour: 'numeric',
+          minute: '2-digit',
+          hour12: true
+        });
+        toast({
+          title: "Task Scheduled",
+          description: `Scheduled for today at ${startTime}`,
+        });
+      } else {
+        toast({
+          title: "Task Created",
+          description: `Added to Up Next — no open slot found for today`,
+        });
+      }
 
       setInput('');
       onTaskCreated?.();
