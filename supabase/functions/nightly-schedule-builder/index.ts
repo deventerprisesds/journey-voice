@@ -274,7 +274,7 @@ serve(async (req) => {
                 status: 'DONE',
                 completed_at: now.toISOString(),
                 updated_at: now.toISOString(),
-                metadata: {
+                scheduling_context: {
                   archived_reason: 'stale_rollover',
                   pushed_count: stale.pushed_count,
                   original_due_date: stale.due_date,
