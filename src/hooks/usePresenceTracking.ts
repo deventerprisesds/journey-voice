@@ -32,8 +32,8 @@ export function usePresenceTracking({
   currentMode,
   enabled = true
 }: UsePresenceTrackingOptions) {
-  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const heartbeatIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const heartbeatIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastStateRef = useRef<{ isActive: boolean; context: string } | null>(null);
 
   const updatePresence = useCallback(async (isActive: boolean, context: string, trigger: string = 'update') => {
