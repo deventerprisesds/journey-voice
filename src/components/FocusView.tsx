@@ -1260,7 +1260,7 @@ const FocusView: React.FC<FocusViewProps> = ({
           userId={user.id}
           initialDate={today}
           initialHour={createModalHour}
-          initialMinute={0}
+          initialMinute={createModalMinute}
         />
       )}
     </DragDropContext>
