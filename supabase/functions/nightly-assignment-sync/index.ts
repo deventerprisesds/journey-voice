@@ -124,7 +124,7 @@ serve(async (req) => {
                 status: 'DONE',
                 completed_at: now.toISOString(),
                 updated_at: now.toISOString(),
-                metadata: {
+                scheduling_context: {
                   archived_reason: 'overdue_assignment',
                   original_due_date: assignment.due_date,
                   source,
