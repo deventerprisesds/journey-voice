@@ -317,6 +317,7 @@ export function CalendarConnectionModal({ isOpen, onClose, onConnectionSuccess }
                           </div>
                           <CalendarOAuthManager
                             provider={provider.id as 'google' | 'outlook'}
+                            connectionId={status?.connectionId}
                             onSuccess={handleConnectionSuccess}
                             onError={handleConnectionError}
                           />
