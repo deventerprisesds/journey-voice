@@ -413,7 +413,48 @@ async function createOutlookCalendarEvent(connection: any, task: any): Promise<s
 }
 
 async function refreshGoogleToken(connection: any) {
-  // Implementation for refreshing Google OAuth tokens
   console.log('Token refresh needed for connection:', connection.id);
-  // This would implement the OAuth refresh flow
+}
+
+async function listCalendars(supabaseClient: any, connectionId: string) {
+  const { data: tokenData, error: tokenError } = await supabaseClient
+    .rpc('get_calendar_connection_tokens', { _connection_id: connectionId });
+
+  if (tokenError || !tokenData || tokenData.length === 0) {
+    throw new Error('Calendar connection not found');
+  }
+
+  const connection = tokenData[0];
+  let calendars: Array<{ id: string; name: string; primary: boolean }> = [];
+
+  if (connection.provider === 'google') {
+    const res = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', {
+      headers: { 'Authorization': `Bearer ${connection.access_token}` },
+    });
+    if (!res.ok) throw new Error(`Google API error: ${res.statusText}`);
+    const data = await res.json();
+    calendars = (data.items || []).map((c: any) => ({
+      id: c.id,
+      name: c.summary || c.id,
+      primary: !!c.primary,
+    }));
+  } else if (connection.provider === 'outlook' || connection.provider === 'microsoft') {
+    const res = await fetch('https://graph.microsoft.com/v1.0/me/calendars', {
+      headers: { 'Authorization': `Bearer ${connection.access_token}` },
+    });
+    if (!res.ok) throw new Error(`Microsoft Graph error: ${res.statusText}`);
+    const data = await res.json();
+    calendars = (data.value || []).map((c: any) => ({
+      id: c.id,
+      name: c.name || c.id,
+      primary: c.isDefaultCalendar || false,
+    }));
+  }
+
+  console.log(`Listed ${calendars.length} calendars for connection ${connectionId}`);
+
+  return new Response(
+    JSON.stringify({ calendars }),
+    { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+  );
 }
