@@ -768,7 +768,8 @@ const FocusView: React.FC<FocusViewProps> = ({
 
   // Get drop time slots for a window
   const getDropSlotsForWindow = (windowName: string) => {
-    const window = config.timeWindows[windowName as keyof typeof config.timeWindows];
+    const windowKey = windowName as keyof typeof config.timeWindows;
+    const window = config.timeWindows[windowKey];
     if (!window) return [];
     
     const slots: { hour: number; minute: number; label: string }[] = [];
