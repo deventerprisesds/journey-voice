@@ -67,7 +67,7 @@ serve(async (req) => {
         console.log(`[calendar-delta-sync] Token expired for ${connection.id}, attempting refresh...`);
         
         const { data: tokenData } = await supabaseClient
-          .rpc('get_calendar_connection_tokens', { _connection_id: connection.id });
+          .rpc('get_calendar_connection_tokens_service', { _connection_id: connection.id, _user_id: connection.user_id });
         
         if (tokenData?.[0]?.refresh_token) {
           let refreshed: string | null = null;
