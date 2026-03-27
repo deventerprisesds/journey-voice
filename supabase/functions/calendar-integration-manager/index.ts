@@ -427,8 +427,17 @@ async function refreshGoogleToken(connection: any) {
 }
 
 async function listCalendars(supabaseClient: any, connectionId: string) {
+  // Get connection user_id first
+  const { data: connRecord } = await supabaseClient
+    .from('calendar_connections')
+    .select('user_id')
+    .eq('id', connectionId)
+    .single();
+
+  if (!connRecord) throw new Error('Calendar connection not found');
+
   const { data: tokenData, error: tokenError } = await supabaseClient
-    .rpc('get_calendar_connection_tokens', { _connection_id: connectionId });
+    .rpc('get_calendar_connection_tokens_service', { _connection_id: connectionId, _user_id: connRecord.user_id });
 
   if (tokenError || !tokenData || tokenData.length === 0) {
     throw new Error('Calendar connection not found');
