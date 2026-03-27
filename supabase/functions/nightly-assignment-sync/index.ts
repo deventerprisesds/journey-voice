@@ -142,8 +142,7 @@ serve(async (req) => {
           continue;
         }
 
-        // SECONDARY DEDUP: Check by title similarity (for legacy tasks without assignment_id)
-        const normalizedAssignmentTitle = normalizeTitle(assignment.title);
+        // SECONDARY DEDUP: exact title match only (for legacy tasks without assignment_id)
         const { data: titleMatches } = await supabase
           .from('tasks')
           .select('id, title, status')
@@ -151,7 +150,7 @@ serve(async (req) => {
           .is('assignment_id', null)
           .is('completed_at', null)
           .not('status', 'eq', 'DONE')
-          .or(`title.ilike.%${assignment.title}%,title.ilike.%📚 ${assignment.title}%`);
+          .or(`title.eq.${assignment.title},title.eq.📚 ${assignment.title}`);
 
         if (titleMatches && titleMatches.length > 0) {
           // Found a legacy task matching this assignment's title — link it
