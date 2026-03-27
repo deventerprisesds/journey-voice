@@ -1,54 +1,59 @@
 
 
-# Full Consolidated Plan: Stale Assignments, Scoring, Calendar Sync, Multi-Account & Per-Calendar Toggles
+# Fix: Upcoming Assignments Not Being Created as Tasks
 
-## Problem Summary
+## Root Cause
 
-1. **Old assignments (Oct 2025) dominate the schedule** — archival only targets `PROF_EDUCATION`, missing `EDUCATION` category; scoring boosts all overdue tasks (+5) instead of penalizing them; shared demo user IDs not used in assignment sync
-2. **No manual calendar sync button** — users can't force-pull external events on demand
-3. **Single account per provider** — `selectBestConnection` picks one connection; can't add multiple Outlook/Google accounts
-4. **No per-calendar pull toggles** — pull is all-or-nothing per connection; users need to toggle individual calendars (Work vs Family)
+The title-based fuzzy dedup on **line 154** is too aggressive. It uses `title.ilike.%${assignment.title}%` which does a broad substring match. For example:
 
----
+- Assignment **"Project Management Tracker (March 30, 2026)"** matches existing task **"Submit project tracker"** because "project" and "tracker" appear in both
+- Assignment **"ASSIGNMENT #7: Draft Client Presentation"** matches **"Finish assignment for Business Problem ALP"** because both contain "assignment"
 
-## Fix 1: Archive Stale EDUCATION Tasks + Shared User ID Sync
+This causes ALL upcoming assignments to be falsely "linked" to unrelated existing tasks and skipped (663 skipped, 0 created).
 
-**File**: `supabase/functions/nightly-assignment-sync/index.ts`
+Additionally, this false linking **corrupts existing tasks** by overwriting their `assignment_id` and `due_date` with wrong data.
 
-- **Line 49**: Change `.eq('category', 'PROF_EDUCATION')` to `.in('category', ['PROF_EDUCATION', 'EDUCATION'])`
-- **Lines 89-95**: Add `DEMO_EMBA_USER_IDS` array and use `.in('user_id', ...)` for the `assignments` table when the user is a demo user (same pattern as `assignmentFetching.ts`)
+## Fix
 
-**Database migration**: One-time cleanup — archive all `EDUCATION` tasks with `due_date < '2026-01-01'` and `status != 'DONE'`
+### 1. Replace fuzzy title dedup with exact-match dedup
 
-## Fix 2: Fix Scoring — Stop Boosting Stale Overdue Tasks
+**File**: `supabase/functions/nightly-assignment-sync/index.ts` (lines 145-172)
 
-**File**: `supabase/functions/nightly-schedule-builder/index.ts`
+Replace the broad `ilike` query with an exact title match (with and without the emoji prefix):
 
-- **Lines 469-470**: Replace `task.due_date <= targetISO` blanket +5 boost with a "due within 7 days" check:
-  ```ts
-  if (task.due_date) {
-    const dueDate = new Date(task.due_date);
-    const sevenDaysOut = new Date(targetDate.getTime() + 7*86400000);
-    if (dueDate >= targetDate && dueDate <= sevenDaysOut) score += 5;
-  }
-  ```
-- **Lines 479-486**: Increase staleness penalty — tasks overdue 30+ days get `-10`, 14-30 days get `-3`
-- **Lines 253-293**: Add EDUCATION archival pass alongside existing stale archival
+```ts
+// SECONDARY DEDUP: exact title match only
+const { data: titleMatches } = await supabase
+  .from('tasks')
+  .select('id, title, status')
+  .eq('user_id', userId)
+  .is('assignment_id', null)
+  .is('completed_at', null)
+  .not('status', 'eq', 'DONE')
+  .or(`title.eq.${assignment.title},title.eq.📚 ${assignment.title}`);
+```
 
-## Fix 3: Manual Sync Button in FocusView
+This prevents false matches while still linking tasks that were manually created with the exact assignment title.
 
-**File**: `src/components/FocusView.tsx`
+### 2. Clean up incorrectly linked tasks
 
-Add a "Sync Calendar" button (RefreshCw icon, already imported) next to the existing toolbar buttons. On click:
-1. Calls `calendar-delta-sync` with the user's ID
-2. Reloads external events from DB
-3. Shows toast with count of events synced
+The previous runs linked wrong assignments to unrelated tasks. Fix by clearing `assignment_id` on the 6 existing EDUCATION/PROF_EDUCATION tasks that were incorrectly linked (they currently show `assignment_id = null` so this may have already self-corrected, but we should verify after the fix runs).
 
-## Fix 4: Multi-Account Support in NotificationSettings
+### 3. Invoke the fixed sync and verify
 
-**File**: `src/components/NotificationSettings.tsx`
+After deploying:
+1. Call `nightly-assignment-sync` for user `a3378f93-d655-4913-b2fa-ca5b1d8020f1`
+2. Confirm `created_count > 0` — specifically tasks for "Project Management Tracker (March 30)" and "ASSIGNMENT #7: Draft Client Presentation (March 30)"
+3. Call `nightly-schedule-builder` to assign `start_time` values to the new tasks
+4. Query tasks to confirm they appear with today/upcoming `start_time` values
 
-- Replace `outlookConnection` / `googleConnection` (single objects) with `outlookConnections` / `googleConnections` (arrays)
-- Remove `selectBestConnection` — render ALL active connections as separate cards
-- Each card shows email, push toggle, pull section with per-calendar toggles
-- "Add Another Account" OAuth button always visible at bottom of each provider section
+## Files to Change
+
+| File | Change |
+|------|--------|
+| `supabase/functions/nightly-assignment-sync/index.ts` | Replace `ilike` fuzzy match with exact `eq` match on lines 147-154 |
+
+## Single change, high impact
+
+This is a one-line query fix that unblocks all upcoming assignment task creation.
+
