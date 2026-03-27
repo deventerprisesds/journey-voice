@@ -962,8 +962,11 @@ const FocusView: React.FC<FocusViewProps> = ({
                                   );
                                 }
 
-                                // Merge tasks and open slots into a sorted timeline
-                                type TimelineItem = { type: 'task'; task: Task; sortKey: number } | { type: 'slot'; slot: { hour: number; minute: number; label: string }; sortKey: number };
+                                // Merge tasks, external events, and open slots into a sorted timeline
+                                type TimelineItem = 
+                                  | { type: 'task'; task: Task; sortKey: number } 
+                                  | { type: 'external'; event: ExternalCalendarEvent; sortKey: number }
+                                  | { type: 'slot'; slot: { hour: number; minute: number; label: string }; sortKey: number };
                                 const timeline: TimelineItem[] = [];
 
                                 windowTasks.forEach(task => {
@@ -971,6 +974,17 @@ const FocusView: React.FC<FocusViewProps> = ({
                                     ? (() => { const { hour, minute } = getTimePartsInTimezone(task.start_time, userTimezone); return hour * 60 + minute; })()
                                     : 0;
                                   timeline.push({ type: 'task', task, sortKey });
+                                });
+
+                                // Add external calendar events to this window
+                                const windowConfig = config.timeWindows[windowName as keyof typeof config.timeWindows];
+                                const wStart = windowConfig?.start ?? 0;
+                                const wEnd = windowConfig?.end ?? 24;
+                                externalEvents.forEach(evt => {
+                                  const { hour, minute } = getTimePartsInTimezone(evt.start_time, userTimezone);
+                                  if (hour >= wStart && hour < wEnd) {
+                                    timeline.push({ type: 'external', event: evt, sortKey: hour * 60 + minute });
+                                  }
                                 });
 
                                 openSlots.forEach(slot => {
