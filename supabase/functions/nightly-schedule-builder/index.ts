@@ -274,7 +274,7 @@ serve(async (req) => {
                 status: 'DONE',
                 completed_at: now.toISOString(),
                 updated_at: now.toISOString(),
-                metadata: {
+                scheduling_context: {
                   archived_reason: 'stale_rollover',
                   pushed_count: stale.pushed_count,
                   original_due_date: stale.due_date,
@@ -293,6 +293,44 @@ serve(async (req) => {
         }
 
         // ==========================================
+        // STEP 1.6: ARCHIVE STALE EDUCATION TASKS
+        // EDUCATION tasks overdue 30+ days (regardless of pushed_count)
+        // ==========================================
+        const { data: staleEduTasks, error: staleEduError } = await supabase
+          .from('tasks')
+          .select('id, title, due_date, category')
+          .eq('user_id', userId)
+          .in('category', ['EDUCATION', 'PROF_EDUCATION'])
+          .not('status', 'eq', 'DONE')
+          .is('completed_at', null)
+          .lt('due_date', thirtyDaysAgo);
+
+        let archivedEduCount = 0;
+        if (!staleEduError && staleEduTasks && staleEduTasks.length > 0) {
+          for (const stale of staleEduTasks) {
+            const { error: archError } = await supabase
+              .from('tasks')
+              .update({
+                status: 'DONE',
+                completed_at: now.toISOString(),
+                updated_at: now.toISOString(),
+                scheduling_context: {
+                  archived_reason: 'stale_education',
+                  original_due_date: stale.due_date,
+                },
+              })
+              .eq('id', stale.id);
+
+            if (!archError) {
+              archivedEduCount++;
+              console.log(`  🗑️ Archived stale education: "${stale.title}" (due ${stale.due_date})`);
+            }
+          }
+        }
+        if (archivedEduCount > 0) {
+          console.log(`  🗑️ Archived ${archivedEduCount} stale education tasks`);
+        }
+
         // PULL EXTERNAL CALENDAR EVENTS BEFORE SCHEDULING
         // ==========================================
         try {
@@ -466,8 +504,12 @@ serve(async (req) => {
               // Due soon boost
               if (isDueSoon(task.due_date)) score += 3;
               
-              // Extra boost if due on or before this target day
-              if (task.due_date && task.due_date <= targetISO) score += 5;
+              // Boost only if due within 7 days (not blanket overdue boost)
+              if (task.due_date) {
+                const dueDate = new Date(task.due_date);
+                const sevenDaysOut = new Date(targetDate.getTime() + 7 * 86400000);
+                if (dueDate >= targetDate && dueDate <= sevenDaysOut) score += 5;
+              }
               
               // Intent-based keyword boost (financial, comms) — strong signal
               if (hasPriorityKeyword(task.title)) score += 5;
@@ -475,11 +517,15 @@ serve(async (req) => {
               // Status boost
               if (task.status === 'UP_NEXT') score += 1;
               
-              // Staleness penalty: due_date > 14 days in the past
+              // Staleness penalty: overdue tasks get penalized
               if (task.due_date) {
                 const dueDate = new Date(task.due_date);
                 const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
-                if (dueDate < fourteenDaysAgo) {
+                const thirtyDaysAgoDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+                if (dueDate < thirtyDaysAgoDate) {
+                  score -= 10;
+                  console.log(`      📉 Heavy staleness penalty for "${task.title}" (due ${task.due_date}, 30+ days overdue)`);
+                } else if (dueDate < fourteenDaysAgo) {
                   score -= 3;
                   console.log(`      📉 Staleness penalty for "${task.title}" (due ${task.due_date})`);
                 }

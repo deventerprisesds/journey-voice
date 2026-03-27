@@ -33,7 +33,7 @@ serve(async (req) => {
     // Get all active READ-purpose connections (or specific one if connection_id provided)
     let query = supabaseClient
       .from('calendar_connections')
-      .select('id, user_id, provider, sync_token, purposes, expires_at, access_token, refresh_token')
+      .select('id, user_id, provider, sync_token, purposes, expires_at, access_token, refresh_token, metadata')
       .eq('is_active', true)
       .contains('purposes', ['READ']);
 

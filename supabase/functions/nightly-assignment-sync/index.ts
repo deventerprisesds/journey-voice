@@ -46,7 +46,7 @@ serve(async (req) => {
       .from('tasks')
       .select('id, title, due_date, pushed_count')
       .eq('user_id', userId)
-      .eq('category', 'PROF_EDUCATION')
+      .in('category', ['PROF_EDUCATION', 'EDUCATION'])
       .is('assignment_id', null)
       .is('completed_at', null)
       .not('status', 'eq', 'DONE')
@@ -61,7 +61,7 @@ serve(async (req) => {
             status: 'DONE',
             completed_at: now.toISOString(),
             updated_at: now.toISOString(),
-            metadata: {
+            scheduling_context: {
               archived_reason: 'legacy_stale_assignment',
               original_due_date: stale.due_date,
               pushed_count: stale.pushed_count,
@@ -124,7 +124,7 @@ serve(async (req) => {
                 status: 'DONE',
                 completed_at: now.toISOString(),
                 updated_at: now.toISOString(),
-                metadata: {
+                scheduling_context: {
                   archived_reason: 'overdue_assignment',
                   original_due_date: assignment.due_date,
                   source,

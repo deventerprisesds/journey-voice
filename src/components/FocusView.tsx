@@ -884,6 +884,37 @@ const FocusView: React.FC<FocusViewProps> = ({
                   <Button
                     variant="ghost"
                     size="sm"
+                    onClick={async () => {
+                      if (!user?.id) return;
+                      try {
+                        toast.info('Syncing calendar...');
+                        const { data } = await supabase.functions.invoke('calendar-delta-sync', { body: { user_id: user.id } });
+                        // Reload external events
+                        const todayStart = new Date(); todayStart.setHours(0,0,0,0);
+                        const todayEnd = new Date(); todayEnd.setHours(23,59,59,999);
+                        const { data: events } = await supabase
+                          .from('external_calendar_events')
+                          .select('*')
+                          .eq('user_id', user.id)
+                          .gte('start_time', todayStart.toISOString())
+                          .lte('start_time', todayEnd.toISOString());
+                        setExternalEvents((events || []) as ExternalCalendarEvent[]);
+                        const count = data?.results?.reduce((sum: number, r: any) => sum + (r.events_added || 0), 0) || 0;
+                        toast.success(`Calendar synced — ${count} events pulled, ${(events || []).length} showing today`);
+                      } catch (e) {
+                        console.error('Manual sync failed:', e);
+                        toast.error('Calendar sync failed');
+                      }
+                    }}
+                    className="text-xs h-7"
+                    title="Sync external calendar events now"
+                  >
+                    <RefreshCw className="h-3 w-3 mr-1" />
+                    Sync
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     onClick={() => setIsTimelineExpanded(!isTimelineExpanded)}
                     className="lg:hidden"
                   >
