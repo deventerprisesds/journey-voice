@@ -18,7 +18,6 @@ interface CalendarEvent {
 }
 
 serve(async (req) => {
-  // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
@@ -35,44 +34,30 @@ serve(async (req) => {
 
     switch (action) {
       case 'sync_events':
-        // Only sync from connections with READ purpose
         return await syncCalendarEvents(supabaseClient, connection_id, start_date, end_date);
-      
       case 'get_availability':
         return await getCalendarAvailability(supabaseClient, connection_id, start_date, end_date);
-      
       case 'create_event':
-        // Only create events on connections with WRITE purpose
         return await createCalendarEvent(supabaseClient, connection_id, { task });
-      
       case 'get_read_connections':
         return await getConnectionsByPurpose(supabaseClient, user_id, 'READ');
-      
       case 'get_write_connections':
         return await getConnectionsByPurpose(supabaseClient, user_id, 'WRITE');
-
       case 'list_calendars':
         return await listCalendars(supabaseClient, connection_id);
-      
       default:
-        return new Response(
-          JSON.stringify({ error: 'Invalid action' }),
-          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return new Response(JSON.stringify({ error: 'Invalid action' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
   } catch (error) {
     console.error('Calendar integration error:', error);
     return new Response(
-      JSON.stringify({ 
-        error: 'Calendar integration failed', 
-        details: error instanceof Error ? error.message : 'Unknown error'
-      }),
+      JSON.stringify({ error: 'Calendar integration failed', details: error instanceof Error ? error.message : 'Unknown error' }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
 });
 
-// NEW: Get connections by purpose (READ or WRITE)
 async function getConnectionsByPurpose(supabaseClient: any, userId: string, purpose: 'READ' | 'WRITE') {
   const { data: connections, error } = await supabaseClient
     .from('calendar_connections')
@@ -81,96 +66,136 @@ async function getConnectionsByPurpose(supabaseClient: any, userId: string, purp
     .eq('is_active', true)
     .contains('purposes', [purpose]);
 
-  if (error) {
-    console.error(`Failed to get ${purpose} connections:`, error);
-    throw new Error(`Failed to get connections: ${error.message}`);
+  if (error) throw new Error(`Failed to get connections: ${error.message}`);
+
+  const now = new Date();
+  const validConnections = (connections || []).filter((conn: any) => !conn.expires_at || new Date(conn.expires_at) > now);
+
+  return new Response(JSON.stringify({ connections: validConnections }),
+    { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+}
+
+// Helper: get a valid access token for a connection, refreshing if expired
+async function getValidAccessToken(supabaseClient: any, connectionId: string, userId: string): Promise<{ access_token: string; provider: string }> {
+  const { data: connRecord, error: connError } = await supabaseClient
+    .from('calendar_connections')
+    .select('user_id, provider, expires_at, refresh_token')
+    .eq('id', connectionId)
+    .single();
+
+  if (connError || !connRecord) throw new Error('Calendar connection not found');
+
+  // Check if token is expired (or will expire within 5 minutes)
+  const now = new Date();
+  const expiresAt = connRecord.expires_at ? new Date(connRecord.expires_at) : null;
+  const isExpired = expiresAt && expiresAt < new Date(now.getTime() + 5 * 60 * 1000);
+
+  if (isExpired && connRecord.refresh_token) {
+    console.log(`[calendar-integration-manager] Token expired for ${connectionId}, attempting refresh...`);
+    
+    // Attempt silent refresh via calendar-token-manager
+    try {
+      const refreshResult = await doInlineRefresh(supabaseClient, connRecord.provider, connectionId, userId);
+      if (refreshResult.access_token) {
+        return { access_token: refreshResult.access_token, provider: connRecord.provider };
+      }
+    } catch (refreshErr) {
+      console.warn(`[calendar-integration-manager] Inline refresh failed:`, refreshErr);
+      // Fall through to try with existing token
+    }
   }
 
-  // Filter out expired connections
-  const now = new Date();
-  const validConnections = (connections || []).filter((conn: any) => 
-    !conn.expires_at || new Date(conn.expires_at) > now
-  );
+  // Get tokens via RPC
+  const { data: tokenData, error: tokenError } = await supabaseClient
+    .rpc('get_calendar_connection_tokens_service', { _connection_id: connectionId, _user_id: userId || connRecord.user_id });
 
-  console.log(`Found ${validConnections.length} active ${purpose} connections for user ${userId}`);
+  if (tokenError || !tokenData || tokenData.length === 0) throw new Error('Calendar connection tokens not found');
 
-  return new Response(
-    JSON.stringify({ connections: validConnections }),
-    { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-  );
+  return { access_token: tokenData[0].access_token, provider: tokenData[0].provider };
+}
+
+// Inline token refresh without calling another edge function
+async function doInlineRefresh(supabaseClient: any, provider: string, connectionId: string, userId: string): Promise<{ access_token: string }> {
+  // Get current refresh token
+  const { data: tokenData } = await supabaseClient
+    .rpc('get_calendar_connection_tokens_service', { _connection_id: connectionId, _user_id: userId });
+
+  if (!tokenData?.[0]?.refresh_token) throw new Error('No refresh token');
+
+  const refreshToken = tokenData[0].refresh_token;
+  let tokenEndpoint: string;
+  let body: URLSearchParams;
+
+  if (provider === 'google') {
+    const clientId = Deno.env.get('GOOGLE_CLIENT_ID');
+    const clientSecret = Deno.env.get('GOOGLE_CLIENT_SECRET');
+    if (!clientId || !clientSecret) throw new Error('Google OAuth credentials not configured');
+    tokenEndpoint = 'https://oauth2.googleapis.com/token';
+    body = new URLSearchParams({ client_id: clientId, client_secret: clientSecret, refresh_token: refreshToken, grant_type: 'refresh_token' });
+  } else {
+    const clientId = Deno.env.get('MICROSOFT_CLIENT_ID');
+    const clientSecret = Deno.env.get('MICROSOFT_CLIENT_SECRET');
+    if (!clientId || !clientSecret) throw new Error('Microsoft OAuth credentials not configured');
+    tokenEndpoint = 'https://login.microsoftonline.com/common/oauth2/v2.0/token';
+    body = new URLSearchParams({ client_id: clientId, client_secret: clientSecret, refresh_token: refreshToken, grant_type: 'refresh_token', scope: 'Calendars.ReadWrite User.Read offline_access' });
+  }
+
+  const tokenResponse = await fetch(tokenEndpoint, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
+  if (!tokenResponse.ok) throw new Error('Refresh failed');
+
+  const tokens = await tokenResponse.json();
+  const expiresAt = tokens.expires_in ? new Date(Date.now() + tokens.expires_in * 1000).toISOString() : null;
+
+  // Update in DB
+  await supabaseClient.from('calendar_connections').update({
+    access_token: tokens.access_token,
+    refresh_token: tokens.refresh_token || undefined,
+    expires_at: expiresAt,
+    updated_at: new Date().toISOString(),
+  }).eq('id', connectionId);
+
+  console.log(`[calendar-integration-manager] Inline refresh succeeded for ${connectionId}`);
+  return { access_token: tokens.access_token };
 }
 
 async function syncCalendarEvents(supabaseClient: any, connectionId: string, startDate: string, endDate: string) {
-  // Get connection info first (user_id needed for service-role-safe token decryption)
-  const { data: connRecord, error: connRecordError } = await supabaseClient
+  const { data: connRecord } = await supabaseClient
     .from('calendar_connections')
     .select('user_id, purposes')
     .eq('id', connectionId)
     .single();
 
-  if (connRecordError || !connRecord) {
-    throw new Error('Calendar connection not found');
-  }
-
-  // Get calendar connection tokens securely (service-role safe)
-  const { data: tokenData, error: tokenError } = await supabaseClient
-    .rpc('get_calendar_connection_tokens_service', {
-      _connection_id: connectionId,
-      _user_id: connRecord.user_id
-    });
-
-  if (tokenError || !tokenData || tokenData.length === 0) {
-    console.error('Failed to get connection tokens:', tokenError);
-    throw new Error('Calendar connection not found or access denied');
-  }
-  
-  const connection = tokenData[0];
+  if (!connRecord) throw new Error('Calendar connection not found');
 
   if (!connRecord?.purposes?.includes('READ')) {
-    console.warn(`Connection ${connectionId} does not have READ purpose, skipping sync`);
-    return new Response(
-      JSON.stringify({ success: false, error: 'Connection does not have READ purpose' }),
-      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return new Response(JSON.stringify({ success: false, error: 'Connection does not have READ purpose' }),
+      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
+
+  const { access_token, provider } = await getValidAccessToken(supabaseClient, connectionId, connRecord.user_id);
+  const connection = { access_token, provider, user_id: connRecord.user_id };
 
   const events = await fetchExternalCalendarEvents(connection, startDate, endDate);
   
-  // Store events in database
   const eventsToInsert = events.map(event => ({
-    user_id: connection.user_id,
-    connection_id: connectionId,
-    external_event_id: event.id,
-    title: event.title,
-    description: event.description,
-    start_time: event.start_time,
-    end_time: event.end_time,
-    is_all_day: event.is_all_day,
-    location: event.location,
-    calendar_id: event.calendar_id,
+    user_id: connection.user_id, connection_id: connectionId,
+    external_event_id: event.id, title: event.title, description: event.description,
+    start_time: event.start_time, end_time: event.end_time, is_all_day: event.is_all_day,
+    location: event.location, calendar_id: event.calendar_id,
     last_synced_at: new Date().toISOString(),
   }));
 
-  // Use upsert to handle existing events
   const { error: upsertError } = await supabaseClient
     .from('external_calendar_events')
-    .upsert(eventsToInsert, { 
-      onConflict: 'connection_id,external_event_id',
-      ignoreDuplicates: false 
-    });
+    .upsert(eventsToInsert, { onConflict: 'connection_id,external_event_id', ignoreDuplicates: false });
 
-  if (upsertError) {
-    throw new Error(`Failed to sync events: ${upsertError.message}`);
-  }
+  if (upsertError) throw new Error(`Failed to sync events: ${upsertError.message}`);
 
-  return new Response(
-    JSON.stringify({ success: true, synced_events: events.length }),
-    { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-  );
+  return new Response(JSON.stringify({ success: true, synced_events: events.length }),
+    { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 }
 
 async function getCalendarAvailability(supabaseClient: any, connectionId: string, startDate: string, endDate: string) {
-  // Get external calendar events for the date range
   const { data: events, error } = await supabaseClient
     .from('external_calendar_events')
     .select('start_time, end_time, is_all_day')
@@ -179,255 +204,105 @@ async function getCalendarAvailability(supabaseClient: any, connectionId: string
     .lte('end_time', endDate)
     .order('start_time');
 
-  if (error) {
-    throw new Error(`Failed to get availability: ${error.message}`);
-  }
+  if (error) throw new Error(`Failed to get availability: ${error.message}`);
 
-  const busySlots = events.map((event: any) => ({
-    start: event.start_time,
-    end: event.end_time,
-    is_all_day: event.is_all_day
-  }));
-
-  return new Response(
-    JSON.stringify({ busy_slots: busySlots }),
-    { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-  );
+  return new Response(JSON.stringify({ busy_slots: events.map((e: any) => ({ start: e.start_time, end: e.end_time, is_all_day: e.is_all_day })) }),
+    { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 }
 
 async function createCalendarEvent(supabaseClient: any, connectionId: string, body: { task: any }) {
   const { task } = body;
   
-  // Get connection info first
-  const { data: connInfo, error: connError } = await supabaseClient
+  const { data: connInfo } = await supabaseClient
     .from('calendar_connections')
     .select('purposes, user_id')
     .eq('id', connectionId)
     .single();
 
-  if (connError || !connInfo) {
-    throw new Error('Calendar connection not found');
-  }
-
-  // Get calendar connection tokens securely (service-role safe)
-  const { data: tokenData, error: tokenError } = await supabaseClient
-    .rpc('get_calendar_connection_tokens_service', {
-      _connection_id: connectionId,
-      _user_id: connInfo.user_id
-    });
-
-  if (tokenError || !tokenData || tokenData.length === 0) {
-    console.error('Failed to get connection tokens:', tokenError);
-    throw new Error('Calendar connection not found or access denied');
-  }
-  
-  const connection = tokenData[0];
+  if (!connInfo) throw new Error('Calendar connection not found');
 
   if (!connInfo?.purposes?.includes('WRITE')) {
-    console.warn(`Connection ${connectionId} does not have WRITE purpose, skipping event creation`);
-    return new Response(
-      JSON.stringify({ success: false, error: 'Connection does not have WRITE purpose' }),
-      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return new Response(JSON.stringify({ success: false, error: 'Connection does not have WRITE purpose' }),
+      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 
-  // Create event in external calendar
+  const { access_token, provider } = await getValidAccessToken(supabaseClient, connectionId, connInfo.user_id);
+  const connection = { access_token, provider };
+
   const externalEventId = await createExternalCalendarEvent(connection, task);
   
-  // Update task with external event ID
   if (task?.id) {
-    const { error: updateError } = await supabaseClient
-      .from('tasks')
-      .update({ external_event_id: externalEventId })
-      .eq('id', task.id);
-
-    if (updateError) {
-      console.error('Failed to update task with external event ID:', updateError);
-    }
+    await supabaseClient.from('tasks').update({ external_event_id: externalEventId }).eq('id', task.id);
+    await supabaseClient.from('external_calendar_events').upsert({
+      user_id: connInfo.user_id, connection_id: connectionId,
+      external_event_id: externalEventId, title: task.title,
+      description: task.description || '', start_time: task.start_time,
+      end_time: task.end_time, is_all_day: false, calendar_id: 'primary',
+      source_task_id: task.id, last_synced_at: new Date().toISOString(),
+    }, { onConflict: 'connection_id,external_event_id', ignoreDuplicates: false });
   }
 
-  // Also store in external_calendar_events table with source_task_id for bi-directional sync
-  if (task?.id) {
-    const { error: insertError } = await supabaseClient
-      .from('external_calendar_events')
-      .upsert({
-        user_id: connInfo.user_id,
-        connection_id: connectionId,
-        external_event_id: externalEventId,
-        title: task.title,
-        description: task.description || '',
-        start_time: task.start_time,
-        end_time: task.end_time,
-        is_all_day: false,
-        calendar_id: 'primary',
-        source_task_id: task.id,  // NEW: Link back to task for bi-directional sync
-        last_synced_at: new Date().toISOString(),
-      }, {
-        onConflict: 'connection_id,external_event_id',
-        ignoreDuplicates: false
-      });
-
-    if (insertError) {
-      console.warn('Failed to store external calendar event:', insertError);
-    }
-  }
-
-  return new Response(
-    JSON.stringify({ success: true, external_event_id: externalEventId }),
-    { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-  );
+  return new Response(JSON.stringify({ success: true, external_event_id: externalEventId }),
+    { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 }
 
 async function fetchExternalCalendarEvents(connection: any, startDate: string, endDate: string): Promise<CalendarEvent[]> {
-  if (connection.provider === 'google') {
-    return await fetchGoogleCalendarEvents(connection, startDate, endDate);
-  } else if (connection.provider === 'outlook' || connection.provider === 'office365') {
-    return await fetchOutlookCalendarEvents(connection, startDate, endDate);
-  }
+  if (connection.provider === 'google') return await fetchGoogleCalendarEvents(connection, startDate, endDate);
+  if (connection.provider === 'outlook' || connection.provider === 'office365') return await fetchOutlookCalendarEvents(connection, startDate, endDate);
   return [];
 }
 
 async function fetchGoogleCalendarEvents(connection: any, startDate: string, endDate: string): Promise<CalendarEvent[]> {
   const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${startDate}&timeMax=${endDate}&singleEvents=true&orderBy=startTime`;
-  
-  const response = await fetch(url, {
-    headers: {
-      'Authorization': `Bearer ${connection.access_token}`,
-      'Content-Type': 'application/json',
-    },
-  });
-
-  if (!response.ok) {
-    if (response.status === 401) {
-      // Token expired, try to refresh
-      await refreshGoogleToken(connection);
-      throw new Error('Token expired, please retry');
-    }
-    throw new Error(`Google Calendar API error: ${response.statusText}`);
-  }
-
+  const response = await fetch(url, { headers: { 'Authorization': `Bearer ${connection.access_token}` } });
+  if (!response.ok) throw new Error(`Google Calendar API error: ${response.status} ${response.statusText}`);
   const data = await response.json();
-  
   return data.items?.map((event: any) => ({
-    id: event.id,
-    title: event.summary || 'Untitled Event',
-    description: event.description,
-    start_time: event.start.dateTime || event.start.date,
-    end_time: event.end.dateTime || event.end.date,
-    is_all_day: !event.start.dateTime,
-    location: event.location,
-    calendar_id: 'primary',
+    id: event.id, title: event.summary || 'Untitled Event', description: event.description,
+    start_time: event.start.dateTime || event.start.date, end_time: event.end.dateTime || event.end.date,
+    is_all_day: !event.start.dateTime, location: event.location, calendar_id: 'primary',
   })) || [];
 }
 
 async function fetchOutlookCalendarEvents(connection: any, startDate: string, endDate: string): Promise<CalendarEvent[]> {
   const url = `https://graph.microsoft.com/v1.0/me/calendar/events?$filter=start/dateTime ge '${startDate}' and end/dateTime le '${endDate}'&$orderby=start/dateTime`;
-  
-  const response = await fetch(url, {
-    headers: {
-      'Authorization': `Bearer ${connection.access_token}`,
-      'Content-Type': 'application/json',
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error(`Outlook Calendar API error: ${response.statusText}`);
-  }
-
+  const response = await fetch(url, { headers: { 'Authorization': `Bearer ${connection.access_token}` } });
+  if (!response.ok) throw new Error(`Outlook Calendar API error: ${response.status} ${response.statusText}`);
   const data = await response.json();
-  
   return data.value?.map((event: any) => ({
-    id: event.id,
-    title: event.subject || 'Untitled Event',
-    description: event.body?.content,
-    start_time: event.start.dateTime,
-    end_time: event.end.dateTime,
-    is_all_day: event.isAllDay,
-    location: event.location?.displayName,
-    calendar_id: 'primary',
+    id: event.id, title: event.subject || 'Untitled Event', description: event.body?.content,
+    start_time: event.start.dateTime, end_time: event.end.dateTime,
+    is_all_day: event.isAllDay, location: event.location?.displayName, calendar_id: 'primary',
   })) || [];
 }
 
 async function createExternalCalendarEvent(connection: any, task: any): Promise<string> {
-  if (connection.provider === 'google') {
-    return await createGoogleCalendarEvent(connection, task);
-  } else if (connection.provider === 'outlook' || connection.provider === 'office365') {
-    return await createOutlookCalendarEvent(connection, task);
-  }
+  if (connection.provider === 'google') return await createGoogleCalendarEvent(connection, task);
+  if (connection.provider === 'outlook' || connection.provider === 'office365') return await createOutlookCalendarEvent(connection, task);
   throw new Error('Unsupported calendar provider');
 }
 
 async function createGoogleCalendarEvent(connection: any, task: any): Promise<string> {
-  const event = {
-    summary: task.title,
-    description: task.description,
-    start: {
-      dateTime: task.start_time,
-      timeZone: 'UTC',
-    },
-    end: {
-      dateTime: task.end_time,
-      timeZone: 'UTC',
-    },
-  };
-
   const response = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
     method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${connection.access_token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(event),
+    headers: { 'Authorization': `Bearer ${connection.access_token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ summary: task.title, description: task.description, start: { dateTime: task.start_time, timeZone: 'UTC' }, end: { dateTime: task.end_time, timeZone: 'UTC' } }),
   });
-
-  if (!response.ok) {
-    throw new Error(`Failed to create Google Calendar event: ${response.statusText}`);
-  }
-
-  const data = await response.json();
-  return data.id;
+  if (!response.ok) throw new Error(`Failed to create Google Calendar event: ${response.statusText}`);
+  return (await response.json()).id;
 }
 
 async function createOutlookCalendarEvent(connection: any, task: any): Promise<string> {
-  const event = {
-    subject: task.title,
-    body: {
-      contentType: 'text',
-      content: task.description || '',
-    },
-    start: {
-      dateTime: task.start_time,
-      timeZone: 'UTC',
-    },
-    end: {
-      dateTime: task.end_time,
-      timeZone: 'UTC',
-    },
-  };
-
   const response = await fetch('https://graph.microsoft.com/v1.0/me/calendar/events', {
     method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${connection.access_token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(event),
+    headers: { 'Authorization': `Bearer ${connection.access_token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ subject: task.title, body: { contentType: 'text', content: task.description || '' }, start: { dateTime: task.start_time, timeZone: 'UTC' }, end: { dateTime: task.end_time, timeZone: 'UTC' } }),
   });
-
-  if (!response.ok) {
-    throw new Error(`Failed to create Outlook Calendar event: ${response.statusText}`);
-  }
-
-  const data = await response.json();
-  return data.id;
-}
-
-async function refreshGoogleToken(connection: any) {
-  console.log('Token refresh needed for connection:', connection.id);
+  if (!response.ok) throw new Error(`Failed to create Outlook Calendar event: ${response.statusText}`);
+  return (await response.json()).id;
 }
 
 async function listCalendars(supabaseClient: any, connectionId: string) {
-  // Get connection user_id first
   const { data: connRecord } = await supabaseClient
     .from('calendar_connections')
     .select('user_id')
@@ -436,44 +311,27 @@ async function listCalendars(supabaseClient: any, connectionId: string) {
 
   if (!connRecord) throw new Error('Calendar connection not found');
 
-  const { data: tokenData, error: tokenError } = await supabaseClient
-    .rpc('get_calendar_connection_tokens_service', { _connection_id: connectionId, _user_id: connRecord.user_id });
+  // Use getValidAccessToken which handles auto-refresh
+  const { access_token, provider } = await getValidAccessToken(supabaseClient, connectionId, connRecord.user_id);
 
-  if (tokenError || !tokenData || tokenData.length === 0) {
-    throw new Error('Calendar connection not found');
-  }
-
-  const connection = tokenData[0];
   let calendars: Array<{ id: string; name: string; primary: boolean }> = [];
 
-  if (connection.provider === 'google') {
+  if (provider === 'google') {
     const res = await fetch('https://www.googleapis.com/calendar/v3/users/me/calendarList', {
-      headers: { 'Authorization': `Bearer ${connection.access_token}` },
+      headers: { 'Authorization': `Bearer ${access_token}` },
     });
-    if (!res.ok) throw new Error(`Google API error: ${res.statusText}`);
+    if (!res.ok) throw new Error(`Google API error: ${res.status} ${res.statusText}`);
     const data = await res.json();
-    calendars = (data.items || []).map((c: any) => ({
-      id: c.id,
-      name: c.summary || c.id,
-      primary: !!c.primary,
-    }));
-  } else if (connection.provider === 'outlook' || connection.provider === 'microsoft') {
+    calendars = (data.items || []).map((c: any) => ({ id: c.id, name: c.summary || c.id, primary: !!c.primary }));
+  } else if (provider === 'outlook' || provider === 'office365' || provider === 'microsoft') {
     const res = await fetch('https://graph.microsoft.com/v1.0/me/calendars', {
-      headers: { 'Authorization': `Bearer ${connection.access_token}` },
+      headers: { 'Authorization': `Bearer ${access_token}` },
     });
-    if (!res.ok) throw new Error(`Microsoft Graph error: ${res.statusText}`);
+    if (!res.ok) throw new Error(`Microsoft Graph error: ${res.status} ${res.statusText}`);
     const data = await res.json();
-    calendars = (data.value || []).map((c: any) => ({
-      id: c.id,
-      name: c.name || c.id,
-      primary: c.isDefaultCalendar || false,
-    }));
+    calendars = (data.value || []).map((c: any) => ({ id: c.id, name: c.name || c.id, primary: c.isDefaultCalendar || false }));
   }
 
   console.log(`Listed ${calendars.length} calendars for connection ${connectionId}`);
-
-  return new Response(
-    JSON.stringify({ calendars }),
-    { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-  );
+  return new Response(JSON.stringify({ calendars }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 }
