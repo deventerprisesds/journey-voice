@@ -1053,6 +1053,7 @@ const NotificationSettings = () => {
               <div className="mt-2 pl-8">
                 <CalendarOAuthManager
                   provider="outlook"
+                  connectionId={outlookConnection?.id}
                   onSuccess={() => {
                     loadCalendarConnections();
                     toast({
