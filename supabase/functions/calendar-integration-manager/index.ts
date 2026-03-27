@@ -103,8 +103,9 @@ async function getConnectionsByPurpose(supabaseClient: any, userId: string, purp
 async function syncCalendarEvents(supabaseClient: any, connectionId: string, startDate: string, endDate: string) {
   // Get calendar connection tokens securely
   const { data: tokenData, error: tokenError } = await supabaseClient
-    .rpc('get_calendar_connection_tokens', {
-      _connection_id: connectionId
+    .rpc('get_calendar_connection_tokens_service', {
+      _connection_id: connectionId,
+      _user_id: null as any // will be resolved below
     });
 
   if (tokenError || !tokenData || tokenData.length === 0) {
