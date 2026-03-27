@@ -853,7 +853,10 @@ const FocusView: React.FC<FocusViewProps> = ({
                 <div className="flex items-center gap-2">
                   <Calendar className="h-5 w-5 text-primary" />
                   <h2 className="text-lg font-semibold">Today's Schedule</h2>
-                  <Badge variant="secondary">{scheduledToday.length} scheduled</Badge>
+                  <Badge variant="secondary">{scheduledToday.length + externalEvents.length} items</Badge>
+                  {externalEvents.length > 0 && (
+                    <Badge variant="outline" className="text-xs">{externalEvents.length} external</Badge>
+                  )}
                 </div>
                 <div className="flex items-center gap-1">
                   <Button
