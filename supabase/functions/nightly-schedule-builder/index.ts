@@ -169,7 +169,33 @@ serve(async (req) => {
       
       try {
         // ==========================================
-        // STEP 1: ROLLOVER — Reset incomplete past tasks
+        // STEP 0: SYNC ASSIGNMENTS (EMBA + MIT)
+        // ==========================================
+        try {
+          console.log(`  📚 Running assignment sync for ${userId}...`);
+          const syncResponse = await fetch(
+            `${supabaseUrl}/functions/v1/nightly-assignment-sync`,
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${supabaseServiceKey}`,
+              },
+              body: JSON.stringify({ userId, timezone }),
+            }
+          );
+          if (syncResponse.ok) {
+            const syncResult = await syncResponse.json();
+            console.log(`  📚 Assignment sync: ${syncResult.created?.length || 0} created, ${syncResult.archived?.length || 0} archived`);
+          } else {
+            console.warn(`  ⚠️ Assignment sync failed: ${syncResponse.status}`);
+          }
+        } catch (syncErr) {
+          console.warn(`  ⚠️ Assignment sync error (non-fatal):`, syncErr);
+        }
+
+        // ==========================================
+        // STEP 1: ROLLOVER — Reset incomplete past tasks (keep as candidates)
         // ==========================================
         const now = new Date();
         const todayStart = new Date(now.toLocaleString('en-US', { timeZone: timezone }));
@@ -192,13 +218,13 @@ serve(async (req) => {
         let rolledOverCount = 0;
         if (expiredTasks && expiredTasks.length > 0) {
           for (const task of expiredTasks) {
+            // Clear scheduling but preserve status so they flow into candidate pool
             const { error: updateError } = await supabase
               .from('tasks')
               .update({
                 start_time: null,
                 end_time: null,
                 is_scheduled: false,
-                status: 'UP_NEXT',
                 pushed_count: (task.pushed_count || 0) + 1,
                 updated_at: now.toISOString(),
               })
