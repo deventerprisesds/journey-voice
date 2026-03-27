@@ -1081,6 +1081,28 @@ const FocusView: React.FC<FocusViewProps> = ({
                                     );
                                   }
 
+                                  if (item.type === 'external') {
+                                    const evt = item.event;
+                                    return (
+                                      <div
+                                        key={`ext-${evt.id}`}
+                                        className="bg-accent/50 rounded-md p-3 shadow-sm border border-accent"
+                                      >
+                                        <div className="flex items-center gap-2">
+                                          <Calendar className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                                          <span className="text-xs text-muted-foreground flex-shrink-0">
+                                            {format(parseISO(evt.start_time), 'h:mm a')} – {format(parseISO(evt.end_time), 'h:mm a')}
+                                          </span>
+                                          <span className="font-medium text-sm truncate">{evt.title}</span>
+                                          <Badge variant="outline" className="text-xs ml-auto flex-shrink-0">External</Badge>
+                                        </div>
+                                        {evt.location && (
+                                          <p className="text-xs text-muted-foreground mt-1 truncate">{evt.location}</p>
+                                        )}
+                                      </div>
+                                    );
+                                  }
+
                                   // Open slot
                                   const slot = item.slot;
                                   return (
