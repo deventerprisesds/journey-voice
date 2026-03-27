@@ -508,7 +508,8 @@ async function exchangeMicrosoftCode(supabaseClient: any, code: string, redirect
         _access_token: tokens.access_token,
         _refresh_token: tokens.refresh_token || null,
         _scope: tokens.scope || null,
-        _expires_at: expiresAt
+        _expires_at: expiresAt,
+        _purposes: ['READ', 'WRITE']
       });
     
     if (insertError) {
