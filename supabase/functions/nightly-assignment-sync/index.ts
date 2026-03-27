@@ -61,7 +61,7 @@ serve(async (req) => {
             status: 'DONE',
             completed_at: now.toISOString(),
             updated_at: now.toISOString(),
-            metadata: {
+            scheduling_context: {
               archived_reason: 'legacy_stale_assignment',
               original_due_date: stale.due_date,
               pushed_count: stale.pushed_count,
