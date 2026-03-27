@@ -7,7 +7,7 @@ const corsHeaders = {
 }
 
 interface TokenRequest {
-  action: 'get' | 'update' | 'revoke' | 'get_oauth_url' | 'exchange_code' | 'update_purposes'
+  action: 'get' | 'update' | 'revoke' | 'get_oauth_url' | 'exchange_code' | 'update_purposes' | 'refresh'
   connectionId?: string
   accessToken?: string
   refreshToken?: string
