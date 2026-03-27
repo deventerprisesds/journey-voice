@@ -15,6 +15,9 @@ const HEARTBEAT_INTERVAL = 30000;
 // Debounce time for presence updates
 const DEBOUNCE_MS = 500;
 
+// Demo user ID — skip presence writes to avoid RLS errors in preview
+const DEMO_USER_ID = '00000000-0000-0000-0000-000000000001';
+
 /**
  * Hook for tracking user presence in the chat.
  * Updates the user_presence table based on visibility and panel state.
