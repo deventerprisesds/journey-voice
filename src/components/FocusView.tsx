@@ -29,7 +29,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { Task } from '@/types/task';
+import { Task, ExternalCalendarEvent } from '@/types/task';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { DEFAULT_SCHEDULING_CONFIG, type SchedulingConfig } from '@/config/schedulingRules';
