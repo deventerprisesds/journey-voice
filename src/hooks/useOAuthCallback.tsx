@@ -3,6 +3,25 @@ import { useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 
+// Trace helper — writes to error_log for remote debugging
+async function oauthTrace(stage: string, details: Record<string, any>) {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const userId = session?.user?.id;
+    if (!userId) return;
+    await supabase.from('error_log').insert({
+      user_id: userId,
+      error_type: 'oauth_trace',
+      error_message: stage,
+      source: 'useOAuthCallback',
+      component: details.provider || 'unknown',
+      context: details as any,
+    });
+  } catch {
+    // silently fail trace writes
+  }
+}
+
 export function useOAuthCallback() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -14,117 +33,78 @@ export function useOAuthCallback() {
       const state = searchParams.get('state');
       const error = searchParams.get('error');
 
-      // Check if this is an OAuth callback
-      if (!code && !error) {
-        return;
-      }
+      if (!code && !error) return;
 
-      // Handle OAuth error
       if (error) {
         console.error('[OAuth] Error from provider:', error);
+        await oauthTrace('provider_error', { error, state });
         toast.error(`Calendar connection failed: ${error}`);
         navigate(location.pathname, { replace: true });
         return;
       }
 
-      // Handle successful OAuth callback - ONLY for calendar OAuth (not Supabase Auth)
-      // Supabase Auth uses PKCE tokens in state, calendar OAuth uses 'google' or 'outlook'
       if (code && state && (state === 'google' || state === 'outlook')) {
         const provider = state as 'google' | 'outlook';
         const providerDisplayName = provider === 'google' ? 'Google' : 'Outlook';
         
         try {
           toast.info('Completing calendar connection...');
-          console.log('[OAuth] Starting token exchange for provider:', provider);
+          await oauthTrace('exchange_start', { provider });
           
-          // First try to get existing session
           let { data: sessionData } = await supabase.auth.getSession();
           
           if (!sessionData.session) {
-            console.warn('[OAuth] No session found immediately. Attempting refresh...');
-            
-            // Force refresh the session from localStorage
             const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
-            
             if (refreshError) {
-              console.warn('[OAuth] Session refresh failed:', refreshError.message);
+              await oauthTrace('session_refresh_failed', { provider, error: refreshError.message });
             } else if (refreshed.session) {
-              console.log('[OAuth] Session restored after refresh');
               sessionData = refreshed;
             }
           }
           
-          // If still no session, wait for auth state change
           if (!sessionData.session) {
-            console.warn('[OAuth] No session after refresh, waiting for auth state change...');
-            
-            // Wait up to 5 seconds for session to be restored
+            await oauthTrace('session_wait', { provider });
             const sessionPromise = new Promise<boolean>((resolve) => {
               const timeout = setTimeout(() => resolve(false), 5000);
-              
               const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-                if (session) {
-                  clearTimeout(timeout);
-                  subscription.unsubscribe();
-                  resolve(true);
-                }
+                if (session) { clearTimeout(timeout); subscription.unsubscribe(); resolve(true); }
               });
             });
             
             const hasSession = await sessionPromise;
-            
             if (!hasSession) {
-              // No session after waiting - store OAuth params and redirect to sign in
-              console.error('[OAuth] No session available after timeout');
+              await oauthTrace('session_timeout', { provider });
               sessionStorage.setItem('pending_oauth_exchange', JSON.stringify({
-                code,
-                provider,
-                redirect_uri: `${window.location.origin}${location.pathname}`,
-                return_path: location.pathname
+                code, provider, redirect_uri: `${window.location.origin}${location.pathname}`, return_path: location.pathname
               }));
               toast.error('Please sign in to complete calendar connection');
               navigate('/auth', { replace: true });
               return;
             }
-            
-            // Refresh session data after waiting
             const { data: finalSession } = await supabase.auth.getSession();
             sessionData = finalSession;
           }
 
-          console.log('[OAuth] Session found, exchanging code for tokens');
+          await oauthTrace('exchange_invoke', { provider });
           
           const { data, error: exchangeError } = await supabase.functions.invoke('calendar-token-manager', {
             body: {
-              action: 'exchange_code',
-              provider: provider,
-              code: code,
+              action: 'exchange_code', provider, code,
               redirect_uri: `${window.location.origin}${location.pathname}`
             }
           });
 
           if (exchangeError) {
-            console.error('[OAuth] Token exchange error:', exchangeError);
-            
             const errorMessage = exchangeError.message || '';
-            
-            // Check for "already connected" scenarios - treat as success
-            if (errorMessage.includes('ALREADY_CONNECTED') || 
-                errorMessage.includes('23505') ||
-                errorMessage.includes('duplicate key')) {
-              console.log('[OAuth] Connection already exists, treating as success');
+            await oauthTrace('exchange_error', { provider, error: errorMessage });
+
+            if (errorMessage.includes('ALREADY_CONNECTED') || errorMessage.includes('23505') || errorMessage.includes('duplicate key')) {
               toast.success(`${providerDisplayName} Calendar is already connected!`);
-              
-              // Dispatch refresh event to update UI
-              window.dispatchEvent(new CustomEvent('calendar-connection-updated', {
-                detail: { provider }
-              }));
-              
+              window.dispatchEvent(new CustomEvent('calendar-connection-updated', { detail: { provider } }));
               navigate(location.pathname, { replace: true });
               return;
             }
-            
-            // Check for specific authentication error
+
             if (errorMessage.includes('User authentication required')) {
               toast.error('Could not verify your sign-in. Please sign in and try again.');
             } else if (errorMessage.includes('REFRESH_FAILED')) {
@@ -132,36 +112,26 @@ export function useOAuthCallback() {
             } else {
               toast.error(`Failed to connect calendar: ${errorMessage}`);
             }
-            
-            // Still dispatch refresh to show true connection state
-            window.dispatchEvent(new CustomEvent('calendar-connection-updated', {
-              detail: { provider }
-            }));
-            
+
+            window.dispatchEvent(new CustomEvent('calendar-connection-updated', { detail: { provider } }));
             throw exchangeError;
           }
 
-          console.log('[OAuth] Token exchange successful:', data);
-          
-          // Show appropriate success message based on whether it was a refresh or new connection
+          await oauthTrace('exchange_success', { provider, connectionId: data?.connection_id, refreshed: data?.refreshed });
+
           if (data?.refreshed) {
             toast.success(`${providerDisplayName} Calendar connection refreshed!`);
           } else {
             toast.success(`Successfully connected to ${providerDisplayName} Calendar`);
           }
           
-          // Dispatch event to notify settings components to refresh
-          window.dispatchEvent(new CustomEvent('calendar-connection-updated', {
-            detail: { provider }
-          }));
+          window.dispatchEvent(new CustomEvent('calendar-connection-updated', { detail: { provider } }));
           
-          // Trigger a sync of calendar events (only for new connections or if we have a connection_id)
           if (data?.connection_id) {
             try {
               await supabase.functions.invoke('calendar-integration-manager', {
                 body: {
-                  action: 'sync_events',
-                  connection_id: data.connection_id,
+                  action: 'sync_events', connection_id: data.connection_id,
                   start_date: new Date().toISOString(),
                   end_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
                 }
@@ -171,7 +141,6 @@ export function useOAuthCallback() {
             }
           }
 
-          // Clean URL and navigate back to current page
           navigate(location.pathname, { replace: true });
         } catch (error) {
           console.error('[OAuth] Failed to complete OAuth flow:', error);
