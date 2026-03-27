@@ -62,18 +62,34 @@ serve(async (req) => {
     const now = new Date();
 
     for (const connection of connections) {
-      // Skip expired connections
+      // If token is expired, try to refresh it before skipping
       if (connection.expires_at && new Date(connection.expires_at) < now) {
-        console.log(`[calendar-delta-sync] Skipping expired connection: ${connection.id}`);
-        results.push({
-          connection_id: connection.id,
-          provider: connection.provider,
-          events_added: 0,
-          events_updated: 0,
-          events_deleted: 0,
-          error: 'Token expired - needs re-authentication'
-        });
-        continue;
+        console.log(`[calendar-delta-sync] Token expired for ${connection.id}, attempting refresh...`);
+        
+        const { data: tokenData } = await supabaseClient
+          .rpc('get_calendar_connection_tokens', { _connection_id: connection.id });
+        
+        if (tokenData?.[0]?.refresh_token) {
+          let refreshed: string | null = null;
+          if (connection.provider === 'google') {
+            refreshed = await refreshGoogleToken(supabaseClient, connection, tokenData[0]);
+          } else if (connection.provider === 'outlook' || connection.provider === 'office365') {
+            refreshed = await refreshOutlookToken(supabaseClient, connection, tokenData[0]);
+          }
+          
+          if (!refreshed) {
+            results.push({ connection_id: connection.id, provider: connection.provider,
+              events_added: 0, events_updated: 0, events_deleted: 0,
+              error: 'Token expired and refresh failed - needs re-authentication' });
+            continue;
+          }
+          console.log(`[calendar-delta-sync] Token refreshed for ${connection.id}, proceeding with sync`);
+        } else {
+          results.push({ connection_id: connection.id, provider: connection.provider,
+            events_added: 0, events_updated: 0, events_deleted: 0,
+            error: 'Token expired, no refresh token available' });
+          continue;
+        }
       }
 
       try {
