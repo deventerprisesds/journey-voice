@@ -1307,7 +1307,7 @@ const NotificationSettings = () => {
                   Send Test Reminder
                 </Button>
                 {/* Pull toggle for scheduling */}
-                <PullEventsToggle connection={googleConnection} onUpdate={loadCalendarConnections} />
+                <CalendarPullToggles connection={googleConnection} onUpdate={loadCalendarConnections} />
               </div>
             )}
           </div>
