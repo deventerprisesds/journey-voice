@@ -20,8 +20,7 @@ import {
   FileSpreadsheet,
   Sparkles,
   Home,
-  ListChecks,
-  Calendar
+  ListChecks
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { useIsMobile } from '@/hooks/use-mobile';
