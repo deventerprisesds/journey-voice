@@ -153,6 +153,47 @@ const FocusView: React.FC<FocusViewProps> = ({
       getOrCreateDefaultBoardId(user.id).then(setDefaultBoardId);
     }
   }, [user?.id]);
+
+  // Periodic delta sync + load external calendar events
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const syncAndLoadExternalEvents = async () => {
+      try {
+        // Trigger delta sync to pull latest from Google/Outlook
+        await supabase.functions.invoke('calendar-delta-sync', { body: { user_id: user.id } });
+        console.log('[FocusView] Delta sync completed');
+      } catch (e) {
+        console.warn('[FocusView] Delta sync failed (non-blocking):', e);
+      }
+
+      // Load external events for today from DB
+      try {
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+        const todayEnd = new Date();
+        todayEnd.setHours(23, 59, 59, 999);
+
+        const { data, error } = await supabase
+          .from('external_calendar_events')
+          .select('*')
+          .eq('user_id', user.id)
+          .gte('start_time', todayStart.toISOString())
+          .lte('start_time', todayEnd.toISOString());
+
+        if (!error && data) {
+          setExternalEvents(data as ExternalCalendarEvent[]);
+          console.log(`[FocusView] Loaded ${data.length} external events for today`);
+        }
+      } catch (e) {
+        console.warn('[FocusView] Failed to load external events:', e);
+      }
+    };
+
+    syncAndLoadExternalEvents();
+    const interval = setInterval(syncAndLoadExternalEvents, 15 * 60 * 1000); // every 15 min
+    return () => clearInterval(interval);
+  }, [user?.id]);
   
   // Get user timezone - use browser default as fallback
   const userTimezone = getDefaultTimezone();
