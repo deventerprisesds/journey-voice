@@ -293,6 +293,23 @@ serve(async (req) => {
         }
 
         // ==========================================
+        // PULL EXTERNAL CALENDAR EVENTS BEFORE SCHEDULING
+        // ==========================================
+        try {
+          console.log(`[nightly-builder] Invoking calendar-delta-sync for user ${userId}...`);
+          const { error: syncError } = await supabase.functions.invoke('calendar-delta-sync', {
+            body: { user_id: userId }
+          });
+          if (syncError) {
+            console.warn(`[nightly-builder] Delta sync warning: ${syncError.message}`);
+          } else {
+            console.log(`[nightly-builder] Delta sync completed for user ${userId}`);
+          }
+        } catch (deltaSyncErr) {
+          console.warn(`[nightly-builder] Delta sync failed (non-blocking):`, deltaSyncErr);
+        }
+
+        // ==========================================
         // WEEK LOOP: Fill today through Sunday
         // ==========================================
         const scheduledTaskIds = new Set<string>();
