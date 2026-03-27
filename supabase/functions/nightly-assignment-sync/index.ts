@@ -210,7 +210,7 @@ serve(async (req) => {
           category: 'PROF_EDUCATION',
           priority: assignment.priority?.toUpperCase() || 'HIGH',
           status: 'TODO',
-          due_date: assignment.due_date ? `${assignment.due_date}T23:59:59Z` : null,
+          due_date: assignment.due_date ? new Date(assignment.due_date).toISOString().split('T')[0] + 'T23:59:59Z' : null,
           estimate_minutes: estimateMinutes,
           is_scheduled: false,
           board_id: board.id,
