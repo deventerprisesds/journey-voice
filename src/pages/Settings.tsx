@@ -164,30 +164,6 @@ const Settings: React.FC = () => {
             <TaskCleanupSettings />
           </TabsContent>
 
-          <TabsContent value="calendars" className="mt-6">
-            <div className="space-y-6">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Calendar Connections</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-sm text-muted-foreground mb-4">
-                    Connect your Google or Outlook calendar to sync events and see everything in one view.
-                  </p>
-                  <Button onClick={() => setIsCalendarModalOpen(true)}>
-                    <Calendar className="h-4 w-4 mr-2" />
-                    Connect Calendar
-                  </Button>
-                </CardContent>
-              </Card>
-              <CalendarSelectionPanel />
-            </div>
-            <CalendarConnectionModal 
-              isOpen={isCalendarModalOpen} 
-              onClose={() => setIsCalendarModalOpen(false)}
-              onConnectionSuccess={() => setIsCalendarModalOpen(false)}
-            />
-          </TabsContent>
 
           <TabsContent value="ai" className="mt-6">
             <VoiceAssistantSettings />

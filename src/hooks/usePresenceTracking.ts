@@ -40,7 +40,7 @@ export function usePresenceTracking({
   const lastStateRef = useRef<{ isActive: boolean; context: string } | null>(null);
 
   const updatePresence = useCallback(async (isActive: boolean, context: string, trigger: string = 'update') => {
-    if (!userId || !enabled) return;
+    if (!userId || !enabled || userId === DEMO_USER_ID) return;
 
     // Debounce rapid changes
     if (debounceTimerRef.current) {
