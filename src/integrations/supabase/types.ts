@@ -4018,34 +4018,20 @@ export type Database = {
         }
         Returns: string
       }
-      insert_calendar_connection_for_user:
-        | {
-            Args: {
-              _access_token: string
-              _expires_at?: string
-              _provider: string
-              _provider_account_email: string
-              _provider_account_id: string
-              _refresh_token?: string
-              _scope?: string
-              _user_id: string
-            }
-            Returns: string
-          }
-        | {
-            Args: {
-              _access_token: string
-              _expires_at?: string
-              _provider: string
-              _provider_account_email: string
-              _provider_account_id: string
-              _purposes?: string[]
-              _refresh_token?: string
-              _scope?: string
-              _user_id: string
-            }
-            Returns: string
-          }
+      insert_calendar_connection_for_user: {
+        Args: {
+          _access_token: string
+          _expires_at?: string
+          _provider: string
+          _provider_account_email: string
+          _provider_account_id: string
+          _purposes?: string[]
+          _refresh_token?: string
+          _scope?: string
+          _user_id: string
+        }
+        Returns: string
+      }
       log_oauth_token_access: {
         Args: {
           _action_type: string
