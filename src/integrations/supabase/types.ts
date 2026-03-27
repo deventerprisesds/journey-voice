@@ -3883,6 +3883,16 @@ export type Database = {
           refresh_token: string
         }[]
       }
+      get_calendar_connection_tokens_service: {
+        Args: { _connection_id: string; _user_id: string }
+        Returns: {
+          access_token: string
+          expires_at: string
+          provider: string
+          refresh_token: string
+          user_id: string
+        }[]
+      }
       get_calendar_connections_safe: {
         Args: never
         Returns: {
