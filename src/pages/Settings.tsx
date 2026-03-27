@@ -36,8 +36,8 @@ import ProfileSettings from '@/components/ProfileSettings';
 import { AssignmentSyncSettings } from '@/components/AssignmentSyncSettings';
 import TaskCleanupSettings from '@/components/TaskCleanupSettings';
 import { useOAuthCallback } from '@/hooks/useOAuthCallback';
-import CalendarConnectionModal from '@/components/CalendarConnectionModal';
-import CalendarSelectionPanel from '@/components/CalendarSelectionPanel';
+import { CalendarConnectionModal } from '@/components/CalendarConnectionModal';
+import { CalendarSelectionPanel } from '@/components/CalendarSelectionPanel';
 
 const tabConfig = [
   { value: 'notifications', label: 'Notifications', icon: Bell },
