@@ -742,6 +742,7 @@ export type Database = {
           expires_at: string | null
           id: string
           is_active: boolean
+          metadata: Json | null
           provider: string
           provider_account_email: string
           provider_account_id: string
@@ -761,6 +762,7 @@ export type Database = {
           expires_at?: string | null
           id?: string
           is_active?: boolean
+          metadata?: Json | null
           provider: string
           provider_account_email: string
           provider_account_id: string
@@ -780,6 +782,7 @@ export type Database = {
           expires_at?: string | null
           id?: string
           is_active?: boolean
+          metadata?: Json | null
           provider?: string
           provider_account_email?: string
           provider_account_id?: string
