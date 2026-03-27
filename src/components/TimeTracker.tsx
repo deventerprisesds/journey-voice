@@ -35,7 +35,7 @@ const TimeTracker: React.FC<TimeTrackerProps> = ({ task, onTimeUpdate }) => {
 
   // Update display time every second when running
   useEffect(() => {
-    let interval: NodeJS.Timeout;
+    let interval: ReturnType<typeof setInterval>;
     
     if (isRunning && currentSession) {
       interval = setInterval(() => {

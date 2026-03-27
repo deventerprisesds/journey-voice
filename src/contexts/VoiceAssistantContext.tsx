@@ -69,7 +69,7 @@ export const VoiceAssistantProvider: React.FC<VoiceAssistantProviderProps> = ({
   const [voiceTranscripts, setVoiceTranscripts] = useState<ConversationMessage[]>([]);
   const [liveTranscript, setLiveTranscript] = useState<{ role: 'user' | 'assistant'; content: string; isListening: boolean } | null>(null);
   const assistantRef = useRef<RealtimeVoiceAssistant | null>(null);
-  const autoGreetingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const autoGreetingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   // Load auto-greeting timeout from user settings
   useEffect(() => {
