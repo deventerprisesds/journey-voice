@@ -122,6 +122,7 @@ const FocusView: React.FC<FocusViewProps> = ({
   const [isTimelineExpanded, setIsTimelineExpanded] = useState(true);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [createModalHour, setCreateModalHour] = useState<number>(9);
+  const [createModalMinute, setCreateModalMinute] = useState<number>(0);
   const [defaultBoardId, setDefaultBoardId] = useState<string>('');
   const [isClearing, setIsClearing] = useState(false);
   const [isRerunning, setIsRerunning] = useState(false);
@@ -1009,14 +1010,21 @@ const FocusView: React.FC<FocusViewProps> = ({
                                         <div
                                           ref={provided.innerRef}
                                           {...provided.droppableProps}
+                                          onClick={() => {
+                                            setCreateModalHour(slot.hour);
+                                            setCreateModalMinute(slot.minute);
+                                            setIsCreateModalOpen(true);
+                                          }}
                                           className={cn(
-                                            "p-2 border border-dashed rounded-md text-xs text-muted-foreground transition-colors flex items-center gap-2",
-                                            snapshot.isDraggingOver ? "border-primary bg-primary/5" : "border-muted/50"
+                                            "p-3 border rounded-md text-sm transition-colors flex items-center gap-2 cursor-pointer min-h-[44px]",
+                                            snapshot.isDraggingOver
+                                              ? "border-primary bg-primary/5"
+                                              : "border-dashed border-muted-foreground/30 hover:border-primary/50 hover:bg-accent"
                                           )}
                                         >
-                                          <Clock className="h-3 w-3 flex-shrink-0" />
-                                          <span>{slot.label}</span>
-                                          <span className="text-muted-foreground/50">— open</span>
+                                          <Clock className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
+                                          <span className="text-muted-foreground">{slot.label}</span>
+                                          <Plus className="ml-auto h-4 w-4 text-muted-foreground/60" />
                                           {provided.placeholder}
                                         </div>
                                       )}
@@ -1252,7 +1260,7 @@ const FocusView: React.FC<FocusViewProps> = ({
           userId={user.id}
           initialDate={today}
           initialHour={createModalHour}
-          initialMinute={0}
+          initialMinute={createModalMinute}
         />
       )}
     </DragDropContext>
