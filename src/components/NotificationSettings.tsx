@@ -763,7 +763,7 @@ const NotificationSettings = () => {
               </div>
             )}
           </div>
-        </Content>
+        </CardContent>
       </Card>
 
       {/* Test Notifications */}
