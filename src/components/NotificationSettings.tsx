@@ -14,6 +14,67 @@ import { z } from "zod";
 import { CalendarOAuthManager } from "./CalendarOAuthManager";
 import { useNotifications } from "@/hooks/useNotifications";
 
+// Pull events toggle sub-component
+function PullEventsToggle({ connection, onUpdate }: { connection: CalendarConnection; onUpdate: () => void }) {
+  const [isPull, setIsPull] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    // Check current purposes
+    supabase
+      .from('calendar_connections')
+      .select('purposes')
+      .eq('id', connection.id)
+      .single()
+      .then(({ data }) => {
+        if (data?.purposes && Array.isArray(data.purposes)) {
+          setIsPull(data.purposes.includes('READ'));
+        }
+      });
+  }, [connection.id]);
+
+  const togglePull = async (checked: boolean) => {
+    setLoading(true);
+    try {
+      const { data: current } = await supabase
+        .from('calendar_connections')
+        .select('purposes')
+        .eq('id', connection.id)
+        .single();
+
+      let purposes: string[] = current?.purposes || ['WRITE'];
+      if (checked && !purposes.includes('READ')) {
+        purposes = [...purposes, 'READ'];
+      } else if (!checked) {
+        purposes = purposes.filter((p: string) => p !== 'READ');
+      }
+      if (purposes.length === 0) purposes = ['WRITE'];
+
+      await supabase
+        .from('calendar_connections')
+        .update({ purposes })
+        .eq('id', connection.id);
+
+      setIsPull(checked);
+      onUpdate();
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="flex items-center justify-between p-2 rounded-md bg-muted/50 border border-border mt-2">
+      <div className="text-sm">
+        <span className="font-medium">Pull events for scheduling</span>
+        <p className="text-xs text-muted-foreground">
+          Import events to avoid scheduling conflicts
+        </p>
+      </div>
+      <Switch checked={isPull} onCheckedChange={togglePull} disabled={loading} />
+    </div>
+  );
+}
+
 type NotificationChannel = 'EMAIL' | 'SLACK' | 'PUSH' | 'OUTLOOK_EVENT' | 'GOOGLE_EVENT';
 type DatabaseChannel = NotificationChannel;
 

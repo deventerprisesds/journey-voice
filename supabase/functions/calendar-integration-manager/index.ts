@@ -46,12 +46,13 @@ serve(async (req) => {
         return await createCalendarEvent(supabaseClient, connection_id, { task });
       
       case 'get_read_connections':
-        // Get all connections with READ purpose for a user
         return await getConnectionsByPurpose(supabaseClient, user_id, 'READ');
       
       case 'get_write_connections':
-        // Get all connections with WRITE purpose for a user
         return await getConnectionsByPurpose(supabaseClient, user_id, 'WRITE');
+
+      case 'list_calendars':
+        return await listCalendars(supabaseClient, connection_id);
       
       default:
         return new Response(
