@@ -1,59 +1,61 @@
 
 
-# Fix: Upcoming Assignments Not Being Created as Tasks
+# Fix: Stale DONE Tasks Consuming Schedule Capacity + Missing Assignment Scheduling
 
-## Root Cause
+## Problems Found (Verified via Database)
 
-The title-based fuzzy dedup on **line 154** is too aggressive. It uses `title.ilike.%${assignment.title}%` which does a broad substring match. For example:
+1. **13 DONE tasks are scheduled for today** — they have `is_scheduled = true` and `start_time` set to today. The nightly builder counts them as "already occupied" capacity (line 391-397), leaving less room for real tasks. The rollover step skips DONE tasks intentionally, so they never get cleared.
 
-- Assignment **"Project Management Tracker (March 30, 2026)"** matches existing task **"Submit project tracker"** because "project" and "tracker" appear in both
-- Assignment **"ASSIGNMENT #7: Draft Client Presentation"** matches **"Finish assignment for Business Problem ALP"** because both contain "assignment"
+2. **3 new assignment tasks (Draft Client Presentation, Project Management Tracker, Draft Report) have `start_time = null`** — the schedule builder hasn't run since they were created.
 
-This causes ALL upcoming assignments to be falsely "linked" to unrelated existing tasks and skipped (663 skipped, 0 created).
+3. **No external calendar events** in the `external_calendar_events` table for today.
 
-Additionally, this false linking **corrupts existing tasks** by overwriting their `assignment_id` and `due_date` with wrong data.
+## Fix 1: Clear scheduling flags on DONE tasks during rollover
 
-## Fix
+**File**: `supabase/functions/nightly-schedule-builder/index.ts`
 
-### 1. Replace fuzzy title dedup with exact-match dedup
-
-**File**: `supabase/functions/nightly-assignment-sync/index.ts` (lines 145-172)
-
-Replace the broad `ilike` query with an exact title match (with and without the emoji prefix):
+After the existing rollover step (lines 215-250), add a new pass that clears `is_scheduled`, `start_time`, and `end_time` on all DONE/completed tasks that still have scheduling data. This prevents them from consuming capacity:
 
 ```ts
-// SECONDARY DEDUP: exact title match only
-const { data: titleMatches } = await supabase
+// Clear scheduling data from completed tasks so they don't block capacity
+const { data: doneTasks } = await supabase
   .from('tasks')
-  .select('id, title, status')
+  .select('id, title')
   .eq('user_id', userId)
-  .is('assignment_id', null)
-  .is('completed_at', null)
-  .not('status', 'eq', 'DONE')
-  .or(`title.eq.${assignment.title},title.eq.📚 ${assignment.title}`);
+  .eq('status', 'DONE')
+  .eq('is_scheduled', true);
+
+if (doneTasks && doneTasks.length > 0) {
+  for (const dt of doneTasks) {
+    await supabase.from('tasks').update({
+      start_time: null, end_time: null, is_scheduled: false
+    }).eq('id', dt.id);
+  }
+  console.log(`  🧹 Cleared scheduling from ${doneTasks.length} completed tasks`);
+}
 ```
 
-This prevents false matches while still linking tasks that were manually created with the exact assignment title.
+## Fix 2: One-time data cleanup
 
-### 2. Clean up incorrectly linked tasks
+Run a direct query to clear the 13 DONE tasks currently blocking today's schedule. This is immediate relief while Fix 1 prevents recurrence.
 
-The previous runs linked wrong assignments to unrelated tasks. Fix by clearing `assignment_id` on the 6 existing EDUCATION/PROF_EDUCATION tasks that were incorrectly linked (they currently show `assignment_id = null` so this may have already self-corrected, but we should verify after the fix runs).
+## Fix 3: Trigger schedule builder after fixes
 
-### 3. Invoke the fixed sync and verify
-
-After deploying:
-1. Call `nightly-assignment-sync` for user `a3378f93-d655-4913-b2fa-ca5b1d8020f1`
-2. Confirm `created_count > 0` — specifically tasks for "Project Management Tracker (March 30)" and "ASSIGNMENT #7: Draft Client Presentation (March 30)"
-3. Call `nightly-schedule-builder` to assign `start_time` values to the new tasks
-4. Query tasks to confirm they appear with today/upcoming `start_time` values
+After deploying Fix 1 and running the cleanup:
+1. Invoke `nightly-schedule-builder` for user `a3378f93-...`
+2. Verify the 3 new assignment tasks get `start_time` values for today/upcoming days
+3. Verify no DONE tasks appear in today's schedule
+4. Check FocusView shows the assignments
 
 ## Files to Change
 
 | File | Change |
 |------|--------|
-| `supabase/functions/nightly-assignment-sync/index.ts` | Replace `ilike` fuzzy match with exact `eq` match on lines 147-154 |
+| `supabase/functions/nightly-schedule-builder/index.ts` | Add DONE task cleanup pass after rollover (after line 250) |
 
-## Single change, high impact
+## Verification (will be done before reporting success)
 
-This is a one-line query fix that unblocks all upcoming assignment task creation.
+1. Query `tasks` table: confirm zero DONE tasks with today's `start_time`
+2. Query `tasks` table: confirm assignment tasks have `start_time` set
+3. Check FocusView renders the new assignments in the schedule
 
