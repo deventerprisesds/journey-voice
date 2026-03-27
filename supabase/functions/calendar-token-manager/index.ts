@@ -151,6 +151,17 @@ serve(async (req) => {
         console.log(`[calendar-token-manager] Updated purposes for connection ${connectionId} to: ${purposes.join(', ')}`)
         break
 
+      case 'refresh':
+        if (!connectionId) {
+          throw new Error('Missing connection ID for refresh')
+        }
+        if (!userId) {
+          throw new Error('User authentication required for token refresh')
+        }
+        
+        result = await refreshConnectionToken(supabaseClient, connectionId, userId)
+        break
+
       default:
         throw new Error('Invalid action specified')
     }

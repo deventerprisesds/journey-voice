@@ -241,306 +241,283 @@ serve(async (req) => {
         console.log(`  📋 Rolled over ${rolledOverCount} tasks`);
 
         // ==========================================
-        // STEP 2: COMPUTE WINDOW CAPACITY
+        // WEEK LOOP: Fill today through Sunday
         // ==========================================
-        const todayDate = new Date(now);
-        const todayISO = todayDate.toISOString().split('T')[0];
-        // Get day of week in user's timezone
-        const targetDayOfWeek = parseInt(
-          now.toLocaleString('en-US', { timeZone: timezone, weekday: 'short' })
-            .length > 0
-            ? new Date(now.toLocaleString('en-US', { timeZone: timezone })).getDay().toString()
-            : '0'
-        );
-
-        const activeWindows = getActiveWindows(timeWindows, targetDayOfWeek);
-        const activeWindowNames = Object.keys(activeWindows);
+        const scheduledTaskIds = new Set<string>();
+        const scheduledTitles = new Set<string>();
+        const accumulatedBusySlots: Array<{ start_time: string; end_time: string }> = [];
         
-        if (activeWindowNames.length === 0) {
-          console.log(`  ℹ️ No active time windows for ${userId} on day ${targetDayOfWeek}`);
-          results[userId] = { rolledOver: rolledOverCount, scheduled: 0, reason: 'no_active_windows' };
-          continue;
-        }
-
-        // Fetch already-scheduled tasks for today to compute used capacity
-        const { data: todayScheduled } = await supabase
-          .from('tasks')
-          .select('start_time, end_time, estimate_minutes')
-          .eq('user_id', userId)
-          .eq('is_scheduled', true)
-          .gte('start_time', `${todayISO}T00:00:00`)
-          .lt('start_time', `${todayISO}T23:59:59`);
-
-        // Also fetch external calendar events for today
-        const { data: todayEvents } = await supabase
-          .from('external_calendar_events')
-          .select('start_time, end_time')
-          .eq('user_id', userId)
-          .gte('start_time', `${todayISO}T00:00:00`)
-          .lt('start_time', `${todayISO}T23:59:59`)
-          .eq('is_all_day', false);
-
-        const allScheduledItems = [
-          ...(todayScheduled || []),
-          ...(todayEvents || []).map(e => ({ ...e, estimate_minutes: undefined })),
-        ];
-
-        const windowCapacities = computeUsedMinutes(allScheduledItems, activeWindows, todayISO, timezone);
+        // Determine how many days to fill (today through Sunday)
+        const userNow = new Date(now.toLocaleString('en-US', { timeZone: timezone }));
+        const currentDayOfWeek = userNow.getDay(); // 0=Sun, 6=Sat
+        const daysUntilSunday = currentDayOfWeek === 0 ? 0 : 7 - currentDayOfWeek;
+        const totalDays = daysUntilSunday + 1; // Include today
         
-        const totalRemainingMinutes = Object.values(windowCapacities).reduce(
-          (sum, wc) => sum + wc.remainingMinutes, 0
-        );
+        let totalScheduledAcrossWeek = 0;
+        const weekResults: Record<string, any> = {};
 
-        console.log(`  📊 Window capacities for ${todayISO} (day ${targetDayOfWeek}):`);
-        for (const [name, cap] of Object.entries(windowCapacities)) {
-          console.log(`    ${name}: ${cap.remainingMinutes}/${cap.totalMinutes} min remaining`);
-        }
-
-        if (totalRemainingMinutes <= 0) {
-          console.log(`  ℹ️ No remaining capacity for ${userId} today`);
-          results[userId] = { rolledOver: rolledOverCount, scheduled: 0, reason: 'no_capacity' };
-          continue;
-        }
-
-        // ==========================================
-        // STEP 3: GATHER CANDIDATES from priority board + READY/UP_NEXT
-        // ==========================================
-        // Query tasks that have topic mappings (priority board members)
-        const { data: mappedTasks, error: mappedError } = await supabase
-          .from('tasks')
-          .select('id, task_topic_mappings!inner(topic_id)')
-          .eq('user_id', userId)
-          .is('completed_at', null)
-          .not('status', 'in', '("DONE","BLOCKED")');
-
-        if (mappedError) {
-          console.warn(`⚠️ Error fetching topic mappings for ${userId}, falling back to READY/UP_NEXT only:`, mappedError);
-        }
-
-        const mappedIds = (mappedTasks || []).map((t: any) => t.id);
-
-        // Also fetch READY/UP_NEXT/TODO tasks regardless of priority board membership
-        const { data: readyUpNextTasks, error: readyError } = await supabase
-          .from('tasks')
-          .select('id')
-          .eq('user_id', userId)
-          .in('status', ['READY', 'UP_NEXT', 'TODO', 'BACKLOG'])
-          .is('is_scheduled', false)
-          .is('completed_at', null)
-          .not('title', 'ilike', '%Test Task%');
-
-        if (readyError) {
-          console.error(`❌ Error fetching READY/UP_NEXT tasks for ${userId}:`, readyError);
-        }
-
-        // Merge and deduplicate candidate IDs
-        const readyIds = (readyUpNextTasks || []).map((t: any) => t.id);
-        const allCandidateIds = [...new Set([...mappedIds, ...readyIds])];
-
-        if (allCandidateIds.length === 0) {
-          console.log(`  ℹ️ No candidates (priority board or READY/UP_NEXT) for ${userId}`);
-          results[userId] = { rolledOver: rolledOverCount, scheduled: 0 };
-          continue;
-        }
-
-        // Fetch ALL eligible candidates (no arbitrary limit)
-        const { data: candidates, error: candidatesError } = await supabase
-          .from('tasks')
-          .select('id, title, category, priority, estimate_minutes, due_date, pushed_count, status')
-          .in('id', allCandidateIds)
-          .not('status', 'in', '("DONE","BLOCKED")')
-          .not('title', 'ilike', '%Test Task%')
-          .is('is_scheduled', false)
-          .is('completed_at', null)
-          .order('created_at', { ascending: true });
-
-        if (candidatesError) {
-          console.error(`❌ Error fetching candidates for ${userId}:`, candidatesError);
-          continue;
-        }
-
-        if (!candidates || candidates.length === 0) {
-          console.log(`  ℹ️ No unscheduled candidates for ${userId}`);
-          results[userId] = { rolledOver: rolledOverCount, scheduled: 0 };
-          continue;
-        }
-
-        // ==========================================
-        // STEP 4: SCORE and FILL by window capacity
-        // ==========================================
-        const priorityWeight: Record<string, number> = { URGENT: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
-        
-        const scoredCandidates = candidates.map(task => {
-          let score = priorityWeight[task.priority] || 1;
+        for (let dayOffset = 0; dayOffset < totalDays; dayOffset++) {
+          const targetDate = new Date(now);
+          targetDate.setDate(targetDate.getDate() + dayOffset);
+          const targetISO = targetDate.toISOString().split('T')[0];
           
-          // Priority board boost (+10) — always outranks non-board tasks
-          if (mappedIds.includes(task.id)) {
-            score += 10;
-          }
+          // Get day of week for this target date
+          const targetUserDate = new Date(targetDate.toLocaleString('en-US', { timeZone: timezone }));
+          const targetDayOfWeek = targetUserDate.getDay();
           
-          // Boost pushed tasks (accountability)
-          if (task.pushed_count && task.pushed_count > 0) {
-            score += Math.min(task.pushed_count, 3);
-          }
+          console.log(`\n  📅 === Day ${dayOffset + 1}/${totalDays}: ${targetISO} (day ${targetDayOfWeek}) ===`);
+
+          // STEP 2: COMPUTE WINDOW CAPACITY for this day
+          const activeWindows = getActiveWindows(timeWindows, targetDayOfWeek);
+          const activeWindowNames = Object.keys(activeWindows);
           
-          // Boost due-soon tasks
-          if (isDueSoon(task.due_date)) {
-            score += 3;
-          }
-          
-          // Boost financial/comms tasks
-          if (hasPriorityKeyword(task.title)) {
-            score += 2;
-          }
-          
-          // UP_NEXT status gets a boost
-          if (task.status === 'UP_NEXT') {
-            score += 1;
-          }
-          
-          return { ...task, score, isPriorityBoard: mappedIds.includes(task.id) };
-        });
-
-        // Sort by score descending, then by due_date ascending
-        scoredCandidates.sort((a, b) => {
-          if (b.score !== a.score) return b.score - a.score;
-          if (a.due_date && b.due_date) return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
-          if (a.due_date) return -1;
-          if (b.due_date) return 1;
-          return 0;
-        });
-
-        // Walk through scored candidates, assign to windows until capacity is full
-        const selectedCandidates: typeof scoredCandidates = [];
-        const windowRemaining = { ...Object.fromEntries(
-          Object.entries(windowCapacities).map(([name, cap]) => [name, cap.remainingMinutes])
-        )};
-
-        for (const task of scoredCandidates) {
-          const duration = task.estimate_minutes || 
-            categoryMappings[task.category]?.estimatedDuration || 
-            60;
-          
-          // Find the best window for this task
-          const preferredWindows = getPreferredWindows(task.category, categoryMappings, activeWindowNames);
-          
-          let assigned = false;
-          for (const winName of preferredWindows) {
-            if ((windowRemaining[winName] || 0) >= duration) {
-              windowRemaining[winName] -= duration;
-              selectedCandidates.push(task);
-              assigned = true;
-              break;
-            }
-          }
-
-          if (!assigned) {
-            // Task doesn't fit any preferred window — mark as overflow, don't force into wrong window
-            console.log(`  ⚠️ "${task.title}" (${task.category}) doesn't fit any allowed window — skipping (OVERFLOW)`);
-          }
-
-          // Check if all windows are full
-          const totalRemaining = Object.values(windowRemaining).reduce((s, v) => s + v, 0);
-          if (totalRemaining <= 0) break;
-        }
-
-        console.log(`  🎯 ${selectedCandidates.length} candidates selected to fill capacity (from ${scoredCandidates.length} evaluated):`);
-        selectedCandidates.forEach((t, i) => {
-          console.log(`    ${i + 1}. "${t.title}" (score: ${t.score}, est: ${t.estimate_minutes || 60}m, board: ${t.isPriorityBoard})`);
-        });
-        console.log(`  📊 Window fill status after selection:`);
-        for (const [name, remaining] of Object.entries(windowRemaining)) {
-          const cap = windowCapacities[name];
-          console.log(`    ${name}: ${remaining}/${cap.totalMinutes} min remaining`);
-        }
-
-        if (selectedCandidates.length === 0) {
-          console.log(`  ℹ️ No candidates fit available capacity for ${userId}`);
-          results[userId] = { rolledOver: rolledOverCount, scheduled: 0, reason: 'no_fit' };
-          continue;
-        }
-
-        // ==========================================
-        // STEP 5: Call batch-calendar-scheduler with capacity context
-        // ==========================================
-        const schedulerPayload = {
-          tasks: selectedCandidates.map(t => ({
-            id: t.id,
-            title: t.title,
-            category: t.category,
-            priority: t.priority,
-            estimate_minutes: t.estimate_minutes || categoryMappings[t.category]?.estimatedDuration || 60,
-            due_date: t.due_date,
-          })),
-          userId,
-          timezone,
-          targetDate: todayISO,
-          allowOverflow: false,
-          windowCapacity: Object.fromEntries(
-            Object.entries(windowCapacities).map(([name, cap]) => [
-              name,
-              { totalMinutes: cap.totalMinutes, remainingMinutes: cap.remainingMinutes, start: activeWindows[name].start, end: activeWindows[name].end }
-            ])
-          ),
-        };
-
-        console.log(`  🤖 Calling batch-calendar-scheduler for ${todayISO} with ${selectedCandidates.length} tasks...`);
-
-        const schedulerResponse = await fetch(
-          `${supabaseUrl}/functions/v1/batch-calendar-scheduler`,
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${supabaseServiceKey}`,
-            },
-            body: JSON.stringify(schedulerPayload),
-          }
-        );
-
-        if (!schedulerResponse.ok) {
-          const errText = await schedulerResponse.text();
-          console.error(`❌ Scheduler error for ${userId}: ${schedulerResponse.status} ${errText}`);
-          results[userId] = { rolledOver: rolledOverCount, scheduled: 0, error: errText };
-          continue;
-        }
-
-        const schedulerResult = await schedulerResponse.json();
-        const scheduled = schedulerResult.scheduled || [];
-
-        console.log(`  ✅ Scheduled ${scheduled.length} tasks`);
-
-        // Update tasks with their scheduled times — ONLY if the scheduler returned valid times
-        let actuallyScheduled = 0;
-        for (const slot of scheduled) {
-          if (!slot.taskId || !slot.start_time || !slot.end_time) {
-            console.log(`  ⏭️ Skipping task ${slot.taskId || 'unknown'}: no valid time slot returned`);
+          if (activeWindowNames.length === 0) {
+            console.log(`    ℹ️ No active time windows on day ${targetDayOfWeek}`);
+            weekResults[targetISO] = { scheduled: 0, reason: 'no_active_windows' };
             continue;
           }
-          
-          const candidate = selectedCandidates.find(c => c.id === slot.taskId);
-          const preScheduleStatus = candidate?.status || 'TODO';
-          
-          const { error: scheduleError } = await supabase
-            .from('tasks')
-            .update({
-              start_time: slot.start_time,
-              end_time: slot.end_time,
-              is_scheduled: true,
-              scheduling_context: { pre_schedule_status: preScheduleStatus },
-              status: 'TODO',
-              updated_at: now.toISOString(),
-            })
-            .eq('id', slot.taskId);
 
-          if (scheduleError) {
-            console.error(`❌ Error scheduling task ${slot.taskId}:`, scheduleError);
-          } else {
-            actuallyScheduled++;
+          // Fetch already-scheduled tasks for this day
+          const { data: dayScheduled } = await supabase
+            .from('tasks')
+            .select('start_time, end_time, estimate_minutes')
+            .eq('user_id', userId)
+            .eq('is_scheduled', true)
+            .gte('start_time', `${targetISO}T00:00:00`)
+            .lt('start_time', `${targetISO}T23:59:59`);
+
+          // Fetch external calendar events for this day
+          const { data: dayEvents } = await supabase
+            .from('external_calendar_events')
+            .select('start_time, end_time')
+            .eq('user_id', userId)
+            .gte('start_time', `${targetISO}T00:00:00`)
+            .lt('start_time', `${targetISO}T23:59:59`)
+            .eq('is_all_day', false);
+
+          // Include accumulated busy slots from previous days' scheduling
+          const dayBusySlots = accumulatedBusySlots.filter(s => s.start_time.startsWith(targetISO));
+
+          const allScheduledItems = [
+            ...(dayScheduled || []),
+            ...(dayEvents || []).map(e => ({ ...e, estimate_minutes: undefined })),
+            ...dayBusySlots.map(s => ({ ...s, estimate_minutes: undefined })),
+          ];
+
+          const windowCapacities = computeUsedMinutes(allScheduledItems, activeWindows, targetISO, timezone);
+          
+          const totalRemainingMinutes = Object.values(windowCapacities).reduce(
+            (sum, wc) => sum + wc.remainingMinutes, 0
+          );
+
+          console.log(`    📊 Window capacities for ${targetISO}:`);
+          for (const [name, cap] of Object.entries(windowCapacities)) {
+            console.log(`      ${name}: ${cap.remainingMinutes}/${cap.totalMinutes} min remaining`);
           }
+
+          if (totalRemainingMinutes <= 0) {
+            console.log(`    ℹ️ No remaining capacity for ${targetISO}`);
+            weekResults[targetISO] = { scheduled: 0, reason: 'no_capacity' };
+            continue;
+          }
+
+          // STEP 3: GATHER CANDIDATES (excluding already-scheduled ones)
+          const { data: mappedTasks, error: mappedError } = await supabase
+            .from('tasks')
+            .select('id, task_topic_mappings!inner(topic_id)')
+            .eq('user_id', userId)
+            .is('completed_at', null)
+            .not('status', 'in', '("DONE","BLOCKED")');
+
+          if (mappedError) {
+            console.warn(`    ⚠️ Error fetching topic mappings:`, mappedError);
+          }
+
+          const mappedIds = (mappedTasks || []).map((t: any) => t.id);
+
+          const { data: readyUpNextTasks } = await supabase
+            .from('tasks')
+            .select('id')
+            .eq('user_id', userId)
+            .in('status', ['READY', 'UP_NEXT', 'TODO', 'BACKLOG'])
+            .is('is_scheduled', false)
+            .is('completed_at', null)
+            .not('title', 'ilike', '%Test Task%');
+
+          const readyIds = (readyUpNextTasks || []).map((t: any) => t.id);
+          const allCandidateIds = [...new Set([...mappedIds, ...readyIds])]
+            .filter(id => !scheduledTaskIds.has(id)); // Exclude already-scheduled
+
+          if (allCandidateIds.length === 0) {
+            console.log(`    ℹ️ No candidates remaining for ${targetISO}`);
+            weekResults[targetISO] = { scheduled: 0, reason: 'no_candidates' };
+            continue;
+          }
+
+          const { data: candidates } = await supabase
+            .from('tasks')
+            .select('id, title, category, priority, estimate_minutes, due_date, pushed_count, status')
+            .in('id', allCandidateIds)
+            .not('status', 'in', '("DONE","BLOCKED")')
+            .not('title', 'ilike', '%Test Task%')
+            .is('is_scheduled', false)
+            .is('completed_at', null)
+            .order('created_at', { ascending: true });
+
+          if (!candidates || candidates.length === 0) {
+            console.log(`    ℹ️ No unscheduled candidates for ${targetISO}`);
+            weekResults[targetISO] = { scheduled: 0 };
+            continue;
+          }
+
+          // STEP 4: SCORE and FILL by window capacity (with dedup)
+          const priorityWeight: Record<string, number> = { URGENT: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
+          
+          const scoredCandidates = candidates
+            .filter(t => !scheduledTitles.has(t.title)) // Dedup by title
+            .map(task => {
+              let score = priorityWeight[task.priority] || 1;
+              if (mappedIds.includes(task.id)) score += 10;
+              if (task.pushed_count && task.pushed_count > 0) score += Math.min(task.pushed_count, 3);
+              if (isDueSoon(task.due_date)) score += 3;
+              // Extra boost if due on or before this target day
+              if (task.due_date && task.due_date <= targetISO) score += 5;
+              if (hasPriorityKeyword(task.title)) score += 2;
+              if (task.status === 'UP_NEXT') score += 1;
+              return { ...task, score, isPriorityBoard: mappedIds.includes(task.id) };
+            });
+
+          scoredCandidates.sort((a, b) => {
+            if (b.score !== a.score) return b.score - a.score;
+            if (a.due_date && b.due_date) return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
+            if (a.due_date) return -1;
+            if (b.due_date) return 1;
+            return 0;
+          });
+
+          const selectedCandidates: typeof scoredCandidates = [];
+          const windowRemaining = { ...Object.fromEntries(
+            Object.entries(windowCapacities).map(([name, cap]) => [name, cap.remainingMinutes])
+          )};
+
+          for (const task of scoredCandidates) {
+            const duration = task.estimate_minutes || 
+              categoryMappings[task.category]?.estimatedDuration || 60;
+            const preferredWindows = getPreferredWindows(task.category, categoryMappings, activeWindowNames);
+            
+            let assigned = false;
+            for (const winName of preferredWindows) {
+              if ((windowRemaining[winName] || 0) >= duration) {
+                windowRemaining[winName] -= duration;
+                selectedCandidates.push(task);
+                assigned = true;
+                break;
+              }
+            }
+
+            if (!assigned) {
+              console.log(`    ⚠️ "${task.title}" doesn't fit any allowed window — skipping`);
+            }
+
+            const totalRemaining = Object.values(windowRemaining).reduce((s, v) => s + v, 0);
+            if (totalRemaining <= 0) break;
+          }
+
+          console.log(`    🎯 ${selectedCandidates.length} candidates selected for ${targetISO}`);
+          selectedCandidates.forEach((t, i) => {
+            console.log(`      ${i + 1}. "${t.title}" (score: ${t.score}, est: ${t.estimate_minutes || 60}m, board: ${t.isPriorityBoard})`);
+          });
+
+          if (selectedCandidates.length === 0) {
+            weekResults[targetISO] = { scheduled: 0, reason: 'no_fit' };
+            continue;
+          }
+
+          // STEP 5: Call batch-calendar-scheduler
+          const schedulerPayload = {
+            tasks: selectedCandidates.map(t => ({
+              id: t.id,
+              title: t.title,
+              category: t.category,
+              priority: t.priority,
+              estimate_minutes: t.estimate_minutes || categoryMappings[t.category]?.estimatedDuration || 60,
+              due_date: t.due_date,
+            })),
+            userId,
+            timezone,
+            targetDate: targetISO,
+            allowOverflow: false,
+            windowCapacity: Object.fromEntries(
+              Object.entries(windowCapacities).map(([name, cap]) => [
+                name,
+                { totalMinutes: cap.totalMinutes, remainingMinutes: cap.remainingMinutes, start: activeWindows[name].start, end: activeWindows[name].end }
+              ])
+            ),
+          };
+
+          console.log(`    🤖 Calling batch-calendar-scheduler for ${targetISO} with ${selectedCandidates.length} tasks...`);
+
+          const schedulerResponse = await fetch(
+            `${supabaseUrl}/functions/v1/batch-calendar-scheduler`,
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${supabaseServiceKey}`,
+              },
+              body: JSON.stringify(schedulerPayload),
+            }
+          );
+
+          if (!schedulerResponse.ok) {
+            const errText = await schedulerResponse.text();
+            console.error(`    ❌ Scheduler error: ${schedulerResponse.status} ${errText}`);
+            weekResults[targetISO] = { scheduled: 0, error: errText };
+            continue;
+          }
+
+          const schedulerResult = await schedulerResponse.json();
+          const scheduled = schedulerResult.scheduled || [];
+
+          console.log(`    ✅ Scheduler returned ${scheduled.length} slots`);
+
+          // Update tasks with their scheduled times
+          let actuallyScheduled = 0;
+          for (const slot of scheduled) {
+            if (!slot.taskId || !slot.start_time || !slot.end_time) {
+              console.log(`    ⏭️ Skipping task ${slot.taskId || 'unknown'}: no valid time slot`);
+              continue;
+            }
+            
+            const candidate = selectedCandidates.find(c => c.id === slot.taskId);
+            const preScheduleStatus = candidate?.status || 'TODO';
+            
+            const { error: scheduleError } = await supabase
+              .from('tasks')
+              .update({
+                start_time: slot.start_time,
+                end_time: slot.end_time,
+                is_scheduled: true,
+                scheduling_context: { pre_schedule_status: preScheduleStatus },
+                status: 'TODO',
+                updated_at: now.toISOString(),
+              })
+              .eq('id', slot.taskId);
+
+            if (scheduleError) {
+              console.error(`    ❌ Error scheduling task ${slot.taskId}:`, scheduleError);
+            } else {
+              actuallyScheduled++;
+              scheduledTaskIds.add(slot.taskId);
+              scheduledTitles.add(candidate?.title || '');
+              accumulatedBusySlots.push({ start_time: slot.start_time, end_time: slot.end_time });
+            }
+          }
+          
+          totalScheduledAcrossWeek += actuallyScheduled;
+          weekResults[targetISO] = { scheduled: actuallyScheduled, candidates: selectedCandidates.length };
+          console.log(`    ✅ Actually scheduled ${actuallyScheduled}/${scheduled.length} tasks for ${targetISO}`);
         }
-        
-        console.log(`  ✅ Actually scheduled ${actuallyScheduled}/${scheduled.length} tasks (${scheduled.length - actuallyScheduled} had no time slot)`);
 
         // ==========================================
         // STEP 6: Log the run
@@ -551,29 +528,18 @@ serve(async (req) => {
           status: 'completed',
           metadata: {
             rolled_over: rolledOverCount,
-            candidates_evaluated: scoredCandidates.length,
-            candidates_selected: selectedCandidates.length,
-            scheduled: scheduled.length,
-            target_date: todayISO,
-            window_capacities: Object.fromEntries(
-              Object.entries(windowCapacities).map(([name, cap]) => [
-                name, `${cap.remainingMinutes}/${cap.totalMinutes}`
-              ])
-            ),
+            total_scheduled: totalScheduledAcrossWeek,
+            days_processed: totalDays,
+            week_results: weekResults,
             processing_ms: Date.now() - startTime,
           },
         });
 
         results[userId] = {
           rolledOver: rolledOverCount,
-          candidatesEvaluated: scoredCandidates.length,
-          candidatesSelected: selectedCandidates.length,
-          scheduled: scheduled.length,
-          windowCapacities: Object.fromEntries(
-            Object.entries(windowCapacities).map(([name, cap]) => [
-              name, { remaining: cap.remainingMinutes, total: cap.totalMinutes }
-            ])
-          ),
+          totalScheduled: totalScheduledAcrossWeek,
+          daysProcessed: totalDays,
+          weekResults,
         };
 
       } catch (userError) {
