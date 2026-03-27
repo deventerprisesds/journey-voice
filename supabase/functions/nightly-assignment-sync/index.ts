@@ -36,6 +36,55 @@ serve(async (req) => {
     const archived: string[] = [];
     const skipped: string[] = [];
 
+    // ==========================================
+    // STEP 0: Archive stale PROF_EDUCATION tasks without assignment_id
+    // These are legacy tasks created before the assignment_id column existed
+    // ==========================================
+    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    
+    const { data: legacyStaleTasks, error: legacyError } = await supabase
+      .from('tasks')
+      .select('id, title, due_date, pushed_count')
+      .eq('user_id', userId)
+      .eq('category', 'PROF_EDUCATION')
+      .is('assignment_id', null)
+      .is('completed_at', null)
+      .not('status', 'eq', 'DONE')
+      .lt('due_date', thirtyDaysAgo);
+
+    if (!legacyError && legacyStaleTasks && legacyStaleTasks.length > 0) {
+      console.log(`[ASSIGNMENT_SYNC] Found ${legacyStaleTasks.length} legacy stale PROF_EDUCATION tasks to archive`);
+      for (const stale of legacyStaleTasks) {
+        const { error: archError } = await supabase
+          .from('tasks')
+          .update({
+            status: 'DONE',
+            completed_at: now.toISOString(),
+            updated_at: now.toISOString(),
+            metadata: {
+              archived_reason: 'legacy_stale_assignment',
+              original_due_date: stale.due_date,
+              pushed_count: stale.pushed_count,
+            },
+          })
+          .eq('id', stale.id);
+
+        if (!archError) {
+          archived.push(stale.id);
+          console.log(`  🗑️ Archived legacy stale: "${stale.title}" (due ${stale.due_date})`);
+        }
+      }
+    }
+
+    // Helper: normalize title for fuzzy matching
+    function normalizeTitle(title: string): string {
+      return title
+        .toLowerCase()
+        .replace(/^📚\s*/, '') // Remove emoji prefix we add
+        .replace(/[^a-z0-9\s]/g, '')
+        .trim();
+    }
+
     // Helper: sync assignments from a table
     async function syncAssignments(tableName: string, source: string) {
       const { data: assignments, error } = await supabase
@@ -58,7 +107,7 @@ serve(async (req) => {
       console.log(`[ASSIGNMENT_SYNC] Found ${assignments.length} assignments in ${tableName}`);
 
       for (const assignment of assignments) {
-        // Check if a task already exists for this assignment
+        // Check if a task already exists for this assignment (by assignment_id)
         const { data: existingTask } = await supabase
           .from('tasks')
           .select('id, status')
@@ -90,6 +139,35 @@ serve(async (req) => {
           } else {
             skipped.push(assignment.id);
           }
+          continue;
+        }
+
+        // SECONDARY DEDUP: Check by title similarity (for legacy tasks without assignment_id)
+        const normalizedAssignmentTitle = normalizeTitle(assignment.title);
+        const { data: titleMatches } = await supabase
+          .from('tasks')
+          .select('id, title, status')
+          .eq('user_id', userId)
+          .is('assignment_id', null)
+          .is('completed_at', null)
+          .not('status', 'eq', 'DONE')
+          .or(`title.ilike.%${assignment.title}%,title.ilike.%📚 ${assignment.title}%`);
+
+        if (titleMatches && titleMatches.length > 0) {
+          // Found a legacy task matching this assignment's title — link it
+          const legacyTask = titleMatches[0];
+          console.log(`  🔗 Linking legacy task "${legacyTask.title}" to assignment "${assignment.title}" (id: ${assignment.id})`);
+          
+          await supabase
+            .from('tasks')
+            .update({
+              assignment_id: assignment.id,
+              due_date: assignment.due_date ? `${assignment.due_date}T23:59:59Z` : null,
+              updated_at: now.toISOString(),
+            })
+            .eq('id', legacyTask.id);
+          
+          skipped.push(assignment.id);
           continue;
         }
 

@@ -12,8 +12,8 @@ const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
 // Priority keywords that get a scheduling boost
 const PRIORITY_KEYWORDS = {
-  financial: ['payment', 'invoice', 'bill', 'tax', 'budget', 'contract', 'financial', 'money', 'pay'],
-  comms: ['email', 'follow up', 'follow-up', 'respond', 'reply', 'call', 'meeting', 'text', 'message', 'contact'],
+  financial: ['payment', 'invoice', 'bill', 'tax', 'budget', 'contract', 'financial', 'money', 'pay', 'credit'],
+  comms: ['email', 'follow up', 'follow-up', 'respond', 'reply', 'call', 'meeting', 'text', 'message', 'contact', 'coach'],
 };
 
 function hasPriorityKeyword(title: string): boolean {
@@ -45,16 +45,25 @@ interface WindowCapacity {
 }
 
 /**
- * Get active windows for the target day based on user config,
- * then compute remaining capacity by subtracting already-scheduled items.
+ * Get active windows for the target day based on user config.
+ * WEEKEND ENFORCEMENT: On Saturday (6) and Sunday (0), ONLY the 'weekends'
+ * window is returned, regardless of what other windows include those days.
  */
 function getActiveWindows(
   timeWindows: Record<string, TimeWindow>,
   targetDayOfWeek: number
 ): Record<string, { start: number; end: number; totalMinutes: number }> {
+  const isWeekend = targetDayOfWeek === 0 || targetDayOfWeek === 6;
   const active: Record<string, { start: number; end: number; totalMinutes: number }> = {};
+  
   for (const [name, win] of Object.entries(timeWindows)) {
     if (name === 'flexible') continue; // flexible is a fallback, not a real window
+    
+    // WEEKEND ENFORCEMENT: On weekends, only allow the 'weekends' window
+    if (isWeekend && name !== 'weekends') continue;
+    // On weekdays, skip the 'weekends' window
+    if (!isWeekend && name === 'weekends') continue;
+    
     if (!win.days || !win.days.includes(targetDayOfWeek)) continue;
     const total = (win.end - win.start) * 60;
     if (total > 0) {
@@ -200,6 +209,7 @@ serve(async (req) => {
         const now = new Date();
         const todayStart = new Date(now.toLocaleString('en-US', { timeZone: timezone }));
         todayStart.setHours(0, 0, 0, 0);
+        const todayISO = now.toISOString().split('T')[0];
         
         // Find tasks that were scheduled in the past and not completed
         const { data: expiredTasks, error: expiredError } = await supabase
@@ -241,6 +251,48 @@ serve(async (req) => {
         console.log(`  📋 Rolled over ${rolledOverCount} tasks`);
 
         // ==========================================
+        // STEP 1.5: ARCHIVE STALE TASKS
+        // Tasks pushed 5+ times with due_date > 30 days past are auto-archived
+        // ==========================================
+        const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+        
+        const { data: staleTasks, error: staleError } = await supabase
+          .from('tasks')
+          .select('id, title, pushed_count, due_date, category')
+          .eq('user_id', userId)
+          .not('status', 'eq', 'DONE')
+          .is('completed_at', null)
+          .gte('pushed_count', 5)
+          .lt('due_date', thirtyDaysAgo);
+
+        let archivedStaleCount = 0;
+        if (!staleError && staleTasks && staleTasks.length > 0) {
+          for (const stale of staleTasks) {
+            const { error: archError } = await supabase
+              .from('tasks')
+              .update({
+                status: 'DONE',
+                completed_at: now.toISOString(),
+                updated_at: now.toISOString(),
+                metadata: {
+                  archived_reason: 'stale_rollover',
+                  pushed_count: stale.pushed_count,
+                  original_due_date: stale.due_date,
+                },
+              })
+              .eq('id', stale.id);
+
+            if (!archError) {
+              archivedStaleCount++;
+              console.log(`  🗑️ Archived stale: "${stale.title}" (pushed ×${stale.pushed_count}, due ${stale.due_date})`);
+            }
+          }
+        }
+        if (archivedStaleCount > 0) {
+          console.log(`  🗑️ Archived ${archivedStaleCount} stale tasks`);
+        }
+
+        // ==========================================
         // WEEK LOOP: Fill today through Sunday
         // ==========================================
         const scheduledTaskIds = new Set<string>();
@@ -264,8 +316,9 @@ serve(async (req) => {
           // Get day of week for this target date
           const targetUserDate = new Date(targetDate.toLocaleString('en-US', { timeZone: timezone }));
           const targetDayOfWeek = targetUserDate.getDay();
+          const isWeekend = targetDayOfWeek === 0 || targetDayOfWeek === 6;
           
-          console.log(`\n  📅 === Day ${dayOffset + 1}/${totalDays}: ${targetISO} (day ${targetDayOfWeek}) ===`);
+          console.log(`\n  📅 === Day ${dayOffset + 1}/${totalDays}: ${targetISO} (day ${targetDayOfWeek}${isWeekend ? ' WEEKEND' : ''}) ===`);
 
           // STEP 2: COMPUTE WINDOW CAPACITY for this day
           const activeWindows = getActiveWindows(timeWindows, targetDayOfWeek);
@@ -276,6 +329,8 @@ serve(async (req) => {
             weekResults[targetISO] = { scheduled: 0, reason: 'no_active_windows' };
             continue;
           }
+
+          console.log(`    🪟 Active windows: ${activeWindowNames.join(', ')}`);
 
           // Fetch already-scheduled tasks for this day
           const { data: dayScheduled } = await supabase
@@ -377,14 +432,43 @@ serve(async (req) => {
             .filter(t => !scheduledTitles.has(t.title)) // Dedup by title
             .map(task => {
               let score = priorityWeight[task.priority] || 1;
+              
+              // Priority board boost (strongest signal)
               if (mappedIds.includes(task.id)) score += 10;
-              if (task.pushed_count && task.pushed_count > 0) score += Math.min(task.pushed_count, 3);
+              
+              // Pushed count: diminishing returns after 3
+              if (task.pushed_count && task.pushed_count > 0) {
+                if (task.pushed_count <= 3) {
+                  score += task.pushed_count; // +1, +2, +3
+                } else {
+                  score += 3; // cap the bonus at 3
+                  score -= (task.pushed_count - 3); // then penalize staleness
+                }
+              }
+              
+              // Due soon boost
               if (isDueSoon(task.due_date)) score += 3;
+              
               // Extra boost if due on or before this target day
               if (task.due_date && task.due_date <= targetISO) score += 5;
-              if (hasPriorityKeyword(task.title)) score += 2;
+              
+              // Intent-based keyword boost (financial, comms) — strong signal
+              if (hasPriorityKeyword(task.title)) score += 5;
+              
+              // Status boost
               if (task.status === 'UP_NEXT') score += 1;
-              return { ...task, score, isPriorityBoard: mappedIds.includes(task.id) };
+              
+              // Staleness penalty: due_date > 14 days in the past
+              if (task.due_date) {
+                const dueDate = new Date(task.due_date);
+                const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+                if (dueDate < fourteenDaysAgo) {
+                  score -= 3;
+                  console.log(`      📉 Staleness penalty for "${task.title}" (due ${task.due_date})`);
+                }
+              }
+              
+              return { ...task, score: Math.max(score, 0), isPriorityBoard: mappedIds.includes(task.id) };
             });
 
           scoredCandidates.sort((a, b) => {
@@ -528,6 +612,7 @@ serve(async (req) => {
           status: 'completed',
           metadata: {
             rolled_over: rolledOverCount,
+            archived_stale: archivedStaleCount,
             total_scheduled: totalScheduledAcrossWeek,
             days_processed: totalDays,
             week_results: weekResults,
@@ -537,6 +622,7 @@ serve(async (req) => {
 
         results[userId] = {
           rolledOver: rolledOverCount,
+          archivedStale: archivedStaleCount,
           totalScheduled: totalScheduledAcrossWeek,
           daysProcessed: totalDays,
           weekResults,
