@@ -1,66 +1,75 @@
 
 
-# Combined Plan: Fix Deployment + Calendar Connections
+# Fix: External Calendar Events Not Being Pulled Into Scheduling
 
-## Issue 1: Published Site Still Shows Placeholder
+## Problem
 
-The build trigger comment (`// Build trigger: 2026-03-27`) was already added but the platform still says "Up to date." The preview works fine (console logs show 28 tasks loaded, demo mode active). The published URL serves the Lovable placeholder HTML.
+The `calendar-delta-sync` edge function exists and works, but **nothing ever calls it**:
+- The nightly builder reads from `external_calendar_events` table to detect busy slots, but that table is empty because no sync has run.
+- The frontend never invokes `calendar-delta-sync` — not on page load, not on a timer, not via subscription.
+- When you manually add a 1pm event to Outlook/Google, the app has no way to know about it until someone triggers a delta sync.
 
-**Fix**: Make another trivial change to force a fresh build cycle. Update the build trigger timestamp to include time (e.g., `// Build trigger: 2026-03-27T16:30`). This will create a new build diff and re-enable the Update button.
+## Fix
 
-**File**: `src/App.tsx` line 1 -- change comment to include current time.
+### 1. Nightly builder: invoke `calendar-delta-sync` before scheduling
 
-Additionally, suppress the PresenceTracking RLS errors for the demo user that spam the console every 30 seconds:
+**File**: `supabase/functions/nightly-schedule-builder/index.ts`
 
-**File**: `src/hooks/usePresenceTracking.ts` -- add early return when `userId` matches the demo user ID (`00000000-0000-0000-0000-000000000001`).
+Before the week loop begins (around line 298), invoke `calendar-delta-sync` for the current user to pull in fresh external events:
 
-## Issue 2: Calendar Connection Fixes
+```ts
+// Pull latest external calendar events before scheduling
+await supabase.functions.invoke('calendar-delta-sync', {
+  body: { user_id: userId }
+});
+console.log(`[nightly-builder] Delta sync completed for user ${userId}`);
+```
 
-### 2a. Pass `connectionId` to enable silent token refresh
+This ensures the `external_calendar_events` table is up-to-date before the builder reads busy slots from it.
 
-Currently `CalendarOAuthManager` in NotificationSettings receives no `connectionId`, so the refresh button never appears and silent token renewal is impossible.
+### 2. Frontend: periodic sync on FocusView and CalendarModule mount
 
-**File**: `src/components/NotificationSettings.tsx` (lines 1054, 1142)
-- Pass `connectionId={outlookConnection?.id}` and `connectionId={googleConnection?.id}` to each `CalendarOAuthManager`.
+**File**: `src/components/FocusView.tsx`
 
-**File**: `src/components/CalendarConnectionModal.tsx` (line 318)
-- Pass `connectionId={status.connectionId}` for expired connections.
+Add a `useEffect` that calls `calendar-delta-sync` once on mount (and optionally every 15 minutes) when the user has active READ connections:
 
-### 2b. Add pull toggle under each calendar connection
+```ts
+useEffect(() => {
+  const syncExternalEvents = async () => {
+    if (!user?.id) return;
+    try {
+      await supabase.functions.invoke('calendar-delta-sync', { body: { user_id: user.id } });
+    } catch (e) {
+      console.warn('Delta sync failed:', e);
+    }
+  };
+  syncExternalEvents();
+  const interval = setInterval(syncExternalEvents, 15 * 60 * 1000); // every 15 min
+  return () => clearInterval(interval);
+}, [user?.id]);
+```
 
-Under each connected calendar in NotificationSettings, add a "Pull events for scheduling" toggle that updates the connection's `purposes` array (adding/removing `READ`).
+**File**: `src/components/CalendarModule.tsx`
 
-**File**: `src/components/NotificationSettings.tsx`
-- After each connected calendar section (lines 1072-1103 for Outlook, 1160+ for Google), add a toggle that calls `calendar-token-manager` with `action: 'update_purposes'`.
+Same pattern — invoke delta sync on mount before loading events from the DB.
 
-### 2c. Add `list_calendars` action to edge function
+### 3. FocusView: show external calendar events in Today's Schedule
 
-**File**: `supabase/functions/calendar-integration-manager/index.ts`
-- Add a `list_calendars` case in the switch that fetches calendar list from Google (`/users/me/calendarList`) or Microsoft (`/me/calendars`) using stored tokens.
-- Return calendar names and IDs to the UI.
+**File**: `src/components/FocusView.tsx`
 
-### 2d. Remove redundant Calendars tab from Settings
+Currently `scheduledToday` only shows tasks. Add a query for `external_calendar_events` for today and render them alongside scheduled tasks in the timeline, marked as "External" with a distinct badge. This makes manually-added calendar events visible.
 
-**File**: `src/pages/Settings.tsx`
-- Remove `{ value: 'calendars', ... }` from `tabConfig` array.
-- Remove the `TabsContent value="calendars"` block (lines 170-193).
-- Remove imports for `CalendarConnectionModal` and `CalendarSelectionPanel`.
-- Remove `isCalendarModalOpen` state.
-
-## Files Changed
+## Files to Change
 
 | File | Change |
 |------|--------|
-| `src/App.tsx` | Update build trigger timestamp |
-| `src/hooks/usePresenceTracking.ts` | Skip writes for demo user |
-| `src/components/NotificationSettings.tsx` | Pass connectionId, add pull toggle |
-| `src/components/CalendarConnectionModal.tsx` | Pass connectionId for expired |
-| `src/pages/Settings.tsx` | Remove Calendars tab |
-| `supabase/functions/calendar-integration-manager/index.ts` | Add list_calendars action |
+| `supabase/functions/nightly-schedule-builder/index.ts` | Invoke `calendar-delta-sync` before the week loop |
+| `src/components/FocusView.tsx` | Periodic delta sync + display external events in today's schedule |
+| `src/components/CalendarModule.tsx` | Delta sync on mount before loading events |
 
-## After Implementation
-1. Preview rebuilds with the new trigger
-2. Click Publish > Update to deploy
-3. Verify journey-voice.lovable.app loads the app
-4. Test calendar connection refresh and pull toggle in Settings > Notifications
+## Result
+
+- External calendar events (manually added 1pm meetings, etc.) will be pulled into `external_calendar_events` table automatically
+- The nightly builder will see them as busy slots and avoid double-booking
+- The Focus View will display them so you can see your full day at a glance
 
