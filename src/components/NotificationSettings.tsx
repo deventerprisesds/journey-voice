@@ -14,63 +14,127 @@ import { z } from "zod";
 import { CalendarOAuthManager } from "./CalendarOAuthManager";
 import { useNotifications } from "@/hooks/useNotifications";
 
-// Pull events toggle sub-component
-function PullEventsToggle({ connection, onUpdate }: { connection: CalendarConnection; onUpdate: () => void }) {
-  const [isPull, setIsPull] = useState(false);
-  const [loading, setLoading] = useState(false);
+// Per-calendar toggle sub-component
+function CalendarPullToggles({ connection, onUpdate }: { connection: CalendarConnection; onUpdate: () => void }) {
+  const [calendars, setCalendars] = useState<{ id: string; name: string }[]>([]);
+  const [selectedCalendars, setSelectedCalendars] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    // Check current purposes
-    supabase
-      .from('calendar_connections')
-      .select('purposes')
-      .eq('id', connection.id)
-      .single()
-      .then(({ data }) => {
-        if (data?.purposes && Array.isArray(data.purposes)) {
-          setIsPull(data.purposes.includes('READ'));
-        }
-      });
+    loadCalendars();
   }, [connection.id]);
 
-  const togglePull = async (checked: boolean) => {
+  const loadCalendars = async () => {
     setLoading(true);
+    setError(null);
     try {
-      const { data: current } = await supabase
+      // Fetch available calendars from provider
+      const { data, error: fnError } = await supabase.functions.invoke('calendar-integration-manager', {
+        body: { action: 'list_calendars', connection_id: connection.id }
+      });
+      
+      if (fnError) throw fnError;
+      
+      const calList = data?.calendars || [];
+      setCalendars(calList);
+
+      // Load current selections from connection metadata
+      const { data: connData } = await supabase
         .from('calendar_connections')
         .select('purposes')
         .eq('id', connection.id)
         .single();
 
-      let purposes: string[] = current?.purposes || ['WRITE'];
-      if (checked && !purposes.includes('READ')) {
-        purposes = [...purposes, 'READ'];
-      } else if (!checked) {
-        purposes = purposes.filter((p: string) => p !== 'READ');
+      // Also load metadata via a raw query for selected_calendars
+      // We store selected_calendars in purposes alongside READ marker
+      // Actually, let's use a separate approach: store in metadata
+      // For now, use localStorage as interim until metadata column is used
+      const stored = localStorage.getItem(`cal-pull-${connection.id}`);
+      if (stored) {
+        try {
+          setSelectedCalendars(JSON.parse(stored));
+        } catch { 
+          setSelectedCalendars([]);
+        }
       }
-      if (purposes.length === 0) purposes = ['WRITE'];
-
-      await supabase
-        .from('calendar_connections')
-        .update({ purposes })
-        .eq('id', connection.id);
-
-      setIsPull(checked);
-      onUpdate();
+    } catch (e: any) {
+      console.error('Failed to load calendars:', e);
+      setError(e.message || 'Failed to load calendars. Token may be expired.');
     } finally {
       setLoading(false);
     }
   };
 
-  return (
-    <div className="flex items-center justify-between p-2 rounded-md bg-muted/50 border border-border mt-2">
-      <div className="text-sm">
-        <span className="font-medium">Pull events for scheduling</span>
-        <p className="text-xs text-muted-foreground">
-          Import events to avoid scheduling conflicts
-        </p>
+  const toggleCalendar = async (calId: string, checked: boolean) => {
+    const newSelection = checked
+      ? [...selectedCalendars, calId]
+      : selectedCalendars.filter(id => id !== calId);
+
+    setSelectedCalendars(newSelection);
+    localStorage.setItem(`cal-pull-${connection.id}`, JSON.stringify(newSelection));
+
+    // Update purposes: add READ if any selected, remove if none
+    const { data: current } = await supabase
+      .from('calendar_connections')
+      .select('purposes')
+      .eq('id', connection.id)
+      .single();
+
+    let purposes: string[] = current?.purposes || ['WRITE'];
+    if (newSelection.length > 0 && !purposes.includes('READ')) {
+      purposes = [...purposes, 'READ'];
+    } else if (newSelection.length === 0) {
+      purposes = purposes.filter(p => p !== 'READ');
+      if (purposes.length === 0) purposes = ['WRITE'];
+    }
+
+    await supabase
+      .from('calendar_connections')
+      .update({ purposes })
+      .eq('id', connection.id);
+
+    onUpdate();
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 p-2 text-sm text-muted-foreground">
+        <Loader2 className="h-3 w-3 animate-spin" />
+        Loading calendars...
       </div>
-      <Switch checked={isPull} onCheckedChange={togglePull} disabled={loading} />
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex items-center gap-2 p-2 text-sm text-destructive">
+        <AlertCircle className="h-3 w-3" />
+        {error}
+      </div>
+    );
+  }
+
+  if (calendars.length === 0) {
+    return (
+      <div className="p-2 text-sm text-muted-foreground">
+        No calendars found for this account.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-1 mt-2">
+      <p className="text-xs font-medium text-muted-foreground mb-1">Pull events from:</p>
+      {calendars.map(cal => (
+        <div key={cal.id} className="flex items-center justify-between p-2 rounded-md bg-muted/30 border border-border">
+          <span className="text-sm">{cal.name}</span>
+          <Switch
+            checked={selectedCalendars.includes(cal.id)}
+            onCheckedChange={(checked) => toggleCalendar(cal.id, checked)}
+          />
+        </div>
+      ))}
     </div>
   );
 }
