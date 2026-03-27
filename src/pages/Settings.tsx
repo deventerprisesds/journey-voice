@@ -20,7 +20,8 @@ import {
   FileSpreadsheet,
   Sparkles,
   Home,
-  ListChecks
+  ListChecks,
+  Calendar
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { useIsMobile } from '@/hooks/use-mobile';
@@ -35,11 +36,14 @@ import ProfileSettings from '@/components/ProfileSettings';
 import { AssignmentSyncSettings } from '@/components/AssignmentSyncSettings';
 import TaskCleanupSettings from '@/components/TaskCleanupSettings';
 import { useOAuthCallback } from '@/hooks/useOAuthCallback';
+import { CalendarConnectionModal } from '@/components/CalendarConnectionModal';
+import { CalendarSelectionPanel } from '@/components/CalendarSelectionPanel';
 
 const tabConfig = [
   { value: 'notifications', label: 'Notifications', icon: Bell },
   { value: 'scheduling', label: 'Scheduling', icon: SettingsIcon },
   { value: 'tasks', label: 'Tasks', icon: ListChecks },
+  { value: 'calendars', label: 'Calendars', icon: Calendar },
   { value: 'ai', label: 'AI Instructions', icon: Sparkles },
   { value: 'assignments', label: 'Assignments', icon: FileSpreadsheet },
   { value: 'testing', label: 'Testing', icon: Wrench },
@@ -51,6 +55,8 @@ const tabConfig = [
 const Settings: React.FC = () => {
   // Handle OAuth callback from Google/Outlook
   useOAuthCallback();
+  
+  const [isCalendarModalOpen, setIsCalendarModalOpen] = useState(false);
   
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -159,6 +165,31 @@ const Settings: React.FC = () => {
 
           <TabsContent value="tasks" className="mt-6">
             <TaskCleanupSettings />
+          </TabsContent>
+
+          <TabsContent value="calendars" className="mt-6">
+            <div className="space-y-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Calendar Connections</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm text-muted-foreground mb-4">
+                    Connect your Google or Outlook calendar to sync events and see everything in one view.
+                  </p>
+                  <Button onClick={() => setIsCalendarModalOpen(true)}>
+                    <Calendar className="h-4 w-4 mr-2" />
+                    Connect Calendar
+                  </Button>
+                </CardContent>
+              </Card>
+              <CalendarSelectionPanel />
+            </div>
+            <CalendarConnectionModal 
+              isOpen={isCalendarModalOpen} 
+              onClose={() => setIsCalendarModalOpen(false)}
+              onConnectionSuccess={() => setIsCalendarModalOpen(false)}
+            />
           </TabsContent>
 
           <TabsContent value="ai" className="mt-6">

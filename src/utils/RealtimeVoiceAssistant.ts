@@ -673,6 +673,22 @@ export class RealtimeVoiceAssistant {
       // Create peer connection
       this.pc = new RTCPeerConnection();
 
+      // ICE connection monitoring
+      this.pc.oniceconnectionstatechange = () => {
+        const state = this.pc?.iceConnectionState;
+        console.log('[ICE] Connection state:', state);
+        if (state === 'disconnected') {
+          this.onMessage({ type: 'connection.degraded' });
+        }
+        if (state === 'failed') {
+          this.onMessage({ type: 'connection.failed' });
+          this.disconnect();
+        }
+      };
+      this.pc.onconnectionstatechange = () => {
+        console.log('[WebRTC] Connection state:', this.pc?.connectionState);
+      };
+
       // Set up remote audio
       this.pc.ontrack = e => {
         console.log('Received remote audio track');

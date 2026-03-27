@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { getDefaultTimezone } from '@/lib/date';
+import { logToErrorLog } from '@/utils/directLog';
 
 interface QuickTaskInputProps {
   onTaskCreated?: () => void;
@@ -57,13 +58,22 @@ const QuickTaskInput: React.FC<QuickTaskInputProps> = ({ onTaskCreated }) => {
 
       const userTimezone = getDefaultTimezone();
 
+      // Trace: log the request
+      logToErrorLog({
+        component: 'QuickTaskInput',
+        error_type: 'task_create_request',
+        error_message: 'Sending task creation request',
+        context: { input: input.trim(), userId: user.id, timezone: userTimezone }
+      });
+
       const { data, error } = await supabase.functions.invoke('execute-tool', {
         body: {
           toolName: 'parse_and_create_tasks',
           args: {
             text: input.trim(),
             target_date: 'today',
-            auto_schedule: true
+            auto_schedule: true,
+            default_status: 'UP_NEXT'
           },
           userId: user.id,
           context: {
@@ -72,10 +82,24 @@ const QuickTaskInput: React.FC<QuickTaskInputProps> = ({ onTaskCreated }) => {
         }
       });
 
+      // Trace: log the response
+      logToErrorLog({
+        component: 'QuickTaskInput',
+        error_type: 'task_create_response',
+        error_message: `Response: success=${data?.success}, error=${data?.error || 'none'}`,
+        context: {
+          success: data?.success,
+          resultKeys: data?.result ? Object.keys(data.result) : [],
+          taskCount: data?.result?.tasks?.length,
+          error: error?.message || data?.error,
+          fullResult: data?.result
+        }
+      });
+
       if (error) throw error;
       if (!data?.success) throw new Error(data?.error || 'Failed to create task');
 
-      const createdCount = data.result?.createdTasks?.length || 1;
+      const createdCount = data.result?.tasks?.length || 1;
       toast({
         title: "Task Created",
         description: `Added ${createdCount} task${createdCount !== 1 ? 's' : ''} to today's schedule`,
@@ -86,6 +110,13 @@ const QuickTaskInput: React.FC<QuickTaskInputProps> = ({ onTaskCreated }) => {
 
     } catch (error) {
       console.error('Failed to create task:', error);
+      logToErrorLog({
+        component: 'QuickTaskInput',
+        error_type: 'task_create_error',
+        error_message: error instanceof Error ? error.message : String(error),
+        stack_trace: error instanceof Error ? error.stack : undefined,
+        context: { input: input.trim() }
+      });
       toast({
         title: "Error",
         description: error instanceof Error ? error.message : "Failed to create task",

@@ -237,9 +237,17 @@ const SmartTaskInput: React.FC<SmartTaskInputProps> = ({
         </div>
       </form>
 
-      {lastSuggestion && lastSuggestion.taskSuggestion && (
+      {lastSuggestion && lastSuggestion.parsedTask && (
         <EditableTaskSuggestion
-          suggestion={lastSuggestion.taskSuggestion}
+          suggestion={{
+            title: lastSuggestion.parsedTask.title,
+            priority: lastSuggestion.parsedTask.priority || 'MEDIUM',
+            category: lastSuggestion.parsedTask.category || 'LIFE',
+            estimate_minutes: lastSuggestion.parsedTask.estimate_minutes || 60,
+            scheduledStart: lastSuggestion.scheduledSlot?.start || '',
+            aiReasoning: lastSuggestion.aiReasoning || '',
+            description: lastSuggestion.parsedTask.description,
+          }}
           onAccept={handleAcceptSuggestion}
           onDismiss={() => {
             setLastSuggestion(null);
