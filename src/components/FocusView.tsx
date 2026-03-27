@@ -122,6 +122,7 @@ const FocusView: React.FC<FocusViewProps> = ({
   const [isTimelineExpanded, setIsTimelineExpanded] = useState(true);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [createModalHour, setCreateModalHour] = useState<number>(9);
+  const [createModalMinute, setCreateModalMinute] = useState<number>(0);
   const [defaultBoardId, setDefaultBoardId] = useState<string>('');
   const [isClearing, setIsClearing] = useState(false);
   const [isRerunning, setIsRerunning] = useState(false);
