@@ -198,10 +198,22 @@ async function getCalendarAvailability(supabaseClient: any, connectionId: string
 async function createCalendarEvent(supabaseClient: any, connectionId: string, body: { task: any }) {
   const { task } = body;
   
-  // Get calendar connection tokens securely
+  // Get connection info first
+  const { data: connInfo, error: connError } = await supabaseClient
+    .from('calendar_connections')
+    .select('purposes, user_id')
+    .eq('id', connectionId)
+    .single();
+
+  if (connError || !connInfo) {
+    throw new Error('Calendar connection not found');
+  }
+
+  // Get calendar connection tokens securely (service-role safe)
   const { data: tokenData, error: tokenError } = await supabaseClient
-    .rpc('get_calendar_connection_tokens', {
-      _connection_id: connectionId
+    .rpc('get_calendar_connection_tokens_service', {
+      _connection_id: connectionId,
+      _user_id: connInfo.user_id
     });
 
   if (tokenError || !tokenData || tokenData.length === 0) {
@@ -211,14 +223,7 @@ async function createCalendarEvent(supabaseClient: any, connectionId: string, bo
   
   const connection = tokenData[0];
 
-  // Verify connection has WRITE purpose
-  const { data: connInfo, error: connError } = await supabaseClient
-    .from('calendar_connections')
-    .select('purposes, user_id')
-    .eq('id', connectionId)
-    .single();
-
-  if (connError || !connInfo?.purposes?.includes('WRITE')) {
+  if (!connInfo?.purposes?.includes('WRITE')) {
     console.warn(`Connection ${connectionId} does not have WRITE purpose, skipping event creation`);
     return new Response(
       JSON.stringify({ success: false, error: 'Connection does not have WRITE purpose' }),
