@@ -1173,27 +1173,25 @@ const NotificationSettings = () => {
               </div>
             </div>
             
-            {/* Show OAuth button if not connected or expired */}
-            {(!outlookConnection || outlookExpired) && (
-              <div className="mt-2 pl-8">
-                <CalendarOAuthManager
-                  provider="outlook"
-                  connectionId={outlookConnection?.id}
-                  onSuccess={() => {
-                    loadCalendarConnections();
-                    toast({
-                      title: "Outlook Connected",
-                      description: "Your Outlook calendar is now connected for reminders.",
-                    });
-                  }}
-                  onError={(err) => toast({
-                    title: "Connection Failed",
-                    description: err,
-                    variant: "destructive",
-                  })}
-                />
-              </div>
-            )}
+            {/* Show OAuth button - always visible for adding accounts */}
+            <div className="mt-2 pl-8">
+              <CalendarOAuthManager
+                provider="outlook"
+                connectionId={outlookExpired ? outlookConnection?.id : undefined}
+                onSuccess={() => {
+                  loadCalendarConnections();
+                  toast({
+                    title: "Outlook Connected",
+                    description: "Your Outlook calendar is now connected for reminders.",
+                  });
+                }}
+                onError={(err) => toast({
+                  title: "Connection Failed",
+                  description: err,
+                  variant: "destructive",
+                })}
+              />
+            </div>
             
             {prefs.channels.includes('OUTLOOK_EVENT') && outlookConnection && !outlookExpired && (
               <div className="space-y-2 mt-4 pl-8">
