@@ -854,7 +854,8 @@ const FocusView: React.FC<FocusViewProps> = ({
                 <CardContent className="pt-0">
                   <ScrollArea className="h-[400px] lg:h-[500px]" type="always">
                     <div className="space-y-4 min-w-max">
-                      {Object.entries(timeWindowStyles).map(([windowName, style]) => {
+                      {activeWindowNames.map((windowName) => {
+                        const style = timeWindowStyles[windowName] || timeWindowStyles.business_hours;
                         const windowTasks = tasksByWindow[windowName] || [];
                         const dropSlots = getDropSlotsForWindow(windowName);
                         

@@ -56,6 +56,8 @@ const Settings: React.FC = () => {
   // Handle OAuth callback from Google/Outlook
   useOAuthCallback();
   
+  const [isCalendarModalOpen, setIsCalendarModalOpen] = useState(false);
+  
   const { user } = useAuth();
   const navigate = useNavigate();
   const isMobile = useIsMobile();
