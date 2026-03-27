@@ -541,3 +541,122 @@ async function exchangeMicrosoftCode(supabaseClient: any, code: string, redirect
     message: existing ? 'Connection refreshed with new tokens' : 'New connection created'
   };
 }
+
+// Silently refresh a connection using stored refresh_token
+async function refreshConnectionToken(supabaseClient: any, connectionId: string, userId: string) {
+  console.log(`[calendar-token-manager] Refreshing connection ${connectionId} for user ${userId}`);
+  
+  // Get connection details with decrypted tokens using service role
+  const serviceClient = createClient(
+    Deno.env.get('SUPABASE_URL') ?? '',
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+  );
+  
+  const { data: connection, error: connError } = await serviceClient
+    .from('calendar_connections')
+    .select('id, provider, refresh_token, user_id, provider_account_id, provider_account_email')
+    .eq('id', connectionId)
+    .eq('user_id', userId)
+    .single();
+
+  if (connError || !connection) {
+    throw new Error('Connection not found or access denied');
+  }
+
+  if (!connection.refresh_token) {
+    throw new Error('No refresh token stored — full re-authorization required');
+  }
+
+  // Decrypt refresh token
+  const { data: decrypted, error: decryptError } = await serviceClient
+    .rpc('get_calendar_connection_tokens', { _connection_id: connectionId });
+
+  if (decryptError || !decrypted?.[0]?.refresh_token) {
+    // The RPC requires auth.uid() — use the user's supabaseClient instead
+    const { data: userDecrypted, error: userDecryptError } = await supabaseClient
+      .rpc('get_calendar_connection_tokens', { _connection_id: connectionId });
+    
+    if (userDecryptError || !userDecrypted?.[0]?.refresh_token) {
+      throw new Error('Could not decrypt refresh token — full re-authorization required');
+    }
+    
+    return await doTokenRefresh(supabaseClient, connection.provider, userDecrypted[0].refresh_token, connectionId, userId);
+  }
+
+  return await doTokenRefresh(supabaseClient, connection.provider, decrypted[0].refresh_token, connectionId, userId);
+}
+
+async function doTokenRefresh(supabaseClient: any, provider: string, refreshToken: string, connectionId: string, userId: string) {
+  let tokenEndpoint: string;
+  let body: URLSearchParams;
+
+  if (provider === 'google') {
+    const clientId = Deno.env.get('GOOGLE_CLIENT_ID');
+    const clientSecret = Deno.env.get('GOOGLE_CLIENT_SECRET');
+    if (!clientId || !clientSecret) throw new Error('Google OAuth credentials not configured');
+
+    tokenEndpoint = 'https://oauth2.googleapis.com/token';
+    body = new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: refreshToken,
+      grant_type: 'refresh_token',
+    });
+  } else if (provider === 'outlook' || provider === 'office365') {
+    const clientId = Deno.env.get('MICROSOFT_CLIENT_ID');
+    const clientSecret = Deno.env.get('MICROSOFT_CLIENT_SECRET');
+    if (!clientId || !clientSecret) throw new Error('Microsoft OAuth credentials not configured');
+
+    tokenEndpoint = 'https://login.microsoftonline.com/common/oauth2/v2.0/token';
+    body = new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: refreshToken,
+      grant_type: 'refresh_token',
+      scope: 'Calendars.ReadWrite User.Read offline_access',
+    });
+  } else {
+    throw new Error(`Unsupported provider: ${provider}`);
+  }
+
+  const tokenResponse = await fetch(tokenEndpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body,
+  });
+
+  if (!tokenResponse.ok) {
+    const errText = await tokenResponse.text();
+    console.error(`[calendar-token-manager] Token refresh failed for ${provider}:`, errText);
+    throw new Error(`Token refresh failed — full re-authorization required`);
+  }
+
+  const tokens = await tokenResponse.json();
+  const expiresAt = tokens.expires_in
+    ? new Date(Date.now() + tokens.expires_in * 1000).toISOString()
+    : null;
+
+  // Update tokens in DB
+  const { error: updateError } = await supabaseClient
+    .rpc('update_calendar_connection_tokens_for_user', {
+      _connection_id: connectionId,
+      _user_id: userId,
+      _access_token: tokens.access_token,
+      _refresh_token: tokens.refresh_token || null,
+      _expires_at: expiresAt,
+    });
+
+  if (updateError) {
+    console.error('[calendar-token-manager] Failed to store refreshed tokens:', updateError);
+    throw new Error('Failed to store refreshed tokens');
+  }
+
+  console.log(`[calendar-token-manager] Successfully refreshed ${provider} connection ${connectionId}`);
+  return {
+    success: true,
+    connection_id: connectionId,
+    provider,
+    refreshed: true,
+    message: 'Connection refreshed successfully',
+  };
+}
