@@ -41,7 +41,7 @@ const tabConfig = [
   { value: 'notifications', label: 'Notifications', icon: Bell },
   { value: 'scheduling', label: 'Scheduling', icon: SettingsIcon },
   { value: 'tasks', label: 'Tasks', icon: ListChecks },
-  { value: 'calendars', label: 'Calendars', icon: Calendar },
+  
   { value: 'ai', label: 'AI Instructions', icon: Sparkles },
   { value: 'assignments', label: 'Assignments', icon: FileSpreadsheet },
   { value: 'testing', label: 'Testing', icon: Wrench },
