@@ -1100,6 +1100,8 @@ const NotificationSettings = () => {
                     </>
                   )}
                 </Button>
+                {/* Pull toggle for scheduling */}
+                <PullEventsToggle connection={outlookConnection} onUpdate={loadCalendarConnections} />
               </div>
             )}
           </div>
