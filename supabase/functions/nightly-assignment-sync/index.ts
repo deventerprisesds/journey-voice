@@ -87,11 +87,14 @@ serve(async (req) => {
 
     // Helper: sync assignments from a table
     async function syncAssignments(tableName: string, source: string) {
+      // Only fetch assignments due within the last 30 days to 14 days ahead
+      // This avoids processing hundreds of ancient assignments and timing out
       const { data: assignments, error } = await supabase
         .from(tableName)
         .select('id, title, due_date, description, category, priority, level_of_effort, status')
         .eq('user_id', userId)
         .not('status', 'in', '("completed","graded","past due")')
+        .gte('due_date', thirtyDaysAgo)
         .lte('due_date', futureDateISO);
 
       if (error) {
@@ -142,8 +145,7 @@ serve(async (req) => {
           continue;
         }
 
-        // SECONDARY DEDUP: Check by title similarity (for legacy tasks without assignment_id)
-        const normalizedAssignmentTitle = normalizeTitle(assignment.title);
+        // SECONDARY DEDUP: exact title match only (for legacy tasks without assignment_id)
         const { data: titleMatches } = await supabase
           .from('tasks')
           .select('id, title, status')
@@ -151,7 +153,7 @@ serve(async (req) => {
           .is('assignment_id', null)
           .is('completed_at', null)
           .not('status', 'eq', 'DONE')
-          .or(`title.ilike.%${assignment.title}%,title.ilike.%📚 ${assignment.title}%`);
+          .or(`title.eq.${assignment.title},title.eq.📚 ${assignment.title}`);
 
         if (titleMatches && titleMatches.length > 0) {
           // Found a legacy task matching this assignment's title — link it
@@ -162,7 +164,7 @@ serve(async (req) => {
             .from('tasks')
             .update({
               assignment_id: assignment.id,
-              due_date: assignment.due_date ? `${assignment.due_date}T23:59:59Z` : null,
+              due_date: assignment.due_date ? new Date(assignment.due_date).toISOString().split('T')[0] + 'T23:59:59Z' : null,
               updated_at: now.toISOString(),
             })
             .eq('id', legacyTask.id);
@@ -187,13 +189,15 @@ serve(async (req) => {
           else if (loe.includes('medium')) estimateMinutes = 90;
         }
 
-        // Get or create default board
-        const { data: board } = await supabase
+        // Get default board (use limit 1 in case of duplicates)
+        const { data: boards } = await supabase
           .from('boards')
           .select('id')
           .eq('user_id', userId)
           .eq('is_default', true)
-          .maybeSingle();
+          .limit(1);
+
+        const board = boards?.[0];
 
         if (!board) {
           console.error(`[ASSIGNMENT_SYNC] No default board for user ${userId}`);
@@ -206,7 +210,7 @@ serve(async (req) => {
           category: 'PROF_EDUCATION',
           priority: assignment.priority?.toUpperCase() || 'HIGH',
           status: 'TODO',
-          due_date: assignment.due_date ? `${assignment.due_date}T23:59:59Z` : null,
+          due_date: assignment.due_date ? new Date(assignment.due_date).toISOString().split('T')[0] + 'T23:59:59Z' : null,
           estimate_minutes: estimateMinutes,
           is_scheduled: false,
           board_id: board.id,
