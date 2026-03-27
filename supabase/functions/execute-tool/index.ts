@@ -1322,7 +1322,7 @@ async function parseAndCreateTasks(
       success: true,
       result: {
         created: createdTasks.length,
-        scheduled: scheduledResults.length,
+        scheduled: scheduledResults,
         tasks: createdTasks.map(t => ({
           id: t.id,
           title: t.title,
