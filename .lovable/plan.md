@@ -1,71 +1,70 @@
 
 
-# Fix: Tokens Stored in Plaintext — decrypt_token() Fails
+# Visual Differentiation + Assignment Sync on Demand
 
-## Root Cause
-
-**Confirmed from live logs and DB schema**: Every "Edge Function returned a non-2xx status code" error traces back to one line:
-
-```
-Error: Calendar connection tokens not found
-    at getValidAccessToken → get_calendar_connection_tokens_service
-```
-
-The RPC `get_calendar_connection_tokens_service` calls `decrypt_token()` on the stored `access_token`. But `decrypt_token()` throws an exception when called on **plaintext** data, causing the RPC to return zero rows.
-
-**Why are tokens plaintext?** Two places bypass the encryption RPCs:
-
-1. **`calendar-token-manager/index.ts`** — The reactivation code (lines 250-259, 291-297, and equivalent Outlook blocks) does:
-   ```typescript
-   await serviceClient.from('calendar_connections').update({
-     access_token: tokens.access_token,  // ← PLAINTEXT!
-     refresh_token: tokens.refresh_token,
-   }).eq('id', existing.id);
-   ```
-   The `insert_calendar_connection_for_user` RPC encrypts via `encrypt_token()`, but direct `.update()` does not.
-
-2. **`calendar-integration-manager/index.ts`** — The `doInlineRefresh` function (line ~140) also does a raw `.update()` with plaintext tokens after a token refresh.
-
-**The fix**: An existing RPC `update_calendar_connection_tokens_for_user` already exists and encrypts properly. Both files just need to call it instead of raw `.update()`.
+## Problems
+1. **No visual distinction** between regular tasks, assignment-sourced tasks (EMBA/MIT), and external calendar events in FocusView
+2. **Sync button ignores assignments** — only calls `calendar-delta-sync`, never `nightly-assignment-sync`
+3. **External events show "External" badge** — no indication of which calendar/provider
+4. **Assignment source (EMBA vs MIT) not stored** on the task — only in the description string, not queryable
 
 ## Changes
 
-### File 1: `supabase/functions/calendar-token-manager/index.ts`
+### 1. `nightly-assignment-sync` — Store source in `scheduling_context`
 
-Replace all 4 raw `.update()` calls for token reactivation (Google reactivate, Google 23505 reactivate, Outlook reactivate, Outlook 23505 reactivate) with:
+Currently `syncAssignments('assignments', 'EMBA')` passes source but only puts it in the description. Add `scheduling_context: { source }` to the task insert so the UI can read it:
+
 ```typescript
-await serviceClient.rpc('update_calendar_connection_tokens_for_user', {
-  _connection_id: existing.id,
-  _user_id: userId,
-  _access_token: tokens.access_token,
-  _refresh_token: tokens.refresh_token || null,
-  _expires_at: expiresAt,
-});
+const taskData = {
+  ...existing fields,
+  scheduling_context: { source }, // 'EMBA' or 'MIT'
+};
 ```
 
-This encrypts tokens on write, so `decrypt_token()` succeeds on read.
+### 2. FocusView Sync button — also invoke `nightly-assignment-sync`
 
-### File 2: `supabase/functions/calendar-integration-manager/index.ts`
+In the Sync button `onClick` (line ~889), add a parallel call:
 
-In `doInlineRefresh`, replace the raw `.update()` with the same RPC:
 ```typescript
-await supabaseClient.rpc('update_calendar_connection_tokens_for_user', {
-  _connection_id: connectionId,
-  _user_id: userId,
-  _access_token: tokens.access_token,
-  _refresh_token: tokens.refresh_token || null,
-  _expires_at: expiresAt ? new Date(Date.now() + tokens.expires_in * 1000).toISOString() : null,
-});
+// Existing: calendar-delta-sync
+await supabase.functions.invoke('calendar-delta-sync', { body: { user_id: user.id } });
+// New: assignment sync
+await supabase.functions.invoke('nightly-assignment-sync', { body: { userId: user.id } });
+// Then reload tasks
+onTaskUpdate();
 ```
 
-### Database: Fix currently broken rows
+Update the toast to report assignment counts too.
 
-Run a one-time update to re-encrypt the plaintext tokens for Google (`51d5aadc`) and Outlook (`bb04653a`) connections using `update_calendar_connection_tokens_for_user`. This requires a fresh OAuth exchange since the current plaintext tokens have likely expired. Alternatively, the user can simply reconnect both accounts after the code fix deploys — the reactivation path will now encrypt correctly.
+### 3. FocusView task cards — show source badge for assignments
 
-## Result
+In the task card rendering (line ~1087), add a source badge when task has `assignment_id`:
 
-- All token writes go through `encrypt_token()` via the RPC
-- `decrypt_token()` in `get_calendar_connection_tokens_service` succeeds
-- `listCalendars`, `syncCalendarEvents`, and `doInlineRefresh` all work
-- The "Edge Function returned a non-2xx status code" error disappears
+- Check `task.scheduling_context?.source` for 'EMBA' or 'MIT'
+- Fallback: if `assignment_id` exists but no source, check category (`PROF_EDUCATION` → "EMBA", `EDUCATION` → "MIT")
+- Render a distinct colored badge: **"📚 EMBA"** (indigo) or **"📚 MIT"** (red)
+- Add a purple left border to distinguish from regular tasks
+
+### 4. FocusView external event cards — show provider + account
+
+Change the external events query (line ~177) to join connection data:
+```typescript
+.select('*, calendar_connections!connection_id(provider, provider_account_email)')
+```
+
+In the external event card (line ~1117):
+- Replace `<Badge>External</Badge>` with provider name ("Google" / "Outlook")
+- Show `provider_account_email` as subtitle
+- Use fallback `evt.title || 'Untitled Event'`
+
+### 5. Task type — add `position` to `scheduling_context` typing
+
+No schema change needed — `scheduling_context` is already JSONB.
+
+## Files to Change
+
+| File | Change |
+|------|--------|
+| `supabase/functions/nightly-assignment-sync/index.ts` | Add `scheduling_context: { source }` to task insert |
+| `src/components/FocusView.tsx` | (a) Sync button also invokes assignment sync + reloads tasks (b) Assignment badge on task cards (c) Provider label on external event cards (d) Join connection data on external events query |
 
