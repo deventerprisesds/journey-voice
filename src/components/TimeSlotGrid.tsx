@@ -466,10 +466,37 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
         })}
 
         {/* Overlay: render tasks/events across the full day to avoid overlap issues */}
+        {(() => {
+          // Pre-compute cumulative header heights for offset correction
+          const dayOfWeek = dates[0]?.getDay() ?? 1;
+          const headerPositions: { minFromDayStart: number; heightPx: number }[] = [];
+          for (let hour = DAY_START_HOUR; hour <= DAY_END_HOUR; hour++) {
+            const windowStart = isTimeWindowStart(hour, dayOfWeek);
+            if (windowStart && timeWindowStyles[windowStart]) {
+              headerPositions.push({
+                minFromDayStart: (hour - DAY_START_HOUR) * 60,
+                heightPx: 32, // approximate height of window header row
+              });
+            }
+          }
+          
+          const getHeaderOffset = (minutesFromDayStart: number) => {
+            let offset = 0;
+            for (const hp of headerPositions) {
+              if (hp.minFromDayStart <= minutesFromDayStart) {
+                offset += hp.heightPx;
+              }
+            }
+            return offset;
+          };
+          
+          const totalHeaderHeight = headerPositions.reduce((sum, hp) => sum + hp.heightPx, 0);
+          
+          return (
         <div
           className="absolute inset-0 z-30 pointer-events-none"
           style={{
-            height: `${timeSlots.length * 16}px`,
+            height: `${timeSlots.length * 16 + totalHeaderHeight}px`,
             display: 'grid',
             gridTemplateColumns: `80px repeat(${dates.length}, 1fr)`
           }}
@@ -483,7 +510,7 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
                 {(provided) => (
                   <div ref={provided.innerRef} {...provided.droppableProps} className="relative border-r">
                     {items.map((item, idx) => {
-                      const top = item.startMin * PX_PER_MINUTE + 1;
+                      const top = item.startMin * PX_PER_MINUTE + getHeaderOffset(item.startMin) + 1;
                       const height = Math.max(12, (item.endMin - item.startMin) * PX_PER_MINUTE - 2);
                       const width = 100 / item.columnsInGroup;
                       const left = item.column * width;
