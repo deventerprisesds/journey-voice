@@ -252,8 +252,10 @@ const FocusView: React.FC<FocusViewProps> = ({
       return 0;
     });
   
+  // Use timezone-aware date comparison for "today"
+  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: userTimezone });
   const scheduledToday = tasks.filter(t => 
-    t.start_time && isToday(parseISO(t.start_time)) && t.status !== 'DONE'
+    t.start_time && getDateInTimezone(t.start_time, userTimezone) === todayStr && t.status !== 'DONE'
   ).sort((a, b) => {
     if (!a.start_time || !b.start_time) return 0;
     return new Date(a.start_time).getTime() - new Date(b.start_time).getTime();
