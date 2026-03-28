@@ -24,7 +24,8 @@ import {
 import { cn } from '@/lib/utils';
 import { Task, ExternalCalendarEvent } from '@/types/task';
 import { DEFAULT_SCHEDULING_CONFIG } from '@/config/schedulingRules';
-import { getTimePartsInTimezone, getDefaultTimezone } from '@/lib/date';
+import { loadUserSchedulingConfig, type SchedulingConfig } from '@/services/schedulingService';
+import { getTimePartsInTimezone, getDateInTimezone, getDefaultTimezone } from '@/lib/date';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 
