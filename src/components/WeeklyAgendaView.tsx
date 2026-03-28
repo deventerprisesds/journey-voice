@@ -684,7 +684,7 @@ const WeeklyAgendaView: React.FC<WeeklyAgendaViewProps> = ({
 
         <TabsContent value="meetings">
           <ScrollArea className="h-[calc(100vh-280px)]">
-            <MeetingsTab weekDays={weekDays} externalEvents={externalEvents} />
+            <MeetingsTab weekDays={weekDays} externalEvents={externalEvents} userTimezone={userTimezone} />
           </ScrollArea>
         </TabsContent>
 
