@@ -1135,22 +1135,32 @@ const FocusView: React.FC<FocusViewProps> = ({
                                   }
 
                                   if (item.type === 'external') {
-                                    const evt = item.event;
+                                    const evt = item.event as any;
+                                    const provider = evt.calendar_connections?.provider || 'calendar';
+                                    const providerEmail = evt.calendar_connections?.provider_account_email || '';
+                                    const providerLabel = provider === 'google' ? 'Google' : provider === 'outlook' ? 'Outlook' : provider;
+                                    const borderColor = provider === 'google' ? 'border-l-4 border-l-blue-500' : 'border-l-4 border-l-cyan-500';
                                     return (
                                       <div
                                         key={`ext-${evt.id}`}
-                                        className="bg-accent/50 rounded-md p-3 shadow-sm border border-accent"
+                                        className={cn("bg-accent/50 rounded-md p-3 shadow-sm border border-accent", borderColor)}
                                       >
                                         <div className="flex items-center gap-2">
                                           <Calendar className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
                                           <span className="text-xs text-muted-foreground flex-shrink-0">
                                             {format(parseISO(evt.start_time), 'h:mm a')} – {format(parseISO(evt.end_time), 'h:mm a')}
                                           </span>
-                                          <span className="font-medium text-sm truncate">{evt.title}</span>
-                                          <Badge variant="outline" className="text-xs ml-auto flex-shrink-0">External</Badge>
+                                          <span className="font-medium text-sm truncate">{evt.title || 'Untitled Event'}</span>
+                                          <Badge variant="outline" className={cn("text-xs ml-auto flex-shrink-0",
+                                            provider === 'google' ? "bg-blue-500/10 text-blue-700 border-blue-500/20 dark:text-blue-400" : "bg-cyan-500/10 text-cyan-700 border-cyan-500/20 dark:text-cyan-400"
+                                          )}>
+                                            {providerLabel}
+                                          </Badge>
                                         </div>
-                                        {evt.location && (
-                                          <p className="text-xs text-muted-foreground mt-1 truncate">{evt.location}</p>
+                                        {(evt.location || providerEmail) && (
+                                          <p className="text-xs text-muted-foreground mt-1 truncate">
+                                            {evt.location ? `📍 ${evt.location}` : ''}{evt.location && providerEmail ? ' · ' : ''}{providerEmail}
+                                          </p>
                                         )}
                                       </div>
                                     );
