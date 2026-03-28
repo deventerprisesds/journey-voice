@@ -411,14 +411,14 @@ const MeetingsTab: React.FC<MeetingsTabProps> = ({ weekDays, externalEvents }) =
                               {format(parseISO(evt.start_time), 'h:mm a')} – {format(parseISO(evt.end_time), 'h:mm a')}
                             </span>
                           </div>
-                          <p className="text-xs font-medium truncate">{evt.title}</p>
+                          <p className="text-xs font-medium truncate">{evt.title || 'Untitled Event'}</p>
                           <div className="flex items-center gap-1 mt-1 flex-wrap">
                             <Badge variant="outline" className={cn("text-[10px] px-1 py-0", styles.badge)}>
-                              {conn?.provider === 'google' ? 'Google' : 'Outlook'}
+                              {conn?.provider_account_email || (conn?.provider === 'google' ? 'Google' : 'Outlook')}
                             </Badge>
                             {evt.calendar_id && (
                               <span className="text-[10px] text-muted-foreground truncate max-w-[140px]">
-                                {evt.calendar_id}
+                                {humanizeCalendarId(evt.calendar_id)}
                               </span>
                             )}
                             {evt.location && (
