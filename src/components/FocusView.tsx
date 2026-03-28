@@ -176,7 +176,7 @@ const FocusView: React.FC<FocusViewProps> = ({
 
         const { data, error } = await supabase
           .from('external_calendar_events')
-          .select('*')
+          .select('*, calendar_connections!connection_id(provider, provider_account_email)')
           .eq('user_id', user.id)
           .gte('start_time', todayStart.toISOString())
           .lte('start_time', todayEnd.toISOString());
