@@ -146,13 +146,16 @@ async function doInlineRefresh(supabaseClient: any, provider: string, connection
   const tokens = await tokenResponse.json();
   const expiresAt = tokens.expires_in ? new Date(Date.now() + tokens.expires_in * 1000).toISOString() : null;
 
-  // Update in DB
-  await supabaseClient.from('calendar_connections').update({
-    access_token: tokens.access_token,
-    refresh_token: tokens.refresh_token || undefined,
-    expires_at: expiresAt,
-    updated_at: new Date().toISOString(),
-  }).eq('id', connectionId);
+  const expiresAtStr = tokens.expires_in ? new Date(Date.now() + tokens.expires_in * 1000).toISOString() : null;
+
+  // Use RPC to ensure tokens are encrypted via encrypt_token()
+  await supabaseClient.rpc('update_calendar_connection_tokens_for_user', {
+    _connection_id: connectionId,
+    _user_id: userId,
+    _access_token: tokens.access_token,
+    _refresh_token: tokens.refresh_token || null,
+    _expires_at: expiresAtStr,
+  });
 
   console.log(`[calendar-integration-manager] Inline refresh succeeded for ${connectionId}`);
   return { access_token: tokens.access_token };

@@ -392,10 +392,16 @@ async function exchangeMicrosoftCode(supabaseClient: any, code: string, redirect
           .single();
 
         if (raceRow) {
+          await serviceClient.rpc('update_calendar_connection_tokens_for_user', {
+            _connection_id: raceRow.id,
+            _user_id: userId,
+            _access_token: tokens.access_token,
+            _refresh_token: tokens.refresh_token || null,
+            _expires_at: expiresAt,
+          });
+          // Also update email separately
           await serviceClient.from('calendar_connections').update({
-            access_token: tokens.access_token, refresh_token: tokens.refresh_token || undefined,
-            expires_at: expiresAt, provider_account_email: userEmail,
-            is_active: true, updated_at: new Date().toISOString(),
+            provider_account_email: userEmail,
           }).eq('id', raceRow.id);
           chosenConnectionId = raceRow.id;
         }
