@@ -1,72 +1,146 @@
 
 
-# Revised Stabilization Plan — Item 6 Corrected
+# Combined Stabilization Plan
 
-## Summary of Issues
+## Issues Addressed
 
-1. **WeeklyAgendaView timezone mismatch** — uses hardcoded defaults instead of user config; tasks after 1pm disappear
-2. **External events missing from Agenda tab and DailyScheduleView** — only tasks render
-3. **Generic provider badges** — shows "calendar" or "Google" instead of account email + calendar name
-4. **Weekly history destroyed on rollover** — past days empty out, no way to see completed/rolled items
-5. **Rollover erases schedule evidence** — `start_time` cleared with no history record
-6. **Tasks scheduled outside time windows** — `execute-tool` (`scheduleTask`, `rescheduleTask`) and `smart-calendar-scheduler` write `is_scheduled: true` with any time the AI suggests. **No `validateTaskWindow` call exists in these paths.** Only `batch-calendar-scheduler` validates. This is the root cause of overnight scheduling — the scheduling engine places tasks at invalid times, and alerts follow naturally.
+1. Tasks disappear from Agenda and Weekly views after rollover (no `start_time`)
+2. Past days in weekly view empty out — no history
+3. Outlook "von" account: 181/199 events titled "Untitled Event" (recurring occurrences)
+4. Generic source labels ("calendar", "Google") instead of account email + calendar name
+5. Items scheduled outside time windows causing overnight alerts
+6. Need toggle to optionally hide recurring calendar events
 
-## Corrected Item 6: Enforce Window Validation at Every Scheduling Write Path
+---
 
-### Root Cause (verified in code)
+## Phase 1 — Stop the Bleeding
 
-| Scheduling path | Has `validateTaskWindow`? |
-|---|---|
-| `batch-calendar-scheduler` (line 500) | YES — rejects violations |
-| `nightly-schedule-builder` → calls batch | YES (inherited) |
-| `execute-tool/scheduleTask` (line 942) | **NO** — writes any time |
-| `execute-tool/rescheduleTask` (line 860) | **NO** — writes any time |
-| `smart-calendar-scheduler` | **NO** — AI suggests, no post-validation |
+### A. Time Window Enforcement
+**Files**: `supabase/functions/execute-tool/index.ts`, `supabase/functions/smart-calendar-scheduler/index.ts`
 
-### Fix
+- Before writing `start_time`, validate against user's configured time windows
+- Reject or defer scheduling outside allowed windows
+- Log violations to `activity_log`
 
-Add `validateTaskWindow` to all three unguarded paths:
+### B. Fix Recurring Event Titles in Delta Sync
+**File**: `supabase/functions/calendar-delta-sync/index.ts`
 
-**`execute-tool/index.ts`** — In both `scheduleTask` and `rescheduleTask`:
-- Import `resolveConfig` and `validateTaskWindow` from `_shared/scheduling-defaults.ts`
-- After normalizing `start_time`, load user config from `user_scheduling_prefs`
-- Call `validateTaskWindow(normalizedStartTime, task.category, timeWindows, categoryMappings, timezone)`
-- If `!valid`: return an error message telling the AI the time violates window constraints, listing allowed windows — do NOT silently write the invalid time
-- The AI can then retry with a corrected time
+- Add `seriesMasterId` to Outlook `$select` params
+- After collecting events, identify those missing `subject` with a `seriesMasterId`
+- Batch-fetch unique series masters via `GET /me/events/{masterId}?$select=subject`
+- Map occurrence titles from master; cache within run
+- Never downgrade an existing non-empty title to "Untitled Event"
+- Fix sync token persistence (currently always `null`) — log RPC success/failure
+- Add diagnostic logging: events fetched, subjects missing, masters fetched, titles resolved
 
-**`smart-calendar-scheduler/index.ts`** — After the AI returns a suggested time:
-- Import and call `validateTaskWindow` on the suggestion
-- If invalid, reject with an explanation of allowed windows for that category
-- Already has config loaded; just needs the validation call
+### C. Migration: Add columns + clear bad data
+```sql
+-- Add is_recurring flag
+ALTER TABLE external_calendar_events ADD COLUMN IF NOT EXISTS is_recurring boolean DEFAULT false;
 
-### What This Fixes
+-- Clear untitled events from von connection and reset sync token
+DELETE FROM external_calendar_events
+WHERE connection_id = 'bb04653a-9fa9-4b23-8ab4-00a85b07665b'
+  AND title = 'Untitled Event';
 
-Tasks will no longer be placed at 2am, 4am, or any time outside the user's configured windows. The overnight alerts stop because the scheduling itself is prevented, not just the notification.
+UPDATE calendar_connections
+SET sync_token = NULL
+WHERE id = 'bb04653a-9fa9-4b23-8ab4-00a85b07665b';
+```
 
-## Items 1-5 (Unchanged from Previous Plan)
+---
 
-1. **Fix WeeklyAgendaView timezone/config** — load `user_scheduling_prefs` instead of `DEFAULT_SCHEDULING_CONFIG`; use timezone-aware day grouping and window detection matching `TimeSlotGrid`
-2. **External events in all views** — pass `externalEvents` into AgendaTab day buckets and DailyScheduleView's `TimeSlotGrid`; include in counts and empty-state logic
-3. **Traceable source labels** — replace generic badges with `provider_account_email` + humanized `calendar_id`; treat `office365` as `outlook` everywhere
-4. **Preserve weekly history** — write schedule snapshots to `schedule_history` before rollover clears `start_time`; render past days with completion/rollover markers in FocusView weekly strip
-5. **Fix rollover bookkeeping** — record prior slot + pushed_count in history before clearing; keep completed tasks visible in retrospective view
+## Phase 2 — History and Agenda Restoration
 
-## Files to Change
+### A. Use `task_schedule_history` for Past Days
+**Files**: `src/components/WeeklyAgendaView.tsx`, `src/components/FocusView.tsx`
 
-| File | Change |
-|------|--------|
-| `supabase/functions/execute-tool/index.ts` | Add `validateTaskWindow` to `scheduleTask` and `rescheduleTask`; reject invalid window placements with error message |
-| `supabase/functions/smart-calendar-scheduler/index.ts` | Add post-AI `validateTaskWindow` check on suggested time |
-| `src/components/WeeklyAgendaView.tsx` | Load user config/timezone; merge external events into Agenda tab; traceable source labels |
-| `src/components/DailyScheduleView.tsx` | Fetch and pass external events to TimeSlotGrid |
-| `src/components/FocusView.tsx` | Source labels (email + calendar); `office365` = `outlook`; history-aware weekly view |
-| `supabase/functions/nightly-schedule-builder/index.ts` | Write to `schedule_history` before clearing rolled-over tasks |
+- Query `task_schedule_history` for the displayed week, join with `tasks` for title/category/priority
+- Render past days using stored `start_time` from history records
+- Completed items: checkmark + strikethrough overlay
+- Rolled-over items: rollover icon + `pushed_count` badge
+- Slightly muted opacity to distinguish from live items
+- Keep existing `start_time` guard for today and future days (no change)
+
+### B. Today's Backlog (Today Only)
+**File**: `src/components/WeeklyAgendaView.tsx`
+
+- At bottom of today's card only, show tasks where `!start_time && (status = READY || UP_NEXT || due_date = today)`
+- Compact list, no time, sorted by priority
+- Do NOT add backlog to past days — history covers those
+
+### C. Timezone Fix for Agenda/Meetings Tabs
+**File**: `src/components/WeeklyAgendaView.tsx`
+
+- Replace `format(parseISO(...), 'h:mm a')` with `toLocaleTimeString('en-US', { timeZone: userTimezone, ... })`
+- Apply in both AgendaTab event cards and MeetingsTab event cards
+
+---
+
+## Phase 3 — Source Labels and Traceability
+
+### A. Store Account Email in Connection Metadata
+**File**: `supabase/functions/calendar-delta-sync/index.ts`
+
+- After successful sync, if `metadata` lacks account email, fetch `/me` (Microsoft) or `/userinfo` (Google)
+- Save `userPrincipalName` / email + available calendar names to `calendar_connections.metadata`
+
+### B. Display Real Source Labels
+**Files**: `src/components/WeeklyAgendaView.tsx`, `src/components/FocusView.tsx`, `src/components/CalendarModule.tsx`, `src/components/DailyScheduleView.tsx`
+
+- Join external events with their connection's metadata
+- Render source badge as: email + calendar name (e.g., "von.ellis@enterpriseds.io · Family Calendar")
+- Replace generic "calendar" / "Google" / "office365" badges
+
+### C. Store Real Calendar ID per Event
+**File**: `supabase/functions/calendar-delta-sync/index.ts`
+
+- Replace hardcoded `calendar_id: 'primary'` with actual calendar ID from the event payload
+
+---
+
+## Phase 4 — Recurring Events Toggle
+
+### A. Populate `is_recurring` During Sync
+**File**: `supabase/functions/calendar-delta-sync/index.ts`
+
+- Microsoft: `is_recurring = true` when `seriesMasterId` is present
+- Google: `is_recurring = true` when `recurringEventId` is present
+
+### B. Per-Connection Toggle
+**File**: `src/components/NotificationSettings.tsx`
+
+- Add "Show recurring events" switch under each connection card
+- Persist `show_recurring_events` (default `true`) in `calendar_connections.metadata`
+
+### C. Filter at Display Time
+**Files**: `WeeklyAgendaView.tsx`, `FocusView.tsx`, `CalendarModule.tsx`, `DailyScheduleView.tsx`
+
+- Load connection metadata alongside events
+- When `show_recurring_events === false`, exclude events where `is_recurring = true`
+
+---
 
 ## Implementation Order
 
-1. Window validation in `execute-tool` + `smart-calendar-scheduler` (stops the bleeding)
-2. WeeklyAgendaView timezone/config fix
-3. External events in Agenda tab + DailyScheduleView
-4. Source labels across all views
-5. Schedule history preservation + weekly retrospective UI
+1. Migration (columns + clear bad data)
+2. Time window enforcement in scheduling functions
+3. Delta sync fixes (titles, sync token, `is_recurring`, account email, calendar ID)
+4. History integration in WeeklyAgendaView + FocusView
+5. Source labels across all views
+6. Recurring events toggle in settings + display filtering
+
+## Files Summary
+
+| File | Changes |
+|------|---------|
+| `supabase/functions/calendar-delta-sync/index.ts` | Series master fetch, anti-downgrade, sync token fix, `is_recurring`, account email, real calendar ID, logging |
+| `supabase/functions/execute-tool/index.ts` | Time window validation before scheduling |
+| `supabase/functions/smart-calendar-scheduler/index.ts` | Time window validation |
+| `src/components/WeeklyAgendaView.tsx` | History query for past days, today backlog, timezone fix, source labels, recurring filter |
+| `src/components/FocusView.tsx` | History in weekly strip, source labels, recurring filter |
+| `src/components/CalendarModule.tsx` | Source labels, recurring filter |
+| `src/components/DailyScheduleView.tsx` | Source labels, recurring filter |
+| `src/components/NotificationSettings.tsx` | Recurring events toggle, persist to metadata |
+| SQL migration | `is_recurring` column, clear untitled events, reset sync token |
 
