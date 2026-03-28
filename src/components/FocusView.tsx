@@ -886,24 +886,31 @@ const FocusView: React.FC<FocusViewProps> = ({
                     size="sm"
                     onClick={async () => {
                       if (!user?.id) return;
-                      try {
-                        toast.info('Syncing calendar...');
-                        const { data } = await supabase.functions.invoke('calendar-delta-sync', { body: { user_id: user.id } });
+                   try {
+                        toast.info('Syncing calendar & assignments...');
+                        const [calResult, assignResult] = await Promise.allSettled([
+                          supabase.functions.invoke('calendar-delta-sync', { body: { user_id: user.id } }),
+                          supabase.functions.invoke('nightly-assignment-sync', { body: { userId: user.id } }),
+                        ]);
                         // Reload external events
                         const todayStart = new Date(); todayStart.setHours(0,0,0,0);
                         const todayEnd = new Date(); todayEnd.setHours(23,59,59,999);
                         const { data: events } = await supabase
                           .from('external_calendar_events')
-                          .select('*')
+                          .select('*, calendar_connections!connection_id(provider, provider_account_email)')
                           .eq('user_id', user.id)
                           .gte('start_time', todayStart.toISOString())
                           .lte('start_time', todayEnd.toISOString());
                         setExternalEvents((events || []) as ExternalCalendarEvent[]);
-                        const count = data?.results?.reduce((sum: number, r: any) => sum + (r.events_added || 0), 0) || 0;
-                        toast.success(`Calendar synced — ${count} events pulled, ${(events || []).length} showing today`);
+                        const calData = calResult.status === 'fulfilled' ? calResult.value.data : null;
+                        const calCount = calData?.results?.reduce((sum: number, r: any) => sum + (r.events_added || 0), 0) || 0;
+                        const assignData = assignResult.status === 'fulfilled' ? assignResult.value.data : null;
+                        const assignCount = assignData?.created?.length || 0;
+                        toast.success(`Synced — ${calCount} events, ${assignCount} assignments added, ${(events || []).length} events today`);
+                        onTaskUpdate();
                       } catch (e) {
                         console.error('Manual sync failed:', e);
-                        toast.error('Calendar sync failed');
+                        toast.error('Sync failed');
                       }
                     }}
                     className="text-xs h-7"
