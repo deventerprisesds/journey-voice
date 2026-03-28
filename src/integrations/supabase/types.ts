@@ -1706,6 +1706,7 @@ export type Database = {
           external_event_id: string
           id: string
           is_all_day: boolean
+          is_recurring: boolean | null
           last_synced_at: string
           location: string | null
           source_task_id: string | null
@@ -1723,6 +1724,7 @@ export type Database = {
           external_event_id: string
           id?: string
           is_all_day?: boolean
+          is_recurring?: boolean | null
           last_synced_at?: string
           location?: string | null
           source_task_id?: string | null
@@ -1740,6 +1742,7 @@ export type Database = {
           external_event_id?: string
           id?: string
           is_all_day?: boolean
+          is_recurring?: boolean | null
           last_synced_at?: string
           location?: string | null
           source_task_id?: string | null
