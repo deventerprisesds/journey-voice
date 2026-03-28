@@ -22,6 +22,7 @@ import {
   BookOpen,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { humanizeCalendarId } from '@/lib/calendarUtils';
 import { Task, ExternalCalendarEvent } from '@/types/task';
 import { DEFAULT_SCHEDULING_CONFIG } from '@/config/schedulingRules';
 import { loadUserSchedulingConfig, type SchedulingConfig } from '@/services/schedulingService';

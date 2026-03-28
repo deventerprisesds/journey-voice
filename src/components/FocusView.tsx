@@ -38,6 +38,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { useAuth } from '@/hooks/useAuth';
 import { useBatchScheduling } from '@/hooks/useBatchScheduling';
 import { getTimePartsInTimezone, localTimeToUtcISO, getDefaultTimezone } from '@/lib/date';
+import { humanizeCalendarId } from '@/lib/calendarUtils';
 import QuickTaskInput from './QuickTaskInput';
 import TaskCreationModal from './TaskCreationModal';
 import { getOrCreateDefaultBoardId } from '@/utils/demoData';
