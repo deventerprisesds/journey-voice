@@ -737,6 +737,21 @@ for (let dayOffset = 0; dayOffset < maxSearchDays; dayOffset++) {
             duration: estimatedDuration,
             preferredTimeUsed: preferredTimeMinutes !== null
           });
+
+          // ── POST-AI WINDOW VALIDATION ──
+          // Use scheduling-defaults to validate the slot falls within an allowed window
+          const windowCheck = validateTaskWindow(
+            scheduledSlot.start.toISOString(),
+            taskCategory,
+            config.timeWindows,
+            config.categoryMappings,
+            timezone
+          );
+          if (!windowCheck.valid) {
+            console.error(`⛔ SMART-SCHEDULER WINDOW VIOLATION: category=${taskCategory}, actual="${windowCheck.actualWindow}", allowed=${windowCheck.allowedWindows.join(',')}`);
+            // Skip this slot and keep searching
+            continue;
+          }
           
           return new Response(
             JSON.stringify({
