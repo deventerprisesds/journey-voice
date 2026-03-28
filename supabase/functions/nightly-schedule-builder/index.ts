@@ -227,6 +227,29 @@ serve(async (req) => {
 
         let rolledOverCount = 0;
         if (expiredTasks && expiredTasks.length > 0) {
+          // Write schedule history BEFORE clearing slots
+          const historyRows = expiredTasks
+            .filter(task => task.start_time)
+            .map(task => ({
+              task_id: task.id,
+              user_id: userId,
+              scheduled_date: task.start_time!.split('T')[0],
+              start_time: task.start_time,
+              end_time: null,
+              action: 'rollover',
+              pushed_count: (task.pushed_count || 0) + 1,
+            }));
+          if (historyRows.length > 0) {
+            const { error: histError } = await supabase
+              .from('task_schedule_history')
+              .insert(historyRows);
+            if (histError) {
+              console.warn(`  ⚠️ Failed to write schedule history: ${histError.message}`);
+            } else {
+              console.log(`  📜 Recorded ${historyRows.length} schedule history entries`);
+            }
+          }
+
           for (const task of expiredTasks) {
             // Clear scheduling but preserve status so they flow into candidate pool
             const { error: updateError } = await supabase
