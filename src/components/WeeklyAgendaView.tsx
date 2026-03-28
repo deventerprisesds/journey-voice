@@ -271,7 +271,7 @@ const AgendaTab: React.FC<AgendaTabProps> = ({ tasks, weekDays, externalEvents, 
                                   <div className="flex items-center gap-1.5">
                                     <Video className="h-3 w-3 text-muted-foreground flex-shrink-0" />
                                     <span className="text-xs text-muted-foreground flex-shrink-0">
-                                      {format(parseISO(item.start_time), 'h:mm a')} – {format(parseISO(item.end_time), 'h:mm a')}
+                                      {formatTimeInTimezone(item.start_time, userTimezone)} – {formatTimeInTimezone(item.end_time, userTimezone)}
                                     </span>
                                     <span className="text-xs font-medium truncate">{item.title || 'Untitled Event'}</span>
                                   </div>
