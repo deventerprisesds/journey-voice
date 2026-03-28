@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
+import { useUnifiedTasks } from '@/hooks/useUnifiedTasks';
 import TabbedKanbanBoard from '@/components/TabbedKanbanBoard';
 import TaskGridView from '@/components/EnhancedTaskGridView';
 import FocusView from '@/components/FocusView';
@@ -14,13 +15,14 @@ const TasksPage: React.FC = () => {
   const [searchParams] = useSearchParams();
   const viewParam = searchParams.get('view') as ViewType | null;
   const [currentView, setCurrentView] = useState<ViewType>(viewParam || 'focus');
-  const [tasks, setTasks] = useState<any[]>([]);
   const [selectedTask, setSelectedTask] = useState<any>(null);
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const { user, isDemoMode } = useAuth();
+  const { user } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
+
+  // Unified task loader — live + historical
+  const { tasks, loading, reload: handleTaskUpdate } = useUnifiedTasks();
 
   // Sync view with URL param
   useEffect(() => {
@@ -46,46 +48,6 @@ const TasksPage: React.FC = () => {
     navigate(`/tasks?${newParams.toString()}`, { replace: true });
   };
 
-  // Load tasks
-  useEffect(() => {
-    loadTasks();
-  }, [user, isDemoMode]);
-
-  // Set up real-time subscription for task changes (both authenticated and demo modes)
-  useEffect(() => {
-    if (!user) return;
-
-    const channel = supabase
-      .channel('task-changes-tasks-page')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'tasks',
-          filter: `user_id=eq.${user.id}`,
-        },
-        (payload) => {
-          const newTask = payload.new as any;
-          const oldTask = payload.old as any;
-          console.log('[TasksPage] Task change detected:', payload.eventType, newTask?.title);
-          
-          if (payload.eventType === 'INSERT') {
-            toast.success(`Task Created: "${newTask?.title}"`);
-          } else if (payload.eventType === 'UPDATE' && newTask?.start_time && !oldTask?.start_time) {
-            toast.success(`Task Scheduled: "${newTask?.title}"`);
-          }
-          
-          loadTasks();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [user]);
-
   // Handle deep linking to specific tasks
   useEffect(() => {
     if (!loading && tasks.length > 0) {
@@ -101,65 +63,12 @@ const TasksPage: React.FC = () => {
           toast.error('Task not found');
         }
 
-        // Clear the task parameter but keep view and tab
         const newParams = new URLSearchParams(location.search);
         newParams.delete('task');
         navigate(`${location.pathname}?${newParams.toString()}`, { replace: true });
       }
     }
   }, [loading, tasks, location.search, navigate]);
-
-  const loadTasks = async () => {
-    if (!user) {
-      setLoading(false);
-      return;
-    }
-
-    setLoading(true);
-    try {
-      // Both demo mode and authenticated mode now load from Supabase
-      // Demo mode has RLS policies that allow access to demo user data
-      const { data, error } = await supabase
-        .from('tasks')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('created_at');
-
-      if (error) {
-        console.error('[TasksPage] Error loading tasks from Supabase:', error);
-        
-        // Fallback to localStorage only if Supabase fails in demo mode
-        if (isDemoMode) {
-          console.log('[TasksPage] Falling back to localStorage for demo mode');
-          const demoTasks = localStorage.getItem('kanban-demo-tasks');
-          setTasks(demoTasks ? JSON.parse(demoTasks) : []);
-        } else {
-          setTasks([]);
-        }
-      } else {
-        console.log(`[TasksPage] Loaded ${data?.length || 0} tasks from Supabase`);
-        setTasks(data || []);
-        
-        // Cache to localStorage in demo mode for fallback
-        if (isDemoMode && data && data.length > 0) {
-          try {
-            localStorage.setItem('kanban-demo-tasks', JSON.stringify(data));
-          } catch (e) {
-            console.warn('[TasksPage] Could not cache demo tasks:', e);
-          }
-        }
-      }
-    } catch (error) {
-      console.error('[TasksPage] Error in loadTasks:', error);
-      setTasks([]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleTaskUpdate = () => {
-    loadTasks();
-  };
 
   const handleTaskEdit = (task: any) => {
     setSelectedTask(task);
@@ -171,7 +80,7 @@ const TasksPage: React.FC = () => {
     setSelectedTask(null);
   };
 
-  const handleTaskSave = (updatedTask: any) => {
+  const handleTaskSave = () => {
     handleTaskUpdate();
     setIsTaskModalOpen(false);
     setSelectedTask(null);
@@ -190,7 +99,7 @@ const TasksPage: React.FC = () => {
 
       if (error) throw error;
 
-      loadTasks();
+      handleTaskUpdate();
       toast.success(newStatus === 'DONE' ? 'Task completed!' : 'Task status updated');
     } catch (error) {
       console.error('Error updating task status:', error);
@@ -200,7 +109,6 @@ const TasksPage: React.FC = () => {
 
   return (
     <div className="h-full flex flex-col">
-      {/* Header */}
       <header className="border-b border-border bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/60 sticky top-0 z-10 flex-shrink-0">
         <div className="px-4 py-3 md:py-4">
           <div className="flex items-center justify-between">
@@ -220,7 +128,6 @@ const TasksPage: React.FC = () => {
         </div>
       </header>
 
-      {/* Main Content */}
       <main className="flex-1 overflow-auto px-4 py-4">
         {loading ? (
           <div className="flex items-center justify-center py-12">
@@ -232,40 +139,21 @@ const TasksPage: React.FC = () => {
         ) : (
           <>
             {currentView === 'kanban' && (
-              <TabbedKanbanBoard
-                tasks={tasks}
-                onTaskUpdate={handleTaskUpdate}
-                onTaskEdit={handleTaskEdit}
-              />
+              <TabbedKanbanBoard tasks={tasks} onTaskUpdate={handleTaskUpdate} onTaskEdit={handleTaskEdit} />
             )}
             {currentView === 'grid' && (
-              <TaskGridView
-                tasks={tasks}
-                onTaskEdit={handleTaskEdit}
-                onStatusChange={handleStatusChange}
-              />
+              <TaskGridView tasks={tasks} onTaskEdit={handleTaskEdit} onStatusChange={handleStatusChange} />
             )}
             {currentView === 'focus' && (
-              <FocusView
-                tasks={tasks}
-                onTaskEdit={handleTaskEdit}
-                onStatusChange={handleStatusChange}
-                onTaskUpdate={handleTaskUpdate}
-              />
+              <FocusView tasks={tasks} onTaskEdit={handleTaskEdit} onStatusChange={handleStatusChange} onTaskUpdate={handleTaskUpdate} />
             )}
             {currentView === 'week' && (
-              <WeeklyAgendaView
-                tasks={tasks}
-                onTaskEdit={handleTaskEdit}
-                onStatusChange={handleStatusChange}
-                onTaskUpdate={handleTaskUpdate}
-              />
+              <WeeklyAgendaView tasks={tasks} onTaskEdit={handleTaskEdit} onStatusChange={handleStatusChange} onTaskUpdate={handleTaskUpdate} />
             )}
           </>
         )}
       </main>
 
-      {/* Task Detail Modal */}
       {selectedTask && (
         <TaskDetailModal
           task={selectedTask}
