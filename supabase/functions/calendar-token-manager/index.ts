@@ -247,16 +247,13 @@ async function exchangeGoogleCode(supabaseClient: any, code: string, redirectUri
   if (existing) {
     // Reactivate + update tokens on existing row (handles both active and deactivated)
     console.log(`Reactivating/refreshing existing Google connection ${existing.id}`);
-    const { error: updateError } = await serviceClient
-      .from('calendar_connections')
-      .update({
-        access_token: tokens.access_token,
-        refresh_token: tokens.refresh_token || undefined,
-        expires_at: expiresAt,
-        is_active: true,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', existing.id);
+    const { error: updateError } = await serviceClient.rpc('update_calendar_connection_tokens_for_user', {
+      _connection_id: existing.id,
+      _user_id: userId,
+      _access_token: tokens.access_token,
+      _refresh_token: tokens.refresh_token || null,
+      _expires_at: expiresAt,
+    });
 
     if (updateError) {
       await trace(supabaseClient, userId, 'google_reactivate_failed', { provider: 'google', error: updateError.message, connectionId: existing.id });
