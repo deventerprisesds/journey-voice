@@ -654,7 +654,8 @@ const WeeklyAgendaView: React.FC<WeeklyAgendaViewProps> = ({
   const { user } = useAuth();
   const [externalEvents, setExternalEvents] = useState<(ExternalCalendarEvent & { calendar_connections?: { provider: string; provider_account_email: string } })[]>([]);
   const [schedulingConfig, setSchedulingConfig] = useState<SchedulingConfig>(DEFAULT_SCHEDULING_CONFIG);
-  const [historyTasks, setHistoryTasks] = useState<Task[]>([]);
+  // Derive history tasks from unified props (marked with _fromHistory by useUnifiedTasks)
+  const historyTasks = useMemo(() => tasks.filter((t: any) => t._fromHistory), [tasks]);
   const [connectionMeta, setConnectionMeta] = useState<Map<string, { show_recurring_events?: boolean }>>(new Map());
 
   // Load user's authoritative scheduling config
