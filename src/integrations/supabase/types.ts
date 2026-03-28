@@ -3881,6 +3881,36 @@ export type Database = {
         }
         Relationships: []
       }
+      tasks_with_schedule: {
+        Row: {
+          assignment_id: string | null
+          board_id: string | null
+          category: Database["public"]["Enums"]["task_category"] | null
+          completed_at: string | null
+          created_at: string | null
+          description: string | null
+          due_date: string | null
+          end_time: string | null
+          estimate_minutes: number | null
+          external_event_id: string | null
+          from_history: boolean | null
+          history_action: string | null
+          history_pushed_count: number | null
+          id: string | null
+          is_scheduled: boolean | null
+          priority: Database["public"]["Enums"]["task_priority"] | null
+          pushed_count: number | null
+          scheduled_date: string | null
+          scheduling_context: Json | null
+          source_id: string | null
+          start_time: string | null
+          status: Database["public"]["Enums"]["task_status"] | null
+          title: string | null
+          updated_at: string | null
+          user_id: string | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
       check_profile_access_rate_limit: {

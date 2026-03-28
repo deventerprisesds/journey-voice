@@ -223,15 +223,25 @@ const AgendaTab: React.FC<AgendaTabProps> = ({ tasks, historyTasks, weekDays, ex
 
     // Bucket live tasks (today and future only)
     tasks.forEach(task => {
-      if (!task.start_time || task.status === 'DONE') return;
-      const dayKey = getDateInTimezone(task.start_time, userTimezone);
-      if (pastDays.has(dayKey)) return; // Past days use history
-      if (!map[dayKey]) return;
-      const window = getTimeWindowForTask(task.start_time, parseISO(dayKey));
-      if (window && map[dayKey][window]) {
-        map[dayKey][window].push(task);
+      if (task.status === 'DONE') return;
+      const dayKey = task.start_time ? getDateInTimezone(task.start_time, userTimezone) : null;
+      if (dayKey && pastDays.has(dayKey)) return; // Past days use history
+      
+      // For tasks without start_time, show in today's unscheduled if they're active
+      if (!task.start_time) {
+        const activeStatuses = ['READY', 'UP_NEXT', 'DOING', 'TODO'];
+        if (activeStatuses.includes(task.status) && map[todayStr]) {
+          map[todayStr].unscheduled.push(task);
+        }
+        return;
+      }
+      
+      if (!map[dayKey!]) return;
+      const window = getTimeWindowForTask(task.start_time!, parseISO(dayKey!));
+      if (window && map[dayKey!][window]) {
+        map[dayKey!][window].push(task);
       } else {
-        map[dayKey].unscheduled.push(task);
+        map[dayKey!].unscheduled.push(task);
       }
     });
 
@@ -702,7 +712,7 @@ const WeeklyAgendaView: React.FC<WeeklyAgendaViewProps> = ({
     load();
   }, [user?.id, weekStart]);
 
-  // Fetch schedule history for past days in the visible week
+  // Fetch schedule history for past days using tasks_with_schedule view
   useEffect(() => {
     if (!user?.id) return;
     const load = async () => {
@@ -714,38 +724,40 @@ const WeeklyAgendaView: React.FC<WeeklyAgendaViewProps> = ({
         return;
       }
       const { data } = await supabase
-        .from('task_schedule_history')
-        .select('task_id, scheduled_date, start_time, end_time, action, pushed_count')
+        .from('tasks_with_schedule' as any)
+        .select('*')
         .eq('user_id', user.id)
+        .eq('from_history', true)
         .gte('scheduled_date', weekStartStr)
         .lt('scheduled_date', todayStr);
       
       if (data && data.length > 0) {
-        // Fetch the actual task details for these history entries
-        const taskIds = [...new Set(data.map(h => h.task_id))];
-        const { data: taskData } = await supabase
-          .from('tasks')
-          .select('id, title, category, priority, status, estimate_minutes, pushed_count')
-          .in('id', taskIds);
-        
-        if (taskData) {
-          const taskMap = new Map(taskData.map(t => [t.id, t]));
-          // Create synthetic task objects from history records
-          const histTasks: Task[] = data.map(h => {
-            const task = taskMap.get(h.task_id);
-            if (!task) return null;
-            return {
-              ...task,
-              start_time: h.start_time,
-              end_time: h.end_time,
-              due_date: h.scheduled_date,
-              _historyAction: h.action,
-              _historyPushedCount: h.pushed_count,
-              _fromHistory: true,
-            } as Task & { _historyAction?: string; _historyPushedCount?: number; _fromHistory?: boolean };
-          }).filter(Boolean) as Task[];
-          setHistoryTasks(histTasks);
-        }
+        const histTasks: Task[] = (data as any[]).map(row => ({
+          id: row.id,
+          title: row.title,
+          description: row.description,
+          status: row.status,
+          priority: row.priority,
+          category: row.category,
+          estimate_minutes: row.estimate_minutes,
+          board_id: row.board_id,
+          user_id: row.user_id,
+          due_date: row.due_date,
+          is_scheduled: row.is_scheduled,
+          external_event_id: row.external_event_id,
+          pushed_count: row.pushed_count,
+          assignment_id: row.assignment_id,
+          scheduling_context: row.scheduling_context,
+          start_time: row.start_time,
+          end_time: row.end_time,
+          created_at: row.created_at,
+          updated_at: row.updated_at,
+          completed_at: row.completed_at,
+          _historyAction: row.history_action,
+          _historyPushedCount: row.history_pushed_count,
+          _fromHistory: true,
+        } as Task & { _historyAction?: string; _historyPushedCount?: number; _fromHistory?: boolean }));
+        setHistoryTasks(histTasks);
       } else {
         setHistoryTasks([]);
       }
