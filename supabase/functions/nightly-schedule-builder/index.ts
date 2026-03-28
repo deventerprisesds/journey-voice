@@ -285,6 +285,22 @@ serve(async (req) => {
           .eq('is_scheduled', true);
 
         if (doneTasks && doneTasks.length > 0) {
+          // Record completed tasks in history before clearing
+          const doneHistory = doneTasks
+            .filter((dt: any) => dt.start_time)
+            .map((dt: any) => ({
+              task_id: dt.id,
+              user_id: userId,
+              scheduled_date: dt.start_time.split('T')[0],
+              start_time: dt.start_time,
+              end_time: dt.end_time || null,
+              action: 'completed',
+              pushed_count: 0,
+            }));
+          if (doneHistory.length > 0) {
+            await supabase.from('task_schedule_history').insert(doneHistory);
+          }
+
           for (const dt of doneTasks) {
             await supabase.from('tasks').update({
               start_time: null, end_time: null, is_scheduled: false,
