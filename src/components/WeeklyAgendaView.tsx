@@ -152,6 +152,7 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onTaskEdit, onComplete }) => 
 
 interface AgendaTabProps {
   tasks: Task[];
+  historyTasks: Task[];
   weekDays: Date[];
   externalEvents: (ExternalCalendarEvent & { calendar_connections?: { provider: string; provider_account_email: string } })[];
   config: SchedulingConfig;
@@ -160,7 +161,7 @@ interface AgendaTabProps {
   onComplete: (taskId: string) => void;
 }
 
-const AgendaTab: React.FC<AgendaTabProps> = ({ tasks, weekDays, externalEvents, config, userTimezone, onTaskEdit, onComplete }) => {
+const AgendaTab: React.FC<AgendaTabProps> = ({ tasks, historyTasks, weekDays, externalEvents, config, userTimezone, onTaskEdit, onComplete }) => {
 
   const getTimeWindowForTask = (startTime: string, day: Date): string | null => {
     const { hour: taskHour } = getTimePartsInTimezone(startTime, userTimezone);
