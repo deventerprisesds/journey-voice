@@ -654,7 +654,8 @@ const WeeklyAgendaView: React.FC<WeeklyAgendaViewProps> = ({
   const { user } = useAuth();
   const [externalEvents, setExternalEvents] = useState<(ExternalCalendarEvent & { calendar_connections?: { provider: string; provider_account_email: string } })[]>([]);
   const [schedulingConfig, setSchedulingConfig] = useState<SchedulingConfig>(DEFAULT_SCHEDULING_CONFIG);
-  const [historyTasks, setHistoryTasks] = useState<Task[]>([]);
+  // Derive history tasks from unified props (marked with _fromHistory by useUnifiedTasks)
+  const historyTasks = useMemo(() => tasks.filter((t: any) => t._fromHistory), [tasks]);
   const [connectionMeta, setConnectionMeta] = useState<Map<string, { show_recurring_events?: boolean }>>(new Map());
 
   // Load user's authoritative scheduling config
@@ -712,58 +713,7 @@ const WeeklyAgendaView: React.FC<WeeklyAgendaViewProps> = ({
     load();
   }, [user?.id, weekStart]);
 
-  // Fetch schedule history for past days using tasks_with_schedule view
-  useEffect(() => {
-    if (!user?.id) return;
-    const load = async () => {
-      const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: userTimezone });
-      const weekStartStr = format(weekDays[0], 'yyyy-MM-dd');
-      // Only fetch history for days before today
-      if (weekStartStr >= todayStr) {
-        setHistoryTasks([]);
-        return;
-      }
-      const { data } = await supabase
-        .from('tasks_with_schedule' as any)
-        .select('*')
-        .eq('user_id', user.id)
-        .eq('from_history', true)
-        .gte('scheduled_date', weekStartStr)
-        .lt('scheduled_date', todayStr);
-      
-      if (data && data.length > 0) {
-        const histTasks: Task[] = (data as any[]).map(row => ({
-          id: row.id,
-          title: row.title,
-          description: row.description,
-          status: row.status,
-          priority: row.priority,
-          category: row.category,
-          estimate_minutes: row.estimate_minutes,
-          board_id: row.board_id,
-          user_id: row.user_id,
-          due_date: row.due_date,
-          is_scheduled: row.is_scheduled,
-          external_event_id: row.external_event_id,
-          pushed_count: row.pushed_count,
-          assignment_id: row.assignment_id,
-          scheduling_context: row.scheduling_context,
-          start_time: row.start_time,
-          end_time: row.end_time,
-          created_at: row.created_at,
-          updated_at: row.updated_at,
-          completed_at: row.completed_at,
-          _historyAction: row.history_action,
-          _historyPushedCount: row.history_pushed_count,
-          _fromHistory: true,
-        } as Task & { _historyAction?: string; _historyPushedCount?: number; _fromHistory?: boolean }));
-        setHistoryTasks(histTasks);
-      } else {
-        setHistoryTasks([]);
-      }
-    };
-    load();
-  }, [user?.id, weekStart, userTimezone]);
+  // History tasks are now derived from unified props above (line ~657)
 
   const handleComplete = (taskId: string) => {
     onStatusChange(taskId, 'DONE');
