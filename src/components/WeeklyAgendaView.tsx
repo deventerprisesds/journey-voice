@@ -393,7 +393,7 @@ const MeetingsTab: React.FC<MeetingsTabProps> = ({ weekDays, externalEvents }) =
                         >
                           <div className="flex items-center gap-1.5 mb-0.5">
                             <span className="text-xs text-muted-foreground flex-shrink-0">
-                              {format(parseISO(evt.start_time), 'h:mm a')} – {format(parseISO(evt.end_time), 'h:mm a')}
+                              {formatTimeInTimezone(evt.start_time, userTimezone)} – {formatTimeInTimezone(evt.end_time, userTimezone)}
                             </span>
                           </div>
                           <p className="text-xs font-medium truncate">{evt.title || 'Untitled Event'}</p>
