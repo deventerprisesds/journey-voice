@@ -216,6 +216,7 @@ serve(async (req) => {
           board_id: board.id,
           user_id: userId,
           assignment_id: assignment.id,
+          scheduling_context: { source },
         };
 
         const { data: newTask, error: insertError } = await supabase

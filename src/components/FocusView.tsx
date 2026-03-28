@@ -176,7 +176,7 @@ const FocusView: React.FC<FocusViewProps> = ({
 
         const { data, error } = await supabase
           .from('external_calendar_events')
-          .select('*')
+          .select('*, calendar_connections!connection_id(provider, provider_account_email)')
           .eq('user_id', user.id)
           .gte('start_time', todayStart.toISOString())
           .lte('start_time', todayEnd.toISOString());
@@ -886,24 +886,31 @@ const FocusView: React.FC<FocusViewProps> = ({
                     size="sm"
                     onClick={async () => {
                       if (!user?.id) return;
-                      try {
-                        toast.info('Syncing calendar...');
-                        const { data } = await supabase.functions.invoke('calendar-delta-sync', { body: { user_id: user.id } });
+                   try {
+                        toast.info('Syncing calendar & assignments...');
+                        const [calResult, assignResult] = await Promise.allSettled([
+                          supabase.functions.invoke('calendar-delta-sync', { body: { user_id: user.id } }),
+                          supabase.functions.invoke('nightly-assignment-sync', { body: { userId: user.id } }),
+                        ]);
                         // Reload external events
                         const todayStart = new Date(); todayStart.setHours(0,0,0,0);
                         const todayEnd = new Date(); todayEnd.setHours(23,59,59,999);
                         const { data: events } = await supabase
                           .from('external_calendar_events')
-                          .select('*')
+                          .select('*, calendar_connections!connection_id(provider, provider_account_email)')
                           .eq('user_id', user.id)
                           .gte('start_time', todayStart.toISOString())
                           .lte('start_time', todayEnd.toISOString());
                         setExternalEvents((events || []) as ExternalCalendarEvent[]);
-                        const count = data?.results?.reduce((sum: number, r: any) => sum + (r.events_added || 0), 0) || 0;
-                        toast.success(`Calendar synced — ${count} events pulled, ${(events || []).length} showing today`);
+                        const calData = calResult.status === 'fulfilled' ? calResult.value.data : null;
+                        const calCount = calData?.results?.reduce((sum: number, r: any) => sum + (r.events_added || 0), 0) || 0;
+                        const assignData = assignResult.status === 'fulfilled' ? assignResult.value.data : null;
+                        const assignCount = assignData?.created?.length || 0;
+                        toast.success(`Synced — ${calCount} events, ${assignCount} assignments added, ${(events || []).length} events today`);
+                        onTaskUpdate();
                       } catch (e) {
                         console.error('Manual sync failed:', e);
-                        toast.error('Calendar sync failed');
+                        toast.error('Sync failed');
                       }
                     }}
                     className="text-xs h-7"
@@ -1028,9 +1035,14 @@ const FocusView: React.FC<FocusViewProps> = ({
                                   if (item.type === 'task') {
                                     const task = item.task;
                                     return (
-                                      <div 
+                                    <div 
                                         key={task.id}
-                                        className="bg-card rounded-md p-3 shadow-sm border cursor-pointer hover:shadow-md transition-shadow"
+                                        className={cn(
+                                          "rounded-md p-3 shadow-sm border cursor-pointer hover:shadow-md transition-shadow",
+                                          task.assignment_id
+                                            ? "bg-card border-l-4 border-l-violet-500"
+                                            : "bg-card"
+                                        )}
                                         onClick={() => onTaskEdit(task)}
                                       >
                                         <div className="flex items-start gap-2">
@@ -1085,9 +1097,19 @@ const FocusView: React.FC<FocusViewProps> = ({
                                               </div>
                                             </div>
                                             <div className="flex items-center gap-2 mt-1 flex-wrap">
-                                              <Badge variant="outline" className={cn("text-xs", categoryColors[task.category])}>
-                                                {task.category.toLowerCase()}
-                                              </Badge>
+                                              {task.assignment_id ? (
+                                                <Badge variant="outline" className={cn("text-xs",
+                                                  ((task.scheduling_context as any)?.source === 'MIT' || task.category === 'EDUCATION')
+                                                    ? "bg-red-500/10 text-red-700 border-red-500/20 dark:text-red-400"
+                                                    : "bg-indigo-500/10 text-indigo-700 border-indigo-500/20 dark:text-indigo-400"
+                                                )}>
+                                                  📚 {(task.scheduling_context as any)?.source || (task.category === 'EDUCATION' ? 'MIT' : 'EMBA')}
+                                                </Badge>
+                                              ) : (
+                                                <Badge variant="outline" className={cn("text-xs", categoryColors[task.category])}>
+                                                  {task.category.toLowerCase()}
+                                                </Badge>
+                                              )}
                                               {(() => {
                                                 const { violation, actualWindow, allowedWindows } = isWindowViolation(task);
                                                 if (violation) {
@@ -1113,22 +1135,32 @@ const FocusView: React.FC<FocusViewProps> = ({
                                   }
 
                                   if (item.type === 'external') {
-                                    const evt = item.event;
+                                    const evt = item.event as any;
+                                    const provider = evt.calendar_connections?.provider || 'calendar';
+                                    const providerEmail = evt.calendar_connections?.provider_account_email || '';
+                                    const providerLabel = provider === 'google' ? 'Google' : provider === 'outlook' ? 'Outlook' : provider;
+                                    const borderColor = provider === 'google' ? 'border-l-4 border-l-blue-500' : 'border-l-4 border-l-cyan-500';
                                     return (
                                       <div
                                         key={`ext-${evt.id}`}
-                                        className="bg-accent/50 rounded-md p-3 shadow-sm border border-accent"
+                                        className={cn("bg-accent/50 rounded-md p-3 shadow-sm border border-accent", borderColor)}
                                       >
                                         <div className="flex items-center gap-2">
                                           <Calendar className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
                                           <span className="text-xs text-muted-foreground flex-shrink-0">
                                             {format(parseISO(evt.start_time), 'h:mm a')} – {format(parseISO(evt.end_time), 'h:mm a')}
                                           </span>
-                                          <span className="font-medium text-sm truncate">{evt.title}</span>
-                                          <Badge variant="outline" className="text-xs ml-auto flex-shrink-0">External</Badge>
+                                          <span className="font-medium text-sm truncate">{evt.title || 'Untitled Event'}</span>
+                                          <Badge variant="outline" className={cn("text-xs ml-auto flex-shrink-0",
+                                            provider === 'google' ? "bg-blue-500/10 text-blue-700 border-blue-500/20 dark:text-blue-400" : "bg-cyan-500/10 text-cyan-700 border-cyan-500/20 dark:text-cyan-400"
+                                          )}>
+                                            {providerLabel}
+                                          </Badge>
                                         </div>
-                                        {evt.location && (
-                                          <p className="text-xs text-muted-foreground mt-1 truncate">{evt.location}</p>
+                                        {(evt.location || providerEmail) && (
+                                          <p className="text-xs text-muted-foreground mt-1 truncate">
+                                            {evt.location ? `📍 ${evt.location}` : ''}{evt.location && providerEmail ? ' · ' : ''}{providerEmail}
+                                          </p>
                                         )}
                                       </div>
                                     );
@@ -1297,7 +1329,8 @@ const FocusView: React.FC<FocusViewProps> = ({
                             {...provided.draggableProps}
                             className={cn(
                               "bg-card rounded-lg p-3 border shadow-sm transition-shadow",
-                              snapshot.isDragging && "shadow-lg ring-2 ring-primary"
+                              snapshot.isDragging && "shadow-lg ring-2 ring-primary",
+                              task.assignment_id && "border-l-4 border-l-violet-500"
                             )}
                           >
                             <div className="flex items-start gap-2">
@@ -1316,9 +1349,19 @@ const FocusView: React.FC<FocusViewProps> = ({
                               >
                                 <h3 className="font-medium text-sm truncate">{task.title}</h3>
                                 <div className="flex items-center gap-2 mt-1 flex-wrap">
-                                  <Badge variant="outline" className={cn("text-xs", categoryColors[task.category])}>
-                                    {task.category.toLowerCase()}
-                                  </Badge>
+                                  {task.assignment_id ? (
+                                    <Badge variant="outline" className={cn("text-xs",
+                                      ((task.scheduling_context as any)?.source === 'MIT' || task.category === 'EDUCATION')
+                                        ? "bg-red-500/10 text-red-700 border-red-500/20 dark:text-red-400"
+                                        : "bg-indigo-500/10 text-indigo-700 border-indigo-500/20 dark:text-indigo-400"
+                                    )}>
+                                      📚 {(task.scheduling_context as any)?.source || (task.category === 'EDUCATION' ? 'MIT' : 'EMBA')}
+                                    </Badge>
+                                  ) : (
+                                    <Badge variant="outline" className={cn("text-xs", categoryColors[task.category])}>
+                                      {task.category.toLowerCase()}
+                                    </Badge>
+                                  )}
                                   <Badge variant="outline" className={cn("text-xs", priorityBadgeColors[task.priority])}>
                                     {task.priority.toLowerCase()}
                                   </Badge>
