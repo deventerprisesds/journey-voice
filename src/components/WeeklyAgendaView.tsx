@@ -223,10 +223,20 @@ const AgendaTab: React.FC<AgendaTabProps> = ({ tasks, historyTasks, weekDays, ex
 
     // Bucket live tasks (today and future only)
     tasks.forEach(task => {
-      if (!task.start_time || task.status === 'DONE') return;
-      const dayKey = getDateInTimezone(task.start_time, userTimezone);
-      if (pastDays.has(dayKey)) return; // Past days use history
-      if (!map[dayKey]) return;
+      if (task.status === 'DONE') return;
+      const dayKey = task.start_time ? getDateInTimezone(task.start_time, userTimezone) : null;
+      if (dayKey && pastDays.has(dayKey)) return; // Past days use history
+      
+      // For tasks without start_time, show in today's unscheduled if they're active
+      if (!task.start_time) {
+        const activeStatuses = ['READY', 'UP_NEXT', 'DOING', 'TODO'];
+        if (activeStatuses.includes(task.status) && map[todayStr]) {
+          map[todayStr].unscheduled.push(task);
+        }
+        return;
+      }
+      
+      if (!map[dayKey!]) return;
       const window = getTimeWindowForTask(task.start_time, parseISO(dayKey));
       if (window && map[dayKey][window]) {
         map[dayKey][window].push(task);

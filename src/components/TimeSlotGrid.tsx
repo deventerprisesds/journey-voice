@@ -620,6 +620,8 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
             );
           })}
         </div>
+          );
+        })()}
       </div>
     </div>
     </DragDropContext>

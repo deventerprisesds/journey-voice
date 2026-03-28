@@ -37,7 +37,7 @@ import { loadUserSchedulingConfig } from '@/services/schedulingService';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { useAuth } from '@/hooks/useAuth';
 import { useBatchScheduling } from '@/hooks/useBatchScheduling';
-import { getTimePartsInTimezone, localTimeToUtcISO, getDefaultTimezone } from '@/lib/date';
+import { getTimePartsInTimezone, localTimeToUtcISO, getDefaultTimezone, getDateInTimezone } from '@/lib/date';
 import { humanizeCalendarId } from '@/lib/calendarUtils';
 import QuickTaskInput from './QuickTaskInput';
 import TaskCreationModal from './TaskCreationModal';
