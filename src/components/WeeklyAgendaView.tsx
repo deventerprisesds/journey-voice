@@ -601,6 +601,8 @@ const WeeklyAgendaView: React.FC<WeeklyAgendaViewProps> = ({
   const { user } = useAuth();
   const [externalEvents, setExternalEvents] = useState<(ExternalCalendarEvent & { calendar_connections?: { provider: string; provider_account_email: string } })[]>([]);
   const [schedulingConfig, setSchedulingConfig] = useState<SchedulingConfig>(DEFAULT_SCHEDULING_CONFIG);
+  const [historyTasks, setHistoryTasks] = useState<Task[]>([]);
+  const [connectionMeta, setConnectionMeta] = useState<Map<string, { show_recurring_events?: boolean }>>(new Map());
 
   // Load user's authoritative scheduling config
   useEffect(() => {
@@ -620,7 +622,7 @@ const WeeklyAgendaView: React.FC<WeeklyAgendaViewProps> = ({
     return Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
   }, [weekStart]);
 
-  // Fetch external events for the visible week
+  // Fetch external events + connection metadata for the visible week
   useEffect(() => {
     if (!user?.id) return;
     const load = async () => {
@@ -628,14 +630,85 @@ const WeeklyAgendaView: React.FC<WeeklyAgendaViewProps> = ({
       const rangeEnd = addDays(weekDays[6], 1);
       const { data } = await supabase
         .from('external_calendar_events')
-        .select('*, calendar_connections!connection_id(provider, provider_account_email)')
+        .select('*, calendar_connections!connection_id(id, provider, provider_account_email, metadata)')
         .eq('user_id', user.id)
         .gte('start_time', rangeStart.toISOString())
         .lt('start_time', rangeEnd.toISOString());
-      if (data) setExternalEvents(data as any);
+      
+      if (data) {
+        // Build connection metadata map for recurring filter
+        const metaMap = new Map<string, { show_recurring_events?: boolean }>();
+        data.forEach((evt: any) => {
+          if (evt.calendar_connections?.id && !metaMap.has(evt.calendar_connections.id)) {
+            const meta = evt.calendar_connections.metadata as any;
+            metaMap.set(evt.calendar_connections.id, { show_recurring_events: meta?.show_recurring_events ?? true });
+          }
+        });
+        setConnectionMeta(metaMap);
+
+        // Filter out recurring events if connection says to hide them
+        const filtered = data.filter((evt: any) => {
+          if (!evt.is_recurring) return true;
+          const connId = evt.calendar_connections?.id || evt.connection_id;
+          const connMeta = metaMap.get(connId);
+          return connMeta?.show_recurring_events !== false;
+        });
+        setExternalEvents(filtered as any);
+      }
     };
     load();
   }, [user?.id, weekStart]);
+
+  // Fetch schedule history for past days in the visible week
+  useEffect(() => {
+    if (!user?.id) return;
+    const load = async () => {
+      const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: userTimezone });
+      const weekStartStr = format(weekDays[0], 'yyyy-MM-dd');
+      // Only fetch history for days before today
+      if (weekStartStr >= todayStr) {
+        setHistoryTasks([]);
+        return;
+      }
+      const { data } = await supabase
+        .from('task_schedule_history')
+        .select('task_id, scheduled_date, start_time, end_time, action, pushed_count')
+        .eq('user_id', user.id)
+        .gte('scheduled_date', weekStartStr)
+        .lt('scheduled_date', todayStr);
+      
+      if (data && data.length > 0) {
+        // Fetch the actual task details for these history entries
+        const taskIds = [...new Set(data.map(h => h.task_id))];
+        const { data: taskData } = await supabase
+          .from('tasks')
+          .select('id, title, category, priority, status, estimate_minutes, pushed_count')
+          .in('id', taskIds);
+        
+        if (taskData) {
+          const taskMap = new Map(taskData.map(t => [t.id, t]));
+          // Create synthetic task objects from history records
+          const histTasks: Task[] = data.map(h => {
+            const task = taskMap.get(h.task_id);
+            if (!task) return null;
+            return {
+              ...task,
+              start_time: h.start_time,
+              end_time: h.end_time,
+              due_date: h.scheduled_date,
+              _historyAction: h.action,
+              _historyPushedCount: h.pushed_count,
+              _fromHistory: true,
+            } as Task & { _historyAction?: string; _historyPushedCount?: number; _fromHistory?: boolean };
+          }).filter(Boolean) as Task[];
+          setHistoryTasks(histTasks);
+        }
+      } else {
+        setHistoryTasks([]);
+      }
+    };
+    load();
+  }, [user?.id, weekStart, userTimezone]);
 
   const handleComplete = (taskId: string) => {
     onStatusChange(taskId, 'DONE');
