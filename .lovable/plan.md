@@ -1,101 +1,71 @@
 
 
-# Multi-Account Calendar UI with Push/Pull Toggles + Add Account Buttons
+# Fix: Tokens Stored in Plaintext — decrypt_token() Fails
 
-## Current State
+## Root Cause
 
-The UI uses single-object state (`outlookConnection` / `googleConnection`) via `selectBestConnection`, showing only one connection per provider. There's no way to see multiple accounts, no explicit push/pull toggles per account, and no "Add Another Account" button.
+**Confirmed from live logs and DB schema**: Every "Edge Function returned a non-2xx status code" error traces back to one line:
 
-## What Changes
-
-### Refactor `NotificationSettings.tsx` — Calendar Section
-
-Replace single-connection state with arrays. Each provider section renders **all active connections** as individual cards.
-
-**Per-connection card layout:**
-```text
-Outlook Calendar
-┌─────────────────────────────────────────────────┐
-│ Dev@EnterpriseDS.io                             │
-│ Push tasks to calendar  ──────────── [toggle]   │
-│ Pull events for scheduling ────────  [toggle]   │
-│   └─ Calendars: Work, Personal (sub-toggles)   │
-│ [Disconnect]                                    │
-├─────────────────────────────────────────────────┤
-│ ⚠ tavonoellis@gmail.com (expired)              │
-│ [Reconnect]  [Disconnect]                       │
-└─────────────────────────────────────────────────┘
-[+ Add Another Outlook Account]
-
-Google Calendar
-┌─────────────────────────────────────────────────┐
-│ dev@gmail.com                                   │
-│ Push tasks to calendar  ──────────── [toggle]   │
-│ Pull events for scheduling ────────  [toggle]   │
-│   └─ Calendars: Primary (sub-toggles)          │
-│ [Disconnect]                                    │
-└─────────────────────────────────────────────────┘
-[+ Add Another Google Account]
+```
+Error: Calendar connection tokens not found
+    at getValidAccessToken → get_calendar_connection_tokens_service
 ```
 
-### State Changes
+The RPC `get_calendar_connection_tokens_service` calls `decrypt_token()` on the stored `access_token`. But `decrypt_token()` throws an exception when called on **plaintext** data, causing the RPC to return zero rows.
 
-- Replace `outlookConnection: CalendarConnection | null` → `outlookConnections: CalendarConnection[]`
-- Replace `googleConnection: CalendarConnection | null` → `googleConnections: CalendarConnection[]`
-- Remove `outlookExpired` / `googleExpired` booleans (expiry computed per-connection inline)
-- Add `purposes: string[]` to `CalendarConnection` interface
+**Why are tokens plaintext?** Two places bypass the encryption RPCs:
 
-### `loadCalendarConnections` Changes
+1. **`calendar-token-manager/index.ts`** — The reactivation code (lines 250-259, 291-297, and equivalent Outlook blocks) does:
+   ```typescript
+   await serviceClient.from('calendar_connections').update({
+     access_token: tokens.access_token,  // ← PLAINTEXT!
+     refresh_token: tokens.refresh_token,
+   }).eq('id', existing.id);
+   ```
+   The `insert_calendar_connection_for_user` RPC encrypts via `encrypt_token()`, but direct `.update()` does not.
 
-- Remove `selectBestConnection` helper
-- Filter all active connections per provider into arrays
-- Include `purposes` field from RPC result
+2. **`calendar-integration-manager/index.ts`** — The `doInlineRefresh` function (line ~140) also does a raw `.update()` with plaintext tokens after a token refresh.
 
-### Push Toggle Logic
+**The fix**: An existing RPC `update_calendar_connection_tokens_for_user` already exists and encrypts properly. Both files just need to call it instead of raw `.update()`.
 
-Each connection gets a "Push tasks to calendar" toggle that:
-- Adds/removes `WRITE` from that connection's `purposes` array in DB
-- Adds/removes the corresponding channel (`OUTLOOK_EVENT` / `GOOGLE_EVENT`) from notification prefs if any connection has WRITE
+## Changes
 
-### Pull Toggle Logic
+### File 1: `supabase/functions/calendar-token-manager/index.ts`
 
-Each connection gets a "Pull events for scheduling" toggle that:
-- Adds/removes `READ` from that connection's `purposes` array
-- When enabled, expands the `CalendarPullToggles` sub-calendar selector below it
+Replace all 4 raw `.update()` calls for token reactivation (Google reactivate, Google 23505 reactivate, Outlook reactivate, Outlook 23505 reactivate) with:
+```typescript
+await serviceClient.rpc('update_calendar_connection_tokens_for_user', {
+  _connection_id: existing.id,
+  _user_id: userId,
+  _access_token: tokens.access_token,
+  _refresh_token: tokens.refresh_token || null,
+  _expires_at: expiresAt,
+});
+```
 
-### Add Another Account Button
+This encrypts tokens on write, so `decrypt_token()` succeeds on read.
 
-- Always rendered below each provider's connection list
-- Calls `CalendarOAuthManager` with `provider` but no `connectionId`
-- Opens a fresh OAuth flow
+### File 2: `supabase/functions/calendar-integration-manager/index.ts`
 
-### Disconnect Button
+In `doInlineRefresh`, replace the raw `.update()` with the same RPC:
+```typescript
+await supabaseClient.rpc('update_calendar_connection_tokens_for_user', {
+  _connection_id: connectionId,
+  _user_id: userId,
+  _access_token: tokens.access_token,
+  _refresh_token: tokens.refresh_token || null,
+  _expires_at: expiresAt ? new Date(Date.now() + tokens.expires_in * 1000).toISOString() : null,
+});
+```
 
-Per-connection button that sets `is_active = false` on that connection row and refreshes the list.
+### Database: Fix currently broken rows
 
-### CalendarOAuthManager Changes
+Run a one-time update to re-encrypt the plaintext tokens for Google (`51d5aadc`) and Outlook (`bb04653a`) connections using `update_calendar_connection_tokens_for_user`. This requires a fresh OAuth exchange since the current plaintext tokens have likely expired. Alternatively, the user can simply reconnect both accounts after the code fix deploys — the reactivation path will now encrypt correctly.
 
-- Accept optional `showAlways` prop (default true) so the button renders even when connections exist
-- Label changes: "Connect" when no connections, "Add Another Account" when connections exist
+## Result
 
-## Files to Change
-
-| File | Change |
-|------|--------|
-| `src/components/NotificationSettings.tsx` | Multi-connection arrays, per-connection cards with push/pull toggles, disconnect, add account |
-| `src/components/CalendarOAuthManager.tsx` | Add `showAlways` prop, dynamic button label |
-
-## Also Included (from prior approved plan, not yet implemented)
-
-These fixes will be applied in the same implementation pass:
-- Fix Google 23505 duplicate key → reactivate existing row
-- Fix Outlook email → prefer `userPrincipalName`
-- Add token refresh to `listCalendars`
-- Add structured trace logging
-
-| File | Change |
-|------|--------|
-| `supabase/functions/calendar-token-manager/index.ts` | 23505 reactivation, MS email fix, trace logging |
-| `supabase/functions/calendar-integration-manager/index.ts` | Token refresh in listCalendars, trace logging |
-| `src/hooks/useOAuthCallback.tsx` | Trace logging at each stage |
+- All token writes go through `encrypt_token()` via the RPC
+- `decrypt_token()` in `get_calendar_connection_tokens_service` succeeds
+- `listCalendars`, `syncCalendarEvents`, and `doInlineRefresh` all work
+- The "Edge Function returned a non-2xx status code" error disappears
 
