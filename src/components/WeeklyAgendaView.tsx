@@ -361,6 +361,7 @@ const MeetingsTab: React.FC<MeetingsTabProps> = ({ weekDays, externalEvents }) =
   }, [weekDays, externalEvents]);
 
   const getProviderStyle = (provider?: string) => {
+    const isOutlook = provider === 'outlook' || provider === 'office365';
     if (provider === 'google') return { bg: 'bg-blue-50 dark:bg-blue-950/30', border: 'border-l-blue-400', badge: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300' };
     return { bg: 'bg-cyan-50 dark:bg-cyan-950/30', border: 'border-l-cyan-400', badge: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' };
   };
