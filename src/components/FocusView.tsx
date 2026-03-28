@@ -1160,7 +1160,13 @@ const FocusView: React.FC<FocusViewProps> = ({
                                     return (
                                       <div
                                         key={`ext-${evt.id}`}
-                                        className={cn("bg-accent/50 rounded-md p-3 shadow-sm border border-accent", borderColor)}
+                                        className={cn(
+                                          "rounded-md p-3 shadow-sm border",
+                                          borderColor,
+                                          provider === 'google'
+                                            ? "bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800"
+                                            : "bg-cyan-50 dark:bg-cyan-950/30 border-cyan-200 dark:border-cyan-800"
+                                        )}
                                       >
                                         <div className="flex items-center gap-2">
                                           <Calendar className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />

@@ -15,6 +15,7 @@ import {
   ChevronRight,
   RotateCcw,
   Plus,
+  CalendarDays,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Task } from '@/types/task';
