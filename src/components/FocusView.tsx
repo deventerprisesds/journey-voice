@@ -38,6 +38,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { useAuth } from '@/hooks/useAuth';
 import { useBatchScheduling } from '@/hooks/useBatchScheduling';
 import { getTimePartsInTimezone, localTimeToUtcISO, getDefaultTimezone } from '@/lib/date';
+import { humanizeCalendarId } from '@/lib/calendarUtils';
 import QuickTaskInput from './QuickTaskInput';
 import TaskCreationModal from './TaskCreationModal';
 import { getOrCreateDefaultBoardId } from '@/utils/demoData';
@@ -1154,8 +1155,9 @@ const FocusView: React.FC<FocusViewProps> = ({
                                   if (item.type === 'external') {
                                     const evt = item.event as any;
                                     const provider = evt.calendar_connections?.provider || 'calendar';
+                                    const isOutlook = provider === 'outlook' || provider === 'office365';
                                     const providerEmail = evt.calendar_connections?.provider_account_email || '';
-                                    const providerLabel = provider === 'google' ? 'Google' : provider === 'outlook' ? 'Outlook' : provider;
+                                    const calName = evt.calendar_id ? humanizeCalendarId(evt.calendar_id) : '';
                                     const borderColor = provider === 'google' ? 'border-l-4 border-l-blue-500' : 'border-l-4 border-l-cyan-500';
                                     return (
                                       <div
@@ -1174,17 +1176,24 @@ const FocusView: React.FC<FocusViewProps> = ({
                                             {format(parseISO(evt.start_time), 'h:mm a')} – {format(parseISO(evt.end_time), 'h:mm a')}
                                           </span>
                                           <span className="font-medium text-sm truncate">{evt.title || 'Untitled Event'}</span>
-                                          <Badge variant="outline" className={cn("text-xs ml-auto flex-shrink-0",
+                                        </div>
+                                        <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                                          <Badge variant="outline" className={cn("text-xs flex-shrink-0",
                                             provider === 'google' ? "bg-blue-500/10 text-blue-700 border-blue-500/20 dark:text-blue-400" : "bg-cyan-500/10 text-cyan-700 border-cyan-500/20 dark:text-cyan-400"
                                           )}>
-                                            {providerLabel}
+                                            {providerEmail || (isOutlook ? 'Outlook' : 'Google')}
                                           </Badge>
+                                          {calName && (
+                                            <span className="text-xs text-muted-foreground truncate max-w-[120px]">
+                                              {calName}
+                                            </span>
+                                          )}
+                                          {evt.location && (
+                                            <span className="text-xs text-muted-foreground truncate max-w-[120px]">
+                                              📍 {evt.location}
+                                            </span>
+                                          )}
                                         </div>
-                                        {(evt.location || providerEmail) && (
-                                          <p className="text-xs text-muted-foreground mt-1 truncate">
-                                            {evt.location ? `📍 ${evt.location}` : ''}{evt.location && providerEmail ? ' · ' : ''}{providerEmail}
-                                          </p>
-                                        )}
                                       </div>
                                     );
                                   }

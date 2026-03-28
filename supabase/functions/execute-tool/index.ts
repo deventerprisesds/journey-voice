@@ -3,6 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { normalizeDueDate, normalizeDateTime, getTodayInTimezone } from "../_shared/timezone.ts";
 import { getToolDefinitions } from "../_shared/tool-definitions.ts";
 import { getTopicGroupsManual, WINDOW_RANGES, CATEGORY_WINDOW_MAPPING } from "../_shared/call-context-builder.ts";
+import { resolveConfig, validateTaskWindow } from "../_shared/scheduling-defaults.ts";
 
 // ── Rollback Flag for shared topic ranking ──────────────────────────
 const USE_SHARED_TOPICS = true;
@@ -856,7 +857,35 @@ async function rescheduleTask(supabase: any, args: any, timezone?: string): Prom
     // Normalize the datetime to proper UTC (treats naive datetime as local to user's tz)
     const normalizedStartTime = normalizeDateTime(startTimeRaw, tz);
     console.log(`[RESCHEDULE] Raw: ${startTimeRaw} → Normalized: ${normalizedStartTime} (tz: ${tz})`);
-    
+
+    // Validate time window constraints
+    try {
+      const { data: taskData } = await supabase
+        .from('tasks')
+        .select('category')
+        .eq('id', args.task_id)
+        .single();
+      const taskCategory = taskData?.category || 'LIFE';
+      
+      const supabaseForConfig = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+      const { data: userPrefs } = await supabaseForConfig
+        .from('user_scheduling_prefs')
+        .select('config, timezone')
+        .eq('user_id', (await supabase.auth.getUser()).data.user?.id || '')
+        .single();
+      const { timeWindows, categoryMappings } = resolveConfig(userPrefs?.config);
+      const windowCheck = validateTaskWindow(normalizedStartTime, taskCategory, timeWindows, categoryMappings, tz);
+      if (!windowCheck.valid) {
+        console.error(`[RESCHEDULE] ⛔ WINDOW VIOLATION: category=${taskCategory}, actual="${windowCheck.actualWindow}", allowed=${windowCheck.allowedWindows.join(',')}`);
+        return {
+          success: false,
+          error: `Cannot reschedule this ${taskCategory} task to the requested time — it falls in the "${windowCheck.actualWindow || 'outside any'}" window, but ${taskCategory} tasks are only allowed in: ${windowCheck.allowedWindows.join(', ')}. Please pick a valid time.`
+        };
+      }
+    } catch (configErr) {
+      console.warn(`[RESCHEDULE] Could not validate window (non-blocking):`, configErr);
+    }
+
     const updateData: any = {
       start_time: normalizedStartTime,
       is_scheduled: true
@@ -937,7 +966,32 @@ async function scheduleTask(supabase: any, args: any, timezone?: string): Promis
     // Normalize to proper UTC
     const normalizedStartTime = normalizeDateTime(startTimeRaw, tz);
     console.log(`[SCHEDULE_TASK] Raw: ${startTimeRaw} → Normalized: ${normalizedStartTime} (tz: ${tz})`);
-    
+
+    // =====================================================
+    // CHECK 3: Validate time window constraints
+    // =====================================================
+    const taskForCategory = existingTask;
+    const taskCategory = taskForCategory?.category || 'LIFE';
+    try {
+      const supabaseForConfig = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+      const { data: userPrefs } = await supabaseForConfig
+        .from('user_scheduling_prefs')
+        .select('config, timezone')
+        .eq('user_id', (await supabase.auth.getUser()).data.user?.id || '')
+        .single();
+      const { timeWindows, categoryMappings } = resolveConfig(userPrefs?.config);
+      const windowCheck = validateTaskWindow(normalizedStartTime, taskCategory, timeWindows, categoryMappings, tz);
+      if (!windowCheck.valid) {
+        console.error(`[SCHEDULE_TASK] ⛔ WINDOW VIOLATION: category=${taskCategory}, time falls in "${windowCheck.actualWindow}", allowed=${windowCheck.allowedWindows.join(',')}`);
+        return {
+          success: false,
+          error: `Cannot schedule a ${taskCategory} task at this time — it falls in the "${windowCheck.actualWindow || 'outside any'}" window, but ${taskCategory} tasks are only allowed in: ${windowCheck.allowedWindows.join(', ')}. Please choose a time within those windows.`
+        };
+      }
+    } catch (configErr) {
+      console.warn(`[SCHEDULE_TASK] Could not validate window (non-blocking):`, configErr);
+    }
+
     const normalizedDueDate = normalizeDueDate(dateStr, tz);
     const updateData: any = {
       start_time: normalizedStartTime,

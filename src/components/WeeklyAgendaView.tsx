@@ -22,9 +22,11 @@ import {
   BookOpen,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { humanizeCalendarId } from '@/lib/calendarUtils';
 import { Task, ExternalCalendarEvent } from '@/types/task';
 import { DEFAULT_SCHEDULING_CONFIG } from '@/config/schedulingRules';
-import { getTimePartsInTimezone, getDefaultTimezone } from '@/lib/date';
+import { loadUserSchedulingConfig, type SchedulingConfig } from '@/services/schedulingService';
+import { getTimePartsInTimezone, getDateInTimezone, getDefaultTimezone } from '@/lib/date';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 
@@ -150,47 +152,59 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onTaskEdit, onComplete }) => 
 interface AgendaTabProps {
   tasks: Task[];
   weekDays: Date[];
+  externalEvents: (ExternalCalendarEvent & { calendar_connections?: { provider: string; provider_account_email: string } })[];
+  config: SchedulingConfig;
+  userTimezone: string;
   onTaskEdit: (task: Task) => void;
   onComplete: (taskId: string) => void;
 }
 
-const AgendaTab: React.FC<AgendaTabProps> = ({ tasks, weekDays, onTaskEdit, onComplete }) => {
-  const config = DEFAULT_SCHEDULING_CONFIG;
-  const userTimezone = getDefaultTimezone();
+const AgendaTab: React.FC<AgendaTabProps> = ({ tasks, weekDays, externalEvents, config, userTimezone, onTaskEdit, onComplete }) => {
 
-  const getTimeWindowForTask = (task: Task, day: Date): string | null => {
-    if (!task.start_time) return null;
-    const { hour: taskHour } = getTimePartsInTimezone(task.start_time, userTimezone);
+  const getTimeWindowForTask = (startTime: string, day: Date): string | null => {
+    const { hour: taskHour } = getTimePartsInTimezone(startTime, userTimezone);
     const dayOfWeek = day.getDay();
     if (dayOfWeek === 0 || dayOfWeek === 6) return 'weekends';
     const windows = config.timeWindows;
-    if (windows.morning.days.includes(dayOfWeek) && taskHour >= windows.morning.start && taskHour < windows.morning.end) return 'morning';
-    if (windows.business_hours.days.includes(dayOfWeek) && taskHour >= windows.business_hours.start && taskHour < windows.business_hours.end) return 'business_hours';
-    if (windows.after_work.days.includes(dayOfWeek) && taskHour >= windows.after_work.start && taskHour < windows.after_work.end) return 'after_work';
-    if (windows.evening.days.includes(dayOfWeek) && taskHour >= windows.evening.start && taskHour < windows.evening.end) return 'evening';
+    for (const [name, win] of Object.entries(windows)) {
+      if (name === 'flexible' || name === 'weekends') continue;
+      if (win.days?.includes(dayOfWeek) && taskHour >= win.start && taskHour < win.end) return name;
+    }
     return null;
   };
 
   const tasksByDay = useMemo(() => {
-    const map: Record<string, Record<string, Task[]>> = {};
+    const map: Record<string, Record<string, (Task | (ExternalCalendarEvent & { _isExternal: true; calendar_connections?: any }))[]>> = {};
     weekDays.forEach(day => {
       const key = format(day, 'yyyy-MM-dd');
       map[key] = { morning: [], business_hours: [], after_work: [], evening: [], weekends: [], unscheduled: [] };
     });
+    // Bucket tasks using timezone-aware date comparison
     tasks.forEach(task => {
       if (!task.start_time || task.status === 'DONE') return;
-      const taskDate = parseISO(task.start_time);
-      const dayKey = format(taskDate, 'yyyy-MM-dd');
+      const dayKey = getDateInTimezone(task.start_time, userTimezone);
       if (!map[dayKey]) return;
-      const window = getTimeWindowForTask(task, taskDate);
+      const window = getTimeWindowForTask(task.start_time, parseISO(dayKey));
       if (window && map[dayKey][window]) {
         map[dayKey][window].push(task);
       } else {
         map[dayKey].unscheduled.push(task);
       }
     });
+    // Bucket external events into the same day/window structure
+    externalEvents.forEach(evt => {
+      const dayKey = getDateInTimezone(evt.start_time, userTimezone);
+      if (!map[dayKey]) return;
+      const window = getTimeWindowForTask(evt.start_time, parseISO(dayKey));
+      const extItem = { ...evt, _isExternal: true as const };
+      if (window && map[dayKey][window]) {
+        map[dayKey][window].push(extItem as any);
+      } else {
+        map[dayKey].unscheduled.push(extItem as any);
+      }
+    });
     return map;
-  }, [tasks, weekDays, userTimezone]);
+  }, [tasks, weekDays, externalEvents, userTimezone, config]);
 
   return (
     <div className="space-y-3">
@@ -216,7 +230,7 @@ const AgendaTab: React.FC<AgendaTabProps> = ({ tasks, weekDays, onTaskEdit, onCo
                   {today && <Badge variant="default" className="text-xs px-1.5 py-0">Today</Badge>}
                 </div>
                 <span className="text-xs text-muted-foreground">
-                  {totalForDay} task{totalForDay !== 1 ? 's' : ''}
+                  {totalForDay} item{totalForDay !== 1 ? 's' : ''}
                 </span>
               </div>
             </CardHeader>
@@ -224,14 +238,14 @@ const AgendaTab: React.FC<AgendaTabProps> = ({ tasks, weekDays, onTaskEdit, onCo
               {totalForDay === 0 ? (
                 <div className="py-4 text-center text-xs text-muted-foreground border-2 border-dashed border-muted rounded-md">
                   <Plus className="h-4 w-4 mx-auto mb-1 opacity-50" />
-                  No tasks scheduled
+                  No items scheduled
                 </div>
               ) : (
                 <div className="space-y-2">
                   {relevantWindows.map(windowName => {
                     const style = timeWindowStyles[windowName];
-                    const windowTasks = dayTasks[windowName] || [];
-                    if (!style || windowTasks.length === 0) return null;
+                    const windowItems = dayTasks[windowName] || [];
+                    if (!style || windowItems.length === 0) return null;
                     return (
                       <div key={windowName} className={cn("rounded-md", style.bgClass, style.borderClass)}>
                         <div className="px-2 py-1 flex items-center gap-1.5">
@@ -239,9 +253,47 @@ const AgendaTab: React.FC<AgendaTabProps> = ({ tasks, weekDays, onTaskEdit, onCo
                           <span className={cn("text-xs font-medium", style.textClass)}>{style.label}</span>
                         </div>
                         <div className="px-2 pb-2 space-y-1">
-                          {windowTasks.map(task => (
-                            <TaskCard key={task.id} task={task} onTaskEdit={onTaskEdit} onComplete={onComplete} />
-                          ))}
+                          {windowItems.map((item: any) => {
+                            if (item._isExternal) {
+                              // External event card
+                              const conn = item.calendar_connections;
+                              const provider = conn?.provider || 'calendar';
+                              const isOutlook = provider === 'outlook' || provider === 'office365';
+                              return (
+                                <div
+                                  key={`ext-${item.id}`}
+                                  className={cn(
+                                    "bg-card rounded px-2 py-1.5 shadow-sm border-l-2",
+                                    provider === 'google' ? "border-l-blue-400 bg-blue-50/50 dark:bg-blue-950/20" : "border-l-cyan-400 bg-cyan-50/50 dark:bg-cyan-950/20"
+                                  )}
+                                >
+                                  <div className="flex items-center gap-1.5">
+                                    <Video className="h-3 w-3 text-muted-foreground flex-shrink-0" />
+                                    <span className="text-xs text-muted-foreground flex-shrink-0">
+                                      {format(parseISO(item.start_time), 'h:mm a')} – {format(parseISO(item.end_time), 'h:mm a')}
+                                    </span>
+                                    <span className="text-xs font-medium truncate">{item.title || 'Untitled Event'}</span>
+                                  </div>
+                                  <div className="flex items-center gap-1 mt-0.5 flex-wrap">
+                                    <Badge variant="outline" className={cn("text-[10px] px-1 py-0",
+                                      provider === 'google' ? "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300"
+                                        : "bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300"
+                                    )}>
+                                      {conn?.provider_account_email || (isOutlook ? 'Outlook' : 'Google')}
+                                    </Badge>
+                                    {item.calendar_id && (
+                                      <span className="text-[10px] text-muted-foreground truncate max-w-[100px]">
+                                        {humanizeCalendarId(item.calendar_id)}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            }
+                            return (
+                              <TaskCard key={item.id} task={item} onTaskEdit={onTaskEdit} onComplete={onComplete} />
+                            );
+                          })}
                         </div>
                       </div>
                     );
@@ -253,9 +305,12 @@ const AgendaTab: React.FC<AgendaTabProps> = ({ tasks, weekDays, onTaskEdit, onCo
                         <span className="text-xs font-medium text-muted-foreground">Unscheduled</span>
                       </div>
                       <div className="px-2 pb-2 space-y-1">
-                        {dayTasks.unscheduled.map(task => (
-                          <TaskCard key={task.id} task={task} onTaskEdit={onTaskEdit} onComplete={onComplete} />
-                        ))}
+                        {dayTasks.unscheduled.map((item: any) => {
+                          if (item._isExternal) return null; // External without window — unlikely but skip
+                          return (
+                            <TaskCard key={item.id} task={item} onTaskEdit={onTaskEdit} onComplete={onComplete} />
+                          );
+                        })}
                       </div>
                     </div>
                   )}
@@ -290,6 +345,7 @@ const MeetingsTab: React.FC<MeetingsTabProps> = ({ weekDays, externalEvents }) =
   }, [weekDays, externalEvents]);
 
   const getProviderStyle = (provider?: string) => {
+    const isOutlook = provider === 'outlook' || provider === 'office365';
     if (provider === 'google') return { bg: 'bg-blue-50 dark:bg-blue-950/30', border: 'border-l-blue-400', badge: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300' };
     return { bg: 'bg-cyan-50 dark:bg-cyan-950/30', border: 'border-l-cyan-400', badge: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' };
   };
@@ -339,14 +395,14 @@ const MeetingsTab: React.FC<MeetingsTabProps> = ({ weekDays, externalEvents }) =
                               {format(parseISO(evt.start_time), 'h:mm a')} – {format(parseISO(evt.end_time), 'h:mm a')}
                             </span>
                           </div>
-                          <p className="text-xs font-medium truncate">{evt.title}</p>
+                          <p className="text-xs font-medium truncate">{evt.title || 'Untitled Event'}</p>
                           <div className="flex items-center gap-1 mt-1 flex-wrap">
                             <Badge variant="outline" className={cn("text-[10px] px-1 py-0", styles.badge)}>
-                              {conn?.provider === 'google' ? 'Google' : 'Outlook'}
+                              {conn?.provider_account_email || (conn?.provider === 'google' ? 'Google' : 'Outlook')}
                             </Badge>
                             {evt.calendar_id && (
                               <span className="text-[10px] text-muted-foreground truncate max-w-[140px]">
-                                {evt.calendar_id}
+                                {humanizeCalendarId(evt.calendar_id)}
                               </span>
                             )}
                             {evt.location && (
@@ -542,6 +598,16 @@ const WeeklyAgendaView: React.FC<WeeklyAgendaViewProps> = ({
   const [weekOffset, setWeekOffset] = useState(0);
   const { user } = useAuth();
   const [externalEvents, setExternalEvents] = useState<(ExternalCalendarEvent & { calendar_connections?: { provider: string; provider_account_email: string } })[]>([]);
+  const [schedulingConfig, setSchedulingConfig] = useState<SchedulingConfig>(DEFAULT_SCHEDULING_CONFIG);
+
+  // Load user's authoritative scheduling config
+  useEffect(() => {
+    if (user?.id) {
+      loadUserSchedulingConfig(user.id).then(setSchedulingConfig);
+    }
+  }, [user?.id]);
+
+  const userTimezone = schedulingConfig?.timezone || getDefaultTimezone();
 
   const weekStart = useMemo(() => {
     const base = startOfWeek(new Date(), { weekStartsOn: 1 });
@@ -610,7 +676,7 @@ const WeeklyAgendaView: React.FC<WeeklyAgendaViewProps> = ({
 
         <TabsContent value="agenda">
           <ScrollArea className="h-[calc(100vh-280px)]">
-            <AgendaTab tasks={tasks} weekDays={weekDays} onTaskEdit={onTaskEdit} onComplete={handleComplete} />
+            <AgendaTab tasks={tasks} weekDays={weekDays} externalEvents={externalEvents} config={schedulingConfig} userTimezone={userTimezone} onTaskEdit={onTaskEdit} onComplete={handleComplete} />
           </ScrollArea>
         </TabsContent>
 

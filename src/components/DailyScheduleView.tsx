@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { ChevronLeft, ChevronRight, Clock, Calendar as CalendarIcon, Plus, List, LayoutGrid } from 'lucide-react';
-import { Task } from '@/types/task';
+import { Task, ExternalCalendarEvent } from '@/types/task';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { useAuth } from '@/hooks/useAuth';
@@ -37,6 +37,7 @@ const DailyScheduleView: React.FC<DailyScheduleViewProps> = ({
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [createAtTime, setCreateAtTime] = useState<{ hour: number; minute: number } | null>(null);
   const [schedulingConfig, setSchedulingConfig] = useState<SchedulingConfig>(DEFAULT_SCHEDULING_CONFIG);
+  const [externalEvents, setExternalEvents] = useState<ExternalCalendarEvent[]>([]);
   const isMobile = useIsMobile();
 
   // Load user's scheduling config for time windows
@@ -52,6 +53,23 @@ const DailyScheduleView: React.FC<DailyScheduleViewProps> = ({
     };
     loadConfig();
   }, [user?.id]);
+
+  // Fetch external events for the selected date
+  useEffect(() => {
+    if (!user?.id) return;
+    const load = async () => {
+      const dayStart = startOfDay(selectedDate);
+      const dayEnd = endOfDay(selectedDate);
+      const { data } = await supabase
+        .from('external_calendar_events')
+        .select('*')
+        .eq('user_id', user.id)
+        .gte('start_time', dayStart.toISOString())
+        .lt('start_time', dayEnd.toISOString());
+      if (data) setExternalEvents(data as ExternalCalendarEvent[]);
+    };
+    load();
+  }, [user?.id, selectedDate]);
 
   // Get default board for task creation
   useEffect(() => {
@@ -336,6 +354,7 @@ const DailyScheduleView: React.FC<DailyScheduleViewProps> = ({
                   <TimeSlotGrid
                     dates={[selectedDate]}
                     tasks={scheduledTasks}
+                    externalEvents={externalEvents}
                     onTimeSlotClick={handleTimeSlotClick}
                     onTaskClick={(task) => console.log('Task clicked:', task)}
                     onStatusChange={handleTaskStatusChange}
