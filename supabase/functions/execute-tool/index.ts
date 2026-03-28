@@ -938,7 +938,32 @@ async function scheduleTask(supabase: any, args: any, timezone?: string): Promis
     // Normalize to proper UTC
     const normalizedStartTime = normalizeDateTime(startTimeRaw, tz);
     console.log(`[SCHEDULE_TASK] Raw: ${startTimeRaw} → Normalized: ${normalizedStartTime} (tz: ${tz})`);
-    
+
+    // =====================================================
+    // CHECK 3: Validate time window constraints
+    // =====================================================
+    const taskForCategory = existingTask;
+    const taskCategory = taskForCategory?.category || 'LIFE';
+    try {
+      const supabaseForConfig = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+      const { data: userPrefs } = await supabaseForConfig
+        .from('user_scheduling_prefs')
+        .select('config, timezone')
+        .eq('user_id', (await supabase.auth.getUser()).data.user?.id || '')
+        .single();
+      const { timeWindows, categoryMappings } = resolveConfig(userPrefs?.config);
+      const windowCheck = validateTaskWindow(normalizedStartTime, taskCategory, timeWindows, categoryMappings, tz);
+      if (!windowCheck.valid) {
+        console.error(`[SCHEDULE_TASK] ⛔ WINDOW VIOLATION: category=${taskCategory}, time falls in "${windowCheck.actualWindow}", allowed=${windowCheck.allowedWindows.join(',')}`);
+        return {
+          success: false,
+          error: `Cannot schedule a ${taskCategory} task at this time — it falls in the "${windowCheck.actualWindow || 'outside any'}" window, but ${taskCategory} tasks are only allowed in: ${windowCheck.allowedWindows.join(', ')}. Please choose a time within those windows.`
+        };
+      }
+    } catch (configErr) {
+      console.warn(`[SCHEDULE_TASK] Could not validate window (non-blocking):`, configErr);
+    }
+
     const normalizedDueDate = normalizeDueDate(dateStr, tz);
     const updateData: any = {
       start_time: normalizedStartTime,
