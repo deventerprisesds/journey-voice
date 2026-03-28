@@ -1,10 +1,11 @@
-import React, { useMemo } from 'react';
-import { format, addDays, startOfWeek, parseISO, isToday, isSameDay } from 'date-fns';
+import React, { useMemo, useState, useEffect } from 'react';
+import { format, addDays, startOfWeek, parseISO, isToday, isBefore, addWeeks } from 'date-fns';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import {
   Sunrise,
   Coffee,
@@ -16,11 +17,16 @@ import {
   RotateCcw,
   Plus,
   CalendarDays,
+  GraduationCap,
+  Video,
+  BookOpen,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { Task } from '@/types/task';
+import { Task, ExternalCalendarEvent } from '@/types/task';
 import { DEFAULT_SCHEDULING_CONFIG } from '@/config/schedulingRules';
 import { getTimePartsInTimezone, getDefaultTimezone } from '@/lib/date';
+import { supabase } from '@/integrations/supabase/client';
+import { useAuth } from '@/hooks/useAuth';
 
 interface WeeklyAgendaViewProps {
   tasks: Task[];
@@ -88,33 +94,75 @@ const categoryColors: Record<string, string> = {
   PROF_EDUCATION: 'bg-category-education/10 text-category-education border-category-education/20',
 };
 
-const WeeklyAgendaView: React.FC<WeeklyAgendaViewProps> = ({
-  tasks,
-  onTaskEdit,
-  onStatusChange,
-  onTaskUpdate,
-}) => {
-  const [weekOffset, setWeekOffset] = React.useState(0);
+// ─── Sub-components ────────────────────────────────────────────
+
+interface TaskCardProps {
+  task: Task;
+  onTaskEdit: (task: Task) => void;
+  onComplete: (taskId: string) => void;
+}
+
+const TaskCard: React.FC<TaskCardProps> = ({ task, onTaskEdit, onComplete }) => (
+  <div
+    className="bg-card rounded px-2 py-1.5 shadow-sm border cursor-pointer hover:shadow-md transition-shadow"
+    onClick={() => onTaskEdit(task)}
+  >
+    <div className="flex items-start gap-2">
+      <Checkbox
+        checked={task.status === 'DONE'}
+        onCheckedChange={() => onComplete(task.id)}
+        onClick={(e) => e.stopPropagation()}
+        className="mt-0.5 h-3.5 w-3.5"
+      />
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5">
+          {task.start_time && (
+            <span className="text-xs text-muted-foreground flex-shrink-0">
+              {format(parseISO(task.start_time), 'h:mm a')}
+            </span>
+          )}
+          <span className="text-xs font-medium truncate">{task.title}</span>
+        </div>
+        <div className="flex items-center gap-1 mt-0.5 flex-wrap">
+          <Badge variant="outline" className={cn("text-[10px] px-1 py-0", categoryColors[task.category])}>
+            {task.category.toLowerCase()}
+          </Badge>
+          {task.pushed_count && task.pushed_count > 0 && (
+            <Badge variant="outline" className="text-[10px] px-1 py-0 bg-destructive/10 text-destructive border-destructive/20">
+              <RotateCcw className="h-2.5 w-2.5 mr-0.5" />
+              ×{task.pushed_count}
+            </Badge>
+          )}
+          {task.estimate_minutes && (
+            <span className="text-[10px] text-muted-foreground flex items-center gap-0.5">
+              <Clock className="h-2.5 w-2.5" />
+              {task.estimate_minutes}m
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  </div>
+);
+
+// ─── Agenda Tab (existing logic) ───────────────────────────────
+
+interface AgendaTabProps {
+  tasks: Task[];
+  weekDays: Date[];
+  onTaskEdit: (task: Task) => void;
+  onComplete: (taskId: string) => void;
+}
+
+const AgendaTab: React.FC<AgendaTabProps> = ({ tasks, weekDays, onTaskEdit, onComplete }) => {
   const config = DEFAULT_SCHEDULING_CONFIG;
   const userTimezone = getDefaultTimezone();
-
-  const weekStart = useMemo(() => {
-    const base = startOfWeek(new Date(), { weekStartsOn: 1 }); // Monday
-    return addDays(base, weekOffset * 7);
-  }, [weekOffset]);
-
-  const weekDays = useMemo(() => {
-    return Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
-  }, [weekStart]);
 
   const getTimeWindowForTask = (task: Task, day: Date): string | null => {
     if (!task.start_time) return null;
     const { hour: taskHour } = getTimePartsInTimezone(task.start_time, userTimezone);
     const dayOfWeek = day.getDay();
-
-    // Weekend days always go to the weekends bucket
     if (dayOfWeek === 0 || dayOfWeek === 6) return 'weekends';
-
     const windows = config.timeWindows;
     if (windows.morning.days.includes(dayOfWeek) && taskHour >= windows.morning.start && taskHour < windows.morning.end) return 'morning';
     if (windows.business_hours.days.includes(dayOfWeek) && taskHour >= windows.business_hours.start && taskHour < windows.business_hours.end) return 'business_hours';
@@ -123,20 +171,17 @@ const WeeklyAgendaView: React.FC<WeeklyAgendaViewProps> = ({
     return null;
   };
 
-  // Group tasks by day and time window
   const tasksByDay = useMemo(() => {
     const map: Record<string, Record<string, Task[]>> = {};
     weekDays.forEach(day => {
       const key = format(day, 'yyyy-MM-dd');
       map[key] = { morning: [], business_hours: [], after_work: [], evening: [], weekends: [], unscheduled: [] };
     });
-
     tasks.forEach(task => {
       if (!task.start_time || task.status === 'DONE') return;
       const taskDate = parseISO(task.start_time);
       const dayKey = format(taskDate, 'yyyy-MM-dd');
       if (!map[dayKey]) return;
-
       const window = getTimeWindowForTask(task, taskDate);
       if (window && map[dayKey][window]) {
         map[dayKey][window].push(task);
@@ -144,9 +189,385 @@ const WeeklyAgendaView: React.FC<WeeklyAgendaViewProps> = ({
         map[dayKey].unscheduled.push(task);
       }
     });
-
     return map;
   }, [tasks, weekDays, userTimezone]);
+
+  return (
+    <div className="space-y-3">
+      {weekDays.map(day => {
+        const dayKey = format(day, 'yyyy-MM-dd');
+        const dayTasks = tasksByDay[dayKey] || {};
+        const totalForDay = Object.values(dayTasks).flat().length;
+        const today = isToday(day);
+        const dayOfWeek = day.getDay();
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+        const relevantWindows = isWeekend
+          ? ['weekends']
+          : ['morning', 'business_hours', 'after_work', 'evening'];
+
+        return (
+          <Card key={dayKey} className={cn(today && 'ring-2 ring-primary/50')}>
+            <CardHeader className="pb-2 pt-3 px-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className={cn("text-sm font-semibold", today && "text-primary")}>
+                    {format(day, 'EEE, MMM d')}
+                  </span>
+                  {today && <Badge variant="default" className="text-xs px-1.5 py-0">Today</Badge>}
+                </div>
+                <span className="text-xs text-muted-foreground">
+                  {totalForDay} task{totalForDay !== 1 ? 's' : ''}
+                </span>
+              </div>
+            </CardHeader>
+            <CardContent className="pt-0 px-3 pb-3">
+              {totalForDay === 0 ? (
+                <div className="py-4 text-center text-xs text-muted-foreground border-2 border-dashed border-muted rounded-md">
+                  <Plus className="h-4 w-4 mx-auto mb-1 opacity-50" />
+                  No tasks scheduled
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {relevantWindows.map(windowName => {
+                    const style = timeWindowStyles[windowName];
+                    const windowTasks = dayTasks[windowName] || [];
+                    if (!style || windowTasks.length === 0) return null;
+                    return (
+                      <div key={windowName} className={cn("rounded-md", style.bgClass, style.borderClass)}>
+                        <div className="px-2 py-1 flex items-center gap-1.5">
+                          <span className={style.textClass}>{style.icon}</span>
+                          <span className={cn("text-xs font-medium", style.textClass)}>{style.label}</span>
+                        </div>
+                        <div className="px-2 pb-2 space-y-1">
+                          {windowTasks.map(task => (
+                            <TaskCard key={task.id} task={task} onTaskEdit={onTaskEdit} onComplete={onComplete} />
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {(dayTasks.unscheduled || []).length > 0 && (
+                    <div className="rounded-md bg-muted/30 border-l-2 border-l-muted-foreground/30">
+                      <div className="px-2 py-1 flex items-center gap-1.5">
+                        <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+                        <span className="text-xs font-medium text-muted-foreground">Unscheduled</span>
+                      </div>
+                      <div className="px-2 pb-2 space-y-1">
+                        {dayTasks.unscheduled.map(task => (
+                          <TaskCard key={task.id} task={task} onTaskEdit={onTaskEdit} onComplete={onComplete} />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        );
+      })}
+    </div>
+  );
+};
+
+// ─── Meetings Tab ──────────────────────────────────────────────
+
+interface MeetingsTabProps {
+  weekDays: Date[];
+  externalEvents: (ExternalCalendarEvent & { calendar_connections?: { provider: string; provider_account_email: string } })[];
+}
+
+const MeetingsTab: React.FC<MeetingsTabProps> = ({ weekDays, externalEvents }) => {
+  const eventsByDay = useMemo(() => {
+    const map: Record<string, typeof externalEvents> = {};
+    weekDays.forEach(day => {
+      map[format(day, 'yyyy-MM-dd')] = [];
+    });
+    externalEvents.forEach(evt => {
+      const dayKey = format(parseISO(evt.start_time), 'yyyy-MM-dd');
+      if (map[dayKey]) map[dayKey].push(evt);
+    });
+    return map;
+  }, [weekDays, externalEvents]);
+
+  const getProviderStyle = (provider?: string) => {
+    if (provider === 'google') return { bg: 'bg-blue-50 dark:bg-blue-950/30', border: 'border-l-blue-400', badge: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300' };
+    return { bg: 'bg-cyan-50 dark:bg-cyan-950/30', border: 'border-l-cyan-400', badge: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300' };
+  };
+
+  return (
+    <div className="space-y-3">
+      {weekDays.map(day => {
+        const dayKey = format(day, 'yyyy-MM-dd');
+        const events = eventsByDay[dayKey] || [];
+        const today = isToday(day);
+
+        return (
+          <Card key={dayKey} className={cn(today && 'ring-2 ring-primary/50')}>
+            <CardHeader className="pb-2 pt-3 px-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className={cn("text-sm font-semibold", today && "text-primary")}>
+                    {format(day, 'EEE, MMM d')}
+                  </span>
+                  {today && <Badge variant="default" className="text-xs px-1.5 py-0">Today</Badge>}
+                </div>
+                <span className="text-xs text-muted-foreground">
+                  {events.length} meeting{events.length !== 1 ? 's' : ''}
+                </span>
+              </div>
+            </CardHeader>
+            <CardContent className="pt-0 px-3 pb-3">
+              {events.length === 0 ? (
+                <div className="py-4 text-center text-xs text-muted-foreground border-2 border-dashed border-muted rounded-md">
+                  <Video className="h-4 w-4 mx-auto mb-1 opacity-50" />
+                  No meetings
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  {events
+                    .sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime())
+                    .map(evt => {
+                      const conn = evt.calendar_connections;
+                      const styles = getProviderStyle(conn?.provider);
+                      return (
+                        <div
+                          key={evt.id}
+                          className={cn("rounded-md px-2.5 py-2 border-l-2", styles.bg, styles.border)}
+                        >
+                          <div className="flex items-center gap-1.5 mb-0.5">
+                            <span className="text-xs text-muted-foreground flex-shrink-0">
+                              {format(parseISO(evt.start_time), 'h:mm a')} – {format(parseISO(evt.end_time), 'h:mm a')}
+                            </span>
+                          </div>
+                          <p className="text-xs font-medium truncate">{evt.title}</p>
+                          <div className="flex items-center gap-1 mt-1 flex-wrap">
+                            <Badge variant="outline" className={cn("text-[10px] px-1 py-0", styles.badge)}>
+                              {conn?.provider === 'google' ? 'Google' : 'Outlook'}
+                            </Badge>
+                            {evt.calendar_id && (
+                              <span className="text-[10px] text-muted-foreground truncate max-w-[140px]">
+                                {evt.calendar_id}
+                              </span>
+                            )}
+                            {evt.location && (
+                              <span className="text-[10px] text-muted-foreground truncate max-w-[120px]">
+                                📍 {evt.location}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        );
+      })}
+    </div>
+  );
+};
+
+// ─── Assignments Tab ───────────────────────────────────────────
+
+interface AssignmentsTabProps {
+  tasks: Task[];
+  onTaskEdit: (task: Task) => void;
+  onComplete: (taskId: string) => void;
+}
+
+const getAssignmentSource = (task: Task): string => {
+  const ctx = task.scheduling_context;
+  if (ctx?.source) return ctx.source;
+  if (task.category === 'PROF_EDUCATION') return 'EMBA';
+  if (task.category === 'EDUCATION') return 'MIT';
+  return 'Other';
+};
+
+const AssignmentsTab: React.FC<AssignmentsTabProps> = ({ tasks, onComplete, onTaskEdit }) => {
+  const assignmentTasks = useMemo(
+    () => tasks.filter(t => t.assignment_id || t.scheduling_context?.source),
+    [tasks]
+  );
+
+  const twoWeeksOut = addWeeks(new Date(), 2);
+
+  const upNext = useMemo(
+    () => assignmentTasks
+      .filter(t => t.status !== 'DONE' && t.due_date && isBefore(parseISO(t.due_date), twoWeeksOut))
+      .sort((a, b) => new Date(a.due_date!).getTime() - new Date(b.due_date!).getTime()),
+    [assignmentTasks]
+  );
+
+  const byClass = useMemo(() => {
+    const upNextIds = new Set(upNext.map(t => t.id));
+    const remaining = assignmentTasks.filter(t => !upNextIds.has(t.id) && t.status !== 'DONE');
+    const groups: Record<string, Task[]> = {};
+    remaining.forEach(t => {
+      const source = getAssignmentSource(t);
+      if (!groups[source]) groups[source] = [];
+      groups[source].push(t);
+    });
+    return groups;
+  }, [assignmentTasks, upNext]);
+
+  const sourceStyles: Record<string, { icon: React.ReactNode; badge: string }> = {
+    EMBA: { icon: <GraduationCap className="h-3.5 w-3.5" />, badge: 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300' },
+    MIT: { icon: <BookOpen className="h-3.5 w-3.5" />, badge: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300' },
+    Other: { icon: <GraduationCap className="h-3.5 w-3.5" />, badge: 'bg-muted text-muted-foreground' },
+  };
+
+  if (assignmentTasks.length === 0) {
+    return (
+      <div className="py-12 text-center text-sm text-muted-foreground">
+        <GraduationCap className="h-8 w-8 mx-auto mb-2 opacity-40" />
+        No assignment tasks found. Tap Sync in the Focus View to pull assignments.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Up Next */}
+      {upNext.length > 0 && (
+        <Card>
+          <CardHeader className="pb-2 pt-3 px-3">
+            <div className="flex items-center gap-2">
+              <Clock className="h-4 w-4 text-primary" />
+              <span className="text-sm font-semibold">Up Next — Due within 2 weeks</span>
+              <Badge variant="secondary" className="text-xs">{upNext.length}</Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="pt-0 px-3 pb-3 space-y-1.5">
+            {upNext.map(task => {
+              const source = getAssignmentSource(task);
+              const style = sourceStyles[source] || sourceStyles.Other;
+              return (
+                <div
+                  key={task.id}
+                  className="bg-card rounded px-2.5 py-2 shadow-sm border cursor-pointer hover:shadow-md transition-shadow"
+                  onClick={() => onTaskEdit(task)}
+                >
+                  <div className="flex items-start gap-2">
+                    <Checkbox
+                      checked={task.status === 'DONE'}
+                      onCheckedChange={() => onComplete(task.id)}
+                      onClick={(e) => e.stopPropagation()}
+                      className="mt-0.5 h-3.5 w-3.5"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium truncate">{task.title}</p>
+                      <div className="flex items-center gap-1 mt-0.5 flex-wrap">
+                        <Badge variant="outline" className={cn("text-[10px] px-1 py-0", style.badge)}>
+                          {source}
+                        </Badge>
+                        {task.due_date && (
+                          <span className="text-[10px] text-muted-foreground">
+                            Due {format(parseISO(task.due_date), 'MMM d')}
+                          </span>
+                        )}
+                        <Badge variant="outline" className={cn("text-[10px] px-1 py-0", priorityBadgeColors[task.priority])}>
+                          {task.priority.toLowerCase()}
+                        </Badge>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* By Class */}
+      {Object.entries(byClass).map(([source, classTasks]) => {
+        const style = sourceStyles[source] || sourceStyles.Other;
+        return (
+          <Card key={source}>
+            <CardHeader className="pb-2 pt-3 px-3">
+              <div className="flex items-center gap-2">
+                {style.icon}
+                <span className="text-sm font-semibold">{source}</span>
+                <Badge variant="secondary" className="text-xs">{classTasks.length}</Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="pt-0 px-3 pb-3 space-y-1.5">
+              {classTasks
+                .sort((a, b) => (a.due_date || '').localeCompare(b.due_date || ''))
+                .map(task => (
+                  <div
+                    key={task.id}
+                    className="bg-card rounded px-2.5 py-2 shadow-sm border cursor-pointer hover:shadow-md transition-shadow"
+                    onClick={() => onTaskEdit(task)}
+                  >
+                    <div className="flex items-start gap-2">
+                      <Checkbox
+                        checked={task.status === 'DONE'}
+                        onCheckedChange={() => onComplete(task.id)}
+                        onClick={(e) => e.stopPropagation()}
+                        className="mt-0.5 h-3.5 w-3.5"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-medium truncate">{task.title}</p>
+                        <div className="flex items-center gap-1 mt-0.5 flex-wrap">
+                          {task.due_date && (
+                            <span className="text-[10px] text-muted-foreground">
+                              Due {format(parseISO(task.due_date), 'MMM d')}
+                            </span>
+                          )}
+                          <Badge variant="outline" className={cn("text-[10px] px-1 py-0", priorityBadgeColors[task.priority])}>
+                            {task.priority.toLowerCase()}
+                          </Badge>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+            </CardContent>
+          </Card>
+        );
+      })}
+    </div>
+  );
+};
+
+// ─── Main Component ────────────────────────────────────────────
+
+const WeeklyAgendaView: React.FC<WeeklyAgendaViewProps> = ({
+  tasks,
+  onTaskEdit,
+  onStatusChange,
+  onTaskUpdate,
+}) => {
+  const [weekOffset, setWeekOffset] = useState(0);
+  const { user } = useAuth();
+  const [externalEvents, setExternalEvents] = useState<(ExternalCalendarEvent & { calendar_connections?: { provider: string; provider_account_email: string } })[]>([]);
+
+  const weekStart = useMemo(() => {
+    const base = startOfWeek(new Date(), { weekStartsOn: 1 });
+    return addDays(base, weekOffset * 7);
+  }, [weekOffset]);
+
+  const weekDays = useMemo(() => {
+    return Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
+  }, [weekStart]);
+
+  // Fetch external events for the visible week
+  useEffect(() => {
+    if (!user?.id) return;
+    const load = async () => {
+      const rangeStart = weekDays[0];
+      const rangeEnd = addDays(weekDays[6], 1);
+      const { data } = await supabase
+        .from('external_calendar_events')
+        .select('*, calendar_connections!connection_id(provider, provider_account_email)')
+        .eq('user_id', user.id)
+        .gte('start_time', rangeStart.toISOString())
+        .lt('start_time', rangeEnd.toISOString());
+      if (data) setExternalEvents(data as any);
+    };
+    load();
+  }, [user?.id, weekStart]);
 
   const handleComplete = (taskId: string) => {
     onStatusChange(taskId, 'DONE');
@@ -174,153 +595,37 @@ const WeeklyAgendaView: React.FC<WeeklyAgendaViewProps> = ({
         </Button>
       </div>
 
-      {/* Mobile: stacked days */}
-      <ScrollArea className="h-[calc(100vh-220px)]">
-        <div className="space-y-3">
-          {weekDays.map(day => {
-            const dayKey = format(day, 'yyyy-MM-dd');
-            const dayTasks = tasksByDay[dayKey] || {};
-            const totalForDay = Object.values(dayTasks).flat().length;
-            const today = isToday(day);
+      {/* Tabs */}
+      <Tabs defaultValue="agenda" className="w-full">
+        <TabsList className="w-full">
+          <TabsTrigger value="agenda" className="flex-1 text-xs">Agenda</TabsTrigger>
+          <TabsTrigger value="meetings" className="flex-1 text-xs">
+            Meetings
+            {externalEvents.length > 0 && (
+              <Badge variant="secondary" className="ml-1 text-[10px] px-1 py-0">{externalEvents.length}</Badge>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="assignments" className="flex-1 text-xs">Assignments</TabsTrigger>
+        </TabsList>
 
-            return (
-              <Card key={dayKey} className={cn(today && 'ring-2 ring-primary/50')}>
-                <CardHeader className="pb-2 pt-3 px-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className={cn(
-                        "text-sm font-semibold",
-                        today && "text-primary"
-                      )}>
-                        {format(day, 'EEE, MMM d')}
-                      </span>
-                      {today && <Badge variant="default" className="text-xs px-1.5 py-0">Today</Badge>}
-                    </div>
-                    <span className="text-xs text-muted-foreground">
-                      {totalForDay} task{totalForDay !== 1 ? 's' : ''}
-                    </span>
-                  </div>
-                </CardHeader>
-                <CardContent className="pt-0 px-3 pb-3">
-                  {totalForDay === 0 ? (
-                    <div className="py-4 text-center text-xs text-muted-foreground border-2 border-dashed border-muted rounded-md">
-                      <Plus className="h-4 w-4 mx-auto mb-1 opacity-50" />
-                      No tasks scheduled
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      {(() => {
-                        const dayOfWeek = day.getDay();
-                        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-                        const relevantWindows = isWeekend
-                          ? ['weekends']
-                          : ['morning', 'business_hours', 'after_work', 'evening'];
+        <TabsContent value="agenda">
+          <ScrollArea className="h-[calc(100vh-280px)]">
+            <AgendaTab tasks={tasks} weekDays={weekDays} onTaskEdit={onTaskEdit} onComplete={handleComplete} />
+          </ScrollArea>
+        </TabsContent>
 
-                        return (
-                          <>
-                            {relevantWindows.map(windowName => {
-                              const style = timeWindowStyles[windowName];
-                              const windowTasks = dayTasks[windowName] || [];
-                              if (!style || windowTasks.length === 0) return null;
+        <TabsContent value="meetings">
+          <ScrollArea className="h-[calc(100vh-280px)]">
+            <MeetingsTab weekDays={weekDays} externalEvents={externalEvents} />
+          </ScrollArea>
+        </TabsContent>
 
-                              return (
-                                <div key={windowName} className={cn("rounded-md", style.bgClass, style.borderClass)}>
-                                  <div className="px-2 py-1 flex items-center gap-1.5">
-                                    <span className={style.textClass}>{style.icon}</span>
-                                    <span className={cn("text-xs font-medium", style.textClass)}>{style.label}</span>
-                                  </div>
-                                  <div className="px-2 pb-2 space-y-1">
-                                    {windowTasks.map(task => (
-                                      <div
-                                        key={task.id}
-                                        className="bg-card rounded px-2 py-1.5 shadow-sm border cursor-pointer hover:shadow-md transition-shadow"
-                                        onClick={() => onTaskEdit(task)}
-                                      >
-                                        <div className="flex items-start gap-2">
-                                          <Checkbox
-                                            checked={task.status === 'DONE'}
-                                            onCheckedChange={() => handleComplete(task.id)}
-                                            onClick={(e) => e.stopPropagation()}
-                                            className="mt-0.5 h-3.5 w-3.5"
-                                          />
-                                          <div className="flex-1 min-w-0">
-                                            <div className="flex items-center gap-1.5">
-                                              <span className="text-xs text-muted-foreground flex-shrink-0">
-                                                {task.start_time && format(parseISO(task.start_time), 'h:mm a')}
-                                              </span>
-                                              <span className="text-xs font-medium truncate">{task.title}</span>
-                                            </div>
-                                            <div className="flex items-center gap-1 mt-0.5 flex-wrap">
-                                              <Badge variant="outline" className={cn("text-[10px] px-1 py-0", categoryColors[task.category])}>
-                                                {task.category.toLowerCase()}
-                                              </Badge>
-                                              {task.pushed_count && task.pushed_count > 0 && (
-                                                <Badge variant="outline" className="text-[10px] px-1 py-0 bg-destructive/10 text-destructive border-destructive/20">
-                                                  <RotateCcw className="h-2.5 w-2.5 mr-0.5" />
-                                                  ×{task.pushed_count}
-                                                </Badge>
-                                              )}
-                                              {task.estimate_minutes && (
-                                                <span className="text-[10px] text-muted-foreground flex items-center gap-0.5">
-                                                  <Clock className="h-2.5 w-2.5" />
-                                                  {task.estimate_minutes}m
-                                                </span>
-                                              )}
-                                            </div>
-                                          </div>
-                                        </div>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              );
-                            })}
-                            {/* Unscheduled tasks fallback */}
-                            {(dayTasks.unscheduled || []).length > 0 && (
-                              <div className="rounded-md bg-muted/30 border-l-2 border-l-muted-foreground/30">
-                                <div className="px-2 py-1 flex items-center gap-1.5">
-                                  <Clock className="h-3.5 w-3.5 text-muted-foreground" />
-                                  <span className="text-xs font-medium text-muted-foreground">Unscheduled</span>
-                                </div>
-                                <div className="px-2 pb-2 space-y-1">
-                                  {dayTasks.unscheduled.map(task => (
-                                    <div
-                                      key={task.id}
-                                      className="bg-card rounded px-2 py-1.5 shadow-sm border cursor-pointer hover:shadow-md transition-shadow"
-                                      onClick={() => onTaskEdit(task)}
-                                    >
-                                      <div className="flex items-start gap-2">
-                                        <Checkbox
-                                          checked={task.status === 'DONE'}
-                                          onCheckedChange={() => handleComplete(task.id)}
-                                          onClick={(e) => e.stopPropagation()}
-                                          className="mt-0.5 h-3.5 w-3.5"
-                                        />
-                                        <div className="flex-1 min-w-0">
-                                          <span className="text-xs font-medium truncate">{task.title}</span>
-                                          <div className="flex items-center gap-1 mt-0.5 flex-wrap">
-                                            <Badge variant="outline" className={cn("text-[10px] px-1 py-0", categoryColors[task.category])}>
-                                              {task.category.toLowerCase()}
-                                            </Badge>
-                                          </div>
-                                        </div>
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                          </>
-                        );
-                      })()}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            );
-          })}
-        </div>
-      </ScrollArea>
+        <TabsContent value="assignments">
+          <ScrollArea className="h-[calc(100vh-280px)]">
+            <AssignmentsTab tasks={tasks} onTaskEdit={onTaskEdit} onComplete={handleComplete} />
+          </ScrollArea>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 };
