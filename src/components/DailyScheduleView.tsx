@@ -54,6 +54,23 @@ const DailyScheduleView: React.FC<DailyScheduleViewProps> = ({
     loadConfig();
   }, [user?.id]);
 
+  // Fetch external events for the selected date
+  useEffect(() => {
+    if (!user?.id) return;
+    const load = async () => {
+      const dayStart = startOfDay(selectedDate);
+      const dayEnd = endOfDay(selectedDate);
+      const { data } = await supabase
+        .from('external_calendar_events')
+        .select('*')
+        .eq('user_id', user.id)
+        .gte('start_time', dayStart.toISOString())
+        .lt('start_time', dayEnd.toISOString());
+      if (data) setExternalEvents(data as ExternalCalendarEvent[]);
+    };
+    load();
+  }, [user?.id, selectedDate]);
+
   // Get default board for task creation
   useEffect(() => {
     const fetchDefaultBoard = async () => {
