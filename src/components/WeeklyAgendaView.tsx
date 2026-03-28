@@ -237,11 +237,11 @@ const AgendaTab: React.FC<AgendaTabProps> = ({ tasks, historyTasks, weekDays, ex
       }
       
       if (!map[dayKey!]) return;
-      const window = getTimeWindowForTask(task.start_time, parseISO(dayKey));
-      if (window && map[dayKey][window]) {
-        map[dayKey][window].push(task);
+      const window = getTimeWindowForTask(task.start_time!, parseISO(dayKey!));
+      if (window && map[dayKey!][window]) {
+        map[dayKey!][window].push(task);
       } else {
-        map[dayKey].unscheduled.push(task);
+        map[dayKey!].unscheduled.push(task);
       }
     });
 
