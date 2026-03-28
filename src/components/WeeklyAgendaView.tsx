@@ -313,8 +313,6 @@ const WeeklyAgendaView: React.FC<WeeklyAgendaViewProps> = ({
                           </>
                         );
                       })()}
-                        );
-                      })}
                     </div>
                   )}
                 </CardContent>
