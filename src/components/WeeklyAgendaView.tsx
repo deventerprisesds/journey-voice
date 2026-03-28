@@ -752,7 +752,7 @@ const WeeklyAgendaView: React.FC<WeeklyAgendaViewProps> = ({
 
         <TabsContent value="agenda">
           <ScrollArea className="h-[calc(100vh-280px)]">
-            <AgendaTab tasks={tasks} weekDays={weekDays} externalEvents={externalEvents} config={schedulingConfig} userTimezone={userTimezone} onTaskEdit={onTaskEdit} onComplete={handleComplete} />
+            <AgendaTab tasks={tasks} historyTasks={historyTasks} weekDays={weekDays} externalEvents={externalEvents} config={schedulingConfig} userTimezone={userTimezone} onTaskEdit={onTaskEdit} onComplete={handleComplete} />
           </ScrollArea>
         </TabsContent>
 
