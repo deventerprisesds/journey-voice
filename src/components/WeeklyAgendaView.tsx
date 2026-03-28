@@ -64,6 +64,13 @@ const timeWindowStyles: Record<string, {
     borderClass: 'border-l-2 border-l-purple-400',
     textClass: 'text-purple-700 dark:text-purple-300',
   },
+  weekends: {
+    icon: <CalendarDays className="h-3.5 w-3.5" />,
+    label: 'Weekend',
+    bgClass: 'bg-teal-50 dark:bg-teal-950/20',
+    borderClass: 'border-l-2 border-l-teal-400',
+    textClass: 'text-teal-700 dark:text-teal-300',
+  },
 };
 
 const priorityBadgeColors: Record<string, string> = {
