@@ -111,8 +111,11 @@ const WeeklyAgendaView: React.FC<WeeklyAgendaViewProps> = ({
     if (!task.start_time) return null;
     const { hour: taskHour } = getTimePartsInTimezone(task.start_time, userTimezone);
     const dayOfWeek = day.getDay();
-    const windows = config.timeWindows;
 
+    // Weekend days always go to the weekends bucket
+    if (dayOfWeek === 0 || dayOfWeek === 6) return 'weekends';
+
+    const windows = config.timeWindows;
     if (windows.morning.days.includes(dayOfWeek) && taskHour >= windows.morning.start && taskHour < windows.morning.end) return 'morning';
     if (windows.business_hours.days.includes(dayOfWeek) && taskHour >= windows.business_hours.start && taskHour < windows.business_hours.end) return 'business_hours';
     if (windows.after_work.days.includes(dayOfWeek) && taskHour >= windows.after_work.start && taskHour < windows.after_work.end) return 'after_work';
