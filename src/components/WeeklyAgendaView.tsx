@@ -128,7 +128,7 @@ const WeeklyAgendaView: React.FC<WeeklyAgendaViewProps> = ({
     const map: Record<string, Record<string, Task[]>> = {};
     weekDays.forEach(day => {
       const key = format(day, 'yyyy-MM-dd');
-      map[key] = { morning: [], business_hours: [], after_work: [], evening: [], unscheduled: [] };
+      map[key] = { morning: [], business_hours: [], after_work: [], evening: [], weekends: [], unscheduled: [] };
     });
 
     tasks.forEach(task => {
