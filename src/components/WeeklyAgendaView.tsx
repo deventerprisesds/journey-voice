@@ -330,9 +330,10 @@ const AgendaTab: React.FC<AgendaTabProps> = ({ tasks, weekDays, externalEvents, 
 interface MeetingsTabProps {
   weekDays: Date[];
   externalEvents: (ExternalCalendarEvent & { calendar_connections?: { provider: string; provider_account_email: string } })[];
+  userTimezone: string;
 }
 
-const MeetingsTab: React.FC<MeetingsTabProps> = ({ weekDays, externalEvents }) => {
+const MeetingsTab: React.FC<MeetingsTabProps> = ({ weekDays, externalEvents, userTimezone }) => {
   const eventsByDay = useMemo(() => {
     const map: Record<string, typeof externalEvents> = {};
     weekDays.forEach(day => {
