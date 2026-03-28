@@ -1329,7 +1329,8 @@ const FocusView: React.FC<FocusViewProps> = ({
                             {...provided.draggableProps}
                             className={cn(
                               "bg-card rounded-lg p-3 border shadow-sm transition-shadow",
-                              snapshot.isDragging && "shadow-lg ring-2 ring-primary"
+                              snapshot.isDragging && "shadow-lg ring-2 ring-primary",
+                              task.assignment_id && "border-l-4 border-l-violet-500"
                             )}
                           >
                             <div className="flex items-start gap-2">
@@ -1348,9 +1349,19 @@ const FocusView: React.FC<FocusViewProps> = ({
                               >
                                 <h3 className="font-medium text-sm truncate">{task.title}</h3>
                                 <div className="flex items-center gap-2 mt-1 flex-wrap">
-                                  <Badge variant="outline" className={cn("text-xs", categoryColors[task.category])}>
-                                    {task.category.toLowerCase()}
-                                  </Badge>
+                                  {task.assignment_id ? (
+                                    <Badge variant="outline" className={cn("text-xs",
+                                      ((task.scheduling_context as any)?.source === 'MIT' || task.category === 'EDUCATION')
+                                        ? "bg-red-500/10 text-red-700 border-red-500/20 dark:text-red-400"
+                                        : "bg-indigo-500/10 text-indigo-700 border-indigo-500/20 dark:text-indigo-400"
+                                    )}>
+                                      📚 {(task.scheduling_context as any)?.source || (task.category === 'EDUCATION' ? 'MIT' : 'EMBA')}
+                                    </Badge>
+                                  ) : (
+                                    <Badge variant="outline" className={cn("text-xs", categoryColors[task.category])}>
+                                      {task.category.toLowerCase()}
+                                    </Badge>
+                                  )}
                                   <Badge variant="outline" className={cn("text-xs", priorityBadgeColors[task.priority])}>
                                     {task.priority.toLowerCase()}
                                   </Badge>
