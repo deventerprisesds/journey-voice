@@ -279,7 +279,7 @@ serve(async (req) => {
         // ==========================================
         const { data: doneTasks } = await supabase
           .from('tasks')
-          .select('id, title')
+          .select('id, title, start_time, end_time')
           .eq('user_id', userId)
           .eq('status', 'DONE')
           .eq('is_scheduled', true);
