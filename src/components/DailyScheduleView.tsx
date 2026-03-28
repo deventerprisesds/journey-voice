@@ -112,11 +112,13 @@ const DailyScheduleView: React.FC<DailyScheduleViewProps> = ({
     fetchDefaultBoard();
   }, [user]);
 
-  // Filter tasks for today
+  // Filter tasks for selected date using timezone-aware comparison
+  const userTimezone = schedulingConfig?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const selectedDateStr = format(selectedDate, 'yyyy-MM-dd');
+  
   const scheduledTasks = tasks.filter(task => {
     if (!task.start_time) return false;
-    const taskDate = parseISO(task.start_time);
-    return isSameDay(taskDate, selectedDate);
+    return getDateInTimezone(task.start_time, userTimezone) === selectedDateStr;
   }).sort((a, b) => {
     if (!a.start_time || !b.start_time) return 0;
     return parseISO(a.start_time).getTime() - parseISO(b.start_time).getTime();
