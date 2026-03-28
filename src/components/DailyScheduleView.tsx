@@ -37,6 +37,7 @@ const DailyScheduleView: React.FC<DailyScheduleViewProps> = ({
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [createAtTime, setCreateAtTime] = useState<{ hour: number; minute: number } | null>(null);
   const [schedulingConfig, setSchedulingConfig] = useState<SchedulingConfig>(DEFAULT_SCHEDULING_CONFIG);
+  const [externalEvents, setExternalEvents] = useState<ExternalCalendarEvent[]>([]);
   const isMobile = useIsMobile();
 
   // Load user's scheduling config for time windows
