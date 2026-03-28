@@ -978,13 +978,30 @@ const FocusView: React.FC<FocusViewProps> = ({
                                 windowTasks.forEach(task => {
                                   if (task.start_time) {
                                     const { hour, minute } = getTimePartsInTimezone(task.start_time, userTimezone);
-                                    // Mark the slot and subsequent slots based on duration
                                     const durationMinutes = task.estimate_minutes || 60;
                                     for (let m = 0; m < durationMinutes; m += 30) {
                                       const slotMin = minute + m;
                                       const slotHour = hour + Math.floor(slotMin / 60);
                                       const slotMinute = slotMin % 60 < 30 ? 0 : 30;
                                       occupiedSlots.add(`${slotHour}-${slotMinute}`);
+                                    }
+                                  }
+                                });
+
+                                // Also mark slots occupied by external calendar events
+                                const windowCfg = config.timeWindows[windowName as keyof typeof config.timeWindows];
+                                const wsStart = windowCfg?.start ?? 0;
+                                const wsEnd = windowCfg?.end ?? 24;
+                                externalEvents.forEach(evt => {
+                                  const evtStart = getTimePartsInTimezone(evt.start_time, userTimezone);
+                                  const evtEnd = getTimePartsInTimezone(evt.end_time, userTimezone);
+                                  if (evtStart.hour >= wsStart && evtStart.hour < wsEnd) {
+                                    const startMin = evtStart.hour * 60 + evtStart.minute;
+                                    const endMin = evtEnd.hour * 60 + evtEnd.minute;
+                                    for (let m = startMin; m < endMin; m += 30) {
+                                      const slotH = Math.floor(m / 60);
+                                      const slotM = m % 60 < 30 ? 0 : 30;
+                                      occupiedSlots.add(`${slotH}-${slotM}`);
                                     }
                                   }
                                 });
@@ -1143,7 +1160,13 @@ const FocusView: React.FC<FocusViewProps> = ({
                                     return (
                                       <div
                                         key={`ext-${evt.id}`}
-                                        className={cn("bg-accent/50 rounded-md p-3 shadow-sm border border-accent", borderColor)}
+                                        className={cn(
+                                          "rounded-md p-3 shadow-sm border",
+                                          borderColor,
+                                          provider === 'google'
+                                            ? "bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800"
+                                            : "bg-cyan-50 dark:bg-cyan-950/30 border-cyan-200 dark:border-cyan-800"
+                                        )}
                                       >
                                         <div className="flex items-center gap-2">
                                           <Calendar className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
