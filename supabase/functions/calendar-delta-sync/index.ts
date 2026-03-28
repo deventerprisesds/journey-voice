@@ -486,7 +486,8 @@ async function syncGoogleDelta(
       end_time: event.end.dateTime || event.end.date,
       is_all_day: !event.start.dateTime,
       location: event.location || null,
-      calendar_id: 'primary',
+      calendar_id: event.organizer?.email || 'primary',
+      is_recurring: !!event.recurringEventId,
       last_synced_at: new Date().toISOString()
     }));
 
