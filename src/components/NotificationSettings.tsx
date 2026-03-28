@@ -212,6 +212,9 @@ function CalendarConnectionCard({
             />
           </div>
 
+          {/* Show recurring events toggle */}
+          <RecurringEventsToggle connectionId={connection.id} onRefresh={onRefresh} />
+
           {/* Sub-calendar selection when pull is enabled */}
           {hasPull && (
             <CalendarPullToggles connection={connection} onUpdate={onRefresh} />

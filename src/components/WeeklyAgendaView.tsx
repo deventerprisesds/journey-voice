@@ -105,48 +105,69 @@ interface TaskCardProps {
   onComplete: (taskId: string) => void;
 }
 
-const TaskCard: React.FC<TaskCardProps> = ({ task, onTaskEdit, onComplete }) => (
-  <div
-    className="bg-card rounded px-2 py-1.5 shadow-sm border cursor-pointer hover:shadow-md transition-shadow"
-    onClick={() => onTaskEdit(task)}
-  >
-    <div className="flex items-start gap-2">
-      <Checkbox
-        checked={task.status === 'DONE'}
-        onCheckedChange={() => onComplete(task.id)}
-        onClick={(e) => e.stopPropagation()}
-        className="mt-0.5 h-3.5 w-3.5"
-      />
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-1.5">
-          {task.start_time && (
-            <span className="text-xs text-muted-foreground flex-shrink-0">
-              {new Date(task.start_time).toLocaleTimeString('en-US', { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, hour: 'numeric', minute: '2-digit', hour12: true })}
-            </span>
-          )}
-          <span className="text-xs font-medium truncate">{task.title}</span>
-        </div>
-        <div className="flex items-center gap-1 mt-0.5 flex-wrap">
-          <Badge variant="outline" className={cn("text-[10px] px-1 py-0", categoryColors[task.category])}>
-            {task.category.toLowerCase()}
-          </Badge>
-          {task.pushed_count && task.pushed_count > 0 && (
-            <Badge variant="outline" className="text-[10px] px-1 py-0 bg-destructive/10 text-destructive border-destructive/20">
-              <RotateCcw className="h-2.5 w-2.5 mr-0.5" />
-              ×{task.pushed_count}
+const TaskCard: React.FC<TaskCardProps> = ({ task, onTaskEdit, onComplete }) => {
+  const isHistory = (task as any)._fromHistory;
+  const historyAction = (task as any)._historyAction;
+  const isCompleted = historyAction === 'completed' || task.status === 'DONE';
+  const isRolledOver = historyAction === 'rollover';
+
+  return (
+    <div
+      className={cn(
+        "bg-card rounded px-2 py-1.5 shadow-sm border cursor-pointer hover:shadow-md transition-shadow",
+        isHistory && "opacity-70",
+        isCompleted && "opacity-60"
+      )}
+      onClick={() => onTaskEdit(task)}
+    >
+      <div className="flex items-start gap-2">
+        {isHistory ? (
+          isCompleted ? (
+            <CheckCircle2 className="h-3.5 w-3.5 mt-0.5 text-green-500 flex-shrink-0" />
+          ) : isRolledOver ? (
+            <RotateCcw className="h-3.5 w-3.5 mt-0.5 text-amber-500 flex-shrink-0" />
+          ) : (
+            <Clock className="h-3.5 w-3.5 mt-0.5 text-muted-foreground flex-shrink-0" />
+          )
+        ) : (
+          <Checkbox
+            checked={task.status === 'DONE'}
+            onCheckedChange={() => onComplete(task.id)}
+            onClick={(e) => e.stopPropagation()}
+            className="mt-0.5 h-3.5 w-3.5"
+          />
+        )}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5">
+            {task.start_time && (
+              <span className="text-xs text-muted-foreground flex-shrink-0">
+                {new Date(task.start_time).toLocaleTimeString('en-US', { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, hour: 'numeric', minute: '2-digit', hour12: true })}
+              </span>
+            )}
+            <span className={cn("text-xs font-medium truncate", isCompleted && "line-through")}>{task.title}</span>
+          </div>
+          <div className="flex items-center gap-1 mt-0.5 flex-wrap">
+            <Badge variant="outline" className={cn("text-[10px] px-1 py-0", categoryColors[task.category])}>
+              {task.category.toLowerCase()}
             </Badge>
-          )}
-          {task.estimate_minutes && (
-            <span className="text-[10px] text-muted-foreground flex items-center gap-0.5">
-              <Clock className="h-2.5 w-2.5" />
-              {task.estimate_minutes}m
-            </span>
-          )}
+            {(task.pushed_count && task.pushed_count > 0) && (
+              <Badge variant="outline" className="text-[10px] px-1 py-0 bg-destructive/10 text-destructive border-destructive/20">
+                <RotateCcw className="h-2.5 w-2.5 mr-0.5" />
+                ×{task.pushed_count}
+              </Badge>
+            )}
+            {task.estimate_minutes && (
+              <span className="text-[10px] text-muted-foreground flex items-center gap-0.5">
+                <Clock className="h-2.5 w-2.5" />
+                {task.estimate_minutes}m
+              </span>
+            )}
+          </div>
         </div>
       </div>
     </div>
-  </div>
-);
+  );
+};
 
 // ─── Agenda Tab (existing logic) ───────────────────────────────
 
