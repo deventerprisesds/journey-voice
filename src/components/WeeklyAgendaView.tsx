@@ -614,6 +614,16 @@ const WeeklyAgendaView: React.FC<WeeklyAgendaViewProps> = ({
   const [weekOffset, setWeekOffset] = useState(0);
   const { user } = useAuth();
   const [externalEvents, setExternalEvents] = useState<(ExternalCalendarEvent & { calendar_connections?: { provider: string; provider_account_email: string } })[]>([]);
+  const [schedulingConfig, setSchedulingConfig] = useState<SchedulingConfig>(DEFAULT_SCHEDULING_CONFIG);
+
+  // Load user's authoritative scheduling config
+  useEffect(() => {
+    if (user?.id) {
+      loadUserSchedulingConfig(user.id).then(setSchedulingConfig);
+    }
+  }, [user?.id]);
+
+  const userTimezone = schedulingConfig?.timezone || getDefaultTimezone();
 
   const weekStart = useMemo(() => {
     const base = startOfWeek(new Date(), { weekStartsOn: 1 });
@@ -682,7 +692,7 @@ const WeeklyAgendaView: React.FC<WeeklyAgendaViewProps> = ({
 
         <TabsContent value="agenda">
           <ScrollArea className="h-[calc(100vh-280px)]">
-            <AgendaTab tasks={tasks} weekDays={weekDays} onTaskEdit={onTaskEdit} onComplete={handleComplete} />
+            <AgendaTab tasks={tasks} weekDays={weekDays} externalEvents={externalEvents} config={schedulingConfig} userTimezone={userTimezone} onTaskEdit={onTaskEdit} onComplete={handleComplete} />
           </ScrollArea>
         </TabsContent>
 
