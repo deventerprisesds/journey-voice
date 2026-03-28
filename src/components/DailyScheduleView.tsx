@@ -354,6 +354,7 @@ const DailyScheduleView: React.FC<DailyScheduleViewProps> = ({
                   <TimeSlotGrid
                     dates={[selectedDate]}
                     tasks={scheduledTasks}
+                    externalEvents={externalEvents}
                     onTimeSlotClick={handleTimeSlotClick}
                     onTaskClick={(task) => console.log('Task clicked:', task)}
                     onStatusChange={handleTaskStatusChange}
