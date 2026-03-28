@@ -340,7 +340,7 @@ const MeetingsTab: React.FC<MeetingsTabProps> = ({ weekDays, externalEvents, use
       map[format(day, 'yyyy-MM-dd')] = [];
     });
     externalEvents.forEach(evt => {
-      const dayKey = format(parseISO(evt.start_time), 'yyyy-MM-dd');
+      const dayKey = getDateInTimezone(evt.start_time, userTimezone);
       if (map[dayKey]) map[dayKey].push(evt);
     });
     return map;
