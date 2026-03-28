@@ -175,16 +175,36 @@ const AgendaTab: React.FC<AgendaTabProps> = ({ tasks, historyTasks, weekDays, ex
     return null;
   };
 
+  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: userTimezone });
+
   const tasksByDay = useMemo(() => {
     const map: Record<string, Record<string, (Task | (ExternalCalendarEvent & { _isExternal: true; calendar_connections?: any }))[]>> = {};
     weekDays.forEach(day => {
       const key = format(day, 'yyyy-MM-dd');
       map[key] = { morning: [], business_hours: [], after_work: [], evening: [], weekends: [], unscheduled: [] };
     });
-    // Bucket tasks using timezone-aware date comparison
+
+    // For past days, use history tasks instead of live tasks
+    const pastDays = new Set(weekDays.filter(d => format(d, 'yyyy-MM-dd') < todayStr).map(d => format(d, 'yyyy-MM-dd')));
+
+    // Bucket history tasks into past days
+    historyTasks.forEach(task => {
+      if (!task.start_time) return;
+      const dayKey = getDateInTimezone(task.start_time, userTimezone);
+      if (!pastDays.has(dayKey) || !map[dayKey]) return;
+      const window = getTimeWindowForTask(task.start_time, parseISO(dayKey));
+      if (window && map[dayKey][window]) {
+        map[dayKey][window].push(task);
+      } else {
+        map[dayKey].unscheduled.push(task);
+      }
+    });
+
+    // Bucket live tasks (today and future only)
     tasks.forEach(task => {
       if (!task.start_time || task.status === 'DONE') return;
       const dayKey = getDateInTimezone(task.start_time, userTimezone);
+      if (pastDays.has(dayKey)) return; // Past days use history
       if (!map[dayKey]) return;
       const window = getTimeWindowForTask(task.start_time, parseISO(dayKey));
       if (window && map[dayKey][window]) {
@@ -193,6 +213,7 @@ const AgendaTab: React.FC<AgendaTabProps> = ({ tasks, historyTasks, weekDays, ex
         map[dayKey].unscheduled.push(task);
       }
     });
+
     // Bucket external events into the same day/window structure
     externalEvents.forEach(evt => {
       const dayKey = getDateInTimezone(evt.start_time, userTimezone);
@@ -206,7 +227,7 @@ const AgendaTab: React.FC<AgendaTabProps> = ({ tasks, historyTasks, weekDays, ex
       }
     });
     return map;
-  }, [tasks, weekDays, externalEvents, userTimezone, config]);
+  }, [tasks, historyTasks, weekDays, externalEvents, userTimezone, config, todayStr]);
 
   return (
     <div className="space-y-3">
