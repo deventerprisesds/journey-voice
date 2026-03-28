@@ -209,60 +209,110 @@ const WeeklyAgendaView: React.FC<WeeklyAgendaViewProps> = ({
                     </div>
                   ) : (
                     <div className="space-y-2">
-                      {Object.entries(timeWindowStyles).map(([windowName, style]) => {
-                        const windowTasks = dayTasks[windowName] || [];
-                        if (windowTasks.length === 0) return null;
+                      {(() => {
+                        const dayOfWeek = day.getDay();
+                        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+                        const relevantWindows = isWeekend
+                          ? ['weekends']
+                          : ['morning', 'business_hours', 'after_work', 'evening'];
 
                         return (
-                          <div key={windowName} className={cn("rounded-md", style.bgClass, style.borderClass)}>
-                            <div className="px-2 py-1 flex items-center gap-1.5">
-                              <span className={style.textClass}>{style.icon}</span>
-                              <span className={cn("text-xs font-medium", style.textClass)}>{style.label}</span>
-                            </div>
-                            <div className="px-2 pb-2 space-y-1">
-                              {windowTasks.map(task => (
-                                <div
-                                  key={task.id}
-                                  className="bg-card rounded px-2 py-1.5 shadow-sm border cursor-pointer hover:shadow-md transition-shadow"
-                                  onClick={() => onTaskEdit(task)}
-                                >
-                                  <div className="flex items-start gap-2">
-                                    <Checkbox
-                                      checked={task.status === 'DONE'}
-                                      onCheckedChange={() => handleComplete(task.id)}
-                                      onClick={(e) => e.stopPropagation()}
-                                      className="mt-0.5 h-3.5 w-3.5"
-                                    />
-                                    <div className="flex-1 min-w-0">
-                                      <div className="flex items-center gap-1.5">
-                                        <span className="text-xs text-muted-foreground flex-shrink-0">
-                                          {task.start_time && format(parseISO(task.start_time), 'h:mm a')}
-                                        </span>
-                                        <span className="text-xs font-medium truncate">{task.title}</span>
+                          <>
+                            {relevantWindows.map(windowName => {
+                              const style = timeWindowStyles[windowName];
+                              const windowTasks = dayTasks[windowName] || [];
+                              if (!style || windowTasks.length === 0) return null;
+
+                              return (
+                                <div key={windowName} className={cn("rounded-md", style.bgClass, style.borderClass)}>
+                                  <div className="px-2 py-1 flex items-center gap-1.5">
+                                    <span className={style.textClass}>{style.icon}</span>
+                                    <span className={cn("text-xs font-medium", style.textClass)}>{style.label}</span>
+                                  </div>
+                                  <div className="px-2 pb-2 space-y-1">
+                                    {windowTasks.map(task => (
+                                      <div
+                                        key={task.id}
+                                        className="bg-card rounded px-2 py-1.5 shadow-sm border cursor-pointer hover:shadow-md transition-shadow"
+                                        onClick={() => onTaskEdit(task)}
+                                      >
+                                        <div className="flex items-start gap-2">
+                                          <Checkbox
+                                            checked={task.status === 'DONE'}
+                                            onCheckedChange={() => handleComplete(task.id)}
+                                            onClick={(e) => e.stopPropagation()}
+                                            className="mt-0.5 h-3.5 w-3.5"
+                                          />
+                                          <div className="flex-1 min-w-0">
+                                            <div className="flex items-center gap-1.5">
+                                              <span className="text-xs text-muted-foreground flex-shrink-0">
+                                                {task.start_time && format(parseISO(task.start_time), 'h:mm a')}
+                                              </span>
+                                              <span className="text-xs font-medium truncate">{task.title}</span>
+                                            </div>
+                                            <div className="flex items-center gap-1 mt-0.5 flex-wrap">
+                                              <Badge variant="outline" className={cn("text-[10px] px-1 py-0", categoryColors[task.category])}>
+                                                {task.category.toLowerCase()}
+                                              </Badge>
+                                              {task.pushed_count && task.pushed_count > 0 && (
+                                                <Badge variant="outline" className="text-[10px] px-1 py-0 bg-destructive/10 text-destructive border-destructive/20">
+                                                  <RotateCcw className="h-2.5 w-2.5 mr-0.5" />
+                                                  ×{task.pushed_count}
+                                                </Badge>
+                                              )}
+                                              {task.estimate_minutes && (
+                                                <span className="text-[10px] text-muted-foreground flex items-center gap-0.5">
+                                                  <Clock className="h-2.5 w-2.5" />
+                                                  {task.estimate_minutes}m
+                                                </span>
+                                              )}
+                                            </div>
+                                          </div>
+                                        </div>
                                       </div>
-                                      <div className="flex items-center gap-1 mt-0.5 flex-wrap">
-                                        <Badge variant="outline" className={cn("text-[10px] px-1 py-0", categoryColors[task.category])}>
-                                          {task.category.toLowerCase()}
-                                        </Badge>
-                                        {task.pushed_count && task.pushed_count > 0 && (
-                                          <Badge variant="outline" className="text-[10px] px-1 py-0 bg-destructive/10 text-destructive border-destructive/20">
-                                            <RotateCcw className="h-2.5 w-2.5 mr-0.5" />
-                                            ×{task.pushed_count}
-                                          </Badge>
-                                        )}
-                                        {task.estimate_minutes && (
-                                          <span className="text-[10px] text-muted-foreground flex items-center gap-0.5">
-                                            <Clock className="h-2.5 w-2.5" />
-                                            {task.estimate_minutes}m
-                                          </span>
-                                        )}
-                                      </div>
-                                    </div>
+                                    ))}
                                   </div>
                                 </div>
-                              ))}
-                            </div>
-                          </div>
+                              );
+                            })}
+                            {/* Unscheduled tasks fallback */}
+                            {(dayTasks.unscheduled || []).length > 0 && (
+                              <div className="rounded-md bg-muted/30 border-l-2 border-l-muted-foreground/30">
+                                <div className="px-2 py-1 flex items-center gap-1.5">
+                                  <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+                                  <span className="text-xs font-medium text-muted-foreground">Unscheduled</span>
+                                </div>
+                                <div className="px-2 pb-2 space-y-1">
+                                  {dayTasks.unscheduled.map(task => (
+                                    <div
+                                      key={task.id}
+                                      className="bg-card rounded px-2 py-1.5 shadow-sm border cursor-pointer hover:shadow-md transition-shadow"
+                                      onClick={() => onTaskEdit(task)}
+                                    >
+                                      <div className="flex items-start gap-2">
+                                        <Checkbox
+                                          checked={task.status === 'DONE'}
+                                          onCheckedChange={() => handleComplete(task.id)}
+                                          onClick={(e) => e.stopPropagation()}
+                                          className="mt-0.5 h-3.5 w-3.5"
+                                        />
+                                        <div className="flex-1 min-w-0">
+                                          <span className="text-xs font-medium truncate">{task.title}</span>
+                                          <div className="flex items-center gap-1 mt-0.5 flex-wrap">
+                                            <Badge variant="outline" className={cn("text-[10px] px-1 py-0", categoryColors[task.category])}>
+                                              {task.category.toLowerCase()}
+                                            </Badge>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </>
+                        );
+                      })()}
                         );
                       })}
                     </div>
