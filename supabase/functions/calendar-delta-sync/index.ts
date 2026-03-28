@@ -184,8 +184,8 @@ async function syncOutlookDelta(
     url = connection.sync_token;
     console.log(`[calendar-delta-sync] Using delta token for Outlook connection ${connection.id}`);
   } else {
-    // Initial sync - get all events in range
-    url = `https://graph.microsoft.com/v1.0/me/calendarView/delta?startDateTime=${startDate.toISOString()}&endDateTime=${endDate.toISOString()}&$select=id,subject,body,start,end,isAllDay,location,showAs`;
+    // Initial sync - get all events in range (include seriesMasterId for recurring occurrences)
+    url = `https://graph.microsoft.com/v1.0/me/calendarView/delta?startDateTime=${startDate.toISOString()}&endDateTime=${endDate.toISOString()}&$select=id,subject,body,start,end,isAllDay,location,showAs,seriesMasterId`;
     console.log(`[calendar-delta-sync] Initial sync for Outlook connection ${connection.id}`);
   }
 
@@ -254,21 +254,75 @@ async function syncOutlookDelta(
     }
   }
 
+  // ── Resolve titles for recurring occurrences ──
+  // Microsoft Graph omits `subject` on expanded occurrences from calendarView/delta.
+  // We batch-fetch series masters to get the real title.
+  const missingSubject = allEvents.filter(e => !e.subject && e.seriesMasterId);
+  const withSubject = allEvents.filter(e => e.subject || !e.seriesMasterId);
+  const masterIds = [...new Set(missingSubject.map(e => e.seriesMasterId))];
+
+  console.log(`[calendar-delta-sync] Outlook events: total=${allEvents.length}, missingSubject=${missingSubject.length}, uniqueMasters=${masterIds.length}`);
+
+  const masterTitles = new Map<string, string>();
+  for (const masterId of masterIds) {
+    try {
+      const masterResp = await fetch(`https://graph.microsoft.com/v1.0/me/events/${masterId}?$select=subject`, {
+        headers: { 'Authorization': `Bearer ${tokens.access_token}` }
+      });
+      if (masterResp.ok) {
+        const master = await masterResp.json();
+        if (master.subject) {
+          masterTitles.set(masterId, master.subject);
+        }
+      } else {
+        console.warn(`[calendar-delta-sync] Failed to fetch master ${masterId}: ${masterResp.status}`);
+      }
+    } catch (err) {
+      console.warn(`[calendar-delta-sync] Error fetching master ${masterId}:`, err);
+    }
+  }
+  console.log(`[calendar-delta-sync] Resolved ${masterTitles.size}/${masterIds.length} series master titles`);
+
+  // Also fetch existing titles to prevent anti-downgrade
+  const existingEventIds = allEvents.map(e => e.id);
+  const { data: existingRows } = await supabaseClient
+    .from('external_calendar_events')
+    .select('external_event_id, title')
+    .eq('connection_id', connection.id)
+    .in('external_event_id', existingEventIds.slice(0, 500));
+  const existingTitles = new Map<string, string>();
+  (existingRows || []).forEach((r: any) => {
+    if (r.title && r.title !== 'Untitled Event') {
+      existingTitles.set(r.external_event_id, r.title);
+    }
+  });
+
   // Upsert events
   if (allEvents.length > 0) {
-    const eventsToUpsert = allEvents.map(event => ({
-      user_id: connection.user_id,
-      connection_id: connection.id,
-      external_event_id: event.id,
-      title: event.subject || 'Untitled Event',
-      description: event.body?.content || null,
-      start_time: event.start.dateTime,
-      end_time: event.end.dateTime,
-      is_all_day: event.isAllDay || false,
-      location: event.location?.displayName || null,
-      calendar_id: 'primary',
-      last_synced_at: new Date().toISOString()
-    }));
+    const eventsToUpsert = allEvents.map(event => {
+      // Resolve title: explicit subject > master title > existing DB title > fallback
+      const resolvedTitle = event.subject
+        || (event.seriesMasterId && masterTitles.get(event.seriesMasterId))
+        || existingTitles.get(event.id)
+        || 'Untitled Event';
+      
+      const isRecurring = !!event.seriesMasterId;
+
+      return {
+        user_id: connection.user_id,
+        connection_id: connection.id,
+        external_event_id: event.id,
+        title: resolvedTitle,
+        description: event.body?.content || null,
+        start_time: event.start.dateTime,
+        end_time: event.end.dateTime,
+        is_all_day: event.isAllDay || false,
+        location: event.location?.displayName || null,
+        calendar_id: event.calendar?.id || 'primary',
+        is_recurring: isRecurring,
+        last_synced_at: new Date().toISOString()
+      };
+    });
 
     const { error: upsertError, data: upsertData } = await supabaseClient
       .from('external_calendar_events')
@@ -281,18 +335,22 @@ async function syncOutlookDelta(
     if (upsertError) {
       console.error('[calendar-delta-sync] Error upserting events:', upsertError);
     } else {
-      result.events_added = allEvents.length;  // Simplification - could distinguish adds vs updates
+      result.events_added = allEvents.length;
     }
   }
 
   // Save the delta link for next sync
   if (nextDeltaLink) {
-    await supabaseClient
+    const { error: rpcError } = await supabaseClient
       .rpc('update_calendar_sync_token', {
         _connection_id: connection.id,
         _sync_token: nextDeltaLink
       });
-    console.log(`[calendar-delta-sync] Saved delta link for connection ${connection.id}`);
+    if (rpcError) {
+      console.error(`[calendar-delta-sync] Failed to save delta link for ${connection.id}:`, rpcError);
+    } else {
+      console.log(`[calendar-delta-sync] Saved delta link for connection ${connection.id}`);
+    }
   }
 
   return result;
@@ -428,7 +486,8 @@ async function syncGoogleDelta(
       end_time: event.end.dateTime || event.end.date,
       is_all_day: !event.start.dateTime,
       location: event.location || null,
-      calendar_id: 'primary',
+      calendar_id: event.organizer?.email || 'primary',
+      is_recurring: !!event.recurringEventId,
       last_synced_at: new Date().toISOString()
     }));
 

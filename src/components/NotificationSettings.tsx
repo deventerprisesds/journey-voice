@@ -91,6 +91,57 @@ function CalendarPullToggles({ connection, onUpdate }: { connection: CalendarCon
   );
 }
 
+// Recurring events toggle sub-component
+function RecurringEventsToggle({ connectionId, onRefresh }: { connectionId: string; onRefresh: () => void }) {
+  const [showRecurring, setShowRecurring] = useState(true);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const load = async () => {
+      const { data } = await supabase
+        .from('calendar_connections')
+        .select('metadata')
+        .eq('id', connectionId)
+        .single();
+      const meta = data?.metadata as any;
+      setShowRecurring(meta?.show_recurring_events ?? true);
+      setLoading(false);
+    };
+    load();
+  }, [connectionId]);
+
+  const toggle = async (checked: boolean) => {
+    setShowRecurring(checked);
+    // Read existing metadata, merge, update
+    const { data: existing } = await supabase
+      .from('calendar_connections')
+      .select('metadata')
+      .eq('id', connectionId)
+      .single();
+    const meta = (existing?.metadata as any) || {};
+    await supabase
+      .from('calendar_connections')
+      .update({ metadata: { ...meta, show_recurring_events: checked } })
+      .eq('id', connectionId);
+    onRefresh();
+  };
+
+  if (loading) return null;
+
+  return (
+    <div className="flex items-center justify-between">
+      <div>
+        <p className="text-sm">Show recurring events</p>
+        <p className="text-xs text-muted-foreground">Include repeating calendar events in views</p>
+      </div>
+      <Switch
+        checked={showRecurring}
+        onCheckedChange={toggle}
+      />
+    </div>
+  );
+}
+
 type NotificationChannel = 'EMAIL' | 'SLACK' | 'PUSH' | 'OUTLOOK_EVENT' | 'GOOGLE_EVENT';
 type DatabaseChannel = NotificationChannel;
 
@@ -211,6 +262,9 @@ function CalendarConnectionCard({
               onCheckedChange={(checked) => onTogglePull(connection, checked)}
             />
           </div>
+
+          {/* Show recurring events toggle */}
+          <RecurringEventsToggle connectionId={connection.id} onRefresh={onRefresh} />
 
           {/* Sub-calendar selection when pull is enabled */}
           {hasPull && (
