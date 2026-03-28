@@ -120,7 +120,7 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onTaskEdit, onComplete }) => 
         <div className="flex items-center gap-1.5">
           {task.start_time && (
             <span className="text-xs text-muted-foreground flex-shrink-0">
-              {format(parseISO(task.start_time), 'h:mm a')}
+              {new Date(task.start_time).toLocaleTimeString('en-US', { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, hour: 'numeric', minute: '2-digit', hour12: true })}
             </span>
           )}
           <span className="text-xs font-medium truncate">{task.title}</span>
