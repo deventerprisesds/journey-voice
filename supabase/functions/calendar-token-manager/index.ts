@@ -285,13 +285,13 @@ async function exchangeGoogleCode(supabaseClient: any, code: string, redirectUri
         .single();
 
       if (raceRow) {
-        await serviceClient.from('calendar_connections').update({
-          access_token: tokens.access_token,
-          refresh_token: tokens.refresh_token || undefined,
-          expires_at: expiresAt,
-          is_active: true,
-          updated_at: new Date().toISOString(),
-        }).eq('id', raceRow.id);
+        await serviceClient.rpc('update_calendar_connection_tokens_for_user', {
+          _connection_id: raceRow.id,
+          _user_id: userId,
+          _access_token: tokens.access_token,
+          _refresh_token: tokens.refresh_token || null,
+          _expires_at: expiresAt,
+        });
 
         await trace(supabaseClient, userId, 'google_23505_reactivated', { provider: 'google', connectionId: raceRow.id });
         return { success: true, connection_id: raceRow.id, provider: 'google', email: userInfo.email, refreshed: true, message: 'Existing connection reactivated' };
