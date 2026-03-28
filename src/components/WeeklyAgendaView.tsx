@@ -147,23 +147,6 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onTaskEdit, onComplete }) => 
   </div>
 );
 
-// ─── Helper: humanize calendar ID ──────────────────────────────
-
-function humanizeCalendarId(calendarId: string): string {
-  if (!calendarId) return '';
-  // "primary" → "Primary"
-  if (calendarId === 'primary') return 'Primary';
-  // If it looks like an email, return just the local part
-  if (calendarId.includes('@')) {
-    // Check common patterns like "family123@group.calendar.google.com"
-    const localPart = calendarId.split('@')[0];
-    // Capitalize first letter
-    return localPart.charAt(0).toUpperCase() + localPart.slice(1);
-  }
-  // Already a readable name
-  return calendarId;
-}
-
 // ─── Agenda Tab (existing logic) ───────────────────────────────
 
 interface AgendaTabProps {
