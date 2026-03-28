@@ -3377,6 +3377,57 @@ export type Database = {
           },
         ]
       }
+      task_schedule_history: {
+        Row: {
+          action: string
+          created_at: string
+          end_time: string | null
+          id: string
+          pushed_count: number | null
+          scheduled_date: string
+          start_time: string | null
+          task_id: string
+          user_id: string
+        }
+        Insert: {
+          action?: string
+          created_at?: string
+          end_time?: string | null
+          id?: string
+          pushed_count?: number | null
+          scheduled_date: string
+          start_time?: string | null
+          task_id: string
+          user_id: string
+        }
+        Update: {
+          action?: string
+          created_at?: string
+          end_time?: string | null
+          id?: string
+          pushed_count?: number | null
+          scheduled_date?: string
+          start_time?: string | null
+          task_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "task_schedule_history_task_id_fkey"
+            columns: ["task_id"]
+            isOneToOne: false
+            referencedRelation: "notification_trace"
+            referencedColumns: ["task_id"]
+          },
+          {
+            foreignKeyName: "task_schedule_history_task_id_fkey"
+            columns: ["task_id"]
+            isOneToOne: false
+            referencedRelation: "tasks"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       task_topic_index: {
         Row: {
           category_affinity: string | null
