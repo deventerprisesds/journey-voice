@@ -144,8 +144,6 @@ async function doInlineRefresh(supabaseClient: any, provider: string, connection
   if (!tokenResponse.ok) throw new Error('Refresh failed');
 
   const tokens = await tokenResponse.json();
-  const expiresAt = tokens.expires_in ? new Date(Date.now() + tokens.expires_in * 1000).toISOString() : null;
-
   const expiresAtStr = tokens.expires_in ? new Date(Date.now() + tokens.expires_in * 1000).toISOString() : null;
 
   // Use RPC to ensure tokens are encrypted via encrypt_token()
