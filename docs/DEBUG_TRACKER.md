@@ -1,6 +1,6 @@
 # Master Debug Tracking Sheet
 
-**Last Updated**: 2026-02-17
+**Last Updated**: 2026-03-31
 
 ---
 
@@ -27,6 +27,7 @@ Before making changes, verify:
 | VOICE-05 | Semantic VAD not triggering responses in text-only mode | INVESTIGATING | OpenAI semantic VAD with `modalities: ["text"]` may not reliably trigger responses. |
 | CHAT-01 | Push notification not sent on chat error path | FIXING | Error catch block at line 689 of `useChatAssistant.ts` lacked push trigger. |
 | DEPLOY-01 | Multiple code changes written but never deployed | FIXING | No enforcement mechanism existed to require deployment after code changes. |
+| SCHED-01 | Scheduling rules drift across docs, fill-gaps, and timezone filtering | FIXING | No mandatory scheduling spec, fill-gaps used a separate per-task path, and some views still used local date logic. |
 
 ---
 
@@ -43,6 +44,11 @@ Before making changes, verify:
 | 2026-02-17 | `generate-realtime-token` | Pending changes from prior sessions | DEPLOYING |
 | 2026-02-17 | `twilio-voice-handler` | Phone lookup fix (VOICE-03), ElevenLabs fallback (VOICE-04) | DEPLOYING |
 | 2026-02-17 | `sync-assistant-tools` | Propagate persona and tool changes to OpenAI | DEPLOYING |
+| 2026-03-31 | `docs/SCHEDULING_RULES.md` | Added authoritative scheduling spec and acceptance checklist | UPDATED |
+| 2026-03-31 | `.lovable/rules.md` | Made scheduling rules mandatory for agenda/scheduling work | UPDATED |
+| 2026-03-31 | `CalendarModule.tsx` | Switched fill-gaps to shared candidate selection + batch scheduler | UPDATED |
+| 2026-03-31 | `FocusView.tsx` | Replaced local today filtering with timezone-safe shared candidate logic | UPDATED |
+| 2026-03-31 | `DailyScheduleView.tsx` | Switched selected day matching to timezone-safe logic and hid unscheduled sidebar on non-today dates | UPDATED |
 
 ---
 
@@ -59,6 +65,7 @@ Before making changes, verify:
 | VOICE-05 | Added VAD tracing logs | 2026-02-10 | PENDING DATA | Log-only changes to gather data |
 | CHAT-01 | Extract push helper, add to error catch block | 2026-02-17 | DEPLOYING | Push now fires for both success and error paths |
 | DEPLOY-01 | Created `.lovable/rules.md` enforcement | 2026-02-17 | DEPLOYING | AI must read/update tracker before and after changes |
+| SCHED-01 | Add mandatory scheduling spec + align fill-gaps and view filtering | 2026-03-31 | IN PROGRESS | Centralized candidate selection added to frontend paths; validation still required. |
 
 ---
 
@@ -87,6 +94,10 @@ Before making changes, verify:
 11. **Activity logging for push decisions**: Log whether visibility was hidden/visible and whether push was sent/skipped. Without this, push debugging is impossible.
 
 12. **Enforcement mechanisms are required**: Without `.lovable/rules.md`, tracker updates and deployments are routinely skipped.
+
+13. **Scheduling docs must be prescriptive, not descriptive**: A mandatory-read scheduling spec plus acceptance checklist is required or agenda behavior drifts across threads and entry points.
+
+14. **Shared candidate selection beats per-task fill loops**: Fill-gaps must reuse the same scoring/dedup/timezone rules as the authoritative scheduler path to avoid inconsistent agendas.
 
 ---
 

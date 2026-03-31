@@ -16,6 +16,8 @@ import { toast } from 'sonner';
 import { CalendarConnectionModal } from './CalendarConnectionModal';
 import { CalendarSelectionPanel } from './CalendarSelectionPanel';
 import { supabase } from '@/integrations/supabase/client';
+import { getDateInTimezone } from '@/lib/date';
+import { selectSchedulingCandidates } from '@/lib/schedulingCandidates';
 
 interface CalendarModuleProps {
   tasks: Task[];
@@ -292,13 +294,44 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
   const handleFillGaps = async () => {
     setIsLoading(true);
     try {
-      // Find unscheduled tasks
-      const unscheduledTasks = tasks.filter(task => 
-        !task.is_scheduled && 
-        !task.start_time && 
-        task.status !== 'DONE' && 
-        !task.completed_at
-      );
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user?.id) {
+        toast.error('You must be signed in to fill schedule gaps');
+        return;
+      }
+
+      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const targetDate = new Date();
+      const targetDateStr = targetDate.toLocaleDateString('en-CA', { timeZone: timezone });
+
+      const [mappedTasksResponse, readyTasksResponse] = await Promise.all([
+        supabase
+          .from('task_topic_mappings' as never)
+          .select('task_id')
+          .eq('user_id', user.id),
+        supabase
+          .from('tasks')
+          .select('*')
+          .eq('user_id', user.id)
+          .in('status', ['READY', 'UP_NEXT', 'TODO'])
+          .is('completed_at', null),
+      ]);
+
+      const mappedIds = new Set(((mappedTasksResponse.data as Array<{ task_id: string }> | null) || []).map((item) => item.task_id));
+
+      const scopedCandidates = ((readyTasksResponse.data as Task[] | null) || []).filter((task) => {
+        if (task.is_scheduled && task.start_time) {
+          return getDateInTimezone(task.start_time, timezone) !== targetDateStr;
+        }
+        return true;
+      });
+
+      const unscheduledTasks = selectSchedulingCandidates(scopedCandidates, {
+        priorityBoardIds: mappedIds,
+        targetDate,
+        targetDateStr,
+        timezone,
+      });
 
       if (unscheduledTasks.length === 0) {
         toast.success('No unscheduled tasks to fill gaps with!');
@@ -308,59 +341,46 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
 
       toast.info(`Filling gaps with ${unscheduledTasks.length} unscheduled task${unscheduledTasks.length > 1 ? 's' : ''}...`);
 
-      let filledCount = 0;
+      const batchPayload = unscheduledTasks.map((task) => ({
+        id: task.id,
+        title: task.title,
+        category: task.category,
+        priority: task.priority,
+        estimate_minutes: task.estimate_minutes || 60,
+        due_date: task.due_date,
+      }));
 
-      // Call scheduler with correct parameters for each unscheduled task
-      for (const task of unscheduledTasks) {
-        try {
-          const { data, error } = await supabase.functions.invoke('smart-calendar-scheduler', {
-            body: {
-              taskText: `${task.title}${task.description ? ' - ' + task.description : ''}`,
-              taskCategory: task.category,
-              taskPriority: task.priority,
-              estimateMinutes: task.estimate_minutes || 60,
-              dueDate: task.due_date,
-              userId: task.user_id,
-              existingTasks: tasks.map(t => ({
-                id: t.id,
-                title: t.title,
-                start_time: t.start_time,
-                end_time: t.end_time,
-                priority: t.priority,
-                category: t.category,
-                status: t.status
-              })),
-              busySlots: busySlots,
-              scheduling_context: task.scheduling_context || [],
-              targetDate: new Date().toISOString(),
-              timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
-            }
-          });
+      const { data, error } = await supabase.functions.invoke('batch-calendar-scheduler', {
+        body: {
+          tasks: batchPayload,
+          userId: user.id,
+          timezone,
+          targetDate: targetDateStr,
+        },
+      });
 
-          if (error) {
-            console.error(`Failed to schedule task ${task.id}:`, error);
-            continue;
-          }
-
-          if (data?.success && data?.scheduledSlot) {
-            // Update task in database with scheduled time
-            await supabase
-              .from('tasks')
-              .update({
-                start_time: data.scheduledSlot.startTime,
-                end_time: data.scheduledSlot.endTime,
-                is_scheduled: true
-              })
-              .eq('id', task.id);
-            
-            filledCount++;
-          } else {
-            console.error(`No valid schedule returned for task ${task.id}`);
-          }
-        } catch (err) {
-          console.error(`Failed to fill gap for task ${task.id}:`, err);
-        }
+      if (error || data?.error) {
+        throw error || new Error(data?.error || 'Failed to batch schedule tasks');
       }
+
+      const scheduled = (data?.scheduled || []) as Array<{ taskIndex: number; start_time: string; end_time: string }>;
+      const updates = scheduled
+        .map((slot) => {
+          const task = unscheduledTasks[slot.taskIndex];
+          if (!task?.id) return null;
+          return supabase
+            .from('tasks')
+            .update({
+              start_time: slot.start_time,
+              end_time: slot.end_time,
+              is_scheduled: true,
+            })
+            .eq('id', task.id);
+        })
+        .filter(Boolean);
+
+      const results = await Promise.all(updates);
+      const filledCount = results.filter((result: any) => !result?.error).length;
 
       await loadCalendarData();
       if (onTaskScheduled) onTaskScheduled();
