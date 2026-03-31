@@ -1,85 +1,93 @@
 
-# Validation-First Plan
+Why it didn’t work:
 
-You are right to push on this. Based on the code I just checked, I should not have treated the earlier fix as high-confidence for “all tabs.”
+1. The MD files were not turned into a real enforcement system
+- `.lovable/rules.md` only mandates `docs/DEBUG_TRACKER.md`.
+- There is no `docs/SCHEDULING_RULES.md` in the repo now.
+- There is no single scheduling-specific checklist that must be read before every scheduling plan.
 
-## What I verified in the code
+2. The docs that do exist are too general and fragmented
+- `docs/TASK_MANAGEMENT.md` says “Fill Gaps” should schedule unscheduled `TODO/READY/UP_NEXT` tasks by priority.
+- `docs/CALENDAR_INTEGRATION.md` says busy slots and fill-gaps should use shared availability logic.
+- `src/lib/date.ts` provides the timezone helper that should be used app-wide.
+- But those rules are spread across files, so they are easy to miss and weren’t enforced together.
 
-- `tasks_with_schedule` was created correctly in `supabase/migrations/20260328191148_353c2dc8-bafc-4920-b96c-8c8dfffe035b.sql`.
-- But only `WeeklyAgendaView.tsx` reads that view (`src/components/WeeklyAgendaView.tsx:715-766`).
-- The parent loaders still fetch raw `tasks`:
-  - `src/pages/TasksPage.tsx:122-126`
-  - `src/pages/DailyPriorities.tsx:65-69`
-- `FocusView.tsx` and `DailyScheduleView.tsx` still operate on the raw `tasks` prop, so they never receive historical rows from `tasks_with_schedule`.
-- `DailyScheduleView.tsx` still builds `selectedDateStr` with `format(selectedDate, 'yyyy-MM-dd')`, which is not fully aligned with the timezone helper it uses for task timestamps.
+3. The actual code paths drifted away from the documented rules
+- `nightly-schedule-builder` does contain the priority board, due-soon, keyword, pushed-count, and dedup scoring.
+- But `CalendarModule.handleFillGaps()` does not use that same shared selection/scoring path; it loops task-by-task through `smart-calendar-scheduler`.
+- That means the app has multiple schedulers/placement paths, so one MD file alone would never keep behavior aligned.
 
-## Why that matters
+4. Leaf views still bypass the shared date helper in places
+- `DailyScheduleView.tsx` still builds `selectedDateStr` with `format(selectedDate, 'yyyy-MM-dd')` instead of the timezone helper pattern.
+- `FocusView.tsx` still excludes tasks using `isToday(parseISO(t.start_time))` in one branch while using timezone-aware logic in another.
+- So even if backend scheduling were correct, view-level filtering can still hide tasks.
 
-That means the previous change could only partially help Weekly Agenda. It could not reliably fix Focus View, Daily Schedule, or any other tab fed from the shared `tasks` loader. So the problem was architectural, not just a leaf-component filter bug.
+5. The docs are descriptive, not acceptance-test based
+- The current docs explain architecture and intent.
+- They do not force every new plan to answer:
+  - Which shared scheduler path is authoritative?
+  - Which views still bypass shared date utilities?
+  - How are assignments and due items guaranteed not to drop off?
+  - How is “fill all slots” verified?
+- Without that checklist, context gets lost across days/threads.
 
-## What I should do differently before claiming “fixed”
+What to build so it actually works next time:
 
-### 1. Fix the shared data source first
-Move the history/live merge to the parent data-loading layer so every tab receives the same source of truth.
+1. Create one authoritative scheduling spec
+- Add `docs/SCHEDULING_RULES.md`.
+- It should explicitly define:
+  - your goal for the daily scheduled agenda
+  - fill-all-slots expectation
+  - priority order: priority board, due soon, financial, people/comms, assignments
+  - assignment persistence rules
+  - no duplicate active tasks
+  - timezone rule: always use `getDateInTimezone` / shared helpers
+  - which scheduling path is authoritative
 
-Likely targets:
-- `src/pages/TasksPage.tsx`
-- `src/pages/DailyPriorities.tsx`
+2. Make it mandatory in `.lovable/rules.md`
+- Add a hard rule that any scheduling, calendar, daily agenda, assignment, or timezone plan must read:
+  - `docs/SCHEDULING_RULES.md`
+  - `docs/TASK_MANAGEMENT.md`
+  - `docs/CALENDAR_INTEGRATION.md`
+  - `src/lib/date.ts`
+- This is the missing enforcement layer.
 
-### 2. Use the view only where it actually fits
-Keep this split:
+3. Add a required planning checklist inside the new MD
+- Every scheduling plan must explicitly state:
+  - parent data source/hook being changed
+  - all affected views
+  - whether the change applies to nightly builder, fill-gaps, manual scheduling, and display filtering
+  - how assignments remain visible until done
+  - how “today” is computed in user timezone
+  - how success will be verified in DB + UI
 
-- Past dates: use `tasks_with_schedule`
-- Today/future: use live `tasks`
+4. Consolidate the scheduling logic around one shared source
+- The biggest architectural problem is not just missing docs; it is split logic.
+- The implementation plan should unify:
+  - candidate selection/scoring
+  - slot-filling rules
+  - timezone date handling
+  - assignment priority behavior
+- Then all entry points must call the same shared logic instead of each path improvising.
 
-That preserves historical schedule snapshots without breaking current scheduling/edit behavior.
+5. Fix the specific drift points already visible in code
+- `CalendarModule.handleFillGaps()` must align with the same candidate-selection rules used by nightly scheduling.
+- `DailyScheduleView.tsx` must stop using browser-local selected-date formatting.
+- `FocusView.tsx` must remove the remaining browser-local `isToday` filtering branch.
+- Then verify parent loaders/hooks, not just one leaf tab.
 
-### 3. Stop making each tab invent its own task visibility rules
-Refactor so:
-- parent loader prepares the correct date-scoped task list
-- child views render it
-- only minimal local filtering remains
+Why your earlier MD requests failed, in one sentence:
+- We created documentation, but not a scheduling-specific mandatory-read spec tied to a required verification checklist, and the code itself remained split across multiple competing logic paths.
 
-Targets:
-- `src/components/WeeklyAgendaView.tsx`
-- `src/components/FocusView.tsx`
-- `src/components/DailyScheduleView.tsx`
+Technical details
+```text
+Verified repo evidence:
+- .lovable/rules.md mandates DEBUG_TRACKER, but not scheduling rules
+- No SCHEDULING_RULES doc currently exists
+- nightly-schedule-builder contains the scoring logic you expected
+- CalendarModule fill-gaps uses a separate per-task scheduling path
+- DailyScheduleView and FocusView still show date-helper drift
 
-### 4. Unify timezone day-key logic
-Use one shared rule for both:
-- turning timestamps into day keys
-- turning `selectedDate` / visible days into comparable day keys
-
-This removes the current mismatch where one side is timezone-aware and the other side is still local-date formatted.
-
-## Concrete acceptance gate I should meet before saying it works
-
-I should not call this done until all of these are true:
-
-1. A past scheduled task appears in Weekly Agenda on its original day.
-2. The same past task appears in Daily Schedule when that past date is selected.
-3. A rolled-over task with no current `start_time` still appears in the current-day backlog/unscheduled area where expected.
-4. A late-night task stays on the correct day in the user’s configured timezone.
-5. Today/future scheduling, drag/drop, and task editing still work normally.
-
-## Why this approach has a higher chance of working
-
-Because it follows the app’s existing architecture:
-- parent pages already own task loading
-- child views already depend on props
-- fixing the shared source once is much more reliable than patching each screen separately
-
-## Next implementation scope
-
-1. Replace raw `tasks` loading in parent pages with a unified loader/hook.
-2. Feed historical rows only for past dates.
-3. Update Weekly, Focus, and Daily views to consume the unified source.
-4. Standardize timezone date-key generation.
-5. Only then treat the fix as verified.
-
-## Process change going forward
-
-Before I say a fix has a high chance:
-- I will check every parent loader that feeds the affected screens
-- I will confirm the fix is applied at the shared source if multiple tabs are involved
-- I will use an explicit acceptance checklist like the one above instead of assuming one patched tab proves the whole feature
+So the failure was:
+missing enforcement + fragmented docs + split scheduling code paths + incomplete timezone standardization
+```
