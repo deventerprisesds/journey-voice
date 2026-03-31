@@ -31,6 +31,7 @@ Before modifying any subsystem, read the relevant documentation first:
 | `docs/COMMS_CONSOLE.md` | Chat interface, SSE streaming, message deduplication, thread system |
 | `docs/TASK_MANAGEMENT.md` | Task CRUD, Kanban, scheduling, dependencies |
 | `docs/CALENDAR_INTEGRATION.md` | OAuth flows, calendar sync, busy slot detection |
+| `docs/SCHEDULING_RULES.md` | ANY scheduling, agenda, assignment visibility, or timezone-related change |
 | `docs/NOTIFICATIONS.md` | Push notifications, multi-channel delivery, presence tracking |
 | `docs/CLOUDFLARE_WORKER.md` | Cloudflare Workers, real-time audio relay |
 | `cloudflare/PREFLIGHT_CHECKLIST.md` | **MANDATORY** before ANY Cloudflare worker changes |
@@ -48,3 +49,4 @@ Before modifying any subsystem, read the relevant documentation first:
 - **Voice pipeline**: Never bypass `call-context-builder.ts` for call context. It's the single source of truth for task filtering + topic ranking. See `docs/VOICE_SYSTEM.md`.
 - **OAuth tokens**: Always encrypted via `encrypt_token`/`decrypt_token`. Never store raw tokens. See `docs/CALENDAR_INTEGRATION.md`.
 - **Edge function patterns**: Audit existing functions in the same domain before creating new ones. Use `SUPABASE_SERVICE_ROLE_KEY` consistently. See `docs/EDGE_FUNCTIONS.md`.
+- **Scheduling plans are mandatory-read**: Before any scheduling, calendar, daily agenda, assignment persistence, or timezone plan/change, read `docs/SCHEDULING_RULES.md`, `docs/TASK_MANAGEMENT.md`, `docs/CALENDAR_INTEGRATION.md`, and `src/lib/date.ts`.

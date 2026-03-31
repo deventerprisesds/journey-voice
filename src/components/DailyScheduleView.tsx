@@ -115,7 +115,9 @@ const DailyScheduleView: React.FC<DailyScheduleViewProps> = ({
 
   // Filter tasks for selected date using timezone-aware comparison
   const userTimezone = schedulingConfig?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const selectedDateStr = format(selectedDate, 'yyyy-MM-dd');
+  const selectedDateStr = selectedDate.toLocaleDateString('en-CA', { timeZone: userTimezone });
+  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: userTimezone });
+  const showUnscheduledForSelectedDay = selectedDateStr === todayStr;
   
   const scheduledTasks = tasks.filter(task => {
     if (!task.start_time) return false;
@@ -127,7 +129,7 @@ const DailyScheduleView: React.FC<DailyScheduleViewProps> = ({
 
   // Unscheduled tasks (no start_time or end_time)
   const unscheduledTasks = tasks.filter(task => 
-    !task.start_time && task.status !== 'DONE'
+    showUnscheduledForSelectedDay && !task.start_time && task.status !== 'DONE'
   ).sort((a, b) => {
     const priorityOrder = { URGENT: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
     return (priorityOrder[a.priority as keyof typeof priorityOrder] || 4) - 
@@ -441,6 +443,12 @@ const DailyScheduleView: React.FC<DailyScheduleViewProps> = ({
                 Unscheduled
                 <Badge variant="secondary">{unscheduledTasks.length}</Badge>
               </h2>
+
+              {!showUnscheduledForSelectedDay && (
+                <p className="mb-4 text-sm text-muted-foreground">
+                  Unscheduled tasks are only shown for today.
+                </p>
+              )}
 
               <Droppable droppableId="unscheduled">
                 {(provided, snapshot) => (

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
-import { format, parseISO, isToday, isPast, formatDistanceToNow, addMinutes, startOfDay } from 'date-fns';
+import { format, parseISO, isPast, formatDistanceToNow, addMinutes, startOfDay } from 'date-fns';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -42,6 +42,7 @@ import { humanizeCalendarId } from '@/lib/calendarUtils';
 import QuickTaskInput from './QuickTaskInput';
 import TaskCreationModal from './TaskCreationModal';
 import { getOrCreateDefaultBoardId } from '@/utils/demoData';
+import { selectSchedulingCandidates } from '@/lib/schedulingCandidates';
 
 interface FocusViewProps {
   tasks: Task[];
@@ -233,7 +234,7 @@ const FocusView: React.FC<FocusViewProps> = ({
       isRolledOver(t)
     )
     // Exclude tasks already showing in Today's Schedule
-    .filter(t => !(t.start_time && isToday(parseISO(t.start_time))))
+    .filter(t => !(t.start_time && getDateInTimezone(t.start_time, userTimezone) === todayStr))
     .sort((a, b) => {
       // Rolled-over tasks bubble to top
       const aRolled = isRolledOver(a);
@@ -671,58 +672,18 @@ const FocusView: React.FC<FocusViewProps> = ({
         .is('completed_at', null);
 
       // Filter out tasks already scheduled for today
-      const unscheduledCandidates = (candidates || []).filter((t: any) => {
-        if (t.is_scheduled && t.start_time && isToday(parseISO(t.start_time))) return false;
-        return true;
+      const unscheduledCandidates = selectSchedulingCandidates((candidates || []) as Task[], {
+        priorityBoardIds: new Set(mappedIds),
+        targetDate: new Date(),
+        targetDateStr: todayStr,
+        timezone: userTimezone,
       });
 
       if (unscheduledCandidates.length === 0) {
         toast.info('All candidate tasks are already scheduled');
         return;
       }
-
-      // 5. Score candidates (same heuristics as nightly builder)
-      const priorityWeights: Record<string, number> = { URGENT: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
-      const scored = unscheduledCandidates.map((t: any) => {
-        let score = priorityWeights[t.priority] || 1;
-        score += (t.pushed_count || 0) * 0.5;
-        // Due-soon boost
-        if (t.due_date) {
-          const hoursUntilDue = (new Date(t.due_date).getTime() - Date.now()) / (1000 * 60 * 60);
-          if (hoursUntilDue <= 48) score += 3;
-          else if (hoursUntilDue <= 96) score += 1;
-        }
-        // UP_NEXT boost
-        if (t.status === 'UP_NEXT') score += 1;
-        // Keyword boost for financial/comms tasks
-        const titleLower = (t.title || '').toLowerCase();
-        if (/pay|invoice|bill|transfer|fee/.test(titleLower)) score += 2;
-        if (/email|reply|follow.?up|respond|call|message/.test(titleLower)) score += 1.5;
-        return { ...t, _score: score };
-      });
-
-      // Sort by score desc, then due_date asc
-      scored.sort((a: any, b: any) => {
-        if (b._score !== a._score) return b._score - a._score;
-        if (a.due_date && b.due_date) return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
-        if (a.due_date) return -1;
-        if (b.due_date) return 1;
-        return 0;
-      });
-
-      // Dedup by normalized title — keep only the highest-scored instance
-      const seenTitles = new Map<string, string>();
-      const dedupedCandidates = scored.filter((t: any) => {
-        const key = t.title.toLowerCase().trim();
-        if (seenTitles.has(key)) return false;
-        seenTitles.set(key, t.id);
-        return true;
-      });
-      const dupesRemoved = scored.length - dedupedCandidates.length;
-      if (dupesRemoved > 0) {
-        console.log(`[AUTOFILL] Dedup removed ${dupesRemoved} duplicate titles from ${scored.length} candidates`);
-      }
-      const topCandidates = dedupedCandidates.slice(0, 25);
+      const topCandidates = unscheduledCandidates;
 
       // 6. Call batch scheduler
       const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
