@@ -71,7 +71,7 @@ function getCurrentTimeAnchor(timezone: string = 'America/New_York'): {
     const now = new Date();
     return {
       currentDateTime: now.toISOString(),
-      todayDate: now.toISOString().split('T')[0],
+      todayDate: now.toLocaleDateString('en-CA'), // browser-local fallback, not UTC split
       timezone: 'UTC'
     };
   }
