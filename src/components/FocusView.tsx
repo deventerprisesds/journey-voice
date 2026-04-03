@@ -199,6 +199,7 @@ const FocusView: React.FC<FocusViewProps> = ({
   
   // Get user timezone - use browser default as fallback
   const userTimezone = getDefaultTimezone();
+  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: userTimezone });
 
   // Filter task groups
   const doingTasks = tasks.filter(t => t.status === 'DOING');
