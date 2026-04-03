@@ -65,6 +65,10 @@ export interface ExternalCalendarEvent {
   last_synced_at: string;
   created_at: string;
   updated_at: string;
+  calendar_connections?: {
+    provider: string;
+    provider_account_email?: string;
+  };
 }
 
 export interface Board {

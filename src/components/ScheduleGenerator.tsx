@@ -92,8 +92,9 @@ const ScheduleGenerator: React.FC<ScheduleGeneratorProps> = ({
     }
 
     try {
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York';
       const scheduleData = [{
-        date: targetDate.toISOString().split('T')[0],
+        date: targetDate.toLocaleDateString('en-CA', { timeZone: tz }),
         tasks: generatedSchedule,
         totalMinutes: generatedSchedule.reduce((sum, st) => 
           sum + (st.task.estimate_minutes || 60), 0

@@ -292,7 +292,7 @@ const DailyScheduleView: React.FC<DailyScheduleViewProps> = ({
             <span className="font-semibold">
               {format(selectedDate, 'EEEE, MMMM d')}
             </span>
-            {isSameDay(selectedDate, new Date()) && (
+            {getDateInTimezone(selectedDate.toISOString(), Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York') === getDateInTimezone(new Date().toISOString(), Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York') && (
               <Badge variant="default">Today</Badge>
             )}
           </div>

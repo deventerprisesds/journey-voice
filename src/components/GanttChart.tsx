@@ -327,7 +327,7 @@ const GanttChart: React.FC<GanttChartProps> = ({ tasks, onTaskEdit, className })
                             )}
                             
                             {/* Today indicator */}
-                            {format(date, 'yyyy-MM-dd') === format(new Date(), 'yyyy-MM-dd') && (
+                            {format(date, 'yyyy-MM-dd') === new Date().toLocaleDateString('en-CA') && (
                               <div className="absolute top-0 bottom-0 left-1/2 w-px bg-primary/50 -translate-x-1/2 z-10" />
                             )}
                           </div>

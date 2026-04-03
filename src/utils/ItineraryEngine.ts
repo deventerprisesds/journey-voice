@@ -347,7 +347,7 @@ export class ItineraryEngine {
           text: taskText,
           timezone,
           userId: user.id,
-          targetDate: targetDate?.toISOString().split('T')[0] || new Date().toISOString().split('T')[0],
+          targetDate: targetDate?.toLocaleDateString('en-CA', { timeZone: timezone }) || new Date().toLocaleDateString('en-CA', { timeZone: timezone }),
           existingTasks: existingTasks.map(t => ({
             id: t.id,
             title: t.title,

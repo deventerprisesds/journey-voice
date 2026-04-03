@@ -169,19 +169,23 @@ const FocusView: React.FC<FocusViewProps> = ({
         console.warn('[FocusView] Delta sync failed (non-blocking):', e);
       }
 
-      // Load external events for today from DB
+      // Load external events for today from DB using timezone-aware bounds
       try {
-        const todayStart = new Date();
-        todayStart.setHours(0, 0, 0, 0);
-        const todayEnd = new Date();
-        todayEnd.setHours(23, 59, 59, 999);
+        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York';
+        const todayKey = getTodayInTimezone(tz);
+        // Calculate UTC bounds for the local day
+        const dayStartUTC = localTimeToUtcISO(todayKey, '00:00', tz);
+        const [y, m, d] = todayKey.split('-').map(Number);
+        const nextDayDate = new Date(y, m - 1, d + 1);
+        const nextDayKey = nextDayDate.toLocaleDateString('en-CA');
+        const dayEndUTC = localTimeToUtcISO(nextDayKey, '00:00', tz);
 
         const { data, error } = await supabase
           .from('external_calendar_events')
           .select('*, calendar_connections!connection_id(provider, provider_account_email)')
           .eq('user_id', user.id)
-          .gte('start_time', todayStart.toISOString())
-          .lte('start_time', todayEnd.toISOString());
+          .gte('start_time', dayStartUTC)
+          .lt('start_time', dayEndUTC);
 
         if (!error && data) {
           setExternalEvents(data as ExternalCalendarEvent[]);

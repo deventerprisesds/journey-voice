@@ -175,7 +175,8 @@ export async function fetchPendingAssignments(
             created_at: assignment.created_at,
             updated_at: assignment.updated_at,
             is_scheduled: false,
-            position: 0
+            position: 0,
+            assignment_url: assignment.assignment_url || undefined,
           }))
         );
       }
