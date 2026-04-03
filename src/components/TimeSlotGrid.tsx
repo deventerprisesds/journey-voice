@@ -339,7 +339,7 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
     const durationMs = new Date(task.end_time).getTime() - new Date(task.start_time).getTime();
     
     // Create new start and end times in UTC using the user's timezone
-    const dateStr = format(targetDate, 'yyyy-MM-dd');
+    const dateStr = dateToKeyInTimezone(targetDate, timezone);
     const newStartTime = localTimeToUtcISO(dateStr, `${newHour.toString().padStart(2, '0')}:${newMinute.toString().padStart(2, '0')}`, timezone);
     const newEndDate = new Date(new Date(newStartTime).getTime() + durationMs);
     const newEndTime = newEndDate.toISOString();
