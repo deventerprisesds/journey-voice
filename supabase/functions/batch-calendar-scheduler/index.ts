@@ -279,6 +279,9 @@ OVERFLOW RULES:
       hour12: true
     });
 
+    // Day name for context-aware scheduling
+    const dayName = new Date(`${targetDateISO}T12:00:00Z`).toLocaleDateString('en-US', { timeZone: timezone, weekday: 'long' }).toUpperCase();
+    
     const batchPrompt = `You are a scheduling assistant. Schedule ALL ${tasks.length} tasks efficiently, avoiding conflicts.
 
 === CRITICAL DATE CONTEXT (READ CAREFULLY) ===
@@ -286,12 +289,16 @@ TODAY'S DATE (ISO format): ${todayISO}
 TODAY'S DATE (readable): ${todayReadable}
 TARGET SCHEDULING DATE (ISO): ${targetDateISO}
 TARGET SCHEDULING DATE (readable): ${targetDateStr}
+DAY OF WEEK: This is a ${dayName}
 CURRENT TIME: ${currentTimeStr}
 TIMEZONE: ${timezone}
 
 ⚠️ IMPORTANT: ALL scheduled times MUST use date ${targetDateISO} or later.
 ⚠️ NEVER schedule anything before ${todayISO}.
 ⚠️ Use ISO format for all times: "${targetDateISO}T10:00:00${tzOffset}"
+
+=== DAY-SPECIFIC RULES ===
+${dayName === 'SUNDAY' ? '- Church / worship tasks → MUST be scheduled on Sundays (morning preferred)\n' : ''}${dayName === 'SATURDAY' || dayName === 'SUNDAY' ? '- This is a WEEKEND day. Use weekend-appropriate scheduling.\n' : '- This is a WEEKDAY. Use business-hour scheduling.\n'}
 ==============================================
 
 TASKS TO SCHEDULE:
