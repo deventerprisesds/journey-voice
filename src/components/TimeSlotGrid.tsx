@@ -137,7 +137,7 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
   };
 
   const getEventsForTimeSlot = (date: Date, hour: number, minute: number) => {
-    const dateStr = format(date, 'yyyy-MM-dd');
+    const dateStr = dateToKeyInTimezone(date, timezone);
     return externalEvents.filter(event => {
       const eventStart = parseISO(event.start_time);
       const eventEnd = parseISO(event.end_time);
