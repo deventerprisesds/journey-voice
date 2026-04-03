@@ -17,6 +17,23 @@ NEVER skip deployment when code changes are approved.
 
 ---
 
+## SCHEDULING SYSTEM MAP — MANDATORY
+
+Before ANY scheduling, agenda, calendar, or timezone plan:
+1. Read `docs/SCHEDULING_SYSTEM_MAP.md` (system map — what exists and where)
+2. Read `docs/SCHEDULING_RULES.md` (rules — what must be true)
+3. Answer the Required Planning Checklist in SCHEDULING_RULES.md
+
+After ANY scheduling-related code changes:
+1. Update `docs/SCHEDULING_SYSTEM_MAP.md` if any code paths, shared modules, or data flows changed
+2. Add to Section D (Bugs Fixed) if a bug was resolved
+3. Add to Section E (Anti-Patterns) if a new failure mode was discovered
+
+NEVER add a new scheduling code path without documenting it in the system map.
+NEVER hardcode window/category mappings outside scheduling-defaults.ts.
+
+---
+
 ## DOCUMENTATION CATALOG
 
 Before modifying any subsystem, read the relevant documentation first:
