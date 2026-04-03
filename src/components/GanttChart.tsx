@@ -236,7 +236,7 @@ const GanttChart: React.FC<GanttChartProps> = ({ tasks, onTaskEdit, className })
                     <div>{format(date, 'EEE')}</div>
                     <div className={cn(
                       "text-muted-foreground",
-                      format(date, 'yyyy-MM-dd') === format(new Date(), 'yyyy-MM-dd') && "text-primary font-semibold"
+                      format(date, 'yyyy-MM-dd') === new Date().toLocaleDateString('en-CA') && "text-primary font-semibold"
                     )}>
                       {format(date, 'dd')}
                     </div>
