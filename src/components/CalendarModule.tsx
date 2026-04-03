@@ -603,7 +603,7 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
         <div className="grid grid-cols-7 gap-2">
           {calendarDays.map(day => {
             const dayTasks = getTasksForDate(day);
-            const isCurrentDay = isToday(day);
+            const isCurrentDay = getDateInTimezone(day.toISOString(), Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York') === getTodayInTimezone(Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York');
             const isCurrentMonth = isSameMonth(day, currentDate);
             
             return (
