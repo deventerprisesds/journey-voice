@@ -645,6 +645,14 @@ serve(async (req) => {
             return 0;
           });
 
+          // Same-day title dedup: keep highest-scored instance only
+          const dedupedCandidates = scoredCandidates.filter(task => {
+            const normalizedTitle = task.title.toLowerCase().trim();
+            if (seenTitlesThisDay.has(normalizedTitle)) return false;
+            seenTitlesThisDay.add(normalizedTitle);
+            return true;
+          });
+
           const selectedCandidates: typeof scoredCandidates = [];
           const windowRemaining = { ...Object.fromEntries(
             Object.entries(windowCapacities).map(([name, cap]) => [name, cap.remainingMinutes])
