@@ -306,9 +306,21 @@ SCHEDULING RULES (FOLLOW IN THIS EXACT ORDER):
 Each task's category has ALLOWED time windows listed above. You MUST schedule every task within its allowed windows. This is NOT optional.
 
 - If a category says "after_work or weekends", the task MUST be placed in one of those windows.
-- If a category says "flexible", you may use any active window.
+- If a category says "flexible", you may use any window between 9am and 10pm — NEVER outside that range.
 - NEVER place a task outside its allowed windows, even if it seems logical.
+- NEVER schedule ANY task before 6am or after 10pm regardless of category.
 - If the allowed window is full, mark the task as OVERFLOW (see Rule 6).
+
+=== RULE 1b: ACTIVITY CONTEXT HINTS ===
+Use common sense about WHAT the task involves to pick the best slot WITHIN its allowed window:
+- Gym / workout / exercise → morning window (6-9am weekdays) or early weekends (10am-12pm)
+- Bank / post office / doctor / errands → business hours only (9am-5pm weekdays)
+- Dinner / family / social → evening window (7-10pm)
+- Study / homework / reading → after_work or weekends, not early morning
+- Grocery / shopping → daytime business hours or early evening
+- Calls / emails / follow-ups → business hours preferred
+
+These are hints for SLOT SELECTION within the allowed window — they do NOT override the hard window constraint.
 
 === RULE 2: PRIORITY RANKING WITHIN WINDOWS ===
 Within the allowed windows, use these heuristics to determine ORDER (earliest slot first):
