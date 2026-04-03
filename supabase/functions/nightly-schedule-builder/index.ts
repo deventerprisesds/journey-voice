@@ -465,9 +465,8 @@ serve(async (req) => {
           const targetDate = new Date(tY, tM - 1, tD + dayOffset);
           const targetISO = `${targetDate.getFullYear()}-${String(targetDate.getMonth() + 1).padStart(2, '0')}-${String(targetDate.getDate()).padStart(2, '0')}`;
           
-          // Get day of week for this target date
-          const targetUserDate = new Date(targetDate.toLocaleString('en-US', { timeZone: timezone }));
-          const targetDayOfWeek = targetUserDate.getDay();
+          // targetDate is already in local calendar space (constructed from todayISO)
+          const targetDayOfWeek = targetDate.getDay();
           const isWeekend = targetDayOfWeek === 0 || targetDayOfWeek === 6;
           
           console.log(`\n  📅 === Day ${dayOffset + 1}/${totalDays}: ${targetISO} (day ${targetDayOfWeek}${isWeekend ? ' WEEKEND' : ''}) ===`);

@@ -7,6 +7,7 @@
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { DEFAULT_CATEGORY_MAPPINGS, DEFAULT_TIME_WINDOWS } from "./scheduling-defaults.ts";
 
 // ── Rollback Flag ──────────────────────────────────────────────────
 // Flip to false for instant revert to current (V1) scripts
@@ -21,24 +22,25 @@ export interface CallDescriptor {
 
 // ── Constants ───────────────────────────────────────────────────────
 
-// Map categories to window affinities (from schedulingRules.ts)
-export const CATEGORY_WINDOW_MAPPING: Record<string, string[]> = {
-  'CAREER': ['business_hours'],
-  'PROF_EDUCATION': ['after_work', 'evening', 'weekends'],
-  'EDUCATION': ['business_hours', 'after_work'],
-  'VENTURES': ['after_work', 'evening', 'weekends'],
-  'LIFE': ['morning', 'after_work', 'evening', 'weekends'],
-  'PERSONAL': ['morning', 'after_work', 'evening', 'weekends'],
-};
+// Derive CATEGORY_WINDOW_MAPPING from the authoritative scheduling-defaults
+// so Iris shows the same task-to-window mapping as the scheduler
+export const CATEGORY_WINDOW_MAPPING: Record<string, string[]> = Object.fromEntries(
+  Object.entries(DEFAULT_CATEGORY_MAPPINGS).map(([cat, mapping]) => {
+    const windows = mapping.defaultTimeWindow;
+    // Expand 'flexible' to all concrete non-weekend weekday windows
+    if (windows.includes('flexible')) {
+      return [cat, ['morning', 'business_hours', 'after_work', 'evening', 'weekends']];
+    }
+    return [cat, windows];
+  })
+);
 
-// Window time ranges
-export const WINDOW_RANGES: Record<string, { start: number; end: number }> = {
-  morning: { start: 6, end: 9 },
-  business_hours: { start: 9, end: 17 },
-  after_work: { start: 17, end: 19 },
-  evening: { start: 19, end: 22 },
-  weekends: { start: 10, end: 20 }
-};
+// Window time ranges — derived from authoritative defaults
+export const WINDOW_RANGES: Record<string, { start: number; end: number }> = Object.fromEntries(
+  Object.entries(DEFAULT_TIME_WINDOWS)
+    .filter(([name]) => name !== 'flexible')
+    .map(([name, win]) => [name, { start: win.start, end: win.end }])
+);
 
 // Context header instructing AI to drive naturally
 export const AGENDA_HEADER = `IMPORTANT: The items below are your agenda queue in priority order.
