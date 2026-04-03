@@ -184,8 +184,9 @@ export class ItineraryEngine {
       currentTime.setMinutes(currentTime.getMinutes() + 5);
     }
     
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York';
     return {
-      date: date.toISOString().split('T')[0],
+      date: date.toLocaleDateString('en-CA', { timeZone: tz }),
       tasks: scheduledTasks,
       totalMinutes: usedMinutes,
       availableMinutes
