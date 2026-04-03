@@ -16,7 +16,7 @@ import { toast } from 'sonner';
 import { CalendarConnectionModal } from './CalendarConnectionModal';
 import { CalendarSelectionPanel } from './CalendarSelectionPanel';
 import { supabase } from '@/integrations/supabase/client';
-import { getDateInTimezone } from '@/lib/date';
+import { getDateInTimezone, getTodayInTimezone } from '@/lib/date';
 import { selectSchedulingCandidates } from '@/lib/schedulingCandidates';
 
 interface CalendarModuleProps {

@@ -390,7 +390,7 @@ const MeetingsTab: React.FC<MeetingsTabProps> = ({ weekDays, externalEvents, use
   const eventsByDay = useMemo(() => {
     const map: Record<string, typeof externalEvents> = {};
     weekDays.forEach(day => {
-      map[format(day, 'yyyy-MM-dd')] = [];
+      map[dateToKeyInTimezone(day, userTimezone)] = [];
     });
     externalEvents.forEach(evt => {
       const dayKey = getDateInTimezone(evt.start_time, userTimezone);
@@ -408,9 +408,9 @@ const MeetingsTab: React.FC<MeetingsTabProps> = ({ weekDays, externalEvents, use
   return (
     <div className="space-y-3">
       {weekDays.map(day => {
-        const dayKey = format(day, 'yyyy-MM-dd');
+        const dayKey = dateToKeyInTimezone(day, userTimezone);
         const events = eventsByDay[dayKey] || [];
-        const today = isToday(day);
+        const today = dateToKeyInTimezone(day, userTimezone) === getTodayInTimezone(userTimezone);
 
         return (
           <Card key={dayKey} className={cn(today && 'ring-2 ring-primary/50')}>
