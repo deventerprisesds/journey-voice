@@ -3,6 +3,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { Task } from '@/types/task';
 import { toast } from 'sonner';
+import { getTodayInTimezone, getDefaultTimezone } from '@/lib/date';
 
 /**
  * Unified task loader that merges:
