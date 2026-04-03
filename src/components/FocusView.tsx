@@ -199,6 +199,7 @@ const FocusView: React.FC<FocusViewProps> = ({
   
   // Get user timezone - use browser default as fallback
   const userTimezone = getDefaultTimezone();
+  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: userTimezone });
 
   // Filter task groups
   const doingTasks = tasks.filter(t => t.status === 'DOING');
@@ -254,7 +255,6 @@ const FocusView: React.FC<FocusViewProps> = ({
     });
   
   // Use timezone-aware date comparison for "today"
-  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: userTimezone });
   const scheduledToday = tasks.filter(t => 
     t.start_time && getDateInTimezone(t.start_time, userTimezone) === todayStr && t.status !== 'DONE'
   ).sort((a, b) => {
