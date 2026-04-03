@@ -658,7 +658,7 @@ serve(async (req) => {
             Object.entries(windowCapacities).map(([name, cap]) => [name, cap.remainingMinutes])
           )};
 
-          for (const task of scoredCandidates) {
+          for (const task of dedupedCandidates) {
             const duration = task.estimate_minutes || 
               categoryMappings[task.category]?.estimatedDuration || 60;
             const preferredWindows = getPreferredWindows(task.category, categoryMappings, activeWindowNames);
@@ -670,6 +670,23 @@ serve(async (req) => {
                 selectedCandidates.push(task);
                 assigned = true;
                 break;
+              }
+            }
+
+            // Flexible capacity aggregation: if task's preferred windows span all active windows,
+            // check aggregate remaining across all windows
+            if (!assigned && preferredWindows.length === activeWindowNames.length) {
+              const totalRemaining = Object.values(windowRemaining).reduce((s, v) => s + v, 0);
+              if (totalRemaining >= duration) {
+                // Assign to the window with the most remaining capacity
+                const bestWindow = Object.entries(windowRemaining)
+                  .sort(([,a], [,b]) => b - a)[0];
+                if (bestWindow) {
+                  windowRemaining[bestWindow[0]] -= duration;
+                  selectedCandidates.push(task);
+                  assigned = true;
+                  console.log(`    ✅ "${task.title}" assigned via aggregate capacity to ${bestWindow[0]}`);
+                }
               }
             }
 

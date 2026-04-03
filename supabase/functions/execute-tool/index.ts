@@ -1594,7 +1594,9 @@ async function createCalendarEvent(supabase: any, userId: string, args: any, use
   let endTime = args.end_time;
   
   if (startTime && !startTime.includes('T')) {
-    const today = new Date().toISOString().split('T')[0];
+    // Use timezone from user profile if available, fallback to America/New_York
+    const tz = userProfile?.timezone || 'America/New_York';
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: tz });
     startTime = `${today}T${startTime}:00`;
     endTime = endTime ? `${today}T${endTime}:00` : new Date(new Date(startTime).getTime() + 60 * 60 * 1000).toISOString();
   }
