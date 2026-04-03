@@ -110,7 +110,7 @@ const GanttChart: React.FC<GanttChartProps> = ({ tasks, onTaskEdit, className })
           width,
           isVisible,
           isOverdue: dueDate && isAfter(new Date(), dueDate) && task.status !== 'DONE',
-          isToday: dueDate && format(dueDate, 'yyyy-MM-dd') === format(new Date(), 'yyyy-MM-dd')
+          isToday: dueDate && format(dueDate, 'yyyy-MM-dd') === new Date().toLocaleDateString('en-CA')
         };
       })
       .sort((a, b) => {
@@ -236,7 +236,7 @@ const GanttChart: React.FC<GanttChartProps> = ({ tasks, onTaskEdit, className })
                     <div>{format(date, 'EEE')}</div>
                     <div className={cn(
                       "text-muted-foreground",
-                      format(date, 'yyyy-MM-dd') === format(new Date(), 'yyyy-MM-dd') && "text-primary font-semibold"
+                      format(date, 'yyyy-MM-dd') === new Date().toLocaleDateString('en-CA') && "text-primary font-semibold"
                     )}>
                       {format(date, 'dd')}
                     </div>
@@ -327,7 +327,7 @@ const GanttChart: React.FC<GanttChartProps> = ({ tasks, onTaskEdit, className })
                             )}
                             
                             {/* Today indicator */}
-                            {format(date, 'yyyy-MM-dd') === format(new Date(), 'yyyy-MM-dd') && (
+                            {format(date, 'yyyy-MM-dd') === new Date().toLocaleDateString('en-CA') && (
                               <div className="absolute top-0 bottom-0 left-1/2 w-px bg-primary/50 -translate-x-1/2 z-10" />
                             )}
                           </div>

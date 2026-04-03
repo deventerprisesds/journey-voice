@@ -37,7 +37,7 @@ import { loadUserSchedulingConfig } from '@/services/schedulingService';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { useAuth } from '@/hooks/useAuth';
 import { useBatchScheduling } from '@/hooks/useBatchScheduling';
-import { getTimePartsInTimezone, localTimeToUtcISO, getDefaultTimezone, getDateInTimezone } from '@/lib/date';
+import { getTimePartsInTimezone, localTimeToUtcISO, getDefaultTimezone, getDateInTimezone, dateToKeyInTimezone, getTodayInTimezone } from '@/lib/date';
 import { humanizeCalendarId } from '@/lib/calendarUtils';
 import QuickTaskInput from './QuickTaskInput';
 import TaskCreationModal from './TaskCreationModal';
@@ -169,19 +169,23 @@ const FocusView: React.FC<FocusViewProps> = ({
         console.warn('[FocusView] Delta sync failed (non-blocking):', e);
       }
 
-      // Load external events for today from DB
+      // Load external events for today from DB using timezone-aware bounds
       try {
-        const todayStart = new Date();
-        todayStart.setHours(0, 0, 0, 0);
-        const todayEnd = new Date();
-        todayEnd.setHours(23, 59, 59, 999);
+        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York';
+        const todayKey = getTodayInTimezone(tz);
+        // Calculate UTC bounds for the local day
+        const dayStartUTC = localTimeToUtcISO(todayKey, '00:00', tz);
+        const [y, m, d] = todayKey.split('-').map(Number);
+        const nextDayDate = new Date(y, m - 1, d + 1);
+        const nextDayKey = nextDayDate.toLocaleDateString('en-CA');
+        const dayEndUTC = localTimeToUtcISO(nextDayKey, '00:00', tz);
 
         const { data, error } = await supabase
           .from('external_calendar_events')
           .select('*, calendar_connections!connection_id(provider, provider_account_email)')
           .eq('user_id', user.id)
-          .gte('start_time', todayStart.toISOString())
-          .lte('start_time', todayEnd.toISOString());
+          .gte('start_time', dayStartUTC)
+          .lt('start_time', dayEndUTC);
 
         if (!error && data) {
           setExternalEvents(data as ExternalCalendarEvent[]);
@@ -194,7 +198,25 @@ const FocusView: React.FC<FocusViewProps> = ({
 
     syncAndLoadExternalEvents();
     const interval = setInterval(syncAndLoadExternalEvents, 15 * 60 * 1000); // every 15 min
-    return () => clearInterval(interval);
+    
+    // Realtime subscription for external calendar events
+    const channel = supabase
+      .channel('focus-external-events')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'external_calendar_events',
+        filter: `user_id=eq.${user.id}`,
+      }, () => {
+        console.log('[FocusView] Realtime event change detected, refreshing...');
+        syncAndLoadExternalEvents();
+      })
+      .subscribe();
+    
+    return () => {
+      clearInterval(interval);
+      supabase.removeChannel(channel);
+    };
   }, [user?.id]);
   
   // Get user timezone - use browser default as fallback
@@ -341,7 +363,7 @@ const FocusView: React.FC<FocusViewProps> = ({
     if (!task) return;
 
     // Use timezone-aware conversion to UTC
-    const dateStr = format(today, 'yyyy-MM-dd');
+    const dateStr = dateToKeyInTimezone(today, userTimezone);
     const timeStr = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
     const startTimeISO = localTimeToUtcISO(dateStr, timeStr, userTimezone);
     
@@ -535,13 +557,14 @@ const FocusView: React.FC<FocusViewProps> = ({
     if (!user?.id) return;
     
     const tz = userTimezone;
-    const todayStart = new Date(format(today, 'yyyy-MM-dd') + 'T00:00:00');
-    const tomorrowStart = new Date(format(today, 'yyyy-MM-dd') + 'T00:00:00');
-    tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+    const todayKey = dateToKeyInTimezone(today, tz);
     
-    // Convert to UTC ISO strings for DB query
-    const todayStartUTC = localTimeToUtcISO(format(today, 'yyyy-MM-dd'), '00:00', tz);
-    const tomorrowStartUTC = localTimeToUtcISO(format(new Date(tomorrowStart), 'yyyy-MM-dd'), '00:00', tz);
+    // Convert to UTC ISO strings for DB query using timezone-aware helpers
+    const todayStartUTC = localTimeToUtcISO(todayKey, '00:00', tz);
+    const nextDay = new Date(today);
+    nextDay.setDate(nextDay.getDate() + 1);
+    const nextDayKey = dateToKeyInTimezone(nextDay, tz);
+    const tomorrowStartUTC = localTimeToUtcISO(nextDayKey, '00:00', tz);
 
     setIsClearing(true);
     try {
@@ -783,7 +806,7 @@ const FocusView: React.FC<FocusViewProps> = ({
       for (const minute of [0, 30]) {
         // Format time label using timezone-aware formatting
         const timeStr = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
-        const dateStr = format(today, 'yyyy-MM-dd');
+        const dateStr = dateToKeyInTimezone(today, userTimezone);
         const isoTime = localTimeToUtcISO(dateStr, timeStr, userTimezone);
         const label = new Date(isoTime).toLocaleTimeString('en-US', {
           timeZone: userTimezone,

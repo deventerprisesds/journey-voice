@@ -279,6 +279,9 @@ OVERFLOW RULES:
       hour12: true
     });
 
+    // Day name for context-aware scheduling
+    const dayName = new Date(`${targetDateISO}T12:00:00Z`).toLocaleDateString('en-US', { timeZone: timezone, weekday: 'long' }).toUpperCase();
+    
     const batchPrompt = `You are a scheduling assistant. Schedule ALL ${tasks.length} tasks efficiently, avoiding conflicts.
 
 === CRITICAL DATE CONTEXT (READ CAREFULLY) ===
@@ -286,12 +289,16 @@ TODAY'S DATE (ISO format): ${todayISO}
 TODAY'S DATE (readable): ${todayReadable}
 TARGET SCHEDULING DATE (ISO): ${targetDateISO}
 TARGET SCHEDULING DATE (readable): ${targetDateStr}
+DAY OF WEEK: This is a ${dayName}
 CURRENT TIME: ${currentTimeStr}
 TIMEZONE: ${timezone}
 
 ⚠️ IMPORTANT: ALL scheduled times MUST use date ${targetDateISO} or later.
 ⚠️ NEVER schedule anything before ${todayISO}.
 ⚠️ Use ISO format for all times: "${targetDateISO}T10:00:00${tzOffset}"
+
+=== DAY-SPECIFIC RULES ===
+${dayName === 'SUNDAY' ? '- Church / worship tasks → MUST be scheduled on Sundays (morning preferred)\n' : ''}${dayName === 'SATURDAY' || dayName === 'SUNDAY' ? '- This is a WEEKEND day. Use weekend-appropriate scheduling.\n' : '- This is a WEEKDAY. Use business-hour scheduling.\n'}
 ==============================================
 
 TASKS TO SCHEDULE:
@@ -342,8 +349,10 @@ NEVER double-book — each task must not overlap with busy slots OR other schedu
 === RULE 4: DUE DATES ===
 Respect due dates — schedule before deadline. Tasks due within 48 hours get priority placement.
 
-=== RULE 5: BUFFERS ===
+=== RULE 5: BUFFERS AND CONSOLIDATION ===
 Leave 15-minute buffer between tasks when possible.
+Group similar-category tasks into contiguous blocks when possible (e.g., all CAREER tasks together).
+If shifting an earlier task by 15-30 minutes creates room for an additional task, prefer the shift.
 
 === RULE 6: OVERFLOW ===
 ${targetDateObj ? `If a task cannot fit within its ALLOWED windows on ${targetDateISO} (window is full or no time left), mark it with reasoning "OVERFLOW: [window_name] full on ${targetDateISO}" and DO NOT schedule it. Do NOT force it into a different window.` : 'Schedule each task in its allowed time window based on category.'}

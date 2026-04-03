@@ -124,8 +124,9 @@ export async function getTasksForWindow(
   window: string,
   timezone: string
 ): Promise<any[]> {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  // Use timezone-aware "today" to avoid UTC boundary issues
+  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: timezone || 'America/New_York' });
+  const todayStartISO = new Date(`${todayStr}T00:00:00`).toISOString();
 
   const { data, error } = await supabase
     .from('tasks')
@@ -134,7 +135,7 @@ export async function getTasksForWindow(
     .neq('status', 'BLOCKED')
     .neq('status', 'DONE')
     .not('title', 'ilike', '%test%')
-    .or(`start_time.gte.${today.toISOString()},due_date.gte.${today.toISOString().split('T')[0]}`)
+    .or(`start_time.gte.${todayStartISO},due_date.gte.${todayStr}`)
     .order('start_time', { ascending: true, nullsFirst: false });
 
   if (error || !data) {

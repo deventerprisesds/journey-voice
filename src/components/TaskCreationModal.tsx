@@ -200,8 +200,8 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
       ];
       const isDemo = DEMO_EMBA_USER_IDS.includes(userId);
 
-      // Prepare today's date (YYYY-MM-DD) for date-only comparisons
-      const todayStr = format(new Date(), 'yyyy-MM-dd');
+      // Use timezone-aware today
+      const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York' });
 
       // Get last weekend end time
       const { data: lastWeekend } = await supabase

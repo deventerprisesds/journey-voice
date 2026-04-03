@@ -53,7 +53,7 @@ export const useBatchScheduling = () => {
           tasks,
           userId,
           timezone,
-          targetDate: targetDate ? targetDate.toISOString().split('T')[0] : undefined
+          targetDate: targetDate ? targetDate.toLocaleDateString('en-CA', { timeZone: timezone }) : undefined
         }
       });
 

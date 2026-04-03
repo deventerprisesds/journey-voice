@@ -6,8 +6,9 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Task } from '@/types/task';
 import KanbanBoard from './KanbanBoard';
 import SmartTaskInput from './SmartTaskInput';
-import { format, isToday, parseISO, startOfWeek, endOfWeek, addWeeks, isWithinInterval } from 'date-fns';
+import { format, startOfWeek, endOfWeek, addWeeks, isWithinInterval, parseISO } from 'date-fns';
 import { cn } from '@/lib/utils';
+import { getDateInTimezone, getTodayInTimezone, getDefaultTimezone } from '@/lib/date';
 
 interface TabbedKanbanBoardProps {
   tasks: Task[];
@@ -106,9 +107,11 @@ const TabbedKanbanBoard: React.FC<TabbedKanbanBoardProps> = ({
     
     switch (timePeriod) {
       case 'today': {
+        const tz = getDefaultTimezone();
+        const todayKey = getTodayInTimezone(tz);
         return normalizedTasks.filter(task => {
-          const isDueToday = task.due_date && isToday(parseISO(task.due_date));
-          const isScheduledToday = task.start_time && isToday(parseISO(task.start_time));
+          const isDueToday = task.due_date && getDateInTimezone(task.due_date, tz) === todayKey;
+          const isScheduledToday = task.start_time && getDateInTimezone(task.start_time, tz) === todayKey;
           const isActive = ['UP_NEXT', 'DOING'].includes(task.status);
           return isDueToday || isScheduledToday || isActive;
         });

@@ -506,7 +506,8 @@ serve(async (req) => {
             .eq('is_all_day', false);
 
           // Include accumulated busy slots from previous days' scheduling
-          const dayBusySlots = accumulatedBusySlots.filter(s => s.start_time.startsWith(targetISO));
+          // Use dayBounds for proper timezone-aware filtering instead of UTC string prefix match
+          const dayBusySlots = accumulatedBusySlots.filter(s => s.start_time >= dayBounds.start && s.start_time < dayBounds.end);
 
           const allScheduledItems = [
             ...(dayScheduled || []),
@@ -583,8 +584,10 @@ serve(async (req) => {
           // STEP 4: SCORE and FILL by window capacity (with dedup)
           const priorityWeight: Record<string, number> = { URGENT: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
           
+          // Same-day title dedup: normalize and keep highest-scored only
+          const seenTitlesThisDay = new Set<string>();
           const scoredCandidates = candidates
-            .filter(t => !scheduledTitles.has(t.title)) // Dedup by title
+            .filter(t => !scheduledTitles.has(t.title)) // Cross-day dedup by title
             .map(task => {
               let score = priorityWeight[task.priority] || 1;
               
@@ -642,12 +645,20 @@ serve(async (req) => {
             return 0;
           });
 
+          // Same-day title dedup: keep highest-scored instance only
+          const dedupedCandidates = scoredCandidates.filter(task => {
+            const normalizedTitle = task.title.toLowerCase().trim();
+            if (seenTitlesThisDay.has(normalizedTitle)) return false;
+            seenTitlesThisDay.add(normalizedTitle);
+            return true;
+          });
+
           const selectedCandidates: typeof scoredCandidates = [];
           const windowRemaining = { ...Object.fromEntries(
             Object.entries(windowCapacities).map(([name, cap]) => [name, cap.remainingMinutes])
           )};
 
-          for (const task of scoredCandidates) {
+          for (const task of dedupedCandidates) {
             const duration = task.estimate_minutes || 
               categoryMappings[task.category]?.estimatedDuration || 60;
             const preferredWindows = getPreferredWindows(task.category, categoryMappings, activeWindowNames);
@@ -659,6 +670,23 @@ serve(async (req) => {
                 selectedCandidates.push(task);
                 assigned = true;
                 break;
+              }
+            }
+
+            // Flexible capacity aggregation: if task's preferred windows span all active windows,
+            // check aggregate remaining across all windows
+            if (!assigned && preferredWindows.length === activeWindowNames.length) {
+              const totalRemaining = Object.values(windowRemaining).reduce((s, v) => s + v, 0);
+              if (totalRemaining >= duration) {
+                // Assign to the window with the most remaining capacity
+                const bestWindow = Object.entries(windowRemaining)
+                  .sort(([,a], [,b]) => b - a)[0];
+                if (bestWindow) {
+                  windowRemaining[bestWindow[0]] -= duration;
+                  selectedCandidates.push(task);
+                  assigned = true;
+                  console.log(`    ✅ "${task.title}" assigned via aggregate capacity to ${bestWindow[0]}`);
+                }
               }
             }
 

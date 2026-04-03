@@ -16,7 +16,7 @@ import { toast } from 'sonner';
 import { CalendarConnectionModal } from './CalendarConnectionModal';
 import { CalendarSelectionPanel } from './CalendarSelectionPanel';
 import { supabase } from '@/integrations/supabase/client';
-import { getDateInTimezone } from '@/lib/date';
+import { getDateInTimezone, getTodayInTimezone } from '@/lib/date';
 import { selectSchedulingCandidates } from '@/lib/schedulingCandidates';
 
 interface CalendarModuleProps {
@@ -446,16 +446,16 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
 
   // Get tasks for a specific date
   const getTasksForDate = (date: Date) => {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York';
+    const dateKey = date.toLocaleDateString('en-CA', { timeZone: tz });
     const dateTasks = tasks.filter(task => {
       // Priority 1: Show on start_time date if scheduled
       if (task.start_time) {
-        const taskDate = new Date(task.start_time);
-        return isSameDay(taskDate, date);
+        return getDateInTimezone(task.start_time, tz) === dateKey;
       }
       // Priority 2: Show on due_date only if NOT yet scheduled
       if (task.due_date && !task.start_time) {
-        const dueDate = new Date(task.due_date);
-        return isSameDay(dueDate, date);
+        return getDateInTimezone(task.due_date, tz) === dateKey;
       }
       return false;
     });
@@ -467,8 +467,10 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
   };
 
   const getEventsForDate = (date: Date) => {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York';
+    const dateKey = date.toLocaleDateString('en-CA', { timeZone: tz });
     return externalEvents.filter(event => 
-      isSameDay(parseISO(event.start_time), date)
+      getDateInTimezone(event.start_time, tz) === dateKey
     );
   };
 
@@ -601,7 +603,7 @@ const CalendarModule: React.FC<CalendarModuleProps> = ({
         <div className="grid grid-cols-7 gap-2">
           {calendarDays.map(day => {
             const dayTasks = getTasksForDate(day);
-            const isCurrentDay = isToday(day);
+            const isCurrentDay = getDateInTimezone(day.toISOString(), Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York') === getTodayInTimezone(Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York');
             const isCurrentMonth = isSameMonth(day, currentDate);
             
             return (

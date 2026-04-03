@@ -540,9 +540,10 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
       }
 
       // Create an itinerary with the scheduled tasks
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York';
       await itineraryEngine.saveScheduleAsItinerary(
         [{
-          date: tomorrow.toISOString().split('T')[0],
+          date: tomorrow.toLocaleDateString('en-CA', { timeZone: tz }),
           tasks: scheduledTasks,
           totalMinutes: scheduledTasks.reduce((sum, st) => sum + (st.task.estimate_minutes || 60), 0),
           availableMinutes: 420

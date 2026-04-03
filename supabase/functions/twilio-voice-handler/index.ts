@@ -236,10 +236,9 @@ async function getUserIdFromPhoneSecret(): Promise<string | null> {
 async function executeTool(toolName: string, args: Record<string, unknown>, userId: string, timezone: string): Promise<string> {
   const supabase = createClient(supabaseUrl, supabaseServiceKey);
   
-  // Get current date in user's timezone
+  // Get current date in user's timezone (timezone-aware, no UTC split)
   const now = new Date();
-  const userNow = new Date(now.toLocaleString('en-US', { timeZone: timezone }));
-  const todayStr = userNow.toISOString().split('T')[0];
+  const todayStr = now.toLocaleDateString('en-CA', { timeZone: timezone });
 
   console.log(`Executing tool: ${toolName} with args:`, args);
 
@@ -279,9 +278,9 @@ async function executeTool(toolName: string, args: Record<string, unknown>, user
 
     case 'get_upcoming_tasks': {
       const days = (args.days as number) || 3;
-      const futureDate = new Date(userNow);
+      const futureDate = new Date();
       futureDate.setDate(futureDate.getDate() + days);
-      const futureDateStr = futureDate.toISOString().split('T')[0];
+      const futureDateStr = futureDate.toLocaleDateString('en-CA', { timeZone: timezone });
       
       const { data: tasks, error } = await supabase
         .from('tasks')

@@ -404,8 +404,8 @@ Examples:
             const batchResult = await batchResponse.json();
             console.log(`✅ Batch scheduler returned ${batchResult.scheduled?.length || 0} scheduled slots`);
             
-            // Get today's date for validation
-            const todayISO = new Date().toISOString().split('T')[0];
+            // Get today's date for validation (timezone-aware)
+            const todayISO = new Date().toLocaleDateString('en-CA', { timeZone: timezone || 'America/New_York' });
             
             // Merge scheduled times into parsed tasks WITH DATE VALIDATION
             const tasksWithPreview = tasks.map((task: any, idx: number) => {

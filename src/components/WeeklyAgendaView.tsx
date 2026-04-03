@@ -27,7 +27,7 @@ import { humanizeCalendarId } from '@/lib/calendarUtils';
 import { Task, ExternalCalendarEvent } from '@/types/task';
 import { DEFAULT_SCHEDULING_CONFIG } from '@/config/schedulingRules';
 import { loadUserSchedulingConfig, type SchedulingConfig } from '@/services/schedulingService';
-import { getTimePartsInTimezone, getDateInTimezone, getDefaultTimezone, formatTimeInTimezone } from '@/lib/date';
+import { getTimePartsInTimezone, getDateInTimezone, getDefaultTimezone, formatTimeInTimezone, dateToKeyInTimezone, getTodayInTimezone } from '@/lib/date';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 
@@ -201,12 +201,12 @@ const AgendaTab: React.FC<AgendaTabProps> = ({ tasks, historyTasks, weekDays, ex
   const tasksByDay = useMemo(() => {
     const map: Record<string, Record<string, (Task | (ExternalCalendarEvent & { _isExternal: true; calendar_connections?: any }))[]>> = {};
     weekDays.forEach(day => {
-      const key = format(day, 'yyyy-MM-dd');
+      const key = dateToKeyInTimezone(day, userTimezone);
       map[key] = { morning: [], business_hours: [], after_work: [], evening: [], weekends: [], unscheduled: [] };
     });
 
     // For past days, use history tasks instead of live tasks
-    const pastDays = new Set(weekDays.filter(d => format(d, 'yyyy-MM-dd') < todayStr).map(d => format(d, 'yyyy-MM-dd')));
+    const pastDays = new Set(weekDays.filter(d => dateToKeyInTimezone(d, userTimezone) < todayStr).map(d => dateToKeyInTimezone(d, userTimezone)));
 
     // Bucket history tasks into past days
     historyTasks.forEach(task => {
@@ -263,10 +263,10 @@ const AgendaTab: React.FC<AgendaTabProps> = ({ tasks, historyTasks, weekDays, ex
   return (
     <div className="space-y-3">
       {weekDays.map(day => {
-        const dayKey = format(day, 'yyyy-MM-dd');
+        const dayKey = dateToKeyInTimezone(day, userTimezone);
         const dayTasks = tasksByDay[dayKey] || {};
         const totalForDay = Object.values(dayTasks).flat().length;
-        const today = isToday(day);
+        const today = dateToKeyInTimezone(day, userTimezone) === todayStr;
         const dayOfWeek = day.getDay();
         const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
         const relevantWindows = isWeekend
@@ -390,7 +390,7 @@ const MeetingsTab: React.FC<MeetingsTabProps> = ({ weekDays, externalEvents, use
   const eventsByDay = useMemo(() => {
     const map: Record<string, typeof externalEvents> = {};
     weekDays.forEach(day => {
-      map[format(day, 'yyyy-MM-dd')] = [];
+      map[dateToKeyInTimezone(day, userTimezone)] = [];
     });
     externalEvents.forEach(evt => {
       const dayKey = getDateInTimezone(evt.start_time, userTimezone);
@@ -408,9 +408,9 @@ const MeetingsTab: React.FC<MeetingsTabProps> = ({ weekDays, externalEvents, use
   return (
     <div className="space-y-3">
       {weekDays.map(day => {
-        const dayKey = format(day, 'yyyy-MM-dd');
+        const dayKey = dateToKeyInTimezone(day, userTimezone);
         const events = eventsByDay[dayKey] || [];
-        const today = isToday(day);
+        const today = dateToKeyInTimezone(day, userTimezone) === getTodayInTimezone(userTimezone);
 
         return (
           <Card key={dayKey} className={cn(today && 'ring-2 ring-primary/50')}>
