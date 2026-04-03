@@ -25,6 +25,22 @@ class ErrorBoundary extends Component<Props, State> {
 
   public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error('ErrorBoundary caught an error:', error, errorInfo);
+
+    // Extract the first component name from the component stack
+    const componentMatch = errorInfo.componentStack?.match(/\n\s+at (\w+)/);
+    const crashedComponent = componentMatch?.[1] || 'Unknown';
+
+    // Log to error_log table via direct REST (bypasses supabase-js)
+    logToErrorLog({
+      component: crashedComponent,
+      error_type: 'react_crash',
+      error_message: error.message,
+      stack_trace: error.stack?.substring(0, 2000),
+      context: {
+        pathname: window.location.pathname,
+        componentStack: errorInfo.componentStack?.substring(0, 500),
+      }
+    });
   }
 
   private handleReset = () => {
