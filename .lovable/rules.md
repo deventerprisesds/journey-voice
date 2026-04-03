@@ -68,4 +68,5 @@ Before modifying any subsystem, read the relevant documentation first:
 - **Voice pipeline**: Never bypass `call-context-builder.ts` for call context. It's the single source of truth for task filtering + topic ranking. See `docs/VOICE_SYSTEM.md`.
 - **OAuth tokens**: Always encrypted via `encrypt_token`/`decrypt_token`. Never store raw tokens. See `docs/CALENDAR_INTEGRATION.md`.
 - **Edge function patterns**: Audit existing functions in the same domain before creating new ones. Use `SUPABASE_SERVICE_ROLE_KEY` consistently. See `docs/EDGE_FUNCTIONS.md`.
-- **Scheduling plans are mandatory-read**: Before any scheduling, calendar, daily agenda, assignment persistence, or timezone plan/change, read `docs/SCHEDULING_RULES.md`, `docs/TASK_MANAGEMENT.md`, `docs/CALENDAR_INTEGRATION.md`, and `src/lib/date.ts`.
+- **Scheduling plans are mandatory-read**: Before any scheduling, calendar, daily agenda, assignment persistence, or timezone plan/change, read `docs/SCHEDULING_RULES.md`, `docs/SCHEDULING_SYSTEM_MAP.md`, `docs/TASK_MANAGEMENT.md`, `docs/CALENDAR_INTEGRATION.md`, and `src/lib/date.ts`.
+- **Scheduling system map sync**: After any scheduling code change, update `docs/SCHEDULING_SYSTEM_MAP.md` with new/changed code paths, modules, or data flows.
