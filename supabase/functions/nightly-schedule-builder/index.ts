@@ -274,6 +274,44 @@ serve(async (req) => {
         console.log(`  📋 Rolled over ${rolledOverCount} tasks`);
 
         // ==========================================
+        // STEP 1.1: CLEAR FUTURE-SCHEDULED TASKS (rebuild, not append)
+        // Tasks scheduled in the upcoming 7-day horizon are cleared so the
+        // week loop can rebuild from scratch. No pushed_count increment,
+        // no history — these haven't happened yet.
+        // ==========================================
+        const horizonEnd = new Date(now);
+        horizonEnd.setDate(horizonEnd.getDate() + 7);
+        
+        const { data: futureTasks, error: futureError } = await supabase
+          .from('tasks')
+          .select('id, title, start_time')
+          .eq('user_id', userId)
+          .eq('is_scheduled', true)
+          .not('status', 'eq', 'DONE')
+          .gte('start_time', now.toISOString())
+          .lt('start_time', horizonEnd.toISOString());
+
+        let clearedFutureCount = 0;
+        if (!futureError && futureTasks && futureTasks.length > 0) {
+          for (const ft of futureTasks) {
+            const { error: clearError } = await supabase
+              .from('tasks')
+              .update({
+                start_time: null,
+                end_time: null,
+                is_scheduled: false,
+                updated_at: now.toISOString(),
+              })
+              .eq('id', ft.id);
+
+            if (!clearError) {
+              clearedFutureCount++;
+            }
+          }
+          console.log(`  🔄 Cleared ${clearedFutureCount} future-scheduled tasks for rebuild`);
+        }
+
+        // ==========================================
         // STEP 1.25: CLEAR SCHEDULING FROM COMPLETED TASKS
         // DONE tasks with is_scheduled=true consume capacity — clear them
         // ==========================================
