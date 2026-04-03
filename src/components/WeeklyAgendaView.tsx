@@ -263,10 +263,10 @@ const AgendaTab: React.FC<AgendaTabProps> = ({ tasks, historyTasks, weekDays, ex
   return (
     <div className="space-y-3">
       {weekDays.map(day => {
-        const dayKey = format(day, 'yyyy-MM-dd');
+        const dayKey = dateToKeyInTimezone(day, userTimezone);
         const dayTasks = tasksByDay[dayKey] || {};
         const totalForDay = Object.values(dayTasks).flat().length;
-        const today = isToday(day);
+        const today = dateToKeyInTimezone(day, userTimezone) === todayStr;
         const dayOfWeek = day.getDay();
         const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
         const relevantWindows = isWeekend
