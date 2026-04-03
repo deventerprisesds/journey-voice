@@ -198,7 +198,25 @@ const FocusView: React.FC<FocusViewProps> = ({
 
     syncAndLoadExternalEvents();
     const interval = setInterval(syncAndLoadExternalEvents, 15 * 60 * 1000); // every 15 min
-    return () => clearInterval(interval);
+    
+    // Realtime subscription for external calendar events
+    const channel = supabase
+      .channel('focus-external-events')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'external_calendar_events',
+        filter: `user_id=eq.${user.id}`,
+      }, () => {
+        console.log('[FocusView] Realtime event change detected, refreshing...');
+        syncAndLoadExternalEvents();
+      })
+      .subscribe();
+    
+    return () => {
+      clearInterval(interval);
+      supabase.removeChannel(channel);
+    };
   }, [user?.id]);
   
   // Get user timezone - use browser default as fallback
