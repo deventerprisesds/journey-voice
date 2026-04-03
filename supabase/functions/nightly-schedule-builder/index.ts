@@ -460,9 +460,10 @@ serve(async (req) => {
         const weekResults: Record<string, any> = {};
 
         for (let dayOffset = 0; dayOffset < totalDays; dayOffset++) {
-          const targetDate = new Date(now);
-          targetDate.setDate(targetDate.getDate() + dayOffset);
-          const targetISO = targetDate.toISOString().split('T')[0];
+          // Compute target date from todayISO (timezone-correct) to avoid UTC drift
+          const [tY, tM, tD] = todayISO.split('-').map(Number);
+          const targetDate = new Date(tY, tM - 1, tD + dayOffset);
+          const targetISO = `${targetDate.getFullYear()}-${String(targetDate.getMonth() + 1).padStart(2, '0')}-${String(targetDate.getDate()).padStart(2, '0')}`;
           
           // Get day of week for this target date
           const targetUserDate = new Date(targetDate.toLocaleString('en-US', { timeZone: timezone }));
