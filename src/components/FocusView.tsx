@@ -784,7 +784,7 @@ const FocusView: React.FC<FocusViewProps> = ({
       for (const minute of [0, 30]) {
         // Format time label using timezone-aware formatting
         const timeStr = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
-        const dateStr = format(today, 'yyyy-MM-dd');
+        const dateStr = dateToKeyInTimezone(today, userTimezone);
         const isoTime = localTimeToUtcISO(dateStr, timeStr, userTimezone);
         const label = new Date(isoTime).toLocaleTimeString('en-US', {
           timeZone: userTimezone,
