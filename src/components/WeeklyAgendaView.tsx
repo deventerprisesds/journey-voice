@@ -201,12 +201,12 @@ const AgendaTab: React.FC<AgendaTabProps> = ({ tasks, historyTasks, weekDays, ex
   const tasksByDay = useMemo(() => {
     const map: Record<string, Record<string, (Task | (ExternalCalendarEvent & { _isExternal: true; calendar_connections?: any }))[]>> = {};
     weekDays.forEach(day => {
-      const key = format(day, 'yyyy-MM-dd');
+      const key = dateToKeyInTimezone(day, userTimezone);
       map[key] = { morning: [], business_hours: [], after_work: [], evening: [], weekends: [], unscheduled: [] };
     });
 
     // For past days, use history tasks instead of live tasks
-    const pastDays = new Set(weekDays.filter(d => format(d, 'yyyy-MM-dd') < todayStr).map(d => format(d, 'yyyy-MM-dd')));
+    const pastDays = new Set(weekDays.filter(d => dateToKeyInTimezone(d, userTimezone) < todayStr).map(d => dateToKeyInTimezone(d, userTimezone)));
 
     // Bucket history tasks into past days
     historyTasks.forEach(task => {
