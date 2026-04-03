@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Plus, Clock, Calendar, Sunrise, Sun, Sunset, Moon, Coffee, GripVertical } from 'lucide-react';
 import { SchedulingConfig, DEFAULT_SCHEDULING_CONFIG } from '@/config/schedulingRules';
-import { getTimePartsInTimezone, formatTimeInTimezone, getDateInTimezone, localTimeToUtcISO, getDefaultTimezone } from '@/lib/date';
+import { getTimePartsInTimezone, formatTimeInTimezone, getDateInTimezone, localTimeToUtcISO, getDefaultTimezone, dateToKeyInTimezone } from '@/lib/date';
 
 interface TimeSlotGridProps {
   dates: Date[];
