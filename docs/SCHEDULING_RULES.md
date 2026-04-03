@@ -66,6 +66,27 @@ The daily agenda should present a **full, trustworthy day plan** that:
    - External calendar events and scheduled tasks both count as busy slots.
    - Gap-filling must avoid collisions with either source.
 
+10. **Rolling 7-day horizon**
+    - The nightly builder schedules **today + 6 days** (a full rolling week), not "today through Sunday."
+    - This ensures tasks incomplete on Friday can be placed on Monday without waiting for Monday's run.
+
+11. **Rebuild, not append**
+    - Before each nightly run, all future-scheduled non-DONE tasks within the 7-day horizon are cleared (`start_time`, `end_time`, `is_scheduled` reset).
+    - `pushed_count` is NOT incremented for future tasks — only past tasks get rollover history.
+    - This prevents overlaps from successive nightly runs appending onto previous placements.
+
+12. **Batch overlap rejection**
+    - After AI returns slot placements, each slot is checked against previously accepted slots in the same batch.
+    - If `[start, end)` overlaps any accepted slot, the task is rejected with reason "overlaps previously accepted task."
+
+13. **Iris context alignment**
+    - `call-context-builder` derives `CATEGORY_WINDOW_MAPPING` and `WINDOW_RANGES` from `scheduling-defaults.ts`.
+    - Hardcoded mappings in call context are forbidden — they cause Iris to show different tasks than the scheduler places.
+
+14. **Nightly builder uses timezone-correct "today"**
+    - `todayISO` must be computed via `getTodayInTimezone(timezone)`, never `now.toISOString().split('T')[0]`.
+    - All date arithmetic in the week loop derives from this timezone-correct date string.
+
 ## Required planning checklist
 
 Every scheduling-related plan must explicitly answer:
