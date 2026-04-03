@@ -27,7 +27,7 @@ import { humanizeCalendarId } from '@/lib/calendarUtils';
 import { Task, ExternalCalendarEvent } from '@/types/task';
 import { DEFAULT_SCHEDULING_CONFIG } from '@/config/schedulingRules';
 import { loadUserSchedulingConfig, type SchedulingConfig } from '@/services/schedulingService';
-import { getTimePartsInTimezone, getDateInTimezone, getDefaultTimezone, formatTimeInTimezone } from '@/lib/date';
+import { getTimePartsInTimezone, getDateInTimezone, getDefaultTimezone, formatTimeInTimezone, dateToKeyInTimezone, getTodayInTimezone } from '@/lib/date';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 
