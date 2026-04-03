@@ -100,6 +100,10 @@ Voice/chat → execute-tool → scheduling functions
 | Batch overlaps | AI could return two tasks at same time, no check | Added `acceptedSlots` array with overlap rejection in batch-calendar-scheduler | 2026-04-03 |
 | Iris mapping drift | `call-context-builder` hardcoded different category-window mappings | Derive `CATEGORY_WINDOW_MAPPING` from `scheduling-defaults.ts` | 2026-04-03 |
 | `flexible` free pass | `validateTaskWindow` returned `valid: true` unconditionally for flexible categories | Enforce flexible window's `start`/`end` hours (9-22) | 2026-04-02 |
+| UTC busy-slot queries | Nightly builder used `${targetISO}T00:00:00` (UTC midnight) for capacity queries | Added `localDateToUtcBounds()` to `_shared/timezone.ts`; nightly builder now uses timezone-offset UTC bounds | 2026-04-03 |
+| Client `toLocaleDateString('en-CA')` without timezone | `useUnifiedTasks` history cutoff used browser-local date | Replaced with `getTodayInTimezone(getDefaultTimezone())` from `src/lib/date.ts` | 2026-04-03 |
+| Client `format(date, 'yyyy-MM-dd')` for scheduling | TimeSlotGrid compared timezone-aware task dates against browser-local date keys | Added `dateToKeyInTimezone()` to `src/lib/date.ts`; TimeSlotGrid uses it exclusively | 2026-04-03 |
+| Assignment fetching UTC date | `assignmentFetching.ts` used `toISOString().split('T')[0]` for today | Replaced with `toLocaleDateString('en-CA', { timeZone })` | 2026-04-03 |
 
 ---
 
@@ -107,9 +111,36 @@ Voice/chat → execute-tool → scheduling functions
 
 | Anti-Pattern | Why It's Dangerous | What To Do Instead |
 |-------------|-------------------|-------------------|
-| `now.toISOString().split('T')[0]` for "today" | At 8 PM EDT (midnight UTC), "today" becomes tomorrow | Use `getTodayInTimezone(timezone)` from `_shared/timezone.ts` |
+| `now.toISOString().split('T')[0]` for "today" | At 8 PM EDT (midnight UTC), "today" becomes tomorrow | **Server**: `getTodayInTimezone(tz)` from `_shared/timezone.ts`. **Client**: `getTodayInTimezone(tz)` from `src/lib/date.ts` |
+| `new Date().toLocaleDateString('en-CA')` without `{ timeZone }` | Uses browser locale, not user's configured timezone | `getTodayInTimezone(timezone)` from `src/lib/date.ts` |
+| `format(date, 'yyyy-MM-dd')` from date-fns for schedule filtering | date-fns `format` uses browser-local timezone, not user timezone | `dateToKeyInTimezone(date, timezone)` from `src/lib/date.ts` |
+| `${targetISO}T00:00:00` / `T23:59:59` for DB day-range queries | These are UTC midnight, not local midnight — misses 8PM-midnight local tasks | `localDateToUtcBounds(dateStr, timezone)` from `_shared/timezone.ts` |
+| `accumulatedBusySlots.filter(s => s.start_time.startsWith(targetISO))` | String prefix match on UTC ISO strings doesn't respect timezone day boundaries | Use `isDateInTimezone()` or filter against `localDateToUtcBounds()` range |
 | Hardcoding category-window mappings outside `scheduling-defaults.ts` | Causes Iris, scheduler, and validator to disagree | Import/derive from `scheduling-defaults.ts` |
 | Adding new scheduling code paths instead of using existing ones | Fragments logic, creates paths that skip validation | Use batch-calendar-scheduler or smart-calendar-scheduler |
 | Skipping `pushed_count` distinction between past rollover and future rebuild | Future tasks get unfairly penalized as "pushed" | Pass 1 = past (increment), Pass 1.1 = future (no increment) |
 | Browser-local `isToday()` for agenda filtering | Doesn't account for user timezone | Use `getDateInTimezone` from shared helpers |
 | Creating MD docs without enforcement in `.lovable/rules.md` | Docs get written but never read | Always add mandatory-read entry in rules.md |
+
+---
+
+## F. Mandatory Timezone API
+
+### Server-side (`supabase/functions/_shared/timezone.ts`)
+| Function | Use For |
+|----------|---------|
+| `getTodayInTimezone(tz)` | Getting "today" as YYYY-MM-DD |
+| `localDateToUtcBounds(dateStr, tz)` | DB queries for a local day's tasks/events |
+| `zonedTimeToUtc(date, time, tz)` | Converting user-input times to UTC |
+| `normalizeDateTime(input, tz)` | Normalizing naive datetimes to UTC |
+| `isDateInTimezone(iso, dateStr, tz)` | Checking if a UTC timestamp falls on a local date |
+
+### Client-side (`src/lib/date.ts`)
+| Function | Use For |
+|----------|---------|
+| `getTodayInTimezone(tz)` | Getting "today" as YYYY-MM-DD |
+| `dateToKeyInTimezone(date, tz)` | Converting Date objects to YYYY-MM-DD day keys |
+| `getDateInTimezone(iso, tz)` | Extracting date from ISO timestamp in user timezone |
+| `getTimePartsInTimezone(iso, tz)` | Extracting hour/minute for grid positioning |
+| `localTimeToUtcISO(date, time, tz)` | Converting user time inputs to UTC |
+| `isSameDateInTimezone(iso, dateStr, tz)` | Filtering tasks by date |
