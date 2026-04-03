@@ -535,13 +535,14 @@ const FocusView: React.FC<FocusViewProps> = ({
     if (!user?.id) return;
     
     const tz = userTimezone;
-    const todayStart = new Date(format(today, 'yyyy-MM-dd') + 'T00:00:00');
-    const tomorrowStart = new Date(format(today, 'yyyy-MM-dd') + 'T00:00:00');
-    tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+    const todayKey = dateToKeyInTimezone(today, tz);
     
-    // Convert to UTC ISO strings for DB query
-    const todayStartUTC = localTimeToUtcISO(format(today, 'yyyy-MM-dd'), '00:00', tz);
-    const tomorrowStartUTC = localTimeToUtcISO(format(new Date(tomorrowStart), 'yyyy-MM-dd'), '00:00', tz);
+    // Convert to UTC ISO strings for DB query using timezone-aware helpers
+    const todayStartUTC = localTimeToUtcISO(todayKey, '00:00', tz);
+    const nextDay = new Date(today);
+    nextDay.setDate(nextDay.getDate() + 1);
+    const nextDayKey = dateToKeyInTimezone(nextDay, tz);
+    const tomorrowStartUTC = localTimeToUtcISO(nextDayKey, '00:00', tz);
 
     setIsClearing(true);
     try {
