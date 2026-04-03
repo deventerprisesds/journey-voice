@@ -546,6 +546,49 @@ async function syncGoogleDelta(
     }
   }
 
+  // STALE EVENT CLEANUP: If this was a full sync (no sync_token), remove orphan events
+  if (!connection.sync_token) {
+    const fetchedIds = allEvents.map(e => e.id);
+    if (fetchedIds.length > 0) {
+      const { data: existingEvents } = await supabaseClient
+        .from('external_calendar_events')
+        .select('id, external_event_id')
+        .eq('connection_id', connection.id);
+      
+      if (existingEvents) {
+        const orphanIds = existingEvents
+          .filter(e => !fetchedIds.includes(e.external_event_id))
+          .map(e => e.id);
+        
+        if (orphanIds.length > 0) {
+          const { error: orphanError } = await supabaseClient
+            .from('external_calendar_events')
+            .delete()
+            .in('id', orphanIds);
+          
+          if (!orphanError) {
+            result.events_deleted += orphanIds.length;
+            console.log(`[calendar-delta-sync] Cleaned up ${orphanIds.length} orphan Google events`);
+          }
+        }
+      }
+    }
+  }
+
+  // Purge past events older than 48 hours
+  const purgeThreshold = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+  const { data: purgedData } = await supabaseClient
+    .from('external_calendar_events')
+    .delete()
+    .eq('connection_id', connection.id)
+    .lt('end_time', purgeThreshold)
+    .select('id');
+  
+  if (purgedData && purgedData.length > 0) {
+    result.events_deleted += purgedData.length;
+    console.log(`[calendar-delta-sync] Purged ${purgedData.length} past Google events older than 48h`);
+  }
+
   // Save sync token for next sync
   if (nextSyncToken) {
     await supabaseClient.rpc('update_calendar_sync_token', {

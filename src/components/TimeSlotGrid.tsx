@@ -517,18 +517,27 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
 
                       if (item.type === 'event') {
                         const ev = item.raw as ExternalCalendarEvent;
+                        const provider = ev.calendar_connections?.provider;
+                        const isGoogle = provider === 'google';
+                        const isOutlook = provider === 'outlook' || provider === 'office365';
+                        const bgColor = isGoogle ? 'bg-blue-100 dark:bg-blue-950/30' : isOutlook ? 'bg-cyan-100 dark:bg-cyan-950/30' : 'bg-purple-100';
+                        const borderColor = isGoogle ? 'border-blue-500' : isOutlook ? 'border-cyan-500' : 'border-purple-500';
+                        const iconColor = isGoogle ? 'text-blue-600' : isOutlook ? 'text-cyan-600' : 'text-purple-600';
+                        const titleColor = isGoogle ? 'text-blue-900 dark:text-blue-200' : isOutlook ? 'text-cyan-900 dark:text-cyan-200' : 'text-purple-900';
+                        const timeColor = isGoogle ? 'text-blue-700 dark:text-blue-300' : isOutlook ? 'text-cyan-700 dark:text-cyan-300' : 'text-purple-700';
+                        
                         return (
                           <div
                             key={`ev-${idx}`}
-                            className="absolute rounded bg-purple-100 border-l-4 border-purple-500 px-2 py-1 text-xs shadow-sm pointer-events-auto"
+                            className={cn("absolute rounded border-l-4 px-2 py-1 text-xs shadow-sm pointer-events-auto", bgColor, borderColor)}
                             style={{ top, height, left: `${left}%`, width: `calc(${width}% - 2px)` }}
                             title={`External Event: ${ev.title}`}
                           >
                             <div className="flex items-center gap-1 mb-0.5">
-                              <Calendar className="h-3 w-3 text-purple-600" />
-                              <span className="truncate font-medium text-purple-900">{ev.title}</span>
+                              <Calendar className={cn("h-3 w-3", iconColor)} />
+                              <span className={cn("truncate font-medium", titleColor)}>{ev.title}</span>
                             </div>
-                            <div className="text-purple-700 text-xs flex items-center gap-1">
+                            <div className={cn("text-xs flex items-center gap-1", timeColor)}>
                               <Clock className="h-2 w-2" />
                               {formatTimeInTimezone(ev.start_time, timezone)} - {formatTimeInTimezone(ev.end_time, timezone)}
                             </div>
