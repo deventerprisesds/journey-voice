@@ -52,7 +52,17 @@ The daily agenda should present a **full, trustworthy day plan** that:
    - No duplicate active tasks with the same normalized title should compete for the same fill pass.
    - Dedup should happen before submission to the scheduler.
 
-7. **Busy-slot handling**
+7. **`flexible` is NOT a free pass**
+   - A category mapped to `flexible` may be placed in any named window **within** the flexible range (default 9 AM – 10 PM).
+   - The validator (`validateTaskWindow`) must enforce the `flexible` window's `start`/`end` hours, not return `valid: true` unconditionally.
+   - No task may ever be placed before 6 AM or after 10 PM regardless of category.
+
+8. **Activity-aware placement**
+   - The AI prompt includes activity context hints (gym → morning, bank → business hours, etc.).
+   - These hints guide slot selection within the allowed window but do not override hard window constraints.
+   - The server-side validator catches any AI mistakes after placement.
+
+9. **Busy-slot handling**
    - External calendar events and scheduled tasks both count as busy slots.
    - Gap-filling must avoid collisions with either source.
 

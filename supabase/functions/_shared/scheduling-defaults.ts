@@ -88,12 +88,21 @@ export function validateTaskWindow(
     ? (Array.isArray(mapping.defaultTimeWindow) ? mapping.defaultTimeWindow : [mapping.defaultTimeWindow])
     : ['flexible'];
 
-  // 'flexible' means any window is allowed
+  // 'flexible' means any *named* window within the flexible range — NOT a free pass
   if (allowedWindows.includes('flexible')) {
-    return { valid: true, actualWindow, allowedWindows };
+    const flexWindow = timeWindows['flexible'];
+    if (flexWindow && (taskHour < flexWindow.start || taskHour >= flexWindow.end)) {
+      return { valid: false, actualWindow: null, allowedWindows };
+    }
+    return { valid: true, actualWindow: actualWindow || 'flexible', allowedWindows };
+  }
+
+  // Blanket guard: if task hour is outside ALL defined windows, always invalid
+  if (actualWindow === null) {
+    return { valid: false, actualWindow: null, allowedWindows };
   }
 
   // Check if actual window is in allowed list
-  const valid = actualWindow !== null && allowedWindows.includes(actualWindow);
+  const valid = allowedWindows.includes(actualWindow);
   return { valid, actualWindow, allowedWindows };
 }
