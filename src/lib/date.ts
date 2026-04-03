@@ -246,3 +246,32 @@ export function getDefaultTimezone(): string {
     return 'America/New_York';
   }
 }
+
+/**
+ * Get today's date string (YYYY-MM-DD) in a specific timezone.
+ * USE THIS instead of `new Date().toLocaleDateString('en-CA')` or `toISOString().split('T')[0]`.
+ * @param timezone - IANA timezone string
+ * @returns Date string in YYYY-MM-DD format
+ */
+export function getTodayInTimezone(timezone: string): string {
+  try {
+    return new Date().toLocaleDateString('en-CA', { timeZone: timezone });
+  } catch {
+    return new Date().toLocaleDateString('en-CA');
+  }
+}
+
+/**
+ * Get a date key (YYYY-MM-DD) from a Date object in a specific timezone.
+ * USE THIS instead of `format(date, 'yyyy-MM-dd')` for scheduling/filtering.
+ * @param date - Date object
+ * @param timezone - IANA timezone string
+ * @returns Date string in YYYY-MM-DD format
+ */
+export function dateToKeyInTimezone(date: Date, timezone: string): string {
+  try {
+    return date.toLocaleDateString('en-CA', { timeZone: timezone });
+  } catch {
+    return date.toLocaleDateString('en-CA');
+  }
+}

@@ -54,7 +54,7 @@ export async function fetchPendingAssignments(
       } else {
       // Upcoming mode: between last weekend end and next weekend end
       // Prepare today's date (YYYY-MM-DD) for date-only comparisons
-      const todayStr = new Date().toISOString().split('T')[0];
+      const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
       const isDemo = DEMO_EMBA_USER_IDS.includes(userId);
       
       // Get last completed weekend's end time
