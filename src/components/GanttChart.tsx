@@ -110,7 +110,7 @@ const GanttChart: React.FC<GanttChartProps> = ({ tasks, onTaskEdit, className })
           width,
           isVisible,
           isOverdue: dueDate && isAfter(new Date(), dueDate) && task.status !== 'DONE',
-          isToday: dueDate && format(dueDate, 'yyyy-MM-dd') === format(new Date(), 'yyyy-MM-dd')
+          isToday: dueDate && format(dueDate, 'yyyy-MM-dd') === new Date().toLocaleDateString('en-CA')
         };
       })
       .sort((a, b) => {
