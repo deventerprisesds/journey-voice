@@ -216,6 +216,35 @@ export function isDateInTimezone(isoDateTime: string, dateStr: string, tz: strin
  * @param options - Intl.DateTimeFormat options
  * @returns Formatted string
  */
+/**
+ * Convert a local date (YYYY-MM-DD) to UTC start/end bounds for database queries.
+ * Returns the UTC ISO strings that represent midnight-to-midnight in the user's timezone.
+ * 
+ * @param dateStr - Date string in YYYY-MM-DD format (local date)
+ * @param tz - IANA timezone string
+ * @returns { start: string, end: string } — UTC ISO bounds for the full local day
+ */
+export function localDateToUtcBounds(dateStr: string, tz: string): { start: string; end: string } {
+  // Start of the day in the user's timezone → UTC
+  const startUtc = zonedTimeToUtc(dateStr, '00:00:00', tz);
+  
+  // End of the day: start of the next day in the user's timezone → UTC
+  const [year, month, day] = dateStr.split('-').map(Number);
+  const nextDay = new Date(Date.UTC(year, month - 1, day + 1));
+  const nextDayStr = `${nextDay.getUTCFullYear()}-${String(nextDay.getUTCMonth() + 1).padStart(2, '0')}-${String(nextDay.getUTCDate()).padStart(2, '0')}`;
+  const endUtc = zonedTimeToUtc(nextDayStr, '00:00:00', tz);
+  
+  return { start: startUtc, end: endUtc };
+}
+
+/**
+ * Format an ISO datetime string in a human-readable format in the user's timezone.
+ * 
+ * @param isoDateTime - ISO datetime string
+ * @param tz - IANA timezone string
+ * @param options - Intl.DateTimeFormat options
+ * @returns Formatted string
+ */
 export function formatInTimezone(
   isoDateTime: string, 
   tz: string, 

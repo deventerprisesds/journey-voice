@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Plus, Clock, Calendar, Sunrise, Sun, Sunset, Moon, Coffee, GripVertical } from 'lucide-react';
 import { SchedulingConfig, DEFAULT_SCHEDULING_CONFIG } from '@/config/schedulingRules';
-import { getTimePartsInTimezone, formatTimeInTimezone, getDateInTimezone, localTimeToUtcISO, getDefaultTimezone } from '@/lib/date';
+import { getTimePartsInTimezone, formatTimeInTimezone, getDateInTimezone, localTimeToUtcISO, getDefaultTimezone, dateToKeyInTimezone } from '@/lib/date';
 
 interface TimeSlotGridProps {
   dates: Date[];
@@ -121,7 +121,7 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
   }
 
   const getTasksForTimeSlot = (date: Date, hour: number, minute: number) => {
-    const dateStr = format(date, 'yyyy-MM-dd');
+    const dateStr = dateToKeyInTimezone(date, timezone);
     return tasks.filter(task => {
       if (!task.start_time || !task.end_time) return false;
       
@@ -137,7 +137,7 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
   };
 
   const getEventsForTimeSlot = (date: Date, hour: number, minute: number) => {
-    const dateStr = format(date, 'yyyy-MM-dd');
+    const dateStr = dateToKeyInTimezone(date, timezone);
     return externalEvents.filter(event => {
       const eventStart = parseISO(event.start_time);
       const eventEnd = parseISO(event.end_time);
@@ -229,7 +229,7 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
   };
 
   function layoutItemsForDate(date: Date) {
-    const dateStr = format(date, 'yyyy-MM-dd');
+    const dateStr = dateToKeyInTimezone(date, timezone);
     
     // Collect tasks for this date using timezone-aware filtering
     const dayTasks = tasks.filter(t => {
@@ -339,7 +339,7 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
     const durationMs = new Date(task.end_time).getTime() - new Date(task.start_time).getTime();
     
     // Create new start and end times in UTC using the user's timezone
-    const dateStr = format(targetDate, 'yyyy-MM-dd');
+    const dateStr = dateToKeyInTimezone(targetDate, timezone);
     const newStartTime = localTimeToUtcISO(dateStr, `${newHour.toString().padStart(2, '0')}:${newMinute.toString().padStart(2, '0')}`, timezone);
     const newEndDate = new Date(new Date(newStartTime).getTime() + durationMs);
     const newEndTime = newEndDate.toISOString();

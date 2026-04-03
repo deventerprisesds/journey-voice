@@ -484,21 +484,25 @@ serve(async (req) => {
           console.log(`    🪟 Active windows: ${activeWindowNames.join(', ')}`);
 
           // Fetch already-scheduled tasks for this day
+          // Use timezone-aware UTC bounds for querying this local day
+          const { localDateToUtcBounds } = await import('../_shared/timezone.ts');
+          const dayBounds = localDateToUtcBounds(targetISO, timezone);
+
           const { data: dayScheduled } = await supabase
             .from('tasks')
             .select('start_time, end_time, estimate_minutes')
             .eq('user_id', userId)
             .eq('is_scheduled', true)
-            .gte('start_time', `${targetISO}T00:00:00`)
-            .lt('start_time', `${targetISO}T23:59:59`);
+            .gte('start_time', dayBounds.start)
+            .lt('start_time', dayBounds.end);
 
           // Fetch external calendar events for this day
           const { data: dayEvents } = await supabase
             .from('external_calendar_events')
             .select('start_time, end_time')
             .eq('user_id', userId)
-            .gte('start_time', `${targetISO}T00:00:00`)
-            .lt('start_time', `${targetISO}T23:59:59`)
+            .gte('start_time', dayBounds.start)
+            .lt('start_time', dayBounds.end)
             .eq('is_all_day', false);
 
           // Include accumulated busy slots from previous days' scheduling

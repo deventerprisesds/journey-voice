@@ -3,6 +3,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { Task } from '@/types/task';
 import { toast } from 'sonner';
+import { getTodayInTimezone, getDefaultTimezone } from '@/lib/date';
 
 /**
  * Unified task loader that merges:
@@ -45,7 +46,7 @@ export function useUnifiedTasks() {
       const live = (liveTasks || []) as Task[];
 
       // 2. Load historical rows (past dates where start_time was cleared by rollover)
-      const todayStr = new Date().toLocaleDateString('en-CA');
+      const todayStr = getTodayInTimezone(getDefaultTimezone());
       const { data: historyRows } = await supabase
         .from('tasks_with_schedule' as any)
         .select('*')
