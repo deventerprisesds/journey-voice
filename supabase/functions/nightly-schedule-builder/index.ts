@@ -452,11 +452,9 @@ serve(async (req) => {
         const scheduledTitles = new Set<string>();
         const accumulatedBusySlots: Array<{ start_time: string; end_time: string }> = [];
         
-        // Determine how many days to fill (today through Sunday)
-        const userNow = new Date(now.toLocaleString('en-US', { timeZone: timezone }));
-        const currentDayOfWeek = userNow.getDay(); // 0=Sun, 6=Sat
-        const daysUntilSunday = currentDayOfWeek === 0 ? 0 : 7 - currentDayOfWeek;
-        const totalDays = daysUntilSunday + 1; // Include today
+        // Rolling 7-day horizon: always schedule a full week ahead
+        // This ensures Friday runs can place weekday tasks on Monday
+        const totalDays = 7;
         
         let totalScheduledAcrossWeek = 0;
         const weekResults: Record<string, any> = {};
