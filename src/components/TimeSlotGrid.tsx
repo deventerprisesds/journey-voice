@@ -229,7 +229,7 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
   };
 
   function layoutItemsForDate(date: Date) {
-    const dateStr = format(date, 'yyyy-MM-dd');
+    const dateStr = dateToKeyInTimezone(date, timezone);
     
     // Collect tasks for this date using timezone-aware filtering
     const dayTasks = tasks.filter(t => {
