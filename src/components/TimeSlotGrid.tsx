@@ -121,7 +121,7 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
   }
 
   const getTasksForTimeSlot = (date: Date, hour: number, minute: number) => {
-    const dateStr = format(date, 'yyyy-MM-dd');
+    const dateStr = dateToKeyInTimezone(date, timezone);
     return tasks.filter(task => {
       if (!task.start_time || !task.end_time) return false;
       
