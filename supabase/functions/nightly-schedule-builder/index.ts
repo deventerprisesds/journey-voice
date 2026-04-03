@@ -208,9 +208,8 @@ serve(async (req) => {
         // STEP 1: ROLLOVER — Reset incomplete past tasks (keep as candidates)
         // ==========================================
         const now = new Date();
-        const todayStart = new Date(now.toLocaleString('en-US', { timeZone: timezone }));
-        todayStart.setHours(0, 0, 0, 0);
-        const todayISO = now.toISOString().split('T')[0];
+        const todayISO = getTodayInTimezone(timezone);
+        console.log(`  🕐 Today in ${timezone}: ${todayISO} (UTC: ${now.toISOString().split('T')[0]})`);
         
         // Find tasks that were scheduled in the past and not completed
         const { data: expiredTasks, error: expiredError } = await supabase
