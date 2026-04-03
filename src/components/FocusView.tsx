@@ -341,7 +341,7 @@ const FocusView: React.FC<FocusViewProps> = ({
     if (!task) return;
 
     // Use timezone-aware conversion to UTC
-    const dateStr = format(today, 'yyyy-MM-dd');
+    const dateStr = dateToKeyInTimezone(today, userTimezone);
     const timeStr = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
     const startTimeISO = localTimeToUtcISO(dateStr, timeStr, userTimezone);
     
