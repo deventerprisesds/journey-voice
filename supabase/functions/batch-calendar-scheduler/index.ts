@@ -349,8 +349,10 @@ NEVER double-book — each task must not overlap with busy slots OR other schedu
 === RULE 4: DUE DATES ===
 Respect due dates — schedule before deadline. Tasks due within 48 hours get priority placement.
 
-=== RULE 5: BUFFERS ===
+=== RULE 5: BUFFERS AND CONSOLIDATION ===
 Leave 15-minute buffer between tasks when possible.
+Group similar-category tasks into contiguous blocks when possible (e.g., all CAREER tasks together).
+If shifting an earlier task by 15-30 minutes creates room for an additional task, prefer the shift.
 
 === RULE 6: OVERFLOW ===
 ${targetDateObj ? `If a task cannot fit within its ALLOWED windows on ${targetDateISO} (window is full or no time left), mark it with reasoning "OVERFLOW: [window_name] full on ${targetDateISO}" and DO NOT schedule it. Do NOT force it into a different window.` : 'Schedule each task in its allowed time window based on category.'}
