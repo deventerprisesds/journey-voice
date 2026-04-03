@@ -278,9 +278,9 @@ async function executeTool(toolName: string, args: Record<string, unknown>, user
 
     case 'get_upcoming_tasks': {
       const days = (args.days as number) || 3;
-      const futureDate = new Date(userNow);
+      const futureDate = new Date();
       futureDate.setDate(futureDate.getDate() + days);
-      const futureDateStr = futureDate.toISOString().split('T')[0];
+      const futureDateStr = futureDate.toLocaleDateString('en-CA', { timeZone: timezone });
       
       const { data: tasks, error } = await supabase
         .from('tasks')
