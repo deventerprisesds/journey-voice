@@ -6,8 +6,9 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Task } from '@/types/task';
 import KanbanBoard from './KanbanBoard';
 import SmartTaskInput from './SmartTaskInput';
-import { format, isToday, parseISO, startOfWeek, endOfWeek, addWeeks, isWithinInterval } from 'date-fns';
+import { format, startOfWeek, endOfWeek, addWeeks, isWithinInterval, parseISO } from 'date-fns';
 import { cn } from '@/lib/utils';
+import { getDateInTimezone, getTodayInTimezone, getDefaultTimezone } from '@/lib/date';
 
 interface TabbedKanbanBoardProps {
   tasks: Task[];
