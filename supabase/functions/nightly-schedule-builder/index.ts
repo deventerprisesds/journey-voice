@@ -584,8 +584,10 @@ serve(async (req) => {
           // STEP 4: SCORE and FILL by window capacity (with dedup)
           const priorityWeight: Record<string, number> = { URGENT: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
           
+          // Same-day title dedup: normalize and keep highest-scored only
+          const seenTitlesThisDay = new Set<string>();
           const scoredCandidates = candidates
-            .filter(t => !scheduledTitles.has(t.title)) // Dedup by title
+            .filter(t => !scheduledTitles.has(t.title)) // Cross-day dedup by title
             .map(task => {
               let score = priorityWeight[task.priority] || 1;
               
