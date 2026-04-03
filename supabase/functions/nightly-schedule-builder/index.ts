@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { DEFAULT_TIME_WINDOWS, DEFAULT_CATEGORY_MAPPINGS, resolveConfig, validateTaskWindow } from "../_shared/scheduling-defaults.ts";
+import { getTodayInTimezone } from "../_shared/timezone.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -207,9 +208,8 @@ serve(async (req) => {
         // STEP 1: ROLLOVER — Reset incomplete past tasks (keep as candidates)
         // ==========================================
         const now = new Date();
-        const todayStart = new Date(now.toLocaleString('en-US', { timeZone: timezone }));
-        todayStart.setHours(0, 0, 0, 0);
-        const todayISO = now.toISOString().split('T')[0];
+        const todayISO = getTodayInTimezone(timezone);
+        console.log(`  🕐 Today in ${timezone}: ${todayISO} (UTC: ${now.toISOString().split('T')[0]})`);
         
         // Find tasks that were scheduled in the past and not completed
         const { data: expiredTasks, error: expiredError } = await supabase
@@ -272,6 +272,44 @@ serve(async (req) => {
           }
         }
         console.log(`  📋 Rolled over ${rolledOverCount} tasks`);
+
+        // ==========================================
+        // STEP 1.1: CLEAR FUTURE-SCHEDULED TASKS (rebuild, not append)
+        // Tasks scheduled in the upcoming 7-day horizon are cleared so the
+        // week loop can rebuild from scratch. No pushed_count increment,
+        // no history — these haven't happened yet.
+        // ==========================================
+        const horizonEnd = new Date(now);
+        horizonEnd.setDate(horizonEnd.getDate() + 7);
+        
+        const { data: futureTasks, error: futureError } = await supabase
+          .from('tasks')
+          .select('id, title, start_time')
+          .eq('user_id', userId)
+          .eq('is_scheduled', true)
+          .not('status', 'eq', 'DONE')
+          .gte('start_time', now.toISOString())
+          .lt('start_time', horizonEnd.toISOString());
+
+        let clearedFutureCount = 0;
+        if (!futureError && futureTasks && futureTasks.length > 0) {
+          for (const ft of futureTasks) {
+            const { error: clearError } = await supabase
+              .from('tasks')
+              .update({
+                start_time: null,
+                end_time: null,
+                is_scheduled: false,
+                updated_at: now.toISOString(),
+              })
+              .eq('id', ft.id);
+
+            if (!clearError) {
+              clearedFutureCount++;
+            }
+          }
+          console.log(`  🔄 Cleared ${clearedFutureCount} future-scheduled tasks for rebuild`);
+        }
 
         // ==========================================
         // STEP 1.25: CLEAR SCHEDULING FROM COMPLETED TASKS
@@ -414,23 +452,21 @@ serve(async (req) => {
         const scheduledTitles = new Set<string>();
         const accumulatedBusySlots: Array<{ start_time: string; end_time: string }> = [];
         
-        // Determine how many days to fill (today through Sunday)
-        const userNow = new Date(now.toLocaleString('en-US', { timeZone: timezone }));
-        const currentDayOfWeek = userNow.getDay(); // 0=Sun, 6=Sat
-        const daysUntilSunday = currentDayOfWeek === 0 ? 0 : 7 - currentDayOfWeek;
-        const totalDays = daysUntilSunday + 1; // Include today
+        // Rolling 7-day horizon: always schedule a full week ahead
+        // This ensures Friday runs can place weekday tasks on Monday
+        const totalDays = 7;
         
         let totalScheduledAcrossWeek = 0;
         const weekResults: Record<string, any> = {};
 
         for (let dayOffset = 0; dayOffset < totalDays; dayOffset++) {
-          const targetDate = new Date(now);
-          targetDate.setDate(targetDate.getDate() + dayOffset);
-          const targetISO = targetDate.toISOString().split('T')[0];
+          // Compute target date from todayISO (timezone-correct) to avoid UTC drift
+          const [tY, tM, tD] = todayISO.split('-').map(Number);
+          const targetDate = new Date(tY, tM - 1, tD + dayOffset);
+          const targetISO = `${targetDate.getFullYear()}-${String(targetDate.getMonth() + 1).padStart(2, '0')}-${String(targetDate.getDate()).padStart(2, '0')}`;
           
-          // Get day of week for this target date
-          const targetUserDate = new Date(targetDate.toLocaleString('en-US', { timeZone: timezone }));
-          const targetDayOfWeek = targetUserDate.getDay();
+          // targetDate is already in local calendar space (constructed from todayISO)
+          const targetDayOfWeek = targetDate.getDay();
           const isWeekend = targetDayOfWeek === 0 || targetDayOfWeek === 6;
           
           console.log(`\n  📅 === Day ${dayOffset + 1}/${totalDays}: ${targetISO} (day ${targetDayOfWeek}${isWeekend ? ' WEEKEND' : ''}) ===`);

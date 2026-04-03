@@ -486,6 +486,7 @@ IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include tim
     // Then validate each task against its allowed windows (HARD CONSTRAINT)
     const scheduledTasks = [];
     const rejectedTasks = [];
+    const acceptedSlots: Array<{ start: number; end: number }> = [];
     
     for (const result of scheduledResults) {
       // Handle off-by-one: AI sometimes returns 1-based index despite prompt saying 0-based
@@ -508,7 +509,7 @@ IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include tim
         console.log(`⚠️ Normalized start_time: ${result.start_time} → ${normalizedStart}`);
       }
       
-      // POST-AI VALIDATION: Check if this task's scheduled time respects its allowed windows
+      // POST-AI VALIDATION 1: Check window constraints
       const validation = validateTaskWindow(
         normalizedStart,
         originalTask.category,
@@ -527,6 +528,24 @@ IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include tim
         });
         continue;
       }
+
+      // POST-AI VALIDATION 2: Check overlap with previously accepted slots in this batch
+      const slotStartMs = new Date(normalizedStart).getTime();
+      const slotEndMs = new Date(normalizedEnd).getTime();
+      const hasOverlap = acceptedSlots.some(s => slotStartMs < s.end && slotEndMs > s.start);
+      
+      if (hasOverlap) {
+        console.warn(`🚫 OVERLAP: "${originalTask.title}" [${normalizedStart} - ${normalizedEnd}] overlaps a previously accepted slot — REJECTED`);
+        rejectedTasks.push({
+          taskId: originalTask.id,
+          taskIndex: result.taskIndex,
+          reason: `Overlaps previously accepted task in this batch`,
+          reasoning: result.reasoning,
+        });
+        continue;
+      }
+
+      acceptedSlots.push({ start: slotStartMs, end: slotEndMs });
       
       scheduledTasks.push({
         taskId: originalTask?.id,
