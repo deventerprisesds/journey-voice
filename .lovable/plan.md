@@ -1,86 +1,113 @@
 
 
-# Root Cause: `validateTaskWindow` Treats "flexible" as a Free Pass
+# Complete System Audit: What Exists, What's Broken, What to Fix
 
-## The actual bug
+## What the system already has (and does correctly)
 
-Every scheduling path in the app (batch-calendar-scheduler, smart-calendar-scheduler, execute-tool, nightly-schedule-builder) calls `validateTaskWindow` from `_shared/scheduling-defaults.ts` as its safety net. This function has one critical flaw on **line 92-93**:
+1. **Shared timezone utilities** (`_shared/timezone.ts` + `src/lib/date.ts`): `getTodayInTimezone`, `normalizeDateTime`, `getDateInTimezone`, `localTimeToUtcISO` — all correct and well-tested.
 
-```typescript
-if (allowedWindows.includes('flexible')) {
-  return { valid: true, actualWindow, allowedWindows };
-}
-```
+2. **Shared scheduling defaults** (`_shared/scheduling-defaults.ts`): `validateTaskWindow` with the fixed `flexible` enforcement (9-22 range), blanket guard for tasks outside all windows. Already deployed.
 
-This means: if a category's `defaultTimeWindow` includes `flexible`, **any hour is valid** — including 3 AM, 11 PM, midnight. It never checks that the task hour falls within the `flexible` window's actual range (9 AM – 10 PM).
+3. **Candidate scoring** (nightly builder lines 544-603 + `src/lib/schedulingCandidates.ts`): Priority board +10, due-soon +3, due-within-7-days +5, financial/comms keyword +5, pushed_count diminishing returns, staleness penalty. Both server and client versions match.
 
-Categories mapped to `flexible` in defaults: **LIFE, PERSONAL, EDUCATION**. These are exactly the categories getting placed at absurd hours.
+4. **Client-side fill-gaps** (`CalendarModule.tsx` lines 329-334): Uses `selectSchedulingCandidates` from `src/lib/schedulingCandidates.ts` — same scoring logic, dedup, timezone-aware date filtering. Then calls `batch-calendar-scheduler` for placement.
 
-Additionally, the nightly builder's `getActiveWindows` correctly skips `flexible` as a real window (line 61: `if (name === 'flexible') continue`), so it does capacity math correctly. But the batch scheduler's AI prompt still presents `flexible: 9am-10pm` as a suggestion — and when the AI ignores it and returns 3 AM, the validator waves it through.
+5. **Activity context hints**: Already in `batch-calendar-scheduler` prompt (lines 314-323) — gym→morning, bank→business hours, dinner→evening.
 
-## What the existing system already does right
+6. **Window capacity math** (nightly builder lines 80-121): Computes used minutes per window, tracks remaining capacity.
 
-The scoring, priority board boost, keyword detection, dedup, window capacity math, and day-of-week filtering in the nightly builder are all correct and aligned with `SCHEDULING_RULES.md`. The problem is not in candidate selection — it is in the **post-placement validation** letting invalid times through, and the AI sometimes ignoring the prompt constraints.
+7. **Day-of-week filtering**: Both nightly builder (`getActiveWindows`) and batch-scheduler (lines 183-204) correctly exclude weekend windows on weekdays and vice versa.
 
-## What needs to change (minimal, targeted)
+8. **Rollover** (nightly builder lines 214-273): Writes history to `task_schedule_history`, clears `start_time/end_time/is_scheduled`, increments `pushed_count`. Handles past tasks only.
 
-### 1. Fix `validateTaskWindow` in `_shared/scheduling-defaults.ts`
+9. **Stale task archival** (lines 317-392): 5+ pushed with 30+ day overdue due_date → auto-archived. Education tasks 30+ days overdue → auto-archived.
 
-When `allowedWindows` includes `flexible`, instead of returning `valid: true` unconditionally, check that the task hour falls within the `flexible` window's actual hours:
+10. **Call context builder** (`_shared/call-context-builder.ts`): V2 scripts with per-window prompts, topic group jogging, window-appropriate task filtering. Uses `getTasksForWindow` which filters by `CATEGORY_WINDOW_MAPPING` and hour ranges.
 
-```typescript
-if (allowedWindows.includes('flexible')) {
-  const flexWindow = timeWindows['flexible'];
-  if (flexWindow && (taskHour < flexWindow.start || taskHour >= flexWindow.end)) {
-    return { valid: false, actualWindow: null, allowedWindows };
-  }
-  return { valid: true, actualWindow: actualWindow || 'flexible', allowedWindows };
-}
-```
+## What is actually broken (5 issues)
 
-Also add a blanket guard: if `actualWindow` is `null` AND the task hour is outside all defined windows, it's always invalid regardless of category.
+### Bug 1: Nightly builder uses UTC for "today", not user timezone
+Line 212: `const todayISO = now.toISOString().split('T')[0]`
+This means at 8 PM EDT (midnight UTC), the builder thinks "today" is tomorrow. The batch-scheduler already uses `getTodayInTimezone(timezone)` correctly — the nightly builder does not.
 
-This single fix propagates to all 4 scheduling paths that call it.
+### Bug 2: Nightly builder only schedules through Sunday, not a rolling week
+Lines 420-421: `daysUntilSunday + 1`. If it runs on Friday, it only fills Sat/Sun. Monday tasks wait until Monday's run. A CAREER task incomplete on Friday sits unscheduled for 2 days.
 
-### 2. Add activity-aware context to the AI prompt in `batch-calendar-scheduler`
+### Bug 3: Future-day tasks are never cleared before rebuild
+The rollover at line 221 filters `.lt('start_time', now.toISOString())` — only past tasks. If the builder ran yesterday and placed tasks on Thursday, running again today appends MORE tasks on Thursday without clearing yesterday's placements. This causes the overlaps and capacity miscounts seen in the screenshots.
 
-The AI prompt already has window rules, but it doesn't get the keyword-to-context hints that exist in `schedulingRules.ts`. Add a short section to the prompt:
+The fix is to **widen the existing rollover filter** (not add a new step). Add a second pass that clears future-scheduled non-DONE tasks within the scheduling horizon, using the same update pattern (lines 253-264) but WITHOUT incrementing `pushed_count` or writing rollover history.
 
-```text
-ACTIVITY CONTEXT HINTS:
-- Gym/workout/exercise → schedule in morning window (6-9am weekdays) or early weekends
-- Bank/post office/doctor → business hours only (9-5 weekdays)
-- Dinner/family/social → evening window (7-10pm)
-- Study/homework → after_work or weekends, never morning
-```
+### Bug 4: No overlap detection in batch-calendar-scheduler
+The AI can return two tasks at the same time. The batch-scheduler validates window constraints (line 512-529) but never checks if a newly accepted slot overlaps a previously accepted slot in the same batch. The nightly builder tracks `accumulatedBusySlots` and passes them to the capacity math, but the batch-scheduler's busy-slots query (lines 136-150) only fetches DB-persisted tasks — it doesn't know about other tasks accepted earlier in the same AI response.
 
-This uses AI reasoning constructively (understanding what "gym" means) while the hard validator catches any mistakes.
+### Bug 5: `call-context-builder` has its own hardcoded window mappings
+Lines 25-31 define `CATEGORY_WINDOW_MAPPING` that differs from `scheduling-defaults.ts`:
+- LIFE maps to `['morning', 'after_work', 'evening', 'weekends']` in call-context-builder
+- LIFE maps to `['flexible']` in scheduling-defaults
 
-### 3. Update `SCHEDULING_RULES.md` with the validator fix
+This means Iris shows different tasks than the scheduler places. It should import from `scheduling-defaults.ts` or at minimum stay in sync.
 
-Add a section documenting that `flexible` is **not** a bypass — it means "any named window within 9 AM – 10 PM" and the validator enforces this.
+## Implementation plan
 
-## Files changed
+### 1. Fix nightly builder "today" to use timezone helper
+**File**: `supabase/functions/nightly-schedule-builder/index.ts`
+- Import `getTodayInTimezone` from `_shared/timezone.ts`
+- Line 212: Replace `now.toISOString().split('T')[0]` with `getTodayInTimezone(timezone)`
+- This also fixes the day-boundary queries at lines 456-465 that use `targetISO` (which derives from this same date)
+
+### 2. Change scheduling horizon to rolling 7 days
+**File**: `supabase/functions/nightly-schedule-builder/index.ts`
+- Lines 420-421: Replace `daysUntilSunday + 1` with `const totalDays = 7`
+- This ensures Friday runs can place weekday tasks on Monday
+
+### 3. Add future-task clearing pass using existing rollover pattern
+**File**: `supabase/functions/nightly-schedule-builder/index.ts`
+- After the existing rollover (line 273), add a second pass:
+  - Query tasks where `is_scheduled=true`, `status != DONE`, and `start_time` is within the scheduling horizon (today + 7 days)
+  - Clear `start_time`, `end_time`, `is_scheduled` using the same update pattern
+  - Do NOT increment `pushed_count` (these aren't "pushed", they're being rebuilt)
+  - Do NOT write history (they haven't happened yet)
+- This uses the exact same update logic already proven at lines 253-264
+
+### 4. Add overlap rejection in batch-calendar-scheduler
+**File**: `supabase/functions/batch-calendar-scheduler/index.ts`
+- After parsing AI results and before the validation loop (line 490), maintain an `acceptedSlots` array
+- For each AI result that passes window validation, check if `[start, end)` overlaps any entry in `acceptedSlots`
+- If overlap: reject with reason "overlaps previously accepted task"
+- If no overlap: add to `acceptedSlots` and accept
+
+### 5. Align call-context-builder with scheduling-defaults
+**File**: `supabase/functions/_shared/call-context-builder.ts`
+- Import `DEFAULT_CATEGORY_MAPPINGS` from `scheduling-defaults.ts`
+- Derive `CATEGORY_WINDOW_MAPPING` from it instead of hardcoding
+- This ensures Iris shows the same task-to-window mapping as the scheduler
+
+## Files changed summary
 
 | File | Change |
 |------|--------|
-| `supabase/functions/_shared/scheduling-defaults.ts` | Fix `validateTaskWindow` to enforce `flexible` window hours |
-| `supabase/functions/batch-calendar-scheduler/index.ts` | Add activity-context hints to AI prompt |
-| `docs/SCHEDULING_RULES.md` | Document that `flexible` is not a free pass |
+| `nightly-schedule-builder/index.ts` | Fix "today" to use `getTodayInTimezone`; change horizon to 7 days; add future-task clearing pass |
+| `batch-calendar-scheduler/index.ts` | Add overlap rejection after AI response parsing |
+| `_shared/call-context-builder.ts` | Derive window mappings from `scheduling-defaults.ts` |
 
-## Why this won't branch further
+## What is NOT changed (already working)
 
-- The fix is in the **shared validator** that all paths already call — no new paths, no new abstractions.
-- The nightly builder's candidate selection and scoring logic is untouched (it's already correct).
-- The AI prompt addition is additive context, not a logic change.
-- The `SCHEDULING_RULES.md` update documents existing intent, not new rules.
+- Candidate scoring logic (both server and client)
+- `validateTaskWindow` flexible fix (already deployed)
+- Activity context hints in AI prompt (already deployed)
+- Client-side `selectSchedulingCandidates` (already uses shared scoring)
+- Timezone utilities in `_shared/timezone.ts` and `src/lib/date.ts`
+- Schedule history preservation
+- Stale task archival
+- Rollover history writing
 
 ## Checklist (per SCHEDULING_RULES.md)
 
-1. **Authoritative path**: `_shared/scheduling-defaults.ts` — the single validator all paths use
-2. **Affected views**: All views that display scheduled tasks (Focus, Daily, Weekly, Agenda)
-3. **Coverage**: nightly builder ✓, fill gaps ✓, manual scheduling ✓, display filtering (unchanged)
-4. **Assignments**: Untouched — scoring still prioritizes assignment-linked tasks
-5. **Timezone**: Untouched — validator already uses timezone-aware hour extraction
-6. **Verification**: Deploy, trigger a test schedule, check edge function logs for any rejected placements
+1. **Authoritative path**: nightly-schedule-builder + batch-calendar-scheduler + call-context-builder
+2. **Affected views**: All views consuming scheduled tasks from `tasks` table
+3. **Coverage**: nightly builder ✓, fill-gaps (inherits from batch-scheduler fix) ✓, manual scheduling ✓, Iris context ✓
+4. **Assignments**: Unaffected — clearing returns them to candidate pool, scoring re-prioritizes
+5. **Timezone**: Fixed — nightly builder now uses `getTodayInTimezone` like batch-scheduler already does
+6. **Verification**: After deploy, trigger nightly builder and query today's tasks to confirm no overlaps, correct windows, matching Iris context
 
