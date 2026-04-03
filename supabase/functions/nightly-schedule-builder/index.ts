@@ -506,7 +506,8 @@ serve(async (req) => {
             .eq('is_all_day', false);
 
           // Include accumulated busy slots from previous days' scheduling
-          const dayBusySlots = accumulatedBusySlots.filter(s => s.start_time.startsWith(targetISO));
+          // Use dayBounds for proper timezone-aware filtering instead of UTC string prefix match
+          const dayBusySlots = accumulatedBusySlots.filter(s => s.start_time >= dayBounds.start && s.start_time < dayBounds.end);
 
           const allScheduledItems = [
             ...(dayScheduled || []),
