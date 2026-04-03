@@ -17,6 +17,23 @@ NEVER skip deployment when code changes are approved.
 
 ---
 
+## SCHEDULING SYSTEM MAP — MANDATORY
+
+Before ANY scheduling, agenda, calendar, or timezone plan:
+1. Read `docs/SCHEDULING_SYSTEM_MAP.md` (system map — what exists and where)
+2. Read `docs/SCHEDULING_RULES.md` (rules — what must be true)
+3. Answer the Required Planning Checklist in SCHEDULING_RULES.md
+
+After ANY scheduling-related code changes:
+1. Update `docs/SCHEDULING_SYSTEM_MAP.md` if any code paths, shared modules, or data flows changed
+2. Add to Section D (Bugs Fixed) if a bug was resolved
+3. Add to Section E (Anti-Patterns) if a new failure mode was discovered
+
+NEVER add a new scheduling code path without documenting it in the system map.
+NEVER hardcode window/category mappings outside scheduling-defaults.ts.
+
+---
+
 ## DOCUMENTATION CATALOG
 
 Before modifying any subsystem, read the relevant documentation first:
@@ -35,6 +52,8 @@ Before modifying any subsystem, read the relevant documentation first:
 | `docs/NOTIFICATIONS.md` | Push notifications, multi-channel delivery, presence tracking |
 | `docs/CLOUDFLARE_WORKER.md` | Cloudflare Workers, real-time audio relay |
 | `cloudflare/PREFLIGHT_CHECKLIST.md` | **MANDATORY** before ANY Cloudflare worker changes |
+| `docs/SCHEDULING_SYSTEM_MAP.md` | **MANDATORY** — ANY scheduling, agenda, timezone, or calendar change |
+
 
 ### Key Constraints
 
@@ -49,4 +68,5 @@ Before modifying any subsystem, read the relevant documentation first:
 - **Voice pipeline**: Never bypass `call-context-builder.ts` for call context. It's the single source of truth for task filtering + topic ranking. See `docs/VOICE_SYSTEM.md`.
 - **OAuth tokens**: Always encrypted via `encrypt_token`/`decrypt_token`. Never store raw tokens. See `docs/CALENDAR_INTEGRATION.md`.
 - **Edge function patterns**: Audit existing functions in the same domain before creating new ones. Use `SUPABASE_SERVICE_ROLE_KEY` consistently. See `docs/EDGE_FUNCTIONS.md`.
-- **Scheduling plans are mandatory-read**: Before any scheduling, calendar, daily agenda, assignment persistence, or timezone plan/change, read `docs/SCHEDULING_RULES.md`, `docs/TASK_MANAGEMENT.md`, `docs/CALENDAR_INTEGRATION.md`, and `src/lib/date.ts`.
+- **Scheduling plans are mandatory-read**: Before any scheduling, calendar, daily agenda, assignment persistence, or timezone plan/change, read `docs/SCHEDULING_RULES.md`, `docs/SCHEDULING_SYSTEM_MAP.md`, `docs/TASK_MANAGEMENT.md`, `docs/CALENDAR_INTEGRATION.md`, and `src/lib/date.ts`.
+- **Scheduling system map sync**: After any scheduling code change, update `docs/SCHEDULING_SYSTEM_MAP.md` with new/changed code paths, modules, or data flows.
