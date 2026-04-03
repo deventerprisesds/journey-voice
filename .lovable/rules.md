@@ -52,6 +52,8 @@ Before modifying any subsystem, read the relevant documentation first:
 | `docs/NOTIFICATIONS.md` | Push notifications, multi-channel delivery, presence tracking |
 | `docs/CLOUDFLARE_WORKER.md` | Cloudflare Workers, real-time audio relay |
 | `cloudflare/PREFLIGHT_CHECKLIST.md` | **MANDATORY** before ANY Cloudflare worker changes |
+| `docs/SCHEDULING_SYSTEM_MAP.md` | **MANDATORY** — ANY scheduling, agenda, timezone, or calendar change |
+
 
 ### Key Constraints
 
