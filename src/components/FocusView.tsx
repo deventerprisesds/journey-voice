@@ -1037,7 +1037,42 @@ const FocusView: React.FC<FocusViewProps> = ({
 
                                 timeline.sort((a, b) => a.sortKey - b.sortKey);
 
-                                return timeline.map((item, idx) => {
+                                // Compute end keys for overlap detection
+                                const getEndKey = (item: TimelineItem): number => {
+                                  if (item.type === 'task' && item.task.end_time) {
+                                    const { hour, minute } = getTimePartsInTimezone(item.task.end_time, userTimezone);
+                                    return hour * 60 + minute;
+                                  }
+                                  if (item.type === 'task') {
+                                    return item.sortKey + (item.task.estimate_minutes || 60);
+                                  }
+                                  if (item.type === 'external') {
+                                    const { hour, minute } = getTimePartsInTimezone((item.event as any).end_time, userTimezone);
+                                    return hour * 60 + minute;
+                                  }
+                                  return item.sortKey + 30; // open slot = 30 min
+                                };
+
+                                // Group overlapping non-slot items; slots are never grouped
+                                type OverlapGroup = { items: TimelineItem[]; maxEnd: number };
+                                const groups: OverlapGroup[] = [];
+                                timeline.forEach(item => {
+                                  if (item.type === 'slot') {
+                                    groups.push({ items: [item], maxEnd: item.sortKey + 30 });
+                                    return;
+                                  }
+                                  const endKey = getEndKey(item);
+                                  const lastGroup = groups.length > 0 ? groups[groups.length - 1] : null;
+                                  // Merge into previous group if overlapping and previous group has no slots
+                                  if (lastGroup && lastGroup.items[0].type !== 'slot' && item.sortKey < lastGroup.maxEnd) {
+                                    lastGroup.items.push(item);
+                                    lastGroup.maxEnd = Math.max(lastGroup.maxEnd, endKey);
+                                  } else {
+                                    groups.push({ items: [item], maxEnd: endKey });
+                                  }
+                                });
+
+                                const renderItem = (item: TimelineItem, idx: number, inOverlapGroup: boolean) => {
                                   if (item.type === 'task') {
                                     const task = item.task;
                                     return (
@@ -1045,6 +1080,7 @@ const FocusView: React.FC<FocusViewProps> = ({
                                         key={task.id}
                                         className={cn(
                                           "rounded-md p-3 shadow-sm border cursor-pointer hover:shadow-md transition-shadow",
+                                          inOverlapGroup && "flex-1 min-w-0",
                                           task.assignment_id
                                             ? "bg-card border-l-4 border-l-violet-500"
                                             : "bg-card"
@@ -1153,6 +1189,7 @@ const FocusView: React.FC<FocusViewProps> = ({
                                         className={cn(
                                           "rounded-md p-3 shadow-sm border",
                                           borderColor,
+                                          inOverlapGroup && "flex-1 min-w-0",
                                           provider === 'google'
                                             ? "bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800"
                                             : "bg-cyan-50 dark:bg-cyan-950/30 border-cyan-200 dark:border-cyan-800"
@@ -1213,6 +1250,18 @@ const FocusView: React.FC<FocusViewProps> = ({
                                         </div>
                                       )}
                                     </Droppable>
+                                  );
+                                };
+
+                                return groups.map((group, gIdx) => {
+                                  if (group.items.length === 1) {
+                                    return renderItem(group.items[0], gIdx, false);
+                                  }
+                                  // Overlap group: render side-by-side
+                                  return (
+                                    <div key={`overlap-${gIdx}`} className="flex flex-row gap-2">
+                                      {group.items.map((item, iIdx) => renderItem(item, iIdx, true))}
+                                    </div>
                                   );
                                 });
                               })()}
