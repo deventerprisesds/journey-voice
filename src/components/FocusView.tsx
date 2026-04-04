@@ -1073,9 +1073,20 @@ const FocusView: React.FC<FocusViewProps> = ({
                                 });
 
                                 const renderItem = (item: TimelineItem, idx: number, inOverlapGroup: boolean) => {
-                                  if (item.type === 'task') {
+                                   if (item.type === 'task') {
                                     const task = item.task;
-                                    return (
+                                    const taskDurationMin = task.end_time && task.start_time
+                                      ? differenceInMinutes(parseISO(task.end_time), parseISO(task.start_time))
+                                      : (task.estimate_minutes || 30);
+                                    const slots = Math.max(1, Math.ceil(taskDurationMin / 30));
+                                    const slotHeight = 56;
+                                    const cardMinHeight = slots * slotHeight;
+                                    const taskEndDisplay = task.end_time
+                                      ? format(parseISO(task.end_time), 'h:mm a')
+                                      : task.start_time && task.estimate_minutes
+                                        ? format(addMinutes(parseISO(task.start_time), task.estimate_minutes), 'h:mm a')
+                                        : null;
+                                     return (
                                     <div 
                                         key={task.id}
                                         className={cn(
@@ -1085,6 +1096,7 @@ const FocusView: React.FC<FocusViewProps> = ({
                                             ? "bg-card border-l-4 border-l-violet-500"
                                             : "bg-card"
                                         )}
+                                        style={{ minHeight: `${cardMinHeight}px` }}
                                         onClick={() => onTaskEdit(task)}
                                       >
                                         <div className="flex items-start gap-2">
@@ -1101,7 +1113,7 @@ const FocusView: React.FC<FocusViewProps> = ({
                                             <div className="flex items-center justify-between gap-2">
                                               <div className="flex items-center gap-2 min-w-0 flex-1">
                                                 <span className="text-xs text-muted-foreground flex-shrink-0">
-                                                  {task.start_time && format(parseISO(task.start_time), 'h:mm a')}
+                                                  {task.start_time && format(parseISO(task.start_time), 'h:mm a')}{taskEndDisplay && ` – ${taskEndDisplay}`}
                                                 </span>
                                                 <span className={cn("font-medium text-sm truncate", task.status === 'DONE' && 'line-through text-muted-foreground')}>
                                                   {task.title}
@@ -1176,14 +1188,17 @@ const FocusView: React.FC<FocusViewProps> = ({
                                     );
                                   }
 
-                                  if (item.type === 'external') {
+                                   if (item.type === 'external') {
                                     const evt = item.event as any;
                                     const provider = evt.calendar_connections?.provider || 'calendar';
                                     const isOutlook = provider === 'outlook' || provider === 'office365';
                                     const providerEmail = evt.calendar_connections?.provider_account_email || '';
                                     const calName = evt.calendar_id ? humanizeCalendarId(evt.calendar_id) : '';
                                     const borderColor = provider === 'google' ? 'border-l-4 border-l-blue-500' : 'border-l-4 border-l-cyan-500';
-                                    return (
+                                    const evtDurationMin = differenceInMinutes(parseISO(evt.end_time), parseISO(evt.start_time));
+                                    const evtSlots = Math.max(1, Math.ceil(evtDurationMin / 30));
+                                    const evtMinHeight = evtSlots * 56;
+                                     return (
                                       <div
                                         key={`ext-${evt.id}`}
                                         className={cn(
@@ -1194,6 +1209,7 @@ const FocusView: React.FC<FocusViewProps> = ({
                                             ? "bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800"
                                             : "bg-cyan-50 dark:bg-cyan-950/30 border-cyan-200 dark:border-cyan-800"
                                         )}
+                                        style={{ minHeight: `${evtMinHeight}px` }}
                                       >
                                         <div className="flex items-center gap-2">
                                           <Calendar className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
