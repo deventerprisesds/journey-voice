@@ -1188,14 +1188,17 @@ const FocusView: React.FC<FocusViewProps> = ({
                                     );
                                   }
 
-                                  if (item.type === 'external') {
+                                   if (item.type === 'external') {
                                     const evt = item.event as any;
                                     const provider = evt.calendar_connections?.provider || 'calendar';
                                     const isOutlook = provider === 'outlook' || provider === 'office365';
                                     const providerEmail = evt.calendar_connections?.provider_account_email || '';
                                     const calName = evt.calendar_id ? humanizeCalendarId(evt.calendar_id) : '';
                                     const borderColor = provider === 'google' ? 'border-l-4 border-l-blue-500' : 'border-l-4 border-l-cyan-500';
-                                    return (
+                                    const evtDurationMin = differenceInMinutes(parseISO(evt.end_time), parseISO(evt.start_time));
+                                    const evtSlots = Math.max(1, Math.ceil(evtDurationMin / 30));
+                                    const evtMinHeight = evtSlots * 56;
+                                     return (
                                       <div
                                         key={`ext-${evt.id}`}
                                         className={cn(
@@ -1206,6 +1209,7 @@ const FocusView: React.FC<FocusViewProps> = ({
                                             ? "bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800"
                                             : "bg-cyan-50 dark:bg-cyan-950/30 border-cyan-200 dark:border-cyan-800"
                                         )}
+                                        style={{ minHeight: `${evtMinHeight}px` }}
                                       >
                                         <div className="flex items-center gap-2">
                                           <Calendar className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
