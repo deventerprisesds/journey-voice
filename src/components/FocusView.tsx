@@ -965,7 +965,9 @@ const FocusView: React.FC<FocusViewProps> = ({
                                 windowTasks.forEach(task => {
                                   if (task.start_time) {
                                     const { hour, minute } = getTimePartsInTimezone(task.start_time, userTimezone);
-                                    const durationMinutes = task.estimate_minutes || 60;
+                                    const durationMinutes = task.end_time
+                                      ? differenceInMinutes(parseISO(task.end_time), parseISO(task.start_time))
+                                      : (task.estimate_minutes || 60);
                                     for (let m = 0; m < durationMinutes; m += 30) {
                                       const slotMin = minute + m;
                                       const slotHour = hour + Math.floor(slotMin / 60);
