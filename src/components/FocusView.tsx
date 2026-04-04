@@ -957,48 +957,89 @@ const FocusView: React.FC<FocusViewProps> = ({
                               </div>
                             </div>
                             
-                            {/* Tasks and Open Slots in Window */}
-                            <div className="p-2 space-y-2">
+                            {/* Calendar-Style Grid with Time Gutter */}
+                            <div className="p-2">
                               {(() => {
-                                // Build a merged timeline: tasks at their slots + open slots
-                                const occupiedSlots = new Set<string>();
-                                windowTasks.forEach(task => {
-                                  if (task.start_time) {
-                                    const { hour, minute } = getTimePartsInTimezone(task.start_time, userTimezone);
-                                    const durationMinutes = task.end_time
-                                      ? differenceInMinutes(parseISO(task.end_time), parseISO(task.start_time))
-                                      : (task.estimate_minutes || 60);
-                                    for (let m = 0; m < durationMinutes; m += 15) {
-                                      const slotMin = minute + m;
-                                      const slotHour = hour + Math.floor(slotMin / 60);
-                                      const slotMinute = Math.floor((slotMin % 60) / 15) * 15;
-                                      occupiedSlots.add(`${slotHour}-${slotMinute}`);
-                                    }
-                                  }
-                                });
-
-                                // Also mark slots occupied by external calendar events
                                 const windowCfg = config.timeWindows[windowName as keyof typeof config.timeWindows];
-                                const wsStart = windowCfg?.start ?? 0;
-                                const wsEnd = windowCfg?.end ?? 24;
+                                const wsStart = windowCfg?.start ?? 6;
+                                const wsEnd = windowCfg?.end ?? 22;
+                                const totalMinutes = (wsEnd - wsStart) * 60;
+                                const totalSlots = totalMinutes / 15;
+                                const SLOT_HEIGHT = 28;
+
+                                // Build all 15-min slots for this window
+                                const allSlots: { hour: number; minute: number; label: string; minuteOffset: number }[] = [];
+                                for (let h = wsStart; h < wsEnd; h++) {
+                                  for (const m of [0, 15, 30, 45]) {
+                                    const timeStr = `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+                                    const dateStr = dateToKeyInTimezone(today, userTimezone);
+                                    const isoTime = localTimeToUtcISO(dateStr, timeStr, userTimezone);
+                                    const label = new Date(isoTime).toLocaleTimeString('en-US', {
+                                      timeZone: userTimezone,
+                                      hour: 'numeric',
+                                      minute: '2-digit',
+                                      hour12: true
+                                    });
+                                    allSlots.push({ hour: h, minute: m, label, minuteOffset: (h - wsStart) * 60 + m });
+                                  }
+                                }
+
+                                // Build positioned items (tasks + external events)
+                                type PositionedItem = {
+                                  id: string;
+                                  type: 'task' | 'external';
+                                  data: Task | ExternalCalendarEvent;
+                                  startOffset: number; // minutes from window start
+                                  duration: number; // minutes
+                                };
+                                const positioned: PositionedItem[] = [];
+
+                                windowTasks.forEach(task => {
+                                  if (!task.start_time) return;
+                                  const { hour, minute } = getTimePartsInTimezone(task.start_time, userTimezone);
+                                  const startOffset = (hour - wsStart) * 60 + minute;
+                                  const duration = task.end_time
+                                    ? differenceInMinutes(parseISO(task.end_time), parseISO(task.start_time))
+                                    : (task.estimate_minutes || 60);
+                                  positioned.push({ id: task.id, type: 'task', data: task, startOffset: Math.max(0, startOffset), duration: Math.max(15, duration) });
+                                });
+
                                 externalEvents.forEach(evt => {
-                                  const evtStart = getTimePartsInTimezone(evt.start_time, userTimezone);
-                                  const evtEnd = getTimePartsInTimezone(evt.end_time, userTimezone);
-                                  if (evtStart.hour >= wsStart && evtStart.hour < wsEnd) {
-                                    const startMin = evtStart.hour * 60 + evtStart.minute;
-                                    const endMin = evtEnd.hour * 60 + evtEnd.minute;
-                                    for (let m = startMin; m < endMin; m += 15) {
-                                      const slotH = Math.floor(m / 60);
-                                      const slotM = Math.floor((m % 60) / 15) * 15;
-                                      occupiedSlots.add(`${slotH}-${slotM}`);
-                                    }
+                                  const { hour, minute } = getTimePartsInTimezone(evt.start_time, userTimezone);
+                                  if (hour >= wsStart && hour < wsEnd) {
+                                    const startOffset = (hour - wsStart) * 60 + minute;
+                                    const duration = differenceInMinutes(parseISO(evt.end_time), parseISO(evt.start_time));
+                                    positioned.push({ id: `ext-${evt.id}`, type: 'external', data: evt, startOffset: Math.max(0, startOffset), duration: Math.max(15, duration) });
                                   }
                                 });
 
-                                const openSlots = dropSlots.filter(s => !occupiedSlots.has(`${s.hour}-${s.minute}`));
+                                // Overlap grouping
+                                positioned.sort((a, b) => a.startOffset - b.startOffset);
+                                type OverlapGroup = { items: PositionedItem[]; maxEnd: number };
+                                const overlapGroups: OverlapGroup[] = [];
+                                positioned.forEach(item => {
+                                  const end = item.startOffset + item.duration;
+                                  const lastGroup = overlapGroups.length > 0 ? overlapGroups[overlapGroups.length - 1] : null;
+                                  if (lastGroup && item.startOffset < lastGroup.maxEnd) {
+                                    lastGroup.items.push(item);
+                                    lastGroup.maxEnd = Math.max(lastGroup.maxEnd, end);
+                                  } else {
+                                    overlapGroups.push({ items: [item], maxEnd: end });
+                                  }
+                                });
 
-                                // If no tasks and no slots, show simple placeholder
-                                if (windowTasks.length === 0 && openSlots.length === 0) {
+                                // Build a set of occupied slots for click detection
+                                const occupiedSlots = new Set<string>();
+                                positioned.forEach(item => {
+                                  for (let m = 0; m < item.duration; m += 15) {
+                                    const absMin = item.startOffset + m;
+                                    const slotH = wsStart + Math.floor(absMin / 60);
+                                    const slotM = Math.floor((absMin % 60) / 15) * 15;
+                                    occupiedSlots.add(`${slotH}-${slotM}`);
+                                  }
+                                });
+
+                                if (positioned.length === 0 && allSlots.length === 0) {
                                   return (
                                     <div className="p-4 border-2 border-dashed rounded-md text-center text-sm text-muted-foreground border-muted">
                                       No slots available
@@ -1006,281 +1047,229 @@ const FocusView: React.FC<FocusViewProps> = ({
                                   );
                                 }
 
-                                // Merge tasks, external events, and open slots into a sorted timeline
-                                type TimelineItem = 
-                                  | { type: 'task'; task: Task; sortKey: number } 
-                                  | { type: 'external'; event: ExternalCalendarEvent; sortKey: number }
-                                  | { type: 'slot'; slot: { hour: number; minute: number; label: string }; sortKey: number };
-                                const timeline: TimelineItem[] = [];
-
-                                windowTasks.forEach(task => {
-                                  const sortKey = task.start_time 
-                                    ? (() => { const { hour, minute } = getTimePartsInTimezone(task.start_time, userTimezone); return hour * 60 + minute; })()
-                                    : 0;
-                                  timeline.push({ type: 'task', task, sortKey });
-                                });
-
-                                // Add external calendar events to this window
-                                const windowConfig = config.timeWindows[windowName as keyof typeof config.timeWindows];
-                                const wStart = windowConfig?.start ?? 0;
-                                const wEnd = windowConfig?.end ?? 24;
-                                externalEvents.forEach(evt => {
-                                  const { hour, minute } = getTimePartsInTimezone(evt.start_time, userTimezone);
-                                  if (hour >= wStart && hour < wEnd) {
-                                    timeline.push({ type: 'external', event: evt, sortKey: hour * 60 + minute });
-                                  }
-                                });
-
-                                openSlots.forEach(slot => {
-                                  timeline.push({ type: 'slot', slot, sortKey: slot.hour * 60 + slot.minute });
-                                });
-
-                                timeline.sort((a, b) => a.sortKey - b.sortKey);
-
-                                // Compute end keys for overlap detection
-                                const getEndKey = (item: TimelineItem): number => {
-                                  if (item.type === 'task' && item.task.end_time) {
-                                    const { hour, minute } = getTimePartsInTimezone(item.task.end_time, userTimezone);
-                                    return hour * 60 + minute;
-                                  }
-                                  if (item.type === 'task') {
-                                    return item.sortKey + (item.task.estimate_minutes || 60);
-                                  }
-                                  if (item.type === 'external') {
-                                    const { hour, minute } = getTimePartsInTimezone((item.event as any).end_time, userTimezone);
-                                    return hour * 60 + minute;
-                                  }
-                                  return item.sortKey + 15; // open slot = 15 min
-                                };
-
-                                // Group overlapping non-slot items; slots are never grouped
-                                type OverlapGroup = { items: TimelineItem[]; maxEnd: number };
-                                const groups: OverlapGroup[] = [];
-                                timeline.forEach(item => {
-                                  if (item.type === 'slot') {
-                                    groups.push({ items: [item], maxEnd: item.sortKey + 15 });
-                                    return;
-                                  }
-                                  const endKey = getEndKey(item);
-                                  const lastGroup = groups.length > 0 ? groups[groups.length - 1] : null;
-                                  // Merge into previous group if overlapping and previous group has no slots
-                                  if (lastGroup && lastGroup.items[0].type !== 'slot' && item.sortKey < lastGroup.maxEnd) {
-                                    lastGroup.items.push(item);
-                                    lastGroup.maxEnd = Math.max(lastGroup.maxEnd, endKey);
-                                  } else {
-                                    groups.push({ items: [item], maxEnd: endKey });
-                                  }
-                                });
-
-                                const renderItem = (item: TimelineItem, idx: number, inOverlapGroup: boolean) => {
-                                   if (item.type === 'task') {
-                                    const task = item.task;
-                                    const taskDurationMin = task.end_time && task.start_time
-                                      ? differenceInMinutes(parseISO(task.end_time), parseISO(task.start_time))
-                                      : (task.estimate_minutes || 30);
-                                    const slots = Math.max(1, Math.ceil(taskDurationMin / 15));
-                                    const slotHeight = 28;
-                                    const cardMinHeight = slots * slotHeight;
-                                    const taskEndDisplay = task.end_time
-                                      ? format(parseISO(task.end_time), 'h:mm a')
-                                      : task.start_time && task.estimate_minutes
-                                        ? format(addMinutes(parseISO(task.start_time), task.estimate_minutes), 'h:mm a')
-                                        : null;
-                                     return (
-                                    <div 
-                                        key={task.id}
-                                        className={cn(
-                                          "rounded-md p-3 shadow-sm border cursor-pointer hover:shadow-md transition-shadow",
-                                          inOverlapGroup && "flex-1 min-w-0",
-                                          task.status === 'DONE' && "opacity-60",
-                                          task.assignment_id
-                                            ? "bg-card border-l-4 border-l-violet-500"
-                                            : "bg-card"
-                                        )}
-                                        style={{ minHeight: `${cardMinHeight}px` }}
-                                        onClick={() => onTaskEdit(task)}
-                                      >
-                                        <div className="flex items-start gap-2">
-                                          <Checkbox
-                                            checked={task.status === 'DONE'}
-                                            onCheckedChange={(checked) => {
-                                              if (checked) handleCompleteTask(task.id);
-                                              else onStatusChange(task.id, 'TODO');
-                                            }}
-                                            onClick={(e) => e.stopPropagation()}
-                                            className="mt-0.5 flex-shrink-0"
-                                          />
-                                          <div className="flex-1 min-w-0">
-                                            <div className="flex items-center justify-between gap-2">
-                                              <div className="flex items-center gap-2 min-w-0 flex-1">
-                                                <span className="text-xs text-muted-foreground flex-shrink-0">
-                                                  {task.start_time && format(parseISO(task.start_time), 'h:mm a')}{taskEndDisplay && ` – ${taskEndDisplay}`}
-                                                </span>
-                                                <span className={cn("font-medium text-sm truncate", task.status === 'DONE' && 'line-through text-muted-foreground')}>
-                                                  {task.title}
-                                                </span>
-                                              </div>
-                                              <div className="flex items-center gap-1 flex-shrink-0">
-                                                {task.status !== 'DOING' && task.status !== 'DONE' && (
-                                                  <>
-                                                    <Button
-                                                      variant="ghost"
-                                                      size="icon"
-                                                      className="h-7 w-7 hover:bg-destructive/10"
-                                                      onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        handleRemoveFromSchedule(task);
-                                                      }}
-                                                      title="Remove from schedule"
-                                                    >
-                                                      <X className="h-4 w-4 text-muted-foreground hover:text-destructive" />
-                                                    </Button>
-                                                    <Button
-                                                      variant="ghost"
-                                                      size="icon"
-                                                      className="h-7 w-7 hover:bg-green-100 dark:hover:bg-green-900"
-                                                      onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        handleStartTask(task.id);
-                                                      }}
-                                                      title="Start working on this task"
-                                                    >
-                                                      <Play className="h-4 w-4 text-green-600" />
-                                                    </Button>
-                                                  </>
-                                                )}
-                                              </div>
-                                            </div>
-                                            <div className="flex items-center gap-2 mt-1 flex-wrap">
-                                              {task.assignment_id ? (
-                                                <Badge variant="outline" className={cn("text-xs",
-                                                  ((task.scheduling_context as any)?.source === 'MIT' || task.category === 'EDUCATION')
-                                                    ? "bg-red-500/10 text-red-700 border-red-500/20 dark:text-red-400"
-                                                    : "bg-indigo-500/10 text-indigo-700 border-indigo-500/20 dark:text-indigo-400"
-                                                )}>
-                                                  📚 {(task.scheduling_context as any)?.source || (task.category === 'EDUCATION' ? 'MIT' : 'EMBA')}
-                                                </Badge>
-                                              ) : (
-                                                <Badge variant="outline" className={cn("text-xs", categoryColors[task.category])}>
-                                                  {task.category.toLowerCase()}
-                                                </Badge>
-                                              )}
-                                              {(() => {
-                                                const { violation, actualWindow, allowedWindows } = isWindowViolation(task);
-                                                if (violation) {
-                                                  return (
-                                                    <Badge variant="outline" className="text-xs bg-destructive/10 text-destructive border-destructive/20">
-                                                      ⚠ wrong window ({actualWindow} → {allowedWindows.join('/')})
-                                                    </Badge>
-                                                  );
-                                                }
-                                                return null;
-                                              })()}
-                                              {task.estimate_minutes && (
-                                                <span className="text-xs text-muted-foreground flex items-center gap-1">
-                                                  <Clock className="h-3 w-3" />
-                                                  {task.estimate_minutes}m
-                                                </span>
-                                              )}
-                                            </div>
-                                          </div>
-                                        </div>
-                                      </div>
-                                    );
-                                  }
-
-                                   if (item.type === 'external') {
-                                    const evt = item.event as any;
-                                    const provider = evt.calendar_connections?.provider || 'calendar';
-                                    const isOutlook = provider === 'outlook' || provider === 'office365';
-                                    const providerEmail = evt.calendar_connections?.provider_account_email || '';
-                                    const calName = evt.calendar_id ? humanizeCalendarId(evt.calendar_id) : '';
-                                    const borderColor = provider === 'google' ? 'border-l-4 border-l-blue-500' : 'border-l-4 border-l-cyan-500';
-                                    const evtDurationMin = differenceInMinutes(parseISO(evt.end_time), parseISO(evt.start_time));
-                                    const evtSlots = Math.max(1, Math.ceil(evtDurationMin / 15));
-                                    const evtMinHeight = evtSlots * 28;
-                                     return (
-                                      <div
-                                        key={`ext-${evt.id}`}
-                                        className={cn(
-                                          "rounded-md p-3 shadow-sm border",
-                                          borderColor,
-                                          inOverlapGroup && "flex-1 min-w-0",
-                                          provider === 'google'
-                                            ? "bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800"
-                                            : "bg-cyan-50 dark:bg-cyan-950/30 border-cyan-200 dark:border-cyan-800"
-                                        )}
-                                        style={{ minHeight: `${evtMinHeight}px` }}
-                                      >
-                                        <div className="flex items-center gap-2">
-                                          <Calendar className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                                          <span className="text-xs text-muted-foreground flex-shrink-0">
-                                            {format(parseISO(evt.start_time), 'h:mm a')} – {format(parseISO(evt.end_time), 'h:mm a')}
-                                          </span>
-                                          <span className="font-medium text-sm truncate">{evt.title || 'Untitled Event'}</span>
-                                        </div>
-                                        <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                                          <Badge variant="outline" className={cn("text-xs flex-shrink-0",
-                                            provider === 'google' ? "bg-blue-500/10 text-blue-700 border-blue-500/20 dark:text-blue-400" : "bg-cyan-500/10 text-cyan-700 border-cyan-500/20 dark:text-cyan-400"
-                                          )}>
-                                            {providerEmail || (isOutlook ? 'Outlook' : 'Google')}
-                                          </Badge>
-                                          {calName && (
-                                            <span className="text-xs text-muted-foreground truncate max-w-[120px]">
-                                              {calName}
-                                            </span>
-                                          )}
-                                          {evt.location && (
-                                            <span className="text-xs text-muted-foreground truncate max-w-[120px]">
-                                              📍 {evt.location}
-                                            </span>
-                                          )}
-                                        </div>
-                                      </div>
-                                    );
-                                  }
-
-                                  // Open slot
-                                  const slot = item.slot;
-                                  return (
-                                    <Droppable key={`slot-${slot.hour}-${slot.minute}`} droppableId={`timeslot-${slot.hour}-${slot.minute}`}>
-                                      {(provided, snapshot) => (
+                                return (
+                                  <div className="flex">
+                                    {/* Time gutter */}
+                                    <div className="w-12 flex-shrink-0 select-none">
+                                      {allSlots.map((slot, i) => (
                                         <div
-                                          ref={provided.innerRef}
-                                          {...provided.droppableProps}
-                                          onClick={() => {
-                                            setCreateModalHour(slot.hour);
-                                            setCreateModalMinute(slot.minute);
-                                            setIsCreateModalOpen(true);
-                                          }}
+                                          key={`gutter-${slot.hour}-${slot.minute}`}
                                           className={cn(
-                                            "p-3 border rounded-md text-sm transition-colors flex items-center gap-2 cursor-pointer min-h-[44px]",
-                                            snapshot.isDraggingOver
-                                              ? "border-primary bg-primary/5"
-                                              : "border-dashed border-muted-foreground/30 hover:border-primary/50 hover:bg-accent"
+                                            "h-7 text-right pr-2 flex items-center justify-end",
+                                            slot.minute === 0
+                                              ? "text-xs font-medium text-muted-foreground"
+                                              : "text-[10px] text-muted-foreground/40"
                                           )}
                                         >
-                                          <Clock className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
-                                          <span className="text-muted-foreground">{slot.label}</span>
-                                          <Plus className="ml-auto h-4 w-4 text-muted-foreground/60" />
-                                          {provided.placeholder}
+                                          {slot.minute === 0 ? slot.label : slot.minute === 30 ? '—' : '·'}
                                         </div>
-                                      )}
-                                    </Droppable>
-                                  );
-                                };
-
-                                return groups.map((group, gIdx) => {
-                                  if (group.items.length === 1) {
-                                    return renderItem(group.items[0], gIdx, false);
-                                  }
-                                  // Overlap group: render side-by-side
-                                  return (
-                                    <div key={`overlap-${gIdx}`} className="flex flex-row gap-2">
-                                      {group.items.map((item, iIdx) => renderItem(item, iIdx, true))}
+                                      ))}
                                     </div>
-                                  );
-                                });
+
+                                    {/* Content area */}
+                                    <div
+                                      className="flex-1 relative border-l border-muted/30"
+                                      style={{ height: totalSlots * SLOT_HEIGHT }}
+                                    >
+                                      {/* Background grid lines — clickable for empty slots */}
+                                      {allSlots.map((slot, i) => {
+                                        const isOccupied = occupiedSlots.has(`${slot.hour}-${slot.minute}`);
+                                        return (
+                                          <Droppable key={`grid-${slot.hour}-${slot.minute}`} droppableId={`timeslot-${slot.hour}-${slot.minute}`}>
+                                            {(provided, snapshot) => (
+                                              <div
+                                                ref={provided.innerRef}
+                                                {...provided.droppableProps}
+                                                className={cn(
+                                                  "absolute w-full border-b",
+                                                  slot.minute === 0 ? "border-muted/30" : "border-muted/10",
+                                                  !isOccupied && "cursor-pointer hover:bg-accent/30",
+                                                  snapshot.isDraggingOver && "bg-primary/10"
+                                                )}
+                                                style={{ top: i * SLOT_HEIGHT, height: SLOT_HEIGHT }}
+                                                onClick={() => {
+                                                  if (!isOccupied) {
+                                                    setCreateModalHour(slot.hour);
+                                                    setCreateModalMinute(slot.minute);
+                                                    setIsCreateModalOpen(true);
+                                                  }
+                                                }}
+                                              >
+                                                {provided.placeholder}
+                                              </div>
+                                            )}
+                                          </Droppable>
+                                        );
+                                      })}
+
+                                      {/* Positioned task/event cards */}
+                                      {overlapGroups.map((group, gIdx) =>
+                                        group.items.map((item, colIdx) => {
+                                          const topPx = (item.startOffset / 15) * SLOT_HEIGHT;
+                                          const heightPx = Math.max(SLOT_HEIGHT, (item.duration / 15) * SLOT_HEIGHT);
+                                          const leftPct = (colIdx / group.items.length) * 100;
+                                          const widthPct = 100 / group.items.length;
+
+                                          if (item.type === 'task') {
+                                            const task = item.data as Task;
+                                            const taskEndDisplay = task.end_time
+                                              ? new Date(task.end_time).toLocaleTimeString('en-US', { timeZone: userTimezone, hour: 'numeric', minute: '2-digit', hour12: true })
+                                              : task.start_time && task.estimate_minutes
+                                                ? new Date(addMinutes(parseISO(task.start_time), task.estimate_minutes).getTime()).toLocaleTimeString('en-US', { timeZone: userTimezone, hour: 'numeric', minute: '2-digit', hour12: true })
+                                                : null;
+                                            const taskStartDisplay = task.start_time
+                                              ? new Date(task.start_time).toLocaleTimeString('en-US', { timeZone: userTimezone, hour: 'numeric', minute: '2-digit', hour12: true })
+                                              : '';
+
+                                            return (
+                                              <div
+                                                key={task.id}
+                                                className={cn(
+                                                  "absolute rounded-md p-2 shadow-sm border cursor-pointer hover:shadow-md transition-shadow overflow-hidden z-10",
+                                                  task.status === 'DONE' && "opacity-60",
+                                                  task.assignment_id
+                                                    ? "bg-card border-l-4 border-l-violet-500"
+                                                    : "bg-card"
+                                                )}
+                                                style={{
+                                                  top: topPx,
+                                                  height: heightPx,
+                                                  left: `${leftPct}%`,
+                                                  width: `calc(${widthPct}% - 4px)`,
+                                                  marginLeft: 2,
+                                                }}
+                                                onClick={() => onTaskEdit(task)}
+                                              >
+                                                <div className="flex items-start gap-1.5 h-full">
+                                                  <Checkbox
+                                                    checked={task.status === 'DONE'}
+                                                    onCheckedChange={(checked) => {
+                                                      if (checked) handleCompleteTask(task.id);
+                                                      else onStatusChange(task.id, 'TODO');
+                                                    }}
+                                                    onClick={(e) => e.stopPropagation()}
+                                                    className="mt-0.5 flex-shrink-0"
+                                                  />
+                                                  <div className="flex-1 min-w-0 overflow-hidden">
+                                                    <div className="flex items-center gap-1">
+                                                      <span className="text-[10px] text-muted-foreground flex-shrink-0">
+                                                        {taskStartDisplay}{taskEndDisplay && ` – ${taskEndDisplay}`}
+                                                      </span>
+                                                    </div>
+                                                    <span className={cn("font-medium text-xs truncate block", task.status === 'DONE' && 'line-through text-muted-foreground')}>
+                                                      {task.title}
+                                                    </span>
+                                                    {heightPx > 42 && (
+                                                      <div className="flex items-center gap-1 mt-0.5 flex-wrap">
+                                                        {task.assignment_id ? (
+                                                          <Badge variant="outline" className={cn("text-[10px] h-4 px-1",
+                                                            ((task.scheduling_context as any)?.source === 'MIT' || task.category === 'EDUCATION')
+                                                              ? "bg-red-500/10 text-red-700 border-red-500/20 dark:text-red-400"
+                                                              : "bg-indigo-500/10 text-indigo-700 border-indigo-500/20 dark:text-indigo-400"
+                                                          )}>
+                                                            📚 {(task.scheduling_context as any)?.source || (task.category === 'EDUCATION' ? 'MIT' : 'EMBA')}
+                                                          </Badge>
+                                                        ) : (
+                                                          <Badge variant="outline" className={cn("text-[10px] h-4 px-1", categoryColors[task.category])}>
+                                                            {task.category.toLowerCase()}
+                                                          </Badge>
+                                                        )}
+                                                        {(() => {
+                                                          const { violation, actualWindow, allowedWindows } = isWindowViolation(task);
+                                                          if (violation) {
+                                                            return (
+                                                              <Badge variant="outline" className="text-[10px] h-4 px-1 bg-destructive/10 text-destructive border-destructive/20">
+                                                                ⚠ {actualWindow}→{allowedWindows.join('/')}
+                                                              </Badge>
+                                                            );
+                                                          }
+                                                          return null;
+                                                        })()}
+                                                      </div>
+                                                    )}
+                                                  </div>
+                                                  <div className="flex flex-col gap-0.5 flex-shrink-0">
+                                                    {task.status !== 'DOING' && task.status !== 'DONE' && (
+                                                      <>
+                                                        <Button
+                                                          variant="ghost"
+                                                          size="icon"
+                                                          className="h-5 w-5 hover:bg-destructive/10"
+                                                          onClick={(e) => { e.stopPropagation(); handleRemoveFromSchedule(task); }}
+                                                          title="Remove from schedule"
+                                                        >
+                                                          <X className="h-3 w-3 text-muted-foreground" />
+                                                        </Button>
+                                                        <Button
+                                                          variant="ghost"
+                                                          size="icon"
+                                                          className="h-5 w-5 hover:bg-green-100 dark:hover:bg-green-900"
+                                                          onClick={(e) => { e.stopPropagation(); handleStartTask(task.id); }}
+                                                          title="Start"
+                                                        >
+                                                          <Play className="h-3 w-3 text-green-600" />
+                                                        </Button>
+                                                      </>
+                                                    )}
+                                                  </div>
+                                                </div>
+                                              </div>
+                                            );
+                                          }
+
+                                          // External event card
+                                          const evt = item.data as any;
+                                          const provider = evt.calendar_connections?.provider || 'calendar';
+                                          const isOutlook = provider === 'outlook' || provider === 'office365';
+                                          const providerEmail = evt.calendar_connections?.provider_account_email || '';
+                                          const calName = evt.calendar_id ? humanizeCalendarId(evt.calendar_id) : '';
+                                          const borderColor = provider === 'google' ? 'border-l-4 border-l-blue-500' : 'border-l-4 border-l-cyan-500';
+
+                                          return (
+                                            <div
+                                              key={`ext-${evt.id}`}
+                                              className={cn(
+                                                "absolute rounded-md p-2 shadow-sm border overflow-hidden z-10",
+                                                borderColor,
+                                                provider === 'google'
+                                                  ? "bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800"
+                                                  : "bg-cyan-50 dark:bg-cyan-950/30 border-cyan-200 dark:border-cyan-800"
+                                              )}
+                                              style={{
+                                                top: topPx,
+                                                height: heightPx,
+                                                left: `${leftPct}%`,
+                                                width: `calc(${widthPct}% - 4px)`,
+                                                marginLeft: 2,
+                                              }}
+                                            >
+                                              <div className="flex items-center gap-1.5">
+                                                <Calendar className="h-3 w-3 text-muted-foreground flex-shrink-0" />
+                                                <span className="text-[10px] text-muted-foreground flex-shrink-0">
+                                                  {new Date(evt.start_time).toLocaleTimeString('en-US', { timeZone: userTimezone, hour: 'numeric', minute: '2-digit', hour12: true })}
+                                                  {' – '}
+                                                  {new Date(evt.end_time).toLocaleTimeString('en-US', { timeZone: userTimezone, hour: 'numeric', minute: '2-digit', hour12: true })}
+                                                </span>
+                                                <span className="font-medium text-xs truncate">{evt.title || 'Untitled Event'}</span>
+                                              </div>
+                                              {heightPx > 36 && (
+                                                <div className="flex items-center gap-1 mt-0.5 flex-wrap">
+                                                  <Badge variant="outline" className={cn("text-[10px] h-4 px-1 flex-shrink-0",
+                                                    provider === 'google' ? "bg-blue-500/10 text-blue-700 border-blue-500/20 dark:text-blue-400" : "bg-cyan-500/10 text-cyan-700 border-cyan-500/20 dark:text-cyan-400"
+                                                  )}>
+                                                    {providerEmail || (isOutlook ? 'Outlook' : 'Google')}
+                                                  </Badge>
+                                                  {calName && <span className="text-[10px] text-muted-foreground truncate max-w-[100px]">{calName}</span>}
+                                                  {evt.location && <span className="text-[10px] text-muted-foreground truncate max-w-[100px]">📍 {evt.location}</span>}
+                                                </div>
+                                              )}
+                                            </div>
+                                          );
+                                        })
+                                      )}
+                                    </div>
+                                  </div>
+                                );
                               })()}
                             </div>
                           </div>
