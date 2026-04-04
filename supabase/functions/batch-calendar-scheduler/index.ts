@@ -382,6 +382,7 @@ CRITICAL TIME FORMAT REQUIREMENTS:
 - Or use UTC with Z suffix — but the offset form is preferred
 - NEVER return naive timestamps like "${targetDateISO}T12:00:00" without offset
 - The offset must reflect the actual timezone (${timezone})
+- ALL start times MUST align to 15-minute boundaries (xx:00, xx:15, xx:30, xx:45). NEVER use times like xx:07 or xx:22.
 
 Return a JSON array with one entry per task in order:
 [
