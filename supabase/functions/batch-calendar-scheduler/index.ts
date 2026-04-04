@@ -510,6 +510,13 @@ IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include tim
       });
     }
 
+    // Snap ISO timestamp to nearest 15-minute boundary
+    function snapTo15(isoStr: string): string {
+      const d = new Date(isoStr);
+      d.setMinutes(Math.round(d.getMinutes() / 15) * 15, 0, 0);
+      return d.toISOString();
+    }
+
     // Map results back to task IDs, normalizing times as a safety net
     // Then validate each task against its allowed windows (HARD CONSTRAINT)
     const scheduledTasks = [];
