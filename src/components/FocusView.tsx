@@ -1078,8 +1078,8 @@ const FocusView: React.FC<FocusViewProps> = ({
                                     const taskDurationMin = task.end_time && task.start_time
                                       ? differenceInMinutes(parseISO(task.end_time), parseISO(task.start_time))
                                       : (task.estimate_minutes || 30);
-                                    const slots = Math.max(1, Math.ceil(taskDurationMin / 30));
-                                    const slotHeight = 56;
+                                    const slots = Math.max(1, Math.ceil(taskDurationMin / 15));
+                                    const slotHeight = 28;
                                     const cardMinHeight = slots * slotHeight;
                                     const taskEndDisplay = task.end_time
                                       ? format(parseISO(task.end_time), 'h:mm a')
