@@ -1080,7 +1080,7 @@ const FocusView: React.FC<FocusViewProps> = ({
                                                 {...provided.droppableProps}
                                                 className={cn(
                                                   "absolute w-full border-b",
-                                                  slot.minute === 0 ? "border-muted/30" : "border-muted/10",
+                                                  slot.minute === 0 ? "border-muted/40" : "border-muted/20",
                                                   !isOccupied && "cursor-pointer hover:bg-accent/30",
                                                   snapshot.isDraggingOver && "bg-primary/10"
                                                 )}
