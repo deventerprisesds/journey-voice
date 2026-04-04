@@ -1058,7 +1058,7 @@ const FocusView: React.FC<FocusViewProps> = ({
                                 const groups: OverlapGroup[] = [];
                                 timeline.forEach(item => {
                                   if (item.type === 'slot') {
-                                    groups.push({ items: [item], maxEnd: item.sortKey + 30 });
+                                    groups.push({ items: [item], maxEnd: item.sortKey + 15 });
                                     return;
                                   }
                                   const endKey = getEndKey(item);
