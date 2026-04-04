@@ -1055,13 +1055,11 @@ const FocusView: React.FC<FocusViewProps> = ({
                                         <div
                                           key={`gutter-${slot.hour}-${slot.minute}`}
                                           className={cn(
-                                            "h-7 text-right pr-2 flex items-center justify-end",
-                                            slot.minute === 0
-                                              ? "text-xs font-medium text-muted-foreground"
-                                              : "text-[10px] text-muted-foreground/40"
+                                            "h-7 text-right pr-2 flex items-center justify-end text-[11px] text-muted-foreground",
+                                            slot.minute === 0 && "font-medium"
                                           )}
                                         >
-                                          {slot.minute === 0 ? slot.label : slot.minute === 30 ? '—' : '·'}
+                                          {`${slot.hour}:${slot.minute.toString().padStart(2, '0')}`}
                                         </div>
                                       ))}
                                     </div>
@@ -1082,7 +1080,7 @@ const FocusView: React.FC<FocusViewProps> = ({
                                                 {...provided.droppableProps}
                                                 className={cn(
                                                   "absolute w-full border-b",
-                                                  slot.minute === 0 ? "border-muted/30" : "border-muted/10",
+                                                  slot.minute === 0 ? "border-muted/40" : "border-muted/20",
                                                   !isOccupied && "cursor-pointer hover:bg-accent/30",
                                                   snapshot.isDraggingOver && "bg-primary/10"
                                                 )}
