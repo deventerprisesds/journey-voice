@@ -1,38 +1,30 @@
 
 
-# Combined Plan: 15-Minute Grid + General Scheduling Guardrails
+# Keep Completed Tasks Visible in Focus View (Crossed Out, Not Removed)
 
-## Part 1: 15-Minute Grid Resolution
+## Problem
 
-**File**: `src/components/FocusView.tsx`
+When a task is marked done, it disappears from the Focus View because three places filter out `status !== 'DONE'`:
+1. **Line 281** — `scheduledToday` excludes DONE tasks from rendering
+2. **Line 578** — "Clear schedule" DB query excludes DONE (this one is correct — you don't want to clear completed tasks)
+3. **Line 632** — Verification query excludes DONE (also correct for clear logic)
 
-### Changes:
-1. **Line 806**: Change `[0, 30]` → `[0, 15, 30, 45]` in `getDropSlotsForWindow`
-2. **Lines 971, 990**: Change `m += 30` → `m += 15` in both occupied-slot loops
-3. **Line 974**: Fix bucketing from `slotMin % 60 < 30 ? 0 : 30` → `Math.floor((slotMin % 60) / 15) * 15`
-4. **Line 992**: Same bucketing fix for external events
-5. **Lines 1053, 1061**: Open slot duration references from `30` → `15`
-6. **Card height ratio**: Change from 56px/30min → 28px/15min to maintain visual density
-7. **Memory update**: Update the focus-view memory to reflect 15-min resolution
+The fix is solely in **line 281**: stop filtering out DONE tasks from the displayed timeline. The card already has `line-through` styling for DONE tasks (line 1118), so they'll appear crossed out automatically.
 
-## Part 2: General Common-Sense Guardrails
+## Changes
 
-**File**: `supabase/functions/batch-calendar-scheduler/index.ts`
+**File: `src/components/FocusView.tsx`**
 
-### Changes:
-1. **Line 301**: Replace the hardcoded Sunday/church keyword check with a general rule:
-   - "Consider whether the activity described makes sense on this day/time. Religious services belong on their traditional day. Business errands belong on weekdays during business hours. Outdoor/social activities should not be at odd hours. If the activity clearly doesn't fit this day, mark as OVERFLOW."
+1. **Line 281**: Remove `&& t.status !== 'DONE'` from the `scheduledToday` filter so completed tasks stay visible in the timeline with their original time slot and crossed-out styling.
 
-2. **After line 555** (after overlap validation): Add a lightweight sanity-check pass on accepted results. Send accepted task titles + scheduled times to a fast AI call asking it to flag any obviously nonsensical placements. Flagged tasks get moved to `rejectedTasks` with reason `"common-sense: {reason}"`.
+2. **Dim completed cards**: Add reduced opacity (`opacity-60`) to the card wrapper when `task.status === 'DONE'` so they're visually distinct but still present.
 
-3. **Fallback safety**: If the sanity-check AI call fails, all tasks pass through unchanged (no worse than today).
+3. **Hide action buttons for done tasks**: The "Go" / play buttons are already hidden for DONE (line 1123). Verify the checkbox remains functional so users can un-complete if needed.
 
-4. **Fix timezone-aware day-of-week** (~line 183): Compute `targetDayOfWeek` using the user's timezone instead of server-local `getDay()`.
+That's it — one line removal + a small styling tweak. The history views (Weekly Agenda, past days) already query `task_schedule_history` which preserves completed task snapshots, so cross-day history is unaffected.
 
-## Files changed
-
-| File | Changes |
-|------|---------|
-| `src/components/FocusView.tsx` | 15-min grid slots, bucketing, card height ratio |
-| `supabase/functions/batch-calendar-scheduler/index.ts` | General common-sense prompt rule, post-validation sanity check, timezone day-of-week fix |
+| File | Change |
+|------|--------|
+| `src/components/FocusView.tsx` line 281 | Remove DONE exclusion from `scheduledToday` filter |
+| `src/components/FocusView.tsx` ~line 1095 | Add `opacity-60` class when task is DONE |
 
