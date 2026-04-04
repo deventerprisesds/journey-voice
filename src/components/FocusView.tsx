@@ -1050,7 +1050,7 @@ const FocusView: React.FC<FocusViewProps> = ({
                                     const { hour, minute } = getTimePartsInTimezone((item.event as any).end_time, userTimezone);
                                     return hour * 60 + minute;
                                   }
-                                  return item.sortKey + 30; // open slot = 30 min
+                                  return item.sortKey + 15; // open slot = 15 min
                                 };
 
                                 // Group overlapping non-slot items; slots are never grouped
