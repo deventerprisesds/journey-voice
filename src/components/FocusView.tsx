@@ -278,7 +278,7 @@ const FocusView: React.FC<FocusViewProps> = ({
   
   // Use timezone-aware date comparison for "today"
   const scheduledToday = tasks.filter(t => 
-    t.start_time && getDateInTimezone(t.start_time, userTimezone) === todayStr && t.status !== 'DONE'
+    t.start_time && getDateInTimezone(t.start_time, userTimezone) === todayStr
   ).sort((a, b) => {
     if (!a.start_time || !b.start_time) return 0;
     return new Date(a.start_time).getTime() - new Date(b.start_time).getTime();
@@ -1092,6 +1092,7 @@ const FocusView: React.FC<FocusViewProps> = ({
                                         className={cn(
                                           "rounded-md p-3 shadow-sm border cursor-pointer hover:shadow-md transition-shadow",
                                           inOverlapGroup && "flex-1 min-w-0",
+                                          task.status === 'DONE' && "opacity-60",
                                           task.assignment_id
                                             ? "bg-card border-l-4 border-l-violet-500"
                                             : "bg-card"
