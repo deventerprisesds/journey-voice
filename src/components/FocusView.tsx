@@ -803,7 +803,7 @@ const FocusView: React.FC<FocusViewProps> = ({
     
     const slots: { hour: number; minute: number; label: string }[] = [];
     for (let hour = window.start; hour < window.end; hour++) {
-      for (const minute of [0, 30]) {
+      for (const minute of [0, 15, 30, 45]) {
         // Format time label using timezone-aware formatting
         const timeStr = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
         const dateStr = dateToKeyInTimezone(today, userTimezone);
