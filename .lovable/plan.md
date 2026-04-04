@@ -1,35 +1,45 @@
 
 
-# Fix Task Duration Spanning + Side-by-Side Double-Bookings
+# Fix Focus View: Duration-Proportional Card Heights + Time Range Display
 
-## Two changes in `src/components/FocusView.tsx`
+## Problem
 
-### 1. Fix occupied slot calculation (line 968)
+All task cards render at the same height regardless of duration. A 2-hour task (11:00 AM – 1:00 PM) looks identical to a 30-minute task. This makes it appear that time slots are missing rather than covered by the longer task. Additionally, cards only show the start time, not the full time range.
 
-**Current**: `const durationMinutes = task.estimate_minutes || 60;`
+## Changes in `src/components/FocusView.tsx`
 
-**Fix**: Use actual scheduled span from `end_time - start_time`, falling back to `estimate_minutes || 60`:
+### 1. Show time range instead of just start time
 
-```ts
-const durationMinutes = task.end_time
-  ? differenceInMinutes(parseISO(task.end_time), parseISO(task.start_time))
-  : (task.estimate_minutes || 60);
+On the task card (line ~1104), change from:
+```
+10:30 AM  Order graduation outfit
+```
+to:
+```
+10:30 – 11:00 AM  Order graduation outfit
 ```
 
-This ensures a task scheduled 11:00–1:00 PM marks all four 30-min slots as occupied, hiding false "open" slots.
+Use `end_time` when available; otherwise compute from `start_time + estimate_minutes`.
 
-### 2. Side-by-side rendering for overlapping items
+Same change for external event cards (~line 1200).
 
-Currently, timeline items at the same `sortKey` stack vertically. When two tasks (or a task and an external event) overlap the same time slot, they should render side-by-side.
+### 2. Make card height proportional to duration
 
-**Approach**: After sorting the timeline, group consecutive items that share overlapping time ranges. For each overlap group with 2+ items, wrap them in a flex row container (`flex flex-row gap-2`) where each item gets `flex-1 min-w-0` so they share the width equally.
+Set a minimum height on each task/event card based on its duration. Use a scale like `minHeight = max(baseHeight, slots * slotHeight)` where each 30-minute slot adds height. For example:
+- 30 min → default card height (no change)
+- 60 min → ~120px
+- 120 min → ~200px
 
-Overlap detection: two items overlap if `startA < endB && startB < endA`. Compute each item's start/end minutes from their time data, then do a single pass to build groups.
+This is applied as an inline `style={{ minHeight }}` on the card div. The base unit (e.g., 56px per 30-min slot) matches the natural height of a single-slot card so the visual proportions are correct.
+
+### 3. Slot grid uses 30-minute increments (already does)
+
+The existing slot calculation already uses 30-minute increments. No change needed there — the occupied-slot logic correctly marks all slots within a task's duration. The visual mismatch was purely because card height didn't reflect duration.
 
 ## Files changed
 
 | File | Change |
 |------|--------|
-| `src/components/FocusView.tsx` line 968 | Use `end_time - start_time` for duration instead of `estimate_minutes` |
-| `src/components/FocusView.tsx` ~line 1036-1038 | After sorting timeline, group overlapping items and render groups side-by-side in a flex row |
+| `src/components/FocusView.tsx` ~line 1079-1176 | Add `minHeight` style based on duration; show time range |
+| `src/components/FocusView.tsx` ~line 1186-1220 | Same for external event cards |
 
