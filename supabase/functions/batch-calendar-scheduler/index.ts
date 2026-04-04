@@ -530,11 +530,22 @@ IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include tim
       }
       
       // Normalize times - if AI returned naive ISO, treat as local to user's timezone
-      const normalizedStart = normalizeDateTime(result.start_time, timezone);
-      const normalizedEnd = normalizeDateTime(result.end_time, timezone);
+      let normalizedStart = normalizeDateTime(result.start_time, timezone);
+      let normalizedEnd = normalizeDateTime(result.end_time, timezone);
       
       if (result.start_time !== normalizedStart) {
         console.log(`⚠️ Normalized start_time: ${result.start_time} → ${normalizedStart}`);
+      }
+
+      // Snap to 15-minute boundaries
+      normalizedStart = snapTo15(normalizedStart);
+      normalizedEnd = snapTo15(normalizedEnd);
+      
+      // Ensure end is still after start (snapTo15 rounding could make them equal)
+      if (new Date(normalizedEnd).getTime() <= new Date(normalizedStart).getTime()) {
+        const d = new Date(normalizedStart);
+        d.setMinutes(d.getMinutes() + 15);
+        normalizedEnd = d.toISOString();
       }
       
       // POST-AI VALIDATION 1: Check window constraints
