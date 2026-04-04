@@ -1,45 +1,38 @@
 
 
-# Fix Focus View: Duration-Proportional Card Heights + Time Range Display
+# Combined Plan: 15-Minute Grid + General Scheduling Guardrails
 
-## Problem
+## Part 1: 15-Minute Grid Resolution
 
-All task cards render at the same height regardless of duration. A 2-hour task (11:00 AM – 1:00 PM) looks identical to a 30-minute task. This makes it appear that time slots are missing rather than covered by the longer task. Additionally, cards only show the start time, not the full time range.
+**File**: `src/components/FocusView.tsx`
 
-## Changes in `src/components/FocusView.tsx`
+### Changes:
+1. **Line 806**: Change `[0, 30]` → `[0, 15, 30, 45]` in `getDropSlotsForWindow`
+2. **Lines 971, 990**: Change `m += 30` → `m += 15` in both occupied-slot loops
+3. **Line 974**: Fix bucketing from `slotMin % 60 < 30 ? 0 : 30` → `Math.floor((slotMin % 60) / 15) * 15`
+4. **Line 992**: Same bucketing fix for external events
+5. **Lines 1053, 1061**: Open slot duration references from `30` → `15`
+6. **Card height ratio**: Change from 56px/30min → 28px/15min to maintain visual density
+7. **Memory update**: Update the focus-view memory to reflect 15-min resolution
 
-### 1. Show time range instead of just start time
+## Part 2: General Common-Sense Guardrails
 
-On the task card (line ~1104), change from:
-```
-10:30 AM  Order graduation outfit
-```
-to:
-```
-10:30 – 11:00 AM  Order graduation outfit
-```
+**File**: `supabase/functions/batch-calendar-scheduler/index.ts`
 
-Use `end_time` when available; otherwise compute from `start_time + estimate_minutes`.
+### Changes:
+1. **Line 301**: Replace the hardcoded Sunday/church keyword check with a general rule:
+   - "Consider whether the activity described makes sense on this day/time. Religious services belong on their traditional day. Business errands belong on weekdays during business hours. Outdoor/social activities should not be at odd hours. If the activity clearly doesn't fit this day, mark as OVERFLOW."
 
-Same change for external event cards (~line 1200).
+2. **After line 555** (after overlap validation): Add a lightweight sanity-check pass on accepted results. Send accepted task titles + scheduled times to a fast AI call asking it to flag any obviously nonsensical placements. Flagged tasks get moved to `rejectedTasks` with reason `"common-sense: {reason}"`.
 
-### 2. Make card height proportional to duration
+3. **Fallback safety**: If the sanity-check AI call fails, all tasks pass through unchanged (no worse than today).
 
-Set a minimum height on each task/event card based on its duration. Use a scale like `minHeight = max(baseHeight, slots * slotHeight)` where each 30-minute slot adds height. For example:
-- 30 min → default card height (no change)
-- 60 min → ~120px
-- 120 min → ~200px
-
-This is applied as an inline `style={{ minHeight }}` on the card div. The base unit (e.g., 56px per 30-min slot) matches the natural height of a single-slot card so the visual proportions are correct.
-
-### 3. Slot grid uses 30-minute increments (already does)
-
-The existing slot calculation already uses 30-minute increments. No change needed there — the occupied-slot logic correctly marks all slots within a task's duration. The visual mismatch was purely because card height didn't reflect duration.
+4. **Fix timezone-aware day-of-week** (~line 183): Compute `targetDayOfWeek` using the user's timezone instead of server-local `getDay()`.
 
 ## Files changed
 
-| File | Change |
-|------|--------|
-| `src/components/FocusView.tsx` ~line 1079-1176 | Add `minHeight` style based on duration; show time range |
-| `src/components/FocusView.tsx` ~line 1186-1220 | Same for external event cards |
+| File | Changes |
+|------|---------|
+| `src/components/FocusView.tsx` | 15-min grid slots, bucketing, card height ratio |
+| `supabase/functions/batch-calendar-scheduler/index.ts` | General common-sense prompt rule, post-validation sanity check, timezone day-of-week fix |
 
