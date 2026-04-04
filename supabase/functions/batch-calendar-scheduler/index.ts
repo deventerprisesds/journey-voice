@@ -307,7 +307,16 @@ TIMEZONE: ${timezone}
 ⚠️ Use ISO format for all times: "${targetDateISO}T10:00:00${tzOffset}"
 
 === DAY-SPECIFIC RULES ===
-${dayName === 'SUNDAY' ? '- Church / worship tasks → MUST be scheduled on Sundays (morning preferred)\n' : ''}${dayName === 'SATURDAY' || dayName === 'SUNDAY' ? '- This is a WEEKEND day. Use weekend-appropriate scheduling.\n' : '- This is a WEEKDAY. Use business-hour scheduling.\n'}
+${dayName === 'SATURDAY' || dayName === 'SUNDAY' ? '- This is a WEEKEND day. Use weekend-appropriate scheduling.\n' : '- This is a WEEKDAY. Use business-hour scheduling.\n'}
+=== RULE 1c: COMMON-SENSE DAY/TIME MATCHING ===
+Consider whether the ACTIVITY described in each task title makes sense on ${dayName} at the time you pick. Apply general knowledge:
+- Weekly religious/worship activities belong on their traditional day (e.g., church on Sunday, mosque on Friday)
+- "Weekend" activities should not be placed on weekdays and vice versa
+- Business errands (bank, post office, government offices) should be on weekdays during business hours
+- Social dinners, parties, and gatherings are evening activities, not early morning
+- Outdoor exercise and gym are typically morning or late afternoon, not midnight
+- Grocery shopping and personal errands fit daytime hours, not late night
+If the activity clearly does NOT belong on ${dayName} or at the time you'd place it, mark as OVERFLOW with a reason explaining the mismatch.
 ==============================================
 
 TASKS TO SCHEDULE:
