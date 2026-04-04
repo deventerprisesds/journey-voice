@@ -1059,7 +1059,7 @@ const FocusView: React.FC<FocusViewProps> = ({
                                             slot.minute === 0 && "font-medium"
                                           )}
                                         >
-                                          {`${slot.hour}:${slot.minute.toString().padStart(2, '0')}`}
+                                          {`${slot.hour > 12 ? slot.hour - 12 : slot.hour === 0 ? 12 : slot.hour}:${slot.minute.toString().padStart(2, '0')}`}
                                         </div>
                                       ))}
                                     </div>
