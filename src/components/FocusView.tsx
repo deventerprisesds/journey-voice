@@ -1092,6 +1092,7 @@ const FocusView: React.FC<FocusViewProps> = ({
                                         className={cn(
                                           "rounded-md p-3 shadow-sm border cursor-pointer hover:shadow-md transition-shadow",
                                           inOverlapGroup && "flex-1 min-w-0",
+                                          task.status === 'DONE' && "opacity-60",
                                           task.assignment_id
                                             ? "bg-card border-l-4 border-l-violet-500"
                                             : "bg-card"
