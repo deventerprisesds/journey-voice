@@ -1196,8 +1196,8 @@ const FocusView: React.FC<FocusViewProps> = ({
                                     const calName = evt.calendar_id ? humanizeCalendarId(evt.calendar_id) : '';
                                     const borderColor = provider === 'google' ? 'border-l-4 border-l-blue-500' : 'border-l-4 border-l-cyan-500';
                                     const evtDurationMin = differenceInMinutes(parseISO(evt.end_time), parseISO(evt.start_time));
-                                    const evtSlots = Math.max(1, Math.ceil(evtDurationMin / 30));
-                                    const evtMinHeight = evtSlots * 56;
+                                    const evtSlots = Math.max(1, Math.ceil(evtDurationMin / 15));
+                                    const evtMinHeight = evtSlots * 28;
                                      return (
                                       <div
                                         key={`ext-${evt.id}`}
