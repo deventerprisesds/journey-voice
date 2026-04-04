@@ -1,92 +1,44 @@
 
 
-# Combined Plan: Rules Update + 15-Min Snap + Calendar-Style Grid
+# Fix Focus View: Show All 15-Minute Labels + Visible Grid Lines
 
-## Part 1: Update `.lovable/rules.md` — Two New Mandatory Sections
+## Problem
 
-Insert after line 18 (after the first `---` separator, before SCHEDULING SYSTEM MAP):
+The current Focus View gutter only shows full labels at `:00`, a dash at `:30`, and dots at `:15/:45`. The user wants every 15-minute increment to display its actual time label (6:00, 6:15, 6:30, 6:45, 7:00...) matching the cleaner UX already used in the TimeSlotGrid component (visible in the Create New Tasks modal).
 
-```markdown
----
+Additionally, grid lines need to be more visible so the calendar feel is clear.
 
-## TIMEZONE INTERPRETATION — MANDATORY
-
-- All database timestamps are stored in UTC.
-- NEVER read a raw UTC timestamp and report it as a local time.
-- ALWAYS convert UTC to the user's configured timezone (from `user_scheduling_prefs.timezone`) before making any claims about what time something is scheduled.
-- When querying tasks for debugging, use `AT TIME ZONE` or convert programmatically — do not eyeball UTC values.
-
----
-
-## DATA SOURCE — MANDATORY
-
-- When investigating user-reported issues, ALWAYS use the **published app** (`journey-voice.lovable.app`) and the **real dev user** as the reference, not the preview URL or demo account.
-- The preview URL may fall back to a mock demo user (`000...001`) which has completely different data.
-- NEVER mix rows from different user accounts in a single analysis.
-- ALWAYS scope database queries to the authenticated user's `user_id` before drawing conclusions.
-- If using the preview instance, explicitly state it and do not conflate its data with the published instance.
-```
-
----
-
-## Part 2: Enforce 15-Minute Alignment in Batch Scheduler
-
-**File**: `supabase/functions/batch-calendar-scheduler/index.ts`
-
-1. **Add to prompt** (line 384, after the naive timestamp warning):
-   ```
-   - ALL start times MUST align to 15-minute boundaries (xx:00, xx:15, xx:30, xx:45). NEVER use times like xx:07 or xx:22.
-   ```
-
-2. **Add `snapTo15` helper** and apply it after `normalizeDateTime` calls (lines 532-533), before the window validation at line 539:
-   ```ts
-   function snapTo15(isoStr: string): string {
-     const d = new Date(isoStr);
-     d.setMinutes(Math.round(d.getMinutes() / 15) * 15, 0, 0);
-     return d.toISOString();
-   }
-   ```
-   Apply: `normalizedStart = snapTo15(normalizedStart)` and `normalizedEnd = snapTo15(normalizedEnd)`.
-
----
-
-## Part 3: Calendar-Style Grid with Time Gutter
+## Changes
 
 **File**: `src/components/FocusView.tsx`
 
-Replace the flat timeline rendering (~lines 960-1284) with an absolute-positioned grid layout:
+### 1. Gutter: Show all 15-minute labels (line ~1064)
 
-1. **Time gutter** (fixed ~50px left column): Render 15-min tick labels. Show hour labels at `:00`, lighter ticks at `:15/:30/:45`. Each row = 28px tall.
-
-2. **Content area** (`flex-1, position: relative`): Cards positioned absolutely:
-   - `top: (startMinuteOffset / 15) * 28px`
-   - `height: (durationMinutes / 15) * 28px`
-
-3. **Overlap groups**: Items whose time ranges overlap are grouped. Each item in a group gets `width: 100% / groupSize` and `left: (colIndex / groupSize) * 100%` — rendering side-by-side.
-
-4. **Empty rows**: Background grid lines are clickable drop targets. Clicking opens create modal for that 15-min slot.
-
-5. **Card content unchanged**: Checkbox, title, badge, time range, actions all stay identical. Only the positioning container changes.
-
-```text
-┌──────┬───────────────────────────────┐
-│ 8:00 │                               │
-│ 8:15 │ ┌─────────────────────────┐   │
-│ 8:30 │ │  Transfer 40k     LIFE │   │
-│ 8:45 │ └─────────────────────────┘   │
-│ 9:00 │ ┌──────────┐ ┌──────────┐    │
-│ 9:15 │ │  Task A   │ │  Task B  │    │
-│ 9:30 │ └──────────┘ └──────────┘    │
-└──────┴───────────────────────────────┘
+Replace the conditional label logic:
+```ts
+// Current: only shows label at :00, dash at :30, dot at :15/:45
+{slot.minute === 0 ? slot.label : slot.minute === 30 ? '—' : '·'}
 ```
 
----
+With:
+```ts
+// New: show formatted time for every slot (e.g. "6:00", "6:15", "6:30", "6:45")
+{`${slot.hour}:${slot.minute.toString().padStart(2, '0')}`}
+```
+
+Also unify the text styling so all labels are the same size (currently `:00` is `text-xs font-medium` while others are `text-[10px]`). Use consistent `text-[11px] text-muted-foreground` for all, with slightly bolder weight at `:00` marks.
+
+### 2. Grid lines: Make all rows visually distinct (line ~1084-1085)
+
+Current grid lines are nearly invisible (`border-muted/10` for non-hour, `border-muted/30` for hour). Update to:
+- `:00` rows: `border-muted/40` (stronger line to mark the hour)
+- `:15/:30/:45` rows: `border-muted/20` (visible but lighter)
+
+This creates a clear table-like grid matching the TimeSlotGrid reference.
 
 ## Files changed
 
 | File | Change |
 |------|--------|
-| `.lovable/rules.md` | Add TIMEZONE INTERPRETATION + DATA SOURCE mandatory sections |
-| `supabase/functions/batch-calendar-scheduler/index.ts` | Add 15-min prompt rule + `snapTo15` post-processing |
-| `src/components/FocusView.tsx` | Replace flat timeline with time-gutter + absolute-positioned grid layout |
+| `src/components/FocusView.tsx` | Show all 15-min labels in gutter + increase grid line visibility |
 
