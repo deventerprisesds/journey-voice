@@ -1073,9 +1073,20 @@ const FocusView: React.FC<FocusViewProps> = ({
                                 });
 
                                 const renderItem = (item: TimelineItem, idx: number, inOverlapGroup: boolean) => {
-                                  if (item.type === 'task') {
+                                   if (item.type === 'task') {
                                     const task = item.task;
-                                    return (
+                                    const taskDurationMin = task.end_time && task.start_time
+                                      ? differenceInMinutes(parseISO(task.end_time), parseISO(task.start_time))
+                                      : (task.estimate_minutes || 30);
+                                    const slots = Math.max(1, Math.ceil(taskDurationMin / 30));
+                                    const slotHeight = 56;
+                                    const cardMinHeight = slots * slotHeight;
+                                    const taskEndDisplay = task.end_time
+                                      ? format(parseISO(task.end_time), 'h:mm a')
+                                      : task.start_time && task.estimate_minutes
+                                        ? format(addMinutes(parseISO(task.start_time), task.estimate_minutes), 'h:mm a')
+                                        : null;
+                                     return (
                                     <div 
                                         key={task.id}
                                         className={cn(
@@ -1085,6 +1096,7 @@ const FocusView: React.FC<FocusViewProps> = ({
                                             ? "bg-card border-l-4 border-l-violet-500"
                                             : "bg-card"
                                         )}
+                                        style={{ minHeight: `${cardMinHeight}px` }}
                                         onClick={() => onTaskEdit(task)}
                                       >
                                         <div className="flex items-start gap-2">
