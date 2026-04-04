@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
-import { format, parseISO, isPast, formatDistanceToNow, addMinutes, startOfDay } from 'date-fns';
+import { format, parseISO, isPast, formatDistanceToNow, addMinutes, startOfDay, differenceInMinutes } from 'date-fns';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
