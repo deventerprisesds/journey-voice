@@ -382,6 +382,7 @@ CRITICAL TIME FORMAT REQUIREMENTS:
 - Or use UTC with Z suffix — but the offset form is preferred
 - NEVER return naive timestamps like "${targetDateISO}T12:00:00" without offset
 - The offset must reflect the actual timezone (${timezone})
+- ALL start times MUST align to 15-minute boundaries (xx:00, xx:15, xx:30, xx:45). NEVER use times like xx:07 or xx:22.
 
 Return a JSON array with one entry per task in order:
 [
@@ -509,6 +510,13 @@ IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include tim
       });
     }
 
+    // Snap ISO timestamp to nearest 15-minute boundary
+    function snapTo15(isoStr: string): string {
+      const d = new Date(isoStr);
+      d.setMinutes(Math.round(d.getMinutes() / 15) * 15, 0, 0);
+      return d.toISOString();
+    }
+
     // Map results back to task IDs, normalizing times as a safety net
     // Then validate each task against its allowed windows (HARD CONSTRAINT)
     const scheduledTasks = [];
@@ -529,11 +537,22 @@ IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include tim
       }
       
       // Normalize times - if AI returned naive ISO, treat as local to user's timezone
-      const normalizedStart = normalizeDateTime(result.start_time, timezone);
-      const normalizedEnd = normalizeDateTime(result.end_time, timezone);
+      let normalizedStart = normalizeDateTime(result.start_time, timezone);
+      let normalizedEnd = normalizeDateTime(result.end_time, timezone);
       
       if (result.start_time !== normalizedStart) {
         console.log(`⚠️ Normalized start_time: ${result.start_time} → ${normalizedStart}`);
+      }
+
+      // Snap to 15-minute boundaries
+      normalizedStart = snapTo15(normalizedStart);
+      normalizedEnd = snapTo15(normalizedEnd);
+      
+      // Ensure end is still after start (snapTo15 rounding could make them equal)
+      if (new Date(normalizedEnd).getTime() <= new Date(normalizedStart).getTime()) {
+        const d = new Date(normalizedStart);
+        d.setMinutes(d.getMinutes() + 15);
+        normalizedEnd = d.toISOString();
       }
       
       // POST-AI VALIDATION 1: Check window constraints

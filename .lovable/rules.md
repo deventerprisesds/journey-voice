@@ -70,3 +70,22 @@ Before modifying any subsystem, read the relevant documentation first:
 - **Edge function patterns**: Audit existing functions in the same domain before creating new ones. Use `SUPABASE_SERVICE_ROLE_KEY` consistently. See `docs/EDGE_FUNCTIONS.md`.
 - **Scheduling plans are mandatory-read**: Before any scheduling, calendar, daily agenda, assignment persistence, or timezone plan/change, read `docs/SCHEDULING_RULES.md`, `docs/SCHEDULING_SYSTEM_MAP.md`, `docs/TASK_MANAGEMENT.md`, `docs/CALENDAR_INTEGRATION.md`, and `src/lib/date.ts`.
 - **Scheduling system map sync**: After any scheduling code change, update `docs/SCHEDULING_SYSTEM_MAP.md` with new/changed code paths, modules, or data flows.
+
+---
+
+## TIMEZONE INTERPRETATION — MANDATORY
+
+- All database timestamps are stored in UTC.
+- NEVER read a raw UTC timestamp and report it as a local time.
+- ALWAYS convert UTC to the user's configured timezone (from `user_scheduling_prefs.timezone`) before making any claims about what time something is scheduled.
+- When querying tasks for debugging, use `AT TIME ZONE` or convert programmatically — do not eyeball UTC values.
+
+---
+
+## DATA SOURCE — MANDATORY
+
+- When investigating user-reported issues, ALWAYS use the **published app** (`journey-voice.lovable.app`) and the **real dev user** as the reference, not the preview URL or demo account.
+- The preview URL may fall back to a mock demo user (`000...001`) which has completely different data.
+- NEVER mix rows from different user accounts in a single analysis.
+- ALWAYS scope database queries to the authenticated user's `user_id` before drawing conclusions.
+- If using the preview instance, explicitly state it and do not conflate its data with the published instance.
