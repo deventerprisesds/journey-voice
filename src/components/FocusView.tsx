@@ -803,7 +803,7 @@ const FocusView: React.FC<FocusViewProps> = ({
     
     const slots: { hour: number; minute: number; label: string }[] = [];
     for (let hour = window.start; hour < window.end; hour++) {
-      for (const minute of [0, 30]) {
+      for (const minute of [0, 15, 30, 45]) {
         // Format time label using timezone-aware formatting
         const timeStr = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
         const dateStr = dateToKeyInTimezone(today, userTimezone);
@@ -968,10 +968,10 @@ const FocusView: React.FC<FocusViewProps> = ({
                                     const durationMinutes = task.end_time
                                       ? differenceInMinutes(parseISO(task.end_time), parseISO(task.start_time))
                                       : (task.estimate_minutes || 60);
-                                    for (let m = 0; m < durationMinutes; m += 30) {
+                                    for (let m = 0; m < durationMinutes; m += 15) {
                                       const slotMin = minute + m;
                                       const slotHour = hour + Math.floor(slotMin / 60);
-                                      const slotMinute = slotMin % 60 < 30 ? 0 : 30;
+                                      const slotMinute = Math.floor((slotMin % 60) / 15) * 15;
                                       occupiedSlots.add(`${slotHour}-${slotMinute}`);
                                     }
                                   }
@@ -987,9 +987,9 @@ const FocusView: React.FC<FocusViewProps> = ({
                                   if (evtStart.hour >= wsStart && evtStart.hour < wsEnd) {
                                     const startMin = evtStart.hour * 60 + evtStart.minute;
                                     const endMin = evtEnd.hour * 60 + evtEnd.minute;
-                                    for (let m = startMin; m < endMin; m += 30) {
+                                    for (let m = startMin; m < endMin; m += 15) {
                                       const slotH = Math.floor(m / 60);
-                                      const slotM = m % 60 < 30 ? 0 : 30;
+                                      const slotM = Math.floor((m % 60) / 15) * 15;
                                       occupiedSlots.add(`${slotH}-${slotM}`);
                                     }
                                   }
@@ -1050,7 +1050,7 @@ const FocusView: React.FC<FocusViewProps> = ({
                                     const { hour, minute } = getTimePartsInTimezone((item.event as any).end_time, userTimezone);
                                     return hour * 60 + minute;
                                   }
-                                  return item.sortKey + 30; // open slot = 30 min
+                                  return item.sortKey + 15; // open slot = 15 min
                                 };
 
                                 // Group overlapping non-slot items; slots are never grouped
@@ -1058,7 +1058,7 @@ const FocusView: React.FC<FocusViewProps> = ({
                                 const groups: OverlapGroup[] = [];
                                 timeline.forEach(item => {
                                   if (item.type === 'slot') {
-                                    groups.push({ items: [item], maxEnd: item.sortKey + 30 });
+                                    groups.push({ items: [item], maxEnd: item.sortKey + 15 });
                                     return;
                                   }
                                   const endKey = getEndKey(item);
@@ -1078,8 +1078,8 @@ const FocusView: React.FC<FocusViewProps> = ({
                                     const taskDurationMin = task.end_time && task.start_time
                                       ? differenceInMinutes(parseISO(task.end_time), parseISO(task.start_time))
                                       : (task.estimate_minutes || 30);
-                                    const slots = Math.max(1, Math.ceil(taskDurationMin / 30));
-                                    const slotHeight = 56;
+                                    const slots = Math.max(1, Math.ceil(taskDurationMin / 15));
+                                    const slotHeight = 28;
                                     const cardMinHeight = slots * slotHeight;
                                     const taskEndDisplay = task.end_time
                                       ? format(parseISO(task.end_time), 'h:mm a')
@@ -1196,8 +1196,8 @@ const FocusView: React.FC<FocusViewProps> = ({
                                     const calName = evt.calendar_id ? humanizeCalendarId(evt.calendar_id) : '';
                                     const borderColor = provider === 'google' ? 'border-l-4 border-l-blue-500' : 'border-l-4 border-l-cyan-500';
                                     const evtDurationMin = differenceInMinutes(parseISO(evt.end_time), parseISO(evt.start_time));
-                                    const evtSlots = Math.max(1, Math.ceil(evtDurationMin / 30));
-                                    const evtMinHeight = evtSlots * 56;
+                                    const evtSlots = Math.max(1, Math.ceil(evtDurationMin / 15));
+                                    const evtMinHeight = evtSlots * 28;
                                      return (
                                       <div
                                         key={`ext-${evt.id}`}
