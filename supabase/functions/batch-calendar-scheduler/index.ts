@@ -180,9 +180,18 @@ serve(async (req) => {
     // On a weekday, "weekends" is irrelevant.
     // On a weekend, "business_hours"/"after_work"/"morning" are irrelevant.
     // ===============================================
-    const targetDayOfWeek = targetDateObj
-      ? targetDateObj.getDay()
-      : now.getDay();
+    // Timezone-aware day-of-week: parse targetDateISO in user's timezone
+    const targetDayOfWeek = (() => {
+      if (targetDateISO) {
+        const [y, m, d] = targetDateISO.split('-').map(Number);
+        // Create a date at noon UTC to avoid edge effects, then format in user TZ
+        const noonUtc = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+        const dayStr = noonUtc.toLocaleDateString('en-US', { timeZone: timezone, weekday: 'short' });
+        const dayMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+        return dayMap[dayStr] ?? noonUtc.getDay();
+      }
+      return now.getDay();
+    })();
     const isWeekendDay = targetDayOfWeek === 0 || targetDayOfWeek === 6;
 
     const filteredCategoryMappings: Record<string, any> = {};
