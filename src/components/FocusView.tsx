@@ -968,10 +968,10 @@ const FocusView: React.FC<FocusViewProps> = ({
                                     const durationMinutes = task.end_time
                                       ? differenceInMinutes(parseISO(task.end_time), parseISO(task.start_time))
                                       : (task.estimate_minutes || 60);
-                                    for (let m = 0; m < durationMinutes; m += 30) {
+                                    for (let m = 0; m < durationMinutes; m += 15) {
                                       const slotMin = minute + m;
                                       const slotHour = hour + Math.floor(slotMin / 60);
-                                      const slotMinute = slotMin % 60 < 30 ? 0 : 30;
+                                      const slotMinute = Math.floor((slotMin % 60) / 15) * 15;
                                       occupiedSlots.add(`${slotHour}-${slotMinute}`);
                                     }
                                   }
