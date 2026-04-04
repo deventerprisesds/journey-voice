@@ -587,6 +587,90 @@ IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include tim
       console.log(`🚫 Post-AI validation rejected ${rejectedTasks.length} tasks for window violations`);
     }
 
+    // ============================================================
+    // POST-VALIDATION 3: Common-sense sanity check via lightweight AI call
+    // Catches nonsensical placements that window constraints can't detect
+    // (e.g., church on Saturday, grocery at 3 AM, business call Sunday night)
+    // ============================================================
+    if (scheduledTasks.length > 0) {
+      try {
+        const sanityItems = scheduledTasks.map((st, i) => {
+          const task = tasks[st.taskIndex];
+          const startDt = new Date(st.start_time);
+          const dayOfWeek = startDt.toLocaleDateString('en-US', { timeZone: timezone, weekday: 'long' });
+          const timeStr = startDt.toLocaleTimeString('en-US', { timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true });
+          return `${i}: "${task?.title || 'Unknown'}" → ${dayOfWeek} ${timeStr}`;
+        }).join('\n');
+
+        const sanityPrompt = `Review these scheduled tasks for common-sense issues. Flag any task where the scheduled day or time is clearly wrong for the activity described.
+
+Examples of issues to flag:
+- Religious services on the wrong day of the week
+- Outdoor activities or gym scheduled at midnight or very late hours
+- Business calls, bank visits, or errands on Sunday evening
+- Social dinner at 6 AM, grocery shopping at 3 AM
+- Any activity where the timing is obviously nonsensical for what the activity is
+
+Tasks:
+${sanityItems}
+
+Return a JSON array of objects with "index" (number) and "reason" (string) for ONLY the tasks that have issues.
+Return [] if all placements look reasonable.
+IMPORTANT: Only flag truly nonsensical placements. Do NOT flag tasks just because a slightly better time exists.`;
+
+        const sanityResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${Deno.env.get('OPENAI_API_KEY')}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'gpt-4o-mini',
+            messages: [{ role: 'user', content: sanityPrompt }],
+            response_format: { type: 'json_object' },
+            temperature: 0.1,
+            max_tokens: 500,
+          }),
+        });
+
+        if (sanityResponse.ok) {
+          const sanityData = await sanityResponse.json();
+          const sanityContent = sanityData.choices?.[0]?.message?.content;
+          if (sanityContent) {
+            const parsed = JSON.parse(sanityContent);
+            const flagged: { index: number; reason: string }[] = Array.isArray(parsed) ? parsed : (parsed.flagged || parsed.issues || []);
+            
+            if (flagged.length > 0) {
+              console.log(`🧠 Sanity check flagged ${flagged.length} tasks`);
+              // Remove flagged items from scheduledTasks (iterate in reverse to preserve indices)
+              const flaggedIndices = new Set(flagged.map(f => f.index));
+              const removedTasks: typeof scheduledTasks = [];
+              
+              for (let i = scheduledTasks.length - 1; i >= 0; i--) {
+                if (flaggedIndices.has(i)) {
+                  const removed = scheduledTasks.splice(i, 1)[0];
+                  const reason = flagged.find(f => f.index === i)?.reason || 'common-sense violation';
+                  console.warn(`🧠 SANITY REJECT: "${tasks[removed.taskIndex]?.title}" — ${reason}`);
+                  rejectedTasks.push({
+                    taskId: removed.taskId,
+                    taskIndex: removed.taskIndex,
+                    reason: `common-sense: ${reason}`,
+                    reasoning: removed.reasoning,
+                  });
+                }
+              }
+            } else {
+              console.log('🧠 Sanity check: all placements look reasonable');
+            }
+          }
+        } else {
+          console.warn('🧠 Sanity check API call failed, skipping (tasks pass through):', sanityResponse.status);
+        }
+      } catch (sanityErr) {
+        console.warn('🧠 Sanity check error (non-fatal, tasks pass through):', sanityErr);
+      }
+    }
+
     const totalTime = Date.now() - startTime;
     console.log(`✅ Batch scheduling complete in ${totalTime}ms for ${tasks.length} tasks`);
 
