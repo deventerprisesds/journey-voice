@@ -1113,7 +1113,7 @@ const FocusView: React.FC<FocusViewProps> = ({
                                             <div className="flex items-center justify-between gap-2">
                                               <div className="flex items-center gap-2 min-w-0 flex-1">
                                                 <span className="text-xs text-muted-foreground flex-shrink-0">
-                                                  {task.start_time && format(parseISO(task.start_time), 'h:mm a')}
+                                                  {task.start_time && format(parseISO(task.start_time), 'h:mm a')}{taskEndDisplay && ` – ${taskEndDisplay}`}
                                                 </span>
                                                 <span className={cn("font-medium text-sm truncate", task.status === 'DONE' && 'line-through text-muted-foreground')}>
                                                   {task.title}
