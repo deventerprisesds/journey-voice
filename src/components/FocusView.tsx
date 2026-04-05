@@ -552,6 +552,29 @@ const FocusView: React.FC<FocusViewProps> = ({
     }
   };
 
+  // Reschedule today only via nightly-schedule-builder in single-day mode
+  const handleRescheduleToday = async () => {
+    if (!user?.id) return;
+    if (!confirm('This will clear and rebuild today\'s schedule. Continue?')) return;
+    
+    setIsRescheduling(true);
+    try {
+      toast.info('Rescheduling today...');
+      const { data, error } = await supabase.functions.invoke('nightly-schedule-builder', {
+        body: { userId: user.id, singleDay: true }
+      });
+      if (error) throw error;
+      const count = data?.results?.[user.id]?.totalScheduled || data?.totalScheduled || 0;
+      toast.success(`Rescheduled today — ${count} tasks placed`);
+      onTaskUpdate();
+    } catch (e) {
+      console.error('Reschedule failed:', e);
+      toast.error('Reschedule failed');
+    } finally {
+      setIsRescheduling(false);
+    }
+  };
+
   // Clear all scheduled tasks for today, restoring original statuses
   // BULLETPROOF: queries DB directly instead of relying on React props
   const handleClearAll = async () => {
