@@ -174,6 +174,17 @@ serve(async (req) => {
       });
     }
 
+    // If a specific user was requested, filter to just them
+    const filteredUsers = requestedUserId
+      ? users.filter((u: any) => u.user_id === requestedUserId)
+      : users;
+
+    if (filteredUsers.length === 0) {
+      return new Response(JSON.stringify({ message: `User ${requestedUserId} not found in scheduling prefs` }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
     const results: Record<string, any> = {};
 
     for (const userPref of users) {
