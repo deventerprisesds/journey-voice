@@ -150,6 +150,14 @@ serve(async (req) => {
   const startTime = Date.now();
 
   try {
+    // Parse optional request body for single-day / single-user mode
+    let body: any = {};
+    try { body = await req.json(); } catch { /* no body = full run */ }
+    const requestedUserId: string | undefined = body?.userId;
+    const singleDay: boolean = body?.singleDay === true;
+
+    if (singleDay) console.log(`⚡ Single-day mode requested${requestedUserId ? ` for user ${requestedUserId}` : ''}`);
+
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     
     // Get all users with scheduling preferences (or all users with tasks)
@@ -166,9 +174,20 @@ serve(async (req) => {
       });
     }
 
+    // If a specific user was requested, filter to just them
+    const filteredUsers = requestedUserId
+      ? users.filter((u: any) => u.user_id === requestedUserId)
+      : users;
+
+    if (filteredUsers.length === 0) {
+      return new Response(JSON.stringify({ message: `User ${requestedUserId} not found in scheduling prefs` }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
     const results: Record<string, any> = {};
 
-    for (const userPref of users) {
+    for (const userPref of filteredUsers) {
       const userId = userPref.user_id;
       const timezone = userPref.timezone || 'America/New_York';
       const config = userPref.config || {};
@@ -275,40 +294,74 @@ serve(async (req) => {
 
         // ==========================================
         // STEP 1.1: CLEAR FUTURE-SCHEDULED TASKS (rebuild, not append)
-        // Tasks scheduled in the upcoming 7-day horizon are cleared so the
-        // week loop can rebuild from scratch. No pushed_count increment,
-        // no history — these haven't happened yet.
+        // In single-day mode, only clear TODAY's tasks. In full mode, clear entire 7-day horizon.
         // ==========================================
-        const horizonEnd = new Date(now);
-        horizonEnd.setDate(horizonEnd.getDate() + 7);
-        
-        const { data: futureTasks, error: futureError } = await supabase
-          .from('tasks')
-          .select('id, title, start_time')
-          .eq('user_id', userId)
-          .eq('is_scheduled', true)
-          .not('status', 'eq', 'DONE')
-          .gte('start_time', now.toISOString())
-          .lt('start_time', horizonEnd.toISOString());
+        if (!singleDay) {
+          const horizonEnd = new Date(now);
+          horizonEnd.setDate(horizonEnd.getDate() + 7);
+          
+          const { data: futureTasks, error: futureError } = await supabase
+            .from('tasks')
+            .select('id, title, start_time')
+            .eq('user_id', userId)
+            .eq('is_scheduled', true)
+            .not('status', 'eq', 'DONE')
+            .gte('start_time', now.toISOString())
+            .lt('start_time', horizonEnd.toISOString());
 
-        let clearedFutureCount = 0;
-        if (!futureError && futureTasks && futureTasks.length > 0) {
-          for (const ft of futureTasks) {
-            const { error: clearError } = await supabase
-              .from('tasks')
-              .update({
-                start_time: null,
-                end_time: null,
-                is_scheduled: false,
-                updated_at: now.toISOString(),
-              })
-              .eq('id', ft.id);
+          let clearedFutureCount = 0;
+          if (!futureError && futureTasks && futureTasks.length > 0) {
+            for (const ft of futureTasks) {
+              const { error: clearError } = await supabase
+                .from('tasks')
+                .update({
+                  start_time: null,
+                  end_time: null,
+                  is_scheduled: false,
+                  updated_at: now.toISOString(),
+                })
+                .eq('id', ft.id);
 
-            if (!clearError) {
-              clearedFutureCount++;
+              if (!clearError) {
+                clearedFutureCount++;
+              }
             }
+            console.log(`  🔄 Cleared ${clearedFutureCount} future-scheduled tasks for rebuild`);
           }
-          console.log(`  🔄 Cleared ${clearedFutureCount} future-scheduled tasks for rebuild`);
+        } else {
+          // Single-day: only clear today's scheduled tasks
+          const [tY, tM, tD] = todayISO.split('-').map(Number);
+          const todayStartUtc = new Date(Date.UTC(tY, tM - 1, tD, 0, 0, 0));
+          const todayEndUtc = new Date(Date.UTC(tY, tM - 1, tD + 1, 23, 59, 59));
+          
+          const { data: todayTasks, error: todayError } = await supabase
+            .from('tasks')
+            .select('id, title, start_time')
+            .eq('user_id', userId)
+            .eq('is_scheduled', true)
+            .not('status', 'eq', 'DONE')
+            .gte('start_time', todayStartUtc.toISOString())
+            .lt('start_time', todayEndUtc.toISOString());
+
+          let clearedTodayCount = 0;
+          if (!todayError && todayTasks && todayTasks.length > 0) {
+            for (const ft of todayTasks) {
+              const { error: clearError } = await supabase
+                .from('tasks')
+                .update({
+                  start_time: null,
+                  end_time: null,
+                  is_scheduled: false,
+                  updated_at: now.toISOString(),
+                })
+                .eq('id', ft.id);
+
+              if (!clearError) {
+                clearedTodayCount++;
+              }
+            }
+            console.log(`  🔄 [single-day] Cleared ${clearedTodayCount} today-scheduled tasks for rebuild`);
+          }
         }
 
         // ==========================================
@@ -452,9 +505,8 @@ serve(async (req) => {
         const scheduledTitles = new Set<string>();
         const accumulatedBusySlots: Array<{ start_time: string; end_time: string }> = [];
         
-        // Rolling 7-day horizon: always schedule a full week ahead
-        // This ensures Friday runs can place weekday tasks on Monday
-        const totalDays = 7;
+        // Rolling 7-day horizon (or 1 day in single-day mode)
+        const totalDays = singleDay ? 1 : 7;
         
         let totalScheduledAcrossWeek = 0;
         const weekResults: Record<string, any> = {};

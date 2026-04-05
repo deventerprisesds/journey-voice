@@ -135,6 +135,7 @@ const FocusView: React.FC<FocusViewProps> = ({
   const [defaultBoardId, setDefaultBoardId] = useState<string>('');
   const [isClearing, setIsClearing] = useState(false);
   const [isRerunning, setIsRerunning] = useState(false);
+  const [isRescheduling, setIsRescheduling] = useState(false);
   const [externalEvents, setExternalEvents] = useState<ExternalCalendarEvent[]>([]);
   const today = new Date();
   const [config, setConfig] = useState<SchedulingConfig>(DEFAULT_SCHEDULING_CONFIG);
@@ -551,6 +552,29 @@ const FocusView: React.FC<FocusViewProps> = ({
     }
   };
 
+  // Reschedule today only via nightly-schedule-builder in single-day mode
+  const handleRescheduleToday = async () => {
+    if (!user?.id) return;
+    if (!confirm('This will clear and rebuild today\'s schedule. Continue?')) return;
+    
+    setIsRescheduling(true);
+    try {
+      toast.info('Rescheduling today...');
+      const { data, error } = await supabase.functions.invoke('nightly-schedule-builder', {
+        body: { userId: user.id, singleDay: true }
+      });
+      if (error) throw error;
+      const count = data?.results?.[user.id]?.totalScheduled || data?.totalScheduled || 0;
+      toast.success(`Rescheduled today — ${count} tasks placed`);
+      onTaskUpdate();
+    } catch (e) {
+      console.error('Reschedule failed:', e);
+      toast.error('Reschedule failed');
+    } finally {
+      setIsRescheduling(false);
+    }
+  };
+
   // Clear all scheduled tasks for today, restoring original statuses
   // BULLETPROOF: queries DB directly instead of relying on React props
   const handleClearAll = async () => {
@@ -856,6 +880,17 @@ const FocusView: React.FC<FocusViewProps> = ({
                   >
                     {isClearing ? <Clock className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3 mr-1" />}
                     {!isClearing && 'Clear All'}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleRescheduleToday}
+                    disabled={isRescheduling}
+                    className="text-xs h-7"
+                    title="Clear and rebuild today's full schedule"
+                  >
+                    {isRescheduling ? <Clock className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3 mr-1" />}
+                    {!isRescheduling && 'Reschedule'}
                   </Button>
                   <Button
                     variant="ghost"
