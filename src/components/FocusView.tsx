@@ -884,6 +884,17 @@ const FocusView: React.FC<FocusViewProps> = ({
                   <Button
                     variant="ghost"
                     size="sm"
+                    onClick={handleRescheduleToday}
+                    disabled={isRescheduling}
+                    className="text-xs h-7"
+                    title="Clear and rebuild today's full schedule"
+                  >
+                    {isRescheduling ? <Clock className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3 mr-1" />}
+                    {!isRescheduling && 'Reschedule'}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     onClick={handleAutoFill}
                     disabled={isRerunning}
                     className="text-xs h-7"
