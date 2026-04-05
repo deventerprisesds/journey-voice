@@ -150,6 +150,14 @@ serve(async (req) => {
   const startTime = Date.now();
 
   try {
+    // Parse optional request body for single-day / single-user mode
+    let body: any = {};
+    try { body = await req.json(); } catch { /* no body = full run */ }
+    const requestedUserId: string | undefined = body?.userId;
+    const singleDay: boolean = body?.singleDay === true;
+
+    if (singleDay) console.log(`⚡ Single-day mode requested${requestedUserId ? ` for user ${requestedUserId}` : ''}`);
+
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     
     // Get all users with scheduling preferences (or all users with tasks)
