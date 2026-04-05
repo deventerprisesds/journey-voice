@@ -187,7 +187,7 @@ serve(async (req) => {
 
     const results: Record<string, any> = {};
 
-    for (const userPref of users) {
+    for (const userPref of filteredUsers) {
       const userId = userPref.user_id;
       const timezone = userPref.timezone || 'America/New_York';
       const config = userPref.config || {};
