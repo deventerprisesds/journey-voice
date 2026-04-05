@@ -505,9 +505,8 @@ serve(async (req) => {
         const scheduledTitles = new Set<string>();
         const accumulatedBusySlots: Array<{ start_time: string; end_time: string }> = [];
         
-        // Rolling 7-day horizon: always schedule a full week ahead
-        // This ensures Friday runs can place weekday tasks on Monday
-        const totalDays = 7;
+        // Rolling 7-day horizon (or 1 day in single-day mode)
+        const totalDays = singleDay ? 1 : 7;
         
         let totalScheduledAcrossWeek = 0;
         const weekResults: Record<string, any> = {};

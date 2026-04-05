@@ -135,6 +135,7 @@ const FocusView: React.FC<FocusViewProps> = ({
   const [defaultBoardId, setDefaultBoardId] = useState<string>('');
   const [isClearing, setIsClearing] = useState(false);
   const [isRerunning, setIsRerunning] = useState(false);
+  const [isRescheduling, setIsRescheduling] = useState(false);
   const [externalEvents, setExternalEvents] = useState<ExternalCalendarEvent[]>([]);
   const today = new Date();
   const [config, setConfig] = useState<SchedulingConfig>(DEFAULT_SCHEDULING_CONFIG);
