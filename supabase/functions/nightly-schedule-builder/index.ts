@@ -294,40 +294,74 @@ serve(async (req) => {
 
         // ==========================================
         // STEP 1.1: CLEAR FUTURE-SCHEDULED TASKS (rebuild, not append)
-        // Tasks scheduled in the upcoming 7-day horizon are cleared so the
-        // week loop can rebuild from scratch. No pushed_count increment,
-        // no history — these haven't happened yet.
+        // In single-day mode, only clear TODAY's tasks. In full mode, clear entire 7-day horizon.
         // ==========================================
-        const horizonEnd = new Date(now);
-        horizonEnd.setDate(horizonEnd.getDate() + 7);
-        
-        const { data: futureTasks, error: futureError } = await supabase
-          .from('tasks')
-          .select('id, title, start_time')
-          .eq('user_id', userId)
-          .eq('is_scheduled', true)
-          .not('status', 'eq', 'DONE')
-          .gte('start_time', now.toISOString())
-          .lt('start_time', horizonEnd.toISOString());
+        if (!singleDay) {
+          const horizonEnd = new Date(now);
+          horizonEnd.setDate(horizonEnd.getDate() + 7);
+          
+          const { data: futureTasks, error: futureError } = await supabase
+            .from('tasks')
+            .select('id, title, start_time')
+            .eq('user_id', userId)
+            .eq('is_scheduled', true)
+            .not('status', 'eq', 'DONE')
+            .gte('start_time', now.toISOString())
+            .lt('start_time', horizonEnd.toISOString());
 
-        let clearedFutureCount = 0;
-        if (!futureError && futureTasks && futureTasks.length > 0) {
-          for (const ft of futureTasks) {
-            const { error: clearError } = await supabase
-              .from('tasks')
-              .update({
-                start_time: null,
-                end_time: null,
-                is_scheduled: false,
-                updated_at: now.toISOString(),
-              })
-              .eq('id', ft.id);
+          let clearedFutureCount = 0;
+          if (!futureError && futureTasks && futureTasks.length > 0) {
+            for (const ft of futureTasks) {
+              const { error: clearError } = await supabase
+                .from('tasks')
+                .update({
+                  start_time: null,
+                  end_time: null,
+                  is_scheduled: false,
+                  updated_at: now.toISOString(),
+                })
+                .eq('id', ft.id);
 
-            if (!clearError) {
-              clearedFutureCount++;
+              if (!clearError) {
+                clearedFutureCount++;
+              }
             }
+            console.log(`  🔄 Cleared ${clearedFutureCount} future-scheduled tasks for rebuild`);
           }
-          console.log(`  🔄 Cleared ${clearedFutureCount} future-scheduled tasks for rebuild`);
+        } else {
+          // Single-day: only clear today's scheduled tasks
+          const [tY, tM, tD] = todayISO.split('-').map(Number);
+          const todayStartUtc = new Date(Date.UTC(tY, tM - 1, tD, 0, 0, 0));
+          const todayEndUtc = new Date(Date.UTC(tY, tM - 1, tD + 1, 23, 59, 59));
+          
+          const { data: todayTasks, error: todayError } = await supabase
+            .from('tasks')
+            .select('id, title, start_time')
+            .eq('user_id', userId)
+            .eq('is_scheduled', true)
+            .not('status', 'eq', 'DONE')
+            .gte('start_time', todayStartUtc.toISOString())
+            .lt('start_time', todayEndUtc.toISOString());
+
+          let clearedTodayCount = 0;
+          if (!todayError && todayTasks && todayTasks.length > 0) {
+            for (const ft of todayTasks) {
+              const { error: clearError } = await supabase
+                .from('tasks')
+                .update({
+                  start_time: null,
+                  end_time: null,
+                  is_scheduled: false,
+                  updated_at: now.toISOString(),
+                })
+                .eq('id', ft.id);
+
+              if (!clearError) {
+                clearedTodayCount++;
+              }
+            }
+            console.log(`  🔄 [single-day] Cleared ${clearedTodayCount} today-scheduled tasks for rebuild`);
+          }
         }
 
         // ==========================================
