@@ -302,7 +302,7 @@ serve(async (req) => {
           
           const { data: futureTasks, error: futureError } = await supabase
             .from('tasks')
-            .select('id, title, start_time')
+            .select('id, title, start_time, external_event_id')
             .eq('user_id', userId)
             .eq('is_scheduled', true)
             .not('status', 'eq', 'DONE')
@@ -311,6 +311,9 @@ serve(async (req) => {
 
           let clearedFutureCount = 0;
           if (!futureError && futureTasks && futureTasks.length > 0) {
+            // Delete app-originated calendar events before clearing
+            await deleteAppOriginatedEvents(supabase, userId, futureTasks);
+
             for (const ft of futureTasks) {
               const { error: clearError } = await supabase
                 .from('tasks')
@@ -318,6 +321,7 @@ serve(async (req) => {
                   start_time: null,
                   end_time: null,
                   is_scheduled: false,
+                  external_event_id: null,
                   updated_at: now.toISOString(),
                 })
                 .eq('id', ft.id);
@@ -336,7 +340,7 @@ serve(async (req) => {
           
           const { data: todayTasks, error: todayError } = await supabase
             .from('tasks')
-            .select('id, title, start_time')
+            .select('id, title, start_time, external_event_id')
             .eq('user_id', userId)
             .eq('is_scheduled', true)
             .not('status', 'eq', 'DONE')
@@ -345,6 +349,9 @@ serve(async (req) => {
 
           let clearedTodayCount = 0;
           if (!todayError && todayTasks && todayTasks.length > 0) {
+            // Delete app-originated calendar events before clearing
+            await deleteAppOriginatedEvents(supabase, userId, todayTasks);
+
             for (const ft of todayTasks) {
               const { error: clearError } = await supabase
                 .from('tasks')
@@ -352,6 +359,7 @@ serve(async (req) => {
                   start_time: null,
                   end_time: null,
                   is_scheduled: false,
+                  external_event_id: null,
                   updated_at: now.toISOString(),
                 })
                 .eq('id', ft.id);
@@ -361,6 +369,20 @@ serve(async (req) => {
               }
             }
             console.log(`  🔄 [single-day] Cleared ${clearedTodayCount} today-scheduled tasks for rebuild`);
+          }
+
+          // Also purge pending notifications for today
+          try {
+            await supabase
+              .from('scheduled_notifications')
+              .delete()
+              .eq('user_id', userId)
+              .eq('status', 'pending')
+              .gte('send_at', todayStartUtc.toISOString())
+              .lt('send_at', todayEndUtc.toISOString());
+            console.log(`  🔔 Purged pending notifications for today`);
+          } catch (notifErr) {
+            console.warn(`  ⚠️ Failed to purge notifications (non-fatal):`, notifErr);
           }
         }
 
