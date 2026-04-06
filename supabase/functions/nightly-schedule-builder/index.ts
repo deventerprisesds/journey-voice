@@ -35,7 +35,7 @@ function isDueSoon(dueDate: string | null, hoursThreshold = 48): boolean {
  * Events synced from external calendars (source_task_id = NULL) are untouched.
  */
 async function deleteAppOriginatedEvents(
-  supabaseClient: any,
+  supabase: any,
   userId: string,
   tasks: Array<{ id: string; external_event_id?: string | null }>
 ) {
