@@ -169,27 +169,17 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
   const loadAvailableAssignments = async () => {
     setIsLoadingAssignments(true);
     try {
-      // Get all tasks to check which assignments are already converted
+      // Get all tasks to check which assignments are already converted (by assignment_id)
       const { data: existingTasks } = await supabase
         .from('tasks')
-        .select('scheduling_context')
-        .eq('user_id', userId);
+        .select('assignment_id')
+        .eq('user_id', userId)
+        .not('assignment_id', 'is', null);
 
       const existingAssignmentIds = new Set<string>();
-      const existingMitAssignmentIds = new Set<string>();
-
       existingTasks?.forEach(task => {
-        const context = task.scheduling_context;
-        if (Array.isArray(context)) {
-          context.forEach((c) => {
-            if (typeof c === 'string') {
-              if (c.startsWith('assignment_id:')) {
-                existingAssignmentIds.add(c.split(':')[1]);
-              } else if (c.startsWith('mit_assignment_id:')) {
-                existingMitAssignmentIds.add(c.split(':')[1]);
-              }
-            }
-          });
+        if (task.assignment_id) {
+          existingAssignmentIds.add(task.assignment_id);
         }
       });
 
