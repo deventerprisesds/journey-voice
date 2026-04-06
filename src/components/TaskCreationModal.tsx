@@ -283,7 +283,7 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
         }));
 
       const availableMit: Assignment[] = (mitAssignments || [])
-        .filter(a => !existingMitAssignmentIds.has(a.id))
+        .filter(a => !existingAssignmentIds.has(a.id))
         .map(a => ({
           id: a.id,
           title: a.title,
