@@ -1178,7 +1178,9 @@ const FocusView: React.FC<FocusViewProps> = ({
                                                   "absolute rounded-md p-2 shadow-sm border cursor-pointer hover:shadow-md transition-shadow overflow-hidden z-10",
                                                   task.status === 'DONE' && "opacity-60",
                                                   task.assignment_id
-                                                    ? "bg-card border-l-4 border-l-violet-500"
+                                                    ? task.due_date && isPast(parseISO(task.due_date))
+                                                      ? "bg-card border-l-4 border-l-red-500"
+                                                      : "bg-card border-l-4 border-l-violet-500"
                                                     : "bg-card"
                                                 )}
                                                 style={{
@@ -1212,13 +1214,19 @@ const FocusView: React.FC<FocusViewProps> = ({
                                                     {heightPx > 42 && (
                                                       <div className="flex items-center gap-1 mt-0.5 flex-wrap">
                                                         {task.assignment_id ? (
-                                                          <Badge variant="outline" className={cn("text-[10px] h-4 px-1",
-                                                            ((task.scheduling_context as any)?.source === 'MIT' || task.category === 'EDUCATION')
-                                                              ? "bg-red-500/10 text-red-700 border-red-500/20 dark:text-red-400"
-                                                              : "bg-indigo-500/10 text-indigo-700 border-indigo-500/20 dark:text-indigo-400"
-                                                          )}>
-                                                            📚 {(task.scheduling_context as any)?.source || (task.category === 'EDUCATION' ? 'MIT' : 'EMBA')}
-                                                          </Badge>
+                                                          task.due_date && isPast(parseISO(task.due_date)) ? (
+                                                            <Badge variant="outline" className="text-[10px] h-4 px-1 bg-red-500/10 text-red-700 border-red-500/20 dark:text-red-400 animate-pulse">
+                                                              🔴 OVERDUE
+                                                            </Badge>
+                                                          ) : (
+                                                            <Badge variant="outline" className={cn("text-[10px] h-4 px-1",
+                                                              ((task.scheduling_context as any)?.source === 'MIT' || task.category === 'EDUCATION')
+                                                                ? "bg-red-500/10 text-red-700 border-red-500/20 dark:text-red-400"
+                                                                : "bg-indigo-500/10 text-indigo-700 border-indigo-500/20 dark:text-indigo-400"
+                                                            )}>
+                                                              📚 {(task.scheduling_context as any)?.source || (task.category === 'EDUCATION' ? 'MIT' : 'EMBA')}
+                                                            </Badge>
+                                                          )
                                                         ) : (
                                                           <Badge variant="outline" className={cn("text-[10px] h-4 px-1", categoryColors[task.category])}>
                                                             {task.category.toLowerCase()}
