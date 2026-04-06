@@ -13,7 +13,7 @@ import { toast } from 'sonner';
 import TaskDetailModal from '@/components/TaskDetailModal';
 import type { Task } from '@/types/task';
 
-type StatusTab = 'all' | 'due_next' | 'overdue' | 'active' | 'submitted';
+type StatusTab = 'all' | 'due_next' | 'upcoming' | 'overdue' | 'active' | 'submitted';
 
 interface Program {
   id: string;
@@ -109,10 +109,11 @@ const Assignments: React.FC = () => {
     }
   };
 
-  const getTaskStatus = (task: Task): 'upcoming' | 'overdue' | 'completed' | 'active' => {
-    if (task.status === 'DONE' || task.completed_at) return 'completed';
+  const getTaskStatus = (task: Task): 'upcoming' | 'due_next' | 'overdue' | 'completed' | 'active' => {
+    if (task.completed_at) return 'completed';
     if (task.status === 'DOING' || task.status === 'UP_NEXT') return 'active';
     if (task.due_date && isPast(parseISO(task.due_date))) return 'overdue';
+    if (task.due_date && differenceInDays(parseISO(task.due_date), new Date()) <= 7) return 'due_next';
     return 'upcoming';
   };
 
@@ -131,7 +132,8 @@ const Assignments: React.FC = () => {
     return programFilteredTasks.filter(t => {
       const status = getTaskStatus(t);
       switch (statusTab) {
-        case 'due_next': return status === 'upcoming';
+        case 'due_next': return status === 'due_next';
+        case 'upcoming': return status === 'upcoming';
         case 'overdue': return status === 'overdue';
         case 'active': return status === 'active';
         case 'submitted': return status === 'completed';
@@ -142,15 +144,16 @@ const Assignments: React.FC = () => {
 
   // Tab counts
   const tabCounts = useMemo(() => {
-    let dueNext = 0, overdue = 0, active = 0, submitted = 0;
+    let dueNext = 0, upcoming = 0, overdue = 0, active = 0, submitted = 0;
     programFilteredTasks.forEach(t => {
       const s = getTaskStatus(t);
-      if (s === 'upcoming') dueNext++;
+      if (s === 'due_next') dueNext++;
+      else if (s === 'upcoming') upcoming++;
       else if (s === 'overdue') overdue++;
       else if (s === 'active') active++;
       else submitted++;
     });
-    return { all: programFilteredTasks.length, dueNext, overdue, active, submitted };
+    return { all: programFilteredTasks.length, dueNext, upcoming, overdue, active, submitted };
   }, [programFilteredTasks]);
 
   // Group by course
@@ -226,6 +229,9 @@ const Assignments: React.FC = () => {
             </TabsTrigger>
             <TabsTrigger value="due_next" className="text-[11px] px-2 flex-shrink-0">
               Due Next <Badge variant="secondary" className="ml-1 h-4 text-[9px] px-1">{tabCounts.dueNext}</Badge>
+            </TabsTrigger>
+            <TabsTrigger value="upcoming" className="text-[11px] px-2 flex-shrink-0">
+              Upcoming <Badge variant="secondary" className="ml-1 h-4 text-[9px] px-1">{tabCounts.upcoming}</Badge>
             </TabsTrigger>
             <TabsTrigger value="overdue" className="text-[11px] px-2 flex-shrink-0">
               Overdue <Badge variant="secondary" className="ml-1 h-4 text-[9px] px-1">{tabCounts.overdue}</Badge>
