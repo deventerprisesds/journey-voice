@@ -1,72 +1,62 @@
 
 
-# Assignment Scheduling Grace Period + Assignments Page
+# Redesign Assignments Page: Tabs + Program Selector
 
 ## Problem
 
-1. **Assignments vanish from scheduling the moment they're due.** The scoring logic penalizes overdue tasks (-3 at 14 days, -10 at 30 days) and archives education tasks at 30 days past due. But there's no **boost** for assignments in their first week past due — they just fade from the schedule, causing you to forget to submit them.
+The current Assignments page uses dropdown selects for status filtering and has no program-level grouping (EMBA vs MIT). The reference UI from emba-nexus shows a cleaner pattern: horizontal tab bar for status, and a program selector at the top.
 
-2. **No dedicated assignment management page.** Assignments are scattered across the Kanban board, Focus View, and Settings sync tab. There's no single view to see all assignments grouped by course, sorted by due date, with status and overdue indicators.
+## Design
 
-## Part 1: 7-Day Grace Period Boost for Past-Due Assignments
+### Layout (top to bottom, 411px mobile)
 
-**File**: `supabase/functions/nightly-schedule-builder/index.ts`
+1. **Header**: "Assignments" title + Sync button + subtitle text
+2. **Program selector**: Segmented toggle — "EMBA" | "MIT" | "All" — EMBA selected by default. Fetches from `programs` table.
+3. **Course filter dropdown**: Kept as-is but scoped to selected program
+4. **Status tab bar**: Horizontal scrollable tabs replacing the status dropdown:
+   - "All Assignments" | "Due Next" | "Overdue" | "Active" | "Submitted"
+   - "Due Next" = upcoming tasks sorted by nearest due date
+   - "Active" = tasks currently in progress (status DOING/UP_NEXT)
+   - "Submitted" = completed/DONE tasks
+5. **Course accordion list**: Each course shown as an expandable row with chevron + assignment count (matching the reference). Clicking expands to show assignment cards underneath.
+6. **Stats row removed** — the tabs themselves communicate status counts via badge indicators
 
-In the scoring section (~line 740-765), add a new block specifically for assignment-sourced tasks that are 0-7 days past due:
+### Data Flow
 
-```text
-if task has assignment_id AND due_date is in the past AND within 7 days:
-  → score += 10  (highest boost — treat as urgent)
-  → auto-elevate priority to URGENT in the prompt payload
-  → log: "🚨 Assignment grace period: {title} (due {date}, {N} days overdue)"
-```
+- Fetch `programs` table to get program names/IDs
+- Join tasks via `assignment_id` → `assignments.program_id` to determine which program each task belongs to
+- Since the tasks table doesn't have `program_id` directly, query `assignments` table to get the program mapping, then filter client-side
 
-This ensures assignments in their first week past due get scheduled at the top of the day, not penalized.
+### Status Mapping
 
-Also modify the archival logic (STEP 1.6, ~line 524-558): change the education archive threshold from 30 days to **only archive assignments that are 30+ days overdue AND have no `assignment_id`**, or assignments that are **14+ days overdue** (giving a full 2-week window before archival instead of losing them immediately).
+| Tab | Filter logic |
+|-----|-------------|
+| All Assignments | No status filter |
+| Due Next | Not DONE, has due_date, sorted by nearest due |
+| Overdue | Not DONE, due_date in past |
+| Active | status is DOING or UP_NEXT |
+| Submitted | status is DONE or completed_at set |
 
-**File**: `supabase/functions/batch-calendar-scheduler/index.ts`
+## Changes
 
-Add to the AI prompt instructions: "Tasks marked `[OVERDUE-ASSIGNMENT]` must be scheduled in the earliest available morning slot and styled as urgent."
+### `src/pages/Assignments.tsx` — Full redesign
 
-## Part 2: Assignments Page
+1. Add state for `programFilter` (default: first program or 'EMBA')
+2. Fetch `programs` table on mount to populate program toggle
+3. Fetch `assignments` table (just `id, program_id`) to build a task→program lookup map
+4. Replace status `<Select>` with `<Tabs>` component using values: `all`, `due_next`, `overdue`, `active`, `submitted`
+5. Add program segmented control using existing `<Tabs>` or button group at top
+6. Replace flat card list with collapsible course sections (Collapsible component) — each showing course name + count, expandable to reveal assignment cards
+7. Scope course dropdown options to only courses within the selected program
+8. Keep existing TaskDetailModal integration and sync button
 
-**New file**: `src/pages/Assignments.tsx`
+### No backend changes needed
 
-A dedicated page accessible from the sidebar/nav, showing all assignment-linked tasks.
-
-**Layout (mobile-first, 411px viewport)**:
-
-- **Header**: "Assignments" title + last sync timestamp + manual sync button
-- **Filter bar**: Course filter dropdown, Status filter (All / Upcoming / Overdue / Completed)
-- **Assignment cards** grouped by course, sorted by due date:
-  - Each card shows: title, course name, due date, status badge, priority badge
-  - **Overdue styling**: Red left border + "OVERDUE - X days" badge for past-due items in grace period
-  - **Completed styling**: Muted/strikethrough with green checkmark
-  - Click opens existing `TaskDetailModal`
-- **Summary stats** at top: Total assignments, Upcoming count, Overdue count, Completed count
-
-**Files to modify**:
-- `src/App.tsx`: Add `/assignments` route
-- `src/components/MainLayout.tsx`: Add "Assignments" nav item with `GraduationCap` icon
-
-## Part 3: FocusView Overdue Assignment Styling
-
-**File**: `src/components/FocusView.tsx`
-
-For tasks with `assignment_id` where `due_date` is in the past:
-- Change left border from violet to red (`border-l-red-500`)
-- Show "OVERDUE" badge in red instead of the normal EMBA/MIT badge
-- Add pulsing dot or subtle animation to draw attention
+All filtering is client-side. The `programs` and `assignments` tables already exist with the necessary relationships.
 
 ## Files Changed
 
 | File | Change |
 |------|--------|
-| `supabase/functions/nightly-schedule-builder/index.ts` | Add 7-day grace boost for past-due assignments; adjust archive threshold |
-| `supabase/functions/batch-calendar-scheduler/index.ts` | Add OVERDUE-ASSIGNMENT prompt instruction |
-| `src/pages/Assignments.tsx` | New dedicated assignments management page |
-| `src/App.tsx` | Add `/assignments` route |
-| `src/components/MainLayout.tsx` | Add Assignments nav item |
-| `src/components/FocusView.tsx` | Red overdue styling for past-due assignments |
+| `src/pages/Assignments.tsx` | Add program toggle, replace status dropdown with tab bar, use collapsible course sections |
 
