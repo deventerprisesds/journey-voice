@@ -194,8 +194,32 @@ const Assignments: React.FC = () => {
       if (!map.has(courseName)) map.set(courseName, []);
       map.get(courseName)!.push(a);
     });
-    return map;
-  }, [filteredAssignments, courses]);
+
+    // Sort assignments within each group
+    const isDescending = statusTab === 'overdue';
+    map.forEach((rows, key) => {
+      rows.sort((a, b) => {
+        const da = a.due_date ? new Date(a.due_date).getTime() : 0;
+        const db = b.due_date ? new Date(b.due_date).getTime() : 0;
+        return isDescending ? db - da : da - db;
+      });
+    });
+
+    // Sort course groups: overdue tab → most recent due_date first; otherwise alphabetical
+    const sortedMap = new Map<string, AssignmentRow[]>();
+    const entries = Array.from(map.entries());
+    if (isDescending) {
+      entries.sort((a, b) => {
+        const latestA = Math.max(...a[1].map(r => r.due_date ? new Date(r.due_date).getTime() : 0));
+        const latestB = Math.max(...b[1].map(r => r.due_date ? new Date(r.due_date).getTime() : 0));
+        return latestB - latestA;
+      });
+    } else {
+      entries.sort((a, b) => a[0].localeCompare(b[0]));
+    }
+    entries.forEach(([k, v]) => sortedMap.set(k, v));
+    return sortedMap;
+  }, [filteredAssignments, courses, statusTab]);
 
   // Auto-open all courses on filter change
   useEffect(() => {
