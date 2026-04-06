@@ -1,62 +1,52 @@
 
 
-# Redesign Assignments Page: Tabs + Program Selector
+# Fix Assignments Page: Add "Upcoming" Tab + Fix Overdue Detection
 
-## Problem
+## Problems
 
-The current Assignments page uses dropdown selects for status filtering and has no program-level grouping (EMBA vs MIT). The reference UI from emba-nexus shows a cleaner pattern: horizontal tab bar for status, and a program selector at the top.
+1. **Missing "Upcoming" tab**: "Due Next" shows the nearest assignments to work on now, but there's no separate tab for assignments further out (the next period). Need to add an "Upcoming" tab after "Due Next".
 
-## Design
-
-### Layout (top to bottom, 411px mobile)
-
-1. **Header**: "Assignments" title + Sync button + subtitle text
-2. **Program selector**: Segmented toggle — "EMBA" | "MIT" | "All" — EMBA selected by default. Fetches from `programs` table.
-3. **Course filter dropdown**: Kept as-is but scoped to selected program
-4. **Status tab bar**: Horizontal scrollable tabs replacing the status dropdown:
-   - "All Assignments" | "Due Next" | "Overdue" | "Active" | "Submitted"
-   - "Due Next" = upcoming tasks sorted by nearest due date
-   - "Active" = tasks currently in progress (status DOING/UP_NEXT)
-   - "Submitted" = completed/DONE tasks
-5. **Course accordion list**: Each course shown as an expandable row with chevron + assignment count (matching the reference). Clicking expands to show assignment cards underneath.
-6. **Stats row removed** — the tabs themselves communicate status counts via badge indicators
-
-### Data Flow
-
-- Fetch `programs` table to get program names/IDs
-- Join tasks via `assignment_id` → `assignments.program_id` to determine which program each task belongs to
-- Since the tasks table doesn't have `program_id` directly, query `assignments` table to get the program mapping, then filter client-side
-
-### Status Mapping
-
-| Tab | Filter logic |
-|-----|-------------|
-| All Assignments | No status filter |
-| Due Next | Not DONE, has due_date, sorted by nearest due |
-| Overdue | Not DONE, due_date in past |
-| Active | status is DOING or UP_NEXT |
-| Submitted | status is DONE or completed_at set |
+2. **False "completed" status for past-due assignments**: `getTaskStatus` checks `task.status === 'DONE' || task.completed_at` first. But the screenshot shows an Apr 5 assignment crossed out as done when it was never completed — it just passed its due date. The issue is likely that the task's `status` field is still at its default (not DONE) but the current logic falls through to 'overdue' correctly. However, looking more carefully: the task may have been auto-archived or had its status changed by the scheduler. The real fix is ensuring `completed_at` is the authoritative check — if `completed_at` is null, the task is NOT done regardless of status field. For assignments specifically, we should require `completed_at` to be set before marking as completed.
 
 ## Changes
 
-### `src/pages/Assignments.tsx` — Full redesign
+### `src/pages/Assignments.tsx`
 
-1. Add state for `programFilter` (default: first program or 'EMBA')
-2. Fetch `programs` table on mount to populate program toggle
-3. Fetch `assignments` table (just `id, program_id`) to build a task→program lookup map
-4. Replace status `<Select>` with `<Tabs>` component using values: `all`, `due_next`, `overdue`, `active`, `submitted`
-5. Add program segmented control using existing `<Tabs>` or button group at top
-6. Replace flat card list with collapsible course sections (Collapsible component) — each showing course name + count, expandable to reveal assignment cards
-7. Scope course dropdown options to only courses within the selected program
-8. Keep existing TaskDetailModal integration and sync button
+**1. Split "upcoming" into "due_next" and "upcoming"**
 
-### No backend changes needed
+Update `getTaskStatus` to return 5 possible statuses:
+- `completed`: `completed_at` is set (not just `status === 'DONE'` — require `completed_at` for assignments)
+- `active`: status is DOING or UP_NEXT
+- `overdue`: due_date is in the past and NOT completed
+- `due_next`: due within the next 7 days and not overdue/completed
+- `upcoming`: due more than 7 days out
 
-All filtering is client-side. The `programs` and `assignments` tables already exist with the necessary relationships.
+**2. Fix overdue detection priority**
 
-## Files Changed
+Current order checks DONE/completed first, which is correct. But the bug is that tasks with `status === 'DONE'` but no `completed_at` are being treated as completed. Fix: only treat as completed if `completed_at` is set. If status is DONE but `completed_at` is null, treat based on due date (likely overdue).
+
+**3. Add "Upcoming" tab to the tab bar**
+
+Insert after "Due Next": `Upcoming` with its own count badge.
+
+**4. Update tab counts and filter logic**
+
+Add the `upcoming` count and filter case.
+
+## Status logic (updated)
+
+```text
+getTaskStatus(task):
+  if (task.completed_at)          → 'completed'
+  if (task.status DOING/UP_NEXT)  → 'active'  
+  if (due_date past)              → 'overdue'
+  if (due_date within 7 days)     → 'due_next'
+  else                            → 'upcoming'
+```
+
+## Files changed
 
 | File | Change |
 |------|--------|
-| `src/pages/Assignments.tsx` | Add program toggle, replace status dropdown with tab bar, use collapsible course sections |
+| `src/pages/Assignments.tsx` | Add "Upcoming" tab, fix completed detection to require `completed_at`, split due_next vs upcoming by 7-day threshold |
 
