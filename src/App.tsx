@@ -17,6 +17,7 @@ import Admin from "./pages/Admin";
 import Settings from "./pages/Settings";
 import Calendar from "./pages/Calendar";
 import Priorities from "./pages/Priorities";
+import Assignments from "./pages/Assignments";
 import Debug from "./pages/Debug";
 import NotFound from "./pages/NotFound";
 import DemoModeBadge from "./components/DemoModeBadge";
@@ -74,6 +75,7 @@ const App = () => {
                               <Route path="/settings" element={<Settings />} />
                               <Route path="/calendar" element={<Calendar />} />
                               <Route path="/priorities" element={<Priorities />} />
+                              <Route path="/assignments" element={<Assignments />} />
                               <Route path="*" element={<NotFound />} />
                             </Routes>
                           </MainLayout>

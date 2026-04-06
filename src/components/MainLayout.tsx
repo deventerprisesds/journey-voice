@@ -29,6 +29,7 @@ import {
   MessageSquare,
   Target,
   Layers,
+  GraduationCap,
 } from 'lucide-react';
 
 interface MainLayoutProps {
@@ -129,6 +130,11 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
       icon: Layers,
       label: 'Priorities',
       path: '/priorities',
+    },
+    {
+      icon: GraduationCap,
+      label: 'Assignments',
+      path: '/assignments',
     },
     {
       icon: Settings,
