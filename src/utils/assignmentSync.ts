@@ -118,6 +118,7 @@ export async function createTasksFromAssignments(
           ...insertedTask,
           board_id: insertedTask.board_id!,
           user_id: insertedTask.user_id!,
+          scheduling_context: undefined as any,
           id: insertedTask.id
         };
         
@@ -241,6 +242,7 @@ export async function createTasksFromMitAssignments(
           ...insertedTask,
           board_id: insertedTask.board_id!,
           user_id: insertedTask.user_id!,
+          scheduling_context: undefined as any,
           id: insertedTask.id
         };
         
