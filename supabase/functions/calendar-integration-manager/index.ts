@@ -23,7 +23,7 @@ serve(async (req) => {
   }
 
   try {
-    const { action, provider, connection_id, start_date, end_date, user_id, task } = await req.json();
+    const { action, provider, connection_id, start_date, end_date, user_id, task, task_id } = await req.json();
     
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
@@ -39,6 +39,8 @@ serve(async (req) => {
         return await getCalendarAvailability(supabaseClient, connection_id, start_date, end_date);
       case 'create_event':
         return await createCalendarEvent(supabaseClient, connection_id, { task });
+      case 'delete_event':
+        return await deleteCalendarEvent(supabaseClient, task_id, user_id, connection_id);
       case 'get_read_connections':
         return await getConnectionsByPurpose(supabaseClient, user_id, 'READ');
       case 'get_write_connections':
@@ -301,6 +303,96 @@ async function createOutlookCalendarEvent(connection: any, task: any): Promise<s
   });
   if (!response.ok) throw new Error(`Failed to create Outlook Calendar event: ${response.statusText}`);
   return (await response.json()).id;
+}
+
+async function deleteCalendarEvent(supabaseClient: any, taskId: string, userId: string, connectionId?: string) {
+  if (!taskId) {
+    return new Response(JSON.stringify({ error: 'task_id is required' }),
+      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+  }
+
+  // Only delete app-originated events (source_task_id is set)
+  const { data: eventRow, error: eventError } = await supabaseClient
+    .from('external_calendar_events')
+    .select('id, external_event_id, connection_id, source_task_id')
+    .eq('source_task_id', taskId)
+    .maybeSingle();
+
+  if (eventError) {
+    console.error(`[delete_event] Error looking up event for task ${taskId}:`, eventError);
+    throw new Error(`Failed to look up calendar event: ${eventError.message}`);
+  }
+
+  if (!eventRow) {
+    console.log(`[delete_event] No app-originated calendar event found for task ${taskId} — skipping`);
+    return new Response(JSON.stringify({ success: true, skipped: true, reason: 'no_app_originated_event' }),
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+  }
+
+  const effectiveConnectionId = connectionId || eventRow.connection_id;
+
+  // Get connection info for user_id lookup
+  const { data: connRecord } = await supabaseClient
+    .from('calendar_connections')
+    .select('user_id')
+    .eq('id', effectiveConnectionId)
+    .single();
+
+  if (!connRecord) throw new Error('Calendar connection not found');
+
+  const effectiveUserId = userId || connRecord.user_id;
+
+  try {
+    const { access_token, provider } = await getValidAccessToken(supabaseClient, effectiveConnectionId, effectiveUserId);
+
+    // Call provider DELETE API
+    if (provider === 'google') {
+      await deleteGoogleCalendarEvent(access_token, eventRow.external_event_id);
+    } else if (provider === 'outlook' || provider === 'office365' || provider === 'microsoft') {
+      await deleteOutlookCalendarEvent(access_token, eventRow.external_event_id);
+    }
+
+    console.log(`[delete_event] Deleted external event ${eventRow.external_event_id} from ${provider}`);
+  } catch (deleteErr) {
+    // Log but don't fail — the event may already be deleted externally
+    console.warn(`[delete_event] Provider delete failed (non-fatal):`, deleteErr);
+  }
+
+  // Clean up DB: remove from external_calendar_events
+  await supabaseClient
+    .from('external_calendar_events')
+    .delete()
+    .eq('id', eventRow.id);
+
+  // Clear external_event_id on the task
+  await supabaseClient
+    .from('tasks')
+    .update({ external_event_id: null, updated_at: new Date().toISOString() })
+    .eq('id', taskId);
+
+  console.log(`[delete_event] Cleaned up DB for task ${taskId}`);
+  return new Response(JSON.stringify({ success: true, deleted_event_id: eventRow.external_event_id }),
+    { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+}
+
+async function deleteGoogleCalendarEvent(accessToken: string, eventId: string): Promise<void> {
+  const response = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${eventId}`, {
+    method: 'DELETE',
+    headers: { 'Authorization': `Bearer ${accessToken}` },
+  });
+  if (!response.ok && response.status !== 404 && response.status !== 410) {
+    throw new Error(`Google Calendar DELETE failed: ${response.status} ${response.statusText}`);
+  }
+}
+
+async function deleteOutlookCalendarEvent(accessToken: string, eventId: string): Promise<void> {
+  const response = await fetch(`https://graph.microsoft.com/v1.0/me/events/${eventId}`, {
+    method: 'DELETE',
+    headers: { 'Authorization': `Bearer ${accessToken}` },
+  });
+  if (!response.ok && response.status !== 404) {
+    throw new Error(`Outlook Calendar DELETE failed: ${response.status} ${response.statusText}`);
+  }
 }
 
 async function listCalendars(supabaseClient: any, connectionId: string) {
