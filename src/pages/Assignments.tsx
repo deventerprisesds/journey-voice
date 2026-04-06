@@ -5,12 +5,13 @@ import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Card, CardContent } from '@/components/ui/card';
-import { GraduationCap, RefreshCw, CheckCircle2, AlertTriangle, Clock, BookOpen, ChevronRight } from 'lucide-react';
+import { GraduationCap, RefreshCw, CheckCircle2, AlertTriangle, Clock, BookOpen, ChevronRight, Settings } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from 'sonner';
 import TaskDetailModal from '@/components/TaskDetailModal';
+import { AssignmentSyncSettings } from '@/components/AssignmentSyncSettings';
 import type { Task } from '@/types/task';
 
 type StatusTab = 'all' | 'due_next' | 'upcoming' | 'overdue' | 'active' | 'submitted';
@@ -31,12 +32,11 @@ const Assignments: React.FC = () => {
   const [programs, setPrograms] = useState<Program[]>([]);
   const [assignmentMap, setAssignmentMap] = useState<Map<string, string | null>>(new Map());
   const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState(false);
   const [programFilter, setProgramFilter] = useState<string>('');
   const [statusTab, setStatusTab] = useState<StatusTab>('all');
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
-  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [openCourses, setOpenCourses] = useState<Set<string>>(new Set());
+  const [showImportSettings, setShowImportSettings] = useState(false);
 
   // Fetch programs
   useEffect(() => {
@@ -89,25 +89,6 @@ const Assignments: React.FC = () => {
   useEffect(() => {
     fetchAssignments();
   }, [user]);
-
-  const handleSync = async () => {
-    if (!user) return;
-    setSyncing(true);
-    try {
-      const { error } = await supabase.functions.invoke('nightly-assignment-sync', {
-        body: { userId: user.id }
-      });
-      if (error) throw error;
-      setLastSyncedAt(new Date().toISOString());
-      toast.success('Assignments synced');
-      await fetchAssignments();
-    } catch (err) {
-      console.error('Sync error:', err);
-      toast.error('Sync failed');
-    } finally {
-      setSyncing(false);
-    }
-  };
 
   const getTaskStatus = (task: Task): 'upcoming' | 'due_next' | 'overdue' | 'completed' | 'active' => {
     if (task.completed_at) return 'completed';
@@ -196,16 +177,28 @@ const Assignments: React.FC = () => {
             <GraduationCap className="h-5 w-5 text-primary" />
             <h1 className="text-lg font-bold text-foreground">Assignments</h1>
           </div>
-          <Button variant="outline" size="sm" onClick={handleSync} disabled={syncing}>
-            <RefreshCw className={cn("h-4 w-4 mr-1", syncing && "animate-spin")} />
-            Sync
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="sm" onClick={() => fetchAssignments()}>
+              <RefreshCw className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowImportSettings(!showImportSettings)}
+              className={cn(showImportSettings && "bg-muted")}
+            >
+              <Settings className="h-4 w-4 mr-1" />
+              Import
+            </Button>
+          </div>
         </div>
-        {lastSyncedAt && (
-          <p className="text-xs text-muted-foreground mb-2">
-            Last synced: {format(parseISO(lastSyncedAt), 'MMM d, h:mm a')}
-          </p>
-        )}
+
+        {/* Collapsible Import Settings */}
+        <Collapsible open={showImportSettings} onOpenChange={setShowImportSettings}>
+          <CollapsibleContent className="mt-2 mb-3 border border-border rounded-lg p-3 bg-muted/30">
+            <AssignmentSyncSettings />
+          </CollapsibleContent>
+        </Collapsible>
 
         {/* Program Toggle */}
         {programs.length > 0 && (
