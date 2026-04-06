@@ -23,7 +23,7 @@ serve(async (req) => {
   }
 
   try {
-    const { action, provider, connection_id, start_date, end_date, user_id, task } = await req.json();
+    const { action, provider, connection_id, start_date, end_date, user_id, task, task_id } = await req.json();
     
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
@@ -39,6 +39,8 @@ serve(async (req) => {
         return await getCalendarAvailability(supabaseClient, connection_id, start_date, end_date);
       case 'create_event':
         return await createCalendarEvent(supabaseClient, connection_id, { task });
+      case 'delete_event':
+        return await deleteCalendarEvent(supabaseClient, task_id, user_id, connection_id);
       case 'get_read_connections':
         return await getConnectionsByPurpose(supabaseClient, user_id, 'READ');
       case 'get_write_connections':

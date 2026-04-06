@@ -467,6 +467,23 @@ const FocusView: React.FC<FocusViewProps> = ({
         .eq('id', taskId);
 
       if (error) throw error;
+
+      // Delete app-originated calendar event if it exists
+      const completedTask = scheduledToday.find(t => t.id === taskId);
+      if (completedTask?.external_event_id && user?.id) {
+        const { data: conns } = await supabase
+          .from('calendar_connections')
+          .select('id')
+          .eq('user_id', user.id)
+          .eq('is_active', true)
+          .contains('purposes', ['WRITE']);
+
+        if (conns?.[0]) {
+          supabase.functions.invoke('calendar-integration-manager', {
+            body: { action: 'delete_event', connection_id: conns[0].id, task_id: taskId, user_id: user.id }
+          }).catch(err => console.warn('Failed to delete calendar event:', err));
+        }
+      }
       
       toast.success('Task completed!');
       onTaskUpdate();
