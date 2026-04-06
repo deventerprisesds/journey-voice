@@ -1,17 +1,18 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { format, isPast, parseISO, differenceInDays } from 'date-fns';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Card, CardContent } from '@/components/ui/card';
-import { GraduationCap, RefreshCw, CheckCircle2, AlertTriangle, Clock, BookOpen, ChevronRight, Settings } from 'lucide-react';
+import { GraduationCap, RefreshCw, CheckCircle2, AlertTriangle, Clock, BookOpen, ChevronRight, Settings, Wrench } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from 'sonner';
 import TaskDetailModal from '@/components/TaskDetailModal';
 import { AssignmentSyncSettings } from '@/components/AssignmentSyncSettings';
+import { repairAssignmentLinkage } from '@/utils/assignmentSync';
 import type { Task } from '@/types/task';
 
 type StatusTab = 'all' | 'due_next' | 'upcoming' | 'overdue' | 'active' | 'submitted';
@@ -21,22 +22,33 @@ interface Program {
   name: string;
 }
 
-interface AssignmentMapping {
+interface AssignmentRow {
   id: string;
-  program_id: string | null;
+  title: string;
+  description?: string | null;
+  due_date?: string | null;
+  priority: string;
+  status: string;
+  course_id?: string | null;
+  assignment_url?: string | null;
+  program_id?: string | null;
+  source: 'EMBA' | 'MIT';
+  // Linked task data
+  task?: Task | null;
 }
 
 const Assignments: React.FC = () => {
   const { user } = useAuth();
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const [assignments, setAssignments] = useState<AssignmentRow[]>([]);
   const [programs, setPrograms] = useState<Program[]>([]);
-  const [assignmentMap, setAssignmentMap] = useState<Map<string, string | null>>(new Map());
+  const [courses, setCourses] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
   const [programFilter, setProgramFilter] = useState<string>('');
   const [statusTab, setStatusTab] = useState<StatusTab>('all');
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [openCourses, setOpenCourses] = useState<Set<string>>(new Set());
   const [showImportSettings, setShowImportSettings] = useState(false);
+  const [isRepairing, setIsRepairing] = useState(false);
 
   // Fetch programs
   useEffect(() => {
@@ -44,7 +56,6 @@ const Assignments: React.FC = () => {
       const { data } = await supabase.from('programs').select('id, name').order('name');
       if (data && data.length > 0) {
         setPrograms(data);
-        // Default to EMBA
         const emba = data.find(p => p.name.toLowerCase().includes('emba') || p.name.toLowerCase().includes('executive'));
         setProgramFilter(emba?.id || data[0].id);
       }
@@ -52,66 +63,104 @@ const Assignments: React.FC = () => {
     fetchPrograms();
   }, []);
 
-  // Fetch assignments mapping (assignment_id → program_id)
+  // Fetch courses for display names
   useEffect(() => {
-    const fetchMapping = async () => {
-      const { data } = await supabase.from('assignments').select('id, program_id');
+    const fetchCourses = async () => {
+      if (!user) return;
+      const { data } = await supabase.from('courses').select('id, name').eq('user_id', user.id);
       if (data) {
-        const map = new Map<string, string | null>();
-        data.forEach((a: AssignmentMapping) => map.set(a.id, a.program_id));
-        setAssignmentMap(map);
+        const map = new Map<string, string>();
+        data.forEach(c => map.set(c.id, c.name));
+        setCourses(map);
       }
     };
-    fetchMapping();
-  }, []);
+    fetchCourses();
+  }, [user]);
 
-  const fetchAssignments = async () => {
+  const fetchAssignments = useCallback(async () => {
     if (!user) return;
     setLoading(true);
     try {
-      const { data, error } = await supabase
-        .from('tasks')
-        .select('*')
-        .eq('user_id', user.id)
-        .not('assignment_id', 'is', null)
-        .order('due_date', { ascending: true });
+      // Fetch from both assignment tables
+      const [embaRes, mitRes, tasksRes] = await Promise.all([
+        supabase.from('assignments').select('id, title, description, due_date, priority, status, course_id, assignment_url, program_id').eq('user_id', user.id),
+        supabase.from('assignments_mit').select('id, title, description, due_date, priority, status, course_id, assignment_url').eq('user_id', user.id),
+        supabase.from('tasks').select('*').eq('user_id', user.id).not('assignment_id', 'is', null),
+      ]);
 
-      if (error) throw error;
-      setTasks((data || []) as Task[]);
+      // Build task lookup by assignment_id
+      const taskByAssignmentId = new Map<string, Task>();
+      (tasksRes.data || []).forEach((t: any) => {
+        if (t.assignment_id) taskByAssignmentId.set(t.assignment_id, t as Task);
+      });
+
+      // Find MIT program
+      const mitProgram = programs.find(p => p.name.toLowerCase().includes('mit') || p.name.toLowerCase().includes('cto'));
+
+      const embaRows: AssignmentRow[] = (embaRes.data || []).map(a => ({
+        ...a,
+        source: 'EMBA' as const,
+        task: taskByAssignmentId.get(a.id) || null,
+      }));
+
+      const mitRows: AssignmentRow[] = (mitRes.data || []).map(a => ({
+        ...a,
+        source: 'MIT' as const,
+        program_id: mitProgram?.id || null,
+        task: taskByAssignmentId.get(a.id) || null,
+      }));
+
+      const combined = [...embaRows, ...mitRows].sort((a, b) => {
+        if (!a.due_date) return 1;
+        if (!b.due_date) return -1;
+        return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
+      });
+
+      setAssignments(combined);
     } catch (err) {
       console.error('Error fetching assignments:', err);
       toast.error('Failed to load assignments');
     } finally {
       setLoading(false);
     }
-  };
+  }, [user, programs]);
 
   useEffect(() => {
-    fetchAssignments();
-  }, [user]);
+    if (user && programs.length > 0) {
+      fetchAssignments();
+    }
+  }, [user, programs, fetchAssignments]);
 
-  const getTaskStatus = (task: Task): 'upcoming' | 'due_next' | 'overdue' | 'completed' | 'active' => {
-    if (task.completed_at) return 'completed';
-    if (task.status === 'DOING' || task.status === 'UP_NEXT') return 'active';
-    if (task.due_date && isPast(parseISO(task.due_date))) return 'overdue';
-    if (task.due_date && differenceInDays(parseISO(task.due_date), new Date()) <= 7) return 'due_next';
+  const getAssignmentStatus = (row: AssignmentRow): 'upcoming' | 'due_next' | 'overdue' | 'completed' | 'active' => {
+    // Completed only if the linked task has completed_at
+    if (row.task?.completed_at) return 'completed';
+    if (row.status === 'completed' || row.status === 'graded') return 'completed';
+    if (row.task?.status === 'DOING' || row.task?.status === 'UP_NEXT') return 'active';
+    if (row.due_date && isPast(parseISO(row.due_date))) return 'overdue';
+    if (row.due_date && differenceInDays(parseISO(row.due_date), new Date()) <= 7) return 'due_next';
     return 'upcoming';
   };
 
   // Filter by program
-  const programFilteredTasks = useMemo(() => {
-    if (!programFilter || programFilter === 'all') return tasks;
-    return tasks.filter(t => {
-      if (!t.assignment_id) return false;
-      const progId = assignmentMap.get(t.assignment_id);
-      return progId === programFilter;
+  const programFilteredAssignments = useMemo(() => {
+    if (!programFilter || programFilter === 'all') return assignments;
+    return assignments.filter(a => {
+      if (a.program_id === programFilter) return true;
+      // MIT fallback: check source
+      const matchingProgram = programs.find(p => p.id === programFilter);
+      if (matchingProgram) {
+        const name = matchingProgram.name.toLowerCase();
+        if ((name.includes('emba') || name.includes('executive')) && a.source === 'EMBA') return true;
+        if ((name.includes('mit') || name.includes('cto')) && a.source === 'MIT') return true;
+      }
+      return false;
     });
-  }, [tasks, programFilter, assignmentMap]);
+  }, [assignments, programFilter, programs]);
 
   // Filter by status tab
-  const filteredTasks = useMemo(() => {
-    return programFilteredTasks.filter(t => {
-      const status = getTaskStatus(t);
+  const filteredAssignments = useMemo(() => {
+    return programFilteredAssignments.filter(a => {
+      const status = getAssignmentStatus(a);
       switch (statusTab) {
         case 'due_next': return status === 'due_next';
         case 'upcoming': return status === 'upcoming';
@@ -121,32 +170,32 @@ const Assignments: React.FC = () => {
         default: return true;
       }
     });
-  }, [programFilteredTasks, statusTab]);
+  }, [programFilteredAssignments, statusTab]);
 
   // Tab counts
   const tabCounts = useMemo(() => {
     let dueNext = 0, upcoming = 0, overdue = 0, active = 0, submitted = 0;
-    programFilteredTasks.forEach(t => {
-      const s = getTaskStatus(t);
+    programFilteredAssignments.forEach(a => {
+      const s = getAssignmentStatus(a);
       if (s === 'due_next') dueNext++;
       else if (s === 'upcoming') upcoming++;
       else if (s === 'overdue') overdue++;
       else if (s === 'active') active++;
       else submitted++;
     });
-    return { all: programFilteredTasks.length, dueNext, upcoming, overdue, active, submitted };
-  }, [programFilteredTasks]);
+    return { all: programFilteredAssignments.length, dueNext, upcoming, overdue, active, submitted };
+  }, [programFilteredAssignments]);
 
   // Group by course
   const grouped = useMemo(() => {
-    const map = new Map<string, Task[]>();
-    filteredTasks.forEach(t => {
-      const key = (t.scheduling_context as any)?.source || t.category || 'Other';
-      if (!map.has(key)) map.set(key, []);
-      map.get(key)!.push(t);
+    const map = new Map<string, AssignmentRow[]>();
+    filteredAssignments.forEach(a => {
+      const courseName = a.course_id ? (courses.get(a.course_id) || 'Unknown Course') : (a.source === 'MIT' ? 'MIT' : 'EMBA');
+      if (!map.has(courseName)) map.set(courseName, []);
+      map.get(courseName)!.push(a);
     });
     return map;
-  }, [filteredTasks]);
+  }, [filteredAssignments, courses]);
 
   // Auto-open all courses on filter change
   useEffect(() => {
@@ -168,6 +217,20 @@ const Assignments: React.FC = () => {
     return p.name.slice(0, 6);
   };
 
+  const handleRepair = async () => {
+    if (!user) return;
+    setIsRepairing(true);
+    try {
+      const result = await repairAssignmentLinkage(user.id);
+      toast.success(`Repaired ${result.repaired} tasks`);
+      await fetchAssignments();
+    } catch (err) {
+      toast.error('Repair failed');
+    } finally {
+      setIsRepairing(false);
+    }
+  };
+
   return (
     <div className="flex flex-col h-full bg-background">
       {/* Header */}
@@ -177,7 +240,10 @@ const Assignments: React.FC = () => {
             <GraduationCap className="h-5 w-5 text-primary" />
             <h1 className="text-lg font-bold text-foreground">Assignments</h1>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1">
+            <Button variant="ghost" size="sm" onClick={handleRepair} disabled={isRepairing} title="Repair linkage">
+              <Wrench className="h-4 w-4" />
+            </Button>
             <Button variant="ghost" size="sm" onClick={() => fetchAssignments()}>
               <RefreshCw className="h-4 w-4" />
             </Button>
@@ -196,7 +262,7 @@ const Assignments: React.FC = () => {
         {/* Collapsible Import Settings */}
         <Collapsible open={showImportSettings} onOpenChange={setShowImportSettings}>
           <CollapsibleContent className="mt-2 mb-3 border border-border rounded-lg p-3 bg-muted/30">
-            <AssignmentSyncSettings />
+            <AssignmentSyncSettings onSyncComplete={fetchAssignments} />
           </CollapsibleContent>
         </Collapsible>
 
@@ -246,7 +312,7 @@ const Assignments: React.FC = () => {
         ) : grouped.size === 0 ? (
           <div className="text-center py-8 text-muted-foreground text-sm">No assignments found</div>
         ) : (
-          Array.from(grouped.entries()).map(([course, courseTasks]) => (
+          Array.from(grouped.entries()).map(([course, courseAssignments]) => (
             <Collapsible
               key={course}
               open={openCourses.has(course)}
@@ -261,18 +327,18 @@ const Assignments: React.FC = () => {
                   <BookOpen className="h-4 w-4 text-muted-foreground" />
                   <span className="text-sm font-semibold text-foreground">{course}</span>
                 </div>
-                <Badge variant="secondary" className="text-[10px] h-5">{courseTasks.length}</Badge>
+                <Badge variant="secondary" className="text-[10px] h-5">{courseAssignments.length}</Badge>
               </CollapsibleTrigger>
               <CollapsibleContent className="space-y-2 mt-2 pl-2">
-                {courseTasks.map(task => {
-                  const status = getTaskStatus(task);
-                  const daysOverdue = task.due_date && isPast(parseISO(task.due_date))
-                    ? differenceInDays(new Date(), parseISO(task.due_date))
+                {courseAssignments.map(row => {
+                  const status = getAssignmentStatus(row);
+                  const daysOverdue = row.due_date && isPast(parseISO(row.due_date))
+                    ? differenceInDays(new Date(), parseISO(row.due_date))
                     : 0;
 
                   return (
                     <Card
-                      key={task.id}
+                      key={row.id}
                       className={cn(
                         "cursor-pointer hover:shadow-md transition-shadow",
                         status === 'overdue' && "border-l-4 border-l-destructive",
@@ -280,7 +346,9 @@ const Assignments: React.FC = () => {
                         status === 'upcoming' && "border-l-4 border-l-primary",
                         status === 'active' && "border-l-4 border-l-accent-foreground"
                       )}
-                      onClick={() => setSelectedTask(task)}
+                      onClick={() => {
+                        if (row.task) setSelectedTask(row.task);
+                      }}
                     >
                       <CardContent className="p-3">
                         <div className="flex items-start justify-between gap-2">
@@ -290,11 +358,16 @@ const Assignments: React.FC = () => {
                               status === 'completed' && "line-through text-muted-foreground"
                             )}>
                               {status === 'completed' && <CheckCircle2 className="h-3.5 w-3.5 text-green-500 inline mr-1" />}
-                              {task.title}
+                              {row.title}
                             </span>
-                            {task.due_date && (
+                            {row.due_date && (
                               <span className="text-xs text-muted-foreground mt-0.5 block">
-                                Due: {format(parseISO(task.due_date), 'MMM d, yyyy')}
+                                Due: {format(parseISO(row.due_date), 'MMM d, yyyy')}
+                              </span>
+                            )}
+                            {!row.task && (
+                              <span className="text-[10px] text-muted-foreground/60 mt-0.5 block">
+                                No linked task yet
                               </span>
                             )}
                           </div>
@@ -317,11 +390,10 @@ const Assignments: React.FC = () => {
                               </Badge>
                             )}
                             <Badge variant="outline" className={cn("text-[10px] h-4 px-1",
-                              task.priority === 'URGENT' ? "bg-destructive/10 text-destructive border-destructive/20" :
-                              task.priority === 'HIGH' ? "bg-orange-500/10 text-orange-700 border-orange-500/20" :
-                              "bg-muted text-muted-foreground"
+                              row.source === 'MIT' ? "bg-purple-500/10 text-purple-700 border-purple-500/20" :
+                              "bg-blue-500/10 text-blue-700 border-blue-500/20"
                             )}>
-                              {task.priority.toLowerCase()}
+                              {row.source}
                             </Badge>
                           </div>
                         </div>
