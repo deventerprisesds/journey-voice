@@ -11,7 +11,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from 'sonner';
 import TaskDetailModal from '@/components/TaskDetailModal';
-import AssignmentSyncSettings from '@/components/AssignmentSyncSettings';
+import { AssignmentSyncSettings } from '@/components/AssignmentSyncSettings';
 import type { Task } from '@/types/task';
 
 type StatusTab = 'all' | 'due_next' | 'upcoming' | 'overdue' | 'active' | 'submitted';
