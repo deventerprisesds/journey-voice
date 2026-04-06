@@ -1,52 +1,48 @@
 
 
-# Fix Assignments Page: Add "Upcoming" Tab + Fix Overdue Detection
+# Integrate AssignmentSyncSettings into Assignments Page
 
-## Problems
+## Problem
 
-1. **Missing "Upcoming" tab**: "Due Next" shows the nearest assignments to work on now, but there's no separate tab for assignments further out (the next period). Need to add an "Upcoming" tab after "Due Next".
+The Assignments page (`/assignments`) has a bare "Sync" button that calls `nightly-assignment-sync` directly, ignoring the full-featured `AssignmentSyncSettings` component already built. That component handles sheet URL configuration, EMBA/MIT sync buttons, import mode selection, debug logs, and sync history — all the infrastructure shown in the Settings screenshot.
 
-2. **False "completed" status for past-due assignments**: `getTaskStatus` checks `task.status === 'DONE' || task.completed_at` first. But the screenshot shows an Apr 5 assignment crossed out as done when it was never completed — it just passed its due date. The issue is likely that the task's `status` field is still at its default (not DONE) but the current logic falls through to 'overdue' correctly. However, looking more carefully: the task may have been auto-archived or had its status changed by the scheduler. The real fix is ensuring `completed_at` is the authoritative check — if `completed_at` is null, the task is NOT done regardless of status field. For assignments specifically, we should require `completed_at` to be set before marking as completed.
+## Solution
+
+Embed the `AssignmentSyncSettings` component directly into the Assignments page, replacing the standalone sync button. Place it in a collapsible section at the top of the page (above the program toggle and tabs) so users can configure and trigger syncs without leaving the page.
 
 ## Changes
 
 ### `src/pages/Assignments.tsx`
 
-**1. Split "upcoming" into "due_next" and "upcoming"**
+1. Import `AssignmentSyncSettings` component
+2. Replace the manual `handleSync` function and the simple "Sync" button with a collapsible panel containing `<AssignmentSyncSettings />`
+3. Keep the header layout but swap the sync button for a toggle that expands the import settings panel
+4. After sync completes, re-fetch assignments (add a callback or use an interval/listener to detect new data)
+5. Remove the `syncing`, `lastSyncedAt`, and `handleSync` state/logic since the component handles all of that internally
 
-Update `getTaskStatus` to return 5 possible statuses:
-- `completed`: `completed_at` is set (not just `status === 'DONE'` — require `completed_at` for assignments)
-- `active`: status is DOING or UP_NEXT
-- `overdue`: due_date is in the past and NOT completed
-- `due_next`: due within the next 7 days and not overdue/completed
-- `upcoming`: due more than 7 days out
-
-**2. Fix overdue detection priority**
-
-Current order checks DONE/completed first, which is correct. But the bug is that tasks with `status === 'DONE'` but no `completed_at` are being treated as completed. Fix: only treat as completed if `completed_at` is set. If status is DONE but `completed_at` is null, treat based on due date (likely overdue).
-
-**3. Add "Upcoming" tab to the tab bar**
-
-Insert after "Due Next": `Upcoming` with its own count badge.
-
-**4. Update tab counts and filter logic**
-
-Add the `upcoming` count and filter case.
-
-## Status logic (updated)
+### Layout
 
 ```text
-getTaskStatus(task):
-  if (task.completed_at)          → 'completed'
-  if (task.status DOING/UP_NEXT)  → 'active'  
-  if (due_date past)              → 'overdue'
-  if (due_date within 7 days)     → 'due_next'
-  else                            → 'upcoming'
+┌─────────────────────────────┐
+│ Assignments    [⚙ Import ▾] │  ← collapsible trigger
+├─────────────────────────────┤
+│ ┌─ AssignmentSyncSettings ─┐│  ← collapsed by default
+│ │ Sheet URLs, Sync buttons ││
+│ └──────────────────────────┘│
+├─────────────────────────────┤
+│ [EMBA] [MIT] [All]          │  ← program toggle
+│ [All|Due Next|Upcoming|...] │  ← status tabs
+│ Course accordions...        │
+└─────────────────────────────┘
 ```
+
+### Optional: Add refresh callback
+
+Add an `onSyncComplete` prop to `AssignmentSyncSettings` (or just re-fetch tasks on an interval after the panel is opened). Simplest approach: add a "Refresh" icon button next to the import toggle that calls `fetchAssignments()`.
 
 ## Files changed
 
 | File | Change |
 |------|--------|
-| `src/pages/Assignments.tsx` | Add "Upcoming" tab, fix completed detection to require `completed_at`, split due_next vs upcoming by 7-day threshold |
+| `src/pages/Assignments.tsx` | Replace manual sync with embedded `AssignmentSyncSettings`, add collapsible import panel |
 
