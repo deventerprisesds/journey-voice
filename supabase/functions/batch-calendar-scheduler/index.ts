@@ -359,7 +359,10 @@ B) PEOPLE / COMMUNICATION — tasks involving contacting or coordinating with ot
 C) TIME-SENSITIVE — tasks due within 48 hours:
    → EARLIEST available slot within allowed windows.
 
-D) Higher priority tasks (URGENT > HIGH > MEDIUM > LOW) get earlier slots within their window.
+D) OVERDUE ASSIGNMENTS — tasks marked [OVERDUE-ASSIGNMENT] in their title prefix:
+   → Schedule in the EARLIEST available morning slot. Treat as URGENT priority regardless of original priority.
+
+E) Higher priority tasks (URGENT > HIGH > MEDIUM > LOW) get earlier slots within their window.
 
 === RULE 3: NO CONFLICTS ===
 NEVER double-book — each task must not overlap with busy slots OR other scheduled tasks.
