@@ -1227,7 +1227,6 @@ const FocusView: React.FC<FocusViewProps> = ({
                                                               📚 {(task.scheduling_context as any)?.source || (task.category === 'EDUCATION' ? 'MIT' : 'EMBA')}
                                                             </Badge>
                                                           )
-                                                          </Badge>
                                                         ) : (
                                                           <Badge variant="outline" className={cn("text-[10px] h-4 px-1", categoryColors[task.category])}>
                                                             {task.category.toLowerCase()}
