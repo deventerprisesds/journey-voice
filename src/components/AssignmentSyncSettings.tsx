@@ -279,6 +279,7 @@ export function AssignmentSyncSettings({ onSyncComplete }: { onSyncComplete?: ()
       });
     } finally {
       setIsSyncingEmba(false);
+      onSyncComplete?.();
     }
   };
 
@@ -320,6 +321,7 @@ export function AssignmentSyncSettings({ onSyncComplete }: { onSyncComplete?: ()
       });
     } finally {
       setIsSyncingMit(false);
+      onSyncComplete?.();
     }
   };
 
