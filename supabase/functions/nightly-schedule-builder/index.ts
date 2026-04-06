@@ -522,10 +522,9 @@ serve(async (req) => {
         }
 
         // ==========================================
-        // STEP 1.6: ARCHIVE STALE EDUCATION TASKS
-        // EDUCATION tasks: 14+ days overdue if has assignment_id, else 30+ days
+        // STEP 1.6: ARCHIVE STALE EDUCATION TASKS (non-assignment only)
+        // Assignment-linked tasks are NEVER auto-archived — they stay visible as overdue
         // ==========================================
-        const fourteenDaysAgo = new Date(Date.now() - 14 * 86400000).toISOString();
         const { data: staleEduTasks, error: staleEduError } = await supabase
           .from('tasks')
           .select('id, title, due_date, category, assignment_id')
@@ -533,29 +532,12 @@ serve(async (req) => {
           .in('category', ['EDUCATION', 'PROF_EDUCATION'])
           .not('status', 'eq', 'DONE')
           .is('completed_at', null)
+          .is('assignment_id', null)
           .lt('due_date', thirtyDaysAgo);
-
-        // Also fetch assignment-linked tasks 14+ days overdue
-        const { data: staleAssignmentTasks } = await supabase
-          .from('tasks')
-          .select('id, title, due_date, category, assignment_id')
-          .eq('user_id', userId)
-          .in('category', ['EDUCATION', 'PROF_EDUCATION'])
-          .not('status', 'eq', 'DONE')
-          .is('completed_at', null)
-          .not('assignment_id', 'is', null)
-          .gte('due_date', fourteenDaysAgo)
-          .lt('due_date', thirtyDaysAgo);
-
-        // Merge: 30+ days (any edu), plus 14-30 days (only assignment-linked)
-        const allStaleEdu = [
-          ...(staleEduTasks || []),
-          ...(staleAssignmentTasks || []),
-        ];
 
         let archivedEduCount = 0;
-        if (!staleEduError && allStaleEdu.length > 0) {
-          for (const stale of allStaleEdu) {
+        if (!staleEduError && staleEduTasks && staleEduTasks.length > 0) {
+          for (const stale of staleEduTasks) {
             const { error: archError } = await supabase
               .from('tasks')
               .update({
@@ -576,7 +558,7 @@ serve(async (req) => {
           }
         }
         if (archivedEduCount > 0) {
-          console.log(`  🗑️ Archived ${archivedEduCount} stale education tasks`);
+          console.log(`  🗑️ Archived ${archivedEduCount} stale education tasks (non-assignment only)`);
         }
 
         // PULL EXTERNAL CALENDAR EVENTS BEFORE SCHEDULING
