@@ -90,25 +90,6 @@ const Assignments: React.FC = () => {
     fetchAssignments();
   }, [user]);
 
-  const handleSync = async () => {
-    if (!user) return;
-    setSyncing(true);
-    try {
-      const { error } = await supabase.functions.invoke('nightly-assignment-sync', {
-        body: { userId: user.id }
-      });
-      if (error) throw error;
-      setLastSyncedAt(new Date().toISOString());
-      toast.success('Assignments synced');
-      await fetchAssignments();
-    } catch (err) {
-      console.error('Sync error:', err);
-      toast.error('Sync failed');
-    } finally {
-      setSyncing(false);
-    }
-  };
-
   const getTaskStatus = (task: Task): 'upcoming' | 'due_next' | 'overdue' | 'completed' | 'active' => {
     if (task.completed_at) return 'completed';
     if (task.status === 'DOING' || task.status === 'UP_NEXT') return 'active';
@@ -196,16 +177,28 @@ const Assignments: React.FC = () => {
             <GraduationCap className="h-5 w-5 text-primary" />
             <h1 className="text-lg font-bold text-foreground">Assignments</h1>
           </div>
-          <Button variant="outline" size="sm" onClick={handleSync} disabled={syncing}>
-            <RefreshCw className={cn("h-4 w-4 mr-1", syncing && "animate-spin")} />
-            Sync
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="sm" onClick={() => fetchAssignments()}>
+              <RefreshCw className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowImportSettings(!showImportSettings)}
+              className={cn(showImportSettings && "bg-muted")}
+            >
+              <Settings className="h-4 w-4 mr-1" />
+              Import
+            </Button>
+          </div>
         </div>
-        {lastSyncedAt && (
-          <p className="text-xs text-muted-foreground mb-2">
-            Last synced: {format(parseISO(lastSyncedAt), 'MMM d, h:mm a')}
-          </p>
-        )}
+
+        {/* Collapsible Import Settings */}
+        <Collapsible open={showImportSettings} onOpenChange={setShowImportSettings}>
+          <CollapsibleContent className="mt-2 mb-3 border border-border rounded-lg p-3 bg-muted/30">
+            <AssignmentSyncSettings />
+          </CollapsibleContent>
+        </Collapsible>
 
         {/* Program Toggle */}
         {programs.length > 0 && (
