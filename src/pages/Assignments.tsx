@@ -210,7 +210,11 @@ const Assignments: React.FC = () => {
         return latestB - latestA;
       });
     } else {
-      entries.sort((a, b) => a[0].localeCompare(b[0]));
+      entries.sort((a, b) => {
+        const latestA = Math.max(...a[1].map(r => r.due_date ? new Date(r.due_date).getTime() : 0));
+        const latestB = Math.max(...b[1].map(r => r.due_date ? new Date(r.due_date).getTime() : 0));
+        return latestA - latestB;
+      });
     }
     entries.forEach(([k, v]) => sortedMap.set(k, v));
     return sortedMap;
