@@ -362,7 +362,7 @@ const Assignments: React.FC = () => {
     </>
   );
 
-
+  return (
     <div className="flex flex-col h-full bg-background">
       {/* Header */}
       <div className="p-4 pb-2 border-b border-border">
