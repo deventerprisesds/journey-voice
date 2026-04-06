@@ -32,12 +32,9 @@ const Assignments: React.FC = () => {
   const [programs, setPrograms] = useState<Program[]>([]);
   const [assignmentMap, setAssignmentMap] = useState<Map<string, string | null>>(new Map());
   const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState(false);
-  const [programFilter, setProgramFilter] = useState<string>('');
-  const [statusTab, setStatusTab] = useState<StatusTab>('all');
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
-  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [openCourses, setOpenCourses] = useState<Set<string>>(new Set());
+  const [showImportSettings, setShowImportSettings] = useState(false);
 
   // Fetch programs
   useEffect(() => {
