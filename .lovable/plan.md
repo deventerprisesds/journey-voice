@@ -1,144 +1,84 @@
 
-# Fix Assignment Linkage at the Root
 
-## What’s actually broken
+# Fix CSV Parsing, Date Transfer, and Duplicate Data
 
-The issue is not that `assignment_id` is hard to use. The issue is that existing assignment creation flows are failing to populate it consistently, then newer code is compensating with `scheduling_context` string parsing.
+## Root Cause Analysis
 
-From the current code:
+Three compounding bugs are destroying the assignment data:
 
-- `src/utils/assignmentSync.ts` creates assignment tasks but does **not** write `tasks.assignment_id`
-- MIT tasks are stored only as `mit_assignment_id:...` inside `scheduling_context`
-- `src/pages/Assignments.tsx` loads only tasks where `assignment_id` is present, so imported tasks disappear
-- `supabase/functions/nightly-assignment-sync/index.ts` and `nightly-schedule-builder` both treat overdue assignment tasks as `DONE` + set `completed_at`, which makes incomplete assignments look submitted
+### 1. Broken CSV parsing
+Both sync functions use naive `line.split(',')` to parse CSV. Google Sheets CSV exports quote fields that contain commas (titles like `"Read: ""Digital Transformation Playbook"" by David Roger"`, descriptions, dates like `"April 5, 2025"`). The naive split breaks these into wrong columns, corrupting title, date, and every field after.
 
-So yes: the correct fix is to repair the existing bad development, not build more fallback logic on top of it.
+### 2. Date parsing garbage
+Even when the date column is reached correctly, `new Date(dueDateStr)` is unreliable for partial/mangled strings. The DB confirms dates like `2001-01-01` stored for assignments that should have real dates — the "Dec 31, 2000" shown in the UI is this bad parse displayed.
 
-## Implementation plan
+### 3. No duplicate protection
+There is no unique constraint on `(user_id, sheet_row_number)`. The code uses `.maybeSingle()` to check for existing rows, but once duplicates exist from prior runs, `maybeSingle()` throws on multiple results, and the error is swallowed — creating yet another duplicate. The DB currently has **1,386 rows for only 442 unique titles** (11 duplicates per row from ~11 sync runs).
 
-### 1. Make assignment task creation always populate real linkage fields
-Update the existing assignment task creation paths so they write the relational field directly:
+## Fix
 
-- `src/utils/assignmentSync.ts`
-  - EMBA: insert `assignment_id: assignment.id`
-  - MIT: also link into the same `tasks.assignment_id` field using the MIT row id, and include a clear source marker in `scheduling_context`
-- `src/components/TaskCreationModal.tsx`
-  - When creating tasks from selected assignments, persist `assignment_id` on insert instead of only embedding it in `scheduling_context`
+### Step 1: Replace naive CSV split with proper parsing
 
-Result:
-- the app stops depending on string parsing as the primary linkage
-- Assignments page, scheduler, and sync jobs can all use one consistent field
+Both `sync-google-sheets/index.ts` and `sync-mit-sheets/index.ts` need a real CSV field parser that handles:
+- Quoted fields containing commas: `"April 5, 2025"` stays as one field
+- Escaped quotes within fields: `""Digital Transformation""` becomes `"Digital Transformation"`
+- Multiline fields (rare but possible)
 
-### 2. Unify how the app identifies assignment source
-Because both EMBA and MIT currently feed into `tasks.assignment_id`, source must be explicit and consistent.
+Implementation: a small `parseCSVLine(line)` helper that walks characters, tracking quote state.
 
-Update existing metadata to standardize:
-- `scheduling_context.source = 'EMBA' | 'MIT'`
-- stop using two different conventions like:
-  - `assignment_id:...`
-  - `mit_assignment_id:...`
+### Step 2: Robust date parsing
 
-Keep source info only for program/source classification, not as the primary link.
+Replace `new Date(dueDateStr)` with explicit format handling:
+- Try `MM/DD/YYYY`, `M/D/YYYY`, `YYYY-MM-DD`, `Month D, YYYY`, `M/D/YY`
+- Reject dates that parse to before 2020 (no legitimate assignment is from 2001)
+- Log unparseable dates for debugging instead of silently storing garbage
 
-### 3. Repair existing tasks with null `assignment_id`
-Add a targeted repair path for already-created tasks so the old bad data is corrected instead of worked around forever.
+### Step 3: Deduplicate on sync
 
-Repair logic should:
-- scan assignment-derived tasks with `assignment_id IS NULL`
-- recover the correct assignment row using existing stored metadata:
-  - EMBA from `assignment_id:...` in `scheduling_context`
-  - MIT from `mit_assignment_id:...`
-  - only if needed, fallback to exact title + due date matching
-- update the task row to populate real `assignment_id`
-- normalize `scheduling_context.source`
+Before inserting, enforce uniqueness:
+- Change the existing-row lookup from `.maybeSingle()` to `.limit(1).maybeSingle()` or use `.select().limit(1)` so it never throws on duplicates
+- Before the sync loop, delete all duplicate rows per `(user_id, sheet_row_number)` keeping only the most recently updated one
+- Add a unique index on `(user_id, sheet_row_number)` via migration for both `assignments` and `assignments_mit`
 
-This is the step that fixes the historical damage rather than masking it.
+### Step 4: Clean up existing garbage data
 
-### 4. Stop auto-marking overdue assignments as completed
-Update:
-- `supabase/functions/nightly-assignment-sync/index.ts`
-- `supabase/functions/nightly-schedule-builder/index.ts`
+Run a data cleanup:
+- Delete duplicate assignment rows, keeping one per `(user_id, sheet_row_number)`
+- This reduces 1,386 rows to the correct ~130-200
 
-Change behavior so overdue assignments:
-- remain open
-- keep overdue styling
-- are never marked `DONE` unless the user actually completes them
-- never get `completed_at` from automation
+### Step 5: Remove repair button
 
-If archival is still needed later, use an archive marker in metadata without faking completion.
+Remove the `Wrench` button, `isRepairing` state, and `handleRepair` from `src/pages/Assignments.tsx` as previously discussed.
 
-### 5. Make the Assignments page read repaired data, not assume broken data
-Update `src/pages/Assignments.tsx` so it uses the now-correct linkage model:
+## Files changed
 
-- load assignment-linked tasks by real `assignment_id`
-- classify EMBA vs MIT using normalized source metadata
-- treat `completed_at` as the only true “Submitted” signal
-- stop relying on incomplete EMBA-only mapping assumptions
+| File | Change |
+|------|--------|
+| `supabase/functions/sync-google-sheets/index.ts` | Proper CSV parser, robust date parsing, dedup-safe lookup |
+| `supabase/functions/sync-mit-sheets/index.ts` | Same fixes |
+| `supabase/migrations/[timestamp]_assignment_dedup.sql` | Unique index on `(user_id, sheet_row_number)` for both tables; delete duplicate rows |
+| `src/pages/Assignments.tsx` | Remove repair button/state/handler |
 
-This should become simpler after the linkage repair, not more complex.
-
-### 6. Fix import behavior to support the intended lifecycle
-Your requirement is clear:
-- first run = mass import from sheets
-- later runs = compare rows and apply additions/changes only
-
-Update:
-- `supabase/functions/sync-google-sheets/index.ts`
-- `supabase/functions/sync-mit-sheets/index.ts`
-
-Change them to:
-- support full import on first run
-- compare by `sheet_row_number` per program on later runs
-- update changed title/date/details rows instead of skipping them
-- stop relying on narrow time windows for initial population
-
-The existing weekend / 14-day filters are the wrong behavior for assignment management.
-
-## Files to change
-
-- `src/utils/assignmentSync.ts`
-- `src/components/TaskCreationModal.tsx`
-- `src/pages/Assignments.tsx`
-- `supabase/functions/sync-google-sheets/index.ts`
-- `supabase/functions/sync-mit-sheets/index.ts`
-- `supabase/functions/nightly-assignment-sync/index.ts`
-- `supabase/functions/nightly-schedule-builder/index.ts`
-
-## Expected outcome
-
-After this fix:
-
-- assignment tasks will no longer be created with null `assignment_id`
-- old broken tasks will be repaired instead of hidden behind fallback logic
-- EMBA and MIT assignments will both appear reliably
-- overdue assignments will stay visible as overdue, not fake-submitted
-- the Assignments page can use the actual relational model instead of compensating for past mistakes
-
-## Technical details
+## Technical detail: CSV parser
 
 ```text
-Current bad state:
-sheet row -> assignments / assignments_mit
-          -> task created
-          -> assignment_id often NULL
-          -> source hidden in scheduling_context strings
-          -> page filters by assignment_id
-          -> counts collapse to 0
+Input:  Read: ""Digital Transformation Playbook""," April 5, 2025",Strategic IT
+Naive split: ["Read: ""Digital Transformation Playbook""", " April 5", " 2025\"", "Strategic IT"]
+                                                           ^^^^^^^^   ^^^^^^^
+                                                           date broken into 2 fields
 
-Target state:
-sheet row -> assignments / assignments_mit
-          -> task created/updated
-          -> assignment_id always populated
-          -> source stored consistently
-          -> overdue stays overdue
-          -> page reads linked tasks directly
+Proper parse: ["Read: \"Digital Transformation Playbook\"", "April 5, 2025", "Strategic IT"]
 ```
 
-## Validation before calling it fixed
+## Technical detail: date parser
 
-1. Sync EMBA first run → imported rows create/update assignment-linked tasks with non-null `assignment_id`
-2. Sync MIT first run → same result
-3. Re-run sync without changes → no duplicates
-4. Change sheet row title/date → existing assignment and linked task update
-5. Existing broken tasks get repaired and start appearing in counts
-6. Overdue incomplete assignments show as overdue, not submitted
+```text
+Input strings to handle:
+  "4/5/2025"       → 2025-04-05
+  "April 5, 2025"  → 2025-04-05
+  "2025-04-05"     → 2025-04-05
+  "4/5/25"         → 2025-04-05
+  ""               → null
+  garbage          → null (logged)
+```
+
