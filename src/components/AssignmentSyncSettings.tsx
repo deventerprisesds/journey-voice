@@ -41,7 +41,7 @@ interface SyncLog {
 // Demo user ID for preview mode
 const DEMO_USER_ID = '00000000-0000-0000-0000-000000000001';
 
-export function AssignmentSyncSettings() {
+export function AssignmentSyncSettings({ onSyncComplete }: { onSyncComplete?: () => void } = {}) {
   const { user, isDemoMode } = useAuth();
   const { toast } = useToast();
   const [syncConfigs, setSyncConfigs] = useState<SyncConfig[]>([]);
