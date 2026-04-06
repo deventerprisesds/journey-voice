@@ -43,7 +43,7 @@ async function deleteAppOriginatedEvents(
   if (tasksWithEvents.length === 0) return;
 
   const taskIds = tasksWithEvents.map(t => t.id);
-  const { data: appEvents, error } = await supabaseClient
+  const { data: appEvents, error } = await supabase
     .from('external_calendar_events')
     .select('id, external_event_id, connection_id, source_task_id')
     .in('source_task_id', taskIds);
