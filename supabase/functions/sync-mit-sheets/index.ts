@@ -23,7 +23,6 @@ serve(async (req) => {
         },
       }
     );
-    // Admin client for bypassing RLS on DB writes
     const adminClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? Deno.env.get('SUPABASE_ANON_KEY') ?? ''
@@ -31,71 +30,41 @@ serve(async (req) => {
 
     const { data: { user } } = await supabaseClient.auth.getUser();
 
-    // Support demo/preview mode: allow explicit or fallback user_id
     let requestBody: any = null;
     try { 
       requestBody = await req.json(); 
-      console.log('Request body:', JSON.stringify(requestBody, null, 2));
-    } catch { 
-      console.log('No request body provided');
-    }
+    } catch {}
     
     const requestUserId = requestBody?.userId as string | undefined;
     const DEMO_USER_ID = '00000000-0000-0000-0000-000000000001';
     const userId = user?.id ?? requestUserId ?? DEMO_USER_ID;
 
-    console.log('Authenticated user:', user?.id ?? 'NONE');
     console.log('Effective userId:', userId);
-    console.log('Demo mode:', !user?.id);
 
     // Get MIT sheet config
-    console.log('=== FETCHING SYNC CONFIG ===');
-    console.log('Query params:', { user_id: userId, service_type: 'google_sheets' });
-    
     const { data: configs, error: configError } = await supabaseClient
       .from('sync_config')
       .select('*')
       .eq('user_id', userId)
       .eq('service_type', 'google_sheets');
 
-    if (configError) {
-      console.error('Config query error:', configError);
-      throw configError;
-    }
-
-    console.log('Configs found:', configs?.length ?? 0);
-    console.log('Full configs:', JSON.stringify(configs, null, 2));
+    if (configError) throw configError;
 
     const config = configs?.[0];
-    
-    // Try new structure first: config_data.mit_sheet_url
     let mitSheetUrl = config?.config_data?.mit_sheet_url;
-    let urlSource = 'new (mit_sheet_url)';
-    
-    // Fallback to legacy structure: sheet_type === 'mit'
     if (!mitSheetUrl) {
       const legacyConfig = configs?.find(c => c.config_data?.sheet_type === 'mit');
       mitSheetUrl = legacyConfig?.config_data?.sheet_url;
-      urlSource = 'legacy (sheet_type=mit)';
     }
-
-    console.log('MIT sheet URL:', mitSheetUrl ?? 'NONE');
-    console.log('URL source:', mitSheetUrl ? urlSource : 'N/A');
 
     if (!mitSheetUrl) {
       return new Response(
-        JSON.stringify({ 
-          error: 'MIT sheet URL not configured. Please add your MIT sheet URL in Settings first.' 
-        }),
-        { 
-          status: 400,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
-        }
+        JSON.stringify({ error: 'MIT sheet URL not configured.' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    // Create sync log entry
-    console.log('=== CREATING SYNC LOG ===');
+    // Create sync log
     const { data: syncLog, error: logError } = await supabaseClient
       .from('sync_logs')
       .insert({
@@ -108,44 +77,24 @@ serve(async (req) => {
       .select()
       .single();
 
-    if (logError) {
-      console.error('Sync log creation error:', logError);
-      throw logError;
-    }
-    console.log('Sync log created:', syncLog.id);
+    if (logError) throw logError;
 
     try {
-      // Extract sheet ID and gid from URL
-      console.log('=== PARSING SHEET URL ===');
-      const sheetUrl = mitSheetUrl;
-      const sheetIdMatch = sheetUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
-      const gidMatch = sheetUrl.match(/[#&]gid=([0-9]+)/);
-      
-      if (!sheetIdMatch) {
-        throw new Error('Invalid sheet URL format');
-      }
+      const sheetIdMatch = mitSheetUrl.match(/\/d\/([a-zA-Z0-9-_]+)/);
+      const gidMatch = mitSheetUrl.match(/[#&]gid=([0-9]+)/);
+      if (!sheetIdMatch) throw new Error('Invalid sheet URL format');
 
       const sheetId = sheetIdMatch[1];
       const gid = gidMatch ? gidMatch[1] : '0';
-      console.log('Sheet ID:', sheetId);
-      console.log('GID:', gid);
 
-      // Fetch sheet data as CSV
-      console.log('=== FETCHING CSV DATA ===');
       const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`;
-      console.log('CSV URL:', csvUrl);
-      
       const csvResponse = await fetch(csvUrl);
       const csvText = await csvResponse.text();
       console.log('CSV fetched, length:', csvText.length);
 
-      // Parse CSV
-      console.log('=== PARSING CSV ===');
       const lines = csvText.split('\n');
       const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''));
-      console.log('Headers found:', headers);
       
-      // Find column indexes
       const titleIdx = headers.findIndex(h => h.toLowerCase().includes('title') || h.toLowerCase().includes('assignment'));
       const descIdx = headers.findIndex(h => h.toLowerCase().includes('description') || h.toLowerCase().includes('details'));
       const dueDateIdx = headers.findIndex(h => h.toLowerCase().includes('due'));
@@ -155,19 +104,14 @@ serve(async (req) => {
       const linkIdx = headers.findIndex(h => h.toLowerCase().includes('link') || h.toLowerCase().includes('url'));
 
       console.log('Column mappings:', { titleIdx, descIdx, dueDateIdx, courseIdx, priorityIdx, pointsIdx, linkIdx });
-      console.log('Total rows to process:', lines.length - 1);
-
-      // MIT filter: next 14 days
-      const twoWeeksFromNow = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
-      console.log('Filter date (2 weeks):', twoWeeksFromNow.toISOString());
 
       let processed = 0;
       let added = 0;
       let updated = 0;
+      let unchanged = 0;
       const assignmentIds: string[] = [];
 
-      // Process each row
-      console.log('=== PROCESSING ROWS ===');
+      // Process ALL rows — no time-window filter
       for (let i = 1; i < lines.length; i++) {
         const line = lines[i].trim();
         if (!line) continue;
@@ -182,10 +126,15 @@ serve(async (req) => {
         const points = pointsIdx >= 0 ? parseInt(cols[pointsIdx]) : null;
         const assignmentUrl = linkIdx >= 0 ? (cols[linkIdx] || '') : '';
 
-        console.log(`--- Row ${i}/${lines.length - 1} ---`);
-        console.log('Title:', title);
-        console.log('Course:', courseName);
-        console.log('Due date string:', dueDateStr);
+        // Skip office hours
+        if (title.toLowerCase().includes('office hour')) {
+          continue;
+        }
+
+        // Skip rows with no real title
+        if (!title || title === `MIT Assignment ${i}`) {
+          continue;
+        }
 
         // Parse due date
         let dueDate = null;
@@ -193,30 +142,15 @@ serve(async (req) => {
           const parsed = new Date(dueDateStr);
           if (!isNaN(parsed.getTime())) {
             dueDate = parsed.toISOString();
-            console.log('Parsed due date:', dueDate);
           }
-        }
-
-        // Skip office hours
-        if (title.toLowerCase().includes('office hour')) {
-          console.log('⏭️ Skipping office hour:', title);
-          processed++;
-          continue;
-        }
-
-        // Filter: only include assignments due within next 14 days
-        if (!dueDate || new Date(dueDate) > twoWeeksFromNow || new Date(dueDate) < new Date()) {
-          console.log('Skipping - outside date range');
-          continue;
         }
 
         processed++;
 
-        // Find or create MIT course (prefix with "MIT: ")
+        // Find or create MIT course
         let courseId = null;
         if (courseName) {
           const mitCourseName = courseName.startsWith('MIT:') ? courseName : `MIT: ${courseName}`;
-          console.log('Looking up course:', mitCourseName);
           
           const { data: existingCourse } = await adminClient
             .from('courses')
@@ -227,55 +161,52 @@ serve(async (req) => {
 
           if (existingCourse) {
             courseId = existingCourse.id;
-            console.log('Found existing course:', courseId);
           } else {
-            console.log('Creating new course');
             const { data: newCourse } = await adminClient
               .from('courses')
-              .insert({
-                user_id: userId,
-                name: mitCourseName,
-                color: '#8B5CF6' // Purple for MIT
-              })
+              .insert({ user_id: userId, name: mitCourseName, color: '#8B5CF6' })
               .select('id')
               .single();
-            
-            if (newCourse) {
-              courseId = newCourse.id;
-              console.log('Created course:', courseId);
-            }
+            if (newCourse) courseId = newCourse.id;
           }
         }
 
-        // Check if assignment exists in assignments_mit
-        console.log('Checking for existing assignment at row:', i);
+        // Check existing by sheet_row_number
         const { data: existing } = await adminClient
           .from('assignments_mit')
-          .select('id')
+          .select('id, title, due_date, description, priority, points')
           .eq('user_id', userId)
           .eq('sheet_row_number', i)
           .maybeSingle();
 
         if (existing) {
-          console.log('Updating existing assignment:', existing.id);
-          await adminClient
-            .from('assignments_mit')
-            .update({
-              title,
-              description,
-              due_date: dueDate,
-              course_id: courseId,
-              priority: priority as any,
-              points,
-              assignment_url: assignmentUrl || null,
-              updated_at: new Date().toISOString()
-            })
-            .eq('id', existing.id);
-          
-          updated++;
+          const existingDue = existing.due_date ? new Date(existing.due_date).toISOString() : null;
+          const hasChanges = existing.title !== title ||
+            existingDue !== dueDate ||
+            (existing.description || '') !== (description || '') ||
+            (existing.priority || 'medium') !== (priority || 'medium');
+
+          if (hasChanges) {
+            await adminClient
+              .from('assignments_mit')
+              .update({
+                title,
+                description,
+                due_date: dueDate,
+                course_id: courseId,
+                priority: priority as any,
+                points,
+                assignment_url: assignmentUrl || null,
+                updated_at: new Date().toISOString()
+              })
+              .eq('id', existing.id);
+            updated++;
+            console.log(`Updated row ${i}: "${title}"`);
+          } else {
+            unchanged++;
+          }
           assignmentIds.push(existing.id);
         } else {
-          console.log('Inserting new assignment');
           const { data: newAssignment } = await adminClient
             .from('assignments_mit')
             .insert({
@@ -297,13 +228,11 @@ serve(async (req) => {
           if (newAssignment) {
             added++;
             assignmentIds.push(newAssignment.id);
-            console.log('Created assignment:', newAssignment.id);
+            console.log(`Added row ${i}: "${title}"`);
           }
         }
       }
 
-      // Update sync log
-      console.log('=== UPDATING SYNC LOG ===');
       await supabaseClient
         .from('sync_logs')
         .update({
@@ -315,49 +244,27 @@ serve(async (req) => {
         })
         .eq('id', syncLog.id);
 
-      console.log('=== MIT SYNC COMPLETE ===');
-      console.log('Processed:', processed);
-      console.log('Added:', added);
-      console.log('Updated:', updated);
-      console.log('Assignment IDs:', assignmentIds);
+      console.log(`=== MIT SYNC COMPLETE: ${processed} processed, ${added} added, ${updated} updated, ${unchanged} unchanged ===`);
 
       return new Response(
-        JSON.stringify({ 
-          success: true, 
-          processed, 
-          added, 
-          updated, 
-          assignmentIds 
-        }),
+        JSON.stringify({ success: true, processed, added, updated, unchanged, assignmentIds }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
 
     } catch (error: any) {
-      console.error('=== SYNC ERROR ===');
-      console.error('Error details:', error);
-      
-      // Log error
+      console.error('SYNC ERROR:', error);
       await supabaseClient
         .from('sync_logs')
-        .update({
-          status: 'failed',
-          completed_at: new Date().toISOString(),
-          error_message: error.message
-        })
+        .update({ status: 'failed', completed_at: new Date().toISOString(), error_message: error.message })
         .eq('id', syncLog.id);
-
       throw error;
     }
 
   } catch (error: any) {
-    console.error('=== FATAL ERROR IN SYNC-MIT-SHEETS ===');
-    console.error('Error:', error);
+    console.error('FATAL ERROR:', error);
     return new Response(
       JSON.stringify({ error: error.message }),
-      { 
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
-      }
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
 });

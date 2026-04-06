@@ -33,69 +33,17 @@ serve(async (req) => {
     console.log(`[ASSIGNMENT_SYNC] Starting for user ${userId}, window: ${todayISO} to ${futureDateISO}`);
 
     const created: string[] = [];
-    const archived: string[] = [];
     const skipped: string[] = [];
+    const repaired: string[] = [];
 
-    // ==========================================
-    // STEP 0: Archive stale PROF_EDUCATION tasks without assignment_id
-    // These are legacy tasks created before the assignment_id column existed
-    // ==========================================
-    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-    
-    const { data: legacyStaleTasks, error: legacyError } = await supabase
-      .from('tasks')
-      .select('id, title, due_date, pushed_count')
-      .eq('user_id', userId)
-      .in('category', ['PROF_EDUCATION', 'EDUCATION'])
-      .is('assignment_id', null)
-      .is('completed_at', null)
-      .not('status', 'eq', 'DONE')
-      .lt('due_date', thirtyDaysAgo);
-
-    if (!legacyError && legacyStaleTasks && legacyStaleTasks.length > 0) {
-      console.log(`[ASSIGNMENT_SYNC] Found ${legacyStaleTasks.length} legacy stale PROF_EDUCATION tasks to archive`);
-      for (const stale of legacyStaleTasks) {
-        const { error: archError } = await supabase
-          .from('tasks')
-          .update({
-            status: 'DONE',
-            completed_at: now.toISOString(),
-            updated_at: now.toISOString(),
-            scheduling_context: {
-              archived_reason: 'legacy_stale_assignment',
-              original_due_date: stale.due_date,
-              pushed_count: stale.pushed_count,
-            },
-          })
-          .eq('id', stale.id);
-
-        if (!archError) {
-          archived.push(stale.id);
-          console.log(`  🗑️ Archived legacy stale: "${stale.title}" (due ${stale.due_date})`);
-        }
-      }
-    }
-
-    // Helper: normalize title for fuzzy matching
-    function normalizeTitle(title: string): string {
-      return title
-        .toLowerCase()
-        .replace(/^📚\s*/, '') // Remove emoji prefix we add
-        .replace(/[^a-z0-9\s]/g, '')
-        .trim();
-    }
-
-    // Helper: sync assignments from a table
+    // Helper: sync assignments from a table and create linked tasks
     async function syncAssignments(tableName: string, source: string) {
-      // Only fetch assignments due within the last 30 days to 14 days ahead
-      // This avoids processing hundreds of ancient assignments and timing out
+      // Fetch all non-completed assignments (no narrow time window — full sync)
       const { data: assignments, error } = await supabase
         .from(tableName)
-        .select('id, title, due_date, description, category, priority, level_of_effort, status')
+        .select('id, title, due_date, description, category, priority, level_of_effort, status, assignment_url')
         .eq('user_id', userId)
-        .not('status', 'in', '("completed","graded","past due")')
-        .gte('due_date', thirtyDaysAgo)
-        .lte('due_date', futureDateISO);
+        .not('status', 'in', '("completed","graded")');
 
       if (error) {
         console.error(`[ASSIGNMENT_SYNC] Error fetching ${tableName}:`, error);
@@ -103,7 +51,7 @@ serve(async (req) => {
       }
 
       if (!assignments || assignments.length === 0) {
-        console.log(`[ASSIGNMENT_SYNC] No upcoming assignments in ${tableName}`);
+        console.log(`[ASSIGNMENT_SYNC] No assignments in ${tableName}`);
         return;
       }
 
@@ -113,39 +61,17 @@ serve(async (req) => {
         // Check if a task already exists for this assignment (by assignment_id)
         const { data: existingTask } = await supabase
           .from('tasks')
-          .select('id, status')
+          .select('id, status, completed_at')
           .eq('user_id', userId)
           .eq('assignment_id', assignment.id)
           .maybeSingle();
 
         if (existingTask) {
-          // Check if overdue and not done — archive it
-          if (assignment.due_date && assignment.due_date < todayISO && existingTask.status !== 'DONE') {
-            const { error: archiveError } = await supabase
-              .from('tasks')
-              .update({
-                status: 'DONE',
-                completed_at: now.toISOString(),
-                updated_at: now.toISOString(),
-                scheduling_context: {
-                  archived_reason: 'overdue_assignment',
-                  original_due_date: assignment.due_date,
-                  source,
-                },
-              })
-              .eq('id', existingTask.id);
-
-            if (!archiveError) {
-              archived.push(existingTask.id);
-              console.log(`  📦 Archived overdue task for "${assignment.title}" (due ${assignment.due_date})`);
-            }
-          } else {
-            skipped.push(assignment.id);
-          }
+          skipped.push(assignment.id);
           continue;
         }
 
-        // SECONDARY DEDUP: exact title match only (for legacy tasks without assignment_id)
+        // SECONDARY DEDUP: exact title match for legacy tasks without assignment_id
         const { data: titleMatches } = await supabase
           .from('tasks')
           .select('id, title, status')
@@ -156,7 +82,7 @@ serve(async (req) => {
           .or(`title.eq.${assignment.title},title.eq.📚 ${assignment.title}`);
 
         if (titleMatches && titleMatches.length > 0) {
-          // Found a legacy task matching this assignment's title — link it
+          // Found a legacy task — link it and repair
           const legacyTask = titleMatches[0];
           console.log(`  🔗 Linking legacy task "${legacyTask.title}" to assignment "${assignment.title}" (id: ${assignment.id})`);
           
@@ -165,17 +91,20 @@ serve(async (req) => {
             .update({
               assignment_id: assignment.id,
               due_date: assignment.due_date ? new Date(assignment.due_date).toISOString().split('T')[0] + 'T23:59:59Z' : null,
+              scheduling_context: { source },
               updated_at: now.toISOString(),
             })
             .eq('id', legacyTask.id);
           
+          repaired.push(legacyTask.id);
           skipped.push(assignment.id);
           continue;
         }
 
-        // Skip if overdue and no task exists — don't create a new task for past assignments
-        if (assignment.due_date && assignment.due_date < todayISO) {
-          console.log(`  ⏭️ Skipping past-due assignment "${assignment.title}" (due ${assignment.due_date})`);
+        // Skip creating new tasks for very old past-due assignments (>30 days)
+        const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+        if (assignment.due_date && assignment.due_date < thirtyDaysAgo) {
+          console.log(`  ⏭️ Skipping very old assignment "${assignment.title}" (due ${assignment.due_date})`);
           skipped.push(assignment.id);
           continue;
         }
@@ -189,7 +118,7 @@ serve(async (req) => {
           else if (loe.includes('medium')) estimateMinutes = 90;
         }
 
-        // Get default board (use limit 1 in case of duplicates)
+        // Get default board
         const { data: boards } = await supabase
           .from('boards')
           .select('id')
@@ -198,7 +127,6 @@ serve(async (req) => {
           .limit(1);
 
         const board = boards?.[0];
-
         if (!board) {
           console.error(`[ASSIGNMENT_SYNC] No default board for user ${userId}`);
           continue;
@@ -216,6 +144,7 @@ serve(async (req) => {
           board_id: board.id,
           user_id: userId,
           assignment_id: assignment.id,
+          assignment_url: assignment.assignment_url || null,
           scheduling_context: { source },
         };
 
@@ -238,7 +167,7 @@ serve(async (req) => {
     await syncAssignments('assignments', 'EMBA');
     await syncAssignments('assignments_mit', 'MIT');
 
-    console.log(`[ASSIGNMENT_SYNC] Complete: ${created.length} created, ${archived.length} archived, ${skipped.length} skipped`);
+    console.log(`[ASSIGNMENT_SYNC] Complete: ${created.length} created, ${repaired.length} repaired, ${skipped.length} skipped`);
 
     // Log activity
     await supabase.from('activity_log').insert({
@@ -247,17 +176,17 @@ serve(async (req) => {
       status: 'completed',
       metadata: {
         created_count: created.length,
-        archived_count: archived.length,
+        repaired_count: repaired.length,
         skipped_count: skipped.length,
         created_ids: created,
-        archived_ids: archived,
+        repaired_ids: repaired,
       },
     });
 
     return new Response(JSON.stringify({
       success: true,
       created,
-      archived,
+      repaired,
       skipped,
     }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
