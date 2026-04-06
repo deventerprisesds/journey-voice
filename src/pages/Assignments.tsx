@@ -186,29 +186,24 @@ const Assignments: React.FC = () => {
     return { all: programFilteredAssignments.length, dueNext, upcoming, overdue, active, submitted };
   }, [programFilteredAssignments]);
 
-  // Group by course
-  const grouped = useMemo(() => {
+  // Helper: group assignments by course and sort
+  const groupByCourse = useCallback((items: AssignmentRow[], descending: boolean) => {
     const map = new Map<string, AssignmentRow[]>();
-    filteredAssignments.forEach(a => {
+    items.forEach(a => {
       const courseName = a.course_id ? (courses.get(a.course_id) || 'Unknown Course') : (a.source === 'MIT' ? 'MIT' : 'EMBA');
       if (!map.has(courseName)) map.set(courseName, []);
       map.get(courseName)!.push(a);
     });
-
-    // Sort assignments within each group
-    const isDescending = statusTab === 'overdue';
-    map.forEach((rows, key) => {
+    map.forEach((rows) => {
       rows.sort((a, b) => {
         const da = a.due_date ? new Date(a.due_date).getTime() : 0;
         const db = b.due_date ? new Date(b.due_date).getTime() : 0;
-        return isDescending ? db - da : da - db;
+        return descending ? db - da : da - db;
       });
     });
-
-    // Sort course groups: overdue tab → most recent due_date first; otherwise alphabetical
     const sortedMap = new Map<string, AssignmentRow[]>();
     const entries = Array.from(map.entries());
-    if (isDescending) {
+    if (descending) {
       entries.sort((a, b) => {
         const latestA = Math.max(...a[1].map(r => r.due_date ? new Date(r.due_date).getTime() : 0));
         const latestB = Math.max(...b[1].map(r => r.due_date ? new Date(r.due_date).getTime() : 0));
@@ -219,12 +214,41 @@ const Assignments: React.FC = () => {
     }
     entries.forEach(([k, v]) => sortedMap.set(k, v));
     return sortedMap;
-  }, [filteredAssignments, courses, statusTab]);
+  }, [courses]);
+
+  // Group by course (non-overdue tabs)
+  const grouped = useMemo(() => {
+    return groupByCourse(filteredAssignments, statusTab === 'overdue');
+  }, [filteredAssignments, statusTab, groupByCourse]);
+
+  // Overdue partitioned into recent (≤14 days) and older
+  const overduePartitions = useMemo(() => {
+    if (statusTab !== 'overdue') return null;
+    const fourteenDaysAgo = new Date();
+    fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14);
+    const recent: AssignmentRow[] = [];
+    const older: AssignmentRow[] = [];
+    filteredAssignments.forEach(a => {
+      if (a.due_date && new Date(a.due_date) >= fourteenDaysAgo) {
+        recent.push(a);
+      } else {
+        older.push(a);
+      }
+    });
+    return {
+      recent: groupByCourse(recent, true),
+      older: groupByCourse(older, true),
+    };
+  }, [filteredAssignments, statusTab, groupByCourse]);
 
   // Auto-open all courses on filter change
   useEffect(() => {
-    setOpenCourses(new Set(grouped.keys()));
-  }, [grouped]);
+    if (overduePartitions) {
+      setOpenCourses(new Set([...overduePartitions.recent.keys(), ...overduePartitions.older.keys()]));
+    } else {
+      setOpenCourses(new Set(grouped.keys()));
+    }
+  }, [grouped, overduePartitions]);
 
   const toggleCourse = (course: string) => {
     setOpenCourses(prev => {
@@ -241,6 +265,102 @@ const Assignments: React.FC = () => {
     return p.name.slice(0, 6);
   };
 
+  const renderCourseAccordions = (courseMap: Map<string, AssignmentRow[]>) => (
+    <>
+      {Array.from(courseMap.entries()).map(([course, courseAssignments]) => (
+        <Collapsible
+          key={course}
+          open={openCourses.has(course)}
+          onOpenChange={() => toggleCourse(course)}
+        >
+          <CollapsibleTrigger className="flex items-center justify-between w-full p-3 rounded-lg bg-muted/50 hover:bg-muted transition-colors">
+            <div className="flex items-center gap-2">
+              <ChevronRight className={cn(
+                "h-4 w-4 text-muted-foreground transition-transform",
+                openCourses.has(course) && "rotate-90"
+              )} />
+              <BookOpen className="h-4 w-4 text-muted-foreground" />
+              <span className="text-sm font-semibold text-foreground">{course}</span>
+            </div>
+            <Badge variant="secondary" className="text-[10px] h-5">{courseAssignments.length}</Badge>
+          </CollapsibleTrigger>
+          <CollapsibleContent className="space-y-2 mt-2 pl-2">
+            {courseAssignments.map(row => {
+              const status = getAssignmentStatus(row);
+              const daysOverdue = row.due_date && isPast(parseISO(row.due_date))
+                ? differenceInDays(new Date(), parseISO(row.due_date))
+                : 0;
+
+              return (
+                <Card
+                  key={row.id}
+                  className={cn(
+                    "cursor-pointer hover:shadow-md transition-shadow",
+                    status === 'overdue' && "border-l-4 border-l-destructive",
+                    status === 'completed' && "opacity-60",
+                    status === 'upcoming' && "border-l-4 border-l-primary",
+                    status === 'active' && "border-l-4 border-l-accent-foreground"
+                  )}
+                  onClick={() => {
+                    if (row.task) setSelectedTask(row.task);
+                  }}
+                >
+                  <CardContent className="p-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <span className={cn(
+                          "text-sm font-medium block truncate",
+                          status === 'completed' && "line-through text-muted-foreground"
+                        )}>
+                          {status === 'completed' && <CheckCircle2 className="h-3.5 w-3.5 text-green-500 inline mr-1" />}
+                          {row.title}
+                        </span>
+                        {row.due_date && (
+                          <span className="text-xs text-muted-foreground mt-0.5 block">
+                            Due: {format(parseISO(row.due_date), 'MMM d, yyyy')}
+                          </span>
+                        )}
+                        {!row.task && (
+                          <span className="text-[10px] text-muted-foreground/60 mt-0.5 block">
+                            No linked task yet
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                        {status === 'overdue' && (
+                          <Badge variant="outline" className="text-[10px] h-4 px-1 bg-destructive/10 text-destructive border-destructive/20">
+                            <AlertTriangle className="h-2.5 w-2.5 mr-0.5" />
+                            {daysOverdue}d overdue
+                          </Badge>
+                        )}
+                        {status === 'upcoming' && (
+                          <Badge variant="outline" className="text-[10px] h-4 px-1 bg-primary/10 text-primary border-primary/20">
+                            <Clock className="h-2.5 w-2.5 mr-0.5" />
+                            upcoming
+                          </Badge>
+                        )}
+                        {status === 'active' && (
+                          <Badge variant="outline" className="text-[10px] h-4 px-1 bg-accent text-accent-foreground border-accent">
+                            active
+                          </Badge>
+                        )}
+                        <Badge variant="outline" className={cn("text-[10px] h-4 px-1",
+                          row.source === 'MIT' ? "bg-purple-500/10 text-purple-700 border-purple-500/20" :
+                          "bg-blue-500/10 text-blue-700 border-blue-500/20"
+                        )}>
+                          {row.source}
+                        </Badge>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </CollapsibleContent>
+        </Collapsible>
+      ))}
+    </>
+  );
 
   return (
     <div className="flex flex-col h-full bg-background">
@@ -317,101 +437,40 @@ const Assignments: React.FC = () => {
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-2">
         {loading ? (
           <div className="text-center py-8 text-muted-foreground text-sm">Loading...</div>
+        ) : statusTab === 'overdue' && overduePartitions ? (
+          <>
+            {overduePartitions.recent.size > 0 && (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 px-1 pt-1">
+                  <AlertTriangle className="h-4 w-4 text-destructive" />
+                  <span className="text-xs font-bold text-destructive uppercase tracking-wide">Last 2 Weeks</span>
+                  <Badge variant="outline" className="text-[10px] h-4 px-1 border-destructive/30 text-destructive">
+                    {Array.from(overduePartitions.recent.values()).reduce((sum, arr) => sum + arr.length, 0)}
+                  </Badge>
+                </div>
+                {renderCourseAccordions(overduePartitions.recent)}
+              </div>
+            )}
+            {overduePartitions.older.size > 0 && (
+              <div className="space-y-2 mt-4">
+                <div className="flex items-center gap-2 px-1 pt-1">
+                  <Clock className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-xs font-bold text-muted-foreground uppercase tracking-wide">Older</span>
+                  <Badge variant="outline" className="text-[10px] h-4 px-1">
+                    {Array.from(overduePartitions.older.values()).reduce((sum, arr) => sum + arr.length, 0)}
+                  </Badge>
+                </div>
+                {renderCourseAccordions(overduePartitions.older)}
+              </div>
+            )}
+            {overduePartitions.recent.size === 0 && overduePartitions.older.size === 0 && (
+              <div className="text-center py-8 text-muted-foreground text-sm">No overdue assignments</div>
+            )}
+          </>
         ) : grouped.size === 0 ? (
           <div className="text-center py-8 text-muted-foreground text-sm">No assignments found</div>
         ) : (
-          Array.from(grouped.entries()).map(([course, courseAssignments]) => (
-            <Collapsible
-              key={course}
-              open={openCourses.has(course)}
-              onOpenChange={() => toggleCourse(course)}
-            >
-              <CollapsibleTrigger className="flex items-center justify-between w-full p-3 rounded-lg bg-muted/50 hover:bg-muted transition-colors">
-                <div className="flex items-center gap-2">
-                  <ChevronRight className={cn(
-                    "h-4 w-4 text-muted-foreground transition-transform",
-                    openCourses.has(course) && "rotate-90"
-                  )} />
-                  <BookOpen className="h-4 w-4 text-muted-foreground" />
-                  <span className="text-sm font-semibold text-foreground">{course}</span>
-                </div>
-                <Badge variant="secondary" className="text-[10px] h-5">{courseAssignments.length}</Badge>
-              </CollapsibleTrigger>
-              <CollapsibleContent className="space-y-2 mt-2 pl-2">
-                {courseAssignments.map(row => {
-                  const status = getAssignmentStatus(row);
-                  const daysOverdue = row.due_date && isPast(parseISO(row.due_date))
-                    ? differenceInDays(new Date(), parseISO(row.due_date))
-                    : 0;
-
-                  return (
-                    <Card
-                      key={row.id}
-                      className={cn(
-                        "cursor-pointer hover:shadow-md transition-shadow",
-                        status === 'overdue' && "border-l-4 border-l-destructive",
-                        status === 'completed' && "opacity-60",
-                        status === 'upcoming' && "border-l-4 border-l-primary",
-                        status === 'active' && "border-l-4 border-l-accent-foreground"
-                      )}
-                      onClick={() => {
-                        if (row.task) setSelectedTask(row.task);
-                      }}
-                    >
-                      <CardContent className="p-3">
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="flex-1 min-w-0">
-                            <span className={cn(
-                              "text-sm font-medium block truncate",
-                              status === 'completed' && "line-through text-muted-foreground"
-                            )}>
-                              {status === 'completed' && <CheckCircle2 className="h-3.5 w-3.5 text-green-500 inline mr-1" />}
-                              {row.title}
-                            </span>
-                            {row.due_date && (
-                              <span className="text-xs text-muted-foreground mt-0.5 block">
-                                Due: {format(parseISO(row.due_date), 'MMM d, yyyy')}
-                              </span>
-                            )}
-                            {!row.task && (
-                              <span className="text-[10px] text-muted-foreground/60 mt-0.5 block">
-                                No linked task yet
-                              </span>
-                            )}
-                          </div>
-                          <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                            {status === 'overdue' && (
-                              <Badge variant="outline" className="text-[10px] h-4 px-1 bg-destructive/10 text-destructive border-destructive/20">
-                                <AlertTriangle className="h-2.5 w-2.5 mr-0.5" />
-                                {daysOverdue}d overdue
-                              </Badge>
-                            )}
-                            {status === 'upcoming' && (
-                              <Badge variant="outline" className="text-[10px] h-4 px-1 bg-primary/10 text-primary border-primary/20">
-                                <Clock className="h-2.5 w-2.5 mr-0.5" />
-                                upcoming
-                              </Badge>
-                            )}
-                            {status === 'active' && (
-                              <Badge variant="outline" className="text-[10px] h-4 px-1 bg-accent text-accent-foreground border-accent">
-                                active
-                              </Badge>
-                            )}
-                            <Badge variant="outline" className={cn("text-[10px] h-4 px-1",
-                              row.source === 'MIT' ? "bg-purple-500/10 text-purple-700 border-purple-500/20" :
-                              "bg-blue-500/10 text-blue-700 border-blue-500/20"
-                            )}>
-                              {row.source}
-                            </Badge>
-                          </div>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  );
-                })}
-              </CollapsibleContent>
-            </Collapsible>
-          ))
+          renderCourseAccordions(grouped)
         )}
       </div>
 
