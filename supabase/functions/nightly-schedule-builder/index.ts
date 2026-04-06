@@ -523,20 +523,39 @@ serve(async (req) => {
 
         // ==========================================
         // STEP 1.6: ARCHIVE STALE EDUCATION TASKS
-        // EDUCATION tasks overdue 30+ days (regardless of pushed_count)
+        // EDUCATION tasks: 14+ days overdue if has assignment_id, else 30+ days
         // ==========================================
+        const fourteenDaysAgo = new Date(Date.now() - 14 * 86400000).toISOString();
         const { data: staleEduTasks, error: staleEduError } = await supabase
           .from('tasks')
-          .select('id, title, due_date, category')
+          .select('id, title, due_date, category, assignment_id')
           .eq('user_id', userId)
           .in('category', ['EDUCATION', 'PROF_EDUCATION'])
           .not('status', 'eq', 'DONE')
           .is('completed_at', null)
           .lt('due_date', thirtyDaysAgo);
 
+        // Also fetch assignment-linked tasks 14+ days overdue
+        const { data: staleAssignmentTasks } = await supabase
+          .from('tasks')
+          .select('id, title, due_date, category, assignment_id')
+          .eq('user_id', userId)
+          .in('category', ['EDUCATION', 'PROF_EDUCATION'])
+          .not('status', 'eq', 'DONE')
+          .is('completed_at', null)
+          .not('assignment_id', 'is', null)
+          .gte('due_date', fourteenDaysAgo)
+          .lt('due_date', thirtyDaysAgo);
+
+        // Merge: 30+ days (any edu), plus 14-30 days (only assignment-linked)
+        const allStaleEdu = [
+          ...(staleEduTasks || []),
+          ...(staleAssignmentTasks || []),
+        ];
+
         let archivedEduCount = 0;
-        if (!staleEduError && staleEduTasks && staleEduTasks.length > 0) {
-          for (const stale of staleEduTasks) {
+        if (!staleEduError && allStaleEdu.length > 0) {
+          for (const stale of allStaleEdu) {
             const { error: archError } = await supabase
               .from('tasks')
               .update({
@@ -697,7 +716,7 @@ serve(async (req) => {
 
           const { data: candidates } = await supabase
             .from('tasks')
-            .select('id, title, category, priority, estimate_minutes, due_date, pushed_count, status')
+            .select('id, title, category, priority, estimate_minutes, due_date, pushed_count, status, assignment_id')
             .in('id', allCandidateIds)
             .not('status', 'in', '("DONE","BLOCKED")')
             .not('title', 'ilike', '%Test Task%')
@@ -750,17 +769,34 @@ serve(async (req) => {
               // Status boost
               if (task.status === 'UP_NEXT') score += 1;
               
-              // Staleness penalty: overdue tasks get penalized
+              // Assignment grace period: 0-7 days overdue → boost to URGENT
+              if ((task as any).assignment_id && task.due_date) {
+                const dueDate = new Date(task.due_date);
+                if (dueDate < targetDate) {
+                  const daysOverdue = Math.floor((targetDate.getTime() - dueDate.getTime()) / 86400000);
+                  if (daysOverdue <= 7) {
+                    score += 10;
+                    (task as any)._overridePriority = 'URGENT';
+                    console.log(`      🚨 Assignment grace period: "${task.title}" (due ${task.due_date}, ${daysOverdue} days overdue)`);
+                  }
+                }
+              }
+
+              // Staleness penalty: overdue tasks get penalized (skip assignments in grace period)
               if (task.due_date) {
                 const dueDate = new Date(task.due_date);
                 const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
                 const thirtyDaysAgoDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-                if (dueDate < thirtyDaysAgoDate) {
-                  score -= 10;
-                  console.log(`      📉 Heavy staleness penalty for "${task.title}" (due ${task.due_date}, 30+ days overdue)`);
-                } else if (dueDate < fourteenDaysAgo) {
-                  score -= 3;
-                  console.log(`      📉 Staleness penalty for "${task.title}" (due ${task.due_date})`);
+                const daysOverdue = dueDate < targetDate ? Math.floor((targetDate.getTime() - dueDate.getTime()) / 86400000) : 0;
+                const isAssignmentInGrace = (task as any).assignment_id && daysOverdue > 0 && daysOverdue <= 7;
+                if (!isAssignmentInGrace) {
+                  if (dueDate < thirtyDaysAgoDate) {
+                    score -= 10;
+                    console.log(`      📉 Heavy staleness penalty for "${task.title}" (due ${task.due_date}, 30+ days overdue)`);
+                  } else if (dueDate < fourteenDaysAgo) {
+                    score -= 3;
+                    console.log(`      📉 Staleness penalty for "${task.title}" (due ${task.due_date})`);
+                  }
                 }
               }
               
