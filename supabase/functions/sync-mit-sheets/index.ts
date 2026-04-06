@@ -6,6 +6,75 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+/** Parse a single CSV line respecting quoted fields */
+function parseCSVLine(line: string): string[] {
+  const fields: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (i + 1 < line.length && line[i + 1] === '"') {
+          current += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        current += ch;
+      }
+    } else {
+      if (ch === '"') {
+        inQuotes = true;
+      } else if (ch === ',') {
+        fields.push(current.trim());
+        current = '';
+      } else {
+        current += ch;
+      }
+    }
+  }
+  fields.push(current.trim());
+  return fields;
+}
+
+/** Robust date parser — returns ISO string or null */
+function parseDate(raw: string): string | null {
+  if (!raw || !raw.trim()) return null;
+  const s = raw.trim();
+
+  const monthNameMatch = s.match(/^([A-Za-z]+)\s+(\d{1,2}),?\s*(\d{4})$/);
+  if (monthNameMatch) {
+    const d = new Date(`${monthNameMatch[1]} ${monthNameMatch[2]}, ${monthNameMatch[3]}`);
+    if (!isNaN(d.getTime()) && d.getFullYear() >= 2020) return d.toISOString();
+  }
+
+  const isoMatch = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (isoMatch) {
+    const d = new Date(`${isoMatch[1]}-${isoMatch[2].padStart(2,'0')}-${isoMatch[3].padStart(2,'0')}T00:00:00Z`);
+    if (!isNaN(d.getTime()) && d.getFullYear() >= 2020) return d.toISOString();
+  }
+
+  const slashMatch = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (slashMatch) {
+    let year = parseInt(slashMatch[3]);
+    if (year < 100) year += 2000;
+    if (year >= 2020) {
+      const d = new Date(year, parseInt(slashMatch[1]) - 1, parseInt(slashMatch[2]));
+      if (!isNaN(d.getTime())) return d.toISOString();
+    }
+  }
+
+  const fallback = new Date(s);
+  if (!isNaN(fallback.getTime()) && fallback.getFullYear() >= 2020) {
+    return fallback.toISOString();
+  }
+
+  console.warn(`Unparseable date: "${s}"`);
+  return null;
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -93,7 +162,7 @@ serve(async (req) => {
       console.log('CSV fetched, length:', csvText.length);
 
       const lines = csvText.split('\n');
-      const headers = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''));
+      const headers = parseCSVLine(lines[0]);
       
       const titleIdx = headers.findIndex(h => h.toLowerCase().includes('title') || h.toLowerCase().includes('assignment'));
       const descIdx = headers.findIndex(h => h.toLowerCase().includes('description') || h.toLowerCase().includes('details'));
@@ -111,39 +180,24 @@ serve(async (req) => {
       let unchanged = 0;
       const assignmentIds: string[] = [];
 
-      // Process ALL rows — no time-window filter
       for (let i = 1; i < lines.length; i++) {
         const line = lines[i].trim();
         if (!line) continue;
 
-        const cols = line.split(',').map(c => c.trim().replace(/^"|"$/g, ''));
+        const cols = parseCSVLine(line);
         
-        const title = cols[titleIdx] || `MIT Assignment ${i}`;
-        const description = descIdx >= 0 ? cols[descIdx] : '';
-        const dueDateStr = dueDateIdx >= 0 ? cols[dueDateIdx] : '';
-        const courseName = courseIdx >= 0 ? cols[courseIdx] : '';
-        const priority = priorityIdx >= 0 ? cols[priorityIdx]?.toLowerCase() : 'medium';
+        const title = (titleIdx >= 0 ? cols[titleIdx] : '') || '';
+        const description = descIdx >= 0 ? (cols[descIdx] || '') : '';
+        const dueDateStr = dueDateIdx >= 0 ? (cols[dueDateIdx] || '') : '';
+        const courseName = courseIdx >= 0 ? (cols[courseIdx] || '') : '';
+        const priority = priorityIdx >= 0 ? (cols[priorityIdx]?.toLowerCase() || 'medium') : 'medium';
         const points = pointsIdx >= 0 ? parseInt(cols[pointsIdx]) : null;
         const assignmentUrl = linkIdx >= 0 ? (cols[linkIdx] || '') : '';
 
-        // Skip office hours
-        if (title.toLowerCase().includes('office hour')) {
-          continue;
-        }
+        if (title.toLowerCase().includes('office hour')) continue;
+        if (!title) continue;
 
-        // Skip rows with no real title
-        if (!title || title === `MIT Assignment ${i}`) {
-          continue;
-        }
-
-        // Parse due date
-        let dueDate = null;
-        if (dueDateStr) {
-          const parsed = new Date(dueDateStr);
-          if (!isNaN(parsed.getTime())) {
-            dueDate = parsed.toISOString();
-          }
-        }
+        const dueDate = parseDate(dueDateStr);
 
         processed++;
 
@@ -157,6 +211,7 @@ serve(async (req) => {
             .select('id')
             .eq('user_id', userId)
             .eq('name', mitCourseName)
+            .limit(1)
             .maybeSingle();
 
           if (existingCourse) {
@@ -171,13 +226,15 @@ serve(async (req) => {
           }
         }
 
-        // Check existing by sheet_row_number
-        const { data: existing } = await adminClient
+        // Check existing by sheet_row_number — use limit(1) to handle dupes safely
+        const { data: existingRows } = await adminClient
           .from('assignments_mit')
           .select('id, title, due_date, description, priority, points')
           .eq('user_id', userId)
           .eq('sheet_row_number', i)
-          .maybeSingle();
+          .limit(1);
+
+        const existing = existingRows?.[0] || null;
 
         if (existing) {
           const existingDue = existing.due_date ? new Date(existing.due_date).toISOString() : null;
@@ -201,7 +258,7 @@ serve(async (req) => {
               })
               .eq('id', existing.id);
             updated++;
-            console.log(`Updated row ${i}: "${title}"`);
+            console.log(`Updated row ${i}: "${title}" due=${dueDate}`);
           } else {
             unchanged++;
           }
@@ -228,7 +285,7 @@ serve(async (req) => {
           if (newAssignment) {
             added++;
             assignmentIds.push(newAssignment.id);
-            console.log(`Added row ${i}: "${title}"`);
+            console.log(`Added row ${i}: "${title}" due=${dueDate}`);
           }
         }
       }

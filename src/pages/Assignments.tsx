@@ -5,14 +5,14 @@ import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Card, CardContent } from '@/components/ui/card';
-import { GraduationCap, RefreshCw, CheckCircle2, AlertTriangle, Clock, BookOpen, ChevronRight, Settings, Wrench } from 'lucide-react';
+import { GraduationCap, RefreshCw, CheckCircle2, AlertTriangle, Clock, BookOpen, ChevronRight, Settings } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from 'sonner';
 import TaskDetailModal from '@/components/TaskDetailModal';
 import { AssignmentSyncSettings } from '@/components/AssignmentSyncSettings';
-import { repairAssignmentLinkage } from '@/utils/assignmentSync';
+
 import type { Task } from '@/types/task';
 
 type StatusTab = 'all' | 'due_next' | 'upcoming' | 'overdue' | 'active' | 'submitted';
@@ -48,7 +48,7 @@ const Assignments: React.FC = () => {
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [openCourses, setOpenCourses] = useState<Set<string>>(new Set());
   const [showImportSettings, setShowImportSettings] = useState(false);
-  const [isRepairing, setIsRepairing] = useState(false);
+  
 
   // Fetch programs
   useEffect(() => {
@@ -217,19 +217,6 @@ const Assignments: React.FC = () => {
     return p.name.slice(0, 6);
   };
 
-  const handleRepair = async () => {
-    if (!user) return;
-    setIsRepairing(true);
-    try {
-      const result = await repairAssignmentLinkage(user.id);
-      toast.success(`Repaired ${result.repaired} tasks`);
-      await fetchAssignments();
-    } catch (err) {
-      toast.error('Repair failed');
-    } finally {
-      setIsRepairing(false);
-    }
-  };
 
   return (
     <div className="flex flex-col h-full bg-background">
@@ -241,9 +228,6 @@ const Assignments: React.FC = () => {
             <h1 className="text-lg font-bold text-foreground">Assignments</h1>
           </div>
           <div className="flex items-center gap-1">
-            <Button variant="ghost" size="sm" onClick={handleRepair} disabled={isRepairing} title="Repair linkage">
-              <Wrench className="h-4 w-4" />
-            </Button>
             <Button variant="ghost" size="sm" onClick={() => fetchAssignments()}>
               <RefreshCw className="h-4 w-4" />
             </Button>
