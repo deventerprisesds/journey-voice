@@ -698,7 +698,7 @@ serve(async (req) => {
 
           const { data: candidates } = await supabase
             .from('tasks')
-            .select('id, title, category, priority, estimate_minutes, due_date, pushed_count, status, assignment_id')
+            .select('id, title, category, priority, estimate_minutes, due_date, pushed_count, status, assignment_id, is_priority, created_at')
             .in('id', allCandidateIds)
             .not('status', 'in', '("DONE","BLOCKED")')
             .not('title', 'ilike', '%Test Task%')
@@ -722,8 +722,11 @@ serve(async (req) => {
             .map(task => {
               let score = priorityWeight[task.priority] || 1;
               
-              // Priority board boost (strongest signal)
-              if (mappedIds.includes(task.id)) score += 10;
+              // Explicit user priority — strongest intentional signal
+              if ((task as any).is_priority) score += 12;
+              
+              // Topic-mapped — organizational nudge only (not the same as user priority)
+              if (mappedIds.includes(task.id)) score += 2;
               
               // Pushed count: diminishing returns after 3
               if (task.pushed_count && task.pushed_count > 0) {
@@ -735,14 +738,15 @@ serve(async (req) => {
                 }
               }
               
-              // Due soon boost
-              if (isDueSoon(task.due_date)) score += 3;
+              // Urgency ladder: ±48h includes overdue (intentional)
+              if (isDueSoon(task.due_date)) score += 5;
               
-              // Boost only if due within 7 days (not blanket overdue boost)
+              // 3-7 day window (only if NOT already in the 48h window)
               if (task.due_date) {
                 const dueDate = new Date(task.due_date);
+                const twoDaysOut = new Date(targetDate.getTime() + 2 * 86400000);
                 const sevenDaysOut = new Date(targetDate.getTime() + 7 * 86400000);
-                if (dueDate >= targetDate && dueDate <= sevenDaysOut) score += 5;
+                if (dueDate > twoDaysOut && dueDate <= sevenDaysOut) score += 3;
               }
               
               // Intent-based keyword boost (financial, comms) — strong signal
@@ -750,6 +754,12 @@ serve(async (req) => {
               
               // Status boost
               if (task.status === 'UP_NEXT') score += 1;
+              
+              // Recency boost for recently created tasks
+              const createdAt = new Date((task as any).created_at);
+              const daysSinceCreated = (Date.now() - createdAt.getTime()) / 86400000;
+              if (daysSinceCreated <= 3) score += 2;
+              else if (daysSinceCreated <= 7) score += 1;
               
               // Assignment grace period: 0-7 days overdue → boost to URGENT
               if ((task as any).assignment_id && task.due_date) {

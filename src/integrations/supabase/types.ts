@@ -3548,6 +3548,7 @@ export type Database = {
           estimate_minutes: number | null
           external_event_id: string | null
           id: string
+          is_priority: boolean
           is_scheduled: boolean
           priority: Database["public"]["Enums"]["task_priority"]
           pushed_count: number | null
@@ -3573,6 +3574,7 @@ export type Database = {
           estimate_minutes?: number | null
           external_event_id?: string | null
           id?: string
+          is_priority?: boolean
           is_scheduled?: boolean
           priority?: Database["public"]["Enums"]["task_priority"]
           pushed_count?: number | null
@@ -3598,6 +3600,7 @@ export type Database = {
           estimate_minutes?: number | null
           external_event_id?: string | null
           id?: string
+          is_priority?: boolean
           is_scheduled?: boolean
           priority?: Database["public"]["Enums"]["task_priority"]
           pushed_count?: number | null
