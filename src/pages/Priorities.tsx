@@ -8,6 +8,7 @@ import { supabase, SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from '@/integrations
 import { useAuth } from '@/hooks/useAuth';
 import { DEFAULT_SCHEDULING_CONFIG, mergeSchedulingConfig } from '@/config/schedulingRules';
 import CategoryColumn from '@/components/priorities/CategoryColumn';
+import PriorityLane from '@/components/priorities/PriorityLane';
 import TaskDetailModal from '@/components/TaskDetailModal';
 import type { Task } from '@/types/task';
 import { toast } from 'sonner';
@@ -62,6 +63,7 @@ const Priorities: React.FC = () => {
   const { user } = useAuth();
   const [viewMode, setViewMode] = useState<'group' | 'task'>('group');
   const [categories, setCategories] = useState<CategoryData[]>([]);
+  const [priorityLaneTasks, setPriorityLaneTasks] = useState<Task[]>([]);
   const [allTopicGroupRefs, setAllTopicGroupRefs] = useState<TopicGroupRef[]>([]);
   const [loading, setLoading] = useState(true);
   const [classifying, setClassifying] = useState(false);
