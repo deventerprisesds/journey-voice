@@ -754,7 +754,13 @@ const Priorities: React.FC = () => {
       )}
 
       <DragDropContext onDragEnd={handleDragEnd}>
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        <PriorityLane
+          tasks={priorityLaneTasks}
+          onRemove={removePriority}
+          onOpenTask={setSelectedTask}
+        />
+
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 mt-4">
           {categories.map(cat => (
             <CategoryColumn
               key={cat.key}
@@ -766,6 +772,7 @@ const Priorities: React.FC = () => {
               selectedTaskIds={selectedTaskIds}
               onToggleTaskSelection={toggleTaskSelection}
               onOpenTask={setSelectedTask}
+              onAddToPriority={addToPriorityLane}
             />
           ))}
         </div>
