@@ -44,7 +44,7 @@ const Assignments: React.FC = () => {
   const [courses, setCourses] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
   const [programFilter, setProgramFilter] = useState<string>('');
-  const [statusTab, setStatusTab] = useState<StatusTab>('all');
+  const [statusTab, setStatusTab] = useState<StatusTab>('due_next');
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [openCourses, setOpenCourses] = useState<Set<string>>(new Set());
   const [showImportSettings, setShowImportSettings] = useState(false);
@@ -247,11 +247,7 @@ const Assignments: React.FC = () => {
 
   // Auto-open all courses on filter change
   useEffect(() => {
-    if (overduePartitions) {
-      setOpenCourses(new Set([...overduePartitions.recent.keys(), ...overduePartitions.older.keys()]));
-    } else {
-      setOpenCourses(new Set(grouped.keys()));
-    }
+    setOpenCourses(new Set());
   }, [grouped, overduePartitions]);
 
   const toggleCourse = (course: string) => {
@@ -415,9 +411,6 @@ const Assignments: React.FC = () => {
         {/* Status Tab Bar */}
         <Tabs value={statusTab} onValueChange={(v) => setStatusTab(v as StatusTab)}>
           <TabsList className="w-full h-9 overflow-x-auto flex-nowrap">
-            <TabsTrigger value="all" className="text-[11px] px-2 flex-shrink-0">
-              All <Badge variant="secondary" className="ml-1 h-4 text-[9px] px-1">{tabCounts.all}</Badge>
-            </TabsTrigger>
             <TabsTrigger value="due_next" className="text-[11px] px-2 flex-shrink-0">
               Due Next <Badge variant="secondary" className="ml-1 h-4 text-[9px] px-1">{tabCounts.dueNext}</Badge>
             </TabsTrigger>
@@ -432,6 +425,9 @@ const Assignments: React.FC = () => {
             </TabsTrigger>
             <TabsTrigger value="submitted" className="text-[11px] px-2 flex-shrink-0">
               Submitted <Badge variant="secondary" className="ml-1 h-4 text-[9px] px-1">{tabCounts.submitted}</Badge>
+            </TabsTrigger>
+            <TabsTrigger value="all" className="text-[11px] px-2 flex-shrink-0">
+              All <Badge variant="secondary" className="ml-1 h-4 text-[9px] px-1">{tabCounts.all}</Badge>
             </TabsTrigger>
           </TabsList>
         </Tabs>
