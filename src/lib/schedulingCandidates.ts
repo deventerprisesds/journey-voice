@@ -43,7 +43,11 @@ export function scoreSchedulingCandidate(task: Task, options: ScoreCandidateOpti
   const { priorityBoardIds = new Set<string>(), targetDate = new Date() } = options;
   let score = PRIORITY_WEIGHT[task.priority] || 1;
 
-  if (priorityBoardIds.has(task.id)) score += 10;
+  // Explicit user priority — strongest intentional signal
+  if (task.is_priority) score += 12;
+
+  // Topic-mapped — organizational nudge only (not the same as user priority)
+  if (priorityBoardIds.has(task.id)) score += 2;
 
   if (task.pushed_count && task.pushed_count > 0) {
     if (task.pushed_count <= 3) {
@@ -54,18 +58,29 @@ export function scoreSchedulingCandidate(task: Task, options: ScoreCandidateOpti
     }
   }
 
-  if (isDueSoon(task.due_date)) score += 3;
+  // Urgency ladder: ±48h includes overdue (intentional)
+  if (isDueSoon(task.due_date)) score += 5;
 
   if (task.due_date) {
     const dueDate = new Date(task.due_date);
+    const twoDaysOut = new Date(targetDate.getTime() + 2 * 24 * 60 * 60 * 1000);
     const sevenDaysOut = new Date(targetDate.getTime() + 7 * 24 * 60 * 60 * 1000);
     const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
-    if (dueDate >= targetDate && dueDate <= sevenDaysOut) score += 5;
+    // 3-7 day window (only if NOT already in the 48h window)
+    if (dueDate > twoDaysOut && dueDate <= sevenDaysOut) score += 3;
+
+    // Staleness penalties
     if (dueDate < thirtyDaysAgo) score -= 10;
     else if (dueDate < fourteenDaysAgo) score -= 3;
   }
+
+  // Recency boost for recently created tasks
+  const createdAt = new Date(task.created_at);
+  const daysSinceCreated = (Date.now() - createdAt.getTime()) / (24 * 60 * 60 * 1000);
+  if (daysSinceCreated <= 3) score += 2;
+  else if (daysSinceCreated <= 7) score += 1;
 
   if (hasSchedulingPriorityKeyword(task.title)) score += 5;
   if (task.status === 'UP_NEXT') score += 1;

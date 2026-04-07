@@ -33,6 +33,7 @@ export interface Task {
   assignment_url?: string;
   assignment_id?: string;
   pushed_count?: number;
+  is_priority?: boolean;
 }
 
 export interface CalendarConnection {
