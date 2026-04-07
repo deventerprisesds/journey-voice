@@ -314,7 +314,6 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onStatusChange, onEdit, onSch
                   {task.title}
                 </h3>
               </div>
-              </h3>
               {task.assignment_url && (
                 <a
                   href={task.assignment_url}
