@@ -43,8 +43,10 @@ export function scoreSchedulingCandidate(task: Task, options: ScoreCandidateOpti
   const { priorityBoardIds = new Set<string>(), targetDate = new Date() } = options;
   let score = PRIORITY_WEIGHT[task.priority] || 1;
 
-  // Explicit user priority — strongest intentional signal
-  if (task.is_priority) score += 12;
+  // Explicit user priority — base +10, rank bonus up to +5 (top items get more)
+  if (task.is_priority) {
+    score += 10 + Math.max(5 - (task.priority_rank ?? 0), 0);
+  }
 
   // Topic-mapped — organizational nudge only (not the same as user priority)
   if (priorityBoardIds.has(task.id)) score += 2;

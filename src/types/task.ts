@@ -34,6 +34,7 @@ export interface Task {
   assignment_id?: string;
   pushed_count?: number;
   is_priority?: boolean;
+  priority_rank?: number | null;
 }
 
 export interface CalendarConnection {
