@@ -183,7 +183,12 @@ serve(async (req) => {
     await syncAssignments('assignments', 'EMBA');
     await syncAssignments('assignments_mit', 'MIT');
 
-    console.log(`[ASSIGNMENT_SYNC] Complete: ${created.length} created, ${repaired.length} repaired, ${skipped.length} skipped`);
+    const totalProcessed = created.length + repaired.length + skipped.length;
+    const skipRate = totalProcessed > 0 ? skipped.length / totalProcessed : 0;
+    if (skipRate > 0.9 && totalProcessed > 10) {
+      console.warn(`[ASSIGNMENT_SYNC] ⚠️ HIGH SKIP RATE: ${(skipRate * 100).toFixed(0)}% (${skipped.length}/${totalProcessed}). Possible dedup bug or all assignments already linked.`);
+    }
+
 
     // Log activity
     await supabase.from('activity_log').insert({
