@@ -160,7 +160,6 @@ serve(async (req) => {
           board_id: board.id,
           user_id: userId,
           assignment_id: assignment.id,
-          assignment_url: assignment.assignment_url || null,
           scheduling_context: { source },
         };
 
