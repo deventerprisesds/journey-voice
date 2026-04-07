@@ -41,7 +41,7 @@ const PRIORITY_COLORS: Record<string, string> = {
 };
 
 const TopicGroupPanel: React.FC<TopicGroupPanelProps> = ({
-  topicGroup, isDeletable, onRefresh, allCategories, allTopicGroupRefs, selectedTaskIds, onToggleTaskSelection, onOpenTask,
+  topicGroup, isDeletable, onRefresh, allCategories, allTopicGroupRefs, selectedTaskIds, onToggleTaskSelection, onOpenTask, onAddToPriority,
   depth = 0, categoryKey,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
