@@ -343,6 +343,12 @@ const Priorities: React.FC = () => {
       setAllTopicGroupRefs(refs);
       setCategories(catData);
 
+      // Load priority lane tasks
+      const priorityTasks = tasks
+        .filter(t => t.is_priority)
+        .sort((a, b) => (a.priority_rank ?? 999) - (b.priority_rank ?? 999));
+      setPriorityLaneTasks(priorityTasks);
+
       // Track unmapped count for UI
       const unmapped = tasks.filter(t => !assignedTaskIds.has(t.id) && !t.title.toLowerCase().includes('test'));
       setUnmappedCount(unmapped.length);
