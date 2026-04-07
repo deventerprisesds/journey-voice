@@ -12,7 +12,7 @@ import {
   AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
   AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { ChevronRight, ChevronDown, GripVertical, Trash2, MoreHorizontal, ArrowRight, FolderMinus, Plus } from 'lucide-react';
+import { ChevronRight, ChevronDown, GripVertical, Trash2, MoreHorizontal, ArrowRight, FolderMinus, Plus, Star } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import type { Task } from '@/types/task';
