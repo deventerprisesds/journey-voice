@@ -184,6 +184,7 @@ const TopicGroupPanel: React.FC<TopicGroupPanelProps> = ({
               selectedTaskIds={selectedTaskIds}
               onToggleTaskSelection={onToggleTaskSelection}
               onOpenTask={onOpenTask}
+              onAddToPriority={onAddToPriority}
               depth={depth + 1}
               categoryKey={categoryKey}
             />
