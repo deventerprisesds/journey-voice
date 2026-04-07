@@ -8,6 +8,7 @@ import { supabase, SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from '@/integrations
 import { useAuth } from '@/hooks/useAuth';
 import { DEFAULT_SCHEDULING_CONFIG, mergeSchedulingConfig } from '@/config/schedulingRules';
 import CategoryColumn from '@/components/priorities/CategoryColumn';
+import PriorityLane from '@/components/priorities/PriorityLane';
 import TaskDetailModal from '@/components/TaskDetailModal';
 import type { Task } from '@/types/task';
 import { toast } from 'sonner';
@@ -62,6 +63,7 @@ const Priorities: React.FC = () => {
   const { user } = useAuth();
   const [viewMode, setViewMode] = useState<'group' | 'task'>('group');
   const [categories, setCategories] = useState<CategoryData[]>([]);
+  const [priorityLaneTasks, setPriorityLaneTasks] = useState<Task[]>([]);
   const [allTopicGroupRefs, setAllTopicGroupRefs] = useState<TopicGroupRef[]>([]);
   const [loading, setLoading] = useState(true);
   const [classifying, setClassifying] = useState(false);
@@ -341,6 +343,12 @@ const Priorities: React.FC = () => {
       setAllTopicGroupRefs(refs);
       setCategories(catData);
 
+      // Load priority lane tasks
+      const priorityTasks = tasks
+        .filter(t => t.is_priority)
+        .sort((a, b) => (a.priority_rank ?? 999) - (b.priority_rank ?? 999));
+      setPriorityLaneTasks(priorityTasks);
+
       // Track unmapped count for UI
       const unmapped = tasks.filter(t => !assignedTaskIds.has(t.id) && !t.title.toLowerCase().includes('test'));
       setUnmappedCount(unmapped.length);
@@ -363,6 +371,35 @@ const Priorities: React.FC = () => {
     }
   }, [loading, unmappedCount, classifying, classifyUnmapped]);
 
+  // Helper: persist priority lane ranks
+  const persistPriorityRanks = useCallback(async (laneTasks: Task[]) => {
+    const updates = laneTasks.map((t, i) =>
+      supabase.from('tasks').update({ is_priority: true, priority_rank: i } as any).eq('id', t.id)
+    );
+    await Promise.all(updates);
+  }, []);
+
+  const removePriority = useCallback(async (taskId: string) => {
+    // Optimistic
+    setPriorityLaneTasks(prev => {
+      const updated = prev.filter(t => t.id !== taskId);
+      // Re-index ranks in background
+      persistPriorityRanks(updated).catch(console.error);
+      return updated;
+    });
+    // Clear priority on removed task
+    await supabase.from('tasks').update({ is_priority: false, priority_rank: null } as any).eq('id', taskId);
+  }, [persistPriorityRanks]);
+
+  const addToPriorityLane = useCallback(async (task: Task) => {
+    setPriorityLaneTasks(prev => {
+      if (prev.some(t => t.id === task.id)) return prev;
+      const updated = [...prev, { ...task, is_priority: true, priority_rank: prev.length }];
+      persistPriorityRanks(updated).catch(console.error);
+      return updated;
+    });
+  }, [persistPriorityRanks]);
+
   const handleDragEnd = useCallback(async (result: DropResult) => {
     console.log('[DragEnd] Raw result:', JSON.stringify(result));
     if (!result.destination || !user) {
@@ -373,21 +410,78 @@ const Priorities: React.FC = () => {
     console.log('[DragEnd] Type:', type, 'From:', source.droppableId, '->', destination.droppableId);
 
     if (type === 'TASK') {
-      // Task dragged between categories
-      const srcCatKey = source.droppableId.replace('tasks-', '');
-      const dstCatKey = destination.droppableId.replace('tasks-', '');
-      console.log('[DragEnd:TASK] srcCat:', srcCatKey, 'dstCat:', dstCatKey, 'srcIdx:', source.index, 'dstIdx:', destination.index);
-      if (srcCatKey === dstCatKey && source.index === destination.index) {
-        console.log('[DragEnd:TASK] Same position, ignoring');
+      const srcId = source.droppableId;
+      const dstId = destination.droppableId;
+
+      // --- Priority Lane reorder ---
+      if (srcId === 'priority-lane' && dstId === 'priority-lane') {
+        setPriorityLaneTasks(prev => {
+          const items = [...prev];
+          const [moved] = items.splice(source.index, 1);
+          items.splice(destination.index, 0, moved);
+          persistPriorityRanks(items).catch(console.error);
+          return items;
+        });
         return;
       }
 
-      // Find the task
-      const srcCat = categories.find(c => c.key === srcCatKey);
-      if (!srcCat) {
-        console.error('[DragEnd:TASK] Source category not found:', srcCatKey);
+      // --- Priority Lane → Category (remove from lane) ---
+      if (srcId === 'priority-lane' && dstId !== 'priority-lane') {
+        const task = priorityLaneTasks[source.index];
+        if (!task) return;
+        setPriorityLaneTasks(prev => {
+          const updated = prev.filter(t => t.id !== task.id);
+          persistPriorityRanks(updated).catch(console.error);
+          return updated;
+        });
+        await supabase.from('tasks').update({ is_priority: false, priority_rank: null } as any).eq('id', task.id);
+        // If destination is a category column, update category
+        const dstCatKey = dstId.replace('tasks-', '');
+        if (dstCatKey !== dstId) {
+          await supabase.from('tasks').update({ category: dstCatKey } as any).eq('id', task.id);
+        }
+        loadData();
         return;
       }
+
+      // --- Category → Priority Lane ---
+      if (dstId === 'priority-lane' && srcId !== 'priority-lane') {
+        // Find the task from categories
+        const srcCatKey = srcId.replace('tasks-', '');
+        const srcCat = categories.find(c => c.key === srcCatKey);
+        if (!srcCat) return;
+        const allSrcTasks = [...srcCat.topicGroups.flatMap(tg => tg.tasks), ...srcCat.uncategorizedTasks];
+        const seen = new Set<string>();
+        const dedupedSrcTasks = allSrcTasks.filter(t => {
+          if (seen.has(t.id)) return false;
+          seen.add(t.id);
+          return true;
+        });
+        const task = dedupedSrcTasks[source.index];
+        if (!task) return;
+
+        // Add to priority lane at destination index
+        setPriorityLaneTasks(prev => {
+          if (prev.some(t => t.id === task.id)) return prev;
+          const items = [...prev];
+          const newTask = { ...task, is_priority: true };
+          items.splice(destination.index, 0, newTask);
+          persistPriorityRanks(items).catch(console.error);
+          return items;
+        });
+        return;
+      }
+
+      // --- Category → Category (existing logic) ---
+      const srcCatKey = srcId.replace('tasks-', '');
+      const dstCatKey = dstId.replace('tasks-', '');
+      console.log('[DragEnd:TASK] srcCat:', srcCatKey, 'dstCat:', dstCatKey, 'srcIdx:', source.index, 'dstIdx:', destination.index);
+      if (srcCatKey === dstCatKey && source.index === destination.index) {
+        return;
+      }
+
+      const srcCat = categories.find(c => c.key === srcCatKey);
+      if (!srcCat) return;
       const allSrcTasks = [
         ...srcCat.topicGroups.flatMap(tg => tg.tasks),
         ...srcCat.uncategorizedTasks,
@@ -399,11 +493,7 @@ const Priorities: React.FC = () => {
         return true;
       });
       const task = dedupedSrcTasks[source.index];
-      if (!task) {
-        console.error('[DragEnd:TASK] Task not found at index:', source.index, 'total tasks:', dedupedSrcTasks.length);
-        return;
-      }
-      console.log('[DragEnd:TASK] Moving task:', task.id, task.title, 'from', srcCatKey, 'to', dstCatKey);
+      if (!task) return;
 
       // Optimistic update
       setCategories(prev => prev.map(cat => {
@@ -428,14 +518,10 @@ const Priorities: React.FC = () => {
       }));
 
       // Persist
-      const { error, status, statusText } = await supabase.from('tasks').update({ category: dstCatKey } as any).eq('id', task.id);
-      console.log('[DragEnd:TASK] DB update result:', { error, status, statusText });
+      const { error } = await supabase.from('tasks').update({ category: dstCatKey } as any).eq('id', task.id);
       if (error) {
-        console.error('[DragEnd:TASK] DB error, reloading:', error);
         toast.error('Failed to move task');
         loadData();
-      } else {
-        console.log('[DragEnd:TASK] Success');
       }
       return;
     }
@@ -668,7 +754,13 @@ const Priorities: React.FC = () => {
       )}
 
       <DragDropContext onDragEnd={handleDragEnd}>
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        <PriorityLane
+          tasks={priorityLaneTasks}
+          onRemove={removePriority}
+          onOpenTask={setSelectedTask}
+        />
+
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 mt-4">
           {categories.map(cat => (
             <CategoryColumn
               key={cat.key}
@@ -680,6 +772,7 @@ const Priorities: React.FC = () => {
               selectedTaskIds={selectedTaskIds}
               onToggleTaskSelection={toggleTaskSelection}
               onOpenTask={setSelectedTask}
+              onAddToPriority={addToPriorityLane}
             />
           ))}
         </div>

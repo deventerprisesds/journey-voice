@@ -23,7 +23,8 @@ import {
   ChevronDown,
   ListTodo,
   ExternalLink,
-  RotateCcw
+  RotateCcw,
+  Star
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { Task, ChecklistItem } from '@/types/task';
@@ -305,9 +306,14 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onStatusChange, onEdit, onSch
               <StatusIcon className="h-3 w-3" />
             </Button>
             <div className="flex-1 min-w-0">
-              <h3 className={`font-medium text-sm leading-tight truncate ${task.status === 'DONE' ? 'line-through text-muted-foreground' : ''}`}>
-                {task.title}
-              </h3>
+              <div className="flex items-center gap-1">
+                {task.is_priority && (
+                  <Star className="h-3.5 w-3.5 text-primary fill-primary flex-shrink-0" />
+                )}
+                <h3 className={`font-medium text-sm leading-tight truncate ${task.status === 'DONE' ? 'line-through text-muted-foreground' : ''}`}>
+                  {task.title}
+                </h3>
+              </div>
               {task.assignment_url && (
                 <a
                   href={task.assignment_url}

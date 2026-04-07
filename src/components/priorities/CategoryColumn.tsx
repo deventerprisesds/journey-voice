@@ -1,9 +1,9 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useCallback } from 'react';
 import { Droppable, Draggable } from '@hello-pangea/dnd';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Plus } from 'lucide-react';
+import { Plus, Star } from 'lucide-react';
 import TopicGroupPanel from './TopicGroupPanel';
 import AddTopicGroupDialog from './AddTopicGroupDialog';
 import type { Task } from '@/types/task';
@@ -18,12 +18,13 @@ interface CategoryColumnProps {
   selectedTaskIds: Set<string>;
   onToggleTaskSelection: (taskId: string) => void;
   onOpenTask: (task: Task) => void;
+  onAddToPriority?: (task: Task) => void;
 }
 
 const PRIORITY_ORDER = { URGENT: 0, HIGH: 1, MEDIUM: 2, LOW: 3 } as const;
 
 const CategoryColumn: React.FC<CategoryColumnProps> = ({
-  category, viewMode, onRefresh, allCategories, allTopicGroupRefs, selectedTaskIds, onToggleTaskSelection, onOpenTask,
+  category, viewMode, onRefresh, allCategories, allTopicGroupRefs, selectedTaskIds, onToggleTaskSelection, onOpenTask, onAddToPriority,
 }) => {
   const [addDialogOpen, setAddDialogOpen] = useState(false);
 
@@ -133,7 +134,7 @@ const CategoryColumn: React.FC<CategoryColumnProps> = ({
                         {...dragProvided.draggableProps}
                         {...dragProvided.dragHandleProps}
                       >
-                        <TaskRow task={task} isDragging={dragSnapshot.isDragging} isSelected={selectedTaskIds.has(task.id)} onToggle={() => onToggleTaskSelection(task.id)} onDoubleClick={() => onOpenTask(task)} />
+                        <TaskRow task={task} isDragging={dragSnapshot.isDragging} isSelected={selectedTaskIds.has(task.id)} onToggle={() => onToggleTaskSelection(task.id)} onDoubleClick={() => onOpenTask(task)} onAddToPriority={onAddToPriority} />
                       </div>
                     )}
                   </Draggable>
@@ -168,7 +169,7 @@ const CategoryColumn: React.FC<CategoryColumnProps> = ({
   );
 };
 
-const TaskRow: React.FC<{ task: Task; isDragging?: boolean; isSelected?: boolean; onToggle?: () => void; onDoubleClick?: () => void }> = ({ task, isDragging, isSelected, onToggle, onDoubleClick }) => {
+const TaskRow: React.FC<{ task: Task; isDragging?: boolean; isSelected?: boolean; onToggle?: () => void; onDoubleClick?: () => void; onAddToPriority?: (task: Task) => void }> = ({ task, isDragging, isSelected, onToggle, onDoubleClick, onAddToPriority }) => {
   const priorityColors: Record<string, string> = {
     URGENT: 'bg-destructive/10 text-destructive',
     HIGH: 'bg-[hsl(var(--priority-high))]/10 text-[hsl(var(--priority-high))]',
@@ -176,28 +177,64 @@ const TaskRow: React.FC<{ task: Task; isDragging?: boolean; isSelected?: boolean
     LOW: 'bg-[hsl(var(--priority-low))]/10 text-[hsl(var(--priority-low))]',
   };
 
+  // Mobile swipe-to-prioritize
+  const touchStartX = useRef<number | null>(null);
+  const [swipeOffset, setSwipeOffset] = useState(0);
+
+  const onTouchStart = useCallback((e: React.TouchEvent) => {
+    touchStartX.current = e.touches[0].clientX;
+  }, []);
+
+  const onTouchMove = useCallback((e: React.TouchEvent) => {
+    if (touchStartX.current === null) return;
+    const dx = e.touches[0].clientX - touchStartX.current;
+    if (dx > 0) setSwipeOffset(Math.min(dx, 100));
+  }, []);
+
+  const onTouchEnd = useCallback(() => {
+    if (swipeOffset >= 80 && onAddToPriority) {
+      onAddToPriority(task);
+    }
+    setSwipeOffset(0);
+    touchStartX.current = null;
+  }, [swipeOffset, onAddToPriority, task]);
+
   return (
-    <div
-      onDoubleClick={onDoubleClick}
-      className={`flex items-center gap-2 p-2 rounded-md hover:bg-muted/50 transition-colors text-sm cursor-grab ${
-      isDragging ? 'shadow-lg bg-card border border-border' : ''
-    } ${isSelected ? 'bg-primary/10 ring-1 ring-primary/30' : ''}`}>
-      <input
-        type="checkbox"
-        checked={!!isSelected}
-        onChange={onToggle}
-        onClick={e => e.stopPropagation()}
-        className="h-3.5 w-3.5 rounded border-border accent-primary flex-shrink-0"
-      />
-      <span className="flex-1 truncate text-foreground">{task.title}</span>
-      <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${priorityColors[task.priority] || ''}`}>
-        {task.priority}
-      </Badge>
-      {task.due_date && (
-        <span className="text-[10px] text-muted-foreground whitespace-nowrap">
-          {new Date(task.due_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
-        </span>
+    <div className="relative overflow-hidden rounded-md">
+      {swipeOffset > 0 && (
+        <div className="absolute inset-0 flex items-center pl-3 bg-primary/20 rounded-md">
+          <Star className={`h-4 w-4 transition-all ${swipeOffset >= 80 ? 'text-primary fill-primary scale-125' : 'text-primary/50'}`} />
+        </div>
       )}
+      <div
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
+        onDoubleClick={onDoubleClick}
+        style={{ transform: `translateX(${swipeOffset}px)`, transition: swipeOffset === 0 ? 'transform 0.2s' : 'none' }}
+        className={`flex items-center gap-2 p-2 rounded-md hover:bg-muted/50 transition-colors text-sm cursor-grab bg-card ${
+        isDragging ? 'shadow-lg bg-card border border-border' : ''
+      } ${isSelected ? 'bg-primary/10 ring-1 ring-primary/30' : ''}`}>
+        <input
+          type="checkbox"
+          checked={!!isSelected}
+          onChange={onToggle}
+          onClick={e => e.stopPropagation()}
+          className="h-3.5 w-3.5 rounded border-border accent-primary flex-shrink-0"
+        />
+        {task.is_priority && (
+          <Star className="h-3 w-3 text-primary fill-primary flex-shrink-0" />
+        )}
+        <span className="flex-1 truncate text-foreground">{task.title}</span>
+        <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${priorityColors[task.priority] || ''}`}>
+          {task.priority}
+        </Badge>
+        {task.due_date && (
+          <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+            {new Date(task.due_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+          </span>
+        )}
+      </div>
     </div>
   );
 };

@@ -698,7 +698,7 @@ serve(async (req) => {
 
           const { data: candidates } = await supabase
             .from('tasks')
-            .select('id, title, category, priority, estimate_minutes, due_date, pushed_count, status, assignment_id, is_priority, created_at')
+            .select('id, title, category, priority, estimate_minutes, due_date, pushed_count, status, assignment_id, is_priority, priority_rank, created_at')
             .in('id', allCandidateIds)
             .not('status', 'in', '("DONE","BLOCKED")')
             .not('title', 'ilike', '%Test Task%')
@@ -722,8 +722,10 @@ serve(async (req) => {
             .map(task => {
               let score = priorityWeight[task.priority] || 1;
               
-              // Explicit user priority — strongest intentional signal
-              if ((task as any).is_priority) score += 12;
+              // Explicit user priority — base +10, rank bonus up to +5
+              if ((task as any).is_priority) {
+                score += 10 + Math.max(5 - ((task as any).priority_rank ?? 0), 0);
+              }
               
               // Topic-mapped — organizational nudge only (not the same as user priority)
               if (mappedIds.includes(task.id)) score += 2;

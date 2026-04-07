@@ -3551,6 +3551,7 @@ export type Database = {
           is_priority: boolean
           is_scheduled: boolean
           priority: Database["public"]["Enums"]["task_priority"]
+          priority_rank: number | null
           pushed_count: number | null
           reminder_minutes: number | null
           scheduling_context: Json | null
@@ -3577,6 +3578,7 @@ export type Database = {
           is_priority?: boolean
           is_scheduled?: boolean
           priority?: Database["public"]["Enums"]["task_priority"]
+          priority_rank?: number | null
           pushed_count?: number | null
           reminder_minutes?: number | null
           scheduling_context?: Json | null
@@ -3603,6 +3605,7 @@ export type Database = {
           is_priority?: boolean
           is_scheduled?: boolean
           priority?: Database["public"]["Enums"]["task_priority"]
+          priority_rank?: number | null
           pushed_count?: number | null
           reminder_minutes?: number | null
           scheduling_context?: Json | null
