@@ -206,6 +206,17 @@ const TopicGroupPanel: React.FC<TopicGroupPanelProps> = ({
               />
               <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${PRIORITY_COLORS[task.priority] ? 'bg-current ' + PRIORITY_COLORS[task.priority] : 'bg-muted-foreground'}`} />
               <span className="flex-1 truncate text-foreground/90">{task.title}</span>
+              {task.is_priority ? (
+                <Star className="h-3 w-3 text-primary fill-primary flex-shrink-0" />
+              ) : onAddToPriority ? (
+                <button
+                  onClick={(e) => { e.stopPropagation(); onAddToPriority(task); }}
+                  className="h-5 w-5 flex items-center justify-center rounded hover:bg-primary/20 text-muted-foreground hover:text-primary transition-colors flex-shrink-0"
+                  title="Add to My Priorities"
+                >
+                  <Plus className="h-3 w-3" />
+                </button>
+              ) : null}
               {task.due_date && (
                 <span className="text-[10px] text-muted-foreground whitespace-nowrap">
                   {new Date(task.due_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
