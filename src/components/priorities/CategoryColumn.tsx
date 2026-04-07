@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useCallback } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Droppable, Draggable } from '@hello-pangea/dnd';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -177,64 +177,40 @@ const TaskRow: React.FC<{ task: Task; isDragging?: boolean; isSelected?: boolean
     LOW: 'bg-[hsl(var(--priority-low))]/10 text-[hsl(var(--priority-low))]',
   };
 
-  // Mobile swipe-to-prioritize
-  const touchStartX = useRef<number | null>(null);
-  const [swipeOffset, setSwipeOffset] = useState(0);
-
-  const onTouchStart = useCallback((e: React.TouchEvent) => {
-    touchStartX.current = e.touches[0].clientX;
-  }, []);
-
-  const onTouchMove = useCallback((e: React.TouchEvent) => {
-    if (touchStartX.current === null) return;
-    const dx = e.touches[0].clientX - touchStartX.current;
-    if (dx > 0) setSwipeOffset(Math.min(dx, 100));
-  }, []);
-
-  const onTouchEnd = useCallback(() => {
-    if (swipeOffset >= 80 && onAddToPriority) {
-      onAddToPriority(task);
-    }
-    setSwipeOffset(0);
-    touchStartX.current = null;
-  }, [swipeOffset, onAddToPriority, task]);
-
   return (
-    <div className="relative overflow-hidden rounded-md">
-      {swipeOffset > 0 && (
-        <div className="absolute inset-0 flex items-center pl-3 bg-primary/20 rounded-md">
-          <Star className={`h-4 w-4 transition-all ${swipeOffset >= 80 ? 'text-primary fill-primary scale-125' : 'text-primary/50'}`} />
-        </div>
-      )}
-      <div
-        onTouchStart={onTouchStart}
-        onTouchMove={onTouchMove}
-        onTouchEnd={onTouchEnd}
-        onDoubleClick={onDoubleClick}
-        style={{ transform: `translateX(${swipeOffset}px)`, transition: swipeOffset === 0 ? 'transform 0.2s' : 'none' }}
-        className={`flex items-center gap-2 p-2 rounded-md hover:bg-muted/50 transition-colors text-sm cursor-grab bg-card ${
+    <div
+      onDoubleClick={onDoubleClick}
+      className={`flex items-center gap-2 p-2 rounded-md hover:bg-muted/50 transition-colors text-sm cursor-grab bg-card ${
         isDragging ? 'shadow-lg bg-card border border-border' : ''
-      } ${isSelected ? 'bg-primary/10 ring-1 ring-primary/30' : ''}`}>
-        <input
-          type="checkbox"
-          checked={!!isSelected}
-          onChange={onToggle}
-          onClick={e => e.stopPropagation()}
-          className="h-3.5 w-3.5 rounded border-border accent-primary flex-shrink-0"
-        />
-        {task.is_priority && (
-          <Star className="h-3 w-3 text-primary fill-primary flex-shrink-0" />
-        )}
-        <span className="flex-1 truncate text-foreground">{task.title}</span>
-        <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${priorityColors[task.priority] || ''}`}>
-          {task.priority}
-        </Badge>
-        {task.due_date && (
-          <span className="text-[10px] text-muted-foreground whitespace-nowrap">
-            {new Date(task.due_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
-          </span>
-        )}
-      </div>
+      } ${isSelected ? 'bg-primary/10 ring-1 ring-primary/30' : ''}`}
+    >
+      <input
+        type="checkbox"
+        checked={!!isSelected}
+        onChange={onToggle}
+        onClick={e => e.stopPropagation()}
+        className="h-3.5 w-3.5 rounded border-border accent-primary flex-shrink-0"
+      />
+      {task.is_priority ? (
+        <Star className="h-3 w-3 text-primary fill-primary flex-shrink-0" />
+      ) : onAddToPriority ? (
+        <button
+          onClick={(e) => { e.stopPropagation(); onAddToPriority(task); }}
+          className="h-5 w-5 flex items-center justify-center rounded hover:bg-primary/20 text-muted-foreground hover:text-primary transition-colors flex-shrink-0"
+          title="Add to My Priorities"
+        >
+          <Plus className="h-3 w-3" />
+        </button>
+      ) : null}
+      <span className="flex-1 truncate text-foreground">{task.title}</span>
+      <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${priorityColors[task.priority] || ''}`}>
+        {task.priority}
+      </Badge>
+      {task.due_date && (
+        <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+          {new Date(task.due_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+        </span>
+      )}
     </div>
   );
 };
