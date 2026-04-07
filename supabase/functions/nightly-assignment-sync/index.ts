@@ -72,16 +72,32 @@ serve(async (req) => {
         }
 
         // SECONDARY DEDUP: exact title match for legacy tasks without assignment_id
-        const { data: titleMatches } = await supabase
+        // Use two separate .eq() queries to avoid PostgREST .or() comma-delimiter bugs
+        const { data: exactMatch } = await supabase
           .from('tasks')
           .select('id, title, status')
           .eq('user_id', userId)
           .is('assignment_id', null)
           .is('completed_at', null)
           .not('status', 'eq', 'DONE')
-          .or(`title.eq.${assignment.title},title.eq.📚 ${assignment.title}`);
+          .eq('title', assignment.title)
+          .limit(1);
 
-        if (titleMatches && titleMatches.length > 0) {
+        const { data: emojiMatch } = !exactMatch?.length
+          ? await supabase
+              .from('tasks')
+              .select('id, title, status')
+              .eq('user_id', userId)
+              .is('assignment_id', null)
+              .is('completed_at', null)
+              .not('status', 'eq', 'DONE')
+              .eq('title', `📚 ${assignment.title}`)
+              .limit(1)
+          : { data: null };
+
+        const titleMatches = [...(exactMatch || []), ...(emojiMatch || [])];
+
+        if (titleMatches.length > 0) {
           // Found a legacy task — link it and repair
           const legacyTask = titleMatches[0];
           console.log(`  🔗 Linking legacy task "${legacyTask.title}" to assignment "${assignment.title}" (id: ${assignment.id})`);
