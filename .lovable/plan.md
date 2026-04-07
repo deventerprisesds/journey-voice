@@ -1,38 +1,90 @@
 
 
-# Fix Build Error + Ensure All Tasks Get Mapped + Add `is_priority` Scoring
+# Status Check: Priority Lane UX — What's Done vs What's Missing
 
-## Build Error Fix
+## Done (implemented)
 
-**`src/pages/Assignments.tsx` line 483-487**: The `updates` object from `TaskDetailModal.onSave` contains client-only fields (`checklist_items`, `assignment_url`, `scheduling_context`) that Supabase rejects. Fix by destructuring out non-DB fields before the `.update()` call.
+| Item | Status |
+|------|--------|
+| `is_priority` boolean column on `tasks` table | Done (migration deployed) |
+| `is_priority` in Task TypeScript interface | Done |
+| Client-side scoring: `is_priority` +12 boost | Done (`schedulingCandidates.ts` line 47) |
+| Server-side scoring: `is_priority` +12 boost | Done (`nightly-schedule-builder` line 726) |
+| Topic-mapped boost reduced from +10 to +2 | Done (both client and server) |
+| Recency boost (+2 for ≤3 days, +1 for 4-7 days) | Done (both client and server) |
+| Urgency ladder (48h = +5, 3-7 days = +3) | Done (both client and server) |
+| Auto-classify tasks on create/update (DB trigger) | Done (trigger `notify_task_topic_classification` fires on INSERT/UPDATE) |
+| Build error fix (Assignments.tsx stripping client-only fields) | Done |
 
-## Current Mapping Gap — Confirmed
+## NOT built yet
 
-Tasks are only classified into topic groups when the user visits the Priorities page:
-- **Auto-classify on load**: classifies up to 10 unmapped tasks per visit
-- **Manual "Classify All" button**: handles the rest on demand
-- **No background classification**: tasks created via Kanban, voice, quick input, or assignment sync stay unmapped until a Priorities page visit
+| Item | Detail |
+|------|--------|
+| `priority_rank` column | No migration, no column in DB |
+| `priority_rank` in Task interface | Not added |
+| "My Priorities" lane component (`PriorityLane.tsx`) | Does not exist |
+| Drag-into-lane from category columns | No handler in `Priorities.tsx` |
+| Reorder within lane (updates rank) | Not implemented |
+| Drag-out / remove from lane | Not implemented |
+| Rank-aware scoring (replace flat +12 with `10 + max(5 - rank, 0)`) | Still flat +12 |
+| Mobile swipe-to-prioritize gesture | Not implemented |
+| Star icon badge on priority tasks across views | Not implemented |
 
-This means a large number of tasks can sit unmapped indefinitely if the user doesn't visit Priorities regularly.
+## Plan: Build the missing pieces
 
-## Fix: Auto-classify on task creation/update
+### 1. Database migration
+```sql
+ALTER TABLE tasks ADD COLUMN priority_rank integer DEFAULT null;
+```
 
-The `classify-task-topic` edge function already exists and handles single-task classification. The fix is to call it automatically when tasks are created or updated — not just from the Priorities page. This can be done via a Supabase database webhook trigger on the `tasks` table for INSERT and UPDATE operations, which already partially exists but needs to be verified and enabled.
+### 2. Type update -- `src/types/task.ts`
+Add `priority_rank?: number | null` to the Task interface.
 
-Alternatively, call `classify-task-topic` from the client after any task create/update operation (in `useUnifiedTasks` or wherever tasks are persisted). This ensures every task gets mapped without waiting for a Priorities page visit.
+### 3. Scoring update -- both locations
+Replace `if (task.is_priority) score += 12` with:
+```
+score += task.is_priority ? 10 + Math.max(5 - (task.priority_rank ?? 0), 0) : 0;
+```
+This gives: Rank 0 = +15, Rank 1 = +14, ..., Rank 5+ = +10 (floor). A non-priority task maxes out around +14 from all other signals combined, so even the lowest-ranked priority item (+10 base) plus its own signals will always outrank non-priority.
 
-## ±48h Overdue Boost
+Applied in:
+- `src/lib/schedulingCandidates.ts`
+- `supabase/functions/nightly-schedule-builder/index.ts`
 
-Confirmed: keeping overdue tasks within the `isDueSoon()` +3 boost is correct. No change needed.
+### 4. New component -- `src/components/priorities/PriorityLane.tsx`
+- Full-width horizontal lane above category columns
+- Renders tasks where `is_priority = true`, ordered by `priority_rank`
+- Each card shows star badge, task title, priority pill, remove (x) button
+- When empty: "Drag tasks here to prioritize" placeholder
+- Droppable target using existing `@hello-pangea/dnd`
 
-## Changes
+### 5. Update `src/pages/Priorities.tsx`
+- Query `is_priority` tasks on load, ordered by `priority_rank`
+- Render `PriorityLane` above category columns inside existing `DragDropContext`
+- Handle three drag flows:
+  - **Category to Lane**: set `is_priority = true`, assign `priority_rank` at drop index, re-index all lane items
+  - **Lane reorder**: re-index all `priority_rank` values, batch update
+  - **Lane to Category / remove button**: set `is_priority = false`, `priority_rank = null`, re-index remaining
+- Batch persist via Supabase after every change
+
+### 6. Mobile swipe gesture
+- Touch event handlers on task cards in category columns and in the `TaskRow` component
+- Right-swipe past 80px reveals star icon overlay
+- On release: adds task to bottom of priority lane, persists
+
+### 7. Star badge across views
+- Show a small star icon on priority tasks in Kanban, task grid, daily schedule, and assignment views by checking `is_priority` on the task object
+
+### Files changed
 
 | File | Change |
 |------|--------|
-| `src/pages/Assignments.tsx` | Strip `checklist_items`, `assignment_url`, `scheduling_context` from update payload before `.update()` — fixes build error |
-| `src/hooks/useUnifiedTasks.ts` | After every task INSERT or UPDATE, call the `classify-task-topic` edge function so all tasks get mapped automatically |
-| Migration | Add `is_priority boolean NOT NULL DEFAULT false` to `tasks` |
-| `src/types/task.ts` | Add `is_priority?: boolean` to Task interface |
-| `supabase/functions/nightly-schedule-builder/index.ts` | Query `is_priority`; boost `is_priority` tasks +12, reduce topic-mapped boost from +10 to +2; add recency boost (+2 for ≤3 days, +1 for 4-7 days) |
-| `src/lib/schedulingCandidates.ts` | Mirror server scoring: `is_priority` +12, mapped +2, recency boost, reorder due-date boosts (48h = +5, 3-7 days = +3) |
+| Migration SQL | Add `priority_rank` column |
+| `src/types/task.ts` | Add `priority_rank` field |
+| `src/components/priorities/PriorityLane.tsx` | New component |
+| `src/pages/Priorities.tsx` | Integrate lane, drag handlers, swipe, load priority tasks |
+| `src/components/priorities/CategoryColumn.tsx` | Add swipe gesture to `TaskRow` |
+| `src/lib/schedulingCandidates.ts` | Rank-aware scoring |
+| `supabase/functions/nightly-schedule-builder/index.ts` | Rank-aware scoring + query `priority_rank` |
+| `src/components/TaskCard.tsx` | Star badge for `is_priority` tasks |
 
