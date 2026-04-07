@@ -481,9 +481,11 @@ const Assignments: React.FC = () => {
           isOpen={!!selectedTask}
           onClose={() => setSelectedTask(null)}
           onSave={async (updates) => {
+            // Strip client-only fields that don't exist in the tasks table
+            const { checklist_items, assignment_url, scheduling_context, ...dbFields } = updates as any;
             const { error } = await supabase
               .from('tasks')
-              .update(updates)
+              .update(dbFields)
               .eq('id', selectedTask.id);
             if (!error) {
               toast.success('Updated');
