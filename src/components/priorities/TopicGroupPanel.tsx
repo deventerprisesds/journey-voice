@@ -28,6 +28,7 @@ interface TopicGroupPanelProps {
   selectedTaskIds: Set<string>;
   onToggleTaskSelection: (taskId: string) => void;
   onOpenTask: (task: Task) => void;
+  onAddToPriority?: (task: Task) => void;
   depth?: number;
   categoryKey?: string;
 }

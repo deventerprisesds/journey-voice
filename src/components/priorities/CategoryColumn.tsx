@@ -88,6 +88,7 @@ const CategoryColumn: React.FC<CategoryColumnProps> = ({
                           selectedTaskIds={selectedTaskIds}
                           onToggleTaskSelection={onToggleTaskSelection}
                           onOpenTask={onOpenTask}
+                          onAddToPriority={onAddToPriority}
                         />
                       </div>
                     )}
