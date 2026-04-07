@@ -72,16 +72,32 @@ serve(async (req) => {
         }
 
         // SECONDARY DEDUP: exact title match for legacy tasks without assignment_id
-        const { data: titleMatches } = await supabase
+        // Use two separate .eq() queries to avoid PostgREST .or() comma-delimiter bugs
+        const { data: exactMatch } = await supabase
           .from('tasks')
           .select('id, title, status')
           .eq('user_id', userId)
           .is('assignment_id', null)
           .is('completed_at', null)
           .not('status', 'eq', 'DONE')
-          .or(`title.eq.${assignment.title},title.eq.📚 ${assignment.title}`);
+          .eq('title', assignment.title)
+          .limit(1);
 
-        if (titleMatches && titleMatches.length > 0) {
+        const { data: emojiMatch } = !exactMatch?.length
+          ? await supabase
+              .from('tasks')
+              .select('id, title, status')
+              .eq('user_id', userId)
+              .is('assignment_id', null)
+              .is('completed_at', null)
+              .not('status', 'eq', 'DONE')
+              .eq('title', `📚 ${assignment.title}`)
+              .limit(1)
+          : { data: null };
+
+        const titleMatches = [...(exactMatch || []), ...(emojiMatch || [])];
+
+        if (titleMatches.length > 0) {
           // Found a legacy task — link it and repair
           const legacyTask = titleMatches[0];
           console.log(`  🔗 Linking legacy task "${legacyTask.title}" to assignment "${assignment.title}" (id: ${assignment.id})`);
@@ -144,7 +160,6 @@ serve(async (req) => {
           board_id: board.id,
           user_id: userId,
           assignment_id: assignment.id,
-          assignment_url: assignment.assignment_url || null,
           scheduling_context: { source },
         };
 
@@ -167,7 +182,12 @@ serve(async (req) => {
     await syncAssignments('assignments', 'EMBA');
     await syncAssignments('assignments_mit', 'MIT');
 
-    console.log(`[ASSIGNMENT_SYNC] Complete: ${created.length} created, ${repaired.length} repaired, ${skipped.length} skipped`);
+    const totalProcessed = created.length + repaired.length + skipped.length;
+    const skipRate = totalProcessed > 0 ? skipped.length / totalProcessed : 0;
+    if (skipRate > 0.9 && totalProcessed > 10) {
+      console.warn(`[ASSIGNMENT_SYNC] ⚠️ HIGH SKIP RATE: ${(skipRate * 100).toFixed(0)}% (${skipped.length}/${totalProcessed}). Possible dedup bug or all assignments already linked.`);
+    }
+
 
     // Log activity
     await supabase.from('activity_log').insert({
