@@ -1,71 +1,73 @@
 
 
-# Why Assignment Tasks Aren't Being Created — Root Cause Analysis
+# Revised Plan: External Calendar Reminders + AI Auto-Scheduling Fix
 
-## What the data shows
+## Assessment: What We Can Reuse
 
-- **469 assignments** exist across both tables (345 EMBA + 124 MIT)
-- **427 are skipped** every sync run, **0 created**
-- Only **3 tasks** in the entire database have `assignment_id` set (all DONE)
-- Upcoming assignments due Apr 9-24 have **zero linked tasks** — confirmed by querying for titles like "Bullard Houses" and "Zeta Energy"
+The existing infrastructure is well-suited for both fixes. Here's the reuse map:
 
-## Why wasn't this caught before?
+| Existing Component | Reuse For |
+|---|---|
+| `notification-scheduler` (cron, per-user loop, quiet hours, channel prefs) | Add external event scanning directly here — no new edge function needed |
+| `scheduled_notifications` table | Store calendar event reminders the same way as task reminders |
+| `notification-delivery` pipeline (push, Slack, email routing) | Delivers calendar reminders with zero changes |
+| `notification_prefs` table (channels, quiet hours, timezone) | Add 3 columns for calendar reminder config |
+| `NotificationSettings.tsx` UI | Add one new section for calendar event reminder toggles |
+| `_shared/tool-definitions.ts` | Update `parse_and_create_tasks` description |
+| `hybrid-assistant-api` DATA INTEGRITY RULES | Add one line about auto-scheduling |
 
-This bug has existed **since the function was first written**. It was never caught because:
+**Key decision: No new edge function.** The `notification-scheduler` already runs on a cron, loops through all users, queries their tasks, checks quiet hours, and inserts into `scheduled_notifications`. We add one function call inside that loop to also scan `external_calendar_events` for the same user. The `notification-delivery` function already dispatches to push/Slack/email based on the notification type — it requires zero changes.
 
-1. The first 3 tasks with `assignment_id` were likely created by a different code path (manual creation or an earlier version of the sync), not by this function
-2. The function reports `status: completed` with `skipped_count: 427` — it looks like a successful run. There are no error logs. The skip is silent because the broken `.or()` query returns results (false positives from malformed filter syntax) rather than throwing an error
-3. The nightly cron invokes it, it "succeeds", and moves on. Nobody noticed 0 creates because the activity log just shows counts — it never logged warnings about unexpected skip rates
+---
 
-## The actual bug (line 82)
+## Fix 1: External Calendar Event Reminders
 
-```typescript
-.or(`title.eq.${assignment.title},title.eq.📚 ${assignment.title}`);
-```
+### Database migration
+Add 3 columns to `notification_prefs`:
+- `calendar_reminders_enabled` (boolean, default `true`)
+- `calendar_reminder_minutes` (integer, default `15`)
+- `calendar_reminder_channels` (text array, default `{'PUSH'}`)
 
-PostgREST uses commas as delimiters inside `.or()`. When a title contains a comma (e.g., `"Deficits and Debt: The U.S. Current Account"`), the filter breaks apart into malformed fragments. Some fragments match unrelated tasks, producing false positives that cause the assignment to be skipped. Since most assignment titles contain colons, commas, or parentheses, nearly all 469 assignments hit this path and get incorrectly skipped.
+### Backend: `notification-scheduler/index.ts`
+Inside `processUserNotifications()`, after the existing task processing, add a new block:
+1. Check if `prefs.calendar_reminders_enabled` is true
+2. Query `external_calendar_events` for this user where `start_time` is within the next `calendar_reminder_minutes + 5` minutes and in the future
+3. For each event, check for an existing `scheduled_notifications` row with matching `notification_type = 'calendar_event_reminder'` and a metadata match on `external_event_id` to avoid duplicates
+4. Insert a `scheduled_notifications` row with `scheduled_for` = event start minus `calendar_reminder_minutes`, using `notification_type = 'calendar_event_reminder'`
 
-## The fix
+The existing `notification-delivery` already handles any notification type — it reads title/body and dispatches via `send-push-notification`. No changes needed there.
 
-Replace the unsafe `.or()` with two separate `.eq()` queries:
+### Frontend: `NotificationSettings.tsx`
+Add a "Calendar Event Reminders" card section with:
+- Toggle: Enable/disable calendar event reminders
+- Dropdown: Lead time (5, 10, 15, 30, 60 minutes)
+- Channel checkboxes: Push, Slack, Email
 
-```typescript
-const { data: exactMatch } = await supabase
-  .from('tasks')
-  .select('id, title, status')
-  .eq('user_id', userId)
-  .is('assignment_id', null)
-  .is('completed_at', null)
-  .not('status', 'eq', 'DONE')
-  .eq('title', assignment.title)
-  .limit(1);
+Reads/writes the 3 new `notification_prefs` columns.
 
-const { data: emojiMatch } = !exactMatch?.length 
-  ? await supabase
-      .from('tasks')
-      .select('id, title, status')
-      .eq('user_id', userId)
-      .is('assignment_id', null)
-      .is('completed_at', null)
-      .not('status', 'eq', 'DONE')
-      .eq('title', `📚 ${assignment.title}`)
-      .limit(1)
-  : { data: null };
+---
 
-const titleMatches = [...(exactMatch || []), ...(emojiMatch || [])];
-```
+## Fix 2: AI Stops Asking for Specific Times
 
-Also add a warning log when skip rate is abnormally high (>90%) to catch similar issues in the future.
+### `_shared/tool-definitions.ts`
+Update `parse_and_create_tasks` description to append:
+> "IMPORTANT: When the user says 'this week', 'sometime soon', or any vague timeframe, set auto_schedule to true and DO NOT ask for a specific time. The batch scheduler will find the optimal slot."
 
-## After fix: trigger manual sync
+### `hybrid-assistant-api/index.ts`
+Add one line to the DATA INTEGRITY RULES block (line 452):
+> "When a user asks to create/add/schedule a task, call parse_and_create_tasks immediately with auto_schedule: true. NEVER ask the user for a specific time or day — the scheduler handles placement."
 
-Once deployed, invoke the function manually to create tasks for all upcoming assignments. This will populate the Focus View, Weekly Agenda, and scheduling pipeline with the ~40+ assignments due in the next 3 weeks.
+---
 
-## Files changed
+## Files Changed
 
-| File | Change |
-|------|--------|
-| `supabase/functions/nightly-assignment-sync/index.ts` | Replace unsafe `.or()` with two safe `.eq()` queries; add high-skip-rate warning log |
+| File | Change | New? |
+|---|---|---|
+| `notification_prefs` table (migration) | Add 3 calendar reminder columns | Migration |
+| `supabase/functions/notification-scheduler/index.ts` | Add `external_calendar_events` scan inside existing user loop | Edit |
+| `src/components/NotificationSettings.tsx` | Add calendar reminder settings section | Edit |
+| `supabase/functions/_shared/tool-definitions.ts` | Update `parse_and_create_tasks` description | Edit |
+| `supabase/functions/hybrid-assistant-api/index.ts` | Add auto-schedule guardrail to DATA INTEGRITY RULES | Edit |
 
-One edge function redeployed, then triggered manually.
+No new edge functions. No new cron jobs. No new tables. Maximum reuse of existing pipeline.
 
