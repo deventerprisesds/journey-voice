@@ -289,7 +289,10 @@ const NotificationSettings = () => {
     quiet_hours_start: '22:00',
     quiet_hours_end: '08:00',
     timezone: 'UTC',
-    channels: ['EMAIL']
+    channels: ['EMAIL'],
+    calendar_reminders_enabled: true,
+    calendar_reminder_minutes: 15,
+    calendar_reminder_channels: ['PUSH']
   });
   const [isSaving, setIsSaving] = useState(false);
   const [phone, setPhone] = useState('');
@@ -404,7 +407,10 @@ const NotificationSettings = () => {
           quiet_hours_start: prefsData.quiet_hours_start ?? '22:00',
           quiet_hours_end: prefsData.quiet_hours_end ?? '08:00',
           timezone: prefsData.timezone ?? 'UTC',
-          channels: (prefsData.channels ?? ['EMAIL']) as NotificationChannel[]
+          channels: (prefsData.channels ?? ['EMAIL']) as NotificationChannel[],
+          calendar_reminders_enabled: (prefsData as any).calendar_reminders_enabled ?? true,
+          calendar_reminder_minutes: (prefsData as any).calendar_reminder_minutes ?? 15,
+          calendar_reminder_channels: (prefsData as any).calendar_reminder_channels ?? ['PUSH']
         });
       }
       const { data: profileData } = await supabase
@@ -436,7 +442,10 @@ const NotificationSettings = () => {
           quiet_hours_start: parsed.quiet_hours_start ?? '22:00',
           quiet_hours_end: parsed.quiet_hours_end ?? '08:00',
           timezone: parsed.timezone ?? 'UTC',
-          channels: parsed.channels ?? ['EMAIL']
+          channels: parsed.channels ?? ['EMAIL'],
+          calendar_reminders_enabled: parsed.calendar_reminders_enabled ?? true,
+          calendar_reminder_minutes: parsed.calendar_reminder_minutes ?? 15,
+          calendar_reminder_channels: parsed.calendar_reminder_channels ?? ['PUSH']
         });
       } catch {}
     }
