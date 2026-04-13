@@ -2263,6 +2263,9 @@ export type Database = {
       }
       notification_prefs: {
         Row: {
+          calendar_reminder_channels: string[]
+          calendar_reminder_minutes: number
+          calendar_reminders_enabled: boolean
           channels: Database["public"]["Enums"]["notification_channel"][] | null
           created_at: string
           daily_digest_enabled: boolean | null
@@ -2278,6 +2281,9 @@ export type Database = {
           weekly_digest_enabled: boolean | null
         }
         Insert: {
+          calendar_reminder_channels?: string[]
+          calendar_reminder_minutes?: number
+          calendar_reminders_enabled?: boolean
           channels?:
             | Database["public"]["Enums"]["notification_channel"][]
             | null
@@ -2295,6 +2301,9 @@ export type Database = {
           weekly_digest_enabled?: boolean | null
         }
         Update: {
+          calendar_reminder_channels?: string[]
+          calendar_reminder_minutes?: number
+          calendar_reminders_enabled?: boolean
           channels?:
             | Database["public"]["Enums"]["notification_channel"][]
             | null

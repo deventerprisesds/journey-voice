@@ -28,6 +28,9 @@ interface NotificationPrefs {
   quiet_hours_end: string;
   timezone: string;
   channels: string[];
+  calendar_reminders_enabled: boolean;
+  calendar_reminder_minutes: number;
+  calendar_reminder_channels: string[];
 }
 
 serve(async (req) => {
@@ -168,6 +171,14 @@ async function processUserNotifications(
   if (!inQuietHours && prefs.weekly_digest_enabled && shouldSendWeeklyDigest(now)) {
     const weeklyDigest = generateWeeklyDigest(tasks || [], prefs.user_id, now);
     if (weeklyDigest) notifications.push(weeklyDigest);
+  }
+
+  // Process external calendar event reminders
+  if (prefs.calendar_reminders_enabled) {
+    const calendarReminders = await generateCalendarEventReminders(
+      supabaseClient, prefs, now, inQuietHours
+    );
+    notifications.push(...calendarReminders);
   }
 
   return notifications;
@@ -381,6 +392,85 @@ function shouldSendDailyDigest(now: Date): boolean {
 function shouldSendWeeklyDigest(now: Date): boolean {
   // Send weekly digest on Sunday at 9 AM
   return now.getDay() === 0 && now.getHours() === 9 && now.getMinutes() < 15;
+}
+
+async function generateCalendarEventReminders(
+  supabaseClient: any,
+  prefs: NotificationPrefs,
+  now: Date,
+  inQuietHours: boolean
+): Promise<any[]> {
+  const notifications: any[] = [];
+  const leadMinutes = prefs.calendar_reminder_minutes || 15;
+  
+  // Look for events starting within the next (leadMinutes + 5) minutes
+  const windowEnd = new Date(now.getTime() + (leadMinutes + 5) * 60 * 1000);
+  
+  const { data: events, error } = await supabaseClient
+    .from('external_calendar_events')
+    .select('*')
+    .eq('user_id', prefs.user_id)
+    .gt('start_time', now.toISOString())
+    .lte('start_time', windowEnd.toISOString());
+
+  if (error) {
+    console.error(`Error fetching calendar events for user ${prefs.user_id}:`, error);
+    return notifications;
+  }
+
+  if (!events || events.length === 0) return notifications;
+
+  for (const event of events) {
+    // Calculate when the reminder should fire
+    const eventStart = new Date(event.start_time);
+    let scheduledFor = new Date(eventStart.getTime() - leadMinutes * 60 * 1000);
+    
+    // If the reminder time is in the past, schedule for now + 1 min
+    if (scheduledFor <= now) {
+      scheduledFor = new Date(now.getTime() + 60 * 1000);
+    }
+
+    // Check for existing reminder to avoid duplicates
+    const { data: existing } = await supabaseClient
+      .from('scheduled_notifications')
+      .select('id')
+      .eq('user_id', prefs.user_id)
+      .eq('notification_type', 'calendar_event_reminder')
+      .filter('metadata->>external_event_id', 'eq', event.external_event_id)
+      .is('failed_at', null)
+      .limit(1);
+
+    if (existing && existing.length > 0) continue;
+
+    // Handle quiet hours — defer to after quiet hours end
+    let queuedDuringQuiet = false;
+    let originalScheduledFor = null;
+    if (inQuietHours) {
+      originalScheduledFor = scheduledFor.toISOString();
+      scheduledFor = getQuietHoursEnd(scheduledFor, prefs);
+      queuedDuringQuiet = true;
+    }
+
+    notifications.push({
+      user_id: prefs.user_id,
+      notification_type: 'calendar_event_reminder',
+      title: `📅 ${event.title}`,
+      body: `Starting in ${leadMinutes} minutes${event.location ? ` • ${event.location}` : ''}`,
+      scheduled_for: scheduledFor.toISOString(),
+      queued_during_quiet: queuedDuringQuiet,
+      original_scheduled_for: originalScheduledFor,
+      metadata: {
+        external_event_id: event.external_event_id,
+        event_start: event.start_time,
+        event_end: event.end_time,
+        calendar_id: event.calendar_id,
+        channels: prefs.calendar_reminder_channels || ['PUSH']
+      }
+    });
+  }
+
+  console.log(`Generated ${notifications.length} calendar event reminders for user ${prefs.user_id}`);
+  return notifications;
 }
 
 async function processPendingNotifications(supabaseClient: any, now: Date): Promise<void> {
