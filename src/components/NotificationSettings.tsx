@@ -155,6 +155,9 @@ interface NotificationPrefs {
   quiet_hours_end: string;
   timezone: string;
   channels: NotificationChannel[];
+  calendar_reminders_enabled: boolean;
+  calendar_reminder_minutes: number;
+  calendar_reminder_channels: string[];
 }
 
 interface CalendarConnection {
