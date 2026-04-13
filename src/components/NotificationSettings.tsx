@@ -690,7 +690,77 @@ const NotificationSettings = () => {
         </CardContent>
       </Card>
 
-      {/* Quiet Hours */}
+      {/* Calendar Event Reminders */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Calendar className="h-5 w-5" />
+            Calendar Event Reminders
+          </CardTitle>
+          <CardDescription>Get notified before external calendar events start</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <Label className="text-sm font-medium">Enable Reminders</Label>
+              <p className="text-xs text-muted-foreground">Send alerts before synced calendar events</p>
+            </div>
+            <Switch
+              checked={prefs.calendar_reminders_enabled}
+              onCheckedChange={(checked) => setPrefs({ ...prefs, calendar_reminders_enabled: checked })}
+            />
+          </div>
+
+          {prefs.calendar_reminders_enabled && (
+            <>
+              <div className="space-y-2">
+                <Label className="text-sm font-medium">Lead Time</Label>
+                <select
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  value={prefs.calendar_reminder_minutes}
+                  onChange={(e) => setPrefs({ ...prefs, calendar_reminder_minutes: parseInt(e.target.value) })}
+                >
+                  <option value={5}>5 minutes before</option>
+                  <option value={10}>10 minutes before</option>
+                  <option value={15}>15 minutes before</option>
+                  <option value={30}>30 minutes before</option>
+                  <option value={60}>1 hour before</option>
+                </select>
+              </div>
+
+              <div className="space-y-2">
+                <Label className="text-sm font-medium">Reminder Channels</Label>
+                <p className="text-xs text-muted-foreground">Choose how you want to be reminded</p>
+                <div className="space-y-2">
+                  {[
+                    { key: 'PUSH', label: 'Push Notification', icon: <Smartphone className="h-4 w-4" /> },
+                    { key: 'SLACK', label: 'Slack', icon: <MessageSquare className="h-4 w-4" /> },
+                    { key: 'EMAIL', label: 'Email', icon: <Mail className="h-4 w-4" /> },
+                  ].map(({ key, label, icon }) => (
+                    <div key={key} className="flex items-center space-x-2">
+                      <Checkbox
+                        id={`cal-reminder-${key}`}
+                        checked={prefs.calendar_reminder_channels.includes(key)}
+                        onCheckedChange={(checked) => {
+                          const newChannels = checked
+                            ? [...prefs.calendar_reminder_channels, key]
+                            : prefs.calendar_reminder_channels.filter(c => c !== key);
+                          setPrefs({ ...prefs, calendar_reminder_channels: newChannels });
+                        }}
+                      />
+                      <Label htmlFor={`cal-reminder-${key}`} className="flex items-center gap-2 text-sm cursor-pointer">
+                        {icon} {label}
+                      </Label>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+
       <Card>
         <CardHeader>
           <CardTitle>Quiet Hours</CardTitle>
