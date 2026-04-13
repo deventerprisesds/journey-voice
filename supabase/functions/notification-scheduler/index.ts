@@ -28,6 +28,9 @@ interface NotificationPrefs {
   quiet_hours_end: string;
   timezone: string;
   channels: string[];
+  calendar_reminders_enabled: boolean;
+  calendar_reminder_minutes: number;
+  calendar_reminder_channels: string[];
 }
 
 serve(async (req) => {
@@ -168,6 +171,14 @@ async function processUserNotifications(
   if (!inQuietHours && prefs.weekly_digest_enabled && shouldSendWeeklyDigest(now)) {
     const weeklyDigest = generateWeeklyDigest(tasks || [], prefs.user_id, now);
     if (weeklyDigest) notifications.push(weeklyDigest);
+  }
+
+  // Process external calendar event reminders
+  if (prefs.calendar_reminders_enabled) {
+    const calendarReminders = await generateCalendarEventReminders(
+      supabaseClient, prefs, now, inQuietHours
+    );
+    notifications.push(...calendarReminders);
   }
 
   return notifications;

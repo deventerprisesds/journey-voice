@@ -135,7 +135,7 @@ export function getToolDefinitions(): ToolDefinition[] {
     {
       type: "function",
       name: "parse_and_create_tasks",
-      description: "Parse natural language into tasks using AI and create them. Handles multiple tasks, date parsing ('today', 'tomorrow', 'next week'), categories, priorities, and optional auto-scheduling. Use this when user describes tasks in conversational language rather than explicit field values.",
+      description: "Parse natural language into tasks using AI and create them. Handles multiple tasks, date parsing ('today', 'tomorrow', 'next week'), categories, priorities, and optional auto-scheduling. Use this when user describes tasks in conversational language rather than explicit field values. IMPORTANT: When the user says 'this week', 'sometime soon', 'when I have time', or any vague timeframe, set auto_schedule to true and DO NOT ask for a specific time or day. The batch scheduler will find the optimal slot automatically. Only ask for clarification if the task description itself is ambiguous (not the timing).",
       parameters: {
         type: "object",
         properties: {

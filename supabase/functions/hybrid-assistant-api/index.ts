@@ -449,7 +449,8 @@ async function handleStreamingRequest(
 - For "what can I work on": use get_tasks(status: "ACTIVE").
 - For life-area queries ("life tasks", "career items"): use get_tasks with the category filter.
 - For ready-now queries: use get_tasks(status: "WORKABLE").
-- Always call a tool BEFORE listing tasks you don't already have in context.`);
+- Always call a tool BEFORE listing tasks you don't already have in context.
+- When a user asks to create, add, or schedule a task, call parse_and_create_tasks IMMEDIATELY with auto_schedule: true. NEVER ask the user for a specific time or day — the scheduler handles placement. Only ask for clarification if the task description itself is ambiguous.`);
     additionalInstructions = parts.join('\n\n');
   } else {
     const currentDateTime = getCurrentTimeString(userTimezone);
