@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { DEFAULT_SCHEDULING_CONFIG } from '@/config/schedulingRules';
 import { format } from 'date-fns';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
@@ -9,16 +8,16 @@ import { Input } from '@/components/ui/input';
 import {
   Sunrise, Coffee, Sunset, Moon, Calendar, Send, Sparkles,
   CheckCircle2, Clock, AlertTriangle, ArrowRight, SkipForward,
-  Loader2, Info
+  Loader2, Info, BookOpen
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Task, ExternalCalendarEvent } from '@/types/task';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useChatAssistant } from '@/hooks/useChatAssistant';
-import { getDefaultTimezone, getTodayInTimezone, getTimePartsInTimezone, formatTimeInTimezone } from '@/lib/date';
-import { scoreSchedulingCandidate, selectSchedulingCandidates } from '@/lib/schedulingCandidates';
+import { getDefaultTimezone, getTodayInTimezone, formatTimeInTimezone } from '@/lib/date';
 import { toast } from 'sonner';
+import { buildDailyReviewReasoning } from '@/utils/dailyReviewPipeline';
 
 interface DailyReviewModalProps {
   open: boolean;
@@ -28,36 +27,12 @@ interface DailyReviewModalProps {
   onTaskUpdate: () => void;
 }
 
-interface ScheduleReasoning {
-  greeting: string;
-  stats: {
-    scheduledCount: number;
-    rolledOverCount: number;
-    overdueCount: number;
-    externalEventCount: number;
-    externalBlockedMinutes: number;
-    autoScheduledCount: number;
-    backlogOverdue: number;
-  };
-  explanations: string[];
-  windowSummaries: { window: string; label: string; taskCount: number; capacityNote: string; categoryBreakdown: Record<string, number>; missingCategories: string[] }[];
-  missingExplanations: string[];
-}
-
 const windowIcons: Record<string, React.ReactNode> = {
   morning: <Sunrise className="h-4 w-4" />,
   business_hours: <Coffee className="h-4 w-4" />,
   after_work: <Sunset className="h-4 w-4" />,
   evening: <Moon className="h-4 w-4" />,
   weekends: <Calendar className="h-4 w-4" />,
-};
-
-const windowLabels: Record<string, string> = {
-  morning: 'Morning',
-  business_hours: 'Business Hours',
-  after_work: 'After Work',
-  evening: 'Evening',
-  weekends: 'Weekend',
 };
 
 const priorityColors: Record<string, string> = {
@@ -96,194 +71,11 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
     })();
   }, [open, user?.id]);
 
-  // Build reasoning from tasks + builder log
-  const reasoning = useMemo<ScheduleReasoning>(() => {
-    const scheduledToday = tasks.filter(t =>
-      t.start_time && new Date(t.start_time).toLocaleDateString('en-CA', { timeZone: tz }) === todayStr
-    );
-    // Scope rolled-over and overdue to TODAY's scheduled tasks only
-    const rolledOver = scheduledToday.filter(t =>
-      (t.pushed_count ?? 0) > 0 && t.status !== 'DONE' && !t.completed_at
-    );
-    const overdue = scheduledToday.filter(t =>
-      t.due_date && new Date(t.due_date) < new Date() && t.status !== 'DONE' && !t.completed_at
-    );
-    const autoScheduled = scheduledToday.filter(t =>
-      (t.scheduling_context as any)?.pre_schedule_status
-    );
-
-    // Backlog-wide counts for context (not displayed as primary stats)
-    const backlogOverdue = tasks.filter(t =>
-      t.due_date && new Date(t.due_date) < new Date() && t.status !== 'DONE' && !t.completed_at && !scheduledToday.includes(t)
-    ).length;
-
-    // External event minutes
-    const externalMinutes = externalEvents.reduce((sum, e) => {
-      const start = new Date(e.start_time).getTime();
-      const end = new Date(e.end_time).getTime();
-      return sum + Math.round((end - start) / 60000);
-    }, 0);
-
-    // Build reverse map: window name → eligible categories
-    const windowToCategories: Record<string, string[]> = {};
-    for (const [cat, mapping] of Object.entries(DEFAULT_SCHEDULING_CONFIG.categoryMappings)) {
-      for (const win of mapping.defaultTimeWindow) {
-        if (!windowToCategories[win]) windowToCategories[win] = [];
-        windowToCategories[win].push(cat);
-      }
-    }
-
-    // Window summaries
-    const windowNames = isWeekend ? ['weekends'] : ['morning', 'business_hours', 'after_work', 'evening'];
-    const windowSummaries = windowNames.map(w => {
-      const tasksInWindow = scheduledToday.filter(t => {
-        if (!t.start_time) return false;
-        const { hour } = getTimePartsInTimezone(t.start_time, tz);
-        if (w === 'morning') return hour >= 6 && hour < 9;
-        if (w === 'business_hours') return hour >= 9 && hour < 17;
-        if (w === 'after_work') return hour >= 17 && hour < 19;
-        if (w === 'evening') return hour >= 19 && hour < 23;
-        if (w === 'weekends') return true;
-        return false;
-      });
-      const totalMin = tasksInWindow.reduce((s, t) => s + (t.estimate_minutes || 60), 0);
-
-      // Category breakdown
-      const categoryBreakdown: Record<string, number> = {};
-      tasksInWindow.forEach(t => {
-        const cat = t.category || 'UNCATEGORIZED';
-        categoryBreakdown[cat] = (categoryBreakdown[cat] || 0) + 1;
-      });
-
-      // Missing categories: mapped to this window but no tasks placed
-      const expectedCats = windowToCategories[w] || [];
-      const missingCategories = expectedCats.filter(cat => !categoryBreakdown[cat]);
-
-      return {
-        window: w,
-        label: windowLabels[w] || w,
-        taskCount: tasksInWindow.length,
-        capacityNote: tasksInWindow.length > 0
-          ? `${tasksInWindow.length} task${tasksInWindow.length > 1 ? 's' : ''}, ~${totalMin} min`
-          : 'Empty',
-        categoryBreakdown,
-        missingCategories,
-      };
-    });
-
-    // Explanations
-    const explanations: string[] = [];
-    if (rolledOver.length > 0) {
-      explanations.push(`${rolledOver.length} task${rolledOver.length > 1 ? 's' : ''} rolled over from previous days (push count increased)`);
-    }
-    if (autoScheduled.length > 0) {
-      const topScorer = autoScheduled
-        .map(t => ({ t, score: scoreSchedulingCandidate(t) }))
-        .sort((a, b) => b.score - a.score)[0];
-      explanations.push(`${autoScheduled.length} task${autoScheduled.length > 1 ? 's' : ''} auto-scheduled from backlog — top: "${topScorer.t.title}" (score: ${topScorer.score})`);
-    }
-    if (externalEvents.length > 0) {
-      explanations.push(`${externalEvents.length} calendar event${externalEvents.length > 1 ? 's' : ''} blocking ${externalMinutes} min total`);
-    }
-    if ((builderLog as any)?.archived_stale > 0) {
-      explanations.push(`${(builderLog as any).archived_stale} stale tasks archived by the nightly builder`);
-    }
-
-    // Deterministic missing-window explanations using scheduling rules
-    const missingExplanations: string[] = [];
-    const emptyWindows = windowSummaries.filter(w => w.taskCount === 0);
-    if (emptyWindows.length > 0) {
-
-      const incompleteTasks = tasks.filter(t => t.status !== 'DONE');
-
-      emptyWindows.forEach(w => {
-        const eligibleCats = windowToCategories[w.window] || [];
-        const eligibleTasks = incompleteTasks.filter(t => eligibleCats.includes(t.category || ''));
-
-        // Check if window is fully blocked by calendar events
-        const windowDef = DEFAULT_SCHEDULING_CONFIG.timeWindows[w.window as keyof typeof DEFAULT_SCHEDULING_CONFIG.timeWindows];
-        if (windowDef) {
-          const windowStart = windowDef.start;
-          const windowEnd = windowDef.end;
-          const blockingEvents = externalEvents.filter(e => {
-            const eStart = new Date(e.start_time).getHours();
-            const eEnd = new Date(e.end_time).getHours();
-            return eStart < windowEnd && eEnd > windowStart;
-          });
-          const blockedMin = blockingEvents.reduce((sum, e) => {
-            const s = Math.max(new Date(e.start_time).getHours(), windowStart);
-            const end = Math.min(new Date(e.end_time).getHours(), windowEnd);
-            return sum + Math.max(0, (end - s) * 60);
-          }, 0);
-          const windowMin = (windowEnd - windowStart) * 60;
-          if (blockedMin >= windowMin && blockingEvents.length > 0) {
-            missingExplanations.push(`${w.label} is empty — fully blocked by ${blockingEvents.length} calendar event${blockingEvents.length > 1 ? 's' : ''} (${blockedMin} min)`);
-            return;
-          }
-        }
-
-        if (eligibleTasks.length === 0) {
-          // No tasks exist for mapped categories
-          missingExplanations.push(`${w.label} is empty — no ${eligibleCats.join('/')} tasks in your backlog`);
-        } else {
-          // Tasks exist — determine why they weren't scheduled here
-          const scheduledElsewhere = eligibleTasks.filter(t => t.start_time && new Date(t.start_time).toLocaleDateString('en-CA', { timeZone: tz }) !== todayStr);
-          const scheduledTodayOtherWindow = eligibleTasks.filter(t => t.start_time && new Date(t.start_time).toLocaleDateString('en-CA', { timeZone: tz }) === todayStr);
-          const unscheduled = eligibleTasks.filter(t => !t.start_time);
-
-          if (unscheduled.length > 0) {
-            // Unscheduled tasks exist — report their scores
-            const scored = unscheduled.map(t => ({ t, score: scoreSchedulingCandidate(t) })).sort((a, b) => b.score - a.score);
-            missingExplanations.push(`${w.label} is empty — ${unscheduled.length} eligible ${eligibleCats.join('/')} task${unscheduled.length > 1 ? 's' : ''} scored below scheduling threshold (highest score: ${scored[0].score})`);
-          } else if (scheduledElsewhere.length > 0) {
-            missingExplanations.push(`${w.label} is empty — ${scheduledElsewhere.length} ${eligibleCats.join('/')} task${scheduledElsewhere.length > 1 ? 's' : ''} scheduled on other days`);
-          } else if (scheduledTodayOtherWindow.length > 0) {
-            missingExplanations.push(`${w.label} is empty — ${scheduledTodayOtherWindow.length} ${eligibleCats.join('/')} task${scheduledTodayOtherWindow.length > 1 ? 's' : ''} already placed in other windows today`);
-          } else {
-            missingExplanations.push(`${w.label} is empty — all ${eligibleCats.join('/')} tasks are completed`);
-          }
-        }
-      });
-    }
-
-    // Assignment QC: check tasks with assignment_id, not just education category
-    const assignmentTasksToday = tasks.filter(t =>
-      (t as any).assignment_id && t.status !== 'DONE' && t.start_time &&
-      new Date(t.start_time).toLocaleDateString('en-CA', { timeZone: tz }) === todayStr
-    );
-    const pendingAssignments = tasks.filter(t =>
-      (t as any).assignment_id && t.status !== 'DONE' && !t.completed_at
-    );
-    if (assignmentTasksToday.length === 0 && pendingAssignments.length > 0) {
-      const withDueDate = pendingAssignments
-        .filter(t => t.due_date)
-        .sort((a, b) => new Date(a.due_date!).getTime() - new Date(b.due_date!).getTime());
-      if (withDueDate.length > 0) {
-        missingExplanations.push(`No assignment tasks scheduled today — ${pendingAssignments.length} assignment${pendingAssignments.length > 1 ? 's' : ''} pending, next due: "${withDueDate[0].title}" on ${format(new Date(withDueDate[0].due_date!), 'MMM d')}`);
-      } else {
-        missingExplanations.push(`No assignment tasks scheduled today — ${pendingAssignments.length} assignment${pendingAssignments.length > 1 ? 's' : ''} pending (no due dates set)`);
-      }
-    }
-
-    const hour = new Date().getHours();
-    const greetingWord = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
-
-    return {
-      greeting: `${greetingWord} — here's your day`,
-      stats: {
-        scheduledCount: scheduledToday.length,
-        rolledOverCount: rolledOver.length,
-        overdueCount: overdue.length,
-        externalEventCount: externalEvents.length,
-        externalBlockedMinutes: externalMinutes,
-        autoScheduledCount: autoScheduled.length,
-        backlogOverdue,
-      },
-      explanations,
-      windowSummaries,
-      missingExplanations,
-    };
-  }, [tasks, externalEvents, builderLog, todayStr, tz, isWeekend]);
+  // Build reasoning via structured pipeline
+  const reasoning = useMemo(() =>
+    buildDailyReviewReasoning(tasks, externalEvents, builderLog, tz, todayStr, isWeekend, user?.id ?? null),
+    [tasks, externalEvents, builderLog, todayStr, tz, isWeekend, user?.id]
+  );
 
   // Today's scheduled tasks sorted by time
   const scheduledToday = useMemo(() =>
@@ -298,18 +90,14 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
     if (!user?.id) return;
     setIsConfirming(true);
     try {
-      // Run nightly-schedule-builder in singleDay mode to fill gaps
       const { error } = await supabase.functions.invoke('nightly-schedule-builder', {
         body: { userId: user.id, singleDay: true }
       });
       if (error) throw error;
-
-      // Write confirmed date
       await supabase
         .from('notification_prefs')
         .update({ schedule_confirmed_date: todayStr } as any)
         .eq('user_id', user.id);
-
       toast.success('Schedule confirmed — gaps filled');
       onTaskUpdate();
       onClose();
@@ -323,7 +111,6 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
 
   const handleSkip = async () => {
     if (!user?.id) return;
-    // Mark as confirmed without filling gaps
     await supabase
       .from('notification_prefs')
       .update({ schedule_confirmed_date: todayStr } as any)
@@ -335,16 +122,11 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
     if (!chatInput.trim()) return;
     const msg = chatInput.trim();
     setChatInput('');
-
-    // Prepend context about today's schedule
     const contextPrefix = `[MORNING REVIEW CONTEXT]\nThe user is reviewing today's schedule (${todayStr}). Currently scheduled tasks: ${scheduledToday.map(t => `"${t.title}" at ${t.start_time ? formatTimeInTimezone(t.start_time, tz) : 'unset'}`).join(', ') || 'none'}. External events: ${externalEvents.map(e => `"${e.title}" ${formatTimeInTimezone(e.start_time, tz)}-${formatTimeInTimezone(e.end_time, tz)}`).join(', ') || 'none'}. Apply changes the user requests.\n\nUser message: `;
-
     await sendMessage(contextPrefix + msg);
-    // Refresh tasks after AI processes changes
     setTimeout(() => onTaskUpdate(), 2000);
   };
 
-  // Filter to only show assistant messages from the current session (after modal opened)
   // Track message count at modal open to filter out stale chat history
   const messageCountAtOpen = useRef(messages.length);
   useEffect(() => {
@@ -392,6 +174,18 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
                 <div className="bg-amber-500/5 border border-amber-500/20 rounded-lg p-3 text-center">
                   <div className="text-2xl font-bold text-amber-600">{reasoning.stats.rolledOverCount}</div>
                   <div className="text-xs text-amber-600/80">Rolled Over Today</div>
+                </div>
+              )}
+              {reasoning.stats.pendingAssignmentCount > 0 && (
+                <div className="bg-primary/5 border border-primary/20 rounded-lg p-3 text-center">
+                  <div className="text-2xl font-bold text-primary">
+                    {reasoning.stats.assignmentsScheduledToday}
+                    <span className="text-sm font-normal text-muted-foreground">/{reasoning.stats.pendingAssignmentCount}</span>
+                  </div>
+                  <div className="text-xs text-muted-foreground flex items-center justify-center gap-1">
+                    <BookOpen className="h-3 w-3" />
+                    Assignments
+                  </div>
                 </div>
               )}
             </div>
