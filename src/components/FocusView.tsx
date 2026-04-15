@@ -1591,6 +1591,13 @@ const FocusView: React.FC<FocusViewProps> = ({
           initialMinute={createModalMinute}
         />
       )}
+      <DailyReviewModal
+        open={showDailyReview}
+        onClose={() => setShowDailyReview(false)}
+        tasks={tasks}
+        externalEvents={externalEvents}
+        onTaskUpdate={onTaskUpdate}
+      />
     </DragDropContext>
   );
 };
