@@ -43,6 +43,7 @@ import QuickTaskInput from './QuickTaskInput';
 import TaskCreationModal from './TaskCreationModal';
 import { getOrCreateDefaultBoardId } from '@/utils/demoData';
 import { selectSchedulingCandidates } from '@/lib/schedulingCandidates';
+import DailyReviewModal from './DailyReviewModal';
 
 interface FocusViewProps {
   tasks: Task[];
@@ -137,9 +138,10 @@ const FocusView: React.FC<FocusViewProps> = ({
   const [isRerunning, setIsRerunning] = useState(false);
   const [isRescheduling, setIsRescheduling] = useState(false);
   const [externalEvents, setExternalEvents] = useState<ExternalCalendarEvent[]>([]);
+  const [showDailyReview, setShowDailyReview] = useState(false);
   const today = new Date();
   const [config, setConfig] = useState<SchedulingConfig>(DEFAULT_SCHEDULING_CONFIG);
-  
+
   const { user } = useAuth();
 
   // Load user's authoritative scheduling config
@@ -155,6 +157,24 @@ const FocusView: React.FC<FocusViewProps> = ({
     if (user?.id) {
       getOrCreateDefaultBoardId(user.id).then(setDefaultBoardId);
     }
+  }, [user?.id]);
+
+  // Check if daily review has been confirmed today
+  useEffect(() => {
+    if (!user?.id) return;
+    (async () => {
+      const tz = getDefaultTimezone();
+      const todayKey = getTodayInTimezone(tz);
+      const { data } = await supabase
+        .from('notification_prefs')
+        .select('schedule_confirmed_date')
+        .eq('user_id', user.id)
+        .maybeSingle();
+      const confirmedDate = (data as any)?.schedule_confirmed_date || '';
+      if (confirmedDate !== todayKey) {
+        setShowDailyReview(true);
+      }
+    })();
   }, [user?.id]);
 
   // Periodic delta sync + load external calendar events
@@ -1571,6 +1591,13 @@ const FocusView: React.FC<FocusViewProps> = ({
           initialMinute={createModalMinute}
         />
       )}
+      <DailyReviewModal
+        open={showDailyReview}
+        onClose={() => setShowDailyReview(false)}
+        tasks={tasks}
+        externalEvents={externalEvents}
+        onTaskUpdate={onTaskUpdate}
+      />
     </DragDropContext>
   );
 };
