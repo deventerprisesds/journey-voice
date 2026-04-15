@@ -376,7 +376,7 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
             <div className="grid grid-cols-2 gap-2">
               <div className="bg-card border border-border rounded-lg p-3 text-center">
                 <div className="text-2xl font-bold text-foreground">{reasoning.stats.scheduledCount}</div>
-                <div className="text-xs text-muted-foreground">Scheduled</div>
+                <div className="text-xs text-muted-foreground">Scheduled Today</div>
               </div>
               <div className="bg-card border border-border rounded-lg p-3 text-center">
                 <div className="text-2xl font-bold text-foreground">{reasoning.stats.externalEventCount}</div>
@@ -385,16 +385,21 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
               {reasoning.stats.overdueCount > 0 && (
                 <div className="bg-destructive/5 border border-destructive/20 rounded-lg p-3 text-center">
                   <div className="text-2xl font-bold text-destructive">{reasoning.stats.overdueCount}</div>
-                  <div className="text-xs text-destructive/80">Overdue</div>
+                  <div className="text-xs text-destructive/80">Overdue Today</div>
                 </div>
               )}
               {reasoning.stats.rolledOverCount > 0 && (
                 <div className="bg-amber-500/5 border border-amber-500/20 rounded-lg p-3 text-center">
                   <div className="text-2xl font-bold text-amber-600">{reasoning.stats.rolledOverCount}</div>
-                  <div className="text-xs text-amber-600/80">Rolled Over</div>
+                  <div className="text-xs text-amber-600/80">Rolled Over Today</div>
                 </div>
               )}
             </div>
+            {reasoning.stats.backlogOverdue > 0 && (
+              <p className="text-xs text-muted-foreground px-1">
+                + {reasoning.stats.backlogOverdue} overdue task{reasoning.stats.backlogOverdue > 1 ? 's' : ''} in backlog (not scheduled today)
+              </p>
+            )}
 
             {/* Schedule Reasoning */}
             {(reasoning.explanations.length > 0 || reasoning.missingExplanations.length > 0) && (
