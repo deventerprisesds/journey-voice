@@ -160,17 +160,67 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
     }
 
     // Missing explanations
+    // Deterministic missing-window explanations using scheduling rules
     const missingExplanations: string[] = [];
     const emptyWindows = windowSummaries.filter(w => w.taskCount === 0);
     if (emptyWindows.length > 0) {
-      const categories = new Set(tasks.filter(t => t.status !== 'DONE').map(t => t.category));
+      // Build reverse map: window name → eligible categories
+      const windowToCategories: Record<string, string[]> = {};
+      for (const [cat, mapping] of Object.entries(DEFAULT_SCHEDULING_CONFIG.categoryMappings)) {
+        for (const win of mapping.defaultTimeWindow) {
+          if (!windowToCategories[win]) windowToCategories[win] = [];
+          windowToCategories[win].push(cat);
+        }
+      }
+
+      const incompleteTasks = tasks.filter(t => t.status !== 'DONE');
+
       emptyWindows.forEach(w => {
-        if (w.window === 'evening' && !categories.has('LIFE') && !categories.has('PERSONAL')) {
-          missingExplanations.push(`${w.label} is empty — no LIFE/PERSONAL tasks in your backlog`);
-        } else if (w.window === 'morning' && !categories.has('EDUCATION') && !categories.has('PROF_EDUCATION')) {
-          missingExplanations.push(`${w.label} is empty — no EDUCATION tasks need scheduling`);
+        const eligibleCats = windowToCategories[w.window] || [];
+        const eligibleTasks = incompleteTasks.filter(t => eligibleCats.includes(t.category || ''));
+
+        // Check if window is fully blocked by calendar events
+        const windowDef = DEFAULT_SCHEDULING_CONFIG.timeWindows[w.window as keyof typeof DEFAULT_SCHEDULING_CONFIG.timeWindows];
+        if (windowDef) {
+          const windowStart = windowDef.start;
+          const windowEnd = windowDef.end;
+          const blockingEvents = externalEvents.filter(e => {
+            const eStart = new Date(e.start_time).getHours();
+            const eEnd = new Date(e.end_time).getHours();
+            return eStart < windowEnd && eEnd > windowStart;
+          });
+          const blockedMin = blockingEvents.reduce((sum, e) => {
+            const s = Math.max(new Date(e.start_time).getHours(), windowStart);
+            const end = Math.min(new Date(e.end_time).getHours(), windowEnd);
+            return sum + Math.max(0, (end - s) * 60);
+          }, 0);
+          const windowMin = (windowEnd - windowStart) * 60;
+          if (blockedMin >= windowMin && blockingEvents.length > 0) {
+            missingExplanations.push(`${w.label} is empty — fully blocked by ${blockingEvents.length} calendar event${blockingEvents.length > 1 ? 's' : ''} (${blockedMin} min)`);
+            return;
+          }
+        }
+
+        if (eligibleTasks.length === 0) {
+          // No tasks exist for mapped categories
+          missingExplanations.push(`${w.label} is empty — no ${eligibleCats.join('/')} tasks in your backlog`);
         } else {
-          missingExplanations.push(`${w.label} has no tasks scheduled — candidates may have been lower priority`);
+          // Tasks exist — determine why they weren't scheduled here
+          const scheduledElsewhere = eligibleTasks.filter(t => t.start_time && new Date(t.start_time).toLocaleDateString('en-CA', { timeZone: tz }) !== todayStr);
+          const scheduledTodayOtherWindow = eligibleTasks.filter(t => t.start_time && new Date(t.start_time).toLocaleDateString('en-CA', { timeZone: tz }) === todayStr);
+          const unscheduled = eligibleTasks.filter(t => !t.start_time);
+
+          if (unscheduled.length > 0) {
+            // Unscheduled tasks exist — report their scores
+            const scored = unscheduled.map(t => ({ t, score: scoreSchedulingCandidate(t) })).sort((a, b) => b.score - a.score);
+            missingExplanations.push(`${w.label} is empty — ${unscheduled.length} eligible ${eligibleCats.join('/')} task${unscheduled.length > 1 ? 's' : ''} scored below scheduling threshold (highest score: ${scored[0].score})`);
+          } else if (scheduledElsewhere.length > 0) {
+            missingExplanations.push(`${w.label} is empty — ${scheduledElsewhere.length} ${eligibleCats.join('/')} task${scheduledElsewhere.length > 1 ? 's' : ''} scheduled on other days`);
+          } else if (scheduledTodayOtherWindow.length > 0) {
+            missingExplanations.push(`${w.label} is empty — ${scheduledTodayOtherWindow.length} ${eligibleCats.join('/')} task${scheduledTodayOtherWindow.length > 1 ? 's' : ''} already placed in other windows today`);
+          } else {
+            missingExplanations.push(`${w.label} is empty — all ${eligibleCats.join('/')} tasks are completed`);
+          }
         }
       });
     }
