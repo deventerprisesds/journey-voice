@@ -37,6 +37,7 @@ interface ScheduleReasoning {
     externalEventCount: number;
     externalBlockedMinutes: number;
     autoScheduledCount: number;
+    backlogOverdue: number;
   };
   explanations: string[];
   windowSummaries: { window: string; label: string; taskCount: number; capacityNote: string; categoryBreakdown: Record<string, number>; missingCategories: string[] }[];
@@ -100,15 +101,21 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
     const scheduledToday = tasks.filter(t =>
       t.start_time && new Date(t.start_time).toLocaleDateString('en-CA', { timeZone: tz }) === todayStr
     );
-    const rolledOver = tasks.filter(t =>
+    // Scope rolled-over and overdue to TODAY's scheduled tasks only
+    const rolledOver = scheduledToday.filter(t =>
       (t.pushed_count ?? 0) > 0 && t.status !== 'DONE' && !t.completed_at
     );
-    const overdue = tasks.filter(t =>
+    const overdue = scheduledToday.filter(t =>
       t.due_date && new Date(t.due_date) < new Date() && t.status !== 'DONE' && !t.completed_at
     );
     const autoScheduled = scheduledToday.filter(t =>
       (t.scheduling_context as any)?.pre_schedule_status
     );
+
+    // Backlog-wide counts for context (not displayed as primary stats)
+    const backlogOverdue = tasks.filter(t =>
+      t.due_date && new Date(t.due_date) < new Date() && t.status !== 'DONE' && !t.completed_at && !scheduledToday.includes(t)
+    ).length;
 
     // External event minutes
     const externalMinutes = externalEvents.reduce((sum, e) => {
@@ -270,6 +277,7 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
         externalEventCount: externalEvents.length,
         externalBlockedMinutes: externalMinutes,
         autoScheduledCount: autoScheduled.length,
+        backlogOverdue,
       },
       explanations,
       windowSummaries,
@@ -368,7 +376,7 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
             <div className="grid grid-cols-2 gap-2">
               <div className="bg-card border border-border rounded-lg p-3 text-center">
                 <div className="text-2xl font-bold text-foreground">{reasoning.stats.scheduledCount}</div>
-                <div className="text-xs text-muted-foreground">Scheduled</div>
+                <div className="text-xs text-muted-foreground">Scheduled Today</div>
               </div>
               <div className="bg-card border border-border rounded-lg p-3 text-center">
                 <div className="text-2xl font-bold text-foreground">{reasoning.stats.externalEventCount}</div>
@@ -377,16 +385,21 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
               {reasoning.stats.overdueCount > 0 && (
                 <div className="bg-destructive/5 border border-destructive/20 rounded-lg p-3 text-center">
                   <div className="text-2xl font-bold text-destructive">{reasoning.stats.overdueCount}</div>
-                  <div className="text-xs text-destructive/80">Overdue</div>
+                  <div className="text-xs text-destructive/80">Overdue Today</div>
                 </div>
               )}
               {reasoning.stats.rolledOverCount > 0 && (
                 <div className="bg-amber-500/5 border border-amber-500/20 rounded-lg p-3 text-center">
                   <div className="text-2xl font-bold text-amber-600">{reasoning.stats.rolledOverCount}</div>
-                  <div className="text-xs text-amber-600/80">Rolled Over</div>
+                  <div className="text-xs text-amber-600/80">Rolled Over Today</div>
                 </div>
               )}
             </div>
+            {reasoning.stats.backlogOverdue > 0 && (
+              <p className="text-xs text-muted-foreground px-1">
+                + {reasoning.stats.backlogOverdue} overdue task{reasoning.stats.backlogOverdue > 1 ? 's' : ''} in backlog (not scheduled today)
+              </p>
+            )}
 
             {/* Schedule Reasoning */}
             {(reasoning.explanations.length > 0 || reasoning.missingExplanations.length > 0) && (
