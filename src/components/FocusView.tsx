@@ -43,6 +43,7 @@ import QuickTaskInput from './QuickTaskInput';
 import TaskCreationModal from './TaskCreationModal';
 import { getOrCreateDefaultBoardId } from '@/utils/demoData';
 import { selectSchedulingCandidates } from '@/lib/schedulingCandidates';
+import DailyReviewModal from './DailyReviewModal';
 
 interface FocusViewProps {
   tasks: Task[];
