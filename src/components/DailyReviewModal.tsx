@@ -39,7 +39,7 @@ interface ScheduleReasoning {
     autoScheduledCount: number;
   };
   explanations: string[];
-  windowSummaries: { window: string; label: string; taskCount: number; capacityNote: string }[];
+  windowSummaries: { window: string; label: string; taskCount: number; capacityNote: string; categoryBreakdown: Record<string, number>; missingCategories: string[] }[];
   missingExplanations: string[];
 }
 
@@ -117,6 +117,15 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
       return sum + Math.round((end - start) / 60000);
     }, 0);
 
+    // Build reverse map: window name → eligible categories
+    const windowToCategories: Record<string, string[]> = {};
+    for (const [cat, mapping] of Object.entries(DEFAULT_SCHEDULING_CONFIG.categoryMappings)) {
+      for (const win of mapping.defaultTimeWindow) {
+        if (!windowToCategories[win]) windowToCategories[win] = [];
+        windowToCategories[win].push(cat);
+      }
+    }
+
     // Window summaries
     const windowNames = isWeekend ? ['weekends'] : ['morning', 'business_hours', 'after_work', 'evening'];
     const windowSummaries = windowNames.map(w => {
@@ -131,13 +140,27 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
         return false;
       });
       const totalMin = tasksInWindow.reduce((s, t) => s + (t.estimate_minutes || 60), 0);
+
+      // Category breakdown
+      const categoryBreakdown: Record<string, number> = {};
+      tasksInWindow.forEach(t => {
+        const cat = t.category || 'UNCATEGORIZED';
+        categoryBreakdown[cat] = (categoryBreakdown[cat] || 0) + 1;
+      });
+
+      // Missing categories: mapped to this window but no tasks placed
+      const expectedCats = windowToCategories[w] || [];
+      const missingCategories = expectedCats.filter(cat => !categoryBreakdown[cat]);
+
       return {
         window: w,
         label: windowLabels[w] || w,
         taskCount: tasksInWindow.length,
         capacityNote: tasksInWindow.length > 0
           ? `${tasksInWindow.length} task${tasksInWindow.length > 1 ? 's' : ''}, ~${totalMin} min`
-          : 'Empty'
+          : 'Empty',
+        categoryBreakdown,
+        missingCategories,
       };
     });
 
@@ -159,19 +182,10 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
       explanations.push(`${(builderLog as any).archived_stale} stale tasks archived by the nightly builder`);
     }
 
-    // Missing explanations
     // Deterministic missing-window explanations using scheduling rules
     const missingExplanations: string[] = [];
     const emptyWindows = windowSummaries.filter(w => w.taskCount === 0);
     if (emptyWindows.length > 0) {
-      // Build reverse map: window name → eligible categories
-      const windowToCategories: Record<string, string[]> = {};
-      for (const [cat, mapping] of Object.entries(DEFAULT_SCHEDULING_CONFIG.categoryMappings)) {
-        for (const win of mapping.defaultTimeWindow) {
-          if (!windowToCategories[win]) windowToCategories[win] = [];
-          windowToCategories[win].push(cat);
-        }
-      }
 
       const incompleteTasks = tasks.filter(t => t.status !== 'DONE');
 
@@ -225,20 +239,22 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
       });
     }
 
-    // Check assignment coverage
-    const hasEducationTasks = tasks.some(t =>
-      (t.category === 'EDUCATION' || t.category === 'PROF_EDUCATION') &&
-      t.status !== 'DONE' && t.start_time &&
+    // Assignment QC: check tasks with assignment_id, not just education category
+    const assignmentTasksToday = tasks.filter(t =>
+      (t as any).assignment_id && t.status !== 'DONE' && t.start_time &&
       new Date(t.start_time).toLocaleDateString('en-CA', { timeZone: tz }) === todayStr
     );
-    if (!hasEducationTasks) {
-      const nextAssignment = tasks
-        .filter(t => (t.category === 'EDUCATION' || t.category === 'PROF_EDUCATION') && t.due_date && t.status !== 'DONE')
-        .sort((a, b) => new Date(a.due_date!).getTime() - new Date(b.due_date!).getTime())[0];
-      if (nextAssignment) {
-        missingExplanations.push(`No assignment work today — next due: "${nextAssignment.title}" on ${format(new Date(nextAssignment.due_date!), 'MMM d')}`);
+    const pendingAssignments = tasks.filter(t =>
+      (t as any).assignment_id && t.status !== 'DONE' && !t.completed_at
+    );
+    if (assignmentTasksToday.length === 0 && pendingAssignments.length > 0) {
+      const withDueDate = pendingAssignments
+        .filter(t => t.due_date)
+        .sort((a, b) => new Date(a.due_date!).getTime() - new Date(b.due_date!).getTime());
+      if (withDueDate.length > 0) {
+        missingExplanations.push(`No assignment tasks scheduled today — ${pendingAssignments.length} assignment${pendingAssignments.length > 1 ? 's' : ''} pending, next due: "${withDueDate[0].title}" on ${format(new Date(withDueDate[0].due_date!), 'MMM d')}`);
       } else {
-        missingExplanations.push('No assignment tasks in your backlog');
+        missingExplanations.push(`No assignment tasks scheduled today — ${pendingAssignments.length} assignment${pendingAssignments.length > 1 ? 's' : ''} pending (no due dates set)`);
       }
     }
 
@@ -321,7 +337,17 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
   };
 
   // Filter to only show assistant messages from the current session (after modal opened)
-  const recentAssistantMessages = messages.filter(m => m.role === 'assistant' && !m.isLoading).slice(-3);
+  // Track message count at modal open to filter out stale chat history
+  const messageCountAtOpen = useRef(messages.length);
+  useEffect(() => {
+    if (open) {
+      messageCountAtOpen.current = messages.length;
+    }
+  }, [open]);
+
+  const recentAssistantMessages = messages
+    .slice(messageCountAtOpen.current)
+    .filter(m => m.role === 'assistant' && !m.isLoading);
 
   return (
     <Sheet open={open} onOpenChange={(v) => !v && onClose()}>
@@ -382,17 +408,29 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
             <div className="space-y-1">
               <div className="text-sm font-medium text-foreground mb-2">Time Windows</div>
               {reasoning.windowSummaries.map(ws => (
-                <div key={ws.window} className="flex items-center justify-between py-1.5 px-2 rounded-md bg-card border border-border">
-                  <div className="flex items-center gap-2 text-sm text-foreground">
-                    {windowIcons[ws.window]}
-                    {ws.label}
+                <div key={ws.window} className="py-1.5 px-2 rounded-md bg-card border border-border space-y-1">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-sm text-foreground">
+                      {windowIcons[ws.window]}
+                      {ws.label}
+                    </div>
+                    <span className={cn(
+                      "text-xs",
+                      ws.taskCount > 0 ? "text-foreground" : "text-muted-foreground"
+                    )}>
+                      {ws.capacityNote}
+                    </span>
                   </div>
-                  <span className={cn(
-                    "text-xs",
-                    ws.taskCount > 0 ? "text-foreground" : "text-muted-foreground"
-                  )}>
-                    {ws.capacityNote}
-                  </span>
+                  {ws.taskCount > 0 && Object.keys(ws.categoryBreakdown).length > 0 && (
+                    <div className="pl-6 text-xs text-muted-foreground">
+                      {Object.entries(ws.categoryBreakdown).map(([cat, count]) => `${cat}(${count})`).join(', ')}
+                    </div>
+                  )}
+                  {ws.missingCategories.length > 0 && (
+                    <div className="pl-6 text-xs text-amber-600 dark:text-amber-400">
+                      {ws.missingCategories.map(cat => `⚠ No ${cat} tasks placed`).join(' · ')}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
