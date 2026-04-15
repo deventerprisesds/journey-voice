@@ -1,73 +1,68 @@
 
 
-# Revised Plan: External Calendar Reminders + AI Auto-Scheduling Fix
+# Daily Review Modal with Schedule Summary and Reasoning
 
-## Assessment: What We Can Reuse
+## What it does
 
-The existing infrastructure is well-suited for both fixes. Here's the reuse map:
+When you open Focus View and today's schedule hasn't been confirmed, a full-screen sheet appears showing:
 
-| Existing Component | Reuse For |
+1. **Morning greeting** with stats: tasks confirmed yesterday, carried over, overdue count
+2. **Schedule reasoning summary** — a human-readable explanation of WHY each task landed where it did, pulled from the nightly builder's scoring data (via `activity_log` and `scheduling_context`). If assignments, external events, or entire time windows are missing, it explains why (e.g., "No EDUCATION tasks scheduled — all assignments are due after this week" or "Evening window empty — no LIFE/PERSONAL tasks in candidate pool")
+3. **Today's Plan** — compact task list with per-item status badges: Confirmed (already scheduled), Schedule (needs a time), Blocked (dependencies unmet)
+4. **Auto-Scheduled from Backlog** — items the nightly builder pulled in, with their scores shown
+5. **Inline chat** at the bottom — type natural language corrections processed via `useChatAssistant` (reuses existing hook, same tools)
+6. **Two action buttons**: "Confirm & Fill Gaps" (runs `nightly-schedule-builder` singleDay, writes confirmation date) and "Skip"
+
+## Reuse map
+
+| Existing piece | How it's reused |
 |---|---|
-| `notification-scheduler` (cron, per-user loop, quiet hours, channel prefs) | Add external event scanning directly here — no new edge function needed |
-| `scheduled_notifications` table | Store calendar event reminders the same way as task reminders |
-| `notification-delivery` pipeline (push, Slack, email routing) | Delivers calendar reminders with zero changes |
-| `notification_prefs` table (channels, quiet hours, timezone) | Add 3 columns for calendar reminder config |
-| `NotificationSettings.tsx` UI | Add one new section for calendar event reminder toggles |
-| `_shared/tool-definitions.ts` | Update `parse_and_create_tasks` description |
-| `hybrid-assistant-api` DATA INTEGRITY RULES | Add one line about auto-scheduling |
+| `activity_log` table (`nightly_schedule_built` entries) | Source for reasoning summary — already stores `week_results`, rolled-over count, archived count |
+| `scheduling_context` on each task | Already stores `pre_schedule_status` — will check if task was auto-added vs user-created |
+| `nightly-schedule-builder` (singleDay mode) | Called by "Confirm & Fill Gaps" — same as existing "Reschedule Today" button |
+| `useChatAssistant` hook | Powers inline corrections — no changes needed |
+| `selectSchedulingCandidates` / `scoreSchedulingCandidate` | Used client-side to show scores for unscheduled tasks in the review |
+| `notification_prefs` table | Stores `schedule_confirmed_date` (one new column) |
 
-**Key decision: No new edge function.** The `notification-scheduler` already runs on a cron, loops through all users, queries their tasks, checks quiet hours, and inserts into `scheduled_notifications`. We add one function call inside that loop to also scan `external_calendar_events` for the same user. The `notification-delivery` function already dispatches to push/Slack/email based on the notification type — it requires zero changes.
+## Database migration
 
----
+Add one column to `notification_prefs`:
 
-## Fix 1: External Calendar Event Reminders
+```sql
+ALTER TABLE public.notification_prefs
+ADD COLUMN IF NOT EXISTS schedule_confirmed_date text DEFAULT '';
+```
 
-### Database migration
-Add 3 columns to `notification_prefs`:
-- `calendar_reminders_enabled` (boolean, default `true`)
-- `calendar_reminder_minutes` (integer, default `15`)
-- `calendar_reminder_channels` (text array, default `{'PUSH'}`)
+## New component: `DailyReviewModal.tsx`
 
-### Backend: `notification-scheduler/index.ts`
-Inside `processUserNotifications()`, after the existing task processing, add a new block:
-1. Check if `prefs.calendar_reminders_enabled` is true
-2. Query `external_calendar_events` for this user where `start_time` is within the next `calendar_reminder_minutes + 5` minutes and in the future
-3. For each event, check for an existing `scheduled_notifications` row with matching `notification_type = 'calendar_event_reminder'` and a metadata match on `external_event_id` to avoid duplicates
-4. Insert a `scheduled_notifications` row with `scheduled_for` = event start minus `calendar_reminder_minutes`, using `notification_type = 'calendar_event_reminder'`
+**Trigger**: FocusView checks `notification_prefs.schedule_confirmed_date` on mount. If it doesn't match today's date string, the modal opens.
 
-The existing `notification-delivery` already handles any notification type — it reads title/body and dispatches via `send-push-notification`. No changes needed there.
+**Data it gathers** (all from existing queries/tables):
+- `activity_log` where `activity_type = 'nightly_schedule_built'` and `user_id` matches, most recent — extracts `metadata.rolled_over`, `metadata.archived_stale`, `metadata.week_results[todayISO]`
+- Today's scheduled tasks (already in FocusView props)
+- Today's external calendar events (already loaded in FocusView)
+- Unscheduled candidates with scores (via `selectSchedulingCandidates` from existing lib)
+- Overdue task count (tasks with `due_date < today` and status != DONE)
 
-### Frontend: `NotificationSettings.tsx`
-Add a "Calendar Event Reminders" card section with:
-- Toggle: Enable/disable calendar event reminders
-- Dropdown: Lead time (5, 10, 15, 30, 60 minutes)
-- Channel checkboxes: Push, Slack, Email
+**Reasoning summary generation** (client-side, from existing data):
+- "X tasks were rolled over from yesterday (pushed count increased)"
+- "Y tasks auto-scheduled based on priority scoring — top scorer: [title] (score: N, reason: urgent + due soon)"
+- "Morning window: 2 tasks filling 90/120 min capacity"
+- "Evening window: empty — no LIFE/PERSONAL tasks in candidate pool"
+- "No assignment tasks scheduled — next assignment due [date]"
+- "Z external calendar events blocking [total] minutes"
 
-Reads/writes the 3 new `notification_prefs` columns.
+**Inline chat**: Renders a simplified chat input using `useChatAssistant`. User types corrections, AI applies them via existing `parse_and_create_tasks`, `reschedule_task`, `delete_task` tools.
 
----
+**Confirm action**: Invokes `nightly-schedule-builder` with `{ singleDay: true, userId }`, then updates `notification_prefs.schedule_confirmed_date` to today's date string, closes modal.
 
-## Fix 2: AI Stops Asking for Specific Times
+## Files changed
 
-### `_shared/tool-definitions.ts`
-Update `parse_and_create_tasks` description to append:
-> "IMPORTANT: When the user says 'this week', 'sometime soon', or any vague timeframe, set auto_schedule to true and DO NOT ask for a specific time. The batch scheduler will find the optimal slot."
+| File | Change |
+|---|---|
+| `notification_prefs` (migration) | Add `schedule_confirmed_date` column |
+| `src/components/DailyReviewModal.tsx` | New: full review modal with summary, reasoning, task list, inline chat |
+| `src/components/FocusView.tsx` | Import and render `DailyReviewModal`; pass tasks, external events, onTaskUpdate |
 
-### `hybrid-assistant-api/index.ts`
-Add one line to the DATA INTEGRITY RULES block (line 452):
-> "When a user asks to create/add/schedule a task, call parse_and_create_tasks immediately with auto_schedule: true. NEVER ask the user for a specific time or day — the scheduler handles placement."
-
----
-
-## Files Changed
-
-| File | Change | New? |
-|---|---|---|
-| `notification_prefs` table (migration) | Add 3 calendar reminder columns | Migration |
-| `supabase/functions/notification-scheduler/index.ts` | Add `external_calendar_events` scan inside existing user loop | Edit |
-| `src/components/NotificationSettings.tsx` | Add calendar reminder settings section | Edit |
-| `supabase/functions/_shared/tool-definitions.ts` | Update `parse_and_create_tasks` description | Edit |
-| `supabase/functions/hybrid-assistant-api/index.ts` | Add auto-schedule guardrail to DATA INTEGRITY RULES | Edit |
-
-No new edge functions. No new cron jobs. No new tables. Maximum reuse of existing pipeline.
+No new edge functions. No new tables. Scoring logic already exists in both the edge function and the client-side `schedulingCandidates.ts`.
 
