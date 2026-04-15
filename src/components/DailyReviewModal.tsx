@@ -100,15 +100,21 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
     const scheduledToday = tasks.filter(t =>
       t.start_time && new Date(t.start_time).toLocaleDateString('en-CA', { timeZone: tz }) === todayStr
     );
-    const rolledOver = tasks.filter(t =>
+    // Scope rolled-over and overdue to TODAY's scheduled tasks only
+    const rolledOver = scheduledToday.filter(t =>
       (t.pushed_count ?? 0) > 0 && t.status !== 'DONE' && !t.completed_at
     );
-    const overdue = tasks.filter(t =>
+    const overdue = scheduledToday.filter(t =>
       t.due_date && new Date(t.due_date) < new Date() && t.status !== 'DONE' && !t.completed_at
     );
     const autoScheduled = scheduledToday.filter(t =>
       (t.scheduling_context as any)?.pre_schedule_status
     );
+
+    // Backlog-wide counts for context (not displayed as primary stats)
+    const backlogOverdue = tasks.filter(t =>
+      t.due_date && new Date(t.due_date) < new Date() && t.status !== 'DONE' && !t.completed_at && !scheduledToday.includes(t)
+    ).length;
 
     // External event minutes
     const externalMinutes = externalEvents.reduce((sum, e) => {
