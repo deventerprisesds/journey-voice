@@ -138,9 +138,10 @@ const FocusView: React.FC<FocusViewProps> = ({
   const [isRerunning, setIsRerunning] = useState(false);
   const [isRescheduling, setIsRescheduling] = useState(false);
   const [externalEvents, setExternalEvents] = useState<ExternalCalendarEvent[]>([]);
+  const [showDailyReview, setShowDailyReview] = useState(false);
   const today = new Date();
   const [config, setConfig] = useState<SchedulingConfig>(DEFAULT_SCHEDULING_CONFIG);
-  
+
   const { user } = useAuth();
 
   // Load user's authoritative scheduling config
