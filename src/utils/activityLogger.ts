@@ -52,8 +52,10 @@ export interface ActivityLogParams {
  * Fire-and-forget: never throws.
  */
 export async function logActivity(params: ActivityLogParams): Promise<void> {
-  // Only log for dev user
-  if (!params.userId || params.userId !== DEV_USER_ID) {
+  // Log for all users on pipeline activity types; dev-only for everything else
+  const PIPELINE_TYPES = ['daily_review_reasoning'];
+  if (!params.userId) return;
+  if (!PIPELINE_TYPES.includes(params.activityType) && params.userId !== DEV_USER_ID) {
     return;
   }
 
