@@ -37,6 +37,7 @@ interface ScheduleReasoning {
     externalEventCount: number;
     externalBlockedMinutes: number;
     autoScheduledCount: number;
+    backlogOverdue: number;
   };
   explanations: string[];
   windowSummaries: { window: string; label: string; taskCount: number; capacityNote: string; categoryBreakdown: Record<string, number>; missingCategories: string[] }[];
@@ -276,6 +277,7 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
         externalEventCount: externalEvents.length,
         externalBlockedMinutes: externalMinutes,
         autoScheduledCount: autoScheduled.length,
+        backlogOverdue,
       },
       explanations,
       windowSummaries,
