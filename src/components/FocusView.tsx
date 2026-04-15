@@ -159,6 +159,24 @@ const FocusView: React.FC<FocusViewProps> = ({
     }
   }, [user?.id]);
 
+  // Check if daily review has been confirmed today
+  useEffect(() => {
+    if (!user?.id) return;
+    (async () => {
+      const tz = getDefaultTimezone();
+      const todayKey = getTodayInTimezone(tz);
+      const { data } = await supabase
+        .from('notification_prefs')
+        .select('schedule_confirmed_date')
+        .eq('user_id', user.id)
+        .maybeSingle();
+      const confirmedDate = (data as any)?.schedule_confirmed_date || '';
+      if (confirmedDate !== todayKey) {
+        setShowDailyReview(true);
+      }
+    })();
+  }, [user?.id]);
+
   // Periodic delta sync + load external calendar events
   useEffect(() => {
     if (!user?.id) return;
