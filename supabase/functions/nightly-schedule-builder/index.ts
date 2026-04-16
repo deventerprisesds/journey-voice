@@ -247,8 +247,11 @@ serve(async (req) => {
     try { body = await req.json(); } catch { /* no body = full run */ }
     const requestedUserId: string | undefined = body?.userId;
     const singleDay: boolean = body?.singleDay === true;
+    const triggerSource: string = typeof body?.triggerSource === 'string'
+      ? body.triggerSource
+      : (singleDay ? 'manual_reschedule' : 'cron');
 
-    if (singleDay) console.log(`⚡ Single-day mode requested${requestedUserId ? ` for user ${requestedUserId}` : ''}`);
+    if (singleDay) console.log(`⚡ Single-day mode requested${requestedUserId ? ` for user ${requestedUserId}` : ''} (trigger: ${triggerSource})`);
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     
