@@ -286,11 +286,22 @@ serve(async (req) => {
       const userId = userPref.user_id;
       const timezone = userPref.timezone || 'America/New_York';
       const config = userPref.config || {};
-      
+
       const { timeWindows, categoryMappings } = resolveConfig(config);
-      
-      console.log(`\n🌙 Processing nightly schedule for user ${userId} (${timezone})`);
-      
+      // contextRules.keywords drives keyword-based window overrides
+      // (e.g. "mall" → after_work, even if category LIFE allows flexible 9-22)
+      const contextKeywords: Record<string, string[]> | undefined =
+        (config?.contextRules?.keywords) || undefined;
+
+      // Per-user run identity + structured trace
+      const runId = (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+      const steps: Array<{ step: string; inputs: Record<string, unknown>; outputs: Record<string, unknown>; durationMs: number }> = [];
+      const pushStep = (step: string, inputs: Record<string, unknown>, outputs: Record<string, unknown>, t0: number) => {
+        steps.push({ step, inputs, outputs, durationMs: Date.now() - t0 });
+      };
+
+      console.log(`\n🌙 Processing nightly schedule for user ${userId} (${timezone}) — runId=${runId} trigger=${triggerSource}`);
+
       try {
         // ==========================================
         // STEP 0: SYNC ASSIGNMENTS (EMBA + MIT)
