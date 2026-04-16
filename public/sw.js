@@ -1,6 +1,6 @@
 // Service Worker for Push Notifications
 // Increment this on each deploy to bust old caches
-const CACHE_VERSION = 'v9';
+const CACHE_VERSION = 'v10';
 const CACHE_NAME = `task-manager-${CACHE_VERSION}`;
 const urlsToCache = [
   '/',
