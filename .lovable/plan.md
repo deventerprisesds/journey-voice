@@ -1,41 +1,76 @@
 
+Goal: debug and fix the 4 Daily Review issues against the real dev account on the published app, not the preview/demo path.
 
-# Updated Plan: Fix Daily Review + Guarantee Logging Visibility
+What I found
+- The snapshot I can see is from preview and it is definitely running as demo user `000...001`, not your dev user. The requests for `user_scheduling_prefs` and `activity_log` both use the demo ID.
+- That means the preview evidence is not valid for your live-account complaint.
+- The code also confirms why this happens: `useAuth` intentionally falls back to demo mode in preview when no real session is found.
+- Per project memory, the correct debugging target for user-specific scheduling issues is the published app with dev user `a3378f93-...`.
 
-## Addition: RLS / Silent Failure Diagnostics
+Plan
 
-The `activityLogger.ts` currently does `.catch(() => {})` — completely silent. If the POST returns a 403, 401, or any RLS denial, we'd never know. This is the root cause of missing `daily_review_reasoning` entries for the dev user.
+1. Lock debugging to the live account path
+- Treat `journey-voice.lovable.app` + dev user `a3378f93-...` as the only authoritative source for this bug.
+- Add explicit auth provenance logging in `useAuth`, `TasksPage`, `FocusView`, and `DailyReviewModal`:
+  - hostname
+  - user id
+  - email
+  - `isDemoMode`
+  - auth source (`listener`, `fastPath`, `getSession`, `demoFallback`)
+- On the published domain, hard-disable demo fallback so Daily Review can never silently run against `000...001`.
 
-### What we'll add
+2. Fix overdue and rolled-over counts to only use the scheduled subset
+- Keep the intended rule: both counts must come only from tasks scheduled for today.
+- Make that scoping explicit and auditable in `dailyReviewPipeline.ts`:
+  - compute `scheduledTodayIds`
+  - compute `rolledOverIdsWithinScheduledToday`
+  - compute `overdueIdsWithinScheduledToday`
+  - compute `backlogOverdueIdsNotScheduledToday`
+- Return and log these ID lists so the rendered counts can be verified against exact tasks.
+- Exclude any history rows from Daily Review stats even if the parent loader contains merged history for other views.
 
-**In `src/utils/activityLogger.ts`:**
-- Replace the silent `.catch(() => {})` with a `.then(res => { if (!res.ok) console.error('[activityLogger] POST failed:', res.status, res.statusText) })` so RLS denials become visible in the browser console
-- Add the response body text on failure for full context (RLS errors return a JSON body)
-- Keep fire-and-forget semantics (still don't throw or block)
+3. Show which classes/categories were and were not scheduled per window
+- Use the real live user’s `user_scheduling_prefs.config` as the authority.
+- Expand window summaries so each window shows:
+  - expected categories from config
+  - actual scheduled tasks in that window
+  - missing categories
+  - eligible-but-unscheduled tasks and the reason they were skipped
+- This makes “what classes were or weren’t scheduled” concrete instead of only showing generic empty-window text.
 
-**In `src/utils/dailyReviewPipeline.ts`:**
-- After calling `logActivity`, add a fallback `console.log('[DailyReviewPipeline] trace:', JSON.stringify(reasoning.stats))` so even if the DB write fails, the trace appears in the browser console
-- This ensures we can always verify pipeline output even with broken logging
+4. Stop unrelated AI chat from leaking into the comments area
+- The modal still uses the global `useChatAssistant()` thread, and that hook itself is unstable because thread creation is hitting a duplicate-key error.
+- Fix this in two layers:
+  - in `useChatAssistant`, resolve duplicate-thread creation by loading the existing thread instead of trying to insert another one
+  - in `DailyReviewModal`, stop reading the shared assistant stream directly; use a review-scoped session/thread filter so only review-originated replies render there
 
-**In `src/components/DailyReviewModal.tsx`:**
-- On modal open, call `onTaskUpdate()` to force a task reload before the pipeline runs
-- This prevents stale data from `useUnifiedTasks`
+5. Make the QC issue enforceable, not cosmetic
+- The “mall at 9 PM” problem should be rejected by scheduling rules, not merely described after the fact.
+- Strengthen the authoritative path in `nightly-schedule-builder` and the downstream scheduler by:
+  - applying keyword/context rules before placement
+  - recording which keyword override was used
+  - rejecting placements that violate the intended activity window when a hard keyword rule exists
+- Log accepted and rejected placements with reasons so the Daily Review can explain them.
 
-### Other items (unchanged from approved plan)
+6. Check RLS directly on the live path
+- Since you previously called out silent RLS failure, I’ll verify it on the live account path too:
+  - confirm `activity_log` inserts for the dev user succeed under authenticated requests on published
+  - if not, tighten the diagnosis around token/auth state vs policy mismatch
+- This is a secondary check now; the first blocker is making sure the live page is actually using the live authenticated principal.
 
-1. **Use real user config** — fetch `user_scheduling_prefs` and pass to pipeline instead of `DEFAULT_SCHEDULING_CONFIG`
-2. **Chat isolation** — filter modal chat messages by a `reviewSessionId` instead of global stream
-3. **Keyword-aware scheduling** — apply `contextRules.keywords` in `nightly-schedule-builder` to override window placement (fixes mall at 9pm)
-4. **Structured builder logging** — add `steps[]` array with `runId` and `triggerSource` to `nightly-schedule-builder`
+Files to update
+- `src/hooks/useAuth.tsx`
+- `src/pages/TasksPage.tsx`
+- `src/components/FocusView.tsx`
+- `src/components/DailyReviewModal.tsx`
+- `src/hooks/useChatAssistant.ts`
+- `src/utils/dailyReviewPipeline.ts`
+- `supabase/functions/nightly-schedule-builder/index.ts`
+- possibly `supabase/functions/batch-calendar-scheduler/index.ts` if server-side rejection needs to be tightened there too
 
-## Files Changed
-
-| File | Change |
-|------|--------|
-| `src/utils/activityLogger.ts` | Log POST response status on failure instead of swallowing |
-| `src/utils/dailyReviewPipeline.ts` | Console fallback trace, accept `userConfig` param |
-| `src/components/DailyReviewModal.tsx` | Force task reload on open, fetch user config, chat isolation |
-| `supabase/functions/nightly-schedule-builder/index.ts` | Keyword overrides, structured step logging |
-| `public/sw.js` | Bump cache to v10 |
-| `index.html` | Update build-version meta |
-
+Expected outcome
+- The published app will prove which user the Daily Review is using.
+- Overdue and rolled-over will be traceable to the exact today-scheduled task IDs only.
+- Each window will clearly show what was expected, what was placed, and what was skipped.
+- The comments area will stop showing unrelated assistant messages.
+- Tasks like “go to the mall” at 9 PM will either be prevented during scheduling or clearly logged as rejected.
