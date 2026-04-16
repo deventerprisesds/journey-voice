@@ -198,6 +198,42 @@ function getPreferredWindows(
   return preferred.length > 0 ? preferred : activeWindowNames;
 }
 
+/**
+ * Inspect a task title for contextRules keyword matches and return the
+ * preferred window that should override the category default, if any.
+ *
+ * Example: "Go to the mall" → matches "shopping" → returns "after_work".
+ * This prevents nonsensical placements like errands at 9pm.
+ *
+ * Returns { window, matchedKeyword } when a match is found AND the resulting
+ * window is in the active window set for the day. Returns null otherwise.
+ */
+function getKeywordWindowOverride(
+  title: string,
+  contextKeywords: Record<string, string[]> | undefined,
+  activeWindowNames: string[]
+): { window: string; matchedKeyword: string } | null {
+  if (!contextKeywords || !title) return null;
+  const lower = title.toLowerCase();
+
+  for (const [keyword, mapping] of Object.entries(contextKeywords)) {
+    // mapping is [timeWindow, status] per schedulingRules.ts
+    if (!Array.isArray(mapping) || mapping.length === 0) continue;
+    const targetWindow = mapping[0];
+    if (!targetWindow || targetWindow === 'flexible') continue;
+
+    // Match by word boundary (and underscore→space variant for keys like "follow_up")
+    const kw = keyword.toLowerCase().replace(/_/g, ' ');
+    if (kw.length < 3) continue;
+    if (lower.includes(kw)) {
+      if (activeWindowNames.includes(targetWindow)) {
+        return { window: targetWindow, matchedKeyword: keyword };
+      }
+    }
+  }
+  return null;
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
