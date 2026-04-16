@@ -146,21 +146,45 @@ export function buildDailyReviewReasoning(
   const todayTasks = scheduledToday._tasks;
 
   // ── Step 2: SCOPE_STATS ──
+  // Semantics:
+  //  - rolledOver: scheduled today AND has prior-push evidence that was applied recently
+  //    (pushed_count > 0 AND updated_at within last ~36h). Lifetime push count alone is NOT enough.
+  //  - overdue: due_date (a YYYY-MM-DD) is strictly BEFORE todayStr in user TZ.
+  //    A task due TODAY is never overdue. Compared as date strings — no time-of-day drift.
+  //  - For the visible Daily Review cards, both sets are intersected with today's scheduled subset.
   const { result: scopedStats, stepResult: s2 } = runStep(
     'SCOPE_STATS',
-    { scheduledTodayCount: todayTasks.length },
+    { scheduledTodayCount: todayTasks.length, todayStr },
     () => {
-      const rolledOver = todayTasks.filter(t =>
-        (t.pushed_count ?? 0) > 0 && t.status !== 'DONE' && !t.completed_at
-      );
+      const todayStartMs = (() => {
+        // Local-day start in user TZ, expressed as ms since epoch (approx — used as a recency clamp)
+        const d = new Date(`${todayStr}T00:00:00`);
+        return d.getTime() - 36 * 60 * 60 * 1000; // 36h grace to cover overnight nightly builder runs
+      })();
+
+      const rolledOver = todayTasks.filter(t => {
+        if (t.status === 'DONE' || t.completed_at) return false;
+        if ((t.pushed_count ?? 0) <= 0) return false;
+        // Recency clamp: lifetime pushes don't count — only pushes that landed in this current placement.
+        const updatedMs = t.updated_at ? new Date(t.updated_at).getTime() : 0;
+        return updatedMs >= todayStartMs;
+      });
+
+      const isOverdueDateStr = (dueDate: string | undefined) => {
+        if (!dueDate) return false;
+        // due_date stored as YYYY-MM-DD (or ISO). Take just the date portion and compare as string.
+        const dueStr = dueDate.length >= 10 ? dueDate.slice(0, 10) : dueDate;
+        return dueStr < todayStr;
+      };
+
       const overdue = todayTasks.filter(t =>
-        t.due_date && new Date(t.due_date) < new Date() && t.status !== 'DONE' && !t.completed_at
+        isOverdueDateStr(t.due_date) && t.status !== 'DONE' && !t.completed_at
       );
       const autoScheduled = todayTasks.filter(t =>
         (t.scheduling_context as any)?.pre_schedule_status
       );
       const backlogOverdue = tasks.filter(t =>
-        t.due_date && new Date(t.due_date) < new Date() && t.status !== 'DONE' && !t.completed_at && !todayTasks.includes(t)
+        isOverdueDateStr(t.due_date) && t.status !== 'DONE' && !t.completed_at && !todayTasks.includes(t)
       ).length;
 
       return {
@@ -174,6 +198,34 @@ export function buildDailyReviewReasoning(
     }
   );
   steps.push(s2);
+
+  // ── Hard invariant: scoped subset counts must never exceed scheduledCount ──
+  // Guards against future regressions like "171 of 9 rolled over".
+  const scheduledCount = scheduledToday.count;
+  let invariantViolated = false;
+  const invariantDetails: Record<string, unknown> = {};
+  if (scopedStats.rolledOverCount > scheduledCount) {
+    invariantViolated = true;
+    invariantDetails.rolledOver = { reported: scopedStats.rolledOverCount, max: scheduledCount };
+    scopedStats.rolledOverCount = scheduledCount;
+    scopedStats.rolledOverIds = scopedStats.rolledOverIds.slice(0, scheduledCount);
+  }
+  if (scopedStats.overdueCount > scheduledCount) {
+    invariantViolated = true;
+    invariantDetails.overdue = { reported: scopedStats.overdueCount, max: scheduledCount };
+    scopedStats.overdueCount = scheduledCount;
+    scopedStats.overdueIds = scopedStats.overdueIds.slice(0, scheduledCount);
+  }
+  if (invariantViolated) {
+    console.error('[DailyReviewPipeline] daily_review_invariant_violation', invariantDetails);
+    logActivity({
+      userId,
+      activityType: 'daily_review_invariant_violation',
+      status: 'error',
+      stage: 'scope_stats',
+      metadata: { ...invariantDetails, todayStr, tz },
+    });
+  }
 
   // ── Step 3: WINDOW_ASSIGNMENT ──
   const { result: windowData, stepResult: s3 } = runStep(
@@ -464,7 +516,11 @@ export function buildDailyReviewReasoning(
 
   // Backlog overdue IDs (mirror of count in SCOPE_STATS, exposed for UI traceability)
   const backlogOverdueIds = tasks
-    .filter(t => t.due_date && new Date(t.due_date) < new Date() && t.status !== 'DONE' && !t.completed_at && !todayTasks.includes(t))
+    .filter(t => {
+      if (!t.due_date || t.status === 'DONE' || t.completed_at) return false;
+      const dueStr = t.due_date.length >= 10 ? t.due_date.slice(0, 10) : t.due_date;
+      return dueStr < todayStr && !todayTasks.includes(t);
+    })
     .map(t => t.id);
 
   const hostname = typeof window !== 'undefined' ? window.location.hostname : 'ssr';
