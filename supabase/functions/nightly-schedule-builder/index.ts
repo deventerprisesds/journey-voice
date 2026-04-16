@@ -1079,16 +1079,30 @@ serve(async (req) => {
           activity_type: 'nightly_schedule_built',
           status: 'completed',
           metadata: {
+            runId,
+            triggerSource,
+            singleDay,
             rolled_over: rolledOverCount,
             archived_stale: archivedStaleCount,
             total_scheduled: totalScheduledAcrossWeek,
             days_processed: totalDays,
             week_results: weekResults,
+            steps,
+            keyword_overrides_total: steps.reduce(
+              (sum, s) => sum + (Array.isArray((s.outputs as any)?.keywordOverrides) ? (s.outputs as any).keywordOverrides.length : 0),
+              0
+            ),
+            rejections_total: steps.reduce(
+              (sum, s) => sum + (Array.isArray((s.outputs as any)?.rejected) ? (s.outputs as any).rejected.length : 0),
+              0
+            ),
             processing_ms: Date.now() - startTime,
           },
         });
 
         results[userId] = {
+          runId,
+          triggerSource,
           rolledOver: rolledOverCount,
           archivedStale: archivedStaleCount,
           totalScheduled: totalScheduledAcrossWeek,
