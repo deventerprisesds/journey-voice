@@ -868,39 +868,85 @@ serve(async (req) => {
             Object.entries(windowCapacities).map(([name, cap]) => [name, cap.remainingMinutes])
           )};
 
+          // Per-day step trace for placement decisions
+          const placementStart = Date.now();
+          const dayPlacements: Array<Record<string, unknown>> = [];
+          const dayRejections: Array<Record<string, unknown>> = [];
+          const dayKeywordOverrides: Array<Record<string, unknown>> = [];
+
           for (const task of dedupedCandidates) {
-            const duration = task.estimate_minutes || 
+            const duration = task.estimate_minutes ||
               categoryMappings[task.category]?.estimatedDuration || 60;
-            const preferredWindows = getPreferredWindows(task.category, categoryMappings, activeWindowNames);
-            
+
+            // KEYWORD OVERRIDE: contextRules.keywords beats category default.
+            // e.g. "Go to the mall" → matches "shopping" → after_work,
+            // even if LIFE category would otherwise allow flexible (9-22).
+            const keywordOverride = getKeywordWindowOverride(task.title, contextKeywords, activeWindowNames);
+            let preferredWindows: string[];
+            if (keywordOverride) {
+              preferredWindows = [keywordOverride.window];
+              dayKeywordOverrides.push({
+                taskId: task.id,
+                title: task.title,
+                category: task.category,
+                matchedKeyword: keywordOverride.matchedKeyword,
+                overrideWindow: keywordOverride.window,
+              });
+              console.log(`      🔑 Keyword override: "${task.title}" matched "${keywordOverride.matchedKeyword}" → ${keywordOverride.window}`);
+            } else {
+              preferredWindows = getPreferredWindows(task.category, categoryMappings, activeWindowNames);
+            }
+
             let assigned = false;
+            let assignedWindow: string | null = null;
             for (const winName of preferredWindows) {
               if ((windowRemaining[winName] || 0) >= duration) {
                 windowRemaining[winName] -= duration;
                 selectedCandidates.push(task);
                 assigned = true;
+                assignedWindow = winName;
                 break;
               }
             }
 
-            // Flexible capacity aggregation: if task's preferred windows span all active windows,
-            // check aggregate remaining across all windows
-            if (!assigned && preferredWindows.length === activeWindowNames.length) {
+            // Flexible capacity aggregation: ONLY when there is no keyword override.
+            // Keyword overrides are authoritative — don't sneak around them via aggregate fit.
+            if (!assigned && !keywordOverride && preferredWindows.length === activeWindowNames.length) {
               const totalRemaining = Object.values(windowRemaining).reduce((s, v) => s + v, 0);
               if (totalRemaining >= duration) {
-                // Assign to the window with the most remaining capacity
                 const bestWindow = Object.entries(windowRemaining)
                   .sort(([,a], [,b]) => b - a)[0];
                 if (bestWindow) {
                   windowRemaining[bestWindow[0]] -= duration;
                   selectedCandidates.push(task);
                   assigned = true;
+                  assignedWindow = bestWindow[0];
                   console.log(`    ✅ "${task.title}" assigned via aggregate capacity to ${bestWindow[0]}`);
                 }
               }
             }
 
-            if (!assigned) {
+            if (assigned) {
+              dayPlacements.push({
+                taskId: task.id,
+                title: task.title,
+                category: task.category,
+                score: task.score,
+                duration,
+                window: assignedWindow,
+                keywordOverride: keywordOverride?.matchedKeyword ?? null,
+              });
+            } else {
+              dayRejections.push({
+                taskId: task.id,
+                title: task.title,
+                category: task.category,
+                score: task.score,
+                duration,
+                preferredWindows,
+                reason: 'no_window_capacity',
+                keywordOverride: keywordOverride?.matchedKeyword ?? null,
+              });
               console.log(`    ⚠️ "${task.title}" doesn't fit any allowed window — skipping`);
             }
 
@@ -908,13 +954,34 @@ serve(async (req) => {
             if (totalRemaining <= 0) break;
           }
 
+          pushStep(
+            `PLACEMENT_${targetISO}`,
+            {
+              targetISO,
+              dayOfWeek: targetDayOfWeek,
+              isWeekend,
+              activeWindows: activeWindowNames,
+              windowCapacities: Object.fromEntries(
+                Object.entries(windowCapacities).map(([n, c]) => [n, { total: c.totalMinutes, remaining: c.remainingMinutes }])
+              ),
+              candidateCount: dedupedCandidates.length,
+            },
+            {
+              accepted: dayPlacements,
+              rejected: dayRejections,
+              keywordOverrides: dayKeywordOverrides,
+              windowRemainingAfter: windowRemaining,
+            },
+            placementStart
+          );
+
           console.log(`    🎯 ${selectedCandidates.length} candidates selected for ${targetISO}`);
           selectedCandidates.forEach((t, i) => {
             console.log(`      ${i + 1}. "${t.title}" (score: ${t.score}, est: ${t.estimate_minutes || 60}m, board: ${t.isPriorityBoard})`);
           });
 
           if (selectedCandidates.length === 0) {
-            weekResults[targetISO] = { scheduled: 0, reason: 'no_fit' };
+            weekResults[targetISO] = { scheduled: 0, reason: 'no_fit', rejections: dayRejections.length };
             continue;
           }
 
