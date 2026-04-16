@@ -92,12 +92,11 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
       console.warn('[DailyReviewModal] ⚠️ Published host running as DEMO user — auth fallback bug. Daily Review will be unreliable.');
     }
 
-    // 2. Force tasks to refresh so the pipeline runs on fresh data, not stale cache
-    try {
-      onTaskUpdate();
-    } catch (err) {
-      console.warn('[DailyReviewModal] onTaskUpdate failed on open:', err);
-    }
+    // NOTE: We intentionally do NOT call onTaskUpdate() here. The parent
+    // (TasksPage) renders a full-screen loader whenever useUnifiedTasks is
+    // reloading, which unmounts FocusView (and this modal). That caused a
+    // mount → open → reload → unmount → remount loop. Tasks are already fresh
+    // from the parent's initial load + realtime subscription.
 
     if (!user?.id) return;
 
