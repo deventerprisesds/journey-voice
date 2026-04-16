@@ -7,7 +7,7 @@
  */
 
 import { format } from 'date-fns';
-import { DEFAULT_SCHEDULING_CONFIG } from '@/config/schedulingRules';
+import { DEFAULT_SCHEDULING_CONFIG, type SchedulingConfig, mergeSchedulingConfig } from '@/config/schedulingRules';
 import { scoreSchedulingCandidate } from '@/lib/schedulingCandidates';
 import { getTimePartsInTimezone } from '@/lib/date';
 import { Task, ExternalCalendarEvent } from '@/types/task';
@@ -90,8 +90,14 @@ export function buildDailyReviewReasoning(
   tz: string,
   todayStr: string,
   isWeekend: boolean,
-  userId: string | null
+  userId: string | null,
+  userConfig?: Partial<SchedulingConfig> | null
 ): ScheduleReasoning {
+  // Resolve config: user prefs merged over defaults, or defaults if none provided
+  const config: SchedulingConfig = userConfig
+    ? mergeSchedulingConfig(userConfig)
+    : DEFAULT_SCHEDULING_CONFIG;
+  const usingUserConfig = !!userConfig;
   const steps: StepResult[] = [];
 
   // ── Step 1: FILTER_SCHEDULED_TODAY ──
@@ -147,10 +153,10 @@ export function buildDailyReviewReasoning(
   // ── Step 3: WINDOW_ASSIGNMENT ──
   const { result: windowData, stepResult: s3 } = runStep(
     'WINDOW_ASSIGNMENT',
-    { scheduledTodayCount: todayTasks.length, isWeekend },
+    { scheduledTodayCount: todayTasks.length, isWeekend, usingUserConfig },
     () => {
       const windowToCategories: Record<string, string[]> = {};
-      for (const [cat, mapping] of Object.entries(DEFAULT_SCHEDULING_CONFIG.categoryMappings)) {
+      for (const [cat, mapping] of Object.entries(config.categoryMappings)) {
         for (const win of mapping.defaultTimeWindow) {
           if (!windowToCategories[win]) windowToCategories[win] = [];
           windowToCategories[win].push(cat);
@@ -208,7 +214,7 @@ export function buildDailyReviewReasoning(
         const eligibleCats = windowData.windowToCategories[w.window] || [];
         const eligibleTasks = incompleteTasks.filter(t => eligibleCats.includes(t.category || ''));
 
-        const windowDef = DEFAULT_SCHEDULING_CONFIG.timeWindows[w.window as keyof typeof DEFAULT_SCHEDULING_CONFIG.timeWindows];
+        const windowDef = config.timeWindows[w.window as keyof typeof config.timeWindows];
         if (windowDef) {
           const windowStart = windowDef.start;
           const windowEnd = windowDef.end;
@@ -324,7 +330,8 @@ export function buildDailyReviewReasoning(
       } catch { /* SSR safety */ }
       return {
         buildVersion,
-        swCacheVersion: 'v9',
+        swCacheVersion: 'v10',
+        usingUserConfig,
         userAgent: typeof navigator !== 'undefined' ? navigator.userAgent.slice(0, 80) : 'unknown',
       };
     }
@@ -404,7 +411,29 @@ export function buildDailyReviewReasoning(
       missingExplanationCount: allMissingExplanations.length,
       buildVersion: versionProof.buildVersion,
       swCacheVersion: versionProof.swCacheVersion,
+      usingUserConfig,
     },
+  });
+
+  // ── Console fallback trace: ensures pipeline output is visible
+  // even if the activity_log POST is blocked by RLS, network, or auth ──
+  console.log('[DailyReviewPipeline] trace', {
+    userId,
+    usingUserConfig,
+    buildVersion: versionProof.buildVersion,
+    swCacheVersion: versionProof.swCacheVersion,
+    todayStr,
+    tz,
+    isWeekend,
+    stats: reasoning.stats,
+    windowSummaries: reasoning.windowSummaries.map(w => ({
+      window: w.window,
+      taskCount: w.taskCount,
+      categoryBreakdown: w.categoryBreakdown,
+      missingCategories: w.missingCategories,
+    })),
+    explanations,
+    missingExplanations: allMissingExplanations,
   });
 
   return reasoning;
