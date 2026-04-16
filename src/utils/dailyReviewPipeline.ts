@@ -381,6 +381,52 @@ export function buildDailyReviewReasoning(
   );
   steps.push(s8);
 
+  // ── Step 9: QC_VIOLATIONS — verify scheduled tasks against contextRules.keywords ──
+  // Catches "go to the mall scheduled at 9pm" and similar hard-rule breaches that
+  // slipped past the nightly builder. Surfaced both in UI and console trace.
+  const { result: qcResult, stepResult: s9 } = runStep(
+    'QC_VIOLATIONS',
+    { todayTaskCount: todayTasks.length },
+    () => {
+      const keywords = (config as any)?.contextRules?.keywords as Record<string, string[]> | undefined;
+      const violations: QcViolation[] = [];
+      if (keywords && todayTasks.length > 0) {
+        for (const task of todayTasks) {
+          if (!task.start_time || !task.title) continue;
+          const lower = task.title.toLowerCase();
+          const { hour } = getTimePartsInTimezone(task.start_time, tz);
+          let scheduledWindow: string;
+          if (hour >= 6 && hour < 9) scheduledWindow = 'morning';
+          else if (hour >= 9 && hour < 17) scheduledWindow = 'business_hours';
+          else if (hour >= 17 && hour < 19) scheduledWindow = 'after_work';
+          else if (hour >= 19 && hour < 23) scheduledWindow = 'evening';
+          else scheduledWindow = 'off_hours';
+
+          for (const [keyword, mapping] of Object.entries(keywords)) {
+            if (!Array.isArray(mapping) || mapping.length === 0) continue;
+            const expected = mapping[0];
+            if (!expected || expected === 'flexible') continue;
+            const kw = keyword.toLowerCase().replace(/_/g, ' ');
+            if (kw.length < 3) continue;
+            if (lower.includes(kw) && expected !== scheduledWindow) {
+              violations.push({
+                taskId: task.id,
+                title: task.title,
+                scheduledWindow,
+                expectedWindow: expected,
+                matchedKeyword: keyword,
+                severity: scheduledWindow === 'off_hours' ? 'error' : 'warning',
+              });
+              break; // one violation per task is enough
+            }
+          }
+        }
+      }
+      return { violations, count: violations.length };
+    }
+  );
+  steps.push(s9);
+
   // ── Build explanations ──
   const explanations: string[] = [];
   if (scopedStats.rolledOverCount > 0) {
@@ -416,8 +462,20 @@ export function buildDailyReviewReasoning(
   const hour = new Date().getHours();
   const greetingWord = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
 
+  // Backlog overdue IDs (mirror of count in SCOPE_STATS, exposed for UI traceability)
+  const backlogOverdueIds = tasks
+    .filter(t => t.due_date && new Date(t.due_date) < new Date() && t.status !== 'DONE' && !t.completed_at && !todayTasks.includes(t))
+    .map(t => t.id);
+
+  const hostname = typeof window !== 'undefined' ? window.location.hostname : 'ssr';
   const reasoning: ScheduleReasoning = {
     greeting: `${greetingWord} — here's your day`,
+    authProvenance: {
+      userId,
+      isDemoUserId: userId === '00000000-0000-0000-0000-000000000001',
+      isPublishedHost: hostname === 'journey-voice.lovable.app',
+      hostname,
+    },
     stats: {
       scheduledCount: scheduledToday.count,
       rolledOverCount: scopedStats.rolledOverCount,
@@ -429,9 +487,16 @@ export function buildDailyReviewReasoning(
       pendingAssignmentCount: assignmentQC.pendingAssignmentCount,
       assignmentsScheduledToday: assignmentQC.assignmentsScheduledToday,
     },
+    scopedIds: {
+      scheduledTodayIds: scheduledToday.ids,
+      rolledOverIds: scopedStats.rolledOverIds,
+      overdueIds: scopedStats.overdueIds,
+      backlogOverdueIds,
+    },
     explanations,
     windowSummaries: windowData.summaries,
     missingExplanations: allMissingExplanations,
+    qcViolations: qcResult.violations,
     pipelineTrace: steps,
   };
 
@@ -450,6 +515,10 @@ export function buildDailyReviewReasoning(
         durationMs: s.durationMs,
       })),
       finalStats: reasoning.stats,
+      scopedIds: reasoning.scopedIds,
+      qcViolationCount: reasoning.qcViolations.length,
+      qcViolations: reasoning.qcViolations,
+      authProvenance: reasoning.authProvenance,
       explanationCount: explanations.length,
       missingExplanationCount: allMissingExplanations.length,
       buildVersion: versionProof.buildVersion,
@@ -458,10 +527,24 @@ export function buildDailyReviewReasoning(
     },
   });
 
+  // Fire a separate row when QC violations exist so they're easy to query
+  if (reasoning.qcViolations.length > 0) {
+    logActivity({
+      userId,
+      activityType: 'daily_review_qc_violation',
+      status: 'completed',
+      stage: 'qc_scan',
+      metadata: {
+        violations: reasoning.qcViolations,
+        authProvenance: reasoning.authProvenance,
+      },
+    });
+  }
+
   // ── Console fallback trace: ensures pipeline output is visible
   // even if the activity_log POST is blocked by RLS, network, or auth ──
   console.log('[DailyReviewPipeline] trace', {
-    userId,
+    authProvenance: reasoning.authProvenance,
     usingUserConfig,
     buildVersion: versionProof.buildVersion,
     swCacheVersion: versionProof.swCacheVersion,
@@ -469,11 +552,14 @@ export function buildDailyReviewReasoning(
     tz,
     isWeekend,
     stats: reasoning.stats,
+    scopedIds: reasoning.scopedIds,
+    qcViolations: reasoning.qcViolations,
     windowSummaries: reasoning.windowSummaries.map(w => ({
       window: w.window,
       taskCount: w.taskCount,
       categoryBreakdown: w.categoryBreakdown,
       missingCategories: w.missingCategories,
+      eligibleUnscheduled: w.eligibleUnscheduled.map(t => ({ id: t.id, title: t.title, reason: t.reason })),
     })),
     explanations,
     missingExplanations: allMissingExplanations,
