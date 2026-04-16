@@ -516,7 +516,11 @@ export function buildDailyReviewReasoning(
 
   // Backlog overdue IDs (mirror of count in SCOPE_STATS, exposed for UI traceability)
   const backlogOverdueIds = tasks
-    .filter(t => t.due_date && new Date(t.due_date) < new Date() && t.status !== 'DONE' && !t.completed_at && !todayTasks.includes(t))
+    .filter(t => {
+      if (!t.due_date || t.status === 'DONE' || t.completed_at) return false;
+      const dueStr = t.due_date.length >= 10 ? t.due_date.slice(0, 10) : t.due_date;
+      return dueStr < todayStr && !todayTasks.includes(t);
+    })
     .map(t => t.id);
 
   const hostname = typeof window !== 'undefined' ? window.location.hostname : 'ssr';
