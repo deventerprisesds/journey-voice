@@ -24,14 +24,33 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 // ============================================================================
 const USE_V2_AUTH = true;
 
-// Check if running in Lovable iframe preview or preview URL
+// Check if running in Lovable iframe preview or preview URL.
+// CRITICAL: the published custom domain (journey-voice.lovable.app) must NEVER
+// be treated as preview, otherwise demo-mode fallback hijacks the live dev account
+// and Daily Review runs against user 000...001 instead of the authenticated user.
+const PUBLISHED_HOSTS = new Set(['journey-voice.lovable.app']);
+
 const isDevelopmentMode = () => {
   const hostname = window.location.hostname;
-  return window !== window.top || 
+  // Hard allow-list for known published hosts — these are always live.
+  if (PUBLISHED_HOSTS.has(hostname)) return false;
+  return window !== window.top ||
          hostname.includes('lovableproject.com') ||
-         hostname.includes('lovable.app') && hostname.includes('preview') ||
+         (hostname.includes('lovable.app') && hostname.includes('preview')) ||
          hostname === 'localhost';
 };
+
+// Auth provenance helper used across the app to verify who is actually
+// driving requests. Surfacing this on every Daily Review run makes the
+// "are we running as demo or live?" question instantly answerable.
+export const getAuthProvenance = (user: { id?: string; email?: string } | null, isDemoMode: boolean) => ({
+  hostname: typeof window !== 'undefined' ? window.location.hostname : 'ssr',
+  isPublishedHost: typeof window !== 'undefined' && PUBLISHED_HOSTS.has(window.location.hostname),
+  userId: user?.id ?? null,
+  email: user?.email ?? null,
+  isDemoMode,
+  isDemoUserId: user?.id === '00000000-0000-0000-0000-000000000001',
+});
 
 // Create consistent mock user for preview mode
 const createMockUser = (): User => ({

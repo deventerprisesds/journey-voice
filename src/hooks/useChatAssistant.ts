@@ -236,6 +236,25 @@ export function useChatAssistant(): UseChatAssistantReturn {
         finalAssistantId = defaultAssistant?.id || null;
       }
 
+      // FIX: ai_threads has a unique constraint on user_id (ai_threads_user_id_key),
+      // so a per-user single-row design is enforced at the DB level. Trying to
+      // INSERT a second row throws 23505 ("duplicate key") and silently breaks
+      // the chat experience. Instead, look up any existing thread for this user
+      // first and reuse it; only insert when truly absent.
+      const { data: anyExisting } = await supabase
+        .from('ai_threads')
+        .select('id, assistant_id')
+        .eq('user_id', user.id)
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (anyExisting) {
+        setThreadId(anyExisting.id);
+        await loadMessages(anyExisting.id);
+        return;
+      }
+
       const { data: newThread, error } = await supabase
         .from('ai_threads')
         .insert({
@@ -246,7 +265,25 @@ export function useChatAssistant(): UseChatAssistantReturn {
         .select()
         .single();
 
-      if (error) throw error;
+      if (error) {
+        // Race condition fallback: another tab inserted between our check and
+        // insert. Re-read and reuse instead of surfacing a 23505 error.
+        if ((error as any).code === '23505') {
+          const { data: raced } = await supabase
+            .from('ai_threads')
+            .select('id')
+            .eq('user_id', user.id)
+            .order('updated_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          if (raced) {
+            setThreadId(raced.id);
+            await loadMessages(raced.id);
+            return;
+          }
+        }
+        throw error;
+      }
 
       setThreadId(newThread.id);
       setMessages([]);

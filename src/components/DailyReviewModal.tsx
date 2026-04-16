@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input';
 import {
   Sunrise, Coffee, Sunset, Moon, Calendar, Send, Sparkles,
   CheckCircle2, Clock, AlertTriangle, ArrowRight, SkipForward,
-  Loader2, Info, BookOpen
+  Loader2, Info, BookOpen, ShieldAlert
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Task, ExternalCalendarEvent } from '@/types/task';
@@ -75,7 +75,22 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
     reviewSessionIdRef.current = `review-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     sentMessageMarkersRef.current = new Set();
     messageFloorIndexRef.current = messages.length;
-    console.log('[DailyReviewModal] opened, reviewSessionId:', reviewSessionIdRef.current, 'messageFloor:', messageFloorIndexRef.current);
+
+    // Provenance: prove which user is actually driving this run on which host.
+    // This is the single source of truth when debugging "is it demo or live?".
+    const provenance = {
+      hostname: window.location.hostname,
+      isPublishedHost: window.location.hostname === 'journey-voice.lovable.app',
+      userId: user?.id ?? null,
+      email: user?.email ?? null,
+      isDemoUserId: user?.id === '00000000-0000-0000-0000-000000000001',
+      reviewSessionId: reviewSessionIdRef.current,
+      messageFloor: messageFloorIndexRef.current,
+    };
+    console.log('[DailyReviewModal] opened', provenance);
+    if (provenance.isPublishedHost && provenance.isDemoUserId) {
+      console.warn('[DailyReviewModal] ⚠️ Published host running as DEMO user — auth fallback bug. Daily Review will be unreliable.');
+    }
 
     // 2. Force tasks to refresh so the pipeline runs on fresh data, not stale cache
     try {
@@ -115,7 +130,7 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
       }
       if (data?.config) {
         setUserConfig(data.config);
-        console.log('[DailyReviewModal] loaded user scheduling config');
+        console.log('[DailyReviewModal] loaded user scheduling config for', user.email);
       } else {
         console.log('[DailyReviewModal] no user_scheduling_prefs row — pipeline will use defaults');
       }
@@ -208,9 +223,26 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
           <SheetTitle className="text-lg font-bold text-foreground">
             {reasoning.greeting}
           </SheetTitle>
-          <p className="text-sm text-muted-foreground">
-            {format(new Date(), 'EEEE, MMMM d')}
-          </p>
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-sm text-muted-foreground">
+              {format(new Date(), 'EEEE, MMMM d')}
+            </p>
+            {/* Auth provenance badge — proves which user the run is bound to */}
+            <Badge
+              variant="outline"
+              className={cn(
+                "text-[10px] h-5 px-1.5",
+                reasoning.authProvenance.isDemoUserId
+                  ? "bg-amber-500/10 text-amber-600 border-amber-500/30"
+                  : "bg-primary/10 text-primary border-primary/30"
+              )}
+              title={`${reasoning.authProvenance.hostname} · ${reasoning.authProvenance.userId ?? 'no-user'}`}
+            >
+              {reasoning.authProvenance.isDemoUserId
+                ? 'Demo data'
+                : `Live: ${user?.email ?? reasoning.authProvenance.userId?.slice(0, 8)}`}
+            </Badge>
+          </div>
         </SheetHeader>
 
         <ScrollArea className="flex-1 min-h-0">
@@ -273,6 +305,22 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
               </div>
             )}
 
+            {/* QC Violations — hard rule breaches like "mall at 9pm" */}
+            {reasoning.qcViolations.length > 0 && (
+              <div className="bg-amber-500/5 border border-amber-500/30 rounded-lg p-3 space-y-2">
+                <div className="flex items-center gap-1.5 text-sm font-medium text-amber-700 dark:text-amber-400">
+                  <ShieldAlert className="h-4 w-4" />
+                  Schedule QC — {reasoning.qcViolations.length} violation{reasoning.qcViolations.length > 1 ? 's' : ''}
+                </div>
+                {reasoning.qcViolations.map(v => (
+                  <p key={v.taskId} className="text-xs text-amber-700 dark:text-amber-400 pl-5">
+                    ⚠ "{v.title}" placed in <span className="font-medium">{v.scheduledWindow}</span> but keyword
+                    "{v.matchedKeyword}" expects <span className="font-medium">{v.expectedWindow}</span>
+                  </p>
+                ))}
+              </div>
+            )}
+
             {/* Window Summaries */}
             <div className="space-y-1">
               <div className="text-sm font-medium text-foreground mb-2">Time Windows</div>
@@ -292,12 +340,23 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
                   </div>
                   {ws.taskCount > 0 && Object.keys(ws.categoryBreakdown).length > 0 && (
                     <div className="pl-6 text-xs text-muted-foreground">
-                      {Object.entries(ws.categoryBreakdown).map(([cat, count]) => `${cat}(${count})`).join(', ')}
+                      Placed: {Object.entries(ws.categoryBreakdown).map(([cat, count]) => `${cat}(${count})`).join(', ')}
                     </div>
                   )}
                   {ws.missingCategories.length > 0 && (
                     <div className="pl-6 text-xs text-amber-600 dark:text-amber-400">
                       {ws.missingCategories.map(cat => `⚠ No ${cat} tasks placed`).join(' · ')}
+                    </div>
+                  )}
+                  {ws.eligibleUnscheduled.length > 0 && (
+                    <div className="pl-6 text-[11px] text-muted-foreground space-y-0.5">
+                      <div className="font-medium">Eligible but not placed here:</div>
+                      {ws.eligibleUnscheduled.slice(0, 3).map(t => (
+                        <div key={t.id} className="truncate">• {t.title} <span className="opacity-60">({t.reason})</span></div>
+                      ))}
+                      {ws.eligibleUnscheduled.length > 3 && (
+                        <div className="opacity-60">+ {ws.eligibleUnscheduled.length - 3} more</div>
+                      )}
                     </div>
                   )}
                 </div>
