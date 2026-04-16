@@ -189,6 +189,7 @@ export function buildDailyReviewReasoning(
       }
 
       const windowNames = isWeekend ? ['weekends'] : ['morning', 'business_hours', 'after_work', 'evening'];
+      const incompleteForEligibility = tasks.filter(t => t.status !== 'DONE' && !t.completed_at);
       const summaries: WindowSummary[] = windowNames.map(w => {
         const tasksInWindow = todayTasks.filter(t => {
           if (!t.start_time) return false;
@@ -209,6 +210,22 @@ export function buildDailyReviewReasoning(
         const expectedCats = windowToCategories[w] || [];
         const missingCategories = expectedCats.filter(cat => !categoryBreakdown[cat]);
 
+        // Tasks that match this window's expected categories but were not scheduled today.
+        const eligibleUnscheduled = incompleteForEligibility
+          .filter(t => expectedCats.includes(t.category || ''))
+          .filter(t => !todayTasks.includes(t))
+          .slice(0, 8)
+          .map(t => ({
+            id: t.id,
+            title: t.title,
+            category: t.category || 'UNCATEGORIZED',
+            reason: t.start_time
+              ? (new Date(t.start_time).toLocaleDateString('en-CA', { timeZone: tz }) === todayStr
+                ? 'placed in another window today'
+                : 'scheduled on another day')
+              : 'unscheduled in backlog',
+          }));
+
         return {
           window: w,
           label: windowLabels[w] || w,
@@ -218,13 +235,14 @@ export function buildDailyReviewReasoning(
             : 'Empty',
           categoryBreakdown,
           missingCategories,
+          eligibleUnscheduled,
         };
       });
 
       return { summaries, windowToCategories };
     }
   );
-  steps.push({ ...s3, outputs: { summaries: windowData.summaries.map(s => ({ window: s.window, taskCount: s.taskCount, categoryBreakdown: s.categoryBreakdown, missingCategories: s.missingCategories })) } });
+  steps.push({ ...s3, outputs: { summaries: windowData.summaries.map(s => ({ window: s.window, taskCount: s.taskCount, categoryBreakdown: s.categoryBreakdown, missingCategories: s.missingCategories, eligibleUnscheduledCount: s.eligibleUnscheduled.length })) } });
 
   // ── Step 4: EMPTY_WINDOW_DIAGNOSIS ──
   const { result: emptyDiagnosis, stepResult: s4 } = runStep(
