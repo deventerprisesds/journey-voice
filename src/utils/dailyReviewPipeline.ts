@@ -17,6 +17,12 @@ import { logActivity } from '@/utils/activityLogger';
 
 export interface ScheduleReasoning {
   greeting: string;
+  authProvenance: {
+    userId: string | null;
+    isDemoUserId: boolean;
+    isPublishedHost: boolean;
+    hostname: string;
+  };
   stats: {
     scheduledCount: number;
     rolledOverCount: number;
@@ -28,9 +34,17 @@ export interface ScheduleReasoning {
     pendingAssignmentCount: number;
     assignmentsScheduledToday: number;
   };
+  /** IDs scoped to the today-scheduled subset only — these power the visible counts. */
+  scopedIds: {
+    scheduledTodayIds: string[];
+    rolledOverIds: string[];
+    overdueIds: string[];
+    backlogOverdueIds: string[];
+  };
   explanations: string[];
   windowSummaries: WindowSummary[];
   missingExplanations: string[];
+  qcViolations: QcViolation[];
   pipelineTrace: StepResult[];
 }
 
@@ -41,6 +55,17 @@ export interface WindowSummary {
   capacityNote: string;
   categoryBreakdown: Record<string, number>;
   missingCategories: string[];
+  /** Tasks that match this window's expected categories but were NOT placed today. */
+  eligibleUnscheduled: Array<{ id: string; title: string; category: string; reason: string }>;
+}
+
+export interface QcViolation {
+  taskId: string;
+  title: string;
+  scheduledWindow: string;
+  expectedWindow: string;
+  matchedKeyword: string;
+  severity: 'warning' | 'error';
 }
 
 interface StepResult {
