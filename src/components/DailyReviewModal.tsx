@@ -305,6 +305,22 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
               </div>
             )}
 
+            {/* QC Violations — hard rule breaches like "mall at 9pm" */}
+            {reasoning.qcViolations.length > 0 && (
+              <div className="bg-amber-500/5 border border-amber-500/30 rounded-lg p-3 space-y-2">
+                <div className="flex items-center gap-1.5 text-sm font-medium text-amber-700 dark:text-amber-400">
+                  <ShieldAlert className="h-4 w-4" />
+                  Schedule QC — {reasoning.qcViolations.length} violation{reasoning.qcViolations.length > 1 ? 's' : ''}
+                </div>
+                {reasoning.qcViolations.map(v => (
+                  <p key={v.taskId} className="text-xs text-amber-700 dark:text-amber-400 pl-5">
+                    ⚠ "{v.title}" placed in <span className="font-medium">{v.scheduledWindow}</span> but keyword
+                    "{v.matchedKeyword}" expects <span className="font-medium">{v.expectedWindow}</span>
+                  </p>
+                ))}
+              </div>
+            )}
+
             {/* Window Summaries */}
             <div className="space-y-1">
               <div className="text-sm font-medium text-foreground mb-2">Time Windows</div>
@@ -324,12 +340,23 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
                   </div>
                   {ws.taskCount > 0 && Object.keys(ws.categoryBreakdown).length > 0 && (
                     <div className="pl-6 text-xs text-muted-foreground">
-                      {Object.entries(ws.categoryBreakdown).map(([cat, count]) => `${cat}(${count})`).join(', ')}
+                      Placed: {Object.entries(ws.categoryBreakdown).map(([cat, count]) => `${cat}(${count})`).join(', ')}
                     </div>
                   )}
                   {ws.missingCategories.length > 0 && (
                     <div className="pl-6 text-xs text-amber-600 dark:text-amber-400">
                       {ws.missingCategories.map(cat => `⚠ No ${cat} tasks placed`).join(' · ')}
+                    </div>
+                  )}
+                  {ws.eligibleUnscheduled.length > 0 && (
+                    <div className="pl-6 text-[11px] text-muted-foreground space-y-0.5">
+                      <div className="font-medium">Eligible but not placed here:</div>
+                      {ws.eligibleUnscheduled.slice(0, 3).map(t => (
+                        <div key={t.id} className="truncate">• {t.title} <span className="opacity-60">({t.reason})</span></div>
+                      ))}
+                      {ws.eligibleUnscheduled.length > 3 && (
+                        <div className="opacity-60">+ {ws.eligibleUnscheduled.length - 3} more</div>
+                      )}
                     </div>
                   )}
                 </div>
