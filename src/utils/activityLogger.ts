@@ -78,7 +78,9 @@ export async function logActivity(params: ActivityLogParams): Promise<void> {
   // Use auth token if available, otherwise anon key
   const authToken = getAuthToken() || SUPABASE_PUBLISHABLE_KEY;
 
-  // Fire-and-forget POST to activity_log via REST
+  // Fire-and-forget POST to activity_log via REST.
+  // We log non-OK status codes to the console (RLS denials, 401/403, etc.)
+  // so silent failures become visible. Still never throws or blocks the UI.
   fetch(`${SUPABASE_URL}/rest/v1/activity_log`, {
     method: 'POST',
     headers: {
@@ -88,10 +90,29 @@ export async function logActivity(params: ActivityLogParams): Promise<void> {
       'Prefer': 'return=minimal'
     },
     body: JSON.stringify(body)
-  }).catch(() => {
-    // Silent failure - this is intentional
-    // We don't want logging failures to affect the app
-  });
+  })
+    .then(async (res) => {
+      if (!res.ok) {
+        let errBody = '';
+        try { errBody = await res.text(); } catch { /* ignore */ }
+        console.error(
+          '[activityLogger] POST failed:',
+          res.status,
+          res.statusText,
+          { activityType: params.activityType, stage: params.stage, userId: params.userId, body: errBody.slice(0, 500) }
+        );
+      } else {
+        // Success path is quiet, but useful when chasing missing rows
+        console.debug('[activityLogger] POST ok:', res.status, params.activityType, params.stage || '');
+      }
+    })
+    .catch((err) => {
+      console.error('[activityLogger] Network error posting activity:', err, {
+        activityType: params.activityType,
+        stage: params.stage,
+        userId: params.userId,
+      });
+    });
 }
 
 /**

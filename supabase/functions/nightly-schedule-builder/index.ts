@@ -198,6 +198,42 @@ function getPreferredWindows(
   return preferred.length > 0 ? preferred : activeWindowNames;
 }
 
+/**
+ * Inspect a task title for contextRules keyword matches and return the
+ * preferred window that should override the category default, if any.
+ *
+ * Example: "Go to the mall" → matches "shopping" → returns "after_work".
+ * This prevents nonsensical placements like errands at 9pm.
+ *
+ * Returns { window, matchedKeyword } when a match is found AND the resulting
+ * window is in the active window set for the day. Returns null otherwise.
+ */
+function getKeywordWindowOverride(
+  title: string,
+  contextKeywords: Record<string, string[]> | undefined,
+  activeWindowNames: string[]
+): { window: string; matchedKeyword: string } | null {
+  if (!contextKeywords || !title) return null;
+  const lower = title.toLowerCase();
+
+  for (const [keyword, mapping] of Object.entries(contextKeywords)) {
+    // mapping is [timeWindow, status] per schedulingRules.ts
+    if (!Array.isArray(mapping) || mapping.length === 0) continue;
+    const targetWindow = mapping[0];
+    if (!targetWindow || targetWindow === 'flexible') continue;
+
+    // Match by word boundary (and underscore→space variant for keys like "follow_up")
+    const kw = keyword.toLowerCase().replace(/_/g, ' ');
+    if (kw.length < 3) continue;
+    if (lower.includes(kw)) {
+      if (activeWindowNames.includes(targetWindow)) {
+        return { window: targetWindow, matchedKeyword: keyword };
+      }
+    }
+  }
+  return null;
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -211,8 +247,11 @@ serve(async (req) => {
     try { body = await req.json(); } catch { /* no body = full run */ }
     const requestedUserId: string | undefined = body?.userId;
     const singleDay: boolean = body?.singleDay === true;
+    const triggerSource: string = typeof body?.triggerSource === 'string'
+      ? body.triggerSource
+      : (singleDay ? 'manual_reschedule' : 'cron');
 
-    if (singleDay) console.log(`⚡ Single-day mode requested${requestedUserId ? ` for user ${requestedUserId}` : ''}`);
+    if (singleDay) console.log(`⚡ Single-day mode requested${requestedUserId ? ` for user ${requestedUserId}` : ''} (trigger: ${triggerSource})`);
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     
@@ -247,11 +286,22 @@ serve(async (req) => {
       const userId = userPref.user_id;
       const timezone = userPref.timezone || 'America/New_York';
       const config = userPref.config || {};
-      
+
       const { timeWindows, categoryMappings } = resolveConfig(config);
-      
-      console.log(`\n🌙 Processing nightly schedule for user ${userId} (${timezone})`);
-      
+      // contextRules.keywords drives keyword-based window overrides
+      // (e.g. "mall" → after_work, even if category LIFE allows flexible 9-22)
+      const contextKeywords: Record<string, string[]> | undefined =
+        (config?.contextRules?.keywords) || undefined;
+
+      // Per-user run identity + structured trace
+      const runId = (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+      const steps: Array<{ step: string; inputs: Record<string, unknown>; outputs: Record<string, unknown>; durationMs: number }> = [];
+      const pushStep = (step: string, inputs: Record<string, unknown>, outputs: Record<string, unknown>, t0: number) => {
+        steps.push({ step, inputs, outputs, durationMs: Date.now() - t0 });
+      };
+
+      console.log(`\n🌙 Processing nightly schedule for user ${userId} (${timezone}) — runId=${runId} trigger=${triggerSource}`);
+
       try {
         // ==========================================
         // STEP 0: SYNC ASSIGNMENTS (EMBA + MIT)
@@ -818,39 +868,85 @@ serve(async (req) => {
             Object.entries(windowCapacities).map(([name, cap]) => [name, cap.remainingMinutes])
           )};
 
+          // Per-day step trace for placement decisions
+          const placementStart = Date.now();
+          const dayPlacements: Array<Record<string, unknown>> = [];
+          const dayRejections: Array<Record<string, unknown>> = [];
+          const dayKeywordOverrides: Array<Record<string, unknown>> = [];
+
           for (const task of dedupedCandidates) {
-            const duration = task.estimate_minutes || 
+            const duration = task.estimate_minutes ||
               categoryMappings[task.category]?.estimatedDuration || 60;
-            const preferredWindows = getPreferredWindows(task.category, categoryMappings, activeWindowNames);
-            
+
+            // KEYWORD OVERRIDE: contextRules.keywords beats category default.
+            // e.g. "Go to the mall" → matches "shopping" → after_work,
+            // even if LIFE category would otherwise allow flexible (9-22).
+            const keywordOverride = getKeywordWindowOverride(task.title, contextKeywords, activeWindowNames);
+            let preferredWindows: string[];
+            if (keywordOverride) {
+              preferredWindows = [keywordOverride.window];
+              dayKeywordOverrides.push({
+                taskId: task.id,
+                title: task.title,
+                category: task.category,
+                matchedKeyword: keywordOverride.matchedKeyword,
+                overrideWindow: keywordOverride.window,
+              });
+              console.log(`      🔑 Keyword override: "${task.title}" matched "${keywordOverride.matchedKeyword}" → ${keywordOverride.window}`);
+            } else {
+              preferredWindows = getPreferredWindows(task.category, categoryMappings, activeWindowNames);
+            }
+
             let assigned = false;
+            let assignedWindow: string | null = null;
             for (const winName of preferredWindows) {
               if ((windowRemaining[winName] || 0) >= duration) {
                 windowRemaining[winName] -= duration;
                 selectedCandidates.push(task);
                 assigned = true;
+                assignedWindow = winName;
                 break;
               }
             }
 
-            // Flexible capacity aggregation: if task's preferred windows span all active windows,
-            // check aggregate remaining across all windows
-            if (!assigned && preferredWindows.length === activeWindowNames.length) {
+            // Flexible capacity aggregation: ONLY when there is no keyword override.
+            // Keyword overrides are authoritative — don't sneak around them via aggregate fit.
+            if (!assigned && !keywordOverride && preferredWindows.length === activeWindowNames.length) {
               const totalRemaining = Object.values(windowRemaining).reduce((s, v) => s + v, 0);
               if (totalRemaining >= duration) {
-                // Assign to the window with the most remaining capacity
                 const bestWindow = Object.entries(windowRemaining)
                   .sort(([,a], [,b]) => b - a)[0];
                 if (bestWindow) {
                   windowRemaining[bestWindow[0]] -= duration;
                   selectedCandidates.push(task);
                   assigned = true;
+                  assignedWindow = bestWindow[0];
                   console.log(`    ✅ "${task.title}" assigned via aggregate capacity to ${bestWindow[0]}`);
                 }
               }
             }
 
-            if (!assigned) {
+            if (assigned) {
+              dayPlacements.push({
+                taskId: task.id,
+                title: task.title,
+                category: task.category,
+                score: task.score,
+                duration,
+                window: assignedWindow,
+                keywordOverride: keywordOverride?.matchedKeyword ?? null,
+              });
+            } else {
+              dayRejections.push({
+                taskId: task.id,
+                title: task.title,
+                category: task.category,
+                score: task.score,
+                duration,
+                preferredWindows,
+                reason: 'no_window_capacity',
+                keywordOverride: keywordOverride?.matchedKeyword ?? null,
+              });
               console.log(`    ⚠️ "${task.title}" doesn't fit any allowed window — skipping`);
             }
 
@@ -858,13 +954,34 @@ serve(async (req) => {
             if (totalRemaining <= 0) break;
           }
 
+          pushStep(
+            `PLACEMENT_${targetISO}`,
+            {
+              targetISO,
+              dayOfWeek: targetDayOfWeek,
+              isWeekend,
+              activeWindows: activeWindowNames,
+              windowCapacities: Object.fromEntries(
+                Object.entries(windowCapacities).map(([n, c]) => [n, { total: c.totalMinutes, remaining: c.remainingMinutes }])
+              ),
+              candidateCount: dedupedCandidates.length,
+            },
+            {
+              accepted: dayPlacements,
+              rejected: dayRejections,
+              keywordOverrides: dayKeywordOverrides,
+              windowRemainingAfter: windowRemaining,
+            },
+            placementStart
+          );
+
           console.log(`    🎯 ${selectedCandidates.length} candidates selected for ${targetISO}`);
           selectedCandidates.forEach((t, i) => {
             console.log(`      ${i + 1}. "${t.title}" (score: ${t.score}, est: ${t.estimate_minutes || 60}m, board: ${t.isPriorityBoard})`);
           });
 
           if (selectedCandidates.length === 0) {
-            weekResults[targetISO] = { scheduled: 0, reason: 'no_fit' };
+            weekResults[targetISO] = { scheduled: 0, reason: 'no_fit', rejections: dayRejections.length };
             continue;
           }
 
@@ -962,16 +1079,30 @@ serve(async (req) => {
           activity_type: 'nightly_schedule_built',
           status: 'completed',
           metadata: {
+            runId,
+            triggerSource,
+            singleDay,
             rolled_over: rolledOverCount,
             archived_stale: archivedStaleCount,
             total_scheduled: totalScheduledAcrossWeek,
             days_processed: totalDays,
             week_results: weekResults,
+            steps,
+            keyword_overrides_total: steps.reduce(
+              (sum, s) => sum + (Array.isArray((s.outputs as any)?.keywordOverrides) ? (s.outputs as any).keywordOverrides.length : 0),
+              0
+            ),
+            rejections_total: steps.reduce(
+              (sum, s) => sum + (Array.isArray((s.outputs as any)?.rejected) ? (s.outputs as any).rejected.length : 0),
+              0
+            ),
             processing_ms: Date.now() - startTime,
           },
         });
 
         results[userId] = {
+          runId,
+          triggerSource,
           rolledOver: rolledOverCount,
           archivedStale: archivedStaleCount,
           totalScheduled: totalScheduledAcrossWeek,
