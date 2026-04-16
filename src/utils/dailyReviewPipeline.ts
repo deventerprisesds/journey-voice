@@ -221,7 +221,7 @@ export function buildDailyReviewReasoning(
     logActivity({
       userId,
       activityType: 'daily_review_invariant_violation',
-      status: 'failed',
+      status: 'error',
       stage: 'scope_stats',
       metadata: { ...invariantDetails, todayStr, tz },
     });
