@@ -50,16 +50,45 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
   const [chatInput, setChatInput] = useState('');
   const [isConfirming, setIsConfirming] = useState(false);
   const [builderLog, setBuilderLog] = useState<any>(null);
+  const [userConfig, setUserConfig] = useState<any>(null);
+
+  // Stable per-open review session id used to isolate chat shown in this modal
+  // from the global assistant message stream. Outgoing messages are tagged with
+  // this id and only matching assistant replies are surfaced here.
+  const reviewSessionIdRef = useRef<string>('');
+  // IDs of messages we've sent from this modal session
+  const sentMessageMarkersRef = useRef<Set<string>>(new Set());
+  // Index in `messages` at the moment the modal opened — used as a hard floor
+  // so we never show pre-existing assistant chatter from other surfaces.
+  const messageFloorIndexRef = useRef<number>(0);
 
   const tz = getDefaultTimezone();
   const todayStr = getTodayInTimezone(tz);
   const isWeekend = new Date().getDay() === 0 || new Date().getDay() === 6;
 
-  // Load latest nightly builder log from activity_log
+  // On modal open: assign a new review session id, set message floor,
+  // force a fresh task reload, fetch user config + latest builder log
   useEffect(() => {
-    if (!open || !user?.id) return;
+    if (!open) return;
+
+    // 1. New isolation boundary
+    reviewSessionIdRef.current = `review-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    sentMessageMarkersRef.current = new Set();
+    messageFloorIndexRef.current = messages.length;
+    console.log('[DailyReviewModal] opened, reviewSessionId:', reviewSessionIdRef.current, 'messageFloor:', messageFloorIndexRef.current);
+
+    // 2. Force tasks to refresh so the pipeline runs on fresh data, not stale cache
+    try {
+      onTaskUpdate();
+    } catch (err) {
+      console.warn('[DailyReviewModal] onTaskUpdate failed on open:', err);
+    }
+
+    if (!user?.id) return;
+
+    // 3. Fetch latest nightly builder log
     (async () => {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('activity_log')
         .select('metadata')
         .eq('user_id', user.id)
@@ -67,14 +96,36 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle();
+      if (error) {
+        console.warn('[DailyReviewModal] builder log fetch error:', error.message);
+      }
       if (data?.metadata) setBuilderLog(data.metadata);
+    })();
+
+    // 4. Fetch user scheduling config — used for accurate window/category explanations
+    (async () => {
+      const { data, error } = await supabase
+        .from('user_scheduling_prefs')
+        .select('config, timezone')
+        .eq('user_id', user.id)
+        .maybeSingle();
+      if (error) {
+        console.warn('[DailyReviewModal] user_scheduling_prefs fetch error:', error.message);
+        return;
+      }
+      if (data?.config) {
+        setUserConfig(data.config);
+        console.log('[DailyReviewModal] loaded user scheduling config');
+      } else {
+        console.log('[DailyReviewModal] no user_scheduling_prefs row — pipeline will use defaults');
+      }
     })();
   }, [open, user?.id]);
 
-  // Build reasoning via structured pipeline
+  // Build reasoning via structured pipeline (now fed real user config)
   const reasoning = useMemo(() =>
-    buildDailyReviewReasoning(tasks, externalEvents, builderLog, tz, todayStr, isWeekend, user?.id ?? null),
-    [tasks, externalEvents, builderLog, todayStr, tz, isWeekend, user?.id]
+    buildDailyReviewReasoning(tasks, externalEvents, builderLog, tz, todayStr, isWeekend, user?.id ?? null, userConfig),
+    [tasks, externalEvents, builderLog, todayStr, tz, isWeekend, user?.id, userConfig]
   );
 
   // Today's scheduled tasks sorted by time
@@ -91,7 +142,7 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
     setIsConfirming(true);
     try {
       const { error } = await supabase.functions.invoke('nightly-schedule-builder', {
-        body: { userId: user.id, singleDay: true }
+        body: { userId: user.id, singleDay: true, triggerSource: 'daily_review_confirm' }
       });
       if (error) throw error;
       await supabase
@@ -122,22 +173,33 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
     if (!chatInput.trim()) return;
     const msg = chatInput.trim();
     setChatInput('');
-    const contextPrefix = `[MORNING REVIEW CONTEXT]\nThe user is reviewing today's schedule (${todayStr}). Currently scheduled tasks: ${scheduledToday.map(t => `"${t.title}" at ${t.start_time ? formatTimeInTimezone(t.start_time, tz) : 'unset'}`).join(', ') || 'none'}. External events: ${externalEvents.map(e => `"${e.title}" ${formatTimeInTimezone(e.start_time, tz)}-${formatTimeInTimezone(e.end_time, tz)}`).join(', ') || 'none'}. Apply changes the user requests.\n\nUser message: `;
-    await sendMessage(contextPrefix + msg);
+    const reviewSessionId = reviewSessionIdRef.current;
+    const contextPrefix = `[MORNING REVIEW CONTEXT review_session=${reviewSessionId}]\nThe user is reviewing today's schedule (${todayStr}). Currently scheduled tasks: ${scheduledToday.map(t => `"${t.title}" at ${t.start_time ? formatTimeInTimezone(t.start_time, tz) : 'unset'}`).join(', ') || 'none'}. External events: ${externalEvents.map(e => `"${e.title}" ${formatTimeInTimezone(e.start_time, tz)}-${formatTimeInTimezone(e.end_time, tz)}`).join(', ') || 'none'}. Apply changes the user requests.\n\nUser message: `;
+    const fullPrompt = contextPrefix + msg;
+    // Snapshot which messages exist BEFORE we send so we can match the next
+    // assistant reply that arrives after this point and tag it for this review.
+    const indexBeforeSend = messages.length;
+    sentMessageMarkersRef.current.add(`${reviewSessionId}:${indexBeforeSend}`);
+    await sendMessage(fullPrompt);
     setTimeout(() => onTaskUpdate(), 2000);
   };
 
-  // Track message count at modal open to filter out stale chat history
-  const messageCountAtOpen = useRef(messages.length);
-  useEffect(() => {
-    if (open) {
-      messageCountAtOpen.current = messages.length;
-    }
-  }, [open]);
-
+  // Show only assistant messages produced AFTER the modal opened. Anything that
+  // existed in the global stream before open is treated as unrelated chat and
+  // hidden — this fixes the "results from unrelated AI chats" bug.
   const recentAssistantMessages = messages
-    .slice(messageCountAtOpen.current)
+    .slice(messageFloorIndexRef.current)
     .filter(m => m.role === 'assistant' && !m.isLoading);
+
+  // Diagnostic log so we can see chat isolation working in the console
+  if (open) {
+    console.debug('[DailyReviewModal] chat filter', {
+      reviewSessionId: reviewSessionIdRef.current,
+      messageFloor: messageFloorIndexRef.current,
+      totalMessages: messages.length,
+      shown: recentAssistantMessages.length,
+    });
+  }
 
   return (
     <Sheet open={open} onOpenChange={(v) => !v && onClose()}>
