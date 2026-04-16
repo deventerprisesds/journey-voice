@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input';
 import {
   Sunrise, Coffee, Sunset, Moon, Calendar, Send, Sparkles,
   CheckCircle2, Clock, AlertTriangle, ArrowRight, SkipForward,
-  Loader2, Info, BookOpen
+  Loader2, Info, BookOpen, ShieldAlert
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Task, ExternalCalendarEvent } from '@/types/task';
@@ -75,7 +75,22 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
     reviewSessionIdRef.current = `review-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     sentMessageMarkersRef.current = new Set();
     messageFloorIndexRef.current = messages.length;
-    console.log('[DailyReviewModal] opened, reviewSessionId:', reviewSessionIdRef.current, 'messageFloor:', messageFloorIndexRef.current);
+
+    // Provenance: prove which user is actually driving this run on which host.
+    // This is the single source of truth when debugging "is it demo or live?".
+    const provenance = {
+      hostname: window.location.hostname,
+      isPublishedHost: window.location.hostname === 'journey-voice.lovable.app',
+      userId: user?.id ?? null,
+      email: user?.email ?? null,
+      isDemoUserId: user?.id === '00000000-0000-0000-0000-000000000001',
+      reviewSessionId: reviewSessionIdRef.current,
+      messageFloor: messageFloorIndexRef.current,
+    };
+    console.log('[DailyReviewModal] opened', provenance);
+    if (provenance.isPublishedHost && provenance.isDemoUserId) {
+      console.warn('[DailyReviewModal] ⚠️ Published host running as DEMO user — auth fallback bug. Daily Review will be unreliable.');
+    }
 
     // 2. Force tasks to refresh so the pipeline runs on fresh data, not stale cache
     try {
@@ -115,7 +130,7 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
       }
       if (data?.config) {
         setUserConfig(data.config);
-        console.log('[DailyReviewModal] loaded user scheduling config');
+        console.log('[DailyReviewModal] loaded user scheduling config for', user.email);
       } else {
         console.log('[DailyReviewModal] no user_scheduling_prefs row — pipeline will use defaults');
       }
