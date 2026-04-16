@@ -1,44 +1,41 @@
 
 
-# Add Assignment Count to Stats + Create Pipeline
+# Updated Plan: Fix Daily Review + Guarantee Logging Visibility
 
-## Current State
-- `dailyReviewPipeline.ts` does **not exist** — the approved pipeline plan was never implemented
-- The stats grid shows `scheduledCount` and `externalEventCount` but no assignment count
-- Assignment QC logic exists (lines 250-266) but only as a text explanation, not a stat card
-- Calendar event count is in the stats object (line 277) and rendered (line 382)
+## Addition: RLS / Silent Failure Diagnostics
 
-## Plan
+The `activityLogger.ts` currently does `.catch(() => {})` — completely silent. If the POST returns a 403, 401, or any RLS denial, we'd never know. This is the root cause of missing `daily_review_reasoning` entries for the dev user.
 
-### 1. Add assignment stats to `ScheduleReasoning.stats`
-Add two fields:
-- `pendingAssignmentCount` — total incomplete assignments across backlog
-- `assignmentsScheduledToday` — assignments in today's schedule
+### What we'll add
 
-### 2. Add assignment stat card to the stats grid
-Render a stat card showing assignments scheduled today vs pending, similar to the calendar events card. Show conditionally when `pendingAssignmentCount > 0`.
+**In `src/utils/activityLogger.ts`:**
+- Replace the silent `.catch(() => {})` with a `.then(res => { if (!res.ok) console.error('[activityLogger] POST failed:', res.status, res.statusText) })` so RLS denials become visible in the browser console
+- Add the response body text on failure for full context (RLS errors return a JSON body)
+- Keep fire-and-forget semantics (still don't throw or block)
 
-### 3. Create `src/utils/dailyReviewPipeline.ts` (from approved plan)
-The structured pipeline with 8 named steps, each logging inputs/outputs to `activity_log`. The pipeline output includes:
-- `externalEventCount` and `externalBlockedMinutes`
-- `pendingAssignmentCount` and `assignmentsScheduledToday`
-- All window category breakdowns
-- Build version proof
+**In `src/utils/dailyReviewPipeline.ts`:**
+- After calling `logActivity`, add a fallback `console.log('[DailyReviewPipeline] trace:', JSON.stringify(reasoning.stats))` so even if the DB write fails, the trace appears in the browser console
+- This ensures we can always verify pipeline output even with broken logging
 
-### 4. Update `activityLogger.ts`
-Remove the `DEV_USER_ID` guard for `daily_review_reasoning` activity type so all users get pipeline logging.
+**In `src/components/DailyReviewModal.tsx`:**
+- On modal open, call `onTaskUpdate()` to force a task reload before the pipeline runs
+- This prevents stale data from `useUnifiedTasks`
 
-### 5. Refactor `DailyReviewModal.tsx`
-- Replace inline `useMemo` reasoning (lines 100-286) with pipeline call
-- Add assignment stat card to the grid
-- Bump SW cache version in `public/sw.js` to `'v9'`
+### Other items (unchanged from approved plan)
+
+1. **Use real user config** — fetch `user_scheduling_prefs` and pass to pipeline instead of `DEFAULT_SCHEDULING_CONFIG`
+2. **Chat isolation** — filter modal chat messages by a `reviewSessionId` instead of global stream
+3. **Keyword-aware scheduling** — apply `contextRules.keywords` in `nightly-schedule-builder` to override window placement (fixes mall at 9pm)
+4. **Structured builder logging** — add `steps[]` array with `runId` and `triggerSource` to `nightly-schedule-builder`
 
 ## Files Changed
+
 | File | Change |
 |------|--------|
-| `src/utils/dailyReviewPipeline.ts` | New — structured pipeline |
-| `src/components/DailyReviewModal.tsx` | Use pipeline, add assignment stat card |
-| `src/utils/activityLogger.ts` | Remove dev-only guard for pipeline logs |
-| `public/sw.js` | Bump cache version to v9 |
-| `index.html` | Update build-version meta tag |
+| `src/utils/activityLogger.ts` | Log POST response status on failure instead of swallowing |
+| `src/utils/dailyReviewPipeline.ts` | Console fallback trace, accept `userConfig` param |
+| `src/components/DailyReviewModal.tsx` | Force task reload on open, fetch user config, chat isolation |
+| `supabase/functions/nightly-schedule-builder/index.ts` | Keyword overrides, structured step logging |
+| `public/sw.js` | Bump cache to v10 |
+| `index.html` | Update build-version meta |
 
