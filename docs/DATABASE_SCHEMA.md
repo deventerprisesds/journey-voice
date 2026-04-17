@@ -202,22 +202,21 @@ Tracks notification delivery attempts per channel.
 ## Academic / Assignments
 
 ### `assignments`
-Primary assignment table (synced from Google Sheets).
+Unified assignment table for all academic programs (synced from Google Sheets). Until April 2026, MIT assignments lived in a separate `assignments_mit` table; they were merged here using `program_id` as the discriminator. The deprecated table still exists as `assignments_mit_deprecated` for one week of rollback safety, then will be dropped.
 
 | Column | Type | Notes |
 |--------|------|-------|
 | `id` | uuid PK | |
-| `user_id` | uuid | |
+| `user_id` | uuid | No FK to `auth.users` (matches project convention) |
 | `title` | text | |
 | `course_id` | uuid FK → `courses` | nullable |
-| `program_id` | uuid FK → `programs` | nullable |
+| `program_id` | uuid FK → `programs` | **Discriminator**. `NULL` or non-MIT UUID = EMBA; `4793d933-86ca-4fd5-9b4d-e7a593a513a6` = MIT |
 | `due_date` | date | |
 | `status` / `priority` / `type` | text | |
 | `assignment_url` | text | |
-| `sheet_row_number` | int | For Google Sheets sync |
+| `sheet_row_number` | int | Per-program row number; unique with `(user_id, program_id, sheet_row_number)` |
 
-### `assignments_mit`
-Separate table for MIT program assignments (same schema, different sync source).
+Use `src/utils/programIds.ts` (`MIT_PROGRAM_ID`, `isMitRow`, `isEmbaRow`) for client code rather than hard-coding the discriminator.
 
 ### `courses`
 Academic courses with optional OneDrive/OneNote integration.
@@ -230,7 +229,7 @@ Academic program containers (e.g., MBA, MIT).
 - `assignment_outlines` — Structured outlines
 - `assignment_requirements` — Extracted requirements with completion tracking
 - `assignment_user_context` — User-provided context and instructions
-- `assignment_history` / `assignments_mit_history` — Change tracking
+- `assignment_history` — Change tracking (covers all programs)
 - `case_study_analyses` — Case study workflow state
 
 ---
