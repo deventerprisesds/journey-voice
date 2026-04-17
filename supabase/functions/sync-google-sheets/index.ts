@@ -326,8 +326,33 @@ serve(async (req) => {
 
       console.log(`=== EMBA SYNC COMPLETE: ${processed} processed, ${added} added, ${updated} updated, ${unchanged} unchanged ===`);
 
+      // Auto-promote assignments → tasks (fire-and-log; non-blocking error)
+      let promotion: any = null;
+      try {
+        console.log(`[EMBA_SYNC] Invoking nightly-assignment-sync for ${writeUserId}...`);
+        const promoResp = await fetch(
+          `${Deno.env.get('SUPABASE_URL')}/functions/v1/nightly-assignment-sync`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''}`,
+            },
+            body: JSON.stringify({ userId: writeUserId, timezone: 'America/New_York' }),
+          }
+        );
+        if (promoResp.ok) {
+          promotion = await promoResp.json();
+          console.log(`[EMBA_SYNC] Promotion: ${promotion.created?.length || 0} created, ${promotion.repaired?.length || 0} repaired, ${promotion.skipped?.length || 0} skipped`);
+        } else {
+          console.warn(`[EMBA_SYNC] Promotion failed: ${promoResp.status}`);
+        }
+      } catch (promoErr) {
+        console.warn(`[EMBA_SYNC] Promotion error (non-fatal):`, promoErr);
+      }
+
       return new Response(
-        JSON.stringify({ success: true, processed, added, updated, unchanged, assignmentIds }),
+        JSON.stringify({ success: true, processed, added, updated, unchanged, assignmentIds, promotion }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
 

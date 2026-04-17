@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { getTodayInTimezone } from "../_shared/timezone.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -16,7 +17,8 @@ serve(async (req) => {
 
   try {
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
-    const { userId, timezone } = await req.json();
+    const { userId, timezone: tzInput } = await req.json();
+    const timezone = tzInput || 'America/New_York';
 
     if (!userId) {
       return new Response(JSON.stringify({ error: 'userId required' }), {
@@ -26,11 +28,12 @@ serve(async (req) => {
     }
 
     const now = new Date();
-    const todayISO = now.toISOString().split('T')[0];
+    // Use timezone-aware "today" so the 30-day archive cutoff matches the user's local day
+    const todayISO = getTodayInTimezone(timezone);
     const futureDate = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
     const futureDateISO = futureDate.toISOString().split('T')[0];
 
-    console.log(`[ASSIGNMENT_SYNC] Starting for user ${userId}, window: ${todayISO} to ${futureDateISO}`);
+    console.log(`[ASSIGNMENT_SYNC] Starting for user ${userId} (${timezone}), today=${todayISO}, window: ${todayISO} to ${futureDateISO}`);
 
     const created: string[] = [];
     const skipped: string[] = [];
@@ -118,7 +121,10 @@ serve(async (req) => {
         }
 
         // Skip creating new tasks for very old past-due assignments (>30 days)
-        const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+        // Anchor cutoff to the user's local "today" for timezone correctness
+        const [ty, tm, td] = todayISO.split('-').map(Number);
+        const todayLocalAsUtc = new Date(Date.UTC(ty, tm - 1, td));
+        const thirtyDaysAgo = new Date(todayLocalAsUtc.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
         if (assignment.due_date && assignment.due_date < thirtyDaysAgo) {
           console.log(`  ⏭️ Skipping very old assignment "${assignment.title}" (due ${assignment.due_date})`);
           skipped.push(assignment.id);
