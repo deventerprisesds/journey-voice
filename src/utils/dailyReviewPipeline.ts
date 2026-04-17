@@ -46,6 +46,16 @@ export interface ScheduleReasoning {
   missingExplanations: string[];
   qcViolations: QcViolation[];
   pipelineTrace: StepResult[];
+  calendarStatus?: {
+    eventsToday: number;
+    connectionCount: number;
+    sources: string[];
+  };
+  reshuffleOutcome?: {
+    attempted: number;
+    committed: number;
+    deferred: number;
+  };
 }
 
 export interface WindowSummary {
