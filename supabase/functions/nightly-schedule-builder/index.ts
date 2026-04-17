@@ -1320,6 +1320,71 @@ serve(async (req) => {
         }
 
         // ==========================================
+        // PASS 3: TOP-UP — fill remaining slots with deferred Tier B/C assignments
+        // For each day where assignment count < cap, walk deferred items in tier-sort
+        // order (B before C; B due-asc; C due-desc). Honor category windows.
+        // ==========================================
+        const tierBPending = tierB.filter(t => !scheduledTaskIds.has(t.id));
+        const tierCPending = tierC.filter(t => !scheduledTaskIds.has(t.id));
+        const topUpQueue = [...tierBPending, ...tierCPending]; // already sorted within each tier
+        let topUpPlaced = 0;
+
+        if (topUpQueue.length > 0) {
+          for (let dOff = 0; dOff < totalDays && topUpQueue.length > 0; dOff++) {
+            const [tY, tM, tD] = todayISO.split('-').map(Number);
+            const dt = new Date(tY, tM - 1, tD + dOff);
+            const isoDay = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+            if ((dailyAssignmentCount[isoDay] || 0) >= MAX_ASSIGNMENTS_PER_DAY) continue;
+
+            const dow = dt.getDay();
+            const active = getActiveWindows(timeWindows, dow);
+            const activeNames = Object.keys(active);
+            if (activeNames.length === 0) continue;
+
+            const bounds = _ldub(isoDay, timezone);
+            const { data: dayScheduled2 } = await supabase
+              .from('tasks').select('start_time, end_time, estimate_minutes')
+              .eq('user_id', userId).eq('is_scheduled', true)
+              .gte('start_time', bounds.start).lt('start_time', bounds.end);
+            const { data: dayEvents2 } = await supabase
+              .from('external_calendar_events').select('start_time, end_time')
+              .eq('user_id', userId).gte('start_time', bounds.start).lt('start_time', bounds.end)
+              .eq('is_all_day', false);
+            const items = [
+              ...(dayScheduled2 || []),
+              ...(dayEvents2 || []).map(e => ({ ...e, estimate_minutes: undefined })),
+            ];
+            let caps = computeUsedMinutes(items, active, isoDay, timezone);
+
+            for (let i = 0; i < topUpQueue.length; i++) {
+              if ((dailyAssignmentCount[isoDay] || 0) >= MAX_ASSIGNMENTS_PER_DAY) break;
+              const task = topUpQueue[i];
+              const duration = task.estimate_minutes || categoryMappings[task.category]?.estimatedDuration || 60;
+              const preferred = getPreferredWindows(task.category, categoryMappings, activeNames);
+              const fits = preferred.some(w => (caps[w]?.remainingMinutes || 0) >= duration);
+              if (!fits) continue;
+              const placed = await callTierAScheduler(task, isoDay, caps, active, false);
+              if (placed) {
+                topUpPlaced++;
+                topUpQueue.splice(i, 1);
+                i--;
+                // Recompute caps cheaply by subtracting duration from a fitting window
+                for (const w of preferred) {
+                  if ((caps[w]?.remainingMinutes || 0) >= duration) {
+                    caps[w].remainingMinutes -= duration;
+                    caps[w].usedMinutes += duration;
+                    break;
+                  }
+                }
+                console.log(`    🔁 [Pass 3 top-up] "${task.title}" (Tier ${assignmentTier[task.id]}) → ${isoDay}`);
+              }
+            }
+          }
+          totalScheduledAcrossWeek += topUpPlaced;
+          if (topUpPlaced > 0) console.log(`  🔁 Pass 3 top-up placed ${topUpPlaced} deferred assignments`);
+        }
+
+        // ==========================================
         // STEP 6: Log the run
         // ==========================================
         await supabase.from('activity_log').insert({
@@ -1336,6 +1401,16 @@ serve(async (req) => {
             days_processed: totalDays,
             week_results: weekResults,
             steps,
+            assignment_tiers: {
+              tierA_count: tierA.length,
+              tierB_count: tierB.length,
+              tierC_count: tierC.length,
+              tierA_category_placed: tierAResults.categoryPlaced,
+              tierA_flexible_overflow_placed: tierAResults.flexiblePlaced,
+              tierA_deferred: tierAResults.deferred,
+              top_up_placed: topUpPlaced,
+              daily_assignment_count: dailyAssignmentCount,
+            },
             keyword_overrides_total: steps.reduce(
               (sum, s) => sum + (Array.isArray((s.outputs as any)?.keywordOverrides) ? (s.outputs as any).keywordOverrides.length : 0),
               0
