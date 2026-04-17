@@ -618,6 +618,31 @@ IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include tim
         continue;
       }
 
+      // POST-AI VALIDATION 3: Reject overlap with EXISTING external events or already-scheduled tasks
+      // Hard rule: scheduler must NEVER place a task on top of a real calendar event or another scheduled task.
+      const eventOverlap = existingEventSlots.find(s => slotStartMs < s._endMs && slotEndMs > s._startMs);
+      if (eventOverlap) {
+        console.warn(`🚫 OVERLAPS_EXTERNAL_EVENT: "${originalTask.title}" [${normalizedStart} - ${normalizedEnd}] overlaps event "${eventOverlap.title}" — REJECTED`);
+        rejectedTasks.push({
+          taskId: originalTask.id,
+          taskIndex: result.taskIndex,
+          reason: `overlaps_external_event: "${eventOverlap.title}"`,
+          reasoning: result.reasoning,
+        });
+        continue;
+      }
+      const taskOverlap = existingTaskSlots.find(s => s.id !== originalTask.id && slotStartMs < s._endMs && slotEndMs > s._startMs);
+      if (taskOverlap) {
+        console.warn(`🚫 OVERLAPS_SCHEDULED_TASK: "${originalTask.title}" [${normalizedStart} - ${normalizedEnd}] overlaps task "${taskOverlap.title}" — REJECTED`);
+        rejectedTasks.push({
+          taskId: originalTask.id,
+          taskIndex: result.taskIndex,
+          reason: `overlaps_scheduled_task: "${taskOverlap.title}"`,
+          reasoning: result.reasoning,
+        });
+        continue;
+      }
+
       acceptedSlots.push({ start: slotStartMs, end: slotEndMs });
       
       scheduledTasks.push({
