@@ -1,21 +1,27 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { format } from 'date-fns';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Input } from '@/components/ui/input';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import {
   Sunrise, Coffee, Sunset, Moon, Calendar, Send, Sparkles,
   CheckCircle2, Clock, AlertTriangle, ArrowRight, SkipForward,
-  Loader2, Info, BookOpen, ShieldAlert
+  Loader2, Info, BookOpen, ShieldAlert, ChevronDown
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Task, ExternalCalendarEvent } from '@/types/task';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useChatAssistant } from '@/hooks/useChatAssistant';
-import { getDefaultTimezone, getTodayInTimezone, formatTimeInTimezone } from '@/lib/date';
+import {
+  getDefaultTimezone,
+  getTodayInTimezone,
+  formatTimeInTimezone,
+  isWeekendInTimezone,
+  formatDateOnly,
+} from '@/lib/date';
 import { toast } from 'sonner';
 import { buildDailyReviewReasoning } from '@/utils/dailyReviewPipeline';
 
@@ -64,7 +70,8 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
 
   const tz = getDefaultTimezone();
   const todayStr = getTodayInTimezone(tz);
-  const isWeekend = new Date().getDay() === 0 || new Date().getDay() === 6;
+  // TIMEZONE-SAFE: derive day-of-week in user's tz, never new Date().getDay()
+  const isWeekend = isWeekendInTimezone(tz);
 
   // On modal open: assign a new review session id, set message floor,
   // force a fresh task reload, fetch user config + latest builder log
@@ -223,7 +230,8 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
             {reasoning.greeting}
           </SheetTitle>
           <p className="text-sm text-muted-foreground">
-            {format(new Date(), 'EEEE, MMMM d')}
+            {/* TIMEZONE-SAFE: format header date via shared helper */}
+            {formatDateOnly(todayStr)}
           </p>
         </SheetHeader>
 
