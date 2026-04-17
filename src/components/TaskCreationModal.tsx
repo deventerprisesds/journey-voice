@@ -257,11 +257,13 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
         return;
       }
 
-      // Fetch MIT assignments (exclude office hours)
+      // Fetch MIT assignments (exclude office hours) — unified table, program_id discriminates
+      const MIT_PROGRAM_ID = '4793d933-86ca-4fd5-9b4d-e7a593a513a6';
       const { data: mitAssignments } = await supabase
-        .from('assignments_mit')
+        .from('assignments')
         .select('*, courses(name)')
         .eq('user_id', userId)
+        .eq('program_id', MIT_PROGRAM_ID)
         .eq('status', 'active')
         .not('title', 'ilike', '%office hour%')
         .order('due_date', { ascending: true });
@@ -969,19 +971,22 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
       try {
         const selectedIds = Array.from(selectedAssignmentIds);
         
-        // Fetch EMBA assignments
+        // Fetch EMBA assignments (program_id NULL or non-MIT)
+        const MIT_PROGRAM_ID = '4793d933-86ca-4fd5-9b4d-e7a593a513a6';
         const { data: embaAssignments } = await supabase
           .from('assignments')
           .select('*')
           .in('id', selectedIds)
-          .eq('user_id', userId);
+          .eq('user_id', userId)
+          .or(`program_id.is.null,program_id.neq.${MIT_PROGRAM_ID}`);
 
-        // Fetch MIT assignments
+        // Fetch MIT assignments (program_id = MIT_PROGRAM_ID)
         const { data: mitAssignments } = await supabase
-          .from('assignments_mit')
+          .from('assignments')
           .select('*')
           .in('id', selectedIds)
-          .eq('user_id', userId);
+          .eq('user_id', userId)
+          .eq('program_id', MIT_PROGRAM_ID);
 
         const allAssignments: Assignment[] = [
           ...(embaAssignments || []).map(a => ({ ...a, source: 'emba' as const })),

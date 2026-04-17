@@ -452,7 +452,7 @@ export type Database = {
           },
         ]
       }
-      assignments_mit: {
+      assignments_mit_deprecated: {
         Row: {
           academic_semester: string | null
           assignment_url: string | null
@@ -523,7 +523,7 @@ export type Database = {
           },
         ]
       }
-      assignments_mit_history: {
+      assignments_mit_history_deprecated: {
         Row: {
           assignment_id: string
           changed_at: string
@@ -556,7 +556,7 @@ export type Database = {
             foreignKeyName: "assignments_mit_history_assignment_id_fkey"
             columns: ["assignment_id"]
             isOneToOne: false
-            referencedRelation: "assignments_mit"
+            referencedRelation: "assignments_mit_deprecated"
             referencedColumns: ["id"]
           },
         ]

@@ -1,5 +1,6 @@
 import { supabase } from '@/integrations/supabase/client';
 import { Task } from '@/types/task';
+import { MIT_PROGRAM_ID } from '@/utils/programIds';
 
 // Demo user IDs that share class schedules
 const DEMO_EMBA_USER_IDS = [
@@ -16,19 +17,20 @@ export async function fetchPendingAssignments(
   const assignments: Task[] = [];
 
   try {
-    // Fetch EMBA assignments
+    // Fetch EMBA assignments (program_id IS NULL or != MIT_PROGRAM_ID)
     if (includeEmba) {
       if (importMode === 'full') {
-        // Full import: get all assignments, no date filtering
+        // Full import: get all EMBA assignments, no date filtering
         let embaQuery = supabase
           .from('assignments')
-          .select('*');
-        
+          .select('*')
+          .or(`program_id.is.null,program_id.neq.${MIT_PROGRAM_ID}`);
+
         const isDemo = DEMO_EMBA_USER_IDS.includes(userId);
         embaQuery = isDemo
           ? embaQuery.in('user_id', DEMO_EMBA_USER_IDS)
           : embaQuery.eq('user_id', userId);
-        
+
         const { data: embaAssignments } = await embaQuery.order('due_date', { ascending: true });
 
         if (embaAssignments) {
@@ -54,20 +56,19 @@ export async function fetchPendingAssignments(
         }
       } else {
       // Upcoming mode: between last weekend end and next weekend end
-      // Prepare today's date (YYYY-MM-DD) for date-only comparisons
       const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
       const isDemo = DEMO_EMBA_USER_IDS.includes(userId);
-      
+
       // Get last completed weekend's end time
       let lastWeekendQuery = supabase
         .from('class_schedules')
         .select('end_time')
         .lt('date', todayStr);
-      
+
       lastWeekendQuery = isDemo
         ? lastWeekendQuery.in('user_id', DEMO_EMBA_USER_IDS)
         : lastWeekendQuery.eq('user_id', userId);
-      
+
       const { data: lastWeekend } = await lastWeekendQuery
         .order('date', { ascending: false })
         .limit(1)
@@ -78,11 +79,11 @@ export async function fetchPendingAssignments(
         .from('class_schedules')
         .select('date, end_time')
         .gte('date', todayStr);
-      
+
       nextWeekendQuery = isDemo
         ? nextWeekendQuery.in('user_id', DEMO_EMBA_USER_IDS)
         : nextWeekendQuery.eq('user_id', userId);
-      
+
       const { data: nextWeekendDates } = await nextWeekendQuery
         .order('date', { ascending: true })
         .limit(5);
@@ -91,7 +92,7 @@ export async function fetchPendingAssignments(
         // Group dates within 3 days as same weekend, take the last date's end time
         const weekendGroups: Array<typeof nextWeekendDates> = [];
         let currentGroup: typeof nextWeekendDates = [];
-        
+
         nextWeekendDates.forEach((curr, idx) => {
           if (idx === 0 || Math.abs(new Date(curr.date).getTime() - new Date(nextWeekendDates[idx-1].date).getTime()) <= 3 * 24 * 60 * 60 * 1000) {
             currentGroup.push(curr);
@@ -101,20 +102,21 @@ export async function fetchPendingAssignments(
           }
         });
         if (currentGroup.length > 0) weekendGroups.push(currentGroup);
-        
+
         const nextWeekendEnd = weekendGroups[0]
           .sort((a, b) => new Date(b.end_time).getTime() - new Date(a.end_time).getTime())[0];
 
         let embaQuery = supabase
           .from('assignments')
           .select('*')
+          .or(`program_id.is.null,program_id.neq.${MIT_PROGRAM_ID}`)
           .gte('due_date', lastWeekend?.end_time || new Date().toISOString())
           .lte('due_date', nextWeekendEnd.end_time);
-        
+
         embaQuery = isDemo
           ? embaQuery.in('user_id', DEMO_EMBA_USER_IDS)
           : embaQuery.eq('user_id', userId);
-        
+
         const { data: embaAssignments } = await embaQuery.order('due_date', { ascending: true });
 
         if (embaAssignments) {
@@ -142,12 +144,13 @@ export async function fetchPendingAssignments(
       }
     }
 
-    // Fetch MIT assignments (next 2 weeks, exclude office hours)
+    // Fetch MIT assignments (program_id = MIT_PROGRAM_ID, exclude office hours)
     if (includeMit) {
       let mitQuery = supabase
-        .from('assignments_mit')
+        .from('assignments')
         .select('*')
         .eq('user_id', userId)
+        .eq('program_id', MIT_PROGRAM_ID)
         .not('title', 'ilike', '%office hour%')
         .order('due_date', { ascending: true });
 
