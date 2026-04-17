@@ -109,9 +109,14 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
   const reviewSessionIdRef = useRef<string>('');
   // IDs of messages we've sent from this modal session
   const sentMessageMarkersRef = useRef<Set<string>>(new Set());
-  // Index in `messages` at the moment the modal opened — used as a hard floor
-  // so we never show pre-existing assistant chatter from other surfaces.
-  const messageFloorIndexRef = useRef<number>(0);
+  // Timestamp at the moment the modal opened — used as a hard time floor so we
+  // never show pre-existing assistant chatter that hydrates AFTER mount.
+  // Index-based floors are unreliable because useChatAssistant loads thread
+  // history asynchronously; the floor was being captured at messages.length=0.
+  const openedAtRef = useRef<number>(0);
+  // Whether the user has actually sent a chat message from THIS modal session.
+  // Drives whether the AI Response panel is allowed to render at all.
+  const [hasSentInSession, setHasSentInSession] = useState(false);
 
   const tz = getDefaultTimezone();
   const todayStr = getTodayInTimezone(tz);
@@ -126,7 +131,8 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
     // 1. New isolation boundary
     reviewSessionIdRef.current = `review-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     sentMessageMarkersRef.current = new Set();
-    messageFloorIndexRef.current = messages.length;
+    openedAtRef.current = Date.now();
+    setHasSentInSession(false);
 
     // Provenance: prove which user is actually driving this run on which host.
     // This is the single source of truth when debugging "is it demo or live?".
@@ -137,7 +143,7 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
       email: user?.email ?? null,
       isDemoUserId: user?.id === '00000000-0000-0000-0000-000000000001',
       reviewSessionId: reviewSessionIdRef.current,
-      messageFloor: messageFloorIndexRef.current,
+      openedAt: openedAtRef.current,
     };
     console.log('[DailyReviewModal] opened', provenance);
     if (provenance.isPublishedHost && provenance.isDemoUserId) {
@@ -312,26 +318,30 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
     const reviewSessionId = reviewSessionIdRef.current;
     const contextPrefix = `[MORNING REVIEW CONTEXT review_session=${reviewSessionId}]\nThe user is reviewing today's schedule (${todayStr}). Currently scheduled tasks: ${scheduledToday.map(t => `"${t.title}" at ${t.start_time ? formatTimeInTimezone(t.start_time, tz) : 'unset'}`).join(', ') || 'none'}. External events: ${externalEvents.map(e => `"${e.title}" ${formatTimeInTimezone(e.start_time, tz)}-${formatTimeInTimezone(e.end_time, tz)}`).join(', ') || 'none'}. Apply changes the user requests.\n\nUser message: `;
     const fullPrompt = contextPrefix + msg;
-    // Snapshot which messages exist BEFORE we send so we can match the next
-    // assistant reply that arrives after this point and tag it for this review.
-    const indexBeforeSend = messages.length;
-    sentMessageMarkersRef.current.add(`${reviewSessionId}:${indexBeforeSend}`);
+    setHasSentInSession(true);
+    sentMessageMarkersRef.current.add(reviewSessionId);
     await sendMessage(fullPrompt);
     setTimeout(() => onTaskUpdate(), 2000);
   };
 
-  // Show only assistant messages produced AFTER the modal opened. Anything that
-  // existed in the global stream before open is treated as unrelated chat and
-  // hidden — this fixes the "results from unrelated AI chats" bug.
-  const recentAssistantMessages = messages
-    .slice(messageFloorIndexRef.current)
-    .filter(m => m.role === 'assistant' && !m.isLoading);
+  // Show only assistant messages produced AFTER the modal opened AND only when
+  // the user has actually sent a chat from THIS modal session. Old thread
+  // history that hydrates asynchronously (before or after mount) is excluded
+  // by comparing the message timestamp to `openedAt`.
+  const recentAssistantMessages = hasSentInSession
+    ? messages.filter(m => {
+        if (m.role !== 'assistant' || m.isLoading) return false;
+        const ts = m.timestamp instanceof Date ? m.timestamp.getTime() : new Date(m.timestamp as any).getTime();
+        return Number.isFinite(ts) && ts >= openedAtRef.current;
+      })
+    : [];
 
   // Diagnostic log so we can see chat isolation working in the console
   if (open) {
     console.debug('[DailyReviewModal] chat filter', {
       reviewSessionId: reviewSessionIdRef.current,
-      messageFloor: messageFloorIndexRef.current,
+      openedAt: openedAtRef.current,
+      hasSentInSession,
       totalMessages: messages.length,
       shown: recentAssistantMessages.length,
     });
