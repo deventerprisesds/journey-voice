@@ -453,19 +453,22 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
               )}
             </div>
 
-            {/* AI Response Area */}
-            {recentAssistantMessages.length > 0 && (
-              <div className="space-y-2">
-                <div className="text-sm font-medium text-foreground">AI Response</div>
-                {recentAssistantMessages.map(msg => (
-                  <div key={msg.id} className="bg-primary/5 border border-primary/10 rounded-lg p-3">
-                    <p className="text-sm text-foreground whitespace-pre-wrap">{msg.content}</p>
-                  </div>
-                ))}
-              </div>
-            )}
           </div>
         </ScrollArea>
+
+        {/* AI Response Area — own scroll container above input so Confirm stays visible */}
+        {recentAssistantMessages.length > 0 && (
+          <div className="border-t border-border px-4 py-2 shrink-0 bg-muted/30 max-h-[30vh] overflow-y-auto">
+            <div className="text-xs font-medium text-foreground mb-1.5">AI Response</div>
+            <div className="space-y-2">
+              {recentAssistantMessages.map(msg => (
+                <div key={msg.id} className="bg-primary/5 border border-primary/10 rounded-lg p-2.5">
+                  <p className="text-sm text-foreground whitespace-pre-wrap">{msg.content}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Chat Input + Actions */}
         <div className="border-t border-border p-3 space-y-2 shrink-0 bg-background">
