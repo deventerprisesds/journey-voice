@@ -342,7 +342,9 @@ export function buildDailyReviewReasoning(
           }
         }
 
-        if (eligibleTasks.length === 0) {
+        if (eligibleCats.length === 0) {
+          missingExplanations.push(`${w.label} is empty — no categories mapped to this window in your config`);
+        } else if (eligibleTasks.length === 0) {
           missingExplanations.push(`${w.label} is empty — no ${eligibleCats.join('/')} tasks in your backlog`);
         } else {
           const scheduledElsewhere = eligibleTasks.filter(t => t.start_time && new Date(t.start_time).toLocaleDateString('en-CA', { timeZone: tz }) !== todayStr);
@@ -566,9 +568,13 @@ export function buildDailyReviewReasoning(
   } else if (externalEvents.length > 0) {
     explanations.push(`${externalEvents.length} calendar event${externalEvents.length > 1 ? 's' : ''} blocking ${externalMinutes} min total`);
   }
+  const allMissingExplanationsExtra: string[] = [];
+
   // Reshuffle outcome
   const ro = builderMerge.reshuffleOutcome;
-  if (ro && (ro.committed > 0 || ro.deferred > 0)) {
+  if (ro && ro.committed === 0 && ro.deferred > 0) {
+    allMissingExplanationsExtra.push(`Reshuffle attempted ${ro.attempted} but committed 0 — likely overlap-blocked. Tap Confirm & Fill Gaps.`);
+  } else if (ro && (ro.committed > 0 || ro.deferred > 0)) {
     explanations.push(`${ro.committed} task${ro.committed !== 1 ? 's' : ''} reshuffled into alternate windows; ${ro.deferred} deferred — try Confirm & Fill Gaps for the rest`);
   }
   if (builderMerge.archivedStale > 0) {
@@ -578,6 +584,7 @@ export function buildDailyReviewReasoning(
   const allMissingExplanations = [
     ...emptyDiagnosis.missingExplanations,
     ...assignmentQC.explanations,
+    ...allMissingExplanationsExtra,
   ];
 
   // ── Build greeting (TIMEZONE-SAFE: derive hour in user's tz, never new Date().getHours()) ──
