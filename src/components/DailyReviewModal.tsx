@@ -252,24 +252,7 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
                   <div className="text-xs text-amber-600/80">Rolled Over Today</div>
                 </div>
               )}
-              {reasoning.stats.pendingAssignmentCount > 0 && (
-                <div className="bg-primary/5 border border-primary/20 rounded-lg p-3 text-center">
-                  <div className="text-2xl font-bold text-primary">
-                    {reasoning.stats.assignmentsScheduledToday}
-                    <span className="text-sm font-normal text-muted-foreground">/{reasoning.stats.pendingAssignmentCount}</span>
-                  </div>
-                  <div className="text-xs text-muted-foreground flex items-center justify-center gap-1">
-                    <BookOpen className="h-3 w-3" />
-                    Assignments
-                  </div>
-                </div>
-              )}
             </div>
-            {reasoning.stats.backlogOverdue > 0 && (
-              <p className="text-xs text-muted-foreground px-1">
-                + {reasoning.stats.backlogOverdue} overdue task{reasoning.stats.backlogOverdue > 1 ? 's' : ''} in backlog (not scheduled today)
-              </p>
-            )}
 
             {/* Schedule Reasoning */}
             {(reasoning.explanations.length > 0 || reasoning.missingExplanations.length > 0) && (
