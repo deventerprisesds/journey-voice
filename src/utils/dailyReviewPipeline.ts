@@ -568,6 +568,8 @@ export function buildDailyReviewReasoning(
   } else if (externalEvents.length > 0) {
     explanations.push(`${externalEvents.length} calendar event${externalEvents.length > 1 ? 's' : ''} blocking ${externalMinutes} min total`);
   }
+  const allMissingExplanationsExtra: string[] = [];
+
   // Reshuffle outcome
   const ro = builderMerge.reshuffleOutcome;
   if (ro && ro.committed === 0 && ro.deferred > 0) {
@@ -579,11 +581,10 @@ export function buildDailyReviewReasoning(
     explanations.push(`${builderMerge.archivedStale} stale tasks archived by the nightly builder`);
   }
 
-  const allMissingExplanationsExtra: string[] = [];
-
   const allMissingExplanations = [
     ...emptyDiagnosis.missingExplanations,
     ...assignmentQC.explanations,
+    ...allMissingExplanationsExtra,
   ];
 
   // ── Build greeting (TIMEZONE-SAFE: derive hour in user's tz, never new Date().getHours()) ──
