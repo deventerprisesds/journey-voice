@@ -167,11 +167,18 @@ export function fromHHMMToISO(date: Date, hhmm: string, timezone?: string): stri
 export function formatDateOnly(dateString?: string): string | null {
   if (!dateString) return null;
   try {
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', { 
-      year: 'numeric', 
-      month: 'short', 
-      day: 'numeric' 
+    // TIMEZONE-SAFE: For YYYY-MM-DD inputs, parse as LOCAL date components,
+    // not via `new Date(string)` which interprets as UTC midnight and shifts
+    // back a day in negative-offset zones (e.g. ET sees Apr 17 as Apr 16).
+    const ymdMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateString);
+    const date = ymdMatch
+      ? new Date(parseInt(ymdMatch[1]), parseInt(ymdMatch[2]) - 1, parseInt(ymdMatch[3]))
+      : new Date(dateString);
+    if (isNaN(date.getTime())) return null;
+    return date.toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric'
     });
   } catch {
     return null;

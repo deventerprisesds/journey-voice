@@ -109,9 +109,14 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
   const reviewSessionIdRef = useRef<string>('');
   // IDs of messages we've sent from this modal session
   const sentMessageMarkersRef = useRef<Set<string>>(new Set());
-  // Index in `messages` at the moment the modal opened — used as a hard floor
-  // so we never show pre-existing assistant chatter from other surfaces.
-  const messageFloorIndexRef = useRef<number>(0);
+  // Timestamp at the moment the modal opened — used as a hard time floor so we
+  // never show pre-existing assistant chatter that hydrates AFTER mount.
+  // Index-based floors are unreliable because useChatAssistant loads thread
+  // history asynchronously; the floor was being captured at messages.length=0.
+  const openedAtRef = useRef<number>(0);
+  // Whether the user has actually sent a chat message from THIS modal session.
+  // Drives whether the AI Response panel is allowed to render at all.
+  const [hasSentInSession, setHasSentInSession] = useState(false);
 
   const tz = getDefaultTimezone();
   const todayStr = getTodayInTimezone(tz);
