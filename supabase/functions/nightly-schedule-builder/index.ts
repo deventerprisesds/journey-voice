@@ -1058,7 +1058,30 @@ serve(async (req) => {
               return { ...task, score: Math.max(score, 0), isPriorityBoard: mappedIds.includes(task.id) };
             });
 
+          // Sort: assignments first by tier (B before C, due-asc within B, due-desc within C),
+          // then non-assignment tasks by score. This makes Pass 1B/1C effectively a sort layer
+          // over the existing single placement loop, and Pass 2 (non-assignment) runs after.
           scoredCandidates.sort((a, b) => {
+            const aTier = (a as any).assignment_id ? (assignmentTier[a.id] || 'C') : null;
+            const bTier = (b as any).assignment_id ? (assignmentTier[b.id] || 'C') : null;
+
+            // Assignments before non-assignments
+            if (aTier && !bTier) return -1;
+            if (!aTier && bTier) return 1;
+
+            // Both are assignments — apply tier order then per-tier due sort
+            if (aTier && bTier) {
+              if (aTier !== bTier) {
+                // Tier A first, then B, then C (Tier A is normally pre-placed, but defensive)
+                const order = { A: 0, B: 1, C: 2 } as const;
+                return order[aTier] - order[bTier];
+              }
+              const aDue = a.due_date ? new Date(a.due_date).getTime() : Infinity;
+              const bDue = b.due_date ? new Date(b.due_date).getTime() : Infinity;
+              return aTier === 'C' ? bDue - aDue : aDue - bDue;
+            }
+
+            // Both non-assignment — existing score-based sort
             if (b.score !== a.score) return b.score - a.score;
             if (a.due_date && b.due_date) return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
             if (a.due_date) return -1;
@@ -1084,6 +1107,7 @@ serve(async (req) => {
           const dayPlacements: Array<Record<string, unknown>> = [];
           const dayRejections: Array<Record<string, unknown>> = [];
           const dayKeywordOverrides: Array<Record<string, unknown>> = [];
+          const deferredAssignmentsToday: Array<{ id: string; tier: 'B' | 'C' }> = [];
 
           for (const task of dedupedCandidates) {
             const duration = task.estimate_minutes ||
