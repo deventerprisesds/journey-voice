@@ -230,7 +230,7 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
         <ScrollArea className="flex-1 min-h-0">
           <div className="px-4 py-3 space-y-4">
 
-            {/* Stats Row */}
+            {/* Stats Row — always 2x2 grid, fits any width down to ~320px */}
             <div className="grid grid-cols-2 gap-2">
               <div className="bg-card border border-border rounded-lg p-3 text-center">
                 <div className="text-2xl font-bold text-foreground">{reasoning.stats.scheduledCount}</div>
@@ -240,39 +240,81 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
                 <div className="text-2xl font-bold text-foreground">{reasoning.stats.externalEventCount}</div>
                 <div className="text-xs text-muted-foreground">Calendar Events</div>
               </div>
-              {reasoning.stats.overdueCount > 0 && (
-                <div className="bg-destructive/5 border border-destructive/20 rounded-lg p-3 text-center">
-                  <div className="text-2xl font-bold text-destructive">{reasoning.stats.overdueCount}</div>
-                  <div className="text-xs text-destructive/80">Overdue Today</div>
+              <div className={cn(
+                "rounded-lg p-3 text-center border",
+                reasoning.stats.overdueCount > 0
+                  ? "bg-destructive/5 border-destructive/20"
+                  : "bg-card border-border"
+              )}>
+                <div className={cn(
+                  "text-2xl font-bold",
+                  reasoning.stats.overdueCount > 0 ? "text-destructive" : "text-muted-foreground"
+                )}>{reasoning.stats.overdueCount}</div>
+                <div className={cn(
+                  "text-xs",
+                  reasoning.stats.overdueCount > 0 ? "text-destructive/80" : "text-muted-foreground"
+                )}>Overdue Today</div>
+              </div>
+              <div className={cn(
+                "rounded-lg p-3 text-center border",
+                reasoning.stats.rolledOverCount > 0
+                  ? "bg-amber-500/5 border-amber-500/20"
+                  : "bg-card border-border"
+              )}>
+                <div className={cn(
+                  "text-2xl font-bold",
+                  reasoning.stats.rolledOverCount > 0 ? "text-amber-600" : "text-muted-foreground"
+                )}>{reasoning.stats.rolledOverCount}</div>
+                <div className={cn(
+                  "text-xs",
+                  reasoning.stats.rolledOverCount > 0 ? "text-amber-600/80" : "text-muted-foreground"
+                )}>Rolled Over</div>
+              </div>
+            </div>
+
+            {/* Assignments tile — always rendered, full-width row below grid */}
+            <div className="bg-card border border-border rounded-lg px-3 py-2 flex items-center justify-between gap-3 text-xs">
+              <div className="flex items-center gap-1.5 text-foreground min-w-0">
+                <BookOpen className="h-3.5 w-3.5 text-primary shrink-0" />
+                <span className="font-medium">
+                  {reasoning.stats.assignmentsScheduledToday}/{reasoning.stats.pendingAssignmentCount}
+                </span>
+                <span className="text-muted-foreground truncate">assignments today</span>
+              </div>
+              {reasoning.stats.backlogOverdue > 0 ? (
+                <div className="flex items-center gap-1 text-amber-600 dark:text-amber-400 shrink-0">
+                  <AlertTriangle className="h-3.5 w-3.5" />
+                  <span className="font-medium">+{reasoning.stats.backlogOverdue}</span>
+                  <span className="opacity-80">backlog</span>
                 </div>
-              )}
-              {reasoning.stats.rolledOverCount > 0 && (
-                <div className="bg-amber-500/5 border border-amber-500/20 rounded-lg p-3 text-center">
-                  <div className="text-2xl font-bold text-amber-600">{reasoning.stats.rolledOverCount}</div>
-                  <div className="text-xs text-amber-600/80">Rolled Over Today</div>
-                </div>
+              ) : (
+                <span className="text-muted-foreground shrink-0 opacity-70">no backlog</span>
               )}
             </div>
 
-            {/* Secondary metrics row — full-width, smaller, fits 411px */}
-            {(reasoning.stats.pendingAssignmentCount > 0 || reasoning.stats.backlogOverdue > 0) && (
-              <div className="bg-card border border-border rounded-lg px-3 py-2 flex items-center justify-between gap-3 text-xs">
-                <div className="flex items-center gap-1.5 text-foreground">
-                  <BookOpen className="h-3.5 w-3.5 text-primary shrink-0" />
-                  <span className="font-medium">
-                    {reasoning.stats.assignmentsScheduledToday}/{reasoning.stats.pendingAssignmentCount}
-                  </span>
-                  <span className="text-muted-foreground">assignments today</span>
-                </div>
-                {reasoning.stats.backlogOverdue > 0 && (
-                  <div className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
-                    <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-                    <span className="font-medium">+{reasoning.stats.backlogOverdue}</span>
-                    <span className="opacity-80">in backlog</span>
-                  </div>
-                )}
-              </div>
-            )}
+            {/* Calendar Status tile — proves the scheduler checked external calendars */}
+            <div className="bg-card border border-border rounded-lg px-3 py-2 flex items-center gap-2 text-xs">
+              <Calendar className="h-3.5 w-3.5 text-primary shrink-0" />
+              {(reasoning.calendarStatus?.eventsToday ?? externalEvents.length) > 0 ? (
+                <span className="text-foreground">
+                  Checked{' '}
+                  <span className="font-medium">{reasoning.calendarStatus?.eventsToday ?? externalEvents.length}</span>
+                  {' '}calendar event{(reasoning.calendarStatus?.eventsToday ?? externalEvents.length) > 1 ? 's' : ''}
+                  {reasoning.calendarStatus?.connectionCount
+                    ? <> on <span className="font-medium">{reasoning.calendarStatus.connectionCount}</span> calendar{reasoning.calendarStatus.connectionCount > 1 ? 's' : ''}</>
+                    : null}
+                  {' — '}
+                  <span className="text-muted-foreground">{reasoning.stats.externalBlockedMinutes} min reserved as busy</span>
+                </span>
+              ) : (
+                <span className="text-muted-foreground">
+                  No external calendar events for today
+                  {reasoning.calendarStatus?.connectionCount
+                    ? <> ({reasoning.calendarStatus.connectionCount} calendar{reasoning.calendarStatus.connectionCount > 1 ? 's' : ''} connected)</>
+                    : <> (no calendars connected)</>}
+                </span>
+              )}
+            </div>
 
             {/* Schedule Reasoning */}
             {(reasoning.explanations.length > 0 || reasoning.missingExplanations.length > 0) && (
