@@ -335,19 +335,35 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
               );
             })()}
 
-            {/* Schedule Reasoning */}
+            {/* Schedule Reasoning — top-line bullets only, full reasoning behind disclosure */}
             {(reasoning.explanations.length > 0 || reasoning.missingExplanations.length > 0) && (
               <div className="bg-muted/50 rounded-lg p-3 space-y-2">
                 <div className="flex items-center gap-1.5 text-sm font-medium text-foreground">
                   <Info className="h-4 w-4 text-primary" />
                   How we built today
                 </div>
-                {reasoning.explanations.map((exp, i) => (
+                {reasoning.explanations.slice(0, 3).map((exp, i) => (
                   <p key={i} className="text-xs text-muted-foreground pl-5">• {exp}</p>
                 ))}
-                {reasoning.missingExplanations.map((exp, i) => (
+                {reasoning.missingExplanations.slice(0, 2).map((exp, i) => (
                   <p key={`m-${i}`} className="text-xs text-amber-600 dark:text-amber-400 pl-5">• {exp}</p>
                 ))}
+                {(reasoning.explanations.length > 3 || reasoning.missingExplanations.length > 2) && (
+                  <Collapsible>
+                    <CollapsibleTrigger className="flex items-center gap-1 text-[11px] text-primary pl-5 hover:underline">
+                      <ChevronDown className="h-3 w-3" />
+                      Show full reasoning ({reasoning.explanations.length + reasoning.missingExplanations.length - 5} more)
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="space-y-1 pt-1">
+                      {reasoning.explanations.slice(3).map((exp, i) => (
+                        <p key={`e-rest-${i}`} className="text-xs text-muted-foreground pl-5">• {exp}</p>
+                      ))}
+                      {reasoning.missingExplanations.slice(2).map((exp, i) => (
+                        <p key={`m-rest-${i}`} className="text-xs text-amber-600 dark:text-amber-400 pl-5">• {exp}</p>
+                      ))}
+                    </CollapsibleContent>
+                  </Collapsible>
+                )}
               </div>
             )}
 
@@ -367,46 +383,25 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
               </div>
             )}
 
-            {/* Window Summaries */}
+            {/* Window Summaries — top 3 by default, rest behind disclosure */}
             <div className="space-y-1">
               <div className="text-sm font-medium text-foreground mb-2">Time Windows</div>
-              {reasoning.windowSummaries.map(ws => (
-                <div key={ws.window} className="py-1.5 px-2 rounded-md bg-card border border-border space-y-1">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 text-sm text-foreground">
-                      {windowIcons[ws.window]}
-                      {ws.label}
-                    </div>
-                    <span className={cn(
-                      "text-xs",
-                      ws.taskCount > 0 ? "text-foreground" : "text-muted-foreground"
-                    )}>
-                      {ws.capacityNote}
-                    </span>
-                  </div>
-                  {ws.taskCount > 0 && Object.keys(ws.categoryBreakdown).length > 0 && (
-                    <div className="pl-6 text-xs text-muted-foreground">
-                      Placed: {Object.entries(ws.categoryBreakdown).map(([cat, count]) => `${cat}(${count})`).join(', ')}
-                    </div>
-                  )}
-                  {ws.missingCategories.length > 0 && (
-                    <div className="pl-6 text-xs text-amber-600 dark:text-amber-400">
-                      {ws.missingCategories.map(cat => `⚠ No ${cat} tasks placed`).join(' · ')}
-                    </div>
-                  )}
-                  {ws.eligibleUnscheduled.length > 0 && (
-                    <div className="pl-6 text-[11px] text-muted-foreground space-y-0.5">
-                      <div className="font-medium">Eligible but not placed here:</div>
-                      {ws.eligibleUnscheduled.slice(0, 3).map(t => (
-                        <div key={t.id} className="truncate">• {t.title} <span className="opacity-60">({t.reason})</span></div>
-                      ))}
-                      {ws.eligibleUnscheduled.length > 3 && (
-                        <div className="opacity-60">+ {ws.eligibleUnscheduled.length - 3} more</div>
-                      )}
-                    </div>
-                  )}
-                </div>
+              {reasoning.windowSummaries.slice(0, 3).map(ws => (
+                <WindowSummaryRow key={ws.window} ws={ws} />
               ))}
+              {reasoning.windowSummaries.length > 3 && (
+                <Collapsible>
+                  <CollapsibleTrigger className="flex items-center gap-1 text-xs text-primary pl-2 pt-1 hover:underline">
+                    <ChevronDown className="h-3 w-3" />
+                    Show all windows ({reasoning.windowSummaries.length - 3} more)
+                  </CollapsibleTrigger>
+                  <CollapsibleContent className="space-y-1 pt-1">
+                    {reasoning.windowSummaries.slice(3).map(ws => (
+                      <WindowSummaryRow key={ws.window} ws={ws} />
+                    ))}
+                  </CollapsibleContent>
+                </Collapsible>
+              )}
             </div>
 
             {/* External Events */}
