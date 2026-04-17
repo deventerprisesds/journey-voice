@@ -9,7 +9,7 @@ import {
   ASSIGNMENT_URGENT_HOURS,
   ASSIGNMENT_PRIORITY_DAYS,
 } from "../_shared/scheduling-defaults.ts";
-import { getTodayInTimezone } from "../_shared/timezone.ts";
+import { getTodayInTimezone, localDateToUtcBounds } from "../_shared/timezone.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -448,18 +448,19 @@ serve(async (req) => {
           }
         } else {
           // Single-day: only clear today's scheduled tasks
-          const [tY, tM, tD] = todayISO.split('-').map(Number);
-          const todayStartUtc = new Date(Date.UTC(tY, tM - 1, tD, 0, 0, 0));
-          const todayEndUtc = new Date(Date.UTC(tY, tM - 1, tD + 1, 23, 59, 59));
-          
+          // TIMEZONE-SAFE: use shared localDateToUtcBounds helper. NEVER use Date.UTC for local-day bounds.
+          const todayBounds = localDateToUtcBounds(todayISO, timezone);
+          const todayStartIso = todayBounds.start;
+          const todayEndIso = todayBounds.end;
+
           const { data: todayTasks, error: todayError } = await supabase
             .from('tasks')
             .select('id, title, start_time, external_event_id')
             .eq('user_id', userId)
             .eq('is_scheduled', true)
             .not('status', 'eq', 'DONE')
-            .gte('start_time', todayStartUtc.toISOString())
-            .lt('start_time', todayEndUtc.toISOString());
+            .gte('start_time', todayStartIso)
+            .lt('start_time', todayEndIso);
 
           let clearedTodayCount = 0;
           if (!todayError && todayTasks && todayTasks.length > 0) {
@@ -485,15 +486,15 @@ serve(async (req) => {
             console.log(`  🔄 [single-day] Cleared ${clearedTodayCount} today-scheduled tasks for rebuild`);
           }
 
-          // Also purge pending notifications for today
+          // Also purge pending notifications for today (timezone-safe bounds)
           try {
             await supabase
               .from('scheduled_notifications')
               .delete()
               .eq('user_id', userId)
               .eq('status', 'pending')
-              .gte('send_at', todayStartUtc.toISOString())
-              .lt('send_at', todayEndUtc.toISOString());
+              .gte('send_at', todayStartIso)
+              .lt('send_at', todayEndIso);
             console.log(`  🔔 Purged pending notifications for today`);
           } catch (notifErr) {
             console.warn(`  ⚠️ Failed to purge notifications (non-fatal):`, notifErr);
@@ -540,8 +541,11 @@ serve(async (req) => {
         // ==========================================
         // STEP 1.5: ARCHIVE STALE TASKS
         // Tasks pushed 5+ times with due_date > 30 days past are auto-archived
+        // TIMEZONE-SAFE: use timezone-aware date string, never toISOString().split('T')[0]
         // ==========================================
-        const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+        const thirtyDaysAgo = getTodayInTimezone(timezone).split('-').map(Number);
+        const _staleAnchor = new Date(Date.UTC(thirtyDaysAgo[0], thirtyDaysAgo[1] - 1, thirtyDaysAgo[2] - 30));
+        const thirtyDaysAgoStr = `${_staleAnchor.getUTCFullYear()}-${String(_staleAnchor.getUTCMonth() + 1).padStart(2, '0')}-${String(_staleAnchor.getUTCDate()).padStart(2, '0')}`;
         
         const { data: staleTasks, error: staleError } = await supabase
           .from('tasks')
@@ -550,7 +554,7 @@ serve(async (req) => {
           .not('status', 'eq', 'DONE')
           .is('completed_at', null)
           .gte('pushed_count', 5)
-          .lt('due_date', thirtyDaysAgo);
+          .lt('due_date', thirtyDaysAgoStr);
 
         let archivedStaleCount = 0;
         if (!staleError && staleTasks && staleTasks.length > 0) {
