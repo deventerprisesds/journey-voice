@@ -1,21 +1,27 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { format } from 'date-fns';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Input } from '@/components/ui/input';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import {
   Sunrise, Coffee, Sunset, Moon, Calendar, Send, Sparkles,
   CheckCircle2, Clock, AlertTriangle, ArrowRight, SkipForward,
-  Loader2, Info, BookOpen, ShieldAlert
+  Loader2, Info, BookOpen, ShieldAlert, ChevronDown
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Task, ExternalCalendarEvent } from '@/types/task';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useChatAssistant } from '@/hooks/useChatAssistant';
-import { getDefaultTimezone, getTodayInTimezone, formatTimeInTimezone } from '@/lib/date';
+import {
+  getDefaultTimezone,
+  getTodayInTimezone,
+  formatTimeInTimezone,
+  isWeekendInTimezone,
+  formatDateOnly,
+} from '@/lib/date';
 import { toast } from 'sonner';
 import { buildDailyReviewReasoning } from '@/utils/dailyReviewPipeline';
 
@@ -42,6 +48,51 @@ const priorityColors: Record<string, string> = {
   URGENT: 'bg-destructive/10 text-destructive border-destructive/20',
 };
 
+// Renders a single window-summary row. "Eligible but not placed" lives behind
+// a per-row collapsible so the modal stays scannable on narrow viewports (411px).
+const WindowSummaryRow: React.FC<{ ws: import('@/utils/dailyReviewPipeline').WindowSummary }> = ({ ws }) => (
+  <div className="py-1.5 px-2 rounded-md bg-card border border-border space-y-1">
+    <div className="flex items-center justify-between">
+      <div className="flex items-center gap-2 text-sm text-foreground">
+        {windowIcons[ws.window]}
+        {ws.label}
+      </div>
+      <span className={cn(
+        "text-xs",
+        ws.taskCount > 0 ? "text-foreground" : "text-muted-foreground"
+      )}>
+        {ws.capacityNote}
+      </span>
+    </div>
+    {ws.taskCount > 0 && Object.keys(ws.categoryBreakdown).length > 0 && (
+      <div className="pl-6 text-xs text-muted-foreground">
+        Placed: {Object.entries(ws.categoryBreakdown).map(([cat, count]) => `${cat}(${count})`).join(', ')}
+      </div>
+    )}
+    {ws.missingCategories.length > 0 && (
+      <div className="pl-6 text-xs text-amber-600 dark:text-amber-400">
+        {ws.missingCategories.map(cat => `⚠ No ${cat} tasks placed`).join(' · ')}
+      </div>
+    )}
+    {ws.eligibleUnscheduled.length > 0 && (
+      <Collapsible>
+        <CollapsibleTrigger className="flex items-center gap-1 pl-6 text-[11px] text-primary hover:underline">
+          <ChevronDown className="h-3 w-3" />
+          {ws.eligibleUnscheduled.length} eligible but not placed
+        </CollapsibleTrigger>
+        <CollapsibleContent className="pl-6 text-[11px] text-muted-foreground space-y-0.5 pt-1">
+          {ws.eligibleUnscheduled.slice(0, 5).map(t => (
+            <div key={t.id} className="truncate">• {t.title} <span className="opacity-60">({t.reason})</span></div>
+          ))}
+          {ws.eligibleUnscheduled.length > 5 && (
+            <div className="opacity-60">+ {ws.eligibleUnscheduled.length - 5} more</div>
+          )}
+        </CollapsibleContent>
+      </Collapsible>
+    )}
+  </div>
+);
+
 const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
   open, onClose, tasks, externalEvents, onTaskUpdate
 }) => {
@@ -64,7 +115,8 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
 
   const tz = getDefaultTimezone();
   const todayStr = getTodayInTimezone(tz);
-  const isWeekend = new Date().getDay() === 0 || new Date().getDay() === 6;
+  // TIMEZONE-SAFE: derive day-of-week in user's tz, never new Date().getDay()
+  const isWeekend = isWeekendInTimezone(tz);
 
   // On modal open: assign a new review session id, set message floor,
   // force a fresh task reload, fetch user config + latest builder log
@@ -223,7 +275,8 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
             {reasoning.greeting}
           </SheetTitle>
           <p className="text-sm text-muted-foreground">
-            {format(new Date(), 'EEEE, MMMM d')}
+            {/* TIMEZONE-SAFE: format header date via shared helper */}
+            {formatDateOnly(todayStr)}
           </p>
         </SheetHeader>
 
@@ -292,43 +345,70 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
               )}
             </div>
 
-            {/* Calendar Status tile — proves the scheduler checked external calendars */}
-            <div className="bg-card border border-border rounded-lg px-3 py-2 flex items-center gap-2 text-xs">
-              <Calendar className="h-3.5 w-3.5 text-primary shrink-0" />
-              {(reasoning.calendarStatus?.eventsToday ?? externalEvents.length) > 0 ? (
-                <span className="text-foreground">
-                  Checked{' '}
-                  <span className="font-medium">{reasoning.calendarStatus?.eventsToday ?? externalEvents.length}</span>
-                  {' '}calendar event{(reasoning.calendarStatus?.eventsToday ?? externalEvents.length) > 1 ? 's' : ''}
-                  {reasoning.calendarStatus?.connectionCount
-                    ? <> on <span className="font-medium">{reasoning.calendarStatus.connectionCount}</span> calendar{reasoning.calendarStatus.connectionCount > 1 ? 's' : ''}</>
-                    : null}
-                  {' — '}
-                  <span className="text-muted-foreground">{reasoning.stats.externalBlockedMinutes} min reserved as busy</span>
-                </span>
-              ) : (
-                <span className="text-muted-foreground">
-                  No external calendar events for today
-                  {reasoning.calendarStatus?.connectionCount
-                    ? <> ({reasoning.calendarStatus.connectionCount} calendar{reasoning.calendarStatus.connectionCount > 1 ? 's' : ''} connected)</>
-                    : <> (no calendars connected)</>}
-                </span>
-              )}
-            </div>
+            {/* Calendar Status tile — tri-state, never silent */}
+            {(() => {
+              const cs = reasoning.calendarStatus;
+              const state = cs?.state ?? 'unknown';
+              const eventsToday = cs?.eventsToday ?? externalEvents.length;
+              const connectionCount = cs?.connectionCount ?? 0;
+              return (
+                <div className="bg-card border border-border rounded-lg px-3 py-2 flex items-center gap-2 text-xs">
+                  <Calendar className="h-3.5 w-3.5 text-primary shrink-0" />
+                  {state === 'connected_with_events' ? (
+                    <span className="text-foreground">
+                      <span className="font-medium">{eventsToday}</span> event{eventsToday > 1 ? 's' : ''} today across{' '}
+                      <span className="font-medium">{connectionCount}</span> calendar{connectionCount > 1 ? 's' : ''}
+                      {' — '}<span className="text-muted-foreground">{reasoning.stats.externalBlockedMinutes} min reserved</span>
+                    </span>
+                  ) : state === 'connected_no_events' ? (
+                    <span className="text-muted-foreground">
+                      <span className="font-medium text-foreground">{connectionCount}</span> calendar{connectionCount > 1 ? 's' : ''} connected · 0 events today
+                    </span>
+                  ) : state === 'not_connected' ? (
+                    <span className="text-muted-foreground">No calendars connected</span>
+                  ) : state === 'query_failed' ? (
+                    <span className="text-amber-600 dark:text-amber-400">Calendar status unavailable this run</span>
+                  ) : eventsToday > 0 ? (
+                    <span className="text-foreground">
+                      <span className="font-medium">{eventsToday}</span> event{eventsToday > 1 ? 's' : ''} today
+                      {' — '}<span className="text-muted-foreground">{reasoning.stats.externalBlockedMinutes} min reserved</span>
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground">No external calendar events for today</span>
+                  )}
+                </div>
+              );
+            })()}
 
-            {/* Schedule Reasoning */}
+            {/* Schedule Reasoning — top-line bullets only, full reasoning behind disclosure */}
             {(reasoning.explanations.length > 0 || reasoning.missingExplanations.length > 0) && (
               <div className="bg-muted/50 rounded-lg p-3 space-y-2">
                 <div className="flex items-center gap-1.5 text-sm font-medium text-foreground">
                   <Info className="h-4 w-4 text-primary" />
                   How we built today
                 </div>
-                {reasoning.explanations.map((exp, i) => (
+                {reasoning.explanations.slice(0, 3).map((exp, i) => (
                   <p key={i} className="text-xs text-muted-foreground pl-5">• {exp}</p>
                 ))}
-                {reasoning.missingExplanations.map((exp, i) => (
+                {reasoning.missingExplanations.slice(0, 2).map((exp, i) => (
                   <p key={`m-${i}`} className="text-xs text-amber-600 dark:text-amber-400 pl-5">• {exp}</p>
                 ))}
+                {(reasoning.explanations.length > 3 || reasoning.missingExplanations.length > 2) && (
+                  <Collapsible>
+                    <CollapsibleTrigger className="flex items-center gap-1 text-[11px] text-primary pl-5 hover:underline">
+                      <ChevronDown className="h-3 w-3" />
+                      Show full reasoning ({reasoning.explanations.length + reasoning.missingExplanations.length - 5} more)
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="space-y-1 pt-1">
+                      {reasoning.explanations.slice(3).map((exp, i) => (
+                        <p key={`e-rest-${i}`} className="text-xs text-muted-foreground pl-5">• {exp}</p>
+                      ))}
+                      {reasoning.missingExplanations.slice(2).map((exp, i) => (
+                        <p key={`m-rest-${i}`} className="text-xs text-amber-600 dark:text-amber-400 pl-5">• {exp}</p>
+                      ))}
+                    </CollapsibleContent>
+                  </Collapsible>
+                )}
               </div>
             )}
 
@@ -348,46 +428,25 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
               </div>
             )}
 
-            {/* Window Summaries */}
+            {/* Window Summaries — top 3 by default, rest behind disclosure */}
             <div className="space-y-1">
               <div className="text-sm font-medium text-foreground mb-2">Time Windows</div>
-              {reasoning.windowSummaries.map(ws => (
-                <div key={ws.window} className="py-1.5 px-2 rounded-md bg-card border border-border space-y-1">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 text-sm text-foreground">
-                      {windowIcons[ws.window]}
-                      {ws.label}
-                    </div>
-                    <span className={cn(
-                      "text-xs",
-                      ws.taskCount > 0 ? "text-foreground" : "text-muted-foreground"
-                    )}>
-                      {ws.capacityNote}
-                    </span>
-                  </div>
-                  {ws.taskCount > 0 && Object.keys(ws.categoryBreakdown).length > 0 && (
-                    <div className="pl-6 text-xs text-muted-foreground">
-                      Placed: {Object.entries(ws.categoryBreakdown).map(([cat, count]) => `${cat}(${count})`).join(', ')}
-                    </div>
-                  )}
-                  {ws.missingCategories.length > 0 && (
-                    <div className="pl-6 text-xs text-amber-600 dark:text-amber-400">
-                      {ws.missingCategories.map(cat => `⚠ No ${cat} tasks placed`).join(' · ')}
-                    </div>
-                  )}
-                  {ws.eligibleUnscheduled.length > 0 && (
-                    <div className="pl-6 text-[11px] text-muted-foreground space-y-0.5">
-                      <div className="font-medium">Eligible but not placed here:</div>
-                      {ws.eligibleUnscheduled.slice(0, 3).map(t => (
-                        <div key={t.id} className="truncate">• {t.title} <span className="opacity-60">({t.reason})</span></div>
-                      ))}
-                      {ws.eligibleUnscheduled.length > 3 && (
-                        <div className="opacity-60">+ {ws.eligibleUnscheduled.length - 3} more</div>
-                      )}
-                    </div>
-                  )}
-                </div>
+              {reasoning.windowSummaries.slice(0, 3).map(ws => (
+                <WindowSummaryRow key={ws.window} ws={ws} />
               ))}
+              {reasoning.windowSummaries.length > 3 && (
+                <Collapsible>
+                  <CollapsibleTrigger className="flex items-center gap-1 text-xs text-primary pl-2 pt-1 hover:underline">
+                    <ChevronDown className="h-3 w-3" />
+                    Show all windows ({reasoning.windowSummaries.length - 3} more)
+                  </CollapsibleTrigger>
+                  <CollapsibleContent className="space-y-1 pt-1">
+                    {reasoning.windowSummaries.slice(3).map(ws => (
+                      <WindowSummaryRow key={ws.window} ws={ws} />
+                    ))}
+                  </CollapsibleContent>
+                </Collapsible>
+              )}
             </div>
 
             {/* External Events */}

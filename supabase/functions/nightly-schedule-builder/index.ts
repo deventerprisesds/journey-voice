@@ -9,7 +9,7 @@ import {
   ASSIGNMENT_URGENT_HOURS,
   ASSIGNMENT_PRIORITY_DAYS,
 } from "../_shared/scheduling-defaults.ts";
-import { getTodayInTimezone } from "../_shared/timezone.ts";
+import { getTodayInTimezone, localDateToUtcBounds } from "../_shared/timezone.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -448,18 +448,19 @@ serve(async (req) => {
           }
         } else {
           // Single-day: only clear today's scheduled tasks
-          const [tY, tM, tD] = todayISO.split('-').map(Number);
-          const todayStartUtc = new Date(Date.UTC(tY, tM - 1, tD, 0, 0, 0));
-          const todayEndUtc = new Date(Date.UTC(tY, tM - 1, tD + 1, 23, 59, 59));
-          
+          // TIMEZONE-SAFE: use shared localDateToUtcBounds helper. NEVER use Date.UTC for local-day bounds.
+          const todayBounds = localDateToUtcBounds(todayISO, timezone);
+          const todayStartIso = todayBounds.start;
+          const todayEndIso = todayBounds.end;
+
           const { data: todayTasks, error: todayError } = await supabase
             .from('tasks')
             .select('id, title, start_time, external_event_id')
             .eq('user_id', userId)
             .eq('is_scheduled', true)
             .not('status', 'eq', 'DONE')
-            .gte('start_time', todayStartUtc.toISOString())
-            .lt('start_time', todayEndUtc.toISOString());
+            .gte('start_time', todayStartIso)
+            .lt('start_time', todayEndIso);
 
           let clearedTodayCount = 0;
           if (!todayError && todayTasks && todayTasks.length > 0) {
@@ -485,15 +486,15 @@ serve(async (req) => {
             console.log(`  🔄 [single-day] Cleared ${clearedTodayCount} today-scheduled tasks for rebuild`);
           }
 
-          // Also purge pending notifications for today
+          // Also purge pending notifications for today (timezone-safe bounds)
           try {
             await supabase
               .from('scheduled_notifications')
               .delete()
               .eq('user_id', userId)
               .eq('status', 'pending')
-              .gte('send_at', todayStartUtc.toISOString())
-              .lt('send_at', todayEndUtc.toISOString());
+              .gte('send_at', todayStartIso)
+              .lt('send_at', todayEndIso);
             console.log(`  🔔 Purged pending notifications for today`);
           } catch (notifErr) {
             console.warn(`  ⚠️ Failed to purge notifications (non-fatal):`, notifErr);
@@ -540,8 +541,11 @@ serve(async (req) => {
         // ==========================================
         // STEP 1.5: ARCHIVE STALE TASKS
         // Tasks pushed 5+ times with due_date > 30 days past are auto-archived
+        // TIMEZONE-SAFE: use timezone-aware date string, never toISOString().split('T')[0]
         // ==========================================
-        const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+        const thirtyDaysAgo = getTodayInTimezone(timezone).split('-').map(Number);
+        const _staleAnchor = new Date(Date.UTC(thirtyDaysAgo[0], thirtyDaysAgo[1] - 1, thirtyDaysAgo[2] - 30));
+        const thirtyDaysAgoStr = `${_staleAnchor.getUTCFullYear()}-${String(_staleAnchor.getUTCMonth() + 1).padStart(2, '0')}-${String(_staleAnchor.getUTCDate()).padStart(2, '0')}`;
         
         const { data: staleTasks, error: staleError } = await supabase
           .from('tasks')
@@ -550,7 +554,7 @@ serve(async (req) => {
           .not('status', 'eq', 'DONE')
           .is('completed_at', null)
           .gte('pushed_count', 5)
-          .lt('due_date', thirtyDaysAgo);
+          .lt('due_date', thirtyDaysAgoStr);
 
         let archivedStaleCount = 0;
         if (!staleError && staleTasks && staleTasks.length > 0) {
@@ -1611,28 +1615,48 @@ serve(async (req) => {
         );
 
         // Calendar status snapshot for today (used by daily-review pipeline messaging)
-        let calendarStatus: Record<string, unknown> = { events_today: 0, sources: [] };
+        // Tri-state: connected_with_events | connected_no_events | not_connected | query_failed
+        // NOTE: get_calendar_connections_safe RPC requires auth.uid() context (memory:
+        // service-role-rpc-constraint), so the builder uses a direct query that mirrors
+        // the same filters (is_active=true, scoped to user_id).
+        let calendarStatus: Record<string, unknown> = { state: 'query_failed', events_today: 0, connection_count: 0, sources: [] };
         try {
-          const todayBounds = _ldub(todayISO, timezone);
-          const { data: todayEvents } = await supabase
-            .from('external_calendar_events')
-            .select('id, connection_id')
-            .eq('user_id', userId)
-            .gte('start_time', todayBounds.start)
-            .lt('start_time', todayBounds.end)
-            .eq('is_all_day', false);
-          const { data: connections } = await supabase
-            .from('calendar_connections')
-            .select('provider')
-            .eq('user_id', userId)
-            .eq('is_active', true);
-          calendarStatus = {
-            events_today: todayEvents?.length ?? 0,
-            connection_count: connections?.length ?? 0,
-            sources: Array.from(new Set((connections || []).map((c: any) => c.provider))),
-          };
-        } catch (e) {
-          console.warn('  ⚠️ Calendar status snapshot failed:', e);
+          const todayBounds = localDateToUtcBounds(todayISO, timezone);
+          const [eventsRes, connRes] = await Promise.all([
+            supabase
+              .from('external_calendar_events')
+              .select('id, connection_id')
+              .eq('user_id', userId)
+              .gte('start_time', todayBounds.start)
+              .lt('start_time', todayBounds.end)
+              .eq('is_all_day', false),
+            supabase
+              .from('calendar_connections')
+              .select('provider, is_active')
+              .eq('user_id', userId)
+              .eq('is_active', true),
+          ]);
+          if (connRes.error) {
+            console.warn('  ⚠️ calendar_connections query failed:', connRes.error.message);
+            calendarStatus = { state: 'query_failed', events_today: 0, connection_count: 0, sources: [], error: connRes.error.message };
+          } else {
+            const connectionCount = connRes.data?.length ?? 0;
+            const eventsToday = eventsRes.data?.length ?? 0;
+            const sources = Array.from(new Set((connRes.data || []).map((c: any) => c.provider)));
+            let state: 'connected_with_events' | 'connected_no_events' | 'not_connected';
+            if (connectionCount === 0) state = 'not_connected';
+            else if (eventsToday === 0) state = 'connected_no_events';
+            else state = 'connected_with_events';
+            calendarStatus = {
+              state,
+              events_today: eventsToday,
+              connection_count: connectionCount,
+              sources,
+            };
+          }
+        } catch (e: any) {
+          console.warn('  ⚠️ Calendar status snapshot failed:', e?.message ?? e);
+          calendarStatus = { state: 'query_failed', events_today: 0, connection_count: 0, sources: [], error: String(e?.message ?? e) };
         }
 
         await supabase.from('activity_log').insert({
