@@ -1,55 +1,49 @@
 
+The user is right. My previous QC was wrong because I queried the DB directly with my *own* SQL, not the actual code path the modal uses. I need to replicate the exact data path: `useUnifiedTasks` → `dailyReviewPipeline` → modal counts.
 
-Yes — fixing semantics first is the right call. Everything else (data source split, build-version badges, structured IDs) is downstream of getting the definitions right. If "rolled over" and "overdue" are defined wrong, no amount of scoping will make the numbers make sense.
+## What the modal actually does (traced from code)
 
-## Minimal semantic fix
+1. `FocusView` calls `useUnifiedTasks()` which:
+   - Queries `tasks` where `user_id = current_user`
+   - Queries `tasks_with_schedule` view where `user_id = current_user AND from_history = true AND scheduled_date < todayStr`
+   - Merges both into one array (live + history rows, history rows get `_fromHistory: true`)
+2. Passes merged array as `tasks` prop to `DailyReviewModal`
+3. Modal calls `buildDailyReviewReasoning(tasks, todayStr, timezone)` 
+4. Pipeline filters `todayTasks = tasks.filter(t => t.start_time && t.start_time.startsWith(todayStr))`
+5. Counts derived from `todayTasks` with new clamps
 
-Two definitions need to change in `src/utils/dailyReviewPipeline.ts`. Nothing else this round.
+The bug: `tasks_with_schedule` view rows can have `start_time` that starts with today's date if the historical snapshot was for a task that was once scheduled today. Those rows ALSO have lifetime `pushed_count`. So `todayTasks` gets contaminated with history rows.
 
-### 1. "Rolled over today" — currently wrong
+## QC plan — replicate exact modal path
 
-**Now:** `todayTasks.filter(t => (t.pushed_count ?? 0) > 0)`
-This counts every task scheduled today that has *ever* been pushed in its lifetime. A task pushed 170 times last month but legitimately scheduled today still counts.
+I need to run the **exact same two queries** that `useUnifiedTasks` runs, merge them the same way, then run the **exact same filter logic** from `dailyReviewPipeline`, and confirm the output matches what the user sees in the UI (171 / 39).
 
-**Should be:** a task scheduled today whose *previous* scheduled date was a past day that has now passed without completion.
+### Step 1: Replicate `useUnifiedTasks` queries
+- Query A: `SELECT * FROM tasks WHERE user_id = 'a3378f93-...' ORDER BY created_at DESC`
+- Query B: `SELECT * FROM tasks_with_schedule WHERE user_id = 'a3378f93-...' AND from_history = true AND scheduled_date < '2026-04-17'`
+- Merge per the dedup logic in the hook
 
-Practical signal available without new infra:
-- task is in today's live schedule (`start_time` falls on `todayStr` in user TZ)
-- AND task has a `task_schedule_history` row with `scheduled_date < todayStr` and action indicating it was moved/rolled (not completed)
+### Step 2: Apply the new pipeline filters exactly
+- `todayTasks` = merged where `start_time LIKE '2026-04-17%'`
+- `rolledOverIds` = `todayTasks` where `pushed_count > 0 AND updated_at >= now() - 36h`
+- `overdueIds` = merged where `due_date::date < '2026-04-17' AND id IN todayTasks` (intersected)
+- `backlogOverdueIds` = merged where status != DONE AND due_date::date < '2026-04-17'
 
-If history lookup is too heavy for the modal, fall back to: `is_scheduled = true AND start_time on today AND pushed_count > 0 AND updated_at >= today_start`. The `updated_at` clamp removes the lifetime-pushed contamination.
+### Step 3: Compare to screenshot
+- Screenshot shows: 171 rolled over, 39 overdue
+- If my replicated path returns 171/39 → confirms history-merge contamination is the live root cause and the new clamp isn't reaching the UI (stale bundle OR clamp not effective against history rows)
+- If my replicated path returns 9/1 → confirms bundle is stale on user's device
+- If it returns something else → there's a third source I haven't traced
 
-### 2. "Overdue" — currently wrong
+### Step 4: Check build version on published site
+- Read `index.html` from `https://journey-voice.lovable.app` to extract the deployed `<meta name="build-version">` or bundle hash
+- Compare to current source to confirm publish actually shipped the new code
 
-**Now:** `new Date(t.due_date) < new Date()` — timezone-naive, marks same-day tasks overdue based on time of day.
+## Implementation
 
-**Should be:** `due_date < todayStr` compared as YYYY-MM-DD strings in the user's timezone. A task due today is never overdue.
+This is a read-only investigation, no file changes. I'll use:
+- `supabase--read_query` to run the two exact queries and the pipeline filters as SQL
+- `code--fetch_website` on the published URL to grab the live HTML/bundle hash
+- Report back: exact UI numbers I derived from the exact code path, plus whether the published bundle contains the new logic
 
-Then for the Daily Review card, intersect with today's scheduled set so the count can never exceed `scheduledCount`.
-
-### 3. Hard invariant
-
-Add a single assertion in the pipeline output:
-```
-rolledOverCount <= scheduledCount
-overdueCount <= scheduledCount
-```
-If violated, log a `daily_review_invariant_violation` and clamp the displayed number. This prevents the "171 of 9" UI from ever shipping again even if a future regression slips in.
-
-## What we explicitly defer
-
-- Splitting Daily Review off `useUnifiedTasks` (data source change)
-- New `scheduled_reason` field in `scheduling_context`
-- Build-version badge / SW cache bump
-- Backend `nightly-schedule-builder` changes
-
-If after this fix the numbers are still wrong on the live account, the cause is data-source contamination (history rows leaking in), and we tackle that next as a separate, smaller change.
-
-## Files
-
-| File | Change |
-|------|--------|
-| `src/utils/dailyReviewPipeline.ts` | Redefine `rolledOverIds` and `overdueIds`; add invariant clamp + log |
-
-One file, two definitions, one guardrail. Ship, verify on `journey-voice.lovable.app` with the dev account, then decide if step 2 (data source split) is still needed.
-
+Then we'll know definitively whether the issue is (a) stale bundle, (b) history contamination bypassing the clamp, or (c) something else entirely. No fix proposed in this round — just honest QC that mirrors what you see.
