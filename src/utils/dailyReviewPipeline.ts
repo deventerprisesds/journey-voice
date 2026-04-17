@@ -46,6 +46,16 @@ export interface ScheduleReasoning {
   missingExplanations: string[];
   qcViolations: QcViolation[];
   pipelineTrace: StepResult[];
+  calendarStatus?: {
+    eventsToday: number;
+    connectionCount: number;
+    sources: string[];
+  };
+  reshuffleOutcome?: {
+    attempted: number;
+    committed: number;
+    deferred: number;
+  };
 }
 
 export interface WindowSummary {
@@ -386,10 +396,11 @@ export function buildDailyReviewReasoning(
         const withDueDate = pendingAssignments
           .filter(t => t.due_date)
           .sort((a, b) => new Date(a.due_date!).getTime() - new Date(b.due_date!).getTime());
+        const dueToday = pendingAssignments.filter(t => t.due_date && t.due_date.slice(0, 10) === todayStr).length;
         if (withDueDate.length > 0) {
-          explanations.push(`No assignment tasks scheduled today — ${pendingAssignments.length} assignment${pendingAssignments.length > 1 ? 's' : ''} pending (Tier A: ${tierA}, B: ${tierB}, C: ${tierC}); next due: "${withDueDate[0].title}" on ${format(new Date(withDueDate[0].due_date!), 'MMM d')}`);
+          explanations.push(`${dueToday} assignment${dueToday !== 1 ? 's' : ''} due today (${pendingAssignments.length} total pending — Tier A: ${tierA}, B: ${tierB}, C: ${tierC}); next due: "${withDueDate[0].title}" on ${format(new Date(withDueDate[0].due_date!), 'MMM d')}`);
         } else {
-          explanations.push(`No assignment tasks scheduled today — ${pendingAssignments.length} assignment${pendingAssignments.length > 1 ? 's' : ''} pending (no due dates set)`);
+          explanations.push(`${pendingAssignments.length} assignment${pendingAssignments.length > 1 ? 's' : ''} pending (no due dates set)`);
         }
       } else if (assignmentTasksToday.length > 0) {
         explanations.push(`${assignmentTasksToday.length} assignment${assignmentTasksToday.length > 1 ? 's' : ''} scheduled today (Tier A urgent: ${tierA}, B: ${tierB}, C: ${tierC} pending across horizon)`);
@@ -413,11 +424,23 @@ export function buildDailyReviewReasoning(
     'BUILDER_LOG_MERGE',
     { hasBuilderLog: !!builderLog },
     () => {
+      const cs = (builderLog as any)?.calendar_status;
+      const rs = (builderLog as any)?.reshuffle;
       return {
         archivedStale: (builderLog as any)?.archived_stale ?? 0,
         totalScheduled: (builderLog as any)?.total_scheduled ?? null,
         lastRunTimestamp: (builderLog as any)?.timestamp ?? null,
         rawKeys: builderLog ? Object.keys(builderLog) : [],
+        calendarStatus: cs ? {
+          eventsToday: cs.events_today ?? 0,
+          connectionCount: cs.connection_count ?? 0,
+          sources: Array.isArray(cs.sources) ? cs.sources : [],
+        } : undefined,
+        reshuffleOutcome: rs ? {
+          attempted: rs.attempted ?? 0,
+          committed: rs.committed ?? 0,
+          deferred: rs.deferred ?? 0,
+        } : undefined,
       };
     }
   );
@@ -517,8 +540,21 @@ export function buildDailyReviewReasoning(
     const end = new Date(e.end_time).getTime();
     return sum + Math.round((end - start) / 60000);
   }, 0);
-  if (externalEvents.length > 0) {
+  // Calendar status messaging — proves the scheduler checked external calendars
+  const cs = builderMerge.calendarStatus;
+  if (cs && cs.connectionCount > 0) {
+    if (cs.eventsToday > 0) {
+      explanations.push(`Checked ${cs.eventsToday} calendar event${cs.eventsToday > 1 ? 's' : ''} on ${cs.connectionCount} connected calendar${cs.connectionCount > 1 ? 's' : ''} — ${externalMinutes} min reserved as busy`);
+    } else {
+      explanations.push(`No external calendar events for today (${cs.connectionCount} calendar${cs.connectionCount > 1 ? 's' : ''} connected, checked)`);
+    }
+  } else if (externalEvents.length > 0) {
     explanations.push(`${externalEvents.length} calendar event${externalEvents.length > 1 ? 's' : ''} blocking ${externalMinutes} min total`);
+  }
+  // Reshuffle outcome
+  const ro = builderMerge.reshuffleOutcome;
+  if (ro && (ro.committed > 0 || ro.deferred > 0)) {
+    explanations.push(`${ro.committed} task${ro.committed !== 1 ? 's' : ''} reshuffled into alternate windows; ${ro.deferred} deferred — try Confirm & Fill Gaps for the rest`);
   }
   if (builderMerge.archivedStale > 0) {
     explanations.push(`${builderMerge.archivedStale} stale tasks archived by the nightly builder`);
@@ -573,6 +609,8 @@ export function buildDailyReviewReasoning(
     missingExplanations: allMissingExplanations,
     qcViolations: qcResult.violations,
     pipelineTrace: steps,
+    calendarStatus: builderMerge.calendarStatus,
+    reshuffleOutcome: builderMerge.reshuffleOutcome,
   };
 
   // ── Log full pipeline trace to activity_log (fire-and-forget) ──

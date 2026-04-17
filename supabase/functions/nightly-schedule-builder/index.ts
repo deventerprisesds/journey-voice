@@ -991,14 +991,13 @@ serve(async (req) => {
               // Topic-mapped — organizational nudge only (not the same as user priority)
               if (mappedIds.includes(task.id)) score += 2;
               
-              // Pushed count: diminishing returns after 3
+              // Pushed-count: soft signal only — never bury a task because the system
+              // failed to schedule it. is_priority items skip even the mild -1 hint.
               if (task.pushed_count && task.pushed_count > 0) {
-                if (task.pushed_count <= 3) {
-                  score += task.pushed_count; // +1, +2, +3
-                } else {
-                  score += 3; // cap the bonus at 3
-                  score -= (task.pushed_count - 3); // then penalize staleness
-                }
+                const n = task.pushed_count;
+                if (n <= 3) score += 1;
+                else if (n <= 7) { /* neutral */ }
+                else if (!(task as any).is_priority) score -= 1;
               }
               
               // Urgency ladder: ±48h includes overdue (intentional)
@@ -1058,36 +1057,63 @@ serve(async (req) => {
               return { ...task, score: Math.max(score, 0), isPriorityBoard: mappedIds.includes(task.id) };
             });
 
-          // Sort: assignments first by tier (B before C, due-asc within B, due-desc within C),
-          // then non-assignment tasks by score. This makes Pass 1B/1C effectively a sort layer
-          // over the existing single placement loop, and Pass 2 (non-assignment) runs after.
+          // Sort: Tier A → Tier B → everything else (Tier C + non-assignment) competes on
+          // is_priority → priority_rank → score → due_date NULLS LAST.
+          // Per approved plan: Tier A/B keep deadline-jump behavior (immovable external dates);
+          // Tier C no longer auto-jumps priority-board work.
           scoredCandidates.sort((a, b) => {
             const aTier = (a as any).assignment_id ? (assignmentTier[a.id] || 'C') : null;
             const bTier = (b as any).assignment_id ? (assignmentTier[b.id] || 'C') : null;
 
-            // Assignments before non-assignments
-            if (aTier && !bTier) return -1;
-            if (!aTier && bTier) return 1;
+            // Tier A always first
+            const aIsAB = aTier === 'A' || aTier === 'B';
+            const bIsAB = bTier === 'A' || bTier === 'B';
+            if (aIsAB && !bIsAB) return -1;
+            if (!aIsAB && bIsAB) return 1;
 
-            // Both are assignments — apply tier order then per-tier due sort
-            if (aTier && bTier) {
-              if (aTier !== bTier) {
-                // Tier A first, then B, then C (Tier A is normally pre-placed, but defensive)
-                const order = { A: 0, B: 1, C: 2 } as const;
-                return order[aTier] - order[bTier];
-              }
+            // Both are A/B — A before B, then due ASC within each tier
+            if (aIsAB && bIsAB) {
+              if (aTier !== bTier) return aTier === 'A' ? -1 : 1;
               const aDue = a.due_date ? new Date(a.due_date).getTime() : Infinity;
               const bDue = b.due_date ? new Date(b.due_date).getTime() : Infinity;
-              return aTier === 'C' ? bDue - aDue : aDue - bDue;
+              return aDue - bDue;
             }
 
-            // Both non-assignment — existing score-based sort
+            // Everyone else (Tier C + non-assignment) competes on the same comparator
+            const aPri = (a as any).is_priority ? 1 : 0;
+            const bPri = (b as any).is_priority ? 1 : 0;
+            if (aPri !== bPri) return bPri - aPri;
+            if (aPri && bPri) {
+              const aRank = (a as any).priority_rank ?? 9999;
+              const bRank = (b as any).priority_rank ?? 9999;
+              if (aRank !== bRank) return aRank - bRank;
+            }
             if (b.score !== a.score) return b.score - a.score;
+            // due_date ASC NULLS LAST
             if (a.due_date && b.due_date) return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
             if (a.due_date) return -1;
             if (b.due_date) return 1;
             return 0;
           });
+
+          // SCORING_AUDIT: emit top-20 score breakdown for diagnostic queries.
+          // Lets us answer "why did X outscore Y" without re-running the builder.
+          const auditTop = scoredCandidates.slice(0, 20).map((t: any) => ({
+            taskId: t.id,
+            title: t.title,
+            score: t.score,
+            assignment_tier: (t as any).assignment_id ? (assignmentTier[t.id] || 'C') : null,
+            is_priority: !!(t as any).is_priority,
+            priority_rank: (t as any).priority_rank ?? null,
+            pushed_count: (t as any).pushed_count ?? 0,
+            due_date: t.due_date ?? null,
+          }));
+          pushStep(
+            `SCORING_AUDIT_${targetISO}`,
+            { targetISO, candidateCount: scoredCandidates.length },
+            { topTwenty: auditTop },
+            Date.now(),
+          );
 
           // Same-day title dedup: keep highest-scored instance only
           const dedupedCandidates = scoredCandidates.filter(task => {
@@ -1283,15 +1309,16 @@ serve(async (req) => {
 
           // Update tasks with their scheduled times
           let actuallyScheduled = 0;
+          const committedIds = new Set<string>();
           for (const slot of scheduled) {
             if (!slot.taskId || !slot.start_time || !slot.end_time) {
               console.log(`    ⏭️ Skipping task ${slot.taskId || 'unknown'}: no valid time slot`);
               continue;
             }
-            
+
             const candidate = selectedCandidates.find(c => c.id === slot.taskId);
             const preScheduleStatus = candidate?.status || 'TODO';
-            
+
             const { error: scheduleError } = await supabase
               .from('tasks')
               .update({
@@ -1308,12 +1335,195 @@ serve(async (req) => {
               console.error(`    ❌ Error scheduling task ${slot.taskId}:`, scheduleError);
             } else {
               actuallyScheduled++;
+              committedIds.add(slot.taskId);
               scheduledTaskIds.add(slot.taskId);
               scheduledTitles.add(candidate?.title || '');
               accumulatedBusySlots.push({ start_time: slot.start_time, end_time: slot.end_time });
             }
           }
-          
+
+          // ==========================================
+          // RESHUFFLE PASS: AI-rejected candidates get one retry in expanded windows
+          // ==========================================
+          const aiRejected = selectedCandidates.filter(c => !committedIds.has(c.id));
+          let reshuffleAttempted = 0;
+          let reshuffleCommitted = 0;
+          const reshuffleDeferred: Array<Record<string, unknown>> = [];
+
+          if (aiRejected.length > 0) {
+            console.log(`    🔁 Reshuffle pass: ${aiRejected.length} AI-rejected candidates → retrying in expanded windows`);
+
+            // Recompute remaining capacity from accumulatedBusySlots for this day
+            const dayBounds = _ldub(targetISO, timezone);
+            const dayBusyForRetry = accumulatedBusySlots.filter(s => {
+              const sMs = new Date(s.start_time).getTime();
+              return sMs >= new Date(dayBounds.start).getTime() && sMs < new Date(dayBounds.end).getTime();
+            });
+            const retryCaps = computeUsedMinutes(
+              dayBusyForRetry.map(s => ({ start_time: s.start_time, end_time: s.end_time })),
+              activeWindows,
+              targetISO,
+              timezone,
+            );
+
+            // Filter to candidates that still have capacity in ANY active window (not just preferred)
+            const retryEligible = aiRejected.filter(t => {
+              const duration = t.estimate_minutes || categoryMappings[t.category]?.estimatedDuration || 60;
+              return activeWindowNames.some(w => (retryCaps[w]?.remainingMinutes || 0) >= duration);
+            });
+
+            for (const t of aiRejected) {
+              if (!retryEligible.includes(t)) {
+                reshuffleDeferred.push({
+                  taskId: t.id, title: t.title, category: t.category,
+                  reason: 'no_capacity_any_window',
+                });
+              }
+            }
+
+            if (retryEligible.length > 0) {
+              reshuffleAttempted = retryEligible.length;
+              const retryPayload = {
+                tasks: retryEligible.map(t => ({
+                  id: t.id,
+                  title: t.title,
+                  category: t.category,
+                  priority: t.priority,
+                  estimate_minutes: t.estimate_minutes || categoryMappings[t.category]?.estimatedDuration || 60,
+                  due_date: t.due_date,
+                })),
+                userId,
+                timezone,
+                targetDate: targetISO,
+                allowOverflow: true, // expanded windows on retry
+                windowCapacity: Object.fromEntries(
+                  Object.entries(retryCaps).map(([name, cap]) => [
+                    name,
+                    {
+                      totalMinutes: cap.totalMinutes,
+                      remainingMinutes: cap.remainingMinutes,
+                      start: activeWindows[name].start,
+                      end: activeWindows[name].end,
+                    },
+                  ])
+                ),
+              };
+
+              try {
+                const retryResp = await fetch(
+                  `${supabaseUrl}/functions/v1/batch-calendar-scheduler`,
+                  {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'Authorization': `Bearer ${supabaseServiceKey}`,
+                    },
+                    body: JSON.stringify(retryPayload),
+                  }
+                );
+
+                if (retryResp.ok) {
+                  const retryResult = await retryResp.json();
+                  const retrySlots = retryResult.scheduled || [];
+                  for (const slot of retrySlots) {
+                    if (!slot.taskId || !slot.start_time || !slot.end_time) continue;
+                    const candidate = retryEligible.find(c => c.id === slot.taskId);
+                    const preScheduleStatus = candidate?.status || 'TODO';
+                    const { error: retryErr } = await supabase
+                      .from('tasks')
+                      .update({
+                        start_time: slot.start_time,
+                        end_time: slot.end_time,
+                        is_scheduled: true,
+                        scheduling_context: { pre_schedule_status: preScheduleStatus, reshuffle_retry: true },
+                        status: 'TODO',
+                        updated_at: now.toISOString(),
+                      })
+                      .eq('id', slot.taskId);
+                    if (!retryErr) {
+                      reshuffleCommitted++;
+                      actuallyScheduled++;
+                      committedIds.add(slot.taskId);
+                      scheduledTaskIds.add(slot.taskId);
+                      scheduledTitles.add(candidate?.title || '');
+                      accumulatedBusySlots.push({ start_time: slot.start_time, end_time: slot.end_time });
+                      console.log(`      🔁 [Reshuffle] "${candidate?.title}" placed in retry window`);
+                    }
+                  }
+                  // Anything still uncommitted = AI couldn't find a slot
+                  for (const t of retryEligible) {
+                    if (!committedIds.has(t.id)) {
+                      reshuffleDeferred.push({
+                        taskId: t.id, title: t.title, category: t.category,
+                        reason: 'ai_no_slot_after_retry',
+                      });
+                    }
+                  }
+                } else {
+                  console.warn(`    ⚠️ Reshuffle retry HTTP ${retryResp.status}`);
+                  for (const t of retryEligible) {
+                    reshuffleDeferred.push({
+                      taskId: t.id, title: t.title, category: t.category,
+                      reason: `retry_http_${retryResp.status}`,
+                    });
+                  }
+                }
+              } catch (retryErr) {
+                console.warn(`    ⚠️ Reshuffle retry failed:`, retryErr);
+                for (const t of retryEligible) {
+                  reshuffleDeferred.push({
+                    taskId: t.id, title: t.title, category: t.category,
+                    reason: 'retry_exception',
+                  });
+                }
+              }
+            }
+
+            pushStep(
+              `RESCHEDULE_RETRY_${targetISO}`,
+              { targetISO, aiRejectedCount: aiRejected.length, retryEligibleCount: retryEligible.length },
+              { attempted: reshuffleAttempted, committed: reshuffleCommitted, deferred: reshuffleDeferred },
+              Date.now(),
+            );
+
+            if (reshuffleDeferred.length > 0) {
+              try {
+                await supabase.from('activity_log').insert({
+                  user_id: userId,
+                  activity_type: 'reschedule_deferred',
+                  status: 'completed',
+                  metadata: { targetISO, deferred: reshuffleDeferred, runId },
+                });
+              } catch (_) { /* best effort */ }
+            }
+          }
+
+          // ==========================================
+          // DB-RECONCILED ASSIGNMENT COUNTER
+          // The optimistic in-loop increments can drift from reality (AI drops, retries).
+          // Reconcile by querying the actual count of assignment-linked tasks placed today.
+          // ==========================================
+          try {
+            const dayBoundsForCount = _ldub(targetISO, timezone);
+            const { count: realAssignmentCount } = await supabase
+              .from('tasks')
+              .select('id', { count: 'exact', head: true })
+              .eq('user_id', userId)
+              .eq('is_scheduled', true)
+              .not('assignment_id', 'is', null)
+              .gte('start_time', dayBoundsForCount.start)
+              .lt('start_time', dayBoundsForCount.end);
+            if (typeof realAssignmentCount === 'number') {
+              const before = dailyAssignmentCount[targetISO] || 0;
+              dailyAssignmentCount[targetISO] = realAssignmentCount;
+              if (before !== realAssignmentCount) {
+                console.log(`    🔢 Reconciled assignment count for ${targetISO}: ${before} → ${realAssignmentCount}`);
+              }
+            }
+          } catch (e) {
+            console.warn(`    ⚠️ Assignment count reconciliation failed:`, e);
+          }
+
           totalScheduledAcrossWeek += actuallyScheduled;
           weekResults[targetISO] = { scheduled: actuallyScheduled, candidates: selectedCandidates.length };
           console.log(`    ✅ Actually scheduled ${actuallyScheduled}/${scheduled.length} tasks for ${targetISO}`);
@@ -1387,6 +1597,44 @@ serve(async (req) => {
         // ==========================================
         // STEP 6: Log the run
         // ==========================================
+        // Aggregate reshuffle outcomes across all days
+        const reshuffleSteps = steps.filter(s => s.step.startsWith('RESCHEDULE_RETRY_'));
+        const reshuffleTotals = reshuffleSteps.reduce(
+          (acc, s) => {
+            const out = s.outputs as any;
+            acc.attempted += out?.attempted ?? 0;
+            acc.committed += out?.committed ?? 0;
+            acc.deferred += Array.isArray(out?.deferred) ? out.deferred.length : 0;
+            return acc;
+          },
+          { attempted: 0, committed: 0, deferred: 0 },
+        );
+
+        // Calendar status snapshot for today (used by daily-review pipeline messaging)
+        let calendarStatus: Record<string, unknown> = { events_today: 0, sources: [] };
+        try {
+          const todayBounds = _ldub(todayISO, timezone);
+          const { data: todayEvents } = await supabase
+            .from('external_calendar_events')
+            .select('id, connection_id')
+            .eq('user_id', userId)
+            .gte('start_time', todayBounds.start)
+            .lt('start_time', todayBounds.end)
+            .eq('is_all_day', false);
+          const { data: connections } = await supabase
+            .from('calendar_connections')
+            .select('provider')
+            .eq('user_id', userId)
+            .eq('is_active', true);
+          calendarStatus = {
+            events_today: todayEvents?.length ?? 0,
+            connection_count: connections?.length ?? 0,
+            sources: Array.from(new Set((connections || []).map((c: any) => c.provider))),
+          };
+        } catch (e) {
+          console.warn('  ⚠️ Calendar status snapshot failed:', e);
+        }
+
         await supabase.from('activity_log').insert({
           user_id: userId,
           activity_type: 'nightly_schedule_built',
@@ -1411,6 +1659,8 @@ serve(async (req) => {
               top_up_placed: topUpPlaced,
               daily_assignment_count: dailyAssignmentCount,
             },
+            reshuffle: reshuffleTotals,
+            calendar_status: calendarStatus,
             keyword_overrides_total: steps.reduce(
               (sum, s) => sum + (Array.isArray((s.outputs as any)?.keywordOverrides) ? (s.outputs as any).keywordOverrides.length : 0),
               0

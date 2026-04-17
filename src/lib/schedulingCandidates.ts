@@ -124,12 +124,16 @@ export function scoreSchedulingCandidate(task: Task, options: ScoreCandidateOpti
   // Topic-mapped — organizational nudge only (not the same as user priority)
   if (priorityBoardIds.has(task.id)) score += 2;
 
+  // Pushed-count: soft signal only — never bury a task because the system
+  // failed to schedule it. is_priority items skip even the mild -1 hint.
   if (task.pushed_count && task.pushed_count > 0) {
-    if (task.pushed_count <= 3) {
-      score += task.pushed_count;
-    } else {
-      score += 3;
-      score -= (task.pushed_count - 3);
+    const n = task.pushed_count;
+    if (n <= 3) {
+      score += 1; // mild "recently rolled" nudge
+    } else if (n <= 7) {
+      // neutral — no boost, no penalty
+    } else if (!task.is_priority) {
+      score -= 1; // flat hint, never more, never for explicit priority items
     }
   }
 
@@ -183,7 +187,17 @@ export function selectSchedulingCandidates(
     .filter((task) => !isTaskScheduledOnDate(task, timezone, targetDateStr))
     .map((task) => ({ task, score: scoreSchedulingCandidate(task, { priorityBoardIds, targetDate }) }))
     .sort((a, b) => {
+      // Restored tiebreaker order: explicit priority → priority_rank → score → due_date NULLS LAST
+      const aPri = a.task.is_priority ? 1 : 0;
+      const bPri = b.task.is_priority ? 1 : 0;
+      if (aPri !== bPri) return bPri - aPri;
+      if (aPri && bPri) {
+        const aRank = a.task.priority_rank ?? 9999;
+        const bRank = b.task.priority_rank ?? 9999;
+        if (aRank !== bRank) return aRank - bRank;
+      }
       if (b.score !== a.score) return b.score - a.score;
+      // Due_date ASC NULLS LAST — priority items without due dates no longer punished
       if (a.task.due_date && b.task.due_date) {
         return new Date(a.task.due_date).getTime() - new Date(b.task.due_date).getTime();
       }
@@ -199,4 +213,97 @@ export function selectSchedulingCandidates(
     })
     .slice(0, limit)
     .map(({ task }) => task);
+}
+
+/**
+ * Build a per-candidate scoring breakdown for SCORING_AUDIT logs.
+ * Mirrors scoreSchedulingCandidate logic but returns components separately.
+ * Useful for diagnosing "why did X outscore Y" questions.
+ */
+export interface ScoringBreakdown {
+  taskId: string;
+  title: string;
+  base: number;
+  priorityExplicit: number;
+  priorityBoard: number;
+  pushed: number;
+  dueSoon: number;
+  dueWindow: number;
+  staleness: number;
+  recency: number;
+  keyword: number;
+  upNext: number;
+  total: number;
+  pushed_count: number;
+  is_priority: boolean;
+}
+
+export function explainSchedulingScore(
+  task: Task,
+  options: ScoreCandidateOptions = {},
+): ScoringBreakdown {
+  const { priorityBoardIds = new Set<string>(), targetDate = new Date() } = options;
+  const base = PRIORITY_WEIGHT[task.priority] || 1;
+  const priorityExplicit = task.is_priority ? 10 + Math.max(5 - (task.priority_rank ?? 0), 0) : 0;
+  const priorityBoard = priorityBoardIds.has(task.id) ? 2 : 0;
+
+  let pushed = 0;
+  if (task.pushed_count && task.pushed_count > 0) {
+    const n = task.pushed_count;
+    if (n <= 3) pushed = 1;
+    else if (n <= 7) pushed = 0;
+    else if (!task.is_priority) pushed = -1;
+  }
+
+  const dueSoon = isDueSoon(task.due_date) ? 5 : 0;
+
+  let dueWindow = 0;
+  let staleness = 0;
+  if (task.due_date) {
+    const dueDate = new Date(task.due_date);
+    const twoDaysOut = new Date(targetDate.getTime() + 2 * 24 * 60 * 60 * 1000);
+    const sevenDaysOut = new Date(targetDate.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    if (dueDate > twoDaysOut && dueDate <= sevenDaysOut) dueWindow = 3;
+    if (dueDate < thirtyDaysAgo) staleness = -10;
+    else if (dueDate < fourteenDaysAgo) staleness = -3;
+  }
+
+  const createdAt = new Date(task.created_at);
+  const daysSinceCreated = (Date.now() - createdAt.getTime()) / (24 * 60 * 60 * 1000);
+  const recency = daysSinceCreated <= 3 ? 2 : daysSinceCreated <= 7 ? 1 : 0;
+  const keyword = hasSchedulingPriorityKeyword(task.title) ? 5 : 0;
+  const upNext = task.status === 'UP_NEXT' ? 1 : 0;
+
+  const raw = base + priorityExplicit + priorityBoard + pushed + dueSoon + dueWindow + staleness + recency + keyword + upNext;
+  return {
+    taskId: task.id,
+    title: task.title,
+    base,
+    priorityExplicit,
+    priorityBoard,
+    pushed,
+    dueSoon,
+    dueWindow,
+    staleness,
+    recency,
+    keyword,
+    upNext,
+    total: Math.max(raw, 0),
+    pushed_count: task.pushed_count ?? 0,
+    is_priority: !!task.is_priority,
+  };
+}
+
+/**
+ * UI helper: should we show the "consider archiving" hint for this task?
+ * Visual only — does NOT affect scheduling order.
+ */
+export function isStalePushed(task: Pick<Task, 'pushed_count' | 'created_at'>): boolean {
+  const n = task.pushed_count ?? 0;
+  if (n < 8) return false;
+  if (!task.created_at) return false;
+  const ageDays = (Date.now() - new Date(task.created_at).getTime()) / (24 * 60 * 60 * 1000);
+  return ageDays > 30;
 }
