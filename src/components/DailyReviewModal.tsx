@@ -254,6 +254,26 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
               )}
             </div>
 
+            {/* Secondary metrics row — full-width, smaller, fits 411px */}
+            {(reasoning.stats.pendingAssignmentCount > 0 || reasoning.stats.backlogOverdue > 0) && (
+              <div className="bg-card border border-border rounded-lg px-3 py-2 flex items-center justify-between gap-3 text-xs">
+                <div className="flex items-center gap-1.5 text-foreground">
+                  <BookOpen className="h-3.5 w-3.5 text-primary shrink-0" />
+                  <span className="font-medium">
+                    {reasoning.stats.assignmentsScheduledToday}/{reasoning.stats.pendingAssignmentCount}
+                  </span>
+                  <span className="text-muted-foreground">assignments today</span>
+                </div>
+                {reasoning.stats.backlogOverdue > 0 && (
+                  <div className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
+                    <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                    <span className="font-medium">+{reasoning.stats.backlogOverdue}</span>
+                    <span className="opacity-80">in backlog</span>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Schedule Reasoning */}
             {(reasoning.explanations.length > 0 || reasoning.missingExplanations.length > 0) && (
               <div className="bg-muted/50 rounded-lg p-3 space-y-2">
