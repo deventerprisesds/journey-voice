@@ -1615,28 +1615,48 @@ serve(async (req) => {
         );
 
         // Calendar status snapshot for today (used by daily-review pipeline messaging)
-        let calendarStatus: Record<string, unknown> = { events_today: 0, sources: [] };
+        // Tri-state: connected_with_events | connected_no_events | not_connected | query_failed
+        // NOTE: get_calendar_connections_safe RPC requires auth.uid() context (memory:
+        // service-role-rpc-constraint), so the builder uses a direct query that mirrors
+        // the same filters (is_active=true, scoped to user_id).
+        let calendarStatus: Record<string, unknown> = { state: 'query_failed', events_today: 0, connection_count: 0, sources: [] };
         try {
-          const todayBounds = _ldub(todayISO, timezone);
-          const { data: todayEvents } = await supabase
-            .from('external_calendar_events')
-            .select('id, connection_id')
-            .eq('user_id', userId)
-            .gte('start_time', todayBounds.start)
-            .lt('start_time', todayBounds.end)
-            .eq('is_all_day', false);
-          const { data: connections } = await supabase
-            .from('calendar_connections')
-            .select('provider')
-            .eq('user_id', userId)
-            .eq('is_active', true);
-          calendarStatus = {
-            events_today: todayEvents?.length ?? 0,
-            connection_count: connections?.length ?? 0,
-            sources: Array.from(new Set((connections || []).map((c: any) => c.provider))),
-          };
-        } catch (e) {
-          console.warn('  ⚠️ Calendar status snapshot failed:', e);
+          const todayBounds = localDateToUtcBounds(todayISO, timezone);
+          const [eventsRes, connRes] = await Promise.all([
+            supabase
+              .from('external_calendar_events')
+              .select('id, connection_id')
+              .eq('user_id', userId)
+              .gte('start_time', todayBounds.start)
+              .lt('start_time', todayBounds.end)
+              .eq('is_all_day', false),
+            supabase
+              .from('calendar_connections')
+              .select('provider, is_active')
+              .eq('user_id', userId)
+              .eq('is_active', true),
+          ]);
+          if (connRes.error) {
+            console.warn('  ⚠️ calendar_connections query failed:', connRes.error.message);
+            calendarStatus = { state: 'query_failed', events_today: 0, connection_count: 0, sources: [], error: connRes.error.message };
+          } else {
+            const connectionCount = connRes.data?.length ?? 0;
+            const eventsToday = eventsRes.data?.length ?? 0;
+            const sources = Array.from(new Set((connRes.data || []).map((c: any) => c.provider)));
+            let state: 'connected_with_events' | 'connected_no_events' | 'not_connected';
+            if (connectionCount === 0) state = 'not_connected';
+            else if (eventsToday === 0) state = 'connected_no_events';
+            else state = 'connected_with_events';
+            calendarStatus = {
+              state,
+              events_today: eventsToday,
+              connection_count: connectionCount,
+              sources,
+            };
+          }
+        } catch (e: any) {
+          console.warn('  ⚠️ Calendar status snapshot failed:', e?.message ?? e);
+          calendarStatus = { state: 'query_failed', events_today: 0, connection_count: 0, sources: [], error: String(e?.message ?? e) };
         }
 
         await supabase.from('activity_log').insert({
