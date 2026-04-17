@@ -231,27 +231,68 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
     [tasks, todayStr, tz]
   );
 
-  // Handle confirm & fill gaps
+  // Handle confirm & fill gaps. Wait for the matching nightly_schedule_built
+  // activity_log row so we don't close the modal before the run actually finished
+  // (and the realtime subscription above has had a chance to refresh builderLog).
   const handleConfirm = async () => {
     if (!user?.id) return;
     setIsConfirming(true);
+    let resolved = false;
+
+    const channel = supabase
+      .channel(`daily-review-confirm-${user.id}-${Date.now()}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'activity_log',
+          filter: `user_id=eq.${user.id}`,
+        },
+        async (payload) => {
+          const row = payload.new as { activity_type?: string; metadata?: any };
+          if (row?.activity_type !== 'nightly_schedule_built') return;
+          if (resolved) return;
+          resolved = true;
+          await supabase
+            .from('notification_prefs')
+            .update({ schedule_confirmed_date: todayStr } as any)
+            .eq('user_id', user.id);
+          toast.success('Schedule confirmed — gaps filled');
+          onTaskUpdate();
+          setIsConfirming(false);
+          supabase.removeChannel(channel);
+          onClose();
+        }
+      )
+      .subscribe();
+
     try {
       const { error } = await supabase.functions.invoke('nightly-schedule-builder', {
         body: { userId: user.id, singleDay: true, triggerSource: 'daily_review_confirm' }
       });
       if (error) throw error;
-      await supabase
-        .from('notification_prefs')
-        .update({ schedule_confirmed_date: todayStr } as any)
-        .eq('user_id', user.id);
-      toast.success('Schedule confirmed — gaps filled');
-      onTaskUpdate();
-      onClose();
+      // Safety timeout
+      setTimeout(async () => {
+        if (resolved) return;
+        resolved = true;
+        console.warn('[DailyReviewModal] confirm completion timeout — falling back');
+        await supabase
+          .from('notification_prefs')
+          .update({ schedule_confirmed_date: todayStr } as any)
+          .eq('user_id', user.id);
+        toast.success('Schedule confirmed');
+        onTaskUpdate();
+        setIsConfirming(false);
+        supabase.removeChannel(channel);
+        onClose();
+      }, 30000);
     } catch (e) {
       console.error('Confirm failed:', e);
       toast.error('Failed to confirm schedule');
-    } finally {
+      resolved = true;
       setIsConfirming(false);
+      supabase.removeChannel(channel);
     }
   };
 

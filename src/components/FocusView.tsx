@@ -589,26 +589,66 @@ const FocusView: React.FC<FocusViewProps> = ({
     }
   };
 
-  // Reschedule today only via nightly-schedule-builder in single-day mode
+  // Reschedule today only via nightly-schedule-builder in single-day mode.
+  // We wait for the matching nightly_schedule_built activity_log row before
+  // clearing the pending state, so the spinner stays until the run truly
+  // completes (and the modal/Daily Review pulls the fresh builderLog).
   const handleRescheduleToday = async () => {
     if (!user?.id) return;
     if (!confirm('This will clear and rebuild today\'s schedule. Continue?')) return;
     
     setIsRescheduling(true);
+    const triggeredAt = Date.now();
+    let resolved = false;
+
+    // Subscribe to activity_log first so we don't miss the completion row
+    const channel = supabase
+      .channel(`focus-reschedule-${user.id}-${triggeredAt}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'activity_log',
+          filter: `user_id=eq.${user.id}`,
+        },
+        (payload) => {
+          const row = payload.new as { activity_type?: string; metadata?: any };
+          if (row?.activity_type !== 'nightly_schedule_built') return;
+          if (resolved) return;
+          resolved = true;
+          const meta: any = row.metadata || {};
+          const count = meta.total_scheduled ?? meta.totalScheduled ?? 0;
+          toast.success(`Rescheduled today — ${count} task${count === 1 ? '' : 's'} placed`);
+          onTaskUpdate();
+          setIsRescheduling(false);
+          supabase.removeChannel(channel);
+        }
+      )
+      .subscribe();
+
     try {
       toast.info('Rescheduling today...');
-      const { data, error } = await supabase.functions.invoke('nightly-schedule-builder', {
+      const { error } = await supabase.functions.invoke('nightly-schedule-builder', {
         body: { userId: user.id, singleDay: true }
       });
       if (error) throw error;
-      const count = data?.results?.[user.id]?.totalScheduled || data?.totalScheduled || 0;
-      toast.success(`Rescheduled today — ${count} tasks placed`);
-      onTaskUpdate();
+      // Safety timeout: if no realtime row arrives within 30s, fall back
+      setTimeout(() => {
+        if (resolved) return;
+        resolved = true;
+        console.warn('[FocusView] reschedule completion timeout — falling back');
+        toast.success('Rescheduled today');
+        onTaskUpdate();
+        setIsRescheduling(false);
+        supabase.removeChannel(channel);
+      }, 30000);
     } catch (e) {
       console.error('Reschedule failed:', e);
       toast.error('Reschedule failed');
-    } finally {
+      resolved = true;
       setIsRescheduling(false);
+      supabase.removeChannel(channel);
     }
   };
 
