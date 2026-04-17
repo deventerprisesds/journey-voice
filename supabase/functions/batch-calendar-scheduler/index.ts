@@ -1,7 +1,7 @@
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { normalizeDateTime, getTodayInTimezone, getTzOffsetMinutesAt } from "../_shared/timezone.ts";
+import { normalizeDateTime, getTodayInTimezone, getTzOffsetMinutesAt, localDateToUtcBounds } from "../_shared/timezone.ts";
 import { DEFAULT_TIME_WINDOWS, DEFAULT_CATEGORY_MAPPINGS, resolveConfig, validateTaskWindow } from "../_shared/scheduling-defaults.ts";
 
 const corsHeaders = {
@@ -131,30 +131,54 @@ serve(async (req) => {
     }
 
     // Single DB load for busy slots
-    console.log(`📅 Loading busy slots until ${busySlotsEndDate.toISOString()}...`);
+    // FIX: For single-day target, use localDateToUtcBounds so in-progress events
+    // (those that started BEFORE `now`) still block — previously `gte(start_time, now)`
+    // missed currently-running calendar events, causing tasks to be placed on top of them.
+    let busyStartIso: string;
+    let busyEndIso: string;
+    if (targetDate) {
+      const bounds = localDateToUtcBounds(targetDateISO, timezone);
+      busyStartIso = bounds.start;
+      busyEndIso = allowOverflow ? busySlotsEndDate.toISOString() : bounds.end;
+    } else {
+      busyStartIso = now.toISOString();
+      busyEndIso = busySlotsEndDate.toISOString();
+    }
+    console.log(`📅 Loading busy slots from ${busyStartIso} to ${busyEndIso}...`);
     
     const [tasksResult, eventsResult] = await Promise.all([
       supabase
         .from('tasks')
-        .select('title, start_time, end_time')
+        .select('id, title, start_time, end_time')
         .eq('user_id', userId)
         .eq('is_scheduled', true)
-        .gte('start_time', now.toISOString())
-        .lte('start_time', busySlotsEndDate.toISOString()),
+        // For tasks: must end after busy-window start AND start before busy-window end
+        .gte('end_time', busyStartIso)
+        .lte('start_time', busyEndIso),
       supabase
         .from('external_calendar_events')
-        .select('title, start_time, end_time')
+        .select('id, title, start_time, end_time')
         .eq('user_id', userId)
-        .gte('start_time', now.toISOString())
-        .lte('end_time', busySlotsEndDate.toISOString())
+        // For events: same overlap predicate so in-progress events are included
+        .gte('end_time', busyStartIso)
+        .lte('start_time', busyEndIso)
     ]);
 
-    const existingBusySlots = [
-      ...(tasksResult.data || []),
-      ...(eventsResult.data || [])
-    ];
+    const existingTaskSlots = (tasksResult.data || []).map(t => ({
+      ...t,
+      _source: 'task' as const,
+      _startMs: new Date(t.start_time).getTime(),
+      _endMs: new Date(t.end_time).getTime(),
+    }));
+    const existingEventSlots = (eventsResult.data || []).map(e => ({
+      ...e,
+      _source: 'event' as const,
+      _startMs: new Date(e.start_time).getTime(),
+      _endMs: new Date(e.end_time).getTime(),
+    }));
+    const existingBusySlots = [...existingTaskSlots, ...existingEventSlots];
 
-    console.log(`📊 Found ${existingBusySlots.length} existing busy slots`);
+    console.log(`📊 Found ${existingBusySlots.length} existing busy slots (${existingTaskSlots.length} tasks, ${existingEventSlots.length} events)`);
 
     // Build category mappings from user config (authoritative), falling back to shared defaults
     const { timeWindows: resolvedTimeWindows, categoryMappings: resolvedCategoryMappings } = resolveConfig(userConfig);
