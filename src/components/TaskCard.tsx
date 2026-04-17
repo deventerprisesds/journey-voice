@@ -24,10 +24,12 @@ import {
   ListTodo,
   ExternalLink,
   RotateCcw,
-  Star
+  Star,
+  Archive
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { Task, ChecklistItem } from '@/types/task';
+import { isStalePushed } from '@/lib/schedulingCandidates';
 import { formatDateOnly, formatDuration } from '@/lib/date';
 import {
   AlertDialog,
@@ -391,6 +393,16 @@ const TaskCard: React.FC<TaskCardProps> = ({ task, onStatusChange, onEdit, onSch
             <Badge variant="outline" className="text-xs bg-destructive/10 text-destructive border-destructive/20">
               <RotateCcw className="h-3 w-3 mr-1" />
               Pushed ×{task.pushed_count}
+            </Badge>
+          )}
+          {isStalePushed(task) && (
+            <Badge
+              variant="outline"
+              className="text-xs bg-muted text-muted-foreground border-border"
+              title="Pushed many times over a long period — consider archiving if no longer needed. Does not affect scheduling priority."
+            >
+              <Archive className="h-3 w-3 mr-1" />
+              Consider archiving?
             </Badge>
           )}
         </div>
