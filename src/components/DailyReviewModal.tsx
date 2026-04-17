@@ -300,29 +300,40 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
               )}
             </div>
 
-            {/* Calendar Status tile — proves the scheduler checked external calendars */}
-            <div className="bg-card border border-border rounded-lg px-3 py-2 flex items-center gap-2 text-xs">
-              <Calendar className="h-3.5 w-3.5 text-primary shrink-0" />
-              {(reasoning.calendarStatus?.eventsToday ?? externalEvents.length) > 0 ? (
-                <span className="text-foreground">
-                  Checked{' '}
-                  <span className="font-medium">{reasoning.calendarStatus?.eventsToday ?? externalEvents.length}</span>
-                  {' '}calendar event{(reasoning.calendarStatus?.eventsToday ?? externalEvents.length) > 1 ? 's' : ''}
-                  {reasoning.calendarStatus?.connectionCount
-                    ? <> on <span className="font-medium">{reasoning.calendarStatus.connectionCount}</span> calendar{reasoning.calendarStatus.connectionCount > 1 ? 's' : ''}</>
-                    : null}
-                  {' — '}
-                  <span className="text-muted-foreground">{reasoning.stats.externalBlockedMinutes} min reserved as busy</span>
-                </span>
-              ) : (
-                <span className="text-muted-foreground">
-                  No external calendar events for today
-                  {reasoning.calendarStatus?.connectionCount
-                    ? <> ({reasoning.calendarStatus.connectionCount} calendar{reasoning.calendarStatus.connectionCount > 1 ? 's' : ''} connected)</>
-                    : <> (no calendars connected)</>}
-                </span>
-              )}
-            </div>
+            {/* Calendar Status tile — tri-state, never silent */}
+            {(() => {
+              const cs = reasoning.calendarStatus;
+              const state = cs?.state ?? 'unknown';
+              const eventsToday = cs?.eventsToday ?? externalEvents.length;
+              const connectionCount = cs?.connectionCount ?? 0;
+              return (
+                <div className="bg-card border border-border rounded-lg px-3 py-2 flex items-center gap-2 text-xs">
+                  <Calendar className="h-3.5 w-3.5 text-primary shrink-0" />
+                  {state === 'connected_with_events' ? (
+                    <span className="text-foreground">
+                      <span className="font-medium">{eventsToday}</span> event{eventsToday > 1 ? 's' : ''} today across{' '}
+                      <span className="font-medium">{connectionCount}</span> calendar{connectionCount > 1 ? 's' : ''}
+                      {' — '}<span className="text-muted-foreground">{reasoning.stats.externalBlockedMinutes} min reserved</span>
+                    </span>
+                  ) : state === 'connected_no_events' ? (
+                    <span className="text-muted-foreground">
+                      <span className="font-medium text-foreground">{connectionCount}</span> calendar{connectionCount > 1 ? 's' : ''} connected · 0 events today
+                    </span>
+                  ) : state === 'not_connected' ? (
+                    <span className="text-muted-foreground">No calendars connected</span>
+                  ) : state === 'query_failed' ? (
+                    <span className="text-amber-600 dark:text-amber-400">Calendar status unavailable this run</span>
+                  ) : eventsToday > 0 ? (
+                    <span className="text-foreground">
+                      <span className="font-medium">{eventsToday}</span> event{eventsToday > 1 ? 's' : ''} today
+                      {' — '}<span className="text-muted-foreground">{reasoning.stats.externalBlockedMinutes} min reserved</span>
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground">No external calendar events for today</span>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Schedule Reasoning */}
             {(reasoning.explanations.length > 0 || reasoning.missingExplanations.length > 0) && (
