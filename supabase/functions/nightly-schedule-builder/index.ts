@@ -1579,6 +1579,44 @@ serve(async (req) => {
         // ==========================================
         // STEP 6: Log the run
         // ==========================================
+        // Aggregate reshuffle outcomes across all days
+        const reshuffleSteps = steps.filter(s => s.step.startsWith('RESCHEDULE_RETRY_'));
+        const reshuffleTotals = reshuffleSteps.reduce(
+          (acc, s) => {
+            const out = s.outputs as any;
+            acc.attempted += out?.attempted ?? 0;
+            acc.committed += out?.committed ?? 0;
+            acc.deferred += Array.isArray(out?.deferred) ? out.deferred.length : 0;
+            return acc;
+          },
+          { attempted: 0, committed: 0, deferred: 0 },
+        );
+
+        // Calendar status snapshot for today (used by daily-review pipeline messaging)
+        let calendarStatus: Record<string, unknown> = { events_today: 0, sources: [] };
+        try {
+          const todayBounds = _ldub(todayISO, timezone);
+          const { data: todayEvents } = await supabase
+            .from('external_calendar_events')
+            .select('id, connection_id')
+            .eq('user_id', userId)
+            .gte('start_time', todayBounds.start)
+            .lt('start_time', todayBounds.end)
+            .eq('is_all_day', false);
+          const { data: connections } = await supabase
+            .from('calendar_connections')
+            .select('provider')
+            .eq('user_id', userId)
+            .eq('is_active', true);
+          calendarStatus = {
+            events_today: todayEvents?.length ?? 0,
+            connection_count: connections?.length ?? 0,
+            sources: Array.from(new Set((connections || []).map((c: any) => c.provider))),
+          };
+        } catch (e) {
+          console.warn('  ⚠️ Calendar status snapshot failed:', e);
+        }
+
         await supabase.from('activity_log').insert({
           user_id: userId,
           activity_type: 'nightly_schedule_built',
@@ -1603,6 +1641,8 @@ serve(async (req) => {
               top_up_placed: topUpPlaced,
               daily_assignment_count: dailyAssignmentCount,
             },
+            reshuffle: reshuffleTotals,
+            calendar_status: calendarStatus,
             keyword_overrides_total: steps.reduce(
               (sum, s) => sum + (Array.isArray((s.outputs as any)?.keywordOverrides) ? (s.outputs as any).keywordOverrides.length : 0),
               0
