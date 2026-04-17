@@ -1,35 +1,55 @@
 
-## Plan: prove it works before you check
 
-Two read-only verification steps, no code changes, no user action needed.
+Yes — fixing semantics first is the right call. Everything else (data source split, build-version badges, structured IDs) is downstream of getting the definitions right. If "rolled over" and "overdue" are defined wrong, no amount of scoping will make the numbers make sense.
 
-### Step 1 — Verify the published bundle contains the fix
+## Minimal semantic fix
 
-Use `code--fetch_website` on `https://journey-voice.lovable.app`:
-- Read the HTML, extract `<meta name="build-version">` → must be `v11`
-- Extract the main JS bundle URL from the HTML
-- Fetch the JS bundle, grep for the new clamp string (`36 * 60 * 60 * 1000` or `rolledOverIds`)
+Two definitions need to change in `src/utils/dailyReviewPipeline.ts`. Nothing else this round.
 
-Outcomes:
-- **Bundle is v11 AND contains new clamp** → publish worked. Move to Step 2.
-- **Bundle is v10 OR missing new clamp** → publish didn't ship the change. Stop and tell you. No point refreshing.
+### 1. "Rolled over today" — currently wrong
 
-### Step 2 — Open the live page in a clean browser session
+**Now:** `todayTasks.filter(t => (t.pushed_count ?? 0) > 0)`
+This counts every task scheduled today that has *ever* been pushed in its lifetime. A task pushed 170 times last month but legitimately scheduled today still counts.
 
-If Step 1 passes, use `browser--navigate_to_url` to open `https://journey-voice.lovable.app/tasks?view=focus` in a fresh automated browser (no SW cache from your device). Then:
-- Log in if needed (will stop and ask you first per browser auth rules)
-- Open the Daily Review modal
-- Screenshot the counts
+**Should be:** a task scheduled today whose *previous* scheduled date was a past day that has now passed without completion.
 
-Outcomes:
-- **Counts show 4 / 1** → fix works on a clean device. Your issue is local SW cache; remedy is close all `journey-voice.lovable.app` tabs and reopen, or DevTools → Application → Service Workers → Unregister.
-- **Counts show 171 / 39** → fix doesn't work even on clean device. There's a third data path I missed. Stop and re-trace.
-- **Counts show something else** → new information, re-investigate.
+Practical signal available without new infra:
+- task is in today's live schedule (`start_time` falls on `todayStr` in user TZ)
+- AND task has a `task_schedule_history` row with `scheduled_date < todayStr` and action indicating it was moved/rolled (not completed)
 
-### What this gives you
+If history lookup is too heavy for the modal, fall back to: `is_scheduled = true AND start_time on today AND pushed_count > 0 AND updated_at >= today_start`. The `updated_at` clamp removes the lifetime-pushed contamination.
 
-A definitive answer in one round: either (a) it's published and works, and your local SW just needs to be evicted, (b) publish didn't ship, or (c) my analysis is incomplete and we keep digging — without you having to refresh anything.
+### 2. "Overdue" — currently wrong
 
-### Files
+**Now:** `new Date(t.due_date) < new Date()` — timezone-naive, marks same-day tasks overdue based on time of day.
 
-No file changes in this round. Pure verification.
+**Should be:** `due_date < todayStr` compared as YYYY-MM-DD strings in the user's timezone. A task due today is never overdue.
+
+Then for the Daily Review card, intersect with today's scheduled set so the count can never exceed `scheduledCount`.
+
+### 3. Hard invariant
+
+Add a single assertion in the pipeline output:
+```
+rolledOverCount <= scheduledCount
+overdueCount <= scheduledCount
+```
+If violated, log a `daily_review_invariant_violation` and clamp the displayed number. This prevents the "171 of 9" UI from ever shipping again even if a future regression slips in.
+
+## What we explicitly defer
+
+- Splitting Daily Review off `useUnifiedTasks` (data source change)
+- New `scheduled_reason` field in `scheduling_context`
+- Build-version badge / SW cache bump
+- Backend `nightly-schedule-builder` changes
+
+If after this fix the numbers are still wrong on the live account, the cause is data-source contamination (history rows leaking in), and we tackle that next as a separate, smaller change.
+
+## Files
+
+| File | Change |
+|------|--------|
+| `src/utils/dailyReviewPipeline.ts` | Redefine `rolledOverIds` and `overdueIds`; add invariant clamp + log |
+
+One file, two definitions, one guardrail. Ship, verify on `journey-voice.lovable.app` with the dev account, then decide if step 2 (data source split) is still needed.
+
