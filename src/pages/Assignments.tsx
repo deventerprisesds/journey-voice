@@ -12,6 +12,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { toast } from 'sonner';
 import TaskDetailModal from '@/components/TaskDetailModal';
 import { AssignmentSyncSettings } from '@/components/AssignmentSyncSettings';
+import { isMitRow } from '@/utils/programIds';
 
 import type { Task } from '@/types/task';
 
@@ -81,49 +82,44 @@ const Assignments: React.FC = () => {
     if (!user) return;
     setLoading(true);
     try {
-      // Fetch from both assignment tables
-      const [embaRes, mitRes, tasksRes] = await Promise.all([
-        supabase.from('assignments').select('id, title, description, due_date, priority, status, course_id, assignment_url, program_id').eq('user_id', user.id),
-        supabase.from('assignments_mit').select('id, title, description, due_date, priority, status, course_id, assignment_url').eq('user_id', user.id),
-        supabase.from('tasks').select('*').eq('user_id', user.id).not('assignment_id', 'is', null),
+      // Single query — assignments now unified (program_id discriminates MIT vs EMBA)
+      const [assignmentRes, tasksRes] = await Promise.all([
+        supabase
+          .from('assignments')
+          .select('id, title, description, due_date, priority, status, course_id, assignment_url, program_id')
+          .eq('user_id', user.id),
+        supabase
+          .from('tasks')
+          .select('*')
+          .eq('user_id', user.id)
+          .not('assignment_id', 'is', null),
       ]);
 
-      // Build task lookup by assignment_id
       const taskByAssignmentId = new Map<string, Task>();
       (tasksRes.data || []).forEach((t: any) => {
         if (t.assignment_id) taskByAssignmentId.set(t.assignment_id, t as Task);
       });
 
-      // Find MIT program
-      const mitProgram = programs.find(p => p.name.toLowerCase().includes('mit') || p.name.toLowerCase().includes('cto'));
-
-      const embaRows: AssignmentRow[] = (embaRes.data || []).map(a => ({
+      const rows: AssignmentRow[] = (assignmentRes.data || []).map((a) => ({
         ...a,
-        source: 'EMBA' as const,
+        source: isMitRow(a.program_id) ? ('MIT' as const) : ('EMBA' as const),
         task: taskByAssignmentId.get(a.id) || null,
       }));
 
-      const mitRows: AssignmentRow[] = (mitRes.data || []).map(a => ({
-        ...a,
-        source: 'MIT' as const,
-        program_id: mitProgram?.id || null,
-        task: taskByAssignmentId.get(a.id) || null,
-      }));
-
-      const combined = [...embaRows, ...mitRows].sort((a, b) => {
+      rows.sort((a, b) => {
         if (!a.due_date) return 1;
         if (!b.due_date) return -1;
         return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
       });
 
-      setAssignments(combined);
+      setAssignments(rows);
     } catch (err) {
       console.error('Error fetching assignments:', err);
       toast.error('Failed to load assignments');
     } finally {
       setLoading(false);
     }
-  }, [user, programs]);
+  }, [user]);
 
   useEffect(() => {
     if (user && programs.length > 0) {

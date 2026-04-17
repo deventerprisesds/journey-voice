@@ -226,11 +226,16 @@ serve(async (req) => {
           }
         }
 
-        // Check existing by sheet_row_number — use limit(1) to handle dupes safely
+        // Check existing by (user_id, program_id, sheet_row_number) on the unified
+        // assignments table. MIT and EMBA share `assignments` since April 2026 —
+        // program_id discriminates the source sheet.
+        const MIT_PROGRAM_ID = '4793d933-86ca-4fd5-9b4d-e7a593a513a6';
+
         const { data: existingRows } = await adminClient
-          .from('assignments_mit')
+          .from('assignments')
           .select('id, title, due_date, description, priority, points')
           .eq('user_id', userId)
+          .eq('program_id', MIT_PROGRAM_ID)
           .eq('sheet_row_number', i)
           .limit(1);
 
@@ -245,7 +250,7 @@ serve(async (req) => {
 
           if (hasChanges) {
             await adminClient
-              .from('assignments_mit')
+              .from('assignments')
               .update({
                 title,
                 description,
@@ -265,13 +270,14 @@ serve(async (req) => {
           assignmentIds.push(existing.id);
         } else {
           const { data: newAssignment } = await adminClient
-            .from('assignments_mit')
+            .from('assignments')
             .insert({
               user_id: userId,
               title,
               description,
               due_date: dueDate,
               course_id: courseId,
+              program_id: MIT_PROGRAM_ID,
               priority: priority as any,
               points,
               assignment_url: assignmentUrl || null,

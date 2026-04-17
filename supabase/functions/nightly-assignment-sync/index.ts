@@ -104,30 +104,38 @@ serve(async (req) => {
     const noBoardSkipped: string[] = [];
 
     // ============================================================
-    // PROCESS ONE ASSIGNMENT TABLE — pure in-memory + bulk insert
+    // PROCESS ASSIGNMENTS — single query covers both EMBA and MIT
+    // (program_id discriminates; `assignments_mit` was merged into
+    //  `assignments` in April 2026)
     // ============================================================
-    async function syncAssignments(tableName: string, source: string) {
+    const MIT_PROGRAM_ID = '4793d933-86ca-4fd5-9b4d-e7a593a513a6';
+
+    async function syncAssignments() {
       const { data: assignments, error } = await supabase
-        .from(tableName)
-        .select('id, title, due_date, description, category, priority, level_of_effort, status, assignment_url')
+        .from('assignments')
+        .select('id, title, due_date, description, category, priority, level_of_effort, status, assignment_url, program_id')
         .eq('user_id', userId)
         .not('status', 'in', '("completed","graded")');
 
       if (error) {
-        console.error(`[ASSIGNMENT_SYNC] Error fetching ${tableName}:`, error);
+        console.error(`[ASSIGNMENT_SYNC] Error fetching assignments:`, error);
         return;
       }
       if (!assignments || assignments.length === 0) {
-        console.log(`[ASSIGNMENT_SYNC] No assignments in ${tableName}`);
+        console.log(`[ASSIGNMENT_SYNC] No assignments to process`);
         return;
       }
 
-      console.log(`[ASSIGNMENT_SYNC] Found ${assignments.length} assignments in ${tableName}`);
+      const embaCount = assignments.filter((a) => a.program_id !== MIT_PROGRAM_ID).length;
+      const mitCount = assignments.length - embaCount;
+      console.log(`[ASSIGNMENT_SYNC] Found ${assignments.length} assignments (EMBA=${embaCount}, MIT=${mitCount})`);
 
-      const repairs: Array<{ taskId: string; assignmentId: string; due_date: string | null }> = [];
+      const repairs: Array<{ taskId: string; assignmentId: string; due_date: string | null; source: string }> = [];
       const inserts: Array<Record<string, unknown>> = [];
 
       for (const assignment of assignments) {
+        const source = assignment.program_id === MIT_PROGRAM_ID ? 'MIT' : 'EMBA';
+
         // Layer 1: assignment_id match
         if (tasksByAssignmentId.has(assignment.id)) {
           skipped.push(assignment.id);
@@ -146,8 +154,8 @@ serve(async (req) => {
             due_date: assignment.due_date
               ? new Date(assignment.due_date).toISOString().split('T')[0] + 'T23:59:59Z'
               : null,
+            source,
           });
-          // Mark in-memory so subsequent assignments don't claim the same legacy task
           tasksByAssignmentId.set(assignment.id, legacy);
           activeTasksByTitle.delete(assignment.title);
           activeTasksByTitle.delete(`📚 ${assignment.title}`);
@@ -203,13 +211,13 @@ serve(async (req) => {
       const REPAIR_CHUNK = 50;
       for (let i = 0; i < repairs.length; i += REPAIR_CHUNK) {
         const chunk = repairs.slice(i, i + REPAIR_CHUNK);
-        await Promise.all(chunk.map(r =>
+        await Promise.all(chunk.map((r) =>
           supabase
             .from('tasks')
             .update({
               assignment_id: r.assignmentId,
               due_date: r.due_date,
-              scheduling_context: { source },
+              scheduling_context: { source: r.source },
               updated_at: now.toISOString(),
             })
             .eq('id', r.taskId)
@@ -226,7 +234,7 @@ serve(async (req) => {
           .select('id, assignment_id');
 
         if (insertErr) {
-          console.error(`[ASSIGNMENT_SYNC] Bulk insert error (${source}, chunk ${i}):`, insertErr);
+          console.error(`[ASSIGNMENT_SYNC] Bulk insert error (chunk ${i}):`, insertErr);
         } else if (newRows) {
           for (const row of newRows) {
             created.push(row.id);
@@ -235,11 +243,10 @@ serve(async (req) => {
         }
       }
 
-      console.log(`[ASSIGNMENT_SYNC] ${source}: scanned=${assignments.length}, inserts=${inserts.length}, repairs=${repairs.length}, skipped_old=${skippedOld.length}`);
+      console.log(`[ASSIGNMENT_SYNC] scanned=${assignments.length}, inserts=${inserts.length}, repairs=${repairs.length}, skipped_old=${skippedOld.length}`);
     }
 
-    await syncAssignments('assignments', 'EMBA');
-    await syncAssignments('assignments_mit', 'MIT');
+    await syncAssignments();
 
     if (!board) {
       console.error(`[ASSIGNMENT_SYNC] ⚠️ No default board for user ${userId} — ${noBoardSkipped.length} assignments could not be promoted`);
