@@ -1,6 +1,14 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { DEFAULT_TIME_WINDOWS, DEFAULT_CATEGORY_MAPPINGS, resolveConfig, validateTaskWindow } from "../_shared/scheduling-defaults.ts";
+import {
+  DEFAULT_TIME_WINDOWS,
+  DEFAULT_CATEGORY_MAPPINGS,
+  resolveConfig,
+  validateTaskWindow,
+  MAX_ASSIGNMENTS_PER_DAY,
+  ASSIGNMENT_URGENT_HOURS,
+  ASSIGNMENT_PRIORITY_DAYS,
+} from "../_shared/scheduling-defaults.ts";
 import { getTodayInTimezone } from "../_shared/timezone.ts";
 
 const corsHeaders = {
@@ -628,15 +636,218 @@ serve(async (req) => {
         }
 
         // ==========================================
+        // ASSIGNMENT TIER CLASSIFICATION (cross-horizon)
+        // Split assignment-linked candidates into Tier A (≤48h, deadline-critical),
+        // Tier B (3-7d or overdue ≤7d, due ASC), Tier C (>7d or overdue >7d, due DESC).
+        // ==========================================
+        const { data: allAssignmentTasks } = await supabase
+          .from('tasks')
+          .select('id, title, category, priority, estimate_minutes, due_date, pushed_count, status, assignment_id, is_priority, priority_rank, created_at')
+          .eq('user_id', userId)
+          .not('assignment_id', 'is', null)
+          .not('status', 'in', '("DONE","BLOCKED")')
+          .is('completed_at', null)
+          .is('is_scheduled', false);
+
+        const urgentMs = ASSIGNMENT_URGENT_HOURS * 60 * 60 * 1000;
+        const priorityMs = ASSIGNMENT_PRIORITY_DAYS * 24 * 60 * 60 * 1000;
+        const nowMs = now.getTime();
+        const tierA: any[] = [];
+        const tierB: any[] = [];
+        const tierC: any[] = [];
+        const assignmentTier: Record<string, 'A' | 'B' | 'C'> = {};
+
+        for (const t of (allAssignmentTasks || [])) {
+          if (!t.due_date) continue;
+          const dueMs = new Date(t.due_date).getTime();
+          const delta = dueMs - nowMs;
+          if (delta <= urgentMs && delta >= -urgentMs) {
+            tierA.push(t); assignmentTier[t.id] = 'A';
+          } else if ((delta > urgentMs && delta <= priorityMs) || (delta < -urgentMs && delta >= -priorityMs)) {
+            tierB.push(t); assignmentTier[t.id] = 'B';
+          } else {
+            tierC.push(t); assignmentTier[t.id] = 'C';
+          }
+        }
+        tierA.sort((a, b) => new Date(a.due_date).getTime() - new Date(b.due_date).getTime());
+        tierB.sort((a, b) => new Date(a.due_date).getTime() - new Date(b.due_date).getTime());
+        tierC.sort((a, b) => new Date(b.due_date).getTime() - new Date(a.due_date).getTime()); // DESC: recent first
+
+        console.log(`  📊 Assignment tiers: A=${tierA.length} (≤48h), B=${tierB.length} (3-7d ±overdue), C=${tierC.length} (>7d ±ancient)`);
+
+        // ==========================================
         // WEEK LOOP: Fill today through Sunday
         // ==========================================
         const scheduledTaskIds = new Set<string>();
         const scheduledTitles = new Set<string>();
         const accumulatedBusySlots: Array<{ start_time: string; end_time: string }> = [];
-        
+        const dailyAssignmentCount: Record<string, number> = {}; // targetISO → assignment count placed
+        const tierAResults = { categoryPlaced: 0, flexiblePlaced: 0, deferred: 0 };
+
         // Rolling 7-day horizon (or 1 day in single-day mode)
         const totalDays = singleDay ? 1 : 7;
-        
+
+        // ==========================================
+        // PASS 1A: TIER A PRE-PLACEMENT (mini-horizon distribution)
+        // For each Tier A item: try category windows first across days from today→due_date,
+        // then flexible-window override for any unplaced. Cap-bypassed (deadline-critical).
+        // ==========================================
+        const { localDateToUtcBounds: _ldub } = await import('../_shared/timezone.ts');
+
+        async function placeTierAItem(task: any): Promise<'category' | 'flexible' | 'deferred'> {
+          const dueMs = new Date(task.due_date).getTime();
+          const horizonDays = Math.max(1, Math.min(totalDays, Math.ceil((dueMs - nowMs) / 86400000) + 1));
+          const duration = task.estimate_minutes || categoryMappings[task.category]?.estimatedDuration || 60;
+
+          // Step 1: try category windows across mini-horizon
+          for (let dOff = 0; dOff < horizonDays; dOff++) {
+            const [yy, mm, dd] = todayISO.split('-').map(Number);
+            const dt = new Date(yy, mm - 1, dd + dOff);
+            const isoDay = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+            const dow = dt.getDay();
+            const active = getActiveWindows(timeWindows, dow);
+            const activeNames = Object.keys(active);
+            if (activeNames.length === 0) continue;
+
+            const bounds = _ldub(isoDay, timezone);
+            const { data: dayScheduled } = await supabase
+              .from('tasks').select('start_time, end_time, estimate_minutes')
+              .eq('user_id', userId).eq('is_scheduled', true)
+              .gte('start_time', bounds.start).lt('start_time', bounds.end);
+            const { data: dayEvents } = await supabase
+              .from('external_calendar_events').select('start_time, end_time')
+              .eq('user_id', userId).gte('start_time', bounds.start).lt('start_time', bounds.end)
+              .eq('is_all_day', false);
+            const accumulated = accumulatedBusySlots.filter(s => s.start_time >= bounds.start && s.start_time < bounds.end);
+            const items = [
+              ...(dayScheduled || []),
+              ...(dayEvents || []).map(e => ({ ...e, estimate_minutes: undefined })),
+              ...accumulated.map(s => ({ ...s, estimate_minutes: undefined })),
+            ];
+            const caps = computeUsedMinutes(items, active, isoDay, timezone);
+            const preferred = getPreferredWindows(task.category, categoryMappings, activeNames);
+
+            for (const winName of preferred) {
+              if ((caps[winName]?.remainingMinutes || 0) >= duration) {
+                const placed = await callTierAScheduler(task, isoDay, caps, active, false);
+                if (placed) {
+                  console.log(`    🅰️ [Tier A category] "${task.title}" → ${isoDay} (${winName})`);
+                  return 'category';
+                }
+              }
+            }
+          }
+
+          // Step 2: flexible-window override across mini-horizon
+          const flexWindow = timeWindows['flexible'];
+          if (flexWindow) {
+            for (let dOff = 0; dOff < horizonDays; dOff++) {
+              const [yy, mm, dd] = todayISO.split('-').map(Number);
+              const dt = new Date(yy, mm - 1, dd + dOff);
+              const isoDay = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+              const dow = dt.getDay();
+              if (!flexWindow.days?.includes(dow)) continue;
+
+              const bounds = _ldub(isoDay, timezone);
+              const { data: dayScheduled } = await supabase
+                .from('tasks').select('start_time, end_time, estimate_minutes')
+                .eq('user_id', userId).eq('is_scheduled', true)
+                .gte('start_time', bounds.start).lt('start_time', bounds.end);
+              const { data: dayEvents } = await supabase
+                .from('external_calendar_events').select('start_time, end_time')
+                .eq('user_id', userId).gte('start_time', bounds.start).lt('start_time', bounds.end)
+                .eq('is_all_day', false);
+              const accumulated = accumulatedBusySlots.filter(s => s.start_time >= bounds.start && s.start_time < bounds.end);
+              const flexActive = {
+                flexible: { start: flexWindow.start, end: flexWindow.end, totalMinutes: (flexWindow.end - flexWindow.start) * 60 }
+              };
+              const items = [
+                ...(dayScheduled || []),
+                ...(dayEvents || []).map(e => ({ ...e, estimate_minutes: undefined })),
+                ...accumulated.map(s => ({ ...s, estimate_minutes: undefined })),
+              ];
+              const caps = computeUsedMinutes(items, flexActive, isoDay, timezone);
+              if ((caps.flexible?.remainingMinutes || 0) >= duration) {
+                const placed = await callTierAScheduler(task, isoDay, caps, flexActive, true);
+                if (placed) {
+                  console.log(`    🅰️ [Tier A flexible-overflow] "${task.title}" → ${isoDay}`);
+                  return 'flexible';
+                }
+              }
+            }
+          }
+
+          console.log(`    ⚠️ [Tier A deferred] "${task.title}" — no slot before due ${task.due_date}`);
+          return 'deferred';
+        }
+
+        async function callTierAScheduler(
+          task: any,
+          targetISO: string,
+          caps: Record<string, WindowCapacity>,
+          active: Record<string, { start: number; end: number; totalMinutes: number }>,
+          flexibleOverride: boolean
+        ): Promise<boolean> {
+          const payload = {
+            tasks: [{
+              id: task.id,
+              title: task.title,
+              // When flexible override, send LIFE so batch-scheduler treats as flexible category
+              category: flexibleOverride ? 'LIFE' : task.category,
+              priority: task.priority,
+              estimate_minutes: task.estimate_minutes || categoryMappings[task.category]?.estimatedDuration || 60,
+              due_date: task.due_date,
+            }],
+            userId,
+            timezone,
+            targetDate: targetISO,
+            allowOverflow: false,
+            windowCapacity: Object.fromEntries(
+              Object.entries(caps).map(([n, c]) => [
+                n, { totalMinutes: c.totalMinutes, remainingMinutes: c.remainingMinutes, start: active[n].start, end: active[n].end }
+              ])
+            ),
+          };
+          try {
+            const resp = await fetch(`${supabaseUrl}/functions/v1/batch-calendar-scheduler`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${supabaseServiceKey}` },
+              body: JSON.stringify(payload),
+            });
+            if (!resp.ok) return false;
+            const result = await resp.json();
+            const slot = (result.scheduled || [])[0];
+            if (!slot?.start_time || !slot?.end_time || !slot?.taskId) return false;
+            const { error } = await supabase.from('tasks').update({
+              start_time: slot.start_time,
+              end_time: slot.end_time,
+              is_scheduled: true,
+              scheduling_context: { pre_schedule_status: task.status || 'TODO', assignment_tier: 'A' },
+              status: 'TODO',
+              updated_at: now.toISOString(),
+            }).eq('id', slot.taskId);
+            if (error) return false;
+            scheduledTaskIds.add(slot.taskId);
+            scheduledTitles.add(task.title);
+            accumulatedBusySlots.push({ start_time: slot.start_time, end_time: slot.end_time });
+            dailyAssignmentCount[targetISO] = (dailyAssignmentCount[targetISO] || 0) + 1;
+            return true;
+          } catch (err) {
+            console.warn(`    ⚠️ Tier A scheduler call failed:`, err);
+            return false;
+          }
+        }
+
+        for (const tA of tierA) {
+          const outcome = await placeTierAItem(tA);
+          if (outcome === 'category') tierAResults.categoryPlaced++;
+          else if (outcome === 'flexible') tierAResults.flexiblePlaced++;
+          else tierAResults.deferred++;
+        }
+        if (tierA.length > 0) {
+          console.log(`  🅰️ Tier A summary: ${tierAResults.categoryPlaced} category + ${tierAResults.flexiblePlaced} flexible-overflow + ${tierAResults.deferred} deferred`);
+        }
+
         let totalScheduledAcrossWeek = 0;
         const weekResults: Record<string, any> = {};
 
@@ -847,7 +1058,30 @@ serve(async (req) => {
               return { ...task, score: Math.max(score, 0), isPriorityBoard: mappedIds.includes(task.id) };
             });
 
+          // Sort: assignments first by tier (B before C, due-asc within B, due-desc within C),
+          // then non-assignment tasks by score. This makes Pass 1B/1C effectively a sort layer
+          // over the existing single placement loop, and Pass 2 (non-assignment) runs after.
           scoredCandidates.sort((a, b) => {
+            const aTier = (a as any).assignment_id ? (assignmentTier[a.id] || 'C') : null;
+            const bTier = (b as any).assignment_id ? (assignmentTier[b.id] || 'C') : null;
+
+            // Assignments before non-assignments
+            if (aTier && !bTier) return -1;
+            if (!aTier && bTier) return 1;
+
+            // Both are assignments — apply tier order then per-tier due sort
+            if (aTier && bTier) {
+              if (aTier !== bTier) {
+                // Tier A first, then B, then C (Tier A is normally pre-placed, but defensive)
+                const order = { A: 0, B: 1, C: 2 } as const;
+                return order[aTier] - order[bTier];
+              }
+              const aDue = a.due_date ? new Date(a.due_date).getTime() : Infinity;
+              const bDue = b.due_date ? new Date(b.due_date).getTime() : Infinity;
+              return aTier === 'C' ? bDue - aDue : aDue - bDue;
+            }
+
+            // Both non-assignment — existing score-based sort
             if (b.score !== a.score) return b.score - a.score;
             if (a.due_date && b.due_date) return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
             if (a.due_date) return -1;
@@ -873,22 +1107,36 @@ serve(async (req) => {
           const dayPlacements: Array<Record<string, unknown>> = [];
           const dayRejections: Array<Record<string, unknown>> = [];
           const dayKeywordOverrides: Array<Record<string, unknown>> = [];
+          const deferredAssignmentsToday: Array<{ id: string; tier: 'B' | 'C' }> = [];
 
           for (const task of dedupedCandidates) {
             const duration = task.estimate_minutes ||
               categoryMappings[task.category]?.estimatedDuration || 60;
 
+            const isAssignment = !!(task as any).assignment_id;
+            const tier = isAssignment ? (assignmentTier[task.id] || 'C') : null;
+            const placedAssignmentsToday = dailyAssignmentCount[targetISO] || 0;
+
+            // Pass 1B/1C cap: Tier B/C assignments are limited to MAX_ASSIGNMENTS_PER_DAY/day.
+            // Tier A bypasses the cap (deadline-critical, pre-placed in Pass 1A).
+            if (isAssignment && tier !== 'A' && placedAssignmentsToday >= MAX_ASSIGNMENTS_PER_DAY) {
+              deferredAssignmentsToday.push({ id: task.id, tier: tier as 'B' | 'C' });
+              dayRejections.push({
+                taskId: task.id, title: task.title, category: task.category,
+                score: task.score, duration,
+                reason: `assignment_cap_${MAX_ASSIGNMENTS_PER_DAY}_per_day`,
+                tier,
+              });
+              continue;
+            }
+
             // KEYWORD OVERRIDE: contextRules.keywords beats category default.
-            // e.g. "Go to the mall" → matches "shopping" → after_work,
-            // even if LIFE category would otherwise allow flexible (9-22).
             const keywordOverride = getKeywordWindowOverride(task.title, contextKeywords, activeWindowNames);
             let preferredWindows: string[];
             if (keywordOverride) {
               preferredWindows = [keywordOverride.window];
               dayKeywordOverrides.push({
-                taskId: task.id,
-                title: task.title,
-                category: task.category,
+                taskId: task.id, title: task.title, category: task.category,
                 matchedKeyword: keywordOverride.matchedKeyword,
                 overrideWindow: keywordOverride.window,
               });
@@ -909,9 +1157,9 @@ serve(async (req) => {
               }
             }
 
-            // Flexible capacity aggregation: ONLY when there is no keyword override.
-            // Keyword overrides are authoritative — don't sneak around them via aggregate fit.
-            if (!assigned && !keywordOverride && preferredWindows.length === activeWindowNames.length) {
+            // Flexible capacity aggregation: ONLY for non-assignment tasks without keyword override.
+            // Assignments must respect their category windows; aggregate-fit would bypass that.
+            if (!assigned && !isAssignment && !keywordOverride && preferredWindows.length === activeWindowNames.length) {
               const totalRemaining = Object.values(windowRemaining).reduce((s, v) => s + v, 0);
               if (totalRemaining >= duration) {
                 const bestWindow = Object.entries(windowRemaining)
@@ -927,25 +1175,25 @@ serve(async (req) => {
             }
 
             if (assigned) {
+              if (isAssignment) {
+                dailyAssignmentCount[targetISO] = placedAssignmentsToday + 1;
+              }
               dayPlacements.push({
-                taskId: task.id,
-                title: task.title,
-                category: task.category,
-                score: task.score,
-                duration,
-                window: assignedWindow,
+                taskId: task.id, title: task.title, category: task.category,
+                score: task.score, duration, window: assignedWindow,
                 keywordOverride: keywordOverride?.matchedKeyword ?? null,
+                tier,
               });
             } else {
+              if (isAssignment && tier && tier !== 'A') {
+                deferredAssignmentsToday.push({ id: task.id, tier: tier as 'B' | 'C' });
+              }
               dayRejections.push({
-                taskId: task.id,
-                title: task.title,
-                category: task.category,
-                score: task.score,
-                duration,
-                preferredWindows,
+                taskId: task.id, title: task.title, category: task.category,
+                score: task.score, duration, preferredWindows,
                 reason: 'no_window_capacity',
                 keywordOverride: keywordOverride?.matchedKeyword ?? null,
+                tier,
               });
               console.log(`    ⚠️ "${task.title}" doesn't fit any allowed window — skipping`);
             }
@@ -1072,6 +1320,71 @@ serve(async (req) => {
         }
 
         // ==========================================
+        // PASS 3: TOP-UP — fill remaining slots with deferred Tier B/C assignments
+        // For each day where assignment count < cap, walk deferred items in tier-sort
+        // order (B before C; B due-asc; C due-desc). Honor category windows.
+        // ==========================================
+        const tierBPending = tierB.filter(t => !scheduledTaskIds.has(t.id));
+        const tierCPending = tierC.filter(t => !scheduledTaskIds.has(t.id));
+        const topUpQueue = [...tierBPending, ...tierCPending]; // already sorted within each tier
+        let topUpPlaced = 0;
+
+        if (topUpQueue.length > 0) {
+          for (let dOff = 0; dOff < totalDays && topUpQueue.length > 0; dOff++) {
+            const [tY, tM, tD] = todayISO.split('-').map(Number);
+            const dt = new Date(tY, tM - 1, tD + dOff);
+            const isoDay = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+            if ((dailyAssignmentCount[isoDay] || 0) >= MAX_ASSIGNMENTS_PER_DAY) continue;
+
+            const dow = dt.getDay();
+            const active = getActiveWindows(timeWindows, dow);
+            const activeNames = Object.keys(active);
+            if (activeNames.length === 0) continue;
+
+            const bounds = _ldub(isoDay, timezone);
+            const { data: dayScheduled2 } = await supabase
+              .from('tasks').select('start_time, end_time, estimate_minutes')
+              .eq('user_id', userId).eq('is_scheduled', true)
+              .gte('start_time', bounds.start).lt('start_time', bounds.end);
+            const { data: dayEvents2 } = await supabase
+              .from('external_calendar_events').select('start_time, end_time')
+              .eq('user_id', userId).gte('start_time', bounds.start).lt('start_time', bounds.end)
+              .eq('is_all_day', false);
+            const items = [
+              ...(dayScheduled2 || []),
+              ...(dayEvents2 || []).map(e => ({ ...e, estimate_minutes: undefined })),
+            ];
+            let caps = computeUsedMinutes(items, active, isoDay, timezone);
+
+            for (let i = 0; i < topUpQueue.length; i++) {
+              if ((dailyAssignmentCount[isoDay] || 0) >= MAX_ASSIGNMENTS_PER_DAY) break;
+              const task = topUpQueue[i];
+              const duration = task.estimate_minutes || categoryMappings[task.category]?.estimatedDuration || 60;
+              const preferred = getPreferredWindows(task.category, categoryMappings, activeNames);
+              const fits = preferred.some(w => (caps[w]?.remainingMinutes || 0) >= duration);
+              if (!fits) continue;
+              const placed = await callTierAScheduler(task, isoDay, caps, active, false);
+              if (placed) {
+                topUpPlaced++;
+                topUpQueue.splice(i, 1);
+                i--;
+                // Recompute caps cheaply by subtracting duration from a fitting window
+                for (const w of preferred) {
+                  if ((caps[w]?.remainingMinutes || 0) >= duration) {
+                    caps[w].remainingMinutes -= duration;
+                    caps[w].usedMinutes += duration;
+                    break;
+                  }
+                }
+                console.log(`    🔁 [Pass 3 top-up] "${task.title}" (Tier ${assignmentTier[task.id]}) → ${isoDay}`);
+              }
+            }
+          }
+          totalScheduledAcrossWeek += topUpPlaced;
+          if (topUpPlaced > 0) console.log(`  🔁 Pass 3 top-up placed ${topUpPlaced} deferred assignments`);
+        }
+
+        // ==========================================
         // STEP 6: Log the run
         // ==========================================
         await supabase.from('activity_log').insert({
@@ -1088,6 +1401,16 @@ serve(async (req) => {
             days_processed: totalDays,
             week_results: weekResults,
             steps,
+            assignment_tiers: {
+              tierA_count: tierA.length,
+              tierB_count: tierB.length,
+              tierC_count: tierC.length,
+              tierA_category_placed: tierAResults.categoryPlaced,
+              tierA_flexible_overflow_placed: tierAResults.flexiblePlaced,
+              tierA_deferred: tierAResults.deferred,
+              top_up_placed: topUpPlaced,
+              daily_assignment_count: dailyAssignmentCount,
+            },
             keyword_overrides_total: steps.reduce(
               (sum, s) => sum + (Array.isArray((s.outputs as any)?.keywordOverrides) ? (s.outputs as any).keywordOverrides.length : 0),
               0
@@ -1108,6 +1431,14 @@ serve(async (req) => {
           totalScheduled: totalScheduledAcrossWeek,
           daysProcessed: totalDays,
           weekResults,
+          assignmentTiers: {
+            tierA: tierA.length,
+            tierB: tierB.length,
+            tierC: tierC.length,
+            tierAResults,
+            topUpPlaced,
+            dailyAssignmentCount,
+          },
         };
 
       } catch (userError) {

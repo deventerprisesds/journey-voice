@@ -1,6 +1,79 @@
 import { getDateInTimezone } from '@/lib/date';
 import { Task } from '@/types/task';
 
+/**
+ * Assignment tier thresholds (mirror of scheduling-defaults.ts).
+ * Keep these in sync with the backend constants.
+ */
+export const ASSIGNMENT_URGENT_HOURS = 48;
+export const ASSIGNMENT_PRIORITY_DAYS = 7;
+export const MAX_ASSIGNMENTS_PER_DAY = 2;
+
+export type AssignmentTier = 'A' | 'B' | 'C';
+
+export interface AssignmentTierBuckets {
+  tierA: Task[]; // due ≤48h — deadline-critical, distribute across hours-until-due
+  tierB: Task[]; // due 3-7d OR overdue ≤7d — capped 2/day, due ASC
+  tierC: Task[]; // due >7d OR overdue >7d — capped 2/day, due DESC (recent first)
+}
+
+/**
+ * Split assignment-linked tasks into three placement tiers.
+ * - Tier A: due within ASSIGNMENT_URGENT_HOURS (48h) — sorted due ASC
+ * - Tier B: due 3-7d OR overdue ≤7d — sorted due ASC
+ * - Tier C: due >7d OR overdue >7d — sorted due DESC (recent overdue first;
+ *   ancient overdue last because they're lowest-value to reschedule)
+ *
+ * Tasks without a due_date are excluded from tier classification.
+ */
+export function selectAssignmentCandidates(
+  tasks: Task[],
+  now: Date = new Date(),
+): AssignmentTierBuckets {
+  const tierA: Task[] = [];
+  const tierB: Task[] = [];
+  const tierC: Task[] = [];
+
+  const urgentMs = ASSIGNMENT_URGENT_HOURS * 60 * 60 * 1000;
+  const priorityMs = ASSIGNMENT_PRIORITY_DAYS * 24 * 60 * 60 * 1000;
+  const nowMs = now.getTime();
+
+  for (const task of tasks) {
+    if (!(task as any).assignment_id) continue;
+    if (task.status === 'DONE' || task.status === 'BLOCKED') continue;
+    if (task.completed_at) continue;
+    if (!task.due_date) continue;
+
+    const dueMs = new Date(task.due_date).getTime();
+    const deltaMs = dueMs - nowMs; // positive = future, negative = overdue
+
+    if (deltaMs <= urgentMs && deltaMs >= -urgentMs) {
+      // Within ±48h window — Tier A (includes very recently overdue)
+      tierA.push(task);
+    } else if (deltaMs > urgentMs && deltaMs <= priorityMs) {
+      // Due 3-7 days out
+      tierB.push(task);
+    } else if (deltaMs < -urgentMs && deltaMs >= -priorityMs) {
+      // Overdue between 2 and 7 days ago
+      tierB.push(task);
+    } else {
+      // >7 days out OR >7 days overdue
+      tierC.push(task);
+    }
+  }
+
+  const dueAsc = (a: Task, b: Task) =>
+    new Date(a.due_date!).getTime() - new Date(b.due_date!).getTime();
+  const dueDesc = (a: Task, b: Task) =>
+    new Date(b.due_date!).getTime() - new Date(a.due_date!).getTime();
+
+  tierA.sort(dueAsc);
+  tierB.sort(dueAsc);
+  tierC.sort(dueDesc); // most recent overdue first; ancient overdue last
+
+  return { tierA, tierB, tierC };
+}
+
 const PRIORITY_WEIGHT: Record<Task['priority'], number> = {
   URGENT: 4,
   HIGH: 3,

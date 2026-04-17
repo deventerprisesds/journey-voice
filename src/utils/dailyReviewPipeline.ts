@@ -366,6 +366,20 @@ export function buildDailyReviewReasoning(
       const pendingAssignments = tasks.filter(t =>
         (t as any).assignment_id && t.status !== 'DONE' && !t.completed_at
       );
+
+      // Tier split (mirrors backend: A ≤48h, B 3-7d ±overdue, C >7d ±ancient)
+      const URGENT_MS = 48 * 60 * 60 * 1000;
+      const PRIORITY_MS = 7 * 24 * 60 * 60 * 1000;
+      const nowMs = Date.now();
+      let tierA = 0, tierB = 0, tierC = 0;
+      for (const t of pendingAssignments) {
+        if (!t.due_date) continue;
+        const delta = new Date(t.due_date).getTime() - nowMs;
+        if (delta <= URGENT_MS && delta >= -URGENT_MS) tierA++;
+        else if ((delta > URGENT_MS && delta <= PRIORITY_MS) || (delta < -URGENT_MS && delta >= -PRIORITY_MS)) tierB++;
+        else tierC++;
+      }
+
       const explanations: string[] = [];
 
       if (assignmentTasksToday.length === 0 && pendingAssignments.length > 0) {
@@ -373,15 +387,20 @@ export function buildDailyReviewReasoning(
           .filter(t => t.due_date)
           .sort((a, b) => new Date(a.due_date!).getTime() - new Date(b.due_date!).getTime());
         if (withDueDate.length > 0) {
-          explanations.push(`No assignment tasks scheduled today — ${pendingAssignments.length} assignment${pendingAssignments.length > 1 ? 's' : ''} pending, next due: "${withDueDate[0].title}" on ${format(new Date(withDueDate[0].due_date!), 'MMM d')}`);
+          explanations.push(`No assignment tasks scheduled today — ${pendingAssignments.length} assignment${pendingAssignments.length > 1 ? 's' : ''} pending (Tier A: ${tierA}, B: ${tierB}, C: ${tierC}); next due: "${withDueDate[0].title}" on ${format(new Date(withDueDate[0].due_date!), 'MMM d')}`);
         } else {
           explanations.push(`No assignment tasks scheduled today — ${pendingAssignments.length} assignment${pendingAssignments.length > 1 ? 's' : ''} pending (no due dates set)`);
         }
+      } else if (assignmentTasksToday.length > 0) {
+        explanations.push(`${assignmentTasksToday.length} assignment${assignmentTasksToday.length > 1 ? 's' : ''} scheduled today (Tier A urgent: ${tierA}, B: ${tierB}, C: ${tierC} pending across horizon)`);
       }
 
       return {
         pendingAssignmentCount: pendingAssignments.length,
         assignmentsScheduledToday: assignmentTasksToday.length,
+        tierA,
+        tierB,
+        tierC,
         nextDueTitle: pendingAssignments.filter(t => t.due_date).sort((a, b) => new Date(a.due_date!).getTime() - new Date(b.due_date!).getTime())[0]?.title || null,
         explanations,
       };

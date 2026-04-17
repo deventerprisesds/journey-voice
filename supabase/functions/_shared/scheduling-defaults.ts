@@ -10,6 +10,15 @@ export interface TimeWindow {
   days: number[]; // 0=Sun, 1=Mon, ...6=Sat
 }
 
+/**
+ * Assignment scheduling tier constants.
+ * Used by nightly-schedule-builder to split assignment candidates into
+ * Tier A (deadline-critical), Tier B (urgent), Tier C (long-horizon).
+ */
+export const MAX_ASSIGNMENTS_PER_DAY = 2;
+export const ASSIGNMENT_URGENT_HOURS = 48;
+export const ASSIGNMENT_PRIORITY_DAYS = 7;
+
 export interface CategoryMapping {
   defaultTimeWindow: string[];
   estimatedDuration: number;
