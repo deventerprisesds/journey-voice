@@ -1096,6 +1096,25 @@ serve(async (req) => {
             return 0;
           });
 
+          // SCORING_AUDIT: emit top-20 score breakdown for diagnostic queries.
+          // Lets us answer "why did X outscore Y" without re-running the builder.
+          const auditTop = scoredCandidates.slice(0, 20).map((t: any) => ({
+            taskId: t.id,
+            title: t.title,
+            score: t.score,
+            assignment_tier: (t as any).assignment_id ? (assignmentTier[t.id] || 'C') : null,
+            is_priority: !!(t as any).is_priority,
+            priority_rank: (t as any).priority_rank ?? null,
+            pushed_count: (t as any).pushed_count ?? 0,
+            due_date: t.due_date ?? null,
+          }));
+          pushStep(
+            `SCORING_AUDIT_${targetISO}`,
+            { targetISO, candidateCount: scoredCandidates.length },
+            { topTwenty: auditTop },
+            Date.now(),
+          );
+
           // Same-day title dedup: keep highest-scored instance only
           const dedupedCandidates = scoredCandidates.filter(task => {
             const normalizedTitle = task.title.toLowerCase().trim();
