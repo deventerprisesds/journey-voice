@@ -540,8 +540,21 @@ export function buildDailyReviewReasoning(
     const end = new Date(e.end_time).getTime();
     return sum + Math.round((end - start) / 60000);
   }, 0);
-  if (externalEvents.length > 0) {
+  // Calendar status messaging — proves the scheduler checked external calendars
+  const cs = builderMerge.calendarStatus;
+  if (cs && cs.connectionCount > 0) {
+    if (cs.eventsToday > 0) {
+      explanations.push(`Checked ${cs.eventsToday} calendar event${cs.eventsToday > 1 ? 's' : ''} on ${cs.connectionCount} connected calendar${cs.connectionCount > 1 ? 's' : ''} — ${externalMinutes} min reserved as busy`);
+    } else {
+      explanations.push(`No external calendar events for today (${cs.connectionCount} calendar${cs.connectionCount > 1 ? 's' : ''} connected, checked)`);
+    }
+  } else if (externalEvents.length > 0) {
     explanations.push(`${externalEvents.length} calendar event${externalEvents.length > 1 ? 's' : ''} blocking ${externalMinutes} min total`);
+  }
+  // Reshuffle outcome
+  const ro = builderMerge.reshuffleOutcome;
+  if (ro && (ro.committed > 0 || ro.deferred > 0)) {
+    explanations.push(`${ro.committed} task${ro.committed !== 1 ? 's' : ''} reshuffled into alternate windows; ${ro.deferred} deferred — try Confirm & Fill Gaps for the rest`);
   }
   if (builderMerge.archivedStale > 0) {
     explanations.push(`${builderMerge.archivedStale} stale tasks archived by the nightly builder`);
@@ -596,6 +609,8 @@ export function buildDailyReviewReasoning(
     missingExplanations: allMissingExplanations,
     qcViolations: qcResult.violations,
     pipelineTrace: steps,
+    calendarStatus: builderMerge.calendarStatus,
+    reshuffleOutcome: builderMerge.reshuffleOutcome,
   };
 
   // ── Log full pipeline trace to activity_log (fire-and-forget) ──
