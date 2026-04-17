@@ -1291,15 +1291,16 @@ serve(async (req) => {
 
           // Update tasks with their scheduled times
           let actuallyScheduled = 0;
+          const committedIds = new Set<string>();
           for (const slot of scheduled) {
             if (!slot.taskId || !slot.start_time || !slot.end_time) {
               console.log(`    ⏭️ Skipping task ${slot.taskId || 'unknown'}: no valid time slot`);
               continue;
             }
-            
+
             const candidate = selectedCandidates.find(c => c.id === slot.taskId);
             const preScheduleStatus = candidate?.status || 'TODO';
-            
+
             const { error: scheduleError } = await supabase
               .from('tasks')
               .update({
@@ -1316,12 +1317,195 @@ serve(async (req) => {
               console.error(`    ❌ Error scheduling task ${slot.taskId}:`, scheduleError);
             } else {
               actuallyScheduled++;
+              committedIds.add(slot.taskId);
               scheduledTaskIds.add(slot.taskId);
               scheduledTitles.add(candidate?.title || '');
               accumulatedBusySlots.push({ start_time: slot.start_time, end_time: slot.end_time });
             }
           }
-          
+
+          // ==========================================
+          // RESHUFFLE PASS: AI-rejected candidates get one retry in expanded windows
+          // ==========================================
+          const aiRejected = selectedCandidates.filter(c => !committedIds.has(c.id));
+          let reshuffleAttempted = 0;
+          let reshuffleCommitted = 0;
+          const reshuffleDeferred: Array<Record<string, unknown>> = [];
+
+          if (aiRejected.length > 0) {
+            console.log(`    🔁 Reshuffle pass: ${aiRejected.length} AI-rejected candidates → retrying in expanded windows`);
+
+            // Recompute remaining capacity from accumulatedBusySlots for this day
+            const dayBounds = _ldub(targetISO, timezone);
+            const dayBusyForRetry = accumulatedBusySlots.filter(s => {
+              const sMs = new Date(s.start_time).getTime();
+              return sMs >= new Date(dayBounds.start).getTime() && sMs < new Date(dayBounds.end).getTime();
+            });
+            const retryCaps = computeUsedMinutes(
+              dayBusyForRetry.map(s => ({ start_time: s.start_time, end_time: s.end_time })),
+              activeWindows,
+              targetISO,
+              timezone,
+            );
+
+            // Filter to candidates that still have capacity in ANY active window (not just preferred)
+            const retryEligible = aiRejected.filter(t => {
+              const duration = t.estimate_minutes || categoryMappings[t.category]?.estimatedDuration || 60;
+              return activeWindowNames.some(w => (retryCaps[w]?.remainingMinutes || 0) >= duration);
+            });
+
+            for (const t of aiRejected) {
+              if (!retryEligible.includes(t)) {
+                reshuffleDeferred.push({
+                  taskId: t.id, title: t.title, category: t.category,
+                  reason: 'no_capacity_any_window',
+                });
+              }
+            }
+
+            if (retryEligible.length > 0) {
+              reshuffleAttempted = retryEligible.length;
+              const retryPayload = {
+                tasks: retryEligible.map(t => ({
+                  id: t.id,
+                  title: t.title,
+                  category: t.category,
+                  priority: t.priority,
+                  estimate_minutes: t.estimate_minutes || categoryMappings[t.category]?.estimatedDuration || 60,
+                  due_date: t.due_date,
+                })),
+                userId,
+                timezone,
+                targetDate: targetISO,
+                allowOverflow: true, // expanded windows on retry
+                windowCapacity: Object.fromEntries(
+                  Object.entries(retryCaps).map(([name, cap]) => [
+                    name,
+                    {
+                      totalMinutes: cap.totalMinutes,
+                      remainingMinutes: cap.remainingMinutes,
+                      start: activeWindows[name].start,
+                      end: activeWindows[name].end,
+                    },
+                  ])
+                ),
+              };
+
+              try {
+                const retryResp = await fetch(
+                  `${supabaseUrl}/functions/v1/batch-calendar-scheduler`,
+                  {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'Authorization': `Bearer ${supabaseServiceKey}`,
+                    },
+                    body: JSON.stringify(retryPayload),
+                  }
+                );
+
+                if (retryResp.ok) {
+                  const retryResult = await retryResp.json();
+                  const retrySlots = retryResult.scheduled || [];
+                  for (const slot of retrySlots) {
+                    if (!slot.taskId || !slot.start_time || !slot.end_time) continue;
+                    const candidate = retryEligible.find(c => c.id === slot.taskId);
+                    const preScheduleStatus = candidate?.status || 'TODO';
+                    const { error: retryErr } = await supabase
+                      .from('tasks')
+                      .update({
+                        start_time: slot.start_time,
+                        end_time: slot.end_time,
+                        is_scheduled: true,
+                        scheduling_context: { pre_schedule_status: preScheduleStatus, reshuffle_retry: true },
+                        status: 'TODO',
+                        updated_at: now.toISOString(),
+                      })
+                      .eq('id', slot.taskId);
+                    if (!retryErr) {
+                      reshuffleCommitted++;
+                      actuallyScheduled++;
+                      committedIds.add(slot.taskId);
+                      scheduledTaskIds.add(slot.taskId);
+                      scheduledTitles.add(candidate?.title || '');
+                      accumulatedBusySlots.push({ start_time: slot.start_time, end_time: slot.end_time });
+                      console.log(`      🔁 [Reshuffle] "${candidate?.title}" placed in retry window`);
+                    }
+                  }
+                  // Anything still uncommitted = AI couldn't find a slot
+                  for (const t of retryEligible) {
+                    if (!committedIds.has(t.id)) {
+                      reshuffleDeferred.push({
+                        taskId: t.id, title: t.title, category: t.category,
+                        reason: 'ai_no_slot_after_retry',
+                      });
+                    }
+                  }
+                } else {
+                  console.warn(`    ⚠️ Reshuffle retry HTTP ${retryResp.status}`);
+                  for (const t of retryEligible) {
+                    reshuffleDeferred.push({
+                      taskId: t.id, title: t.title, category: t.category,
+                      reason: `retry_http_${retryResp.status}`,
+                    });
+                  }
+                }
+              } catch (retryErr) {
+                console.warn(`    ⚠️ Reshuffle retry failed:`, retryErr);
+                for (const t of retryEligible) {
+                  reshuffleDeferred.push({
+                    taskId: t.id, title: t.title, category: t.category,
+                    reason: 'retry_exception',
+                  });
+                }
+              }
+            }
+
+            pushStep(
+              `RESCHEDULE_RETRY_${targetISO}`,
+              { targetISO, aiRejectedCount: aiRejected.length, retryEligibleCount: retryEligible.length },
+              { attempted: reshuffleAttempted, committed: reshuffleCommitted, deferred: reshuffleDeferred },
+              Date.now(),
+            );
+
+            if (reshuffleDeferred.length > 0) {
+              try {
+                await supabase.from('activity_log').insert({
+                  user_id: userId,
+                  activity_type: 'reschedule_deferred',
+                  status: 'completed',
+                  metadata: { targetISO, deferred: reshuffleDeferred, runId },
+                });
+              } catch (_) { /* best effort */ }
+            }
+          }
+
+          // ==========================================
+          // DB-RECONCILED ASSIGNMENT COUNTER
+          // The optimistic in-loop increments can drift from reality (AI drops, retries).
+          // Reconcile by querying the actual count of assignment-linked tasks placed today.
+          // ==========================================
+          try {
+            const dayBoundsForCount = _ldub(targetISO, timezone);
+            const { count: realAssignmentCount } = await supabase
+              .from('tasks')
+              .select('id', { count: 'exact', head: true })
+              .eq('user_id', userId)
+              .eq('is_scheduled', true)
+              .not('assignment_id', 'is', null)
+              .gte('start_time', dayBoundsForCount.start)
+              .lt('start_time', dayBoundsForCount.end);
+            if (typeof realAssignmentCount === 'number') {
+              const before = dailyAssignmentCount[targetISO] || 0;
+              dailyAssignmentCount[targetISO] = realAssignmentCount;
+              if (before !== realAssignmentCount) {
+                console.log(`    🔢 Reconciled assignment count for ${targetISO}: ${before} → ${realAssignmentCount}`);
+              }
+            }
+          } catch (e) {
+            console.warn(`    ⚠️ Assignment count reconciliation failed:`, e);
+          }
+
           totalScheduledAcrossWeek += actuallyScheduled;
           weekResults[targetISO] = { scheduled: actuallyScheduled, candidates: selectedCandidates.length };
           console.log(`    ✅ Actually scheduled ${actuallyScheduled}/${scheduled.length} tasks for ${targetISO}`);
