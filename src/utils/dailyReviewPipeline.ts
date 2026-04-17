@@ -396,10 +396,11 @@ export function buildDailyReviewReasoning(
         const withDueDate = pendingAssignments
           .filter(t => t.due_date)
           .sort((a, b) => new Date(a.due_date!).getTime() - new Date(b.due_date!).getTime());
+        const dueToday = pendingAssignments.filter(t => t.due_date && t.due_date.slice(0, 10) === todayStr).length;
         if (withDueDate.length > 0) {
-          explanations.push(`No assignment tasks scheduled today — ${pendingAssignments.length} assignment${pendingAssignments.length > 1 ? 's' : ''} pending (Tier A: ${tierA}, B: ${tierB}, C: ${tierC}); next due: "${withDueDate[0].title}" on ${format(new Date(withDueDate[0].due_date!), 'MMM d')}`);
+          explanations.push(`${dueToday} assignment${dueToday !== 1 ? 's' : ''} due today (${pendingAssignments.length} total pending — Tier A: ${tierA}, B: ${tierB}, C: ${tierC}); next due: "${withDueDate[0].title}" on ${format(new Date(withDueDate[0].due_date!), 'MMM d')}`);
         } else {
-          explanations.push(`No assignment tasks scheduled today — ${pendingAssignments.length} assignment${pendingAssignments.length > 1 ? 's' : ''} pending (no due dates set)`);
+          explanations.push(`${pendingAssignments.length} assignment${pendingAssignments.length > 1 ? 's' : ''} pending (no due dates set)`);
         }
       } else if (assignmentTasksToday.length > 0) {
         explanations.push(`${assignmentTasksToday.length} assignment${assignmentTasksToday.length > 1 ? 's' : ''} scheduled today (Tier A urgent: ${tierA}, B: ${tierB}, C: ${tierC} pending across horizon)`);
