@@ -188,6 +188,35 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
     })();
   }, [open, user?.id]);
 
+  // 5. Realtime: refresh builderLog whenever a fresh nightly_schedule_built row lands
+  // for this user. This unblocks the "modal shows stale builder log after reschedule" bug.
+  useEffect(() => {
+    if (!open || !user?.id) return;
+    const channel = supabase
+      .channel(`daily-review-builder-${user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'activity_log',
+          filter: `user_id=eq.${user.id}`,
+        },
+        (payload) => {
+          const row = payload.new as { activity_type?: string; metadata?: any };
+          if (row?.activity_type !== 'nightly_schedule_built') return;
+          if (row?.metadata) {
+            console.log('[DailyReviewModal] realtime builder log update received');
+            setBuilderLog(row.metadata);
+          }
+        }
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [open, user?.id]);
+
   // Build reasoning via structured pipeline (now fed real user config)
   const reasoning = useMemo(() =>
     buildDailyReviewReasoning(tasks, externalEvents, builderLog, tz, todayStr, isWeekend, user?.id ?? null, userConfig),
