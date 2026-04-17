@@ -1,46 +1,57 @@
 
+## Pre-flight audit
+- Files inspected: `src/components/DailyReviewModal.tsx`, `src/hooks/useChatAssistant.ts`, `src/utils/dailyReviewPipeline.ts`, `src/lib/date.ts`, `src/components/FocusView.tsx`, `src/utils/activityLogger.ts`, `mem://constraints/scheduling-preflight-audit.md`, `mem://infrastructure/timezone-normalization-architecture`
+- Forbidden patterns found:
+  - `src/lib/date.ts:170` uses `new Date(dateString)` in `formatDateOnly` for `YYYY-MM-DD` input
+  - `src/utils/dailyReviewPipeline.ts:172` uses `new Date(\`${todayStr}T00:00:00\`)` for recency clamp, but this is not the cause of the missing modal sections
+- Shared helpers to use/keep: `getTodayInTimezone`, `isSameDateInTimezone`, `getTimePartsInTimezone`, `formatTimeInTimezone`
+- Memory rules invoked: `mem://constraints/scheduling-preflight-audit`, `mem://infrastructure/timezone-normalization-architecture`, `mem://preferences/validation-and-testing-workflow`
 
-## Summary of all fixes queued up across the conversation
+## What the code and data actually show
+- On the published Dev account, the latest `daily_review_reasoning` rows already contain populated output: `explanationCount=4`, `missingExplanationCount=3`, `externalEventCount=2`, `scheduledCount=4`.
+- So the pipeline is producing “How we built today”, Time Windows, and Calendar Events data.
+- The visible regression is in the modal UI:
+  - stale assistant thread history is leaking into the modal’s `AI Response` panel
+  - that panel lives outside the main `ScrollArea` and takes a large chunk of vertical space on mobile
+  - this makes the lower sections appear “missing” even though the data exists
+- Root cause of the stale chat leak: `messageFloorIndexRef` is captured before `useChatAssistant` finishes hydrating old thread messages, so historical assistant messages get treated as current-session modal messages.
+- Separate real bug: `formatDateOnly(todayStr)` is UTC-naive for `YYYY-MM-DD`, which explains the Apr 16 / Apr 17 header mismatch.
 
-Three independent problem areas, all approved or in-flight. Listed by area with the concrete change and the file.
+## Implementation plan
+1. Fix modal-session chat isolation in `src/components/DailyReviewModal.tsx`
+   - track modal-open time
+   - only show `AI Response` after the user sends a message from this modal session
+   - filter assistant messages to current-session messages only, excluding old thread history that hydrates after open
 
-### A. Calendar conflict enforcement (approved earlier)
-The scheduler still allows tasks to overlap real calendar events.
+2. Restore the missing visible content in `src/components/DailyReviewModal.tsx`
+   - keep the review content as the primary visible area on mobile
+   - prevent the leaked AI panel from consuming the modal height before the user has interacted
+   - keep Time Windows and Calendar Events visible again in the normal layout
 
-1. **Hard-reject overlaps in `batch-calendar-scheduler`** — build normalized busy intervals from `external_calendar_events` + already-scheduled tasks; reject AI slots that overlap, with explicit reasons (`overlaps_external_event`, `overlaps_scheduled_task`).
-2. **Fix busy-slot loading window** — replace `now → range end` with `localDateToUtcBounds(targetDateISO, timezone)` so in-progress events still block.
-3. **Reschedule completion UX** — `FocusView` + `DailyReviewModal` wait for the matching `nightly_schedule_built` row before clearing the pending state; show explicit success/failure.
-4. **Refresh Daily Review from the completed run** — re-fetch builder log + live events after completion, not from pre-run snapshot.
+3. Fix the header date bug in `src/lib/date.ts`
+   - replace UTC-naive `new Date('YYYY-MM-DD')` parsing in `formatDateOnly`
+   - format date-only strings using explicit year/month/day parsing
 
-Files: `supabase/functions/batch-calendar-scheduler/index.ts`, `supabase/functions/nightly-schedule-builder/index.ts`, `src/components/FocusView.tsx`, `src/components/DailyReviewModal.tsx`, `src/utils/dailyReviewPipeline.ts`.
+4. Verify against published Dev data only
+   - test on `journey-voice.lovable.app` with user `a3378f93-d655-4913-b2fa-ca5b1d8020f1`
+   - confirm the modal opens with no stale AI thread history
+   - confirm “How we built today” shows the existing reasoning bullets
+   - confirm Time Windows and Calendar Events are visible again
+   - confirm the header date matches the user timezone
+   - confirm that after sending one modal chat message, only that session’s reply appears in `AI Response`
 
-### B. "How we built today" blank / stale modal output (current focus)
-Pipeline produces strings, but modal binds to stale state and one string is malformed.
+## Files to change
+- `src/components/DailyReviewModal.tsx`
+- `src/lib/date.ts`
 
-5. **Realtime refresh of `builderLog` in `DailyReviewModal`** — subscribe to `activity_log` inserts where `activity_type = 'nightly_schedule_built'` for the current user; on insert, refresh `builderLog` so the section updates without remount.
-6. **Sentinel bullet** — when both `explanations` and `missingExplanations` are empty, render `"Schedule built — no notable adjustments to report"` so the section never appears blank under its header.
-7. **Fix double-space empty-window string** — when `eligibleCats` is empty, render `"${w.label} is empty — no categories mapped to this window in your config"` instead of `"… no  tasks in your backlog"`.
-8. **Surface reshuffle failure explicitly** — when `committed === 0 && deferred > 0`, push amber bullet: `"Reshuffle attempted N but committed 0 — likely overlap-blocked. Tap Confirm & Fill Gaps."`
+## Not changing in this pass
+- `src/utils/dailyReviewPipeline.ts` reasoning generation for these missing sections
+- assignment tiering / overdue semantics
+- QC keyword matching
+- scheduler overlap logic
 
-Files: `src/components/DailyReviewModal.tsx`, `src/utils/dailyReviewPipeline.ts`.
-
-### C. Explicitly NOT changing (per your corrections)
-- **"Overdue Today" tile semantics** — stays as subset of scheduled-today that is past-due.
-- **QC keyword substring matcher** — stays as substring; your people/finance early-day rules depend on it.
-- **Assignment tier classification** — no change to scoring/policy.
-
-### Verification (per `mem://preferences/validation-and-testing-workflow`)
-Tested only on **published Dev account** (`journey-voice.lovable.app`, user `a3378f93-d655-4913-b2fa-ca5b1d8020f1`):
-1. Open Daily Review modal, trigger Reschedule from Focus View, confirm "How we built today" updates within seconds without closing modal.
-2. Confirm no scheduled task overlaps any external event for today.
-3. Confirm reshuffle-zero-committed produces the amber bullet when applicable.
-4. Confirm modal header always has at least one bullet under "How we built today."
-
-### Pre-flight audit
-- Forbidden patterns: `nightly-schedule-builder/index.ts:345` has `toISOString().split('T')[0]` in a log line — leave as-is (log-only, non-functional).
-- Helpers used: `getTodayInTimezone`, `localDateToUtcBounds`, `formatDateOnly`, `getTimePartsInTimezone`.
-- Memory rules invoked: scheduling-preflight-audit, timezone-normalization, scheduling-overlap-prevention, calendar-reschedule-sync-integrity, validation-and-testing-workflow, mandatory-debugging-protocols.
-
-### Suggested execution order
-Group B first (smallest, unblocks the modal you're staring at), then Group A (deeper scheduler work).
-
+## Acceptance criteria
+- No stale assistant history appears when the Daily Review modal opens
+- “How we built today”, Time Windows, and Calendar Events render from the already-produced published Dev data
+- The AI panel only appears after the user actually chats in that modal session
+- The modal header shows the correct local date
