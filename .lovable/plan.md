@@ -1,49 +1,36 @@
 
-The user is right. My previous QC was wrong because I queried the DB directly with my *own* SQL, not the actual code path the modal uses. I need to replicate the exact data path: `useUnifiedTasks` → `dailyReviewPipeline` → modal counts.
+The user is reporting the Daily Review modal layout is unusable on mobile (411px). The right column of stat cards is clipped off-screen with no horizontal scroll. They want whatever layout changes I made during/after the pipeline fix reverted.
 
-## What the modal actually does (traced from code)
+## What I need to verify first
 
-1. `FocusView` calls `useUnifiedTasks()` which:
-   - Queries `tasks` where `user_id = current_user`
-   - Queries `tasks_with_schedule` view where `user_id = current_user AND from_history = true AND scheduled_date < todayStr`
-   - Merges both into one array (live + history rows, history rows get `_fromHistory: true`)
-2. Passes merged array as `tasks` prop to `DailyReviewModal`
-3. Modal calls `buildDailyReviewReasoning(tasks, todayStr, timezone)` 
-4. Pipeline filters `todayTasks = tasks.filter(t => t.start_time && t.start_time.startsWith(todayStr))`
-5. Counts derived from `todayTasks` with new clamps
+I changed `dailyReviewPipeline.ts` (logic only) and bumped `sw.js` + `index.html` cache version. I do NOT recall changing `DailyReviewModal.tsx` layout. But the prior screenshot (Apr 16) showed a clean 2×2 grid and current (Apr 17) shows clipped cards — so something in the modal's render changed.
 
-The bug: `tasks_with_schedule` view rows can have `start_time` that starts with today's date if the historical snapshot was for a task that was once scheduled today. Those rows ALSO have lifetime `pushed_count`. So `todayTasks` gets contaminated with history rows.
+Possibilities:
+1. I (or a prior change in this thread) added new stat tiles (e.g. Assignments, backlog overflow line) that broke the grid
+2. The grid was always `grid-cols-2` but new content widened cells beyond viewport
+3. New diagnostic bullets / "Live: dev@" badge pushed layout
 
-## QC plan — replicate exact modal path
+I need to read `DailyReviewModal.tsx` and check git/edit history references in this thread to identify exactly what layout changes happened alongside the pipeline fix.
 
-I need to run the **exact same two queries** that `useUnifiedTasks` runs, merge them the same way, then run the **exact same filter logic** from `dailyReviewPipeline`, and confirm the output matches what the user sees in the UI (171 / 39).
+## Plan
 
-### Step 1: Replicate `useUnifiedTasks` queries
-- Query A: `SELECT * FROM tasks WHERE user_id = 'a3378f93-...' ORDER BY created_at DESC`
-- Query B: `SELECT * FROM tasks_with_schedule WHERE user_id = 'a3378f93-...' AND from_history = true AND scheduled_date < '2026-04-17'`
-- Merge per the dedup logic in the hook
+### Step 1 — Read current DailyReviewModal.tsx
+Identify the stat-card grid markup and any tiles/lines added recently (Assignments tile, backlog overflow subtitle, Live badge, new diagnostic bullets).
 
-### Step 2: Apply the new pipeline filters exactly
-- `todayTasks` = merged where `start_time LIKE '2026-04-17%'`
-- `rolledOverIds` = `todayTasks` where `pushed_count > 0 AND updated_at >= now() - 36h`
-- `overdueIds` = merged where `due_date::date < '2026-04-17' AND id IN todayTasks` (intersected)
-- `backlogOverdueIds` = merged where status != DONE AND due_date::date < '2026-04-17'
+### Step 2 — Identify what to revert
+Compare against the Apr 16 screenshot (2×2 grid: Scheduled / Calendar Events / Overdue / Rolled Over, no Live badge, no Assignments tile, no backlog overflow line). Anything beyond that is a candidate for revert.
 
-### Step 3: Compare to screenshot
-- Screenshot shows: 171 rolled over, 39 overdue
-- If my replicated path returns 171/39 → confirms history-merge contamination is the live root cause and the new clamp isn't reaching the UI (stale bundle OR clamp not effective against history rows)
-- If my replicated path returns 9/1 → confirms bundle is stale on user's device
-- If it returns something else → there's a third source I haven't traced
+### Step 3 — Recommend revert path
+Two options:
+- **(A) Surgical revert**: keep the pipeline logic fix (4/1 counts) but remove the new tiles/badges/bullets that broke layout, restoring the Apr 16 2×2 grid.
+- **(B) Full revert via History**: roll back to the message before any of these changes shipped. User loses pipeline fix and re-sees 171/39, but UI is usable.
 
-### Step 4: Check build version on published site
-- Read `index.html` from `https://journey-voice.lovable.app` to extract the deployed `<meta name="build-version">` or bundle hash
-- Compare to current source to confirm publish actually shipped the new code
+### Step 4 — Present recommendation
+Default to (A): preserve the data correctness work, restore the working layout. Offer (B) via History tab as the clean rollback if user prefers.
 
-## Implementation
+### Files I'd touch in option A
+- `src/components/DailyReviewModal.tsx` — restore 2×2 grid, remove Assignments tile, remove backlog overflow line, remove Live badge, remove new diagnostic bullets
+- No pipeline file changes
+- No sw.js / index.html changes (keep v11)
 
-This is a read-only investigation, no file changes. I'll use:
-- `supabase--read_query` to run the two exact queries and the pipeline filters as SQL
-- `code--fetch_website` on the published URL to grab the live HTML/bundle hash
-- Report back: exact UI numbers I derived from the exact code path, plus whether the published bundle contains the new logic
-
-Then we'll know definitively whether the issue is (a) stale bundle, (b) history contamination bypassing the clamp, or (c) something else entirely. No fix proposed in this round — just honest QC that mirrors what you see.
+I'll need to read the modal first to confirm what's actually there before presenting a precise revert.
