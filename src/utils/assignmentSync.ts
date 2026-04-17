@@ -1,5 +1,6 @@
 import { supabase } from "@/integrations/supabase/client";
 import { scheduleNewTask } from "@/utils/taskScheduling";
+import { MIT_PROGRAM_ID } from "@/utils/programIds";
 
 // Helper to map assignment priority to task priority enum
 function mapPriority(priority: string | null | undefined): 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT' {
@@ -146,9 +147,10 @@ export async function createTasksFromMitAssignments(
 ): Promise<void> {
   try {
     const { data: assignments, error: fetchError } = await supabase
-      .from('assignments_mit')
+      .from('assignments')
       .select('*')
-      .in('id', assignmentIds);
+      .in('id', assignmentIds)
+      .eq('program_id', MIT_PROGRAM_ID);
 
     if (fetchError) {
       console.error('Error fetching MIT assignments:', fetchError);
@@ -327,9 +329,10 @@ export async function repairAssignmentLinkage(userId: string): Promise<{ repaire
         } else {
           // Try MIT
           const { data: mitMatch } = await supabase
-            .from('assignments_mit')
+            .from('assignments')
             .select('id')
             .eq('user_id', userId)
+            .eq('program_id', MIT_PROGRAM_ID)
             .eq('title', cleanTitle)
             .maybeSingle();
 
