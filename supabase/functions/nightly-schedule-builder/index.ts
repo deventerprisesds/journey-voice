@@ -1113,17 +1113,30 @@ serve(async (req) => {
             const duration = task.estimate_minutes ||
               categoryMappings[task.category]?.estimatedDuration || 60;
 
+            const isAssignment = !!(task as any).assignment_id;
+            const tier = isAssignment ? (assignmentTier[task.id] || 'C') : null;
+            const placedAssignmentsToday = dailyAssignmentCount[targetISO] || 0;
+
+            // Pass 1B/1C cap: Tier B/C assignments are limited to MAX_ASSIGNMENTS_PER_DAY/day.
+            // Tier A bypasses the cap (deadline-critical, pre-placed in Pass 1A).
+            if (isAssignment && tier !== 'A' && placedAssignmentsToday >= MAX_ASSIGNMENTS_PER_DAY) {
+              deferredAssignmentsToday.push({ id: task.id, tier: tier as 'B' | 'C' });
+              dayRejections.push({
+                taskId: task.id, title: task.title, category: task.category,
+                score: task.score, duration,
+                reason: `assignment_cap_${MAX_ASSIGNMENTS_PER_DAY}_per_day`,
+                tier,
+              });
+              continue;
+            }
+
             // KEYWORD OVERRIDE: contextRules.keywords beats category default.
-            // e.g. "Go to the mall" → matches "shopping" → after_work,
-            // even if LIFE category would otherwise allow flexible (9-22).
             const keywordOverride = getKeywordWindowOverride(task.title, contextKeywords, activeWindowNames);
             let preferredWindows: string[];
             if (keywordOverride) {
               preferredWindows = [keywordOverride.window];
               dayKeywordOverrides.push({
-                taskId: task.id,
-                title: task.title,
-                category: task.category,
+                taskId: task.id, title: task.title, category: task.category,
                 matchedKeyword: keywordOverride.matchedKeyword,
                 overrideWindow: keywordOverride.window,
               });
@@ -1144,9 +1157,9 @@ serve(async (req) => {
               }
             }
 
-            // Flexible capacity aggregation: ONLY when there is no keyword override.
-            // Keyword overrides are authoritative — don't sneak around them via aggregate fit.
-            if (!assigned && !keywordOverride && preferredWindows.length === activeWindowNames.length) {
+            // Flexible capacity aggregation: ONLY for non-assignment tasks without keyword override.
+            // Assignments must respect their category windows; aggregate-fit would bypass that.
+            if (!assigned && !isAssignment && !keywordOverride && preferredWindows.length === activeWindowNames.length) {
               const totalRemaining = Object.values(windowRemaining).reduce((s, v) => s + v, 0);
               if (totalRemaining >= duration) {
                 const bestWindow = Object.entries(windowRemaining)
@@ -1162,25 +1175,25 @@ serve(async (req) => {
             }
 
             if (assigned) {
+              if (isAssignment) {
+                dailyAssignmentCount[targetISO] = placedAssignmentsToday + 1;
+              }
               dayPlacements.push({
-                taskId: task.id,
-                title: task.title,
-                category: task.category,
-                score: task.score,
-                duration,
-                window: assignedWindow,
+                taskId: task.id, title: task.title, category: task.category,
+                score: task.score, duration, window: assignedWindow,
                 keywordOverride: keywordOverride?.matchedKeyword ?? null,
+                tier,
               });
             } else {
+              if (isAssignment && tier && tier !== 'A') {
+                deferredAssignmentsToday.push({ id: task.id, tier: tier as 'B' | 'C' });
+              }
               dayRejections.push({
-                taskId: task.id,
-                title: task.title,
-                category: task.category,
-                score: task.score,
-                duration,
-                preferredWindows,
+                taskId: task.id, title: task.title, category: task.category,
+                score: task.score, duration, preferredWindows,
                 reason: 'no_window_capacity',
                 keywordOverride: keywordOverride?.matchedKeyword ?? null,
+                tier,
               });
               console.log(`    ⚠️ "${task.title}" doesn't fit any allowed window — skipping`);
             }
