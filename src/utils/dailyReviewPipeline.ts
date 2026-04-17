@@ -423,11 +423,23 @@ export function buildDailyReviewReasoning(
     'BUILDER_LOG_MERGE',
     { hasBuilderLog: !!builderLog },
     () => {
+      const cs = (builderLog as any)?.calendar_status;
+      const rs = (builderLog as any)?.reshuffle;
       return {
         archivedStale: (builderLog as any)?.archived_stale ?? 0,
         totalScheduled: (builderLog as any)?.total_scheduled ?? null,
         lastRunTimestamp: (builderLog as any)?.timestamp ?? null,
         rawKeys: builderLog ? Object.keys(builderLog) : [],
+        calendarStatus: cs ? {
+          eventsToday: cs.events_today ?? 0,
+          connectionCount: cs.connection_count ?? 0,
+          sources: Array.isArray(cs.sources) ? cs.sources : [],
+        } : undefined,
+        reshuffleOutcome: rs ? {
+          attempted: rs.attempted ?? 0,
+          committed: rs.committed ?? 0,
+          deferred: rs.deferred ?? 0,
+        } : undefined,
       };
     }
   );
