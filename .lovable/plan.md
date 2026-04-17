@@ -1,62 +1,46 @@
 
-## Why I missed the rules and how to enforce reading them
 
-### Honest answer
-I didn't fail because the rules are hidden — they're in `.lovable/rules.md`, the memory index Core section, and `mem://infrastructure/timezone-normalization-architecture`, all of which load into my context every turn. I failed because I treated them as background reference instead of a pre-flight gate. When you asked about scheduling/calendar bugs, I jumped to symptom analysis (calendar query, modal layout) instead of first auditing the changed files against the forbidden-pattern list. That's a process failure, not a missing-doc failure.
+## Summary of all fixes queued up across the conversation
 
-### What will actually fix this (durable, not just "I'll try harder")
+Three independent problem areas, all approved or in-flight. Listed by area with the concrete change and the file.
 
-**1. Add a hard pre-flight gate to Core memory**
-Update `mem://index.md` Core section with a one-line non-negotiable rule that forces a checklist before any scheduling/calendar/timezone plan:
+### A. Calendar conflict enforcement (approved earlier)
+The scheduler still allows tasks to overlap real calendar events.
 
-```
-PRE-FLIGHT (scheduling/calendar/timezone/modal): Before planning, grep changed files for forbidden patterns: Date.UTC, new Date().getDay/getHours, toISOString().split, isToday, format(date,'yyyy-MM-dd'). List violations in plan. Confirm shared helpers (localDateToUtcBounds, getTimePartsInTimezone, dateToKeyInTimezone, get_calendar_connections_safe RPC) are used. No plan ships without this audit section.
-```
+1. **Hard-reject overlaps in `batch-calendar-scheduler`** — build normalized busy intervals from `external_calendar_events` + already-scheduled tasks; reject AI slots that overlap, with explicit reasons (`overlaps_external_event`, `overlaps_scheduled_task`).
+2. **Fix busy-slot loading window** — replace `now → range end` with `localDateToUtcBounds(targetDateISO, timezone)` so in-progress events still block.
+3. **Reschedule completion UX** — `FocusView` + `DailyReviewModal` wait for the matching `nightly_schedule_built` row before clearing the pending state; show explicit success/failure.
+4. **Refresh Daily Review from the completed run** — re-fetch builder log + live events after completion, not from pre-run snapshot.
 
-Core rules are always in context and apply to every action — this turns the audit into a required plan section, not an optional reference.
+Files: `supabase/functions/batch-calendar-scheduler/index.ts`, `supabase/functions/nightly-schedule-builder/index.ts`, `src/components/FocusView.tsx`, `src/components/DailyReviewModal.tsx`, `src/utils/dailyReviewPipeline.ts`.
 
-**2. Add a dedicated pre-flight memory**
-Create `mem://constraints/scheduling-preflight-audit` with the explicit grep list, the helper inventory, and the "audit must appear in plan" requirement. Indexed so it surfaces on any scheduling/calendar topic match.
+### B. "How we built today" blank / stale modal output (current focus)
+Pipeline produces strings, but modal binds to stale state and one string is malformed.
 
-**3. Restructure plan template for these topics**
-Every scheduling/calendar/modal plan must open with a "Pre-flight audit" section listing:
-- Files inspected
-- Forbidden patterns found (with line numbers) or "none"
-- Shared helpers that should replace them
-- Existing memory rules invoked
+5. **Realtime refresh of `builderLog` in `DailyReviewModal`** — subscribe to `activity_log` inserts where `activity_type = 'nightly_schedule_built'` for the current user; on insert, refresh `builderLog` so the section updates without remount.
+6. **Sentinel bullet** — when both `explanations` and `missingExplanations` are empty, render `"Schedule built — no notable adjustments to report"` so the section never appears blank under its header.
+7. **Fix double-space empty-window string** — when `eligibleCats` is empty, render `"${w.label} is empty — no categories mapped to this window in your config"` instead of `"… no  tasks in your backlog"`.
+8. **Surface reshuffle failure explicitly** — when `committed === 0 && deferred > 0`, push amber bullet: `"Reshuffle attempted N but committed 0 — likely overlap-blocked. Tap Confirm & Fill Gaps."`
 
-If that section is missing or empty, the plan is incomplete.
+Files: `src/components/DailyReviewModal.tsx`, `src/utils/dailyReviewPipeline.ts`.
 
-### Plan for this turn (carry forward the previously approved fixes)
+### C. Explicitly NOT changing (per your corrections)
+- **"Overdue Today" tile semantics** — stays as subset of scheduled-today that is past-due.
+- **QC keyword substring matcher** — stays as substring; your people/finance early-day rules depend on it.
+- **Assignment tier classification** — no change to scoring/policy.
 
-Apply the 5 fixes from the prior approved plan, plus the memory/process changes above:
+### Verification (per `mem://preferences/validation-and-testing-workflow`)
+Tested only on **published Dev account** (`journey-voice.lovable.app`, user `a3378f93-d655-4913-b2fa-ca5b1d8020f1`):
+1. Open Daily Review modal, trigger Reschedule from Focus View, confirm "How we built today" updates within seconds without closing modal.
+2. Confirm no scheduled task overlaps any external event for today.
+3. Confirm reshuffle-zero-committed produces the amber bullet when applicable.
+4. Confirm modal header always has at least one bullet under "How we built today."
 
-1. **`supabase/functions/nightly-schedule-builder/index.ts`** — singleDay clear uses `localDateToUtcBounds(todayISO, timezone)`; calendar_status uses `get_calendar_connections_safe` RPC with tri-state output (`connected_with_events`, `connected_no_events`, `not_connected`, `query_failed`); stale-cutoff uses `dateToKeyInTimezone`.
+### Pre-flight audit
+- Forbidden patterns: `nightly-schedule-builder/index.ts:345` has `toISOString().split('T')[0]` in a log line — leave as-is (log-only, non-functional).
+- Helpers used: `getTodayInTimezone`, `localDateToUtcBounds`, `formatDateOnly`, `getTimePartsInTimezone`.
+- Memory rules invoked: scheduling-preflight-audit, timezone-normalization, scheduling-overlap-prevention, calendar-reschedule-sync-integrity, validation-and-testing-workflow, mandatory-debugging-protocols.
 
-2. **`src/utils/dailyReviewPipeline.ts`** — greeting hour from `getTimePartsInTimezone`; surface tri-state calendar status in pipeline message.
+### Suggested execution order
+Group B first (smallest, unblocks the modal you're staring at), then Group A (deeper scheduler work).
 
-3. **`src/components/DailyReviewModal.tsx`** — weekend detection from timezone helper (new `getDayOfWeekInTimezone` if needed); tri-state Calendar tile copy; collapse "eligible but not placed" details behind `<Collapsible>` (default closed); trim window summary to top 3 with "Show all".
-
-4. **`src/lib/date.ts`** — add `getDayOfWeekInTimezone(timezone)` if not already present.
-
-5. **`mem://index.md`** — add PRE-FLIGHT Core rule.
-
-6. **`mem://constraints/scheduling-preflight-audit`** — new memory file with grep list + helper inventory + plan-section requirement.
-
-### Files touched
-- `supabase/functions/nightly-schedule-builder/index.ts`
-- `src/utils/dailyReviewPipeline.ts`
-- `src/components/DailyReviewModal.tsx`
-- `src/lib/date.ts`
-- `mem://index.md`
-- `mem://constraints/scheduling-preflight-audit`
-
-### Will NOT touch
-Tier classification, scoring, Pass 1A/1B/1C, reshuffle pass, window validation, buffer/alignment, two-way sync deletion safeguard, calendar OAuth/sync internals.
-
-### Acceptance
-1. No `Date.UTC`, `new Date().getDay/getHours`, `toISOString().split('T')[0]` remain in scheduling/modal paths
-2. Modal Calendar tile matches Focus View via shared RPC
-3. Single-day reschedule scoped to local day only
-4. Modal at 411px shows top stats by default; details opt-in
-5. New Core rule + preflight memory in place — next scheduling plan must open with audit section
