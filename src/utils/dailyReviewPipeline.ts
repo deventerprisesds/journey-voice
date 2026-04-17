@@ -339,7 +339,7 @@ export function buildDailyReviewReasoning(
 
           if (unscheduled.length > 0) {
             const scored = unscheduled.map(t => ({ t, score: scoreSchedulingCandidate(t) })).sort((a, b) => b.score - a.score);
-            missingExplanations.push(`${w.label} is empty — ${unscheduled.length} eligible ${eligibleCats.join('/')} task${unscheduled.length > 1 ? 's' : ''} scored below scheduling threshold (highest score: ${scored[0].score})`);
+            missingExplanations.push(`${w.label} is empty — ${unscheduled.length} eligible ${eligibleCats.join('/')} task${unscheduled.length > 1 ? 's' : ''} in backlog (top score: ${scored[0].score}); higher-priority work filled the day's slots first`);
           } else if (scheduledElsewhere.length > 0) {
             missingExplanations.push(`${w.label} is empty — ${scheduledElsewhere.length} ${eligibleCats.join('/')} task${scheduledElsewhere.length > 1 ? 's' : ''} scheduled on other days`);
           } else if (scheduledTodayOtherWindow.length > 0) {
