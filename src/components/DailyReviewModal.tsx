@@ -222,26 +222,9 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
           <SheetTitle className="text-lg font-bold text-foreground">
             {reasoning.greeting}
           </SheetTitle>
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-sm text-muted-foreground">
-              {format(new Date(), 'EEEE, MMMM d')}
-            </p>
-            {/* Auth provenance badge — proves which user the run is bound to */}
-            <Badge
-              variant="outline"
-              className={cn(
-                "text-[10px] h-5 px-1.5",
-                reasoning.authProvenance.isDemoUserId
-                  ? "bg-amber-500/10 text-amber-600 border-amber-500/30"
-                  : "bg-primary/10 text-primary border-primary/30"
-              )}
-              title={`${reasoning.authProvenance.hostname} · ${reasoning.authProvenance.userId ?? 'no-user'}`}
-            >
-              {reasoning.authProvenance.isDemoUserId
-                ? 'Demo data'
-                : `Live: ${user?.email ?? reasoning.authProvenance.userId?.slice(0, 8)}`}
-            </Badge>
-          </div>
+          <p className="text-sm text-muted-foreground">
+            {format(new Date(), 'EEEE, MMMM d')}
+          </p>
         </SheetHeader>
 
         <ScrollArea className="flex-1 min-h-0">
@@ -269,24 +252,7 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
                   <div className="text-xs text-amber-600/80">Rolled Over Today</div>
                 </div>
               )}
-              {reasoning.stats.pendingAssignmentCount > 0 && (
-                <div className="bg-primary/5 border border-primary/20 rounded-lg p-3 text-center">
-                  <div className="text-2xl font-bold text-primary">
-                    {reasoning.stats.assignmentsScheduledToday}
-                    <span className="text-sm font-normal text-muted-foreground">/{reasoning.stats.pendingAssignmentCount}</span>
-                  </div>
-                  <div className="text-xs text-muted-foreground flex items-center justify-center gap-1">
-                    <BookOpen className="h-3 w-3" />
-                    Assignments
-                  </div>
-                </div>
-              )}
             </div>
-            {reasoning.stats.backlogOverdue > 0 && (
-              <p className="text-xs text-muted-foreground px-1">
-                + {reasoning.stats.backlogOverdue} overdue task{reasoning.stats.backlogOverdue > 1 ? 's' : ''} in backlog (not scheduled today)
-              </p>
-            )}
 
             {/* Schedule Reasoning */}
             {(reasoning.explanations.length > 0 || reasoning.missingExplanations.length > 0) && (
