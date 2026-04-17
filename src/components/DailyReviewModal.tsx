@@ -409,37 +409,41 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
               );
             })()}
 
-            {/* Schedule Reasoning — top-line bullets only, full reasoning behind disclosure */}
-            {(reasoning.explanations.length > 0 || reasoning.missingExplanations.length > 0) && (
-              <div className="bg-muted/50 rounded-lg p-3 space-y-2">
-                <div className="flex items-center gap-1.5 text-sm font-medium text-foreground">
-                  <Info className="h-4 w-4 text-primary" />
-                  How we built today
-                </div>
-                {reasoning.explanations.slice(0, 3).map((exp, i) => (
-                  <p key={i} className="text-xs text-muted-foreground pl-5">• {exp}</p>
-                ))}
-                {reasoning.missingExplanations.slice(0, 2).map((exp, i) => (
-                  <p key={`m-${i}`} className="text-xs text-amber-600 dark:text-amber-400 pl-5">• {exp}</p>
-                ))}
-                {(reasoning.explanations.length > 3 || reasoning.missingExplanations.length > 2) && (
-                  <Collapsible>
-                    <CollapsibleTrigger className="flex items-center gap-1 text-[11px] text-primary pl-5 hover:underline">
-                      <ChevronDown className="h-3 w-3" />
-                      Show full reasoning ({reasoning.explanations.length + reasoning.missingExplanations.length - 5} more)
-                    </CollapsibleTrigger>
-                    <CollapsibleContent className="space-y-1 pt-1">
-                      {reasoning.explanations.slice(3).map((exp, i) => (
-                        <p key={`e-rest-${i}`} className="text-xs text-muted-foreground pl-5">• {exp}</p>
-                      ))}
-                      {reasoning.missingExplanations.slice(2).map((exp, i) => (
-                        <p key={`m-rest-${i}`} className="text-xs text-amber-600 dark:text-amber-400 pl-5">• {exp}</p>
-                      ))}
-                    </CollapsibleContent>
-                  </Collapsible>
-                )}
+            {/* Schedule Reasoning — always rendered, sentinel bullet when both lists empty */}
+            <div className="bg-muted/50 rounded-lg p-3 space-y-2">
+              <div className="flex items-center gap-1.5 text-sm font-medium text-foreground">
+                <Info className="h-4 w-4 text-primary" />
+                How we built today
               </div>
-            )}
+              {reasoning.explanations.length === 0 && reasoning.missingExplanations.length === 0 ? (
+                <p className="text-xs text-muted-foreground pl-5">• Schedule built — no notable adjustments to report</p>
+              ) : (
+                <>
+                  {reasoning.explanations.slice(0, 3).map((exp, i) => (
+                    <p key={i} className="text-xs text-muted-foreground pl-5">• {exp}</p>
+                  ))}
+                  {reasoning.missingExplanations.slice(0, 2).map((exp, i) => (
+                    <p key={`m-${i}`} className="text-xs text-amber-600 dark:text-amber-400 pl-5">• {exp}</p>
+                  ))}
+                  {(reasoning.explanations.length > 3 || reasoning.missingExplanations.length > 2) && (
+                    <Collapsible>
+                      <CollapsibleTrigger className="flex items-center gap-1 text-[11px] text-primary pl-5 hover:underline">
+                        <ChevronDown className="h-3 w-3" />
+                        Show full reasoning ({reasoning.explanations.length + reasoning.missingExplanations.length - 5} more)
+                      </CollapsibleTrigger>
+                      <CollapsibleContent className="space-y-1 pt-1">
+                        {reasoning.explanations.slice(3).map((exp, i) => (
+                          <p key={`e-rest-${i}`} className="text-xs text-muted-foreground pl-5">• {exp}</p>
+                        ))}
+                        {reasoning.missingExplanations.slice(2).map((exp, i) => (
+                          <p key={`m-rest-${i}`} className="text-xs text-amber-600 dark:text-amber-400 pl-5">• {exp}</p>
+                        ))}
+                      </CollapsibleContent>
+                    </Collapsible>
+                  )}
+                </>
+              )}
+            </div>
 
             {/* QC Violations — hard rule breaches like "mall at 9pm" */}
             {reasoning.qcViolations.length > 0 && (
