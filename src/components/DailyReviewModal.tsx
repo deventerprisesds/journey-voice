@@ -48,6 +48,51 @@ const priorityColors: Record<string, string> = {
   URGENT: 'bg-destructive/10 text-destructive border-destructive/20',
 };
 
+// Renders a single window-summary row. "Eligible but not placed" lives behind
+// a per-row collapsible so the modal stays scannable on narrow viewports (411px).
+const WindowSummaryRow: React.FC<{ ws: import('@/utils/dailyReviewPipeline').WindowSummary }> = ({ ws }) => (
+  <div className="py-1.5 px-2 rounded-md bg-card border border-border space-y-1">
+    <div className="flex items-center justify-between">
+      <div className="flex items-center gap-2 text-sm text-foreground">
+        {windowIcons[ws.window]}
+        {ws.label}
+      </div>
+      <span className={cn(
+        "text-xs",
+        ws.taskCount > 0 ? "text-foreground" : "text-muted-foreground"
+      )}>
+        {ws.capacityNote}
+      </span>
+    </div>
+    {ws.taskCount > 0 && Object.keys(ws.categoryBreakdown).length > 0 && (
+      <div className="pl-6 text-xs text-muted-foreground">
+        Placed: {Object.entries(ws.categoryBreakdown).map(([cat, count]) => `${cat}(${count})`).join(', ')}
+      </div>
+    )}
+    {ws.missingCategories.length > 0 && (
+      <div className="pl-6 text-xs text-amber-600 dark:text-amber-400">
+        {ws.missingCategories.map(cat => `⚠ No ${cat} tasks placed`).join(' · ')}
+      </div>
+    )}
+    {ws.eligibleUnscheduled.length > 0 && (
+      <Collapsible>
+        <CollapsibleTrigger className="flex items-center gap-1 pl-6 text-[11px] text-primary hover:underline">
+          <ChevronDown className="h-3 w-3" />
+          {ws.eligibleUnscheduled.length} eligible but not placed
+        </CollapsibleTrigger>
+        <CollapsibleContent className="pl-6 text-[11px] text-muted-foreground space-y-0.5 pt-1">
+          {ws.eligibleUnscheduled.slice(0, 5).map(t => (
+            <div key={t.id} className="truncate">• {t.title} <span className="opacity-60">({t.reason})</span></div>
+          ))}
+          {ws.eligibleUnscheduled.length > 5 && (
+            <div className="opacity-60">+ {ws.eligibleUnscheduled.length - 5} more</div>
+          )}
+        </CollapsibleContent>
+      </Collapsible>
+    )}
+  </div>
+);
+
 const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
   open, onClose, tasks, externalEvents, onTaskUpdate
 }) => {
