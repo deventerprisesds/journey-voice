@@ -222,26 +222,9 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
           <SheetTitle className="text-lg font-bold text-foreground">
             {reasoning.greeting}
           </SheetTitle>
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-sm text-muted-foreground">
-              {format(new Date(), 'EEEE, MMMM d')}
-            </p>
-            {/* Auth provenance badge — proves which user the run is bound to */}
-            <Badge
-              variant="outline"
-              className={cn(
-                "text-[10px] h-5 px-1.5",
-                reasoning.authProvenance.isDemoUserId
-                  ? "bg-amber-500/10 text-amber-600 border-amber-500/30"
-                  : "bg-primary/10 text-primary border-primary/30"
-              )}
-              title={`${reasoning.authProvenance.hostname} · ${reasoning.authProvenance.userId ?? 'no-user'}`}
-            >
-              {reasoning.authProvenance.isDemoUserId
-                ? 'Demo data'
-                : `Live: ${user?.email ?? reasoning.authProvenance.userId?.slice(0, 8)}`}
-            </Badge>
-          </div>
+          <p className="text-sm text-muted-foreground">
+            {format(new Date(), 'EEEE, MMMM d')}
+          </p>
         </SheetHeader>
 
         <ScrollArea className="flex-1 min-h-0">
