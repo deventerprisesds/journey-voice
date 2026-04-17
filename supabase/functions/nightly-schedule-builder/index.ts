@@ -991,14 +991,13 @@ serve(async (req) => {
               // Topic-mapped — organizational nudge only (not the same as user priority)
               if (mappedIds.includes(task.id)) score += 2;
               
-              // Pushed count: diminishing returns after 3
+              // Pushed-count: soft signal only — never bury a task because the system
+              // failed to schedule it. is_priority items skip even the mild -1 hint.
               if (task.pushed_count && task.pushed_count > 0) {
-                if (task.pushed_count <= 3) {
-                  score += task.pushed_count; // +1, +2, +3
-                } else {
-                  score += 3; // cap the bonus at 3
-                  score -= (task.pushed_count - 3); // then penalize staleness
-                }
+                const n = task.pushed_count;
+                if (n <= 3) score += 1;
+                else if (n <= 7) { /* neutral */ }
+                else if (!(task as any).is_priority) score -= 1;
               }
               
               // Urgency ladder: ±48h includes overdue (intentional)
