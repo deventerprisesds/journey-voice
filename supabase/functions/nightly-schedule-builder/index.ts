@@ -1,6 +1,14 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { DEFAULT_TIME_WINDOWS, DEFAULT_CATEGORY_MAPPINGS, resolveConfig, validateTaskWindow } from "../_shared/scheduling-defaults.ts";
+import {
+  DEFAULT_TIME_WINDOWS,
+  DEFAULT_CATEGORY_MAPPINGS,
+  resolveConfig,
+  validateTaskWindow,
+  MAX_ASSIGNMENTS_PER_DAY,
+  ASSIGNMENT_URGENT_HOURS,
+  ASSIGNMENT_PRIORITY_DAYS,
+} from "../_shared/scheduling-defaults.ts";
 import { getTodayInTimezone } from "../_shared/timezone.ts";
 
 const corsHeaders = {
