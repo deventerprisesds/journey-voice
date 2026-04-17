@@ -1431,6 +1431,14 @@ serve(async (req) => {
           totalScheduled: totalScheduledAcrossWeek,
           daysProcessed: totalDays,
           weekResults,
+          assignmentTiers: {
+            tierA: tierA.length,
+            tierB: tierB.length,
+            tierC: tierC.length,
+            tierAResults,
+            topUpPlaced,
+            dailyAssignmentCount,
+          },
         };
 
       } catch (userError) {
