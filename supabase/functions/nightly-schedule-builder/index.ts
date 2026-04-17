@@ -1058,31 +1058,39 @@ serve(async (req) => {
               return { ...task, score: Math.max(score, 0), isPriorityBoard: mappedIds.includes(task.id) };
             });
 
-          // Sort: assignments first by tier (B before C, due-asc within B, due-desc within C),
-          // then non-assignment tasks by score. This makes Pass 1B/1C effectively a sort layer
-          // over the existing single placement loop, and Pass 2 (non-assignment) runs after.
+          // Sort: Tier A → Tier B → everything else (Tier C + non-assignment) competes on
+          // is_priority → priority_rank → score → due_date NULLS LAST.
+          // Per approved plan: Tier A/B keep deadline-jump behavior (immovable external dates);
+          // Tier C no longer auto-jumps priority-board work.
           scoredCandidates.sort((a, b) => {
             const aTier = (a as any).assignment_id ? (assignmentTier[a.id] || 'C') : null;
             const bTier = (b as any).assignment_id ? (assignmentTier[b.id] || 'C') : null;
 
-            // Assignments before non-assignments
-            if (aTier && !bTier) return -1;
-            if (!aTier && bTier) return 1;
+            // Tier A always first
+            const aIsAB = aTier === 'A' || aTier === 'B';
+            const bIsAB = bTier === 'A' || bTier === 'B';
+            if (aIsAB && !bIsAB) return -1;
+            if (!aIsAB && bIsAB) return 1;
 
-            // Both are assignments — apply tier order then per-tier due sort
-            if (aTier && bTier) {
-              if (aTier !== bTier) {
-                // Tier A first, then B, then C (Tier A is normally pre-placed, but defensive)
-                const order = { A: 0, B: 1, C: 2 } as const;
-                return order[aTier] - order[bTier];
-              }
+            // Both are A/B — A before B, then due ASC within each tier
+            if (aIsAB && bIsAB) {
+              if (aTier !== bTier) return aTier === 'A' ? -1 : 1;
               const aDue = a.due_date ? new Date(a.due_date).getTime() : Infinity;
               const bDue = b.due_date ? new Date(b.due_date).getTime() : Infinity;
-              return aTier === 'C' ? bDue - aDue : aDue - bDue;
+              return aDue - bDue;
             }
 
-            // Both non-assignment — existing score-based sort
+            // Everyone else (Tier C + non-assignment) competes on the same comparator
+            const aPri = (a as any).is_priority ? 1 : 0;
+            const bPri = (b as any).is_priority ? 1 : 0;
+            if (aPri !== bPri) return bPri - aPri;
+            if (aPri && bPri) {
+              const aRank = (a as any).priority_rank ?? 9999;
+              const bRank = (b as any).priority_rank ?? 9999;
+              if (aRank !== bRank) return aRank - bRank;
+            }
             if (b.score !== a.score) return b.score - a.score;
+            // due_date ASC NULLS LAST
             if (a.due_date && b.due_date) return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
             if (a.due_date) return -1;
             if (b.due_date) return 1;
