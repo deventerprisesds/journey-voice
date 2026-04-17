@@ -1,65 +1,62 @@
 
-## What you're seeing & the two real problems
+## Why I missed the rules and how to enforce reading them
 
-### Problem 1 — "Reject instead of shuffle" is the core scheduling bug
+### Honest answer
+I didn't fail because the rules are hidden — they're in `.lovable/rules.md`, the memory index Core section, and `mem://infrastructure/timezone-normalization-architecture`, all of which load into my context every turn. I failed because I treated them as background reference instead of a pre-flight gate. When you asked about scheduling/calendar bugs, I jumped to symptom analysis (calendar query, modal layout) instead of first auditing the changed files against the forbidden-pattern list. That's a process failure, not a missing-doc failure.
 
-The builder treats the AI scheduler's response as final: if `batch-calendar-scheduler` rejects a slot (overlap, window mismatch, AI didn't return one), the candidate is **dropped silently for the day** instead of being re-tried in another valid window or shuffled around busy slots. That's why business hours show empty bands while accepted candidates list more.
+### What will actually fix this (durable, not just "I'll try harder")
 
-The Pass-3 top-up I added only pulls *deferred Tier B/C* into open slots — it doesn't retry rejected non-assignment items. So priority-board work that gets bumped by a calendar event or AI miss is just... gone for the day.
+**1. Add a hard pre-flight gate to Core memory**
+Update `mem://index.md` Core section with a one-line non-negotiable rule that forces a checklist before any scheduling/calendar/timezone plan:
 
-**Root cause:** No reshuffle pass. The pipeline is "select → AI place → commit OR drop." It needs "select → AI place → commit → for rejected, retry in next valid window → commit OR defer with reason."
+```
+PRE-FLIGHT (scheduling/calendar/timezone/modal): Before planning, grep changed files for forbidden patterns: Date.UTC, new Date().getDay/getHours, toISOString().split, isToday, format(date,'yyyy-MM-dd'). List violations in plan. Confirm shared helpers (localDateToUtcBounds, getTimePartsInTimezone, dateToKeyInTimezone, get_calendar_connections_safe RPC) are used. No plan ships without this audit section.
+```
 
-### Problem 2 — Modal grid breaks at narrow widths (≤411px)
+Core rules are always in context and apply to every action — this turns the audit into a required plan section, not an optional reference.
 
-`DailyReviewModal` uses `grid-cols-2 md:grid-cols-4` for the stat tiles. At your 411px viewport, the 4-tile row tries to render 2-up, but the recently-added **Assignments tile** (full-width row added in the prior plan) is being rendered *inside* the same grid as a 5th item, which collapses badly when there's no breakpoint between mobile and `md:`. Assignments tile also doesn't show calendar/external-event status, so when it says "0/32" you can't tell if the scheduler even checked your calendar.
+**2. Add a dedicated pre-flight memory**
+Create `mem://constraints/scheduling-preflight-audit` with the explicit grep list, the helper inventory, and the "audit must appear in plan" requirement. Indexed so it surfaces on any scheduling/calendar topic match.
 
-## Plan — 3 surgical fixes
+**3. Restructure plan template for these topics**
+Every scheduling/calendar/modal plan must open with a "Pre-flight audit" section listing:
+- Files inspected
+- Forbidden patterns found (with line numbers) or "none"
+- Shared helpers that should replace them
+- Existing memory rules invoked
 
-### Fix 1 — Add a reshuffle/retry pass for AI-rejected candidates
-**File:** `supabase/functions/nightly-schedule-builder/index.ts`
+If that section is missing or empty, the plan is incomplete.
 
-Per day, after the main `batch-calendar-scheduler` call:
-1. Compute `rejected = selected − committed`
-2. For each rejected candidate, identify **next valid window** (next allowed window for the task's category that still has capacity for the day)
-3. Single retry call to `batch-calendar-scheduler` with rejected set + expanded window list (all category-allowed windows, not just preferred)
-4. Commit any successes; remaining failures get logged to `activity_log` as `RESCHEDULE_DEFERRED` with reason (window-full, all-windows-tried, AI-no-slot)
+### Plan for this turn (carry forward the previously approved fixes)
 
-Cap retries at 1 per day to prevent runaway. This is the same retry mechanism already approved in the prior plan but applied to **all rejected candidates**, not just assignments.
+Apply the 5 fixes from the prior approved plan, plus the memory/process changes above:
 
-### Fix 2 — Daily Review modal layout for narrow viewports
-**File:** `src/components/DailyReviewModal.tsx`
+1. **`supabase/functions/nightly-schedule-builder/index.ts`** — singleDay clear uses `localDateToUtcBounds(todayISO, timezone)`; calendar_status uses `get_calendar_connections_safe` RPC with tri-state output (`connected_with_events`, `connected_no_events`, `not_connected`, `query_failed`); stale-cutoff uses `dateToKeyInTimezone`.
 
-- Stat tiles: `grid-cols-2` always (no `md:grid-cols-4`). 4 tiles stack 2×2 cleanly at any width.
-- Assignments tile: separate **full-width row below** the 2×2 grid (not inside it). Always rendered.
-- Add a **second full-width row**: "Calendar Status" tile showing `N events synced today · M busy slots respected` OR `No external calendar events for today` so users know the scheduler actually checked.
-- AI conversation panel: wrap `recentAssistantMessages` in its own scroll container (`max-h-[30vh] overflow-y-auto`) above the chat input. Confirm/Fill Gaps stay visible.
+2. **`src/utils/dailyReviewPipeline.ts`** — greeting hour from `getTimePartsInTimezone`; surface tri-state calendar status in pipeline message.
 
-### Fix 3 — Pipeline messaging includes calendar outcome
-**File:** `src/utils/dailyReviewPipeline.ts`
+3. **`src/components/DailyReviewModal.tsx`** — weekend detection from timezone helper (new `getDayOfWeekInTimezone` if needed); tri-state Calendar tile copy; collapse "eligible but not placed" details behind `<Collapsible>` (default closed); trim window summary to top 3 with "Show all".
 
-Add to the `ASSIGNMENT_QC` / today summary:
-- `calendar_status`: `{ events_today: N, busy_slots_used: M, source: ['google', 'outlook'] }` from existing builder logs
-- Pipeline message line: `"Checked X calendar events on Y connected calendars — N slots reserved as busy."` (or "No calendar events for today" when zero)
-- Reshuffle outcome line: `"Z tasks reshuffled into alternate windows; W deferred — see Fill Gaps."`
+4. **`src/lib/date.ts`** — add `getDayOfWeekInTimezone(timezone)` if not already present.
 
-## Files
+5. **`mem://index.md`** — add PRE-FLIGHT Core rule.
 
-1. `supabase/functions/nightly-schedule-builder/index.ts` — reshuffle pass (Fix 1)
-2. `src/components/DailyReviewModal.tsx` — 2×2 grid + Assignments + Calendar tiles + AI panel scroll (Fix 2)
-3. `src/utils/dailyReviewPipeline.ts` — calendar status + reshuffle messaging (Fix 3)
+6. **`mem://constraints/scheduling-preflight-audit`** — new memory file with grep list + helper inventory + plan-section requirement.
 
-## Will NOT touch
+### Files touched
+- `supabase/functions/nightly-schedule-builder/index.ts`
+- `src/utils/dailyReviewPipeline.ts`
+- `src/components/DailyReviewModal.tsx`
+- `src/lib/date.ts`
+- `mem://index.md`
+- `mem://constraints/scheduling-preflight-audit`
 
-- Tier classification, scoring (Email AI professor fix from prior approved plan still applies)
-- Pass 1A/1B/1C assignment placement
-- External calendar sync logic, busy-slot detection, two-way deletion safeguard
-- Window validation, buffer, alignment, dedup, history snapshot
+### Will NOT touch
+Tier classification, scoring, Pass 1A/1B/1C, reshuffle pass, window validation, buffer/alignment, two-way sync deletion safeguard, calendar OAuth/sync internals.
 
-## Acceptance gate
-
-1. Modal renders cleanly at 411px (your current viewport): 2×2 stats, full-width Assignments tile, full-width Calendar tile, scrollable AI panel, visible Confirm button
-2. Calendar tile shows event count OR "No external calendar events for today" — never silent
-3. Builder log shows `RESCHEDULE_RETRY` step with rejected→retried→committed counts
-4. Business hours block fills more completely: rejected candidates from preferred window get a second shot in alternate windows
-5. `RESCHEDULE_DEFERRED` log entries explain *why* a task didn't fit (not silent drops)
-6. Tier A/B assignments still pre-place; calendar busy slots still respected
+### Acceptance
+1. No `Date.UTC`, `new Date().getDay/getHours`, `toISOString().split('T')[0]` remain in scheduling/modal paths
+2. Modal Calendar tile matches Focus View via shared RPC
+3. Single-day reschedule scoped to local day only
+4. Modal at 411px shows top stats by default; details opt-in
+5. New Core rule + preflight memory in place — next scheduling plan must open with audit section
