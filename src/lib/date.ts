@@ -275,3 +275,33 @@ export function dateToKeyInTimezone(date: Date, timezone: string): string {
     return date.toLocaleDateString('en-CA');
   }
 }
+
+/**
+ * Get day-of-week (0=Sun..6=Sat) for "now" in the given timezone.
+ * USE THIS instead of `new Date().getDay()` which returns the browser-local day
+ * and silently breaks for users in other zones across midnight boundaries.
+ * @param timezone - IANA timezone string
+ * @returns 0 (Sunday) through 6 (Saturday)
+ */
+export function getDayOfWeekInTimezone(timezone: string): number {
+  try {
+    const weekday = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      weekday: 'short',
+    }).format(new Date());
+    const map: Record<string, number> = {
+      Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6,
+    };
+    return map[weekday] ?? new Date().getDay();
+  } catch {
+    return new Date().getDay();
+  }
+}
+
+/**
+ * True if "now" falls on Saturday or Sunday in the given timezone.
+ */
+export function isWeekendInTimezone(timezone: string): boolean {
+  const dow = getDayOfWeekInTimezone(timezone);
+  return dow === 0 || dow === 6;
+}
