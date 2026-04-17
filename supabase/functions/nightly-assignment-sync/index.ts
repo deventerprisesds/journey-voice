@@ -28,20 +28,85 @@ serve(async (req) => {
     }
 
     const now = new Date();
-    // Use timezone-aware "today" so the 30-day archive cutoff matches the user's local day
+    // Timezone-aware "today" so the 30-day archive cutoff matches the user's local day
     const todayISO = getTodayInTimezone(timezone);
-    const futureDate = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
-    const futureDateISO = futureDate.toISOString().split('T')[0];
+    const [ty, tm, td] = todayISO.split('-').map(Number);
+    const todayLocalAsUtc = new Date(Date.UTC(ty, tm - 1, td));
+    const thirtyDaysAgo = new Date(todayLocalAsUtc.getTime() - 30 * 24 * 60 * 60 * 1000)
+      .toISOString().split('T')[0];
 
-    console.log(`[ASSIGNMENT_SYNC] Starting for user ${userId} (${timezone}), today=${todayISO}, window: ${todayISO} to ${futureDateISO}`);
+    console.log(`[ASSIGNMENT_SYNC] Starting for user ${userId} (${timezone}), today=${todayISO}, archive cutoff=${thirtyDaysAgo}`);
+
+    // ============================================================
+    // BATCH PRELOAD — one query per source instead of per-assignment
+    // ============================================================
+
+    // 1. Default board (one query, used for all inserts)
+    const { data: boards } = await supabase
+      .from('boards')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('is_default', true)
+      .limit(1);
+    const board = boards?.[0];
+
+    // 2. Preload ALL existing tasks for this user (single query)
+    //    We only need: id, title, status, completed_at, assignment_id
+    //    PostgREST default limit is 1000 — paginate if needed
+    const allTasks: Array<{
+      id: string;
+      title: string;
+      status: string;
+      completed_at: string | null;
+      assignment_id: string | null;
+    }> = [];
+
+    let offset = 0;
+    const PAGE = 1000;
+    while (true) {
+      const { data: page, error: pageErr } = await supabase
+        .from('tasks')
+        .select('id, title, status, completed_at, assignment_id')
+        .eq('user_id', userId)
+        .range(offset, offset + PAGE - 1);
+      if (pageErr) {
+        console.error('[ASSIGNMENT_SYNC] Error loading tasks page:', pageErr);
+        break;
+      }
+      if (!page || page.length === 0) break;
+      allTasks.push(...page);
+      if (page.length < PAGE) break;
+      offset += PAGE;
+    }
+
+    console.log(`[ASSIGNMENT_SYNC] Preloaded ${allTasks.length} existing tasks`);
+
+    // 3. Build in-memory indexes for O(1) lookups
+    const tasksByAssignmentId = new Map<string, typeof allTasks[number]>();
+    const activeTasksByTitle = new Map<string, typeof allTasks[number]>();
+    for (const t of allTasks) {
+      if (t.assignment_id) {
+        tasksByAssignmentId.set(t.assignment_id, t);
+      }
+      // Legacy match candidates: assignment_id NULL, not done, not completed
+      if (!t.assignment_id && t.completed_at == null && t.status !== 'DONE') {
+        // Index by both raw and emoji-prefixed title
+        if (!activeTasksByTitle.has(t.title)) {
+          activeTasksByTitle.set(t.title, t);
+        }
+      }
+    }
 
     const created: string[] = [];
     const skipped: string[] = [];
     const repaired: string[] = [];
+    const skippedOld: Array<{ id: string; title: string; due_date: string }> = [];
+    const noBoardSkipped: string[] = [];
 
-    // Helper: sync assignments from a table and create linked tasks
+    // ============================================================
+    // PROCESS ONE ASSIGNMENT TABLE — pure in-memory + bulk insert
+    // ============================================================
     async function syncAssignments(tableName: string, source: string) {
-      // Fetch all non-completed assignments (no narrow time window — full sync)
       const { data: assignments, error } = await supabase
         .from(tableName)
         .select('id, title, due_date, description, category, priority, level_of_effort, status, assignment_url')
@@ -52,7 +117,6 @@ serve(async (req) => {
         console.error(`[ASSIGNMENT_SYNC] Error fetching ${tableName}:`, error);
         return;
       }
-
       if (!assignments || assignments.length === 0) {
         console.log(`[ASSIGNMENT_SYNC] No assignments in ${tableName}`);
         return;
@@ -60,74 +124,51 @@ serve(async (req) => {
 
       console.log(`[ASSIGNMENT_SYNC] Found ${assignments.length} assignments in ${tableName}`);
 
+      const repairs: Array<{ taskId: string; assignmentId: string; due_date: string | null }> = [];
+      const inserts: Array<Record<string, unknown>> = [];
+
       for (const assignment of assignments) {
-        // Check if a task already exists for this assignment (by assignment_id)
-        const { data: existingTask } = await supabase
-          .from('tasks')
-          .select('id, status, completed_at')
-          .eq('user_id', userId)
-          .eq('assignment_id', assignment.id)
-          .maybeSingle();
-
-        if (existingTask) {
+        // Layer 1: assignment_id match
+        if (tasksByAssignmentId.has(assignment.id)) {
           skipped.push(assignment.id);
           continue;
         }
 
-        // SECONDARY DEDUP: exact title match for legacy tasks without assignment_id
-        // Use two separate .eq() queries to avoid PostgREST .or() comma-delimiter bugs
-        const { data: exactMatch } = await supabase
-          .from('tasks')
-          .select('id, title, status')
-          .eq('user_id', userId)
-          .is('assignment_id', null)
-          .is('completed_at', null)
-          .not('status', 'eq', 'DONE')
-          .eq('title', assignment.title)
-          .limit(1);
+        // Layer 2 + 3: legacy title match (raw OR emoji-prefixed)
+        const legacy =
+          activeTasksByTitle.get(assignment.title) ||
+          activeTasksByTitle.get(`📚 ${assignment.title}`);
 
-        const { data: emojiMatch } = !exactMatch?.length
-          ? await supabase
-              .from('tasks')
-              .select('id, title, status')
-              .eq('user_id', userId)
-              .is('assignment_id', null)
-              .is('completed_at', null)
-              .not('status', 'eq', 'DONE')
-              .eq('title', `📚 ${assignment.title}`)
-              .limit(1)
-          : { data: null };
-
-        const titleMatches = [...(exactMatch || []), ...(emojiMatch || [])];
-
-        if (titleMatches.length > 0) {
-          // Found a legacy task — link it and repair
-          const legacyTask = titleMatches[0];
-          console.log(`  🔗 Linking legacy task "${legacyTask.title}" to assignment "${assignment.title}" (id: ${assignment.id})`);
-          
-          await supabase
-            .from('tasks')
-            .update({
-              assignment_id: assignment.id,
-              due_date: assignment.due_date ? new Date(assignment.due_date).toISOString().split('T')[0] + 'T23:59:59Z' : null,
-              scheduling_context: { source },
-              updated_at: now.toISOString(),
-            })
-            .eq('id', legacyTask.id);
-          
-          repaired.push(legacyTask.id);
+        if (legacy) {
+          repairs.push({
+            taskId: legacy.id,
+            assignmentId: assignment.id,
+            due_date: assignment.due_date
+              ? new Date(assignment.due_date).toISOString().split('T')[0] + 'T23:59:59Z'
+              : null,
+          });
+          // Mark in-memory so subsequent assignments don't claim the same legacy task
+          tasksByAssignmentId.set(assignment.id, legacy);
+          activeTasksByTitle.delete(assignment.title);
+          activeTasksByTitle.delete(`📚 ${assignment.title}`);
+          repaired.push(legacy.id);
           skipped.push(assignment.id);
           continue;
         }
 
-        // Skip creating new tasks for very old past-due assignments (>30 days)
-        // Anchor cutoff to the user's local "today" for timezone correctness
-        const [ty, tm, td] = todayISO.split('-').map(Number);
-        const todayLocalAsUtc = new Date(Date.UTC(ty, tm - 1, td));
-        const thirtyDaysAgo = new Date(todayLocalAsUtc.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+        // Skip very old past-due assignments (>30 days, anchored to local today)
         if (assignment.due_date && assignment.due_date < thirtyDaysAgo) {
-          console.log(`  ⏭️ Skipping very old assignment "${assignment.title}" (due ${assignment.due_date})`);
+          skippedOld.push({
+            id: assignment.id,
+            title: assignment.title,
+            due_date: assignment.due_date,
+          });
           skipped.push(assignment.id);
+          continue;
+        }
+
+        if (!board) {
+          noBoardSkipped.push(assignment.id);
           continue;
         }
 
@@ -140,60 +181,75 @@ serve(async (req) => {
           else if (loe.includes('medium')) estimateMinutes = 90;
         }
 
-        // Get default board
-        const { data: boards } = await supabase
-          .from('boards')
-          .select('id')
-          .eq('user_id', userId)
-          .eq('is_default', true)
-          .limit(1);
-
-        const board = boards?.[0];
-        if (!board) {
-          console.error(`[ASSIGNMENT_SYNC] No default board for user ${userId}`);
-          continue;
-        }
-
-        const taskData = {
+        inserts.push({
           title: `📚 ${assignment.title}`,
           description: assignment.description || `Assignment from ${source}. Due: ${assignment.due_date}`,
           category: 'PROF_EDUCATION',
           priority: assignment.priority?.toUpperCase() || 'HIGH',
           status: 'TODO',
-          due_date: assignment.due_date ? new Date(assignment.due_date).toISOString().split('T')[0] + 'T23:59:59Z' : null,
+          due_date: assignment.due_date
+            ? new Date(assignment.due_date).toISOString().split('T')[0] + 'T23:59:59Z'
+            : null,
           estimate_minutes: estimateMinutes,
           is_scheduled: false,
           board_id: board.id,
           user_id: userId,
           assignment_id: assignment.id,
           scheduling_context: { source },
-        };
+        });
+      }
 
-        const { data: newTask, error: insertError } = await supabase
+      // ----- BULK REPAIR (chunked updates) -----
+      const REPAIR_CHUNK = 50;
+      for (let i = 0; i < repairs.length; i += REPAIR_CHUNK) {
+        const chunk = repairs.slice(i, i + REPAIR_CHUNK);
+        await Promise.all(chunk.map(r =>
+          supabase
+            .from('tasks')
+            .update({
+              assignment_id: r.assignmentId,
+              due_date: r.due_date,
+              scheduling_context: { source },
+              updated_at: now.toISOString(),
+            })
+            .eq('id', r.taskId)
+        ));
+      }
+
+      // ----- BULK INSERT (chunked) -----
+      const INSERT_CHUNK = 100;
+      for (let i = 0; i < inserts.length; i += INSERT_CHUNK) {
+        const chunk = inserts.slice(i, i + INSERT_CHUNK);
+        const { data: newRows, error: insertErr } = await supabase
           .from('tasks')
-          .insert([taskData])
-          .select('id')
-          .single();
+          .insert(chunk)
+          .select('id, assignment_id');
 
-        if (insertError) {
-          console.error(`[ASSIGNMENT_SYNC] Error creating task for "${assignment.title}":`, insertError);
-        } else {
-          created.push(newTask.id);
-          console.log(`  ✅ Created task for "${assignment.title}" (due ${assignment.due_date}, est ${estimateMinutes}m)`);
+        if (insertErr) {
+          console.error(`[ASSIGNMENT_SYNC] Bulk insert error (${source}, chunk ${i}):`, insertErr);
+        } else if (newRows) {
+          for (const row of newRows) {
+            created.push(row.id);
+            if (row.assignment_id) tasksByAssignmentId.set(row.assignment_id, row as any);
+          }
         }
       }
+
+      console.log(`[ASSIGNMENT_SYNC] ${source}: scanned=${assignments.length}, inserts=${inserts.length}, repairs=${repairs.length}, skipped_old=${skippedOld.length}`);
     }
 
-    // Sync from both assignment tables
     await syncAssignments('assignments', 'EMBA');
     await syncAssignments('assignments_mit', 'MIT');
+
+    if (!board) {
+      console.error(`[ASSIGNMENT_SYNC] ⚠️ No default board for user ${userId} — ${noBoardSkipped.length} assignments could not be promoted`);
+    }
 
     const totalProcessed = created.length + repaired.length + skipped.length;
     const skipRate = totalProcessed > 0 ? skipped.length / totalProcessed : 0;
     if (skipRate > 0.9 && totalProcessed > 10) {
-      console.warn(`[ASSIGNMENT_SYNC] ⚠️ HIGH SKIP RATE: ${(skipRate * 100).toFixed(0)}% (${skipped.length}/${totalProcessed}). Possible dedup bug or all assignments already linked.`);
+      console.warn(`[ASSIGNMENT_SYNC] ⚠️ HIGH SKIP RATE: ${(skipRate * 100).toFixed(0)}% (${skipped.length}/${totalProcessed}).`);
     }
-
 
     // Log activity
     await supabase.from('activity_log').insert({
@@ -204,6 +260,8 @@ serve(async (req) => {
         created_count: created.length,
         repaired_count: repaired.length,
         skipped_count: skipped.length,
+        skipped_old_count: skippedOld.length,
+        no_board_skipped_count: noBoardSkipped.length,
         created_ids: created,
         repaired_ids: repaired,
       },
@@ -211,9 +269,15 @@ serve(async (req) => {
 
     return new Response(JSON.stringify({
       success: true,
+      created_count: created.length,
+      repaired_count: repaired.length,
+      skipped_count: skipped.length,
+      skipped_old_count: skippedOld.length,
+      no_board_skipped_count: noBoardSkipped.length,
       created,
       repaired,
-      skipped,
+      skipped_old: skippedOld,
+      no_board_skipped: noBoardSkipped,
     }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
