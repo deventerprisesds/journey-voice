@@ -47,6 +47,7 @@ export interface ScheduleReasoning {
   qcViolations: QcViolation[];
   pipelineTrace: StepResult[];
   calendarStatus?: {
+    state: 'connected_with_events' | 'connected_no_events' | 'not_connected' | 'query_failed' | 'unknown';
     eventsToday: number;
     connectionCount: number;
     sources: string[];
@@ -323,15 +324,16 @@ export function buildDailyReviewReasoning(
         if (windowDef) {
           const windowStart = windowDef.start;
           const windowEnd = windowDef.end;
+          // TIMEZONE-SAFE: extract event hour in user's tz, never via raw new Date(...).getHours()
           const blockingEvents = externalEvents.filter(e => {
-            const eStart = new Date(e.start_time).getHours();
-            const eEnd = new Date(e.end_time).getHours();
+            const eStart = getTimePartsInTimezone(e.start_time, tz).hour;
+            const eEnd = getTimePartsInTimezone(e.end_time, tz).hour;
             return eStart < windowEnd && eEnd > windowStart;
           });
           const blockedMin = blockingEvents.reduce((sum, e) => {
-            const s = Math.max(new Date(e.start_time).getHours(), windowStart);
-            const end = Math.min(new Date(e.end_time).getHours(), windowEnd);
-            return sum + Math.max(0, (end - s) * 60);
+            const sH = Math.max(getTimePartsInTimezone(e.start_time, tz).hour, windowStart);
+            const eH = Math.min(getTimePartsInTimezone(e.end_time, tz).hour, windowEnd);
+            return sum + Math.max(0, (eH - sH) * 60);
           }, 0);
           const windowMin = (windowEnd - windowStart) * 60;
           if (blockedMin >= windowMin && blockingEvents.length > 0) {
@@ -426,16 +428,25 @@ export function buildDailyReviewReasoning(
     () => {
       const cs = (builderLog as any)?.calendar_status;
       const rs = (builderLog as any)?.reshuffle;
+      // Tri-state mapping from builder log; default to 'unknown' if no log/state present
+      let calendarStatus: ScheduleReasoning['calendarStatus'] | undefined;
+      if (cs) {
+        const rawState = cs.state as string | undefined;
+        const validStates = ['connected_with_events', 'connected_no_events', 'not_connected', 'query_failed'] as const;
+        const state = (validStates.includes(rawState as any) ? rawState : 'unknown') as ScheduleReasoning['calendarStatus']['state'];
+        calendarStatus = {
+          state,
+          eventsToday: cs.events_today ?? 0,
+          connectionCount: cs.connection_count ?? 0,
+          sources: Array.isArray(cs.sources) ? cs.sources : [],
+        };
+      }
       return {
         archivedStale: (builderLog as any)?.archived_stale ?? 0,
         totalScheduled: (builderLog as any)?.total_scheduled ?? null,
         lastRunTimestamp: (builderLog as any)?.timestamp ?? null,
         rawKeys: builderLog ? Object.keys(builderLog) : [],
-        calendarStatus: cs ? {
-          eventsToday: cs.events_today ?? 0,
-          connectionCount: cs.connection_count ?? 0,
-          sources: Array.isArray(cs.sources) ? cs.sources : [],
-        } : undefined,
+        calendarStatus,
         reshuffleOutcome: rs ? {
           attempted: rs.attempted ?? 0,
           committed: rs.committed ?? 0,
@@ -540,13 +551,17 @@ export function buildDailyReviewReasoning(
     const end = new Date(e.end_time).getTime();
     return sum + Math.round((end - start) / 60000);
   }, 0);
-  // Calendar status messaging — proves the scheduler checked external calendars
+  // Calendar status messaging — tri-state, never silent
   const cs = builderMerge.calendarStatus;
-  if (cs && cs.connectionCount > 0) {
-    if (cs.eventsToday > 0) {
+  if (cs) {
+    if (cs.state === 'connected_with_events') {
       explanations.push(`Checked ${cs.eventsToday} calendar event${cs.eventsToday > 1 ? 's' : ''} on ${cs.connectionCount} connected calendar${cs.connectionCount > 1 ? 's' : ''} — ${externalMinutes} min reserved as busy`);
-    } else {
+    } else if (cs.state === 'connected_no_events') {
       explanations.push(`No external calendar events for today (${cs.connectionCount} calendar${cs.connectionCount > 1 ? 's' : ''} connected, checked)`);
+    } else if (cs.state === 'not_connected') {
+      explanations.push(`No external calendars connected — connect one in Settings to block out meetings automatically`);
+    } else if (cs.state === 'query_failed') {
+      explanations.push(`Calendar status unavailable — could not verify connections this run`);
     }
   } else if (externalEvents.length > 0) {
     explanations.push(`${externalEvents.length} calendar event${externalEvents.length > 1 ? 's' : ''} blocking ${externalMinutes} min total`);
@@ -565,8 +580,8 @@ export function buildDailyReviewReasoning(
     ...assignmentQC.explanations,
   ];
 
-  // ── Build greeting ──
-  const hour = new Date().getHours();
+  // ── Build greeting (TIMEZONE-SAFE: derive hour in user's tz, never new Date().getHours()) ──
+  const { hour } = getTimePartsInTimezone(new Date().toISOString(), tz);
   const greetingWord = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
 
   // Backlog overdue IDs (mirror of count in SCOPE_STATS, exposed for UI traceability)
