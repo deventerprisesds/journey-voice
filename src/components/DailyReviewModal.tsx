@@ -101,6 +101,7 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
   const { user } = useAuth();
   const { sendMessage, messages, isLoading: chatLoading } = useChatAssistant();
   const [chatInput, setChatInput] = useState('');
+  const [quotaExhausted, setQuotaExhausted] = useState(false);
   const [isConfirming, setIsConfirming] = useState(false);
   const [builderLog, setBuilderLog] = useState<any>(null);
   const [userConfig, setUserConfig] = useState<any>(null);
@@ -322,8 +323,12 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
 
     try {
       const result = await sendMessage(msg, { dayContext, interface: 'daily_review' });
-      if (!result || !result.assistantContent || !result.assistantContent.trim()) {
+      if (result?.assistantContent && /credits exhausted|quota/i.test(result.assistantContent)) {
+        setQuotaExhausted(true);
+      } else if (!result || !result.assistantContent || !result.assistantContent.trim()) {
         toast.error('Iris reached the assistant but returned no reply — try rephrasing.');
+      } else {
+        setQuotaExhausted(false);
       }
     } catch (e) {
       console.error('[DailyReviewModal] chat error:', e);
@@ -681,6 +686,22 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
 
         {/* Chat Input + Actions */}
         <div className="border-t border-border p-3 space-y-2 shrink-0 bg-background">
+          {quotaExhausted && (
+            <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
+              <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <p className="font-medium">Iris is offline — AI credits exhausted.</p>
+                <a
+                  href="https://platform.openai.com/settings/organization/billing"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline underline-offset-2 hover:opacity-80"
+                >
+                  Add credits to OpenAI
+                </a>
+              </div>
+            </div>
+          )}
           <div className="flex gap-2">
             <Input
               value={chatInput}

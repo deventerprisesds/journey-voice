@@ -1125,6 +1125,8 @@ ${contextualInstructions || ''}`;
       if (runStatus !== 'completed') {
         // Fetch run details to surface the real failure reason (e.g. quota, rate limit)
         let lastErrorMsg = '';
+        let isQuota = false;
+        let quotaMsg = '';
         try {
           const runDetail = await fetch(
             `https://api.openai.com/v1/threads/${openaiThreadId}/runs/${runId}`,
@@ -1141,13 +1143,40 @@ ${contextualInstructions || ''}`;
             const msg = detail?.last_error?.message || '';
             lastErrorMsg = `${code}: ${msg}`;
             console.error(`[HYBRID] Run ${runStatus} — last_error:`, JSON.stringify(detail?.last_error));
-            if (code === 'rate_limit_exceeded' || /quota/i.test(msg)) {
-              throw new Error(`OpenAI quota exceeded. Add credits at platform.openai.com/billing or rotate OPENAI_API_KEY. (${msg})`);
+            if (code === 'rate_limit_exceeded' || code === 'insufficient_quota' || /quota/i.test(msg)) {
+              isQuota = true;
+              quotaMsg = msg || 'OpenAI quota exceeded';
             }
           }
         } catch (detailErr) {
-          if (detailErr instanceof Error && detailErr.message.startsWith('OpenAI quota')) throw detailErr;
+          console.error('[HYBRID] Failed to fetch run details:', detailErr);
         }
+
+        if (isQuota) {
+          // Log to error_log so QuotaAlertBanner picks it up
+          try {
+            await supabase.from('error_log').insert({
+              error_type: 'quota_exceeded_openai',
+              error_message: quotaMsg,
+              source: 'hybrid-assistant-api',
+              component: 'openai_assistant_run',
+              user_id: userId,
+              context: { thread_id: openaiThreadId, run_id: runId }
+            });
+          } catch (logErr) {
+            console.error('[HYBRID] Failed to log quota error:', logErr);
+          }
+          return new Response(JSON.stringify({
+            success: false,
+            code: 'QUOTA_EXCEEDED',
+            provider: 'openai',
+            error: `OpenAI credits exhausted. Add credits at platform.openai.com/billing. (${quotaMsg})`
+          }), {
+            status: 200,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+          });
+        }
+
         throw new Error(`Run did not complete successfully. Status: ${runStatus}${lastErrorMsg ? ` (${lastErrorMsg})` : ''}`);
       }
 
