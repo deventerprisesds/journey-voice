@@ -332,16 +332,33 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
     setTimeout(() => onTaskUpdate(), 2000);
   };
 
-  // Render assistant messages produced AFTER the modal opened. To avoid the
-  // "panel shows nothing" oscillation we ALSO show the in-flight loading
-  // bubble whenever the user has sent in this session.
-  const recentAssistantMessages = hasSentInSession
-    ? messages.filter(m => {
-        if (m.role !== 'assistant') return false;
+  // Replay-on-open: show last 10 thread messages so context is never lost.
+  // Tag stale messages (>30 min old, or sent before the modal opened in this
+  // session) with a muted timestamp instead of hiding them. After the user
+  // sends in this session, prefer in-session messages but still keep the tail
+  // for continuity.
+  const STALE_THRESHOLD_MS = 30 * 60 * 1000;
+  const shownMessages = (() => {
+    const all = messages
+      .filter(m => m.role === 'assistant' || m.role === 'user')
+      .map(m => {
         const ts = m.timestamp instanceof Date ? m.timestamp.getTime() : new Date(m.timestamp as any).getTime();
-        return Number.isFinite(ts) && ts >= openedAtRef.current;
+        return { ...m, _ts: Number.isFinite(ts) ? ts : 0 };
       })
-    : [];
+      .sort((a, b) => a._ts - b._ts);
+
+    // Take last 10 (replay tail)
+    const tail = all.slice(-10);
+    const now = Date.now();
+    return tail.map(m => ({
+      ...m,
+      isStale: m._ts < openedAtRef.current || (now - m._ts) > STALE_THRESHOLD_MS,
+      isInSession: m._ts >= openedAtRef.current,
+    }));
+  })();
+
+  // Backwards-compat alias used downstream (panel renders this)
+  const recentAssistantMessages = shownMessages;
 
   // Diagnostic log so we can see chat isolation working in the console
   if (open) {
