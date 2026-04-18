@@ -1223,20 +1223,54 @@ serve(async (req) => {
   }
 
   try {
-    const { 
-      userInput, 
-      userId, 
-      threadId, 
+    const body = await req.json();
+    const {
+      userInput,
+      userId,
+      threadId,
       assistantId = Deno.env.get('OPENAI_ASSISTANT_ID') || 'asst_BcZBxlx7zH8VIPvfJrhPP3EF',
       dbAssistantId,
-      contextualInstructions,
-      stream = false  // New: streaming flag
-    } = await req.json();
+      contextualInstructions: rawContextual,
+      dayContext,             // NEW: structured day snapshot for itinerary mode
+      interface: ifaceParam,  // NEW: 'daily_review' | 'chat' | 'phone'
+      stream = false
+    } = body || {};
 
-    console.log(`[HYBRID] Processing request for user ${userId}, stream=${stream}`);
+    const iface = ifaceParam || (dayContext ? 'daily_review' : 'chat');
+
+    // Build itinerary system prompt when in daily-review mode
+    let contextualInstructions: string | undefined = rawContextual;
+    if (iface === 'daily_review' && dayContext) {
+      const itineraryPreamble = `ITINERARY COPILOT MODE
+You are reviewing the user's plan for ${dayContext.date} (${dayContext.timezone}). The DAY_CONTEXT JSON below is the SINGLE SOURCE OF TRUTH — never invent task IDs, scores, gaps, or assignments not in it. Always cite tasks by exact title.
+
+CAPABILITIES (call directly when applicable, no preamble):
+- update_task → mark DONE, change status/priority. Confirm before mutating.
+- reschedule_task / move_task_to_day → move a task. Confirm before mutating.
+- swap_task_order → reorder two same-day tasks.
+- explain_task_score → answer "why scored so high / why this over that". Read-only — execute immediately.
+- find_open_slots → answer "where's the gap / what could fit in morning". Read-only.
+- list_pending_assignments → answer "is anything due this week I'm missing".
+- set_priority_rank → "make X my top priority".
+- quick_create_task → "I need to call John today". Confirm placement before mutating.
+- parse_and_create_tasks → multi-task NL.
+
+BEHAVIORAL RULES:
+1. Confirm before any state-changing tool: summarize ("I'll move X from 9pm to 7am — confirm?") and wait for yes/no.
+2. NEVER ask the user for a specific time. Use find_open_slots and propose.
+3. ALWAYS emit a final natural-language reply after tool calls — never empty.
+4. When the user asks WHY, call explain_task_score with the exact ID from DAY_CONTEXT.
+
+DAY_CONTEXT (JSON):
+${JSON.stringify(dayContext)}
+`;
+      contextualInstructions = (rawContextual ? rawContextual + '\n\n' : '') + itineraryPreamble;
+    }
+
+    console.log(`[HYBRID] Processing request for user ${userId}, stream=${stream}, interface=${iface}, dayContext=${!!dayContext}`);
 
     // PHASE 4: Smart routing for trivial messages (skip RAG and Assistants API)
-    if (isTrivialMessage(userInput)) {
+    if (isTrivialMessage(userInput) && iface !== 'daily_review') {
       const result = await handleTrivialMessage(userInput, userId, threadId, 'America/New_York');
       return new Response(JSON.stringify(result), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -1250,16 +1284,38 @@ serve(async (req) => {
 
     // Default: polling-based request
     const result = await handleAssistantRequest(
-      userInput, 
-      userId, 
-      threadId, 
-      assistantId, 
+      userInput,
+      userId,
+      threadId,
+      assistantId,
       contextualInstructions
     );
+
+    // Itinerary mode: synthesize a fallback response if model returned empty
+    // (typically happens when only tool calls were made and no trailing text turn).
+    if (iface === 'daily_review' && (!result.response || result.response.trim().length === 0)) {
+      const synth = collectedToolOutputs.length > 0
+        ? `Done — ${collectedToolOutputs.map((o: any) => o.toolName).join(', ')}.`
+        : 'I processed your request but had no further reply. Try rephrasing if something looks off.';
+      console.warn('[HYBRID] Itinerary fallback synth applied');
+      result.response = synth;
+    }
 
     return new Response(JSON.stringify(result), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
+
+  } catch (error) {
+    console.error('Error in hybrid-assistant-api function:', error);
+    return new Response(JSON.stringify({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+});
 
   } catch (error) {
     console.error('Error in hybrid-assistant-api function:', error);
