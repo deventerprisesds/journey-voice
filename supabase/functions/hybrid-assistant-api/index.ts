@@ -1123,7 +1123,32 @@ ${contextualInstructions || ''}`;
       }
 
       if (runStatus !== 'completed') {
-        throw new Error(`Run did not complete successfully. Status: ${runStatus}`);
+        // Fetch run details to surface the real failure reason (e.g. quota, rate limit)
+        let lastErrorMsg = '';
+        try {
+          const runDetail = await fetch(
+            `https://api.openai.com/v1/threads/${openaiThreadId}/runs/${runId}`,
+            {
+              headers: {
+                'Authorization': `Bearer ${openaiApiKey}`,
+                'OpenAI-Beta': 'assistants=v2'
+              }
+            }
+          );
+          if (runDetail.ok) {
+            const detail = await runDetail.json();
+            const code = detail?.last_error?.code || '';
+            const msg = detail?.last_error?.message || '';
+            lastErrorMsg = `${code}: ${msg}`;
+            console.error(`[HYBRID] Run ${runStatus} — last_error:`, JSON.stringify(detail?.last_error));
+            if (code === 'rate_limit_exceeded' || /quota/i.test(msg)) {
+              throw new Error(`OpenAI quota exceeded. Add credits at platform.openai.com/billing or rotate OPENAI_API_KEY. (${msg})`);
+            }
+          }
+        } catch (detailErr) {
+          if (detailErr instanceof Error && detailErr.message.startsWith('OpenAI quota')) throw detailErr;
+        }
+        throw new Error(`Run did not complete successfully. Status: ${runStatus}${lastErrorMsg ? ` (${lastErrorMsg})` : ''}`);
       }
 
       // Get the assistant's response
