@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { logRealtime, logChat } from '@/utils/activityLogger';
+import { toast } from 'sonner';
 
 // ── Interactive content types (aligned with call-context-builder patterns) ──
 
@@ -689,6 +690,28 @@ User message: ${content.trim()}`;
       });
 
       if (error) throw error;
+
+      // ── Quota-exhaustion branch (OpenAI credits) ──
+      const errStr = typeof data?.error === 'string' ? data.error : '';
+      const isQuota = data?.code === 'QUOTA_EXCEEDED'
+        || /insufficient_quota|quota exceeded|quota exhausted/i.test(errStr);
+      if (data?.success === false && isQuota) {
+        const friendly = 'Iris is offline — AI credits exhausted. Add credits to continue.';
+        setMessages(prev => prev.map(msg =>
+          msg.id === loadingId
+            ? { id: loadingId, role: 'assistant' as const, content: friendly, timestamp: new Date(), isLoading: false }
+            : msg
+        ));
+        toast.error('AI credits exhausted', {
+          description: 'Add credits to your OpenAI account to keep using Iris.',
+          action: {
+            label: 'Open billing',
+            onClick: () => window.open('https://platform.openai.com/settings/organization/billing', '_blank')
+          },
+          duration: 10000
+        });
+        return { assistantContent: friendly, assistantMessageId: loadingId };
+      }
 
       const assistantContent = data?.response || 'I processed your request but had nothing further to say.';
       const assistantMessageId = data?.assistantMessageId || loadingId;
