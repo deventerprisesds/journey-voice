@@ -332,16 +332,33 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
     setTimeout(() => onTaskUpdate(), 2000);
   };
 
-  // Render assistant messages produced AFTER the modal opened. To avoid the
-  // "panel shows nothing" oscillation we ALSO show the in-flight loading
-  // bubble whenever the user has sent in this session.
-  const recentAssistantMessages = hasSentInSession
-    ? messages.filter(m => {
-        if (m.role !== 'assistant') return false;
+  // Replay-on-open: show last 10 thread messages so context is never lost.
+  // Tag stale messages (>30 min old, or sent before the modal opened in this
+  // session) with a muted timestamp instead of hiding them. After the user
+  // sends in this session, prefer in-session messages but still keep the tail
+  // for continuity.
+  const STALE_THRESHOLD_MS = 30 * 60 * 1000;
+  const shownMessages = (() => {
+    const all = messages
+      .filter(m => m.role === 'assistant' || m.role === 'user')
+      .map(m => {
         const ts = m.timestamp instanceof Date ? m.timestamp.getTime() : new Date(m.timestamp as any).getTime();
-        return Number.isFinite(ts) && ts >= openedAtRef.current;
+        return { ...m, _ts: Number.isFinite(ts) ? ts : 0 };
       })
-    : [];
+      .sort((a, b) => a._ts - b._ts);
+
+    // Take last 10 (replay tail)
+    const tail = all.slice(-10);
+    const now = Date.now();
+    return tail.map(m => ({
+      ...m,
+      isStale: m._ts < openedAtRef.current || (now - m._ts) > STALE_THRESHOLD_MS,
+      isInSession: m._ts >= openedAtRef.current,
+    }));
+  })();
+
+  // Backwards-compat alias used downstream (panel renders this)
+  const recentAssistantMessages = shownMessages;
 
   // Diagnostic log so we can see chat isolation working in the console
   if (open) {
@@ -611,25 +628,52 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
           </div>
         </ScrollArea>
 
-        {/* AI Response Area — own scroll container above input. Always visible after first send. */}
-        {hasSentInSession && (
+        {/* AI Response Area — own scroll container above input. Always visible
+            with replay-on-open: shows last 10 messages of the thread, tagged
+            stale when older than 30 min or sent before this modal opened. */}
+        {(hasSentInSession || recentAssistantMessages.length > 0) && (
           <div className="border-t border-border px-4 py-2 shrink-0 bg-muted/30 max-h-[30vh] overflow-y-auto">
-            <div className="text-xs font-medium text-foreground mb-1.5">AI Response</div>
+            <div className="text-xs font-medium text-foreground mb-1.5 flex items-center justify-between">
+              <span>AI Response</span>
+              {recentAssistantMessages.some(m => (m as any).isStale) && (
+                <span className="text-[10px] text-muted-foreground italic">earlier conversation shown for context</span>
+              )}
+            </div>
             <div className="space-y-2">
-              {recentAssistantMessages.length === 0 ? (
+              {recentAssistantMessages.length === 0 && hasSentInSession ? (
                 <div className="bg-primary/5 border border-primary/10 rounded-lg p-2.5 text-sm text-muted-foreground italic">
                   Iris is thinking…
                 </div>
               ) : (
-                recentAssistantMessages.map(msg => (
-                  <div key={msg.id} className="bg-primary/5 border border-primary/10 rounded-lg p-2.5">
-                    {msg.isLoading ? (
-                      <p className="text-sm text-muted-foreground italic">Iris is thinking…</p>
-                    ) : (
-                      <p className="text-sm text-foreground whitespace-pre-wrap">{msg.content}</p>
-                    )}
-                  </div>
-                ))
+                recentAssistantMessages.map((msg: any) => {
+                  const isUser = msg.role === 'user';
+                  const tsLabel = msg._ts
+                    ? new Date(msg._ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+                    : '';
+                  return (
+                    <div
+                      key={msg.id}
+                      className={cn(
+                        "rounded-lg p-2.5 border",
+                        isUser
+                          ? "bg-muted border-border ml-6"
+                          : "bg-primary/5 border-primary/10",
+                        msg.isStale && "opacity-60"
+                      )}
+                    >
+                      {msg.isLoading ? (
+                        <p className="text-sm text-muted-foreground italic">Iris is thinking…</p>
+                      ) : (
+                        <>
+                          <p className="text-sm text-foreground whitespace-pre-wrap">{msg.content}</p>
+                          {msg.isStale && tsLabel && (
+                            <p className="mt-1 text-[10px] text-muted-foreground italic">{tsLabel}</p>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  );
+                })
               )}
             </div>
           </div>

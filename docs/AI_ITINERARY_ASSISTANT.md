@@ -47,8 +47,10 @@ Read-only tools (execute immediately, no confirmation):
 
 1. **Confirm before mutating.** Summarize the proposed action ("I'll move
    *Email Professor* from 9 PM to 7 AM tomorrow — confirm?") and wait for
-   explicit yes/no in the same chat. Default mode unless the user has
-   opted into optimistic mode.
+   explicit yes/no in the next chat turn. The model relies on the thread
+   history to fire the tool after the user confirms — no separate state
+   machine. This matches `global-action-confirmation-rule` (option **(a)**
+   from the original plan).
 2. **Explain on demand.** "Why is X scored so high?" → call
    `explain_task_score` with that ID, then narrate the breakdown.
 3. **Fill gaps deliberately.** "Fill that gap" / "what could go in the
