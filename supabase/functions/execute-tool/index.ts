@@ -2152,8 +2152,262 @@ async function getMyConfig(supabase: any, userId: string, args: any): Promise<Ex
 }
 
 // ============================================================================
+// ITINERARY TOOLS — used by the Daily Review chat assistant
+// Server-side mirror of the rules in src/lib/schedulingCandidates.ts
+// ============================================================================
+
+const ITINERARY_PRIORITY_WEIGHT: Record<string, number> = { URGENT: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
+const ITINERARY_KEYWORDS = ['payment','invoice','bill','tax','budget','contract','financial','money','pay','credit','transfer','fee','email','follow up','follow-up','respond','reply','call','meeting','text','message','contact','coach'];
+
+function itineraryHourFromIso(iso: string, tz: string): number {
+  try {
+    const h = new Date(iso).toLocaleString('en-US', { timeZone: tz, hour: 'numeric', hour12: false });
+    return parseInt(h, 10);
+  } catch { return 0; }
+}
+
+function itineraryDetectWindow(hour: number, isWeekend: boolean): string {
+  if (isWeekend) return 'weekends';
+  if (hour >= 6 && hour < 9) return 'morning';
+  if (hour >= 9 && hour < 17) return 'business_hours';
+  if (hour >= 17 && hour < 19) return 'after_work';
+  return 'evening';
+}
+
+function itineraryWindowRange(window: string): { start: number; end: number } {
+  switch (window) {
+    case 'morning': return { start: 6, end: 9 };
+    case 'business_hours': return { start: 9, end: 17 };
+    case 'after_work': return { start: 17, end: 19 };
+    case 'evening': return { start: 19, end: 23 };
+    case 'weekends': return { start: 9, end: 21 };
+    default: return { start: 9, end: 17 };
+  }
+}
+
+function explainSchedulingScoreServer(task: any): {
+  base: number; priorityExplicit: number; pushed: number; dueSoon: number;
+  dueWindow: number; staleness: number; recency: number; keyword: number; upNext: number; total: number;
+} {
+  const base = ITINERARY_PRIORITY_WEIGHT[task.priority] || 1;
+  const priorityExplicit = task.is_priority ? 10 + Math.max(5 - (task.priority_rank ?? 0), 0) : 0;
+  let pushed = 0;
+  if ((task.pushed_count ?? 0) > 0) {
+    const n = task.pushed_count;
+    if (n <= 3) pushed = 1;
+    else if (n > 7 && !task.is_priority) pushed = -1;
+  }
+  const nowMs = Date.now();
+  let dueSoon = 0, dueWindow = 0, staleness = 0;
+  if (task.due_date) {
+    const dueMs = new Date(task.due_date).getTime();
+    const delta = dueMs - nowMs;
+    if (delta <= 48 * 3600 * 1000 && delta >= -48 * 3600 * 1000) dueSoon = 5;
+    if (delta > 48 * 3600 * 1000 && delta <= 7 * 24 * 3600 * 1000) dueWindow = 3;
+    if (delta < -30 * 24 * 3600 * 1000) staleness = -10;
+    else if (delta < -14 * 24 * 3600 * 1000) staleness = -3;
+  }
+  const createdAt = new Date(task.created_at).getTime();
+  const daysSince = (nowMs - createdAt) / (24 * 3600 * 1000);
+  const recency = daysSince <= 3 ? 2 : daysSince <= 7 ? 1 : 0;
+  const lower = (task.title || '').toLowerCase();
+  const keyword = ITINERARY_KEYWORDS.some(k => lower.includes(k)) ? 5 : 0;
+  const upNext = task.status === 'UP_NEXT' ? 1 : 0;
+  const total = Math.max(base + priorityExplicit + pushed + dueSoon + dueWindow + staleness + recency + keyword + upNext, 0);
+  return { base, priorityExplicit, pushed, dueSoon, dueWindow, staleness, recency, keyword, upNext, total };
+}
+
+async function explainTaskScore(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
+  if (!args.task_id) return { success: false, error: 'task_id required' };
+  try {
+    const { data: task, error } = await supabase
+      .from('tasks').select('*').eq('id', args.task_id).eq('user_id', userId).maybeSingle();
+    if (error) throw error;
+    if (!task) return { success: false, error: 'Task not found' };
+    const breakdown = explainSchedulingScoreServer(task);
+    const factors: string[] = [];
+    if (breakdown.base) factors.push(`priority=${task.priority} (+${breakdown.base})`);
+    if (breakdown.priorityExplicit) factors.push(`on Priority Lane rank=${task.priority_rank ?? '?'} (+${breakdown.priorityExplicit})`);
+    if (breakdown.dueSoon) factors.push(`due within 48h (+${breakdown.dueSoon})`);
+    if (breakdown.dueWindow) factors.push(`due in 3-7 days (+${breakdown.dueWindow})`);
+    if (breakdown.staleness) factors.push(`stale (${breakdown.staleness})`);
+    if (breakdown.recency) factors.push(`recently created (+${breakdown.recency})`);
+    if (breakdown.keyword) factors.push(`title keyword matched (+${breakdown.keyword})`);
+    if (breakdown.upNext) factors.push(`already UP_NEXT (+${breakdown.upNext})`);
+    if (breakdown.pushed > 0) factors.push(`recently rolled (+${breakdown.pushed})`);
+    if (breakdown.pushed < 0) factors.push(`stale rolled-over (${breakdown.pushed})`);
+    return {
+      success: true,
+      result: { task: { id: task.id, title: task.title, priority: task.priority, due_date: task.due_date, status: task.status, is_priority: task.is_priority, priority_rank: task.priority_rank, pushed_count: task.pushed_count }, breakdown, total: breakdown.total, factors },
+      message: `"${task.title}" scored ${breakdown.total}: ${factors.join('; ') || 'base score only'}`
+    };
+  } catch (error) {
+    return { success: false, error: extractErrorMessage(error) };
+  }
+}
+
+async function listPendingAssignments(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
+  try {
+    const includeOverdue = args.include_overdue !== false;
+    let q = supabase
+      .from('assignments')
+      .select('id, title, due_date, priority, status, program_id, assignment_url, course_id')
+      .eq('user_id', userId)
+      .neq('status', 'completed')
+      .neq('status', 'graded');
+    if (args.program_id) q = q.eq('program_id', args.program_id);
+    const { data, error } = await q;
+    if (error) throw error;
+    const now = Date.now();
+    const filtered = (data || []).filter((a: any) => {
+      if (!a.due_date) return true;
+      const due = new Date(a.due_date).getTime();
+      if (!includeOverdue && due < now) return false;
+      if (args.due_within_days != null) {
+        const cutoff = now + args.due_within_days * 24 * 3600 * 1000;
+        return due <= cutoff;
+      }
+      return true;
+    }).sort((a: any, b: any) => {
+      if (!a.due_date) return 1;
+      if (!b.due_date) return -1;
+      return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
+    });
+    // Check which have linked tasks
+    const aIds = filtered.map((a: any) => a.id.toString());
+    const { data: linkedTasks } = await supabase.from('tasks').select('id, assignment_id, status, start_time').in('assignment_id', aIds).eq('user_id', userId);
+    const linkMap = new Map((linkedTasks || []).map((t: any) => [String(t.assignment_id), t]));
+    const enriched = filtered.slice(0, 30).map((a: any) => ({
+      id: a.id, title: a.title, due_date: a.due_date, priority: a.priority,
+      program_id: a.program_id, url: a.assignment_url,
+      task: linkMap.get(String(a.id)) || null
+    }));
+    return {
+      success: true,
+      result: { assignments: enriched, count: enriched.length, total: filtered.length },
+      message: `${enriched.length} pending assignment${enriched.length !== 1 ? 's' : ''}${args.due_within_days ? ` due within ${args.due_within_days}d` : ''}`
+    };
+  } catch (error) {
+    return { success: false, error: extractErrorMessage(error) };
+  }
+}
+
+async function findOpenSlots(supabase: any, userId: string, args: any, timezone?: string): Promise<ExecuteToolResponse> {
+  const tz = timezone || 'America/New_York';
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: tz });
+  const date = args.date || today;
+  const minDur = args.min_duration_min || 30;
+  try {
+    const dayStart = `${date}T00:00:00`;
+    const dayEnd = `${date}T23:59:59`;
+    const [tasksRes, eventsRes] = await Promise.all([
+      supabase.from('tasks').select('start_time, end_time, estimate_minutes').eq('user_id', userId).eq('is_scheduled', true).gte('start_time', dayStart).lte('start_time', dayEnd),
+      supabase.from('external_calendar_events').select('start_time, end_time').eq('user_id', userId).gte('start_time', dayStart).lte('start_time', dayEnd)
+    ]);
+    const dow = new Date(date + 'T12:00:00').toLocaleString('en-US', { timeZone: tz, weekday: 'short' });
+    const isWeekend = dow === 'Sat' || dow === 'Sun';
+    const occupied: Array<{ start: number; end: number }> = [];
+    for (const t of (tasksRes.data || [])) {
+      if (!t.start_time) continue;
+      const sH = itineraryHourFromIso(t.start_time, tz);
+      const dur = t.end_time ? (new Date(t.end_time).getTime() - new Date(t.start_time).getTime()) / 3600000 : (t.estimate_minutes || 60) / 60;
+      occupied.push({ start: sH, end: sH + dur });
+    }
+    for (const e of (eventsRes.data || [])) {
+      occupied.push({ start: itineraryHourFromIso(e.start_time, tz), end: itineraryHourFromIso(e.end_time, tz) });
+    }
+    occupied.sort((a, b) => a.start - b.start);
+    const range = args.window ? itineraryWindowRange(args.window) : { start: isWeekend ? 9 : 6, end: 23 };
+    const slots: Array<{ start_hour: number; end_hour: number; duration_min: number; window: string }> = [];
+    let cursor = range.start;
+    for (const span of occupied) {
+      if (span.start >= range.end) break;
+      if (span.start > cursor + minDur / 60) {
+        const slotEnd = Math.min(span.start, range.end);
+        slots.push({ start_hour: cursor, end_hour: slotEnd, duration_min: Math.round((slotEnd - cursor) * 60), window: itineraryDetectWindow(Math.floor(cursor), isWeekend) });
+      }
+      cursor = Math.max(cursor, span.end);
+    }
+    if (cursor < range.end) {
+      slots.push({ start_hour: cursor, end_hour: range.end, duration_min: Math.round((range.end - cursor) * 60), window: itineraryDetectWindow(Math.floor(cursor), isWeekend) });
+    }
+    const filtered = slots.filter(s => s.duration_min >= minDur);
+    return { success: true, result: { date, timezone: tz, slots: filtered }, message: `${filtered.length} open slot${filtered.length !== 1 ? 's' : ''} ≥${minDur}m on ${date}` };
+  } catch (error) {
+    return { success: false, error: extractErrorMessage(error) };
+  }
+}
+
+async function moveTaskToDay(supabase: any, userId: string, args: any, timezone?: string): Promise<ExecuteToolResponse> {
+  if (!args.task_id || !args.date) return { success: false, error: 'task_id and date required' };
+  const tz = timezone || 'America/New_York';
+  // Find a slot on the target date matching the requested window (if any)
+  const slotResp = await findOpenSlots(supabase, userId, { date: args.date, window: args.window, min_duration_min: 30 }, tz);
+  if (!slotResp.success || !(slotResp.result as any).slots?.length) {
+    // Fall back to a default time at the start of the requested window or 9am
+    const range = itineraryWindowRange(args.window || 'business_hours');
+    const fallback = `${String(range.start).padStart(2, '0')}:00`;
+    return rescheduleTask(supabase, { task_id: args.task_id, new_date: args.date, new_start_time: fallback }, tz);
+  }
+  const slot = (slotResp.result as any).slots[0];
+  const hh = String(Math.floor(slot.start_hour)).padStart(2, '0');
+  const mm = String(Math.round((slot.start_hour - Math.floor(slot.start_hour)) * 60)).padStart(2, '0');
+  return rescheduleTask(supabase, { task_id: args.task_id, new_date: args.date, new_start_time: `${hh}:${mm}` }, tz);
+}
+
+async function swapTaskOrder(supabase: any, args: any): Promise<ExecuteToolResponse> {
+  if (!args.task_id_a || !args.task_id_b) return { success: false, error: 'task_id_a and task_id_b required' };
+  try {
+    const { data: tasks, error } = await supabase.from('tasks').select('id, title, start_time, end_time').in('id', [args.task_id_a, args.task_id_b]);
+    if (error) throw error;
+    if (!tasks || tasks.length !== 2) return { success: false, error: 'Both tasks not found' };
+    const a = tasks.find((t: any) => t.id === args.task_id_a);
+    const b = tasks.find((t: any) => t.id === args.task_id_b);
+    if (!a?.start_time || !b?.start_time) return { success: false, error: 'Both tasks must be scheduled' };
+    const [updA, updB] = await Promise.all([
+      supabase.from('tasks').update({ start_time: b.start_time, end_time: b.end_time }).eq('id', a.id),
+      supabase.from('tasks').update({ start_time: a.start_time, end_time: a.end_time }).eq('id', b.id),
+    ]);
+    if (updA.error) throw updA.error;
+    if (updB.error) throw updB.error;
+    return { success: true, result: { swapped: [a.id, b.id] }, message: `Swapped "${a.title}" and "${b.title}"` };
+  } catch (error) {
+    return { success: false, error: extractErrorMessage(error) };
+  }
+}
+
+async function setPriorityRank(supabase: any, args: any): Promise<ExecuteToolResponse> {
+  if (!args.task_id) return { success: false, error: 'task_id required' };
+  try {
+    const update: any = args.unset
+      ? { is_priority: false, priority_rank: null }
+      : { is_priority: true, priority_rank: args.rank ?? null };
+    const { data, error } = await supabase.from('tasks').update(update).eq('id', args.task_id).select('id, title, is_priority, priority_rank').single();
+    if (error) throw error;
+    return { success: true, result: { task: data }, message: args.unset ? `Removed "${data.title}" from priority lane` : `"${data.title}" set as priority${data.priority_rank ? ` (rank ${data.priority_rank})` : ''}` };
+  } catch (error) {
+    return { success: false, error: extractErrorMessage(error) };
+  }
+}
+
+async function quickCreateTask(supabase: any, userId: string, args: any, timezone?: string): Promise<ExecuteToolResponse> {
+  if (!args.title) return { success: false, error: 'title required' };
+  // Re-use parse_and_create_tasks for consistent scheduling/buffer/window enforcement
+  const text = args.title;
+  const targetDate = args.date;
+  const auto = args.auto_schedule !== false;
+  // Inject duration/category/priority hints by prefixing — ai-task-parser respects these
+  return parseAndCreateTasks(supabase, userId, {
+    text,
+    target_date: targetDate,
+    auto_schedule: auto,
+  } as any, timezone);
+}
+
+// ============================================================================
 // HTTP SERVER
 // ============================================================================
+
 
 serve(async (req) => {
   // Handle CORS preflight
