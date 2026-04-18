@@ -1155,7 +1155,7 @@ ${contextualInstructions || ''}`;
         if (isQuota) {
           // Log to error_log so QuotaAlertBanner picks it up
           try {
-            await supabaseClient.from('error_log').insert({
+            await supabase.from('error_log').insert({
               error_type: 'quota_exceeded_openai',
               error_message: quotaMsg,
               source: 'hybrid-assistant-api',
