@@ -463,9 +463,9 @@ serve(async (req) => {
           if (tasksToCheck.length > 0) {
             const { data: tasks } = await supabaseClient
               .from('tasks')
-              .select('id, status, completed_at, start_time, end_time, estimate_minutes, title')
+              .select('id, status, completed_at, start_time, end_time, estimate_minutes, title, due_date')
               .in('id', tasksToCheck);
-            
+
             if (tasks) {
               for (const task of tasks) {
                 taskDetails[task.id] = {
@@ -476,42 +476,64 @@ serve(async (req) => {
                 };
               }
             }
-            
+
+            // Drop completed tasks
             const completedTaskIds = new Set(
               tasks?.filter((t: any) => t.status === 'DONE' || t.completed_at)
                 .map((t: any) => t.id) || []
             );
-            
+
+            // Drop ANCIENT tasks: due_date < today AND start_time IS NULL
+            // (these are stale assignments the nightly builder skipped — don't ping the user about them)
+            let userTzForFilter = 'America/New_York';
+            try {
+              const { data: prefRow } = await supabaseClient
+                .from('user_scheduling_prefs')
+                .select('timezone')
+                .eq('user_id', userId)
+                .maybeSingle();
+              if (prefRow?.timezone) userTzForFilter = prefRow.timezone;
+            } catch {}
+            const todayStrTz = new Date().toLocaleDateString('en-CA', { timeZone: userTzForFilter });
+            const ancientTaskIds = new Set(
+              tasks?.filter((t: any) => !t.start_time && t.due_date && String(t.due_date).slice(0, 10) < todayStrTz)
+                .map((t: any) => t.id) || []
+            );
+
             const validNotifications = batchNotifications.filter((n: any) => {
               if (n.task_id && completedTaskIds.has(n.task_id)) {
                 console.log(`⏭️ Skipping notification ${n.id} - task ${n.task_id} is completed`);
                 return false;
               }
+              if (n.task_id && ancientTaskIds.has(n.task_id)) {
+                console.log(`⏭️ Skipping notification ${n.id} - task ${n.task_id} is ancient (overdue, unscheduled)`);
+                return false;
+              }
               return true;
             });
-            
+
             const skippedIds = batchNotifications
-              .filter((n: any) => n.task_id && completedTaskIds.has(n.task_id))
+              .filter((n: any) => n.task_id && (completedTaskIds.has(n.task_id) || ancientTaskIds.has(n.task_id)))
               .map((n: any) => n.id);
-            
+
             if (skippedIds.length > 0) {
               await supabaseClient
                 .from('scheduled_notifications')
                 .update({
                   failed_at: new Date().toISOString(),
-                  failure_reason: 'Task completed'
+                  failure_reason: 'Task completed or ancient'
                 })
                 .in('id', skippedIds);
-              
-              console.log(`❌ Marked ${skippedIds.length} notifications as failed (completed tasks)`);
+
+              console.log(`❌ Marked ${skippedIds.length} notifications as failed (completed/ancient tasks)`);
               failed += skippedIds.length;
             }
-            
+
             if (validNotifications.length === 0) {
-              console.log('All notifications in batch were for completed tasks, skipping');
+              console.log('All notifications in batch were for completed/ancient tasks, skipping');
               continue;
             }
-            
+
             batchNotifications.length = 0;
             batchNotifications.push(...validNotifications);
           }
