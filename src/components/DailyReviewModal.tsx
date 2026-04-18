@@ -628,25 +628,52 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
           </div>
         </ScrollArea>
 
-        {/* AI Response Area — own scroll container above input. Always visible after first send. */}
-        {hasSentInSession && (
+        {/* AI Response Area — own scroll container above input. Always visible
+            with replay-on-open: shows last 10 messages of the thread, tagged
+            stale when older than 30 min or sent before this modal opened. */}
+        {(hasSentInSession || recentAssistantMessages.length > 0) && (
           <div className="border-t border-border px-4 py-2 shrink-0 bg-muted/30 max-h-[30vh] overflow-y-auto">
-            <div className="text-xs font-medium text-foreground mb-1.5">AI Response</div>
+            <div className="text-xs font-medium text-foreground mb-1.5 flex items-center justify-between">
+              <span>AI Response</span>
+              {recentAssistantMessages.some(m => (m as any).isStale) && (
+                <span className="text-[10px] text-muted-foreground italic">earlier conversation shown for context</span>
+              )}
+            </div>
             <div className="space-y-2">
-              {recentAssistantMessages.length === 0 ? (
+              {recentAssistantMessages.length === 0 && hasSentInSession ? (
                 <div className="bg-primary/5 border border-primary/10 rounded-lg p-2.5 text-sm text-muted-foreground italic">
                   Iris is thinking…
                 </div>
               ) : (
-                recentAssistantMessages.map(msg => (
-                  <div key={msg.id} className="bg-primary/5 border border-primary/10 rounded-lg p-2.5">
-                    {msg.isLoading ? (
-                      <p className="text-sm text-muted-foreground italic">Iris is thinking…</p>
-                    ) : (
-                      <p className="text-sm text-foreground whitespace-pre-wrap">{msg.content}</p>
-                    )}
-                  </div>
-                ))
+                recentAssistantMessages.map((msg: any) => {
+                  const isUser = msg.role === 'user';
+                  const tsLabel = msg._ts
+                    ? new Date(msg._ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+                    : '';
+                  return (
+                    <div
+                      key={msg.id}
+                      className={cn(
+                        "rounded-lg p-2.5 border",
+                        isUser
+                          ? "bg-muted border-border ml-6"
+                          : "bg-primary/5 border-primary/10",
+                        msg.isStale && "opacity-60"
+                      )}
+                    >
+                      {msg.isLoading ? (
+                        <p className="text-sm text-muted-foreground italic">Iris is thinking…</p>
+                      ) : (
+                        <>
+                          <p className="text-sm text-foreground whitespace-pre-wrap">{msg.content}</p>
+                          {msg.isStale && tsLabel && (
+                            <p className="mt-1 text-[10px] text-muted-foreground italic">{tsLabel}</p>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  );
+                })
               )}
             </div>
           </div>
