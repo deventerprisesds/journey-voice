@@ -394,6 +394,28 @@ async function executeToolCall(
       case 'get_tasks_by_topic':
         return await getTasksByTopic(supabase, userId, args);
 
+      // ============ ITINERARY TOOLS ============
+      case 'explain_task_score':
+        return await explainTaskScore(supabase, userId, args);
+
+      case 'list_pending_assignments':
+        return await listPendingAssignments(supabase, userId, args);
+
+      case 'find_open_slots':
+        return await findOpenSlots(supabase, userId, args, context.timezone);
+
+      case 'move_task_to_day':
+        return await moveTaskToDay(supabase, userId, args, context.timezone);
+
+      case 'swap_task_order':
+        return await swapTaskOrder(supabase, args);
+
+      case 'set_priority_rank':
+        return await setPriorityRank(supabase, args);
+
+      case 'quick_create_task':
+        return await quickCreateTask(supabase, userId, args, context.timezone);
+
       // ============ INTROSPECTION ============
       case 'get_my_config':
         return await getMyConfig(supabase, userId, args);
