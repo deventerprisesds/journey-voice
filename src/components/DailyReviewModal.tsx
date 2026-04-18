@@ -24,6 +24,8 @@ import {
 } from '@/lib/date';
 import { toast } from 'sonner';
 import { buildDailyReviewReasoning } from '@/utils/dailyReviewPipeline';
+import { buildDayContext } from '@/utils/buildDayContext';
+import TaskDetailModal from '@/components/TaskDetailModal';
 
 interface DailyReviewModalProps {
   open: boolean;
@@ -102,20 +104,13 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
   const [isConfirming, setIsConfirming] = useState(false);
   const [builderLog, setBuilderLog] = useState<any>(null);
   const [userConfig, setUserConfig] = useState<any>(null);
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
 
   // Stable per-open review session id used to isolate chat shown in this modal
-  // from the global assistant message stream. Outgoing messages are tagged with
-  // this id and only matching assistant replies are surfaced here.
+  // from the global assistant message stream.
   const reviewSessionIdRef = useRef<string>('');
-  // IDs of messages we've sent from this modal session
   const sentMessageMarkersRef = useRef<Set<string>>(new Set());
-  // Timestamp at the moment the modal opened — used as a hard time floor so we
-  // never show pre-existing assistant chatter that hydrates AFTER mount.
-  // Index-based floors are unreliable because useChatAssistant loads thread
-  // history asynchronously; the floor was being captured at messages.length=0.
   const openedAtRef = useRef<number>(0);
-  // Whether the user has actually sent a chat message from THIS modal session.
-  // Drives whether the AI Response panel is allowed to render at all.
   const [hasSentInSession, setHasSentInSession] = useState(false);
 
   const tz = getDefaultTimezone();
@@ -315,22 +310,34 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
     if (!chatInput.trim()) return;
     const msg = chatInput.trim();
     setChatInput('');
-    const reviewSessionId = reviewSessionIdRef.current;
-    const contextPrefix = `[MORNING REVIEW CONTEXT review_session=${reviewSessionId}]\nThe user is reviewing today's schedule (${todayStr}). Currently scheduled tasks: ${scheduledToday.map(t => `"${t.title}" at ${t.start_time ? formatTimeInTimezone(t.start_time, tz) : 'unset'}`).join(', ') || 'none'}. External events: ${externalEvents.map(e => `"${e.title}" ${formatTimeInTimezone(e.start_time, tz)}-${formatTimeInTimezone(e.end_time, tz)}`).join(', ') || 'none'}. Apply changes the user requests.\n\nUser message: `;
-    const fullPrompt = contextPrefix + msg;
     setHasSentInSession(true);
-    sentMessageMarkersRef.current.add(reviewSessionId);
-    await sendMessage(fullPrompt);
+    sentMessageMarkersRef.current.add(reviewSessionIdRef.current);
+
+    // Build structured DAY_CONTEXT (the AI sees what the user sees)
+    const pendingAssignmentTasks = tasks.filter(t => (t as any).assignment_id && t.status !== 'DONE' && !t.completed_at);
+    const dayContext = buildDayContext({
+      tasks, externalEvents, reasoning, pendingAssignmentTasks, builderLog,
+      tz, todayStr, isWeekend
+    });
+
+    try {
+      const result = await sendMessage(msg, { dayContext, interface: 'daily_review' });
+      if (!result || !result.assistantContent || !result.assistantContent.trim()) {
+        toast.error('Iris reached the assistant but returned no reply — try rephrasing.');
+      }
+    } catch (e) {
+      console.error('[DailyReviewModal] chat error:', e);
+      toast.error('Chat failed — please try again.');
+    }
     setTimeout(() => onTaskUpdate(), 2000);
   };
 
-  // Show only assistant messages produced AFTER the modal opened AND only when
-  // the user has actually sent a chat from THIS modal session. Old thread
-  // history that hydrates asynchronously (before or after mount) is excluded
-  // by comparing the message timestamp to `openedAt`.
+  // Render assistant messages produced AFTER the modal opened. To avoid the
+  // "panel shows nothing" oscillation we ALSO show the in-flight loading
+  // bubble whenever the user has sent in this session.
   const recentAssistantMessages = hasSentInSession
     ? messages.filter(m => {
-        if (m.role !== 'assistant' || m.isLoading) return false;
+        if (m.role !== 'assistant') return false;
         const ts = m.timestamp instanceof Date ? m.timestamp.getTime() : new Date(m.timestamp as any).getTime();
         return Number.isFinite(ts) && ts >= openedAtRef.current;
       })
@@ -563,7 +570,12 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
                 scheduledToday.map(task => {
                   const isAuto = !!(task.scheduling_context as any)?.pre_schedule_status;
                   return (
-                    <div key={task.id} className="flex items-center gap-2 py-2 px-2 rounded-md bg-card border border-border">
+                    <button
+                      key={task.id}
+                      type="button"
+                      onClick={() => setSelectedTask(task)}
+                      className="w-full text-left flex items-center gap-2 py-2 px-2 rounded-md bg-card border border-border hover:bg-muted/50 transition-colors cursor-pointer"
+                    >
                       <div className="shrink-0">
                         {task.status === 'DONE' ? (
                           <CheckCircle2 className="h-4 w-4 text-accent" />
@@ -590,7 +602,7 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
                           )}
                         </div>
                       </div>
-                    </div>
+                    </button>
                   );
                 })
               )}
@@ -599,16 +611,26 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
           </div>
         </ScrollArea>
 
-        {/* AI Response Area — own scroll container above input so Confirm stays visible */}
-        {recentAssistantMessages.length > 0 && (
+        {/* AI Response Area — own scroll container above input. Always visible after first send. */}
+        {hasSentInSession && (
           <div className="border-t border-border px-4 py-2 shrink-0 bg-muted/30 max-h-[30vh] overflow-y-auto">
             <div className="text-xs font-medium text-foreground mb-1.5">AI Response</div>
             <div className="space-y-2">
-              {recentAssistantMessages.map(msg => (
-                <div key={msg.id} className="bg-primary/5 border border-primary/10 rounded-lg p-2.5">
-                  <p className="text-sm text-foreground whitespace-pre-wrap">{msg.content}</p>
+              {recentAssistantMessages.length === 0 ? (
+                <div className="bg-primary/5 border border-primary/10 rounded-lg p-2.5 text-sm text-muted-foreground italic">
+                  Iris is thinking…
                 </div>
-              ))}
+              ) : (
+                recentAssistantMessages.map(msg => (
+                  <div key={msg.id} className="bg-primary/5 border border-primary/10 rounded-lg p-2.5">
+                    {msg.isLoading ? (
+                      <p className="text-sm text-muted-foreground italic">Iris is thinking…</p>
+                    ) : (
+                      <p className="text-sm text-foreground whitespace-pre-wrap">{msg.content}</p>
+                    )}
+                  </div>
+                ))
+              )}
             </div>
           </div>
         )}
@@ -648,6 +670,23 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
           </div>
         </div>
       </SheetContent>
+      {selectedTask && (
+        <TaskDetailModal
+          task={selectedTask}
+          isOpen={!!selectedTask}
+          onClose={() => setSelectedTask(null)}
+          onSave={async (updates) => {
+            const { checklist_items, assignment_url, scheduling_context, ...dbFields } = updates as any;
+            const { error } = await supabase.from('tasks').update(dbFields).eq('id', selectedTask.id);
+            if (!error) {
+              toast.success('Task updated');
+              onTaskUpdate();
+            } else {
+              toast.error('Update failed');
+            }
+          }}
+        />
+      )}
     </Sheet>
   );
 };

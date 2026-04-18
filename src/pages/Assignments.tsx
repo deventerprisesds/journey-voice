@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Card, CardContent } from '@/components/ui/card';
-import { GraduationCap, RefreshCw, CheckCircle2, AlertTriangle, Clock, BookOpen, ChevronRight, Settings } from 'lucide-react';
+import { GraduationCap, RefreshCw, CheckCircle2, AlertTriangle, Clock, BookOpen, ChevronRight, Settings, ExternalLink } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
@@ -323,6 +323,19 @@ const Assignments: React.FC = () => {
                         )}
                       </div>
                       <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                        {row.assignment_url && (
+                          <a
+                            href={row.assignment_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="inline-flex items-center justify-center h-5 px-1 rounded border border-primary/20 bg-primary/5 text-primary hover:bg-primary/10 transition-colors"
+                            aria-label={`Open ${row.title} in new tab`}
+                            title="Open assignment link"
+                          >
+                            <ExternalLink className="h-3 w-3" />
+                          </a>
+                        )}
                         {status === 'overdue' && (
                           <Badge variant="outline" className="text-[10px] h-4 px-1 bg-destructive/10 text-destructive border-destructive/20">
                             <AlertTriangle className="h-2.5 w-2.5 mr-0.5" />

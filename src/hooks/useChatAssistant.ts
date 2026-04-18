@@ -30,7 +30,7 @@ interface UseChatAssistantReturn {
   messages: ChatMessage[];
   isLoading: boolean;
   threadId: string | null;
-  sendMessage: (content: string) => Promise<void>;
+  sendMessage: (content: string, options?: { dayContext?: any; interface?: string }) => Promise<{ assistantContent: string; assistantMessageId: string } | undefined>;
   createNewThread: () => Promise<void>;
   loadThread: (threadId: string) => Promise<void>;
   startWindowCheckIn: () => Promise<void>;
@@ -581,7 +581,7 @@ export function useChatAssistant(): UseChatAssistantReturn {
     }
   }, [user]);
 
-  const sendMessage = useCallback(async (content: string) => {
+  const sendMessage = useCallback(async (content: string, options?: { dayContext?: any; interface?: string }) => {
     if (!user || !threadId || !content.trim()) return;
 
     const userMessage: ChatMessage = {
@@ -676,29 +676,33 @@ Respond conversationally based on the current check-in context.
 User message: ${content.trim()}`;
       }
 
+      const invokeBody: Record<string, unknown> = {
+        userInput: groundedInput,
+        userId: user.id,
+        threadId: threadId,
+      };
+      if (options?.dayContext) invokeBody.dayContext = options.dayContext;
+      if (options?.interface) invokeBody.interface = options.interface;
+
       const { data, error } = await supabase.functions.invoke('hybrid-assistant-api', {
-        body: {
-          userInput: groundedInput,
-          userId: user.id,
-          threadId: threadId
-        }
+        body: invokeBody
       });
 
       if (error) throw error;
 
-      const assistantContent = data?.response || 'I apologize, but I couldn\'t process your request.';
+      const assistantContent = data?.response || 'I processed your request but had nothing further to say.';
       const assistantMessageId = data?.assistantMessageId || loadingId;
 
       // Update the loading placeholder with the real response
       // Messages are saved server-side; realtime subscription handles deduplication
-      setMessages(prev => prev.map(msg => 
-        msg.id === loadingId 
-          ? { 
-              id: assistantMessageId, 
-              role: 'assistant' as const, 
-              content: assistantContent, 
+      setMessages(prev => prev.map(msg =>
+        msg.id === loadingId
+          ? {
+              id: assistantMessageId,
+              role: 'assistant' as const,
+              content: assistantContent,
               timestamp: new Date(),
-              isLoading: false 
+              isLoading: false
             }
           : msg
       ));
@@ -722,9 +726,10 @@ User message: ${content.trim()}`;
       }
 
       // Thread timestamp is now updated server-side
+      return { assistantContent, assistantMessageId };
 
     } catch (error) {
-      const errorContent = 'I may still be processing your request. Check back shortly.';
+      const errorContent = 'I had trouble reaching the assistant. Please try again.';
       setMessages(prev => prev.filter(msg => msg.id !== loadingId));
       const errorMsgId = crypto.randomUUID();
       setMessages(prev => [...prev, {
@@ -736,6 +741,7 @@ User message: ${content.trim()}`;
 
       // Push notification on error path so user knows the request failed
       await maybeSendPush(errorContent, errorMsgId, 'error');
+      return undefined;
     } finally {
       setIsLoading(false);
     }

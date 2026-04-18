@@ -132,6 +132,104 @@ export function getToolDefinitions(): ToolDefinition[] {
         required: ["task_id"]
       }
     },
+    // ── ITINERARY TOOLS (used by Daily Review chat) ──────────────
+    {
+      type: "function",
+      name: "explain_task_score",
+      description: "Return the scheduling-score breakdown for one task (priority, due-soon, recency, keyword bonuses, staleness penalties, etc.). Use this when the user asks 'why is X scored so high', 'why was Y picked over Z', or 'why is this on today's plan'.",
+      parameters: {
+        type: "object",
+        properties: {
+          task_id: { type: "string", description: "Task ID from DAY_CONTEXT.schedule[].id or another tool's result" }
+        },
+        required: ["task_id"]
+      }
+    },
+    {
+      type: "function",
+      name: "list_pending_assignments",
+      description: "List academic assignments that are not yet done. Optionally filter by program or by how many days until due. Use for questions like 'is there another assignment due?', 'what's pending in MIT?', 'anything due this week I'm not seeing?'.",
+      parameters: {
+        type: "object",
+        properties: {
+          program_id: { type: "string", description: "Optional program UUID to filter (EMBA / MIT)" },
+          due_within_days: { type: "number", description: "Optional: only return assignments due within this many days" },
+          include_overdue: { type: "boolean", description: "Include overdue assignments. Default true." }
+        }
+      }
+    },
+    {
+      type: "function",
+      name: "find_open_slots",
+      description: "Find open time slots on a given date that match a window (morning/business_hours/after_work/evening) and minimum duration. Use to answer 'what could fit in the morning?' or 'where's the gap in my afternoon?' before proposing a placement.",
+      parameters: {
+        type: "object",
+        properties: {
+          date: { type: "string", description: "Date in YYYY-MM-DD format. Defaults to today." },
+          window: { type: "string", enum: ["morning", "business_hours", "after_work", "evening", "weekends"], description: "Optional window filter" },
+          min_duration_min: { type: "number", description: "Minimum slot duration in minutes. Default 30." }
+        }
+      }
+    },
+    {
+      type: "function",
+      name: "move_task_to_day",
+      description: "Move a task to a specific day, optionally targeting a window (the scheduler will pick the time). Use for 'move email to tomorrow morning' or 'push this to Friday'.",
+      parameters: {
+        type: "object",
+        properties: {
+          task_id: { type: "string", description: "Task ID to move" },
+          date: { type: "string", description: "Target date YYYY-MM-DD" },
+          window: { type: "string", enum: ["morning", "business_hours", "after_work", "evening", "weekends"], description: "Optional preferred window" }
+        },
+        required: ["task_id", "date"]
+      }
+    },
+    {
+      type: "function",
+      name: "swap_task_order",
+      description: "Swap the start times of two same-day tasks (reorder). Use for 'put X before Y' or 'do the call before the email'.",
+      parameters: {
+        type: "object",
+        properties: {
+          task_id_a: { type: "string", description: "First task ID" },
+          task_id_b: { type: "string", description: "Second task ID" }
+        },
+        required: ["task_id_a", "task_id_b"]
+      }
+    },
+    {
+      type: "function",
+      name: "set_priority_rank",
+      description: "Promote a task onto the user's explicit Priority Lane and (optionally) set its rank. Use when the user says 'make X my top priority' or 'promote this to priority'.",
+      parameters: {
+        type: "object",
+        properties: {
+          task_id: { type: "string", description: "Task ID to promote" },
+          rank: { type: "number", description: "1 = top priority, 2 = next, etc. Omit to add at end." },
+          unset: { type: "boolean", description: "If true, REMOVE from priority lane instead of adding." }
+        },
+        required: ["task_id"]
+      }
+    },
+    {
+      type: "function",
+      name: "quick_create_task",
+      description: "Create a single task quickly with optional scheduling. Use for 'I need to call John today', 'add an item to email the prof'. Prefer parse_and_create_tasks for multi-task or vague NL.",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string", description: "Task title" },
+          date: { type: "string", description: "Optional YYYY-MM-DD or 'today'/'tomorrow'" },
+          window: { type: "string", enum: ["morning", "business_hours", "after_work", "evening"], description: "Optional preferred window — scheduler picks exact time" },
+          duration_minutes: { type: "number", description: "Estimated duration. Default 30." },
+          category: { type: "string", enum: ["LIFE", "CAREER", "VENTURES", "EDUCATION", "PROF_EDUCATION", "PERSONAL"], description: "Defaults to LIFE" },
+          priority: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "URGENT"], description: "Defaults to MEDIUM" },
+          auto_schedule: { type: "boolean", description: "If true (default), find a slot automatically." }
+        },
+        required: ["title"]
+      }
+    },
     {
       type: "function",
       name: "parse_and_create_tasks",
