@@ -1105,8 +1105,10 @@ async function parseAndCreateTasks(
   const tz = timezone || 'America/New_York';
   const autoSchedule = args.auto_schedule !== false; // Default true
   const hasThisWeek = /this\s+week/i.test(args.text);
+  // Detect any explicit date phrase — used to avoid inventing a deadline for priority tasks
+  const hasDatePhrase = /\b(today|tonight|tomorrow|this\s+week|next\s+week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(args.text);
 
-  console.log(`[PARSE_AND_CREATE] Input: "${args.text}", target_date: ${args.target_date}, auto_schedule: ${autoSchedule}, tz: ${tz}, hasThisWeek: ${hasThisWeek}`);
+  console.log(`[PARSE_AND_CREATE] Input: "${args.text}", target_date: ${args.target_date}, auto_schedule: ${autoSchedule}, tz: ${tz}, hasThisWeek: ${hasThisWeek}, hasDatePhrase: ${hasDatePhrase}`);
   
   if (!args.text || args.text.trim().length === 0) {
     return { success: false, error: "Task text is required" };
@@ -1193,11 +1195,19 @@ async function parseAndCreateTasks(
       const isPriority = task.intent === 'priority';
 
       // Normalize due_date to end-of-day in user's timezone.
-      // Priority + "this week" with no explicit date → end of Sunday.
-      let rawDueDate = task.due_date || targetDate || null;
-      if (isPriority && hasThisWeek && !task.due_date) {
+      // Priority date rules (applied before OpenAI's suggestion):
+      //   - priority + "this week" → always end of Sunday (ignore OpenAI's pick)
+      //   - priority + no date phrase at all → null (don't invent a deadline)
+      //   - everything else → OpenAI's due_date or targetDate fallback
+      let rawDueDate: string | null;
+      if (isPriority && hasThisWeek) {
         rawDueDate = getEndOfSundayISO(tz);
         console.log(`[PARSE_AND_CREATE] Priority+"this week" → due_date set to end of Sunday: ${rawDueDate}`);
+      } else if (isPriority && !hasDatePhrase) {
+        rawDueDate = null;
+        console.log(`[PARSE_AND_CREATE] Priority+no date phrase → due_date null`);
+      } else {
+        rawDueDate = task.due_date || targetDate || null;
       }
       const normalizedDueDate = rawDueDate ? normalizeDueDate(rawDueDate, tz) : null;
       
