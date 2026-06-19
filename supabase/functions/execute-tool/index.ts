@@ -1085,14 +1085,13 @@ async function unscheduleTask(supabase: any, args: any): Promise<ExecuteToolResp
 // ============================================================================
 
 function getEndOfSundayISO(tz: string): string {
-  const now = new Date();
-  const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-  const todayName = now.toLocaleDateString('en-US', { timeZone: tz, weekday: 'long' });
-  const todayIndex = dayNames.indexOf(todayName);
-  const daysToSunday = todayIndex === 0 ? 0 : 7 - todayIndex;
-  const todayLocal = now.toLocaleDateString('en-CA', { timeZone: tz }); // YYYY-MM-DD
-  const [y, m, d] = todayLocal.split('-').map(Number);
-  // Use Date.UTC to avoid Deno runtime local-timezone contamination
+  const todayStr = getTodayInTimezone(tz); // YYYY-MM-DD via _shared/timezone.ts
+  const [y, m, d] = todayStr.split('-').map(Number);
+  // Use Intl with weekday:'short' — same pattern as app's getDayOfWeekInTimezone
+  const shortDay = new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short' }).format(new Date());
+  const dowMap: Record<string, number> = { Sun:0, Mon:1, Tue:2, Wed:3, Thu:4, Fri:5, Sat:6 };
+  const dow = dowMap[shortDay] ?? 0;
+  const daysToSunday = dow === 0 ? 0 : 7 - dow;
   const sundayMs = Date.UTC(y, m - 1, d + daysToSunday);
   return new Date(sundayMs).toISOString().slice(0, 10); // YYYY-MM-DD
 }
