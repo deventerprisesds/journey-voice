@@ -251,6 +251,12 @@ Examples:
 - "Take Coursera course" → category: "EDUCATION", status: "EDUCATION"
 - "Research startup funding" → category: "VENTURES", status: "VENTURES"
 
+INTENT DETECTION — KEYWORD ONLY:
+Scan the original user input for the literal words "priority" or "priorities" (case-insensitive).
+- If either word appears anywhere in the input → set intent: "priority" for ALL tasks parsed from this input.
+- Otherwise → set intent: "task".
+This is a literal keyword scan only. Do not infer priority intent from any other phrasing.
+
 Return JSON in this exact format:
 {
   "tasks": [
@@ -258,13 +264,14 @@ Return JSON in this exact format:
       "title": "string",
       "description": "string or null",
       "priority": "LOW|MEDIUM|HIGH|URGENT",
-      "category": "LIFE|CAREER|VENTURES|PROF_EDUCATION|EDUCATION", 
+      "category": "LIFE|CAREER|VENTURES|PROF_EDUCATION|EDUCATION",
       "due_date": "ISO string or null",
       "start_time": null,
       "end_time": null,
       "estimate_minutes": number or null,
       "status": "LIFE|CAREER|VENTURES|PROF_EDUCATION|EDUCATION (must match category)",
-      "scheduling_context": []
+      "scheduling_context": [],
+      "intent": "task|priority"
     }
   ]
 }

@@ -1084,16 +1084,29 @@ async function unscheduleTask(supabase: any, args: any): Promise<ExecuteToolResp
 // PARSE AND CREATE TASKS - Leverages AI task parser for NLP extraction
 // ============================================================================
 
+function getEndOfSundayISO(tz: string): string {
+  const now = new Date();
+  const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const todayName = now.toLocaleDateString('en-US', { timeZone: tz, weekday: 'long' });
+  const todayIndex = dayNames.indexOf(todayName);
+  const daysToSunday = todayIndex === 0 ? 0 : 7 - todayIndex;
+  const todayLocal = now.toLocaleDateString('en-CA', { timeZone: tz }); // YYYY-MM-DD
+  const [y, m, d] = todayLocal.split('-').map(Number);
+  const sunday = new Date(y, m - 1, d + daysToSunday);
+  return sunday.toLocaleDateString('en-CA'); // YYYY-MM-DD — caller passes to normalizeDueDate
+}
+
 async function parseAndCreateTasks(
-  supabase: any, 
-  userId: string, 
-  args: { text: string; target_date?: string; auto_schedule?: boolean },
+  supabase: any,
+  userId: string,
+  args: { text: string; target_date?: string; auto_schedule?: boolean; source_topic_id?: string },
   timezone?: string
 ): Promise<ExecuteToolResponse> {
   const tz = timezone || 'America/New_York';
   const autoSchedule = args.auto_schedule !== false; // Default true
-  
-  console.log(`[PARSE_AND_CREATE] Input: "${args.text}", target_date: ${args.target_date}, auto_schedule: ${autoSchedule}, tz: ${tz}`);
+  const hasThisWeek = /this\s+week/i.test(args.text);
+
+  console.log(`[PARSE_AND_CREATE] Input: "${args.text}", target_date: ${args.target_date}, auto_schedule: ${autoSchedule}, tz: ${tz}, hasThisWeek: ${hasThisWeek}`);
   
   if (!args.text || args.text.trim().length === 0) {
     return { success: false, error: "Task text is required" };
@@ -1177,8 +1190,15 @@ async function parseAndCreateTasks(
     // 5. Create tasks in database with normalized dates
     const createdTasks: any[] = [];
     for (const task of tasks) {
-      // Normalize due_date to end-of-day in user's timezone
-      const rawDueDate = task.due_date || targetDate || null;
+      const isPriority = task.intent === 'priority';
+
+      // Normalize due_date to end-of-day in user's timezone.
+      // Priority + "this week" with no explicit date → end of Sunday.
+      let rawDueDate = task.due_date || targetDate || null;
+      if (isPriority && hasThisWeek && !task.due_date) {
+        rawDueDate = getEndOfSundayISO(tz);
+        console.log(`[PARSE_AND_CREATE] Priority+"this week" → due_date set to end of Sunday: ${rawDueDate}`);
+      }
       const normalizedDueDate = rawDueDate ? normalizeDueDate(rawDueDate, tz) : null;
       
       // Normalize start_time/end_time if provided (treat as local to user's timezone)
@@ -1201,6 +1221,7 @@ async function parseAndCreateTasks(
         priority: (task.priority || 'MEDIUM').toUpperCase(),
         category: (task.category || 'LIFE').toUpperCase(),
         status: task.status || args.default_status || ((normalizedStartTime || normalizedDueDate) ? 'UP_NEXT' : 'BACKLOG'),
+        is_priority: isPriority,
         due_date: normalizedDueDate,
         start_time: normalizedStartTime,
         end_time: normalizedEndTime,
@@ -1218,8 +1239,35 @@ async function parseAndCreateTasks(
 
       if (data) {
         createdTasks.push(data);
-        console.log(`[PARSE_AND_CREATE] Created task: ${data.title} (${data.id}) at ${new Date().toISOString()}`);
-        
+        console.log(`[PARSE_AND_CREATE] Created task: ${data.title} (${data.id}) is_priority=${isPriority} at ${new Date().toISOString()}`);
+
+        // Wire priority board mapping when intent === "priority"
+        if (isPriority) {
+          try {
+            let topicId: string | null = args.source_topic_id || null;
+            if (!topicId) {
+              const { data: topics } = await supabase
+                .from('task_topic_index')
+                .select('id, topic_name')
+                .eq('user_id', userId);
+              if (topics && topics.length > 0) {
+                const keyword = (task.category || '').toLowerCase();
+                const exact = topics.find((t: any) => t.topic_name.toLowerCase() === keyword);
+                const partial = topics.find((t: any) => t.topic_name.toLowerCase().includes(keyword));
+                topicId = (exact || partial)?.id || null;
+              }
+            }
+            if (topicId) {
+              await supabase.from('task_topic_mappings').insert({ task_id: data.id, topic_id: topicId });
+              console.log(`[PARSE_AND_CREATE] Priority task "${data.title}" mapped to topic ${topicId}`);
+            } else {
+              console.log(`[PARSE_AND_CREATE] Priority task "${data.title}" — no matching topic group found`);
+            }
+          } catch (err) {
+            console.error(`[PARSE_AND_CREATE] Topic mapping failed (non-fatal):`, err);
+          }
+        }
+
         // Create Outlook calendar event IMMEDIATELY if task has scheduled time
         if (data.start_time) {
           console.log(`[PARSE_AND_CREATE] Creating immediate Outlook event for "${data.title}" at ${data.start_time}`);
