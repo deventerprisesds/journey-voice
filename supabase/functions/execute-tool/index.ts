@@ -1092,8 +1092,9 @@ function getEndOfSundayISO(tz: string): string {
   const daysToSunday = todayIndex === 0 ? 0 : 7 - todayIndex;
   const todayLocal = now.toLocaleDateString('en-CA', { timeZone: tz }); // YYYY-MM-DD
   const [y, m, d] = todayLocal.split('-').map(Number);
-  const sunday = new Date(y, m - 1, d + daysToSunday);
-  return sunday.toLocaleDateString('en-CA'); // YYYY-MM-DD — caller passes to normalizeDueDate
+  // Use Date.UTC to avoid Deno runtime local-timezone contamination
+  const sundayMs = Date.UTC(y, m - 1, d + daysToSunday);
+  return new Date(sundayMs).toISOString().slice(0, 10); // YYYY-MM-DD
 }
 
 async function parseAndCreateTasks(
