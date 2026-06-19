@@ -1085,9 +1085,9 @@ async function unscheduleTask(supabase: any, args: any): Promise<ExecuteToolResp
 // ============================================================================
 
 async function parseAndCreateTasks(
-  supabase: any, 
-  userId: string, 
-  args: { text: string; target_date?: string; auto_schedule?: boolean },
+  supabase: any,
+  userId: string,
+  args: { text: string; target_date?: string; auto_schedule?: boolean; source_topic_id?: string },
   timezone?: string
 ): Promise<ExecuteToolResponse> {
   const tz = timezone || 'America/New_York';
@@ -1195,12 +1195,15 @@ async function parseAndCreateTasks(
       
       console.log(`[PARSE_AND_CREATE] Task "${task.title}" dates: raw_due=${rawDueDate} → ${normalizedDueDate}, start=${task.start_time} → ${normalizedStartTime}, end=${normalizedEndTime}`);
       
+      const isPriority = task.intent === 'priority';
+
       const taskData = {
         title: task.title,
         description: task.description || null,
         priority: (task.priority || 'MEDIUM').toUpperCase(),
         category: (task.category || 'LIFE').toUpperCase(),
         status: task.status || args.default_status || ((normalizedStartTime || normalizedDueDate) ? 'UP_NEXT' : 'BACKLOG'),
+        is_priority: isPriority,
         due_date: normalizedDueDate,
         start_time: normalizedStartTime,
         end_time: normalizedEndTime,
@@ -1219,7 +1222,49 @@ async function parseAndCreateTasks(
       if (data) {
         createdTasks.push(data);
         console.log(`[PARSE_AND_CREATE] Created task: ${data.title} (${data.id}) at ${new Date().toISOString()}`);
-        
+
+        // Wire priority board mapping if intent === "priority"
+        if (isPriority) {
+          try {
+            // Resolve topic group:
+            // 1. Caller-supplied source_topic_id (Widget 4 will pass this)
+            // 2. group_category from parser matched against topic_name (case-insensitive)
+            // 3. task category matched against topic_name as a fallback
+            let topicId: string | null = args.source_topic_id || null;
+
+            if (!topicId) {
+              const groupCategory = (task.group_category || task.category || '').toUpperCase();
+              // topic_name is user-defined (e.g. "Career", "CAREER", "career goals")
+              // match the first topic whose name contains the category keyword
+              const { data: topics } = await supabase
+                .from('task_topic_index')
+                .select('id, topic_name')
+                .eq('user_id', userId);
+
+              if (topics && topics.length > 0) {
+                const keyword = groupCategory.toLowerCase();
+                // Exact match first, then prefix/contains
+                const exact = topics.find((t: any) => t.topic_name.toLowerCase() === keyword);
+                const partial = topics.find((t: any) => t.topic_name.toLowerCase().includes(keyword));
+                topicId = (exact || partial)?.id || null;
+              }
+            }
+
+            if (topicId) {
+              await supabase.from('task_topic_mappings').insert({
+                task_id: data.id,
+                topic_id: topicId,
+              });
+              console.log(`[PARSE_AND_CREATE] Priority task "${data.title}" mapped to topic ${topicId}`);
+            } else {
+              console.log(`[PARSE_AND_CREATE] Priority task "${data.title}" — no matching topic group found, skipping mapping`);
+            }
+          } catch (err) {
+            // Non-fatal: task was created, just the board mapping failed
+            console.error(`[PARSE_AND_CREATE] Failed to map priority task to topic:`, err);
+          }
+        }
+
         // Create Outlook calendar event IMMEDIATELY if task has scheduled time
         if (data.start_time) {
           console.log(`[PARSE_AND_CREATE] Creating immediate Outlook event for "${data.title}" at ${data.start_time}`);

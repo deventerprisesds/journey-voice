@@ -251,6 +251,13 @@ Examples:
 - "Take Coursera course" → category: "EDUCATION", status: "EDUCATION"
 - "Research startup funding" → category: "VENTURES", status: "VENTURES"
 
+INTENT DETECTION:
+Each task must include an "intent" field:
+- "priority": use when the user's phrasing signals they are explicitly adding something to their priority list / this week's focus. Trigger phrases include: "this week's priority is...", "add a priority for...", "priority:", "add as a priority", "make this a priority", "this is a priority", "for my priorities", "add to priorities". Also trigger when a category is named as a prefix before the task (e.g. "Career: finish the deck", "LIFE: call mom") — this implies priority-board placement.
+- "task": use for all other task creation (default when ambiguous).
+
+When intent is "priority", also extract an optional "group_category" field: the category the user named or implied as their priority group context (e.g. "Career: finish the deck" → group_category: "CAREER"). Leave null if no group is specified.
+
 Return JSON in this exact format:
 {
   "tasks": [
@@ -258,13 +265,15 @@ Return JSON in this exact format:
       "title": "string",
       "description": "string or null",
       "priority": "LOW|MEDIUM|HIGH|URGENT",
-      "category": "LIFE|CAREER|VENTURES|PROF_EDUCATION|EDUCATION", 
+      "category": "LIFE|CAREER|VENTURES|PROF_EDUCATION|EDUCATION",
       "due_date": "ISO string or null",
       "start_time": null,
       "end_time": null,
       "estimate_minutes": number or null,
       "status": "LIFE|CAREER|VENTURES|PROF_EDUCATION|EDUCATION (must match category)",
-      "scheduling_context": []
+      "scheduling_context": [],
+      "intent": "task|priority",
+      "group_category": "LIFE|CAREER|VENTURES|PROF_EDUCATION|EDUCATION or null"
     }
   ]
 }
