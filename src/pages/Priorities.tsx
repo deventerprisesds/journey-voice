@@ -276,15 +276,12 @@ const Priorities: React.FC = () => {
         }
       });
 
-      const getOrder = (catKey: string): string[] => {
-        try {
-          const stored = localStorage.getItem(`priorities-order-${user.id}-${catKey}`);
-          return stored ? JSON.parse(stored) : [];
-        } catch { return []; }
-      };
+      // Build a position lookup from the raw DB rows so the sort is driven
+      // entirely by task_topic_index.position — not localStorage.
+      const positionMap = new Map<string, number>();
+      allTopics.forEach((t: any) => positionMap.set(t.id, t.position ?? 0));
 
       const catData: CategoryData[] = categoryKeys.map(key => {
-        const savedOrder = getOrder(key);
         const catTopics = topics
           .filter((t: any) => topicCategoryMap.get(t.id) === key)
           .map((t: any) => ({
@@ -308,13 +305,10 @@ const Priorities: React.FC = () => {
               children: [],
             })),
           }));
+        // Sort by DB position; fall back to alphabetical for ties (position defaults to 0).
         catTopics.sort((a: any, b: any) => {
-          const aIdx = savedOrder.indexOf(a.id);
-          const bIdx = savedOrder.indexOf(b.id);
-          if (aIdx !== -1 && bIdx !== -1) return aIdx - bIdx;
-          if (aIdx !== -1) return -1;
-          if (bIdx !== -1) return 1;
-          return a.topic_name.localeCompare(b.topic_name);
+          const diff = (positionMap.get(a.id) ?? 0) - (positionMap.get(b.id) ?? 0);
+          return diff !== 0 ? diff : a.topic_name.localeCompare(b.topic_name);
         });
 
         const uncategorized = tasks.filter(
@@ -548,7 +542,6 @@ const Priorities: React.FC = () => {
         const groups = [...cat.topicGroups];
         const [moved] = groups.splice(source.index, 1);
         groups.splice(destination.index, 0, moved);
-        localStorage.setItem(`priorities-order-${user.id}-${srcCatKey}`, JSON.stringify(groups.map(g => g.id)));
         reorderedGroups = groups;
         return { ...cat, topicGroups: groups };
       }));
@@ -575,7 +568,6 @@ const Priorities: React.FC = () => {
             const groups = [...cat.topicGroups];
             const [removed] = groups.splice(source.index, 1);
             movedGroup = removed;
-            localStorage.setItem(`priorities-order-${user.id}-${srcCatKey}`, JSON.stringify(groups.map(g => g.id)));
             srcGroups = groups;
             return { ...cat, topicGroups: groups };
           }
@@ -588,7 +580,6 @@ const Priorities: React.FC = () => {
           if (cat.key === dstCatKey) {
             const groups = [...cat.topicGroups];
             groups.splice(destination.index, 0, movedGroup!);
-            localStorage.setItem(`priorities-order-${user.id}-${dstCatKey}`, JSON.stringify(groups.map(g => g.id)));
             dstGroups = groups;
             return { ...cat, topicGroups: groups };
           }
