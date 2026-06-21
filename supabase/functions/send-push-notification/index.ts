@@ -33,8 +33,96 @@ interface NotificationRequest {
   };
 }
 
+// ── FCM HTTP v1 helpers ──────────────────────────────────────────────────────
+
+async function getFcmAccessToken(serviceAccountJson: string): Promise<string> {
+  const sa = JSON.parse(serviceAccountJson);
+  const now = Math.floor(Date.now() / 1000);
+  const header = btoa(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const claim = btoa(JSON.stringify({
+    iss: sa.client_email,
+    scope: 'https://www.googleapis.com/auth/firebase.messaging',
+    aud: sa.token_uri,
+    iat: now,
+    exp: now + 3600,
+  }));
+  const unsigned = `${header}.${claim}`;
+
+  // Import the private key for signing
+  const pemBody = sa.private_key
+    .replace('-----BEGIN PRIVATE KEY-----', '')
+    .replace('-----END PRIVATE KEY-----', '')
+    .replace(/\s/g, '');
+  const keyBytes = Uint8Array.from(atob(pemBody), c => c.charCodeAt(0));
+  const cryptoKey = await crypto.subtle.importKey(
+    'pkcs8', keyBytes.buffer,
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+    false, ['sign']
+  );
+  const sigBytes = await crypto.subtle.sign(
+    'RSASSA-PKCS1-v1_5', cryptoKey,
+    new TextEncoder().encode(unsigned)
+  );
+  const sig = btoa(String.fromCharCode(...new Uint8Array(sigBytes)));
+  const jwt = `${unsigned}.${sig}`;
+
+  const tokenRes = await fetch(sa.token_uri, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}`,
+  });
+  const tokenData = await tokenRes.json();
+  if (!tokenData.access_token) throw new Error(`FCM token error: ${JSON.stringify(tokenData)}`);
+  return tokenData.access_token;
+}
+
+async function sendFcmNotification(
+  fcmToken: string,
+  title: string,
+  body: string,
+  data: Record<string, string>,
+  serviceAccountJson: string,
+): Promise<void> {
+  const sa = JSON.parse(serviceAccountJson);
+  const accessToken = await getFcmAccessToken(serviceAccountJson);
+
+  const message = {
+    message: {
+      token: fcmToken,
+      notification: { title, body },
+      data,
+      android: {
+        priority: 'high',
+        notification: {
+          channel_id: 'task-reminders',
+          default_vibrate_timings: true,
+          default_sound: true,
+        },
+      },
+    },
+  };
+
+  const res = await fetch(
+    `https://fcm.googleapis.com/v1/projects/${sa.project_id}/messages:send`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(message),
+    }
+  );
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`FCM send failed (${res.status}): ${err}`);
+  }
+}
+
+// ── Main handler ─────────────────────────────────────────────────────────────
+
 serve(async (req) => {
-  // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
@@ -42,36 +130,13 @@ serve(async (req) => {
   try {
     const { userId, title, body, data }: NotificationRequest = await req.json();
 
-    console.log('[send-push-notification] Processing push notification:', { userId, title, body, data });
+    console.log('[send-push-notification] Processing:', { userId, title, body, data });
 
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
-    // Get VAPID keys from environment
-    const vapidPublicKey = Deno.env.get('VAPID_PUBLIC_KEY');
-    const vapidPrivateKey = Deno.env.get('VAPID_PRIVATE_KEY');
-
-    if (!vapidPublicKey || !vapidPrivateKey) {
-      console.error('[send-push-notification] VAPID keys not configured');
-      return new Response(
-        JSON.stringify({ error: 'Push notifications not configured - missing VAPID keys' }),
-        {
-          status: 500,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        }
-      );
-    }
-
-    // Configure web-push with VAPID details
-    webpush.setVapidDetails(
-      'mailto:support@journey-voice.lovable.app',
-      vapidPublicKey,
-      vapidPrivateKey
-    );
-
-    // Fetch user's push subscriptions from database
     const { data: subscriptions, error: fetchError } = await supabaseClient
       .from('push_subscriptions')
       .select('*')
@@ -81,17 +146,12 @@ serve(async (req) => {
       console.error('[send-push-notification] Error fetching subscriptions:', fetchError);
       return new Response(
         JSON.stringify({ error: 'Failed to fetch push subscriptions', details: fetchError.message }),
-        {
-          status: 500,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        }
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
     if (!subscriptions || subscriptions.length === 0) {
-      console.log('[send-push-notification] No push subscriptions found for user:', userId);
-      
-      // Fire-and-forget activity logging
+      console.log('[send-push-notification] No subscriptions for user:', userId);
       supabaseClient.from('activity_log').insert({
         user_id: userId,
         activity_type: 'browser_push_skipped',
@@ -100,63 +160,85 @@ serve(async (req) => {
       }).then(() => {}).catch(() => {});
 
       return new Response(
-        JSON.stringify({ 
-          success: true, 
-          message: 'No push subscriptions found',
-          delivered: 0 
-        }),
-        {
-          status: 200,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        }
+        JSON.stringify({ success: true, message: 'No push subscriptions found', delivered: 0 }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    console.log(`[send-push-notification] Found ${subscriptions.length} subscription(s) for user`);
+    console.log(`[send-push-notification] Found ${subscriptions.length} subscription(s)`);
 
-    // Prepare notification payload
-    // Include messageData at top level for SW to access easily (Slack/SMS model)
-    const payload = JSON.stringify({
+    // FCM service account (may be absent for web-only users)
+    const serviceAccountJson = Deno.env.get('FIREBASE_SERVICE_ACCOUNT_KEY') ?? '';
+
+    // Web push config
+    const vapidPublicKey = Deno.env.get('VAPID_PUBLIC_KEY');
+    const vapidPrivateKey = Deno.env.get('VAPID_PRIVATE_KEY');
+    if (vapidPublicKey && vapidPrivateKey) {
+      webpush.setVapidDetails(
+        'mailto:support@journey-voice.lovable.app',
+        vapidPublicKey,
+        vapidPrivateKey
+      );
+    }
+
+    const webPayload = JSON.stringify({
       title,
       body,
-      data: {
-        ...data,
-        // Ensure messageData is accessible at data.messageData
-        messageData: data?.messageData || null,
-      },
+      data: { ...data, messageData: data?.messageData || null },
       icon: '/icons/iris-icon-192.png',
       badge: '/icons/iris-badge-72.png',
       tag: data?.notificationId || data?.messageId || 'default',
       requireInteraction: true,
     });
 
-    // Send to each subscription
+    // Flatten data values to strings for FCM data payload
+    const fcmData: Record<string, string> = {
+      title,
+      body,
+      type: data?.type ?? '',
+      taskId: data?.taskId ?? '',
+      notificationId: data?.notificationId ?? '',
+    };
+
     const results = await Promise.allSettled(
       subscriptions.map(async (sub) => {
+        // Route FCM subscriptions to Firebase
+        if (sub.fcm_token) {
+          if (!serviceAccountJson) {
+            console.warn('[send-push-notification] FCM token present but FIREBASE_SERVICE_ACCOUNT_KEY not set');
+            return { success: false, endpoint: sub.endpoint, error: 'No FCM credentials' };
+          }
+          try {
+            await sendFcmNotification(sub.fcm_token, title, body, fcmData, serviceAccountJson);
+            console.log('[send-push-notification] FCM sent to token:', sub.fcm_token.substring(0, 20));
+            return { success: true, endpoint: sub.endpoint };
+          } catch (err: any) {
+            console.error('[send-push-notification] FCM send failed:', err.message);
+            return { success: false, endpoint: sub.endpoint, error: err.message };
+          }
+        }
+
+        // Web push path
+        if (!vapidPublicKey || !vapidPrivateKey) {
+          console.warn('[send-push-notification] VAPID keys not configured, skipping web push');
+          return { success: false, endpoint: sub.endpoint, error: 'No VAPID keys' };
+        }
+
         const pushSubscription = {
           endpoint: sub.endpoint,
-          keys: {
-            p256dh: sub.p256dh_key,
-            auth: sub.auth_key,
-          },
+          keys: { p256dh: sub.p256dh_key, auth: sub.auth_key },
         };
 
         try {
-          await webpush.sendNotification(pushSubscription, payload);
-          console.log('[send-push-notification] Successfully sent to endpoint:', sub.endpoint.substring(0, 50));
+          await webpush.sendNotification(pushSubscription, webPayload);
+          console.log('[send-push-notification] Web push sent to:', sub.endpoint.substring(0, 50));
           return { success: true, endpoint: sub.endpoint };
         } catch (pushError: any) {
-          console.error('[send-push-notification] Failed to send to endpoint:', sub.endpoint.substring(0, 50), pushError.message);
-          
-          // If subscription is expired/invalid (410 Gone or 404), remove it
+          console.error('[send-push-notification] Web push failed:', sub.endpoint.substring(0, 50), pushError.message);
           if (pushError.statusCode === 410 || pushError.statusCode === 404) {
             console.log('[send-push-notification] Removing expired subscription');
-            await supabaseClient
-              .from('push_subscriptions')
-              .delete()
-              .eq('id', sub.id);
+            await supabaseClient.from('push_subscriptions').delete().eq('id', sub.id);
           }
-          
           return { success: false, endpoint: sub.endpoint, error: pushError.message };
         }
       })
@@ -165,53 +247,31 @@ serve(async (req) => {
     const successCount = results.filter(r => r.status === 'fulfilled' && (r.value as any).success).length;
     const failureCount = results.length - successCount;
 
-    console.log(`[send-push-notification] Delivery complete: ${successCount} success, ${failureCount} failed`);
+    console.log(`[send-push-notification] Done: ${successCount} success, ${failureCount} failed`);
 
-    // Fire-and-forget activity logging
     supabaseClient.from('activity_log').insert({
       user_id: userId,
       activity_type: failureCount > 0 && successCount === 0 ? 'browser_push_failed' : 'browser_push_sent',
       status: successCount > 0 ? 'completed' : 'error',
-      metadata: { 
-        title, 
-        subscriptionCount: subscriptions.length,
-        successCount,
-        failureCount,
-        taskId: data?.taskId,
-        notificationId: data?.notificationId
-      }
-    }).then(() => {
-      console.log('[send-push-notification] Activity logged');
-    }).catch((logErr) => {
-      console.warn('[send-push-notification] Activity log failed (non-blocking):', logErr);
-    });
+      metadata: { title, subscriptionCount: subscriptions.length, successCount, failureCount, taskId: data?.taskId, notificationId: data?.notificationId }
+    }).then(() => {}).catch(() => {});
 
     return new Response(
-      JSON.stringify({ 
-        success: true, 
+      JSON.stringify({
+        success: true,
         message: `Push notification delivered to ${successCount} of ${subscriptions.length} subscriptions`,
         delivered: successCount,
         failed: failureCount
       }),
-      {
-        status: 200,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      }
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 
   } catch (error) {
-    console.error('[send-push-notification] Error in push notification handler:', error);
+    console.error('[send-push-notification] Error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    
     return new Response(
-      JSON.stringify({ 
-        error: 'Internal server error', 
-        details: errorMessage 
-      }),
-      {
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      }
+      JSON.stringify({ error: 'Internal server error', details: errorMessage }),
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
 });

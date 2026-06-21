@@ -15,8 +15,9 @@ interface PushSubscription {
 }
 
 interface RequestBody {
-  action: 'subscribe' | 'unsubscribe';
+  action: 'subscribe' | 'unsubscribe' | 'subscribe_fcm';
   subscription?: PushSubscription;
+  fcmToken?: string;
   userId: string;
 }
 
@@ -32,7 +33,7 @@ serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
-    const { action, subscription, userId }: RequestBody = await req.json();
+    const { action, subscription, fcmToken, userId }: RequestBody = await req.json();
 
     // Validate userId is provided
     if (!userId) {
@@ -47,6 +48,33 @@ serve(async (req) => {
     }
 
     console.log(`[manage-push-subscription] Processing ${action} request for user:`, userId);
+
+    // Android bridge: store FCM token for native notification routing
+    if (action === 'subscribe_fcm') {
+      if (!fcmToken) {
+        return new Response(JSON.stringify({ error: 'fcmToken required' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+      const { error: upsertError } = await supabaseClient
+        .from('push_subscriptions')
+        .upsert({
+          user_id: userId,
+          endpoint: `fcm:${userId}`,
+          p256dh_key: '',
+          auth_key: '',
+          fcm_token: fcmToken,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'user_id,endpoint' });
+
+      if (upsertError) {
+        console.error('[manage-push-subscription] Error storing FCM token:', upsertError);
+        return new Response(JSON.stringify({ error: 'Failed to store FCM token', details: upsertError.message }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+      console.log('[manage-push-subscription] FCM token stored for user:', userId);
+      return new Response(JSON.stringify({ success: true, message: 'FCM token saved' }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
 
     if (action === 'subscribe') {
       if (!subscription) {

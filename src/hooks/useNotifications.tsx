@@ -3,6 +3,20 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
 
+// Android bridge types injected by JavascriptBridge.kt
+declare global {
+  interface Window {
+    __BRIDGE_PLATFORM__?: string;
+    AndroidBridge?: {
+      notify: (jsonPayload: string) => void;
+      getFcmToken: () => string;
+      isBridgeApp: () => boolean;
+    };
+  }
+}
+
+const isAndroidBridge = typeof window !== 'undefined' && window.__BRIDGE_PLATFORM__ === 'android';
+
 interface NotificationSubscription {
   endpoint: string;
   keys: {
@@ -20,47 +34,73 @@ export const useNotifications = () => {
   const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
-    // Check if notifications are supported
+    if (isAndroidBridge) {
+      // Android bridge always supports notifications — no service worker needed
+      setIsSupported(true);
+      setPermission('granted');
+      return;
+    }
+
     const supported = 'Notification' in window && 'serviceWorker' in navigator && 'PushManager' in window;
     setIsSupported(supported);
-    
     if (supported) {
       setPermission(Notification.permission);
     }
   }, []);
 
   useEffect(() => {
+    if (isAndroidBridge) {
+      // Register FCM token with backend when user is available
+      if (user) registerFcmToken();
+      return;
+    }
+
     if (isSupported && user) {
-      // Register service worker and get existing subscription
       registerServiceWorker();
     }
   }, [isSupported, user]);
 
+  // ── Android: register FCM token with backend ────────────────────────────────
+
+  const registerFcmToken = async () => {
+    if (!user || !window.AndroidBridge) return;
+    const token = window.AndroidBridge.getFcmToken();
+    if (!token) return;
+
+    try {
+      await supabase.functions.invoke('manage-push-subscription', {
+        body: { action: 'subscribe_fcm', fcmToken: token, userId: user.id }
+      });
+      // Mark as subscribed so the UI reflects the correct state
+      setSubscription({ endpoint: `fcm:${token}` } as any);
+    } catch (err) {
+      console.error('[useNotifications] Failed to register FCM token:', err);
+    }
+  };
+
+  // ── Web: service worker registration ───────────────────────────────────────
+
   const registerServiceWorker = async () => {
     try {
       const registration = await navigator.serviceWorker.register('/sw.js', {
-        updateViaCache: 'none' // Force browser to check for SW updates
+        updateViaCache: 'none'
       });
       console.log('Service Worker registered:', registration);
-      
-      // Check for updates on page load
+
       registration.update();
-      
-      // Listen for new SW waiting
+
       registration.addEventListener('updatefound', () => {
         const newWorker = registration.installing;
         if (newWorker) {
           newWorker.addEventListener('statechange', () => {
             if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-              // New version available - activate it immediately
               console.log('New Service Worker version available, activating...');
               newWorker.postMessage({ type: 'SKIP_WAITING' });
             }
           });
         }
       });
-      
-      // Reload page when new SW takes over
+
       let refreshing = false;
       navigator.serviceWorker.addEventListener('controllerchange', () => {
         if (!refreshing) {
@@ -69,13 +109,11 @@ export const useNotifications = () => {
           window.location.reload();
         }
       });
-      
-      // Get existing subscription
+
       const existingSubscription = await (registration as any).pushManager.getSubscription();
       setSubscription(existingSubscription);
-      
+
       if (existingSubscription) {
-        // Sync subscription with backend
         await syncSubscriptionWithBackend(existingSubscription);
       }
     } catch (error) {
@@ -83,7 +121,15 @@ export const useNotifications = () => {
     }
   };
 
+  // ── requestPermission ───────────────────────────────────────────────────────
+
   const requestPermission = async (): Promise<boolean> => {
+    if (isAndroidBridge) {
+      // Android handles notification permission at install time
+      setPermission('granted');
+      return true;
+    }
+
     if (!isSupported) {
       toast({
         title: "Not supported",
@@ -96,7 +142,7 @@ export const useNotifications = () => {
     try {
       const permission = await Notification.requestPermission();
       setPermission(permission);
-      
+
       if (permission === 'granted') {
         toast({
           title: "Notifications enabled",
@@ -122,46 +168,44 @@ export const useNotifications = () => {
     }
   };
 
+  // ── subscribe ───────────────────────────────────────────────────────────────
+
   const subscribe = async (): Promise<boolean> => {
-    if (!isSupported || permission !== 'granted' || !user) {
-      return false;
+    if (isAndroidBridge) {
+      await registerFcmToken();
+      toast({
+        title: "Notifications enabled",
+        description: "You'll receive native Android task reminders",
+      });
+      return true;
     }
+
+    if (!isSupported || permission !== 'granted' || !user) return false;
 
     setIsLoading(true);
     try {
       const registration = await navigator.serviceWorker.ready;
-      
-      // Fetch current VAPID public key from backend
       const vapidPublicKey = await getVapidPublicKey();
-      
-      // Check for existing subscription with potentially different VAPID key
-      // This handles VAPID key rotation gracefully
+
       const existingSubscription = await (registration as any).pushManager.getSubscription();
-      
       if (existingSubscription) {
-        // Always unsubscribe first to handle VAPID key changes
-        // PushManager.subscribe() throws if applicationServerKey differs from existing subscription
         console.log('[useNotifications] Removing existing subscription before re-subscribing');
         try {
           await existingSubscription.unsubscribe();
           await removeSubscriptionFromBackend();
         } catch (unsubError) {
           console.warn('[useNotifications] Could not unsubscribe old subscription:', unsubError);
-          // Continue anyway - the new subscribe call will either work or fail gracefully
         }
       }
-      
-      // Create new subscription with current VAPID key
+
       const pushSubscription = await (registration as any).pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey: urlBase64ToUint8Array(vapidPublicKey).buffer as ArrayBuffer
       });
 
       setSubscription(pushSubscription);
-      
-      // Send subscription to backend
+
       const success = await syncSubscriptionWithBackend(pushSubscription);
-      
       if (success) {
         toast({
           title: "Subscribed to notifications",
@@ -174,7 +218,6 @@ export const useNotifications = () => {
     } catch (error) {
       console.error('[useNotifications] Error subscribing to push notifications:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      console.error('[useNotifications] Error details:', errorMessage);
       toast({
         title: "Subscription failed",
         description: `Push subscription error: ${errorMessage}`,
@@ -186,25 +229,25 @@ export const useNotifications = () => {
     }
   };
 
+  // ── unsubscribe ─────────────────────────────────────────────────────────────
+
   const unsubscribe = async (): Promise<boolean> => {
-    if (!subscription || !user) {
-      return false;
+    if (isAndroidBridge) {
+      await removeSubscriptionFromBackend();
+      setSubscription(null);
+      toast({ title: "Unsubscribed", description: "You'll no longer receive push notifications" });
+      return true;
     }
+
+    if (!subscription || !user) return false;
 
     setIsLoading(true);
     try {
-      // Unsubscribe from push manager
       const success = await subscription.unsubscribe();
-      
       if (success) {
-        // Remove subscription from backend
         await removeSubscriptionFromBackend();
         setSubscription(null);
-        
-        toast({
-          title: "Unsubscribed",
-          description: "You'll no longer receive push notifications",
-        });
+        toast({ title: "Unsubscribed", description: "You'll no longer receive push notifications" });
         return true;
       }
       return false;
@@ -221,30 +264,25 @@ export const useNotifications = () => {
     }
   };
 
-  /**
-   * Force resubscribe - clears all stale data and creates fresh subscription
-   * Use when VAPID keys have changed or subscription is in a bad state
-   */
+  // ── forceResubscribe ────────────────────────────────────────────────────────
+
   const forceResubscribe = async (): Promise<boolean> => {
+    if (isAndroidBridge) {
+      await registerFcmToken();
+      toast({ title: "Push refreshed", description: "FCM token re-registered" });
+      return true;
+    }
+
     if (!user) {
-      toast({
-        title: "Not logged in",
-        description: "Please log in to enable notifications",
-        variant: "destructive",
-      });
+      toast({ title: "Not logged in", description: "Please log in to enable notifications", variant: "destructive" });
       return false;
     }
 
     setIsLoading(true);
     try {
       console.log('[useNotifications] Starting force resubscribe...');
-      
-      // 1. Remove all backend subscriptions for this user
-      console.log('[useNotifications] Step 1: Removing backend subscriptions...');
       await removeSubscriptionFromBackend();
-      
-      // 2. Get current SW registration and unsubscribe from any push
-      console.log('[useNotifications] Step 2: Unsubscribing from push manager...');
+
       const registration = await navigator.serviceWorker.ready;
       const existingSub = await (registration as any).pushManager.getSubscription();
       if (existingSub) {
@@ -256,50 +294,31 @@ export const useNotifications = () => {
         }
       }
       setSubscription(null);
-      
-      // 3. Clear the service worker cache to bust any stale data
-      console.log('[useNotifications] Step 3: Clearing service worker caches...');
+
       try {
         const cacheNames = await caches.keys();
-        for (const name of cacheNames) {
-          await caches.delete(name);
-        }
+        for (const name of cacheNames) await caches.delete(name);
         console.log('[useNotifications] Cleared', cacheNames.length, 'caches');
       } catch (e) {
         console.warn('[useNotifications] Failed to clear caches:', e);
       }
-      
-      // 4. Ensure permission is still granted
+
       if (Notification.permission !== 'granted') {
         const permission = await Notification.requestPermission();
-        if (permission !== 'granted') {
-          throw new Error('Notification permission denied');
-        }
+        if (permission !== 'granted') throw new Error('Notification permission denied');
       }
-      
-      // 5. Now subscribe fresh with current VAPID key
-      console.log('[useNotifications] Step 4: Creating fresh subscription...');
+
       const vapidPublicKey = await getVapidPublicKey();
-      console.log('[useNotifications] Got VAPID key:', vapidPublicKey.substring(0, 20) + '...');
-      
       const pushSubscription = await (registration as any).pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey: urlBase64ToUint8Array(vapidPublicKey).buffer as ArrayBuffer
       });
-      
-      console.log('[useNotifications] New subscription created:', pushSubscription.endpoint.substring(0, 50) + '...');
+
       setSubscription(pushSubscription);
-      
-      // 6. Sync with backend
-      console.log('[useNotifications] Step 5: Syncing with backend...');
       const success = await syncSubscriptionWithBackend(pushSubscription);
-      
+
       if (success) {
-        console.log('[useNotifications] Force resubscribe completed successfully!');
-        toast({
-          title: "Push refreshed",
-          description: "Successfully refreshed push notification registration",
-        });
+        toast({ title: "Push refreshed", description: "Successfully refreshed push notification registration" });
         return true;
       } else {
         throw new Error('Failed to sync new subscription with backend');
@@ -307,100 +326,30 @@ export const useNotifications = () => {
     } catch (error) {
       console.error('[useNotifications] Force resubscribe failed:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      toast({
-        title: "Refresh failed",
-        description: `Could not refresh push subscription: ${errorMessage}`,
-        variant: "destructive",
-      });
+      toast({ title: "Refresh failed", description: `Could not refresh push subscription: ${errorMessage}`, variant: "destructive" });
       return false;
     } finally {
       setIsLoading(false);
     }
   };
 
-  const getVapidPublicKey = async (): Promise<string> => {
-    try {
-      const { data, error } = await supabase.functions.invoke('get-vapid-key');
-      
-      if (error) {
-        console.error('Error fetching VAPID key:', error);
-        throw new Error('Failed to fetch VAPID key');
-      }
-      
-      if (!data?.vapidPublicKey) {
-        throw new Error('VAPID key not configured on server');
-      }
-      
-      return data.vapidPublicKey;
-    } catch (error) {
-      console.error('Failed to get VAPID public key:', error);
-      throw error;
-    }
-  };
-
-  const syncSubscriptionWithBackend = async (pushSubscription: PushSubscription): Promise<boolean> => {
-    if (!user) return false;
-
-    try {
-      const subscriptionData = {
-        endpoint: pushSubscription.endpoint,
-        keys: {
-          p256dh: arrayBufferToBase64(pushSubscription.getKey('p256dh')!),
-          auth: arrayBufferToBase64(pushSubscription.getKey('auth')!)
-        }
-      };
-
-      // Call edge function to save subscription (pass userId explicitly per project pattern)
-      const { error } = await supabase.functions.invoke('manage-push-subscription', {
-        body: {
-          action: 'subscribe',
-          subscription: subscriptionData,
-          userId: user.id
-        }
-      });
-
-      if (error) {
-        console.error('Error syncing subscription:', error);
-        return false;
-      }
-
-      return true;
-    } catch (error) {
-      console.error('Error syncing subscription with backend:', error);
-      return false;
-    }
-  };
-
-  const removeSubscriptionFromBackend = async (): Promise<boolean> => {
-    if (!user) return false;
-
-    try {
-      const { error } = await supabase.functions.invoke('manage-push-subscription', {
-        body: {
-          action: 'unsubscribe',
-          userId: user.id
-        }
-      });
-
-      if (error) {
-        console.error('Error removing subscription:', error);
-        return false;
-      }
-
-      return true;
-    } catch (error) {
-      console.error('Error removing subscription from backend:', error);
-      return false;
-    }
-  };
+  // ── sendTestNotification ────────────────────────────────────────────────────
 
   const sendTestNotification = async () => {
+    if (isAndroidBridge && window.AndroidBridge) {
+      window.AndroidBridge.notify(JSON.stringify({
+        channel: 'task-reminders',
+        title: '🧪 Test Notification',
+        body: 'Native Android notification working correctly.',
+        deepLink: '/',
+        tag: 'test'
+      }));
+      toast({ title: "Test sent", description: "Check your Android notification shade" });
+      return;
+    }
+
     if (!user || !subscription) {
-      toast({
-        title: "Not subscribed",
-        description: "Please subscribe to notifications first",
-        variant: "destructive",
-      });
+      toast({ title: "Not subscribed", description: "Please subscribe to notifications first", variant: "destructive" });
       return;
     }
 
@@ -415,21 +364,58 @@ export const useNotifications = () => {
         }
       });
 
-      if (error) {
-        throw error;
-      }
+      if (error) throw error;
 
-      toast({
-        title: "Test notification sent",
-        description: "Check your unified webhook for the test notification.",
-      });
+      toast({ title: "Test notification sent", description: "Check your unified webhook for the test notification." });
     } catch (error) {
       console.error('Error sending test notification:', error);
-      toast({
-        title: "Test failed",
-        description: "Failed to send test notification",
-        variant: "destructive",
+      toast({ title: "Test failed", description: "Failed to send test notification", variant: "destructive" });
+    }
+  };
+
+  // ── backend helpers ─────────────────────────────────────────────────────────
+
+  const getVapidPublicKey = async (): Promise<string> => {
+    const { data, error } = await supabase.functions.invoke('get-vapid-key');
+    if (error || !data?.vapidPublicKey) throw new Error('Failed to fetch VAPID key');
+    return data.vapidPublicKey;
+  };
+
+  const syncSubscriptionWithBackend = async (pushSubscription: PushSubscription): Promise<boolean> => {
+    if (!user) return false;
+    try {
+      const { error } = await supabase.functions.invoke('manage-push-subscription', {
+        body: {
+          action: 'subscribe',
+          subscription: {
+            endpoint: pushSubscription.endpoint,
+            keys: {
+              p256dh: arrayBufferToBase64(pushSubscription.getKey('p256dh')!),
+              auth: arrayBufferToBase64(pushSubscription.getKey('auth')!)
+            }
+          },
+          userId: user.id
+        }
       });
+      if (error) { console.error('Error syncing subscription:', error); return false; }
+      return true;
+    } catch (error) {
+      console.error('Error syncing subscription with backend:', error);
+      return false;
+    }
+  };
+
+  const removeSubscriptionFromBackend = async (): Promise<boolean> => {
+    if (!user) return false;
+    try {
+      const { error } = await supabase.functions.invoke('manage-push-subscription', {
+        body: { action: 'unsubscribe', userId: user.id }
+      });
+      if (error) { console.error('Error removing subscription:', error); return false; }
+      return true;
+    } catch (error) {
+      console.error('Error removing subscription from backend:', error);
+      return false;
     }
   };
 
@@ -438,6 +424,7 @@ export const useNotifications = () => {
     permission,
     subscription: !!subscription,
     isLoading,
+    isAndroidBridge,
     requestPermission,
     subscribe,
     unsubscribe,
@@ -446,19 +433,14 @@ export const useNotifications = () => {
   };
 };
 
-// Utility functions
+// ── Utility functions ───────────────────────────────────────────────────────
+
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
   const padding = '='.repeat((4 - base64String.length % 4) % 4);
-  const base64 = (base64String + padding)
-    .replace(/-/g, '+')
-    .replace(/_/g, '/');
-
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
   const rawData = window.atob(base64);
   const outputArray = new Uint8Array(rawData.length);
-
-  for (let i = 0; i < rawData.length; ++i) {
-    outputArray[i] = rawData.charCodeAt(i);
-  }
+  for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
   return outputArray;
 }
 
