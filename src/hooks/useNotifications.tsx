@@ -344,48 +344,26 @@ export const useNotifications = () => {
   // ── sendTestNotification ────────────────────────────────────────────────────
 
   const sendTestNotification = async () => {
-    if (isAndroidBridge && window.AndroidBridge) {
-      // Cancel any previous test alarm so it doesn't keep repeating
-      window.AndroidBridge.cancelAlarm?.('test');
-      const result = window.AndroidBridge.notify(JSON.stringify({
-        channel: 'task-reminders',
-        title: '🧪 Test Notification',
-        body: 'Native Android notification working correctly.',
-        deepLink: '/',
-        tag: 'test',
-        repeat: false
-      }));
-      // Show result toast FIRST (before any async work that could mask it)
-      let parsed: any = null;
-      try { parsed = JSON.parse(result); } catch { /* result was undefined or malformed */ }
-
-      if (parsed) {
-        const desc = parsed.notifEnabled === false
-          ? 'Notifications are disabled in Android settings — enable in Settings > Apps > Journey Voice > Notifications'
-          : parsed.channelEnabled === false
-            ? `Channel "${parsed.channelId}" is disabled — enable in Settings > Apps > Journey Voice > Notifications`
-            : parsed.success
-              ? `Posted to channel "${parsed.channelId}" — check your notification shade`
-              : `Failed: ${parsed.error || JSON.stringify(parsed)}`;
-        toast({
-          title: parsed.success ? 'Test notification sent' : 'Notification failed',
-          description: desc,
-          variant: parsed.success ? 'default' : 'destructive',
-        });
-      } else {
-        // notify() returned undefined — APK predates debug return (should not happen on .32+)
-        toast({ title: 'Test sent (no debug)', description: `Raw result: ${String(result)} — APK may be outdated` });
+    if (isAndroidBridge) {
+      if (!user) {
+        toast({ title: 'Not logged in', description: 'Please log in to send a test notification', variant: 'destructive' });
+        return;
       }
-
-      // Fire-and-forget DB log — never block or throw to the user
-      supabase.from('bridge_diagnostics').insert({
-        user_id: user?.id,
-        is_android_bridge: true,
-        user_agent: navigator.userAgent,
-        js_bundle: (import.meta as any).url ?? 'unknown',
-        window_android_bridge_present: true,
-        apk_capabilities: parsed ?? { raw: String(result) },
-      } as any).then(({ error }) => { if (error) console.warn('bridge_diagnostics insert:', error.message); });
+      try {
+        const { error } = await supabase.functions.invoke('send-push-notification', {
+          body: {
+            userId: user.id,
+            title: '🧪 Test Notification',
+            body: 'Native Android notification working correctly.',
+            data: { type: 'test', channel: 'task_reminders', deepLink: '/' }
+          }
+        });
+        if (error) throw error;
+        toast({ title: 'Test notification sent', description: 'Check your notification shade' });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        toast({ title: 'Test failed', description: msg, variant: 'destructive' });
+      }
       return;
     }
 
