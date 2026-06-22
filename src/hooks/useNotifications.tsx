@@ -15,7 +15,14 @@ declare global {
   }
 }
 
-const isAndroidBridge = typeof window !== 'undefined' && window.__BRIDGE_PLATFORM__ === 'android';
+// window.AndroidBridge is registered via addJavascriptInterface() before page load — reliable at module eval time.
+// window.__BRIDGE_PLATFORM__ is set via evaluateJavascript() which races with React bundle evaluation.
+// User-agent is set before page load and is the most reliable fallback.
+const isAndroidBridge = typeof window !== 'undefined' && (
+  !!window.AndroidBridge ||
+  navigator.userAgent.includes('BridgeApp/') ||
+  window.__BRIDGE_PLATFORM__ === 'android'
+);
 
 interface NotificationSubscription {
   endpoint: string;
