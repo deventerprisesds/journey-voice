@@ -19,9 +19,9 @@
         "deepLink": "/tasks"
       },
       {
-        "id": "task_reminders",
+        "id": "task-reminders",
         "name": "Task Reminders",
-        "description": "Overdue and due-soon task alerts",
+        "description": "Overdue and due-soon task alerts — ID uses hyphens to match live edge function. See send-push-notification/index.ts.",
         "importance": "high",
         "sound": "default",
         "vibrate": true,

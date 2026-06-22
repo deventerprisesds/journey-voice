@@ -355,7 +355,8 @@ export const useNotifications = () => {
             userId: user.id,
             title: '🧪 Test Notification',
             body: 'Native Android notification working correctly.',
-            data: { type: 'test', channel: 'task_reminders', deepLink: '/' }
+            data: { type: 'test', channel: 'task-reminders', deepLink: '/' }
+            // NOTE: hyphen matches live edge function channel_id — see send-push-notification/index.ts
           }
         });
         if (error) throw error;
