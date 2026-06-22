@@ -561,9 +561,17 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     };
     
     navigator.serviceWorker?.addEventListener('message', handleServiceWorkerMessage);
-    
+
+    // Android bridge equivalent: BridgeFirebaseService dispatches window events
+    // instead of service worker postMessage (no SW in WebView).
+    const handleBridgeMessage = (event: Event) => {
+      handleServiceWorkerMessage({ data: (event as CustomEvent).detail } as MessageEvent);
+    };
+    window.addEventListener('bridgeMessage', handleBridgeMessage);
+
     return () => {
       navigator.serviceWorker?.removeEventListener('message', handleServiceWorkerMessage);
+      window.removeEventListener('bridgeMessage', handleBridgeMessage);
     };
   }, [userId, dbThreadId]);
   

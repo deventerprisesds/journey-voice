@@ -8,7 +8,7 @@ declare global {
   interface Window {
     __BRIDGE_PLATFORM__?: string;
     AndroidBridge?: {
-      notify: (jsonPayload: string) => void;
+      notify: (jsonPayload: string) => string;
       getFcmToken: () => string;
       isBridgeApp: () => boolean;
     };
@@ -344,14 +344,32 @@ export const useNotifications = () => {
 
   const sendTestNotification = async () => {
     if (isAndroidBridge && window.AndroidBridge) {
-      window.AndroidBridge.notify(JSON.stringify({
+      const result = window.AndroidBridge.notify(JSON.stringify({
         channel: 'task-reminders',
         title: '🧪 Test Notification',
         body: 'Native Android notification working correctly.',
         deepLink: '/',
         tag: 'test'
       }));
-      toast({ title: "Test sent", description: "Check your Android notification shade" });
+      // Log debug result to DB so we can diagnose silently-dropped notifications
+      try {
+        const parsed = JSON.parse(result);
+        await supabase.from('bridge_diagnostics').insert({
+          user_id: user?.id,
+          is_android_bridge: true,
+          user_agent: navigator.userAgent,
+          js_bundle: (import.meta as any).url ?? 'unknown',
+          window_android_bridge_present: true,
+          apk_capabilities: parsed,
+        } as any);
+        const desc = parsed.success
+          ? (parsed.channelEnabled ? 'Check notification shade' : `Channel "${parsed.channelId}" is disabled in Android settings`)
+          : `Failed: ${parsed.error || JSON.stringify(parsed)}`;
+        toast({ title: parsed.success ? "Test sent" : "Notification failed", description: desc,
+          variant: parsed.success ? 'default' : 'destructive' });
+      } catch {
+        toast({ title: "Test sent", description: "Check your Android notification shade" });
+      }
       return;
     }
 
