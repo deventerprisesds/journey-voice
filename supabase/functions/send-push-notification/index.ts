@@ -36,17 +36,20 @@ interface NotificationRequest {
 
 // ── FCM HTTP v1 helpers ──────────────────────────────────────────────────────
 
+// JWT requires base64url encoding: replace + with -, / with _, strip = padding
+const toBase64Url = (b64: string) => b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+
 async function getFcmAccessToken(serviceAccountJson: string): Promise<string> {
   const sa = JSON.parse(serviceAccountJson);
   const now = Math.floor(Date.now() / 1000);
-  const header = btoa(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
-  const claim = btoa(JSON.stringify({
+  const header = toBase64Url(btoa(JSON.stringify({ alg: 'RS256', typ: 'JWT' })));
+  const claim = toBase64Url(btoa(JSON.stringify({
     iss: sa.client_email,
     scope: 'https://www.googleapis.com/auth/firebase.messaging',
     aud: sa.token_uri,
     iat: now,
     exp: now + 3600,
-  }));
+  })));
   const unsigned = `${header}.${claim}`;
 
   // Import the private key for signing
@@ -64,13 +67,13 @@ async function getFcmAccessToken(serviceAccountJson: string): Promise<string> {
     'RSASSA-PKCS1-v1_5', cryptoKey,
     new TextEncoder().encode(unsigned)
   );
-  const sig = btoa(String.fromCharCode(...new Uint8Array(sigBytes)));
+  const sig = toBase64Url(btoa(String.fromCharCode(...new Uint8Array(sigBytes))));
   const jwt = `${unsigned}.${sig}`;
 
   const tokenRes = await fetch(sa.token_uri, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}`,
+    body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(jwt)}`,
   });
   const tokenData = await tokenRes.json();
   if (!tokenData.access_token) throw new Error(`FCM token error: ${JSON.stringify(tokenData)}`);
