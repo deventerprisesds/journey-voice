@@ -570,6 +570,19 @@ const NotificationSettings = () => {
     } catch { toast({ title: "Error", description: "Failed to send test Slack notification.", variant: "destructive" }); }
   };
 
+  const sendTestAlarm = () => {
+    if (!window.AndroidBridge) return;
+    window.AndroidBridge.cancelAlarm?.('test-alarm');
+    window.AndroidBridge.notify(JSON.stringify({
+      channel: 'calendar-events',
+      title: '🔔 Event Starting Now',
+      body: 'Test: alarm notification with Snooze and Dismiss',
+      deepLink: '/calendar',
+      tag: 'test-alarm'
+    }));
+    toast({ title: 'Alarm fired', description: 'Check your notification shade' });
+  };
+
   const sendTestPush = async () => {
     if (!pushNotifications.subscription) { toast({ title: "Not Subscribed", variant: "destructive" }); return; }
     // On Android bridge: fire a local native notification immediately via the bridge.
@@ -941,6 +954,11 @@ const NotificationSettings = () => {
             <Button onClick={createTestTaskWithNotifications} variant="outline" className="w-full col-span-2">
               <Calendar className="h-4 w-4 mr-2" />Create Test Task
             </Button>
+            {pushNotifications.isAndroidBridge && (
+              <Button onClick={sendTestAlarm} variant="outline" className="w-full col-span-2">
+                <Bell className="h-4 w-4 mr-2" />Test Alarm (Android)
+              </Button>
+            )}
           </div>
         </CardContent>
       </Card>
