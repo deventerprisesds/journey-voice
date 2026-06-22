@@ -734,6 +734,54 @@ export type Database = {
         }
         Relationships: []
       }
+      bridge_diagnostics: {
+        Row: {
+          apk_capabilities: Json | null
+          apk_version: string | null
+          bridge_platform_flag: string | null
+          created_at: string
+          fcm_token_prefix: string | null
+          fcm_token_present: boolean | null
+          id: string
+          is_android_bridge: boolean
+          js_bundle: string | null
+          push_sub_endpoint: string | null
+          user_agent: string | null
+          user_id: string | null
+          window_android_bridge_present: boolean | null
+        }
+        Insert: {
+          apk_capabilities?: Json | null
+          apk_version?: string | null
+          bridge_platform_flag?: string | null
+          created_at?: string
+          fcm_token_prefix?: string | null
+          fcm_token_present?: boolean | null
+          id?: string
+          is_android_bridge: boolean
+          js_bundle?: string | null
+          push_sub_endpoint?: string | null
+          user_agent?: string | null
+          user_id?: string | null
+          window_android_bridge_present?: boolean | null
+        }
+        Update: {
+          apk_capabilities?: Json | null
+          apk_version?: string | null
+          bridge_platform_flag?: string | null
+          created_at?: string
+          fcm_token_prefix?: string | null
+          fcm_token_present?: boolean | null
+          id?: string
+          is_android_bridge?: boolean
+          js_bundle?: string | null
+          push_sub_endpoint?: string | null
+          user_agent?: string | null
+          user_id?: string | null
+          window_android_bridge_present?: boolean | null
+        }
+        Relationships: []
+      }
       calendar_connections: {
         Row: {
           access_token: string
@@ -2822,6 +2870,7 @@ export type Database = {
           auth_key: string
           created_at: string | null
           endpoint: string
+          fcm_token: string | null
           id: string
           p256dh_key: string
           updated_at: string | null
@@ -2831,6 +2880,7 @@ export type Database = {
           auth_key: string
           created_at?: string | null
           endpoint: string
+          fcm_token?: string | null
           id?: string
           p256dh_key: string
           updated_at?: string | null
@@ -2840,6 +2890,7 @@ export type Database = {
           auth_key?: string
           created_at?: string | null
           endpoint?: string
+          fcm_token?: string | null
           id?: string
           p256dh_key?: string
           updated_at?: string | null
