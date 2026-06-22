@@ -191,6 +191,24 @@ const Auth = () => {
     // Environment-aware OAuth strategy
     const isProductionDomain = window.location.hostname === 'journey-voice.lovable.app';
     
+    // Android WebView bridge: use custom URI scheme so the Custom Tab closes after OAuth
+    // and returns control to the WebView. window.AndroidBridge is only present inside the
+    // WebView (injected by addJavascriptInterface), so this is a proven signal, not an inference.
+    if (typeof window !== 'undefined' && !!window.AndroidBridge) {
+      console.log('[Auth] Android WebView detected - using custom URI scheme redirect');
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: 'journey-voice://auth'
+        }
+      });
+      if (error) {
+        toast({ variant: "destructive", title: "Google sign in failed", description: error.message });
+        setLoading(false);
+      }
+      return;
+    }
+
     if (isProductionDomain) {
       // Production: Use standard redirect (no popup issues, no skipBrowserRedirect)
       console.log('[Auth] Production domain detected - using standard OAuth redirect');
