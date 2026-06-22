@@ -11,6 +11,7 @@ interface NotificationRequest {
   userId: string;
   title: string;
   body: string;
+  channel?: string;
   data?: {
     type: string;
     taskId?: string;
@@ -35,20 +36,22 @@ interface NotificationRequest {
 
 // ── FCM HTTP v1 helpers ──────────────────────────────────────────────────────
 
+// JWT requires base64url encoding: replace + with -, / with _, strip = padding
+const toBase64Url = (b64: string) => b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+
 async function getFcmAccessToken(serviceAccountJson: string): Promise<string> {
   const sa = JSON.parse(serviceAccountJson);
   const now = Math.floor(Date.now() / 1000);
-  const header = btoa(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
-  const claim = btoa(JSON.stringify({
+  const header = toBase64Url(btoa(JSON.stringify({ alg: 'RS256', typ: 'JWT' })));
+  const claim = toBase64Url(btoa(JSON.stringify({
     iss: sa.client_email,
     scope: 'https://www.googleapis.com/auth/firebase.messaging',
     aud: sa.token_uri,
     iat: now,
     exp: now + 3600,
-  }));
+  })));
   const unsigned = `${header}.${claim}`;
 
-  // Import the private key for signing
   const pemBody = sa.private_key
     .replace('-----BEGIN PRIVATE KEY-----', '')
     .replace('-----END PRIVATE KEY-----', '')
@@ -63,13 +66,13 @@ async function getFcmAccessToken(serviceAccountJson: string): Promise<string> {
     'RSASSA-PKCS1-v1_5', cryptoKey,
     new TextEncoder().encode(unsigned)
   );
-  const sig = btoa(String.fromCharCode(...new Uint8Array(sigBytes)));
+  const sig = toBase64Url(btoa(String.fromCharCode(...new Uint8Array(sigBytes))));
   const jwt = `${unsigned}.${sig}`;
 
   const tokenRes = await fetch(sa.token_uri, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}`,
+    body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${encodeURIComponent(jwt)}`,
   });
   const tokenData = await tokenRes.json();
   if (!tokenData.access_token) throw new Error(`FCM token error: ${JSON.stringify(tokenData)}`);
@@ -86,6 +89,10 @@ async function sendFcmNotification(
   const sa = JSON.parse(serviceAccountJson);
   const accessToken = await getFcmAccessToken(serviceAccountJson);
 
+  // Read channel from the flattened data record — it's already set by the caller
+  // and must match the id in bridge.config.json (hyphen: 'task-reminders')
+  const channelId = data['channel'] ?? 'task-reminders';
+
   const message = {
     message: {
       token: fcmToken,
@@ -94,7 +101,7 @@ async function sendFcmNotification(
       android: {
         priority: 'high',
         notification: {
-          channel_id: 'task-reminders',
+          channel_id: channelId,
           default_vibrate_timings: true,
           default_sound: true,
         },
@@ -128,9 +135,9 @@ serve(async (req) => {
   }
 
   try {
-    const { userId, title, body, data }: NotificationRequest = await req.json();
+    const { userId, title, body, channel, data }: NotificationRequest = await req.json();
 
-    console.log('[send-push-notification] Processing:', { userId, title, body, data });
+    console.log('[send-push-notification] Processing:', { userId, title, body, channel, data });
 
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
@@ -191,14 +198,16 @@ serve(async (req) => {
       requireInteraction: true,
     });
 
-    // Flatten data values to strings for FCM data payload
+    // Flatten all values to strings for FCM data payload.
+    // channel is included so BridgeFirebaseService.onMessageReceived() routes
+    // to the correct Android notification channel — must match bridge.config.json id (hyphen).
     const fcmData: Record<string, string> = {
       title,
       body,
       type: data?.type ?? '',
       taskId: data?.taskId ?? '',
       notificationId: data?.notificationId ?? '',
-      channel: 'task-reminders',
+      channel: channel ?? 'task-reminders',
     };
 
     const results = await Promise.allSettled(
@@ -207,14 +216,27 @@ serve(async (req) => {
         if (sub.fcm_token) {
           if (!serviceAccountJson) {
             console.warn('[send-push-notification] FCM token present but FIREBASE_SERVICE_ACCOUNT_KEY not set');
+            await supabaseClient.from('activity_log').insert({
+              user_id: userId, activity_type: 'fcm_send_skipped', status: 'error',
+              metadata: { reason: 'no_service_account', token_prefix: sub.fcm_token.substring(0, 20) }
+            }).then(() => {}).catch(() => {});
             return { success: false, endpoint: sub.endpoint, error: 'No FCM credentials' };
           }
           try {
             await sendFcmNotification(sub.fcm_token, title, body, fcmData, serviceAccountJson);
             console.log('[send-push-notification] FCM sent to token:', sub.fcm_token.substring(0, 20));
+            await supabaseClient.from('activity_log').insert({
+              user_id: userId, activity_type: 'fcm_send_success', status: 'completed',
+              metadata: { token_prefix: sub.fcm_token.substring(0, 20), channel: fcmData.channel, title }
+            }).then(() => {}).catch(() => {});
             return { success: true, endpoint: sub.endpoint };
           } catch (err: any) {
             console.error('[send-push-notification] FCM send failed:', err.message);
+            await supabaseClient.from('activity_log').insert({
+              user_id: userId, activity_type: 'fcm_send_failed', status: 'error',
+              error_message: err.message,
+              metadata: { token_prefix: sub.fcm_token.substring(0, 20), channel: fcmData.channel, title }
+            }).then(() => {}).catch(() => {});
             return { success: false, endpoint: sub.endpoint, error: err.message };
           }
         }
