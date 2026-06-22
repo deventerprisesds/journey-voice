@@ -578,25 +578,23 @@ serve(async (req) => {
           if (primaryType === 'calendar_event_reminder') androidChannel = 'calendar_events';
           else if (primaryType === 'daily_digest' || primaryType === 'batched_reminders') androidChannel = 'messages';
 
-          if (enabledChannels.includes('PUSH')) {
-            const { data: pushResult, error: pushError } = await supabaseClient.functions.invoke('send-push-notification', {
-              body: {
-                userId: userId,
-                title: title,
-                body: body,
-                channel: androidChannel,
-                data: {
-                  type: primaryType,
-                  taskId: batchNotifications.length === 1 ? batchNotifications[0].task_id : null,
-                  notificationIds: notificationIds,
-                  batchSize: batchNotifications.length
-                }
+          const { error: pushError } = await supabaseClient.functions.invoke('send-push-notification', {
+            body: {
+              userId: userId,
+              title: title,
+              body: body,
+              channel: androidChannel,
+              data: {
+                type: primaryType,
+                taskId: batchNotifications.length === 1 ? batchNotifications[0].task_id : null,
+                notificationIds: notificationIds,
+                batchSize: batchNotifications.length
               }
-            });
-
-            if (pushError) {
-              console.error(`Push notification failed: ${pushError.message}`);
             }
+          });
+
+          if (pushError) {
+            console.error(`Push notification failed: ${pushError.message}`);
           }
 
           const channelsForDelivery = enabledChannels.filter((channel: string) => {

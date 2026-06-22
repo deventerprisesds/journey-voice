@@ -202,8 +202,15 @@ serve(async (req) => {
       channel: channel ?? 'task-reminders',
     };
 
+    // If the user has any FCM token registered, send only via FCM.
+    // This prevents duplicate notifications from both the Android app and the browser.
+    const hasFcmToken = subscriptions.some((s: any) => s.fcm_token);
+    const subsToNotify = hasFcmToken
+      ? subscriptions.filter((s: any) => s.fcm_token)
+      : subscriptions;
+
     const results = await Promise.allSettled(
-      subscriptions.map(async (sub) => {
+      subsToNotify.map(async (sub) => {
         // Route FCM subscriptions to Firebase
         if (sub.fcm_token) {
           if (!serviceAccountJson) {
