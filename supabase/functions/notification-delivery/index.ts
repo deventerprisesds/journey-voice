@@ -572,30 +572,35 @@ serve(async (req) => {
 
           const enabledChannels = userPrefs?.channels || ['PUSH'];
 
-          const { data: pushResult, error: pushError } = await supabaseClient.functions.invoke('send-push-notification', {
-            body: {
-              userId: userId,
-              title: title,
-              body: body,
-              data: {
-                type: batchNotifications.length === 1 ? batchNotifications[0].notification_type : 'batched_reminders',
-                taskId: batchNotifications.length === 1 ? batchNotifications[0].task_id : null,
-                notificationIds: notificationIds,
-                batchSize: batchNotifications.length
-              }
-            }
-          });
+          // Determine the Android notification channel based on notification type
+          const primaryType = batchNotifications.length === 1 ? batchNotifications[0].notification_type : 'batched_reminders';
+          let androidChannel = 'task-reminders';
+          if (primaryType === 'calendar_event_reminder') androidChannel = 'calendar_events';
+          else if (primaryType === 'daily_digest' || primaryType === 'batched_reminders') androidChannel = 'messages';
 
-          if (pushError) {
-            console.error(`Push notification failed: ${pushError.message}`);
+          if (enabledChannels.includes('PUSH')) {
+            const { data: pushResult, error: pushError } = await supabaseClient.functions.invoke('send-push-notification', {
+              body: {
+                userId: userId,
+                title: title,
+                body: body,
+                channel: androidChannel,
+                data: {
+                  type: primaryType,
+                  taskId: batchNotifications.length === 1 ? batchNotifications[0].task_id : null,
+                  notificationIds: notificationIds,
+                  batchSize: batchNotifications.length
+                }
+              }
+            });
+
+            if (pushError) {
+              console.error(`Push notification failed: ${pushError.message}`);
+            }
           }
 
           const channelsForDelivery = enabledChannels.filter((channel: string) => {
-            if (['OUTLOOK_EVENT', 'GOOGLE_EVENT'].includes(channel)) {
-              console.log(`📅 Skipping ${channel} - event created at task creation time`);
-              return false;
-            }
-            return ['SLACK', 'EMAIL'].includes(channel);
+            return !['PUSH', 'OUTLOOK_EVENT', 'GOOGLE_EVENT'].includes(channel);
           });
           
           if (channelsForDelivery.length > 0) {
