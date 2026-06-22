@@ -243,8 +243,10 @@ async function sendImmediateTestNotification(supabaseClient: any, task: any, use
       .eq('user_id', userId)
       .single();
 
-    // Use user's configured channels or default to EMAIL and SLACK
-    const channels = notificationPrefs?.channels || ['EMAIL', 'SLACK'];
+    // Default includes PUSH so mobile receives notifications even without explicit prefs.
+    // Exclude calendar-sync-only channels which are not applicable here.
+    const allChannels = notificationPrefs?.channels || ['EMAIL', 'SLACK', 'PUSH'];
+    const channels = allChannels.filter((c: string) => !['OUTLOOK_EVENT', 'GOOGLE_EVENT'].includes(c));
 
     // Send immediate notification via unified webhook
     const { data, error } = await supabaseClient.functions.invoke('send-unified-notification', {
