@@ -84,11 +84,11 @@ export function useBridgeDiagnostics(): BridgeDiagnostics | null {
           window_android_bridge_present: windowAndroidBridgePresent,
           bridge_platform_flag: bridgePlatformFlag,
           apk_version: apkVersion,
-          apk_capabilities: apkCapabilities,
+          apk_capabilities: apkCapabilities as any,
           fcm_token_present: fcmTokenPresent,
           fcm_token_prefix: fcmTokenPrefix,
           push_sub_endpoint: pushSubEndpoint,
-        });
+        } as any);
       } catch { /* non-fatal */ }
 
       setDiag({
