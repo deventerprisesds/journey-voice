@@ -344,26 +344,24 @@ export const useNotifications = () => {
   // ── sendTestNotification ────────────────────────────────────────────────────
 
   const sendTestNotification = async () => {
-    if (isAndroidBridge) {
-      if (!user) {
-        toast({ title: 'Not logged in', description: 'Please log in to send a test notification', variant: 'destructive' });
-        return;
-      }
-      try {
-        const { error } = await supabase.functions.invoke('send-push-notification', {
-          body: {
-            userId: user.id,
-            title: '🧪 Test Notification',
-            body: 'Native Android notification working correctly.',
-            data: { type: 'test', channel: 'task-reminders', deepLink: '/' }
-            // NOTE: hyphen matches live edge function channel_id — see send-push-notification/index.ts
-          }
-        });
-        if (error) throw error;
+    if (isAndroidBridge && window.AndroidBridge) {
+      const result = window.AndroidBridge.notify(JSON.stringify({
+        channel: 'task-reminders',
+        title: '🧪 Test Notification',
+        body: 'Native Android notification working correctly.',
+        deepLink: '/',
+        tag: 'test'
+      }));
+      let parsed: any = null;
+      try { parsed = JSON.parse(result); } catch {}
+      if (parsed) {
+        const desc = parsed.success
+          ? `Posted to channel "${parsed.channelId}"`
+          : `Failed: ${parsed.error || JSON.stringify(parsed)}`;
+        toast({ title: parsed.success ? 'Test notification sent' : 'Notification failed',
+          description: desc, variant: parsed.success ? 'default' : 'destructive' });
+      } else {
         toast({ title: 'Test notification sent', description: 'Check your notification shade' });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        toast({ title: 'Test failed', description: msg, variant: 'destructive' });
       }
       return;
     }
