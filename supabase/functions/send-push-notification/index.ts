@@ -94,7 +94,7 @@ async function sendFcmNotification(
       android: {
         priority: 'high',
         notification: {
-          channel_id: 'task-reminders',
+          channel_id: 'task_reminders',
           default_vibrate_timings: true,
           default_sound: true,
         },
@@ -198,7 +198,7 @@ serve(async (req) => {
       type: data?.type ?? '',
       taskId: data?.taskId ?? '',
       notificationId: data?.notificationId ?? '',
-      channel: 'task-reminders',
+      channel: 'task_reminders',
     };
 
     const results = await Promise.allSettled(
