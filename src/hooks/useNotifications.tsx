@@ -351,25 +351,37 @@ export const useNotifications = () => {
         deepLink: '/',
         tag: 'test'
       }));
-      // Log debug result to DB so we can diagnose silently-dropped notifications
-      try {
-        const parsed = JSON.parse(result);
-        await supabase.from('bridge_diagnostics').insert({
-          user_id: user?.id,
-          is_android_bridge: true,
-          user_agent: navigator.userAgent,
-          js_bundle: (import.meta as any).url ?? 'unknown',
-          window_android_bridge_present: true,
-          apk_capabilities: parsed,
-        } as any);
-        const desc = parsed.success
-          ? (parsed.channelEnabled ? 'Check notification shade' : `Channel "${parsed.channelId}" is disabled in Android settings`)
-          : `Failed: ${parsed.error || JSON.stringify(parsed)}`;
-        toast({ title: parsed.success ? "Test sent" : "Notification failed", description: desc,
-          variant: parsed.success ? 'default' : 'destructive' });
-      } catch {
-        toast({ title: "Test sent", description: "Check your Android notification shade" });
+      // Show result toast FIRST (before any async work that could mask it)
+      let parsed: any = null;
+      try { parsed = JSON.parse(result); } catch { /* result was undefined or malformed */ }
+
+      if (parsed) {
+        const desc = parsed.notifEnabled === false
+          ? 'Notifications are disabled in Android settings — enable in Settings > Apps > Journey Voice > Notifications'
+          : parsed.channelEnabled === false
+            ? `Channel "${parsed.channelId}" is disabled — enable in Settings > Apps > Journey Voice > Notifications`
+            : parsed.success
+              ? `Posted to channel "${parsed.channelId}" — check your notification shade`
+              : `Failed: ${parsed.error || JSON.stringify(parsed)}`;
+        toast({
+          title: parsed.success ? 'Test notification sent' : 'Notification failed',
+          description: desc,
+          variant: parsed.success ? 'default' : 'destructive',
+        });
+      } else {
+        // notify() returned undefined — APK predates debug return (should not happen on .32+)
+        toast({ title: 'Test sent (no debug)', description: `Raw result: ${String(result)} — APK may be outdated` });
       }
+
+      // Fire-and-forget DB log — never block or throw to the user
+      supabase.from('bridge_diagnostics').insert({
+        user_id: user?.id,
+        is_android_bridge: true,
+        user_agent: navigator.userAgent,
+        js_bundle: (import.meta as any).url ?? 'unknown',
+        window_android_bridge_present: true,
+        apk_capabilities: parsed ?? { raw: String(result) },
+      } as any).then(({ error }) => { if (error) console.warn('bridge_diagnostics insert:', error.message); });
       return;
     }
 
