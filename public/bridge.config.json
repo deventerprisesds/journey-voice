@@ -8,7 +8,7 @@
       {
         "id": "messages",
         "name": "Messages",
-        "description": "AI assistant messages and chat responses",
+        "description": "AI assistant messages, chat responses, and morning briefing",
         "importance": "high",
         "sound": "default",
         "vibrate": true,
@@ -16,7 +16,7 @@
         "repeatIntervalSeconds": 0,
         "repeatMaxTimes": 0,
         "ledColor": "",
-        "deepLink": "/tasks"
+        "deepLink": "/"
       },
       {
         "id": "task-reminders",
@@ -47,7 +47,7 @@
       {
         "id": "agenda",
         "name": "Daily Agenda",
-        "description": "Morning briefing and daily summary",
+        "description": "Kept for backward compatibility with older APKs — new notifications use 'messages' channel instead",
         "importance": "default",
         "sound": "default",
         "vibrate": false,
@@ -55,7 +55,7 @@
         "repeatIntervalSeconds": 0,
         "repeatMaxTimes": 0,
         "ledColor": "",
-        "deepLink": "/agenda"
+        "deepLink": "/"
       }
     ]
   },

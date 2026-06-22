@@ -583,6 +583,26 @@ const NotificationSettings = () => {
     toast({ title: 'Alarm fired', description: 'Check your notification shade' });
   };
 
+  const sendTestMessage = () => {
+    if (!window.AndroidBridge) return;
+    const result = window.AndroidBridge.notify(JSON.stringify({
+      channel: 'messages',
+      title: '💬 Journey Voice',
+      body: 'Test: new message notification — tap to open chat',
+      deepLink: '/',
+      tag: 'test-message'
+    }));
+    let parsed: any = null;
+    try { parsed = JSON.parse(result); } catch {}
+    if (parsed) {
+      toast({ title: parsed.success ? 'Message notification sent' : 'Notification failed',
+        description: parsed.success ? `Channel: ${parsed.channelId}` : (parsed.error || JSON.stringify(parsed)),
+        variant: parsed.success ? 'default' : 'destructive' });
+    } else {
+      toast({ title: 'Message notification sent', description: 'Check your notification shade' });
+    }
+  };
+
   const sendTestPush = async () => {
     if (!pushNotifications.subscription) { toast({ title: "Not Subscribed", variant: "destructive" }); return; }
     // On Android bridge: fire a local native notification immediately via the bridge.
@@ -955,8 +975,13 @@ const NotificationSettings = () => {
               <Calendar className="h-4 w-4 mr-2" />Create Test Task
             </Button>
             {pushNotifications.isAndroidBridge && (
-              <Button onClick={sendTestAlarm} variant="outline" className="w-full col-span-2">
-                <Bell className="h-4 w-4 mr-2" />Test Alarm (Android)
+              <Button onClick={sendTestAlarm} variant="outline" className="w-full">
+                <Bell className="h-4 w-4 mr-2" />Test Alarm
+              </Button>
+            )}
+            {pushNotifications.isAndroidBridge && (
+              <Button onClick={sendTestMessage} variant="outline" className="w-full">
+                <Bell className="h-4 w-4 mr-2" />Test Message
               </Button>
             )}
           </div>
