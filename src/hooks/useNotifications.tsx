@@ -11,6 +11,7 @@ declare global {
       notify: (jsonPayload: string) => string;
       getFcmToken: () => string;
       isBridgeApp: () => boolean;
+      cancelAlarm?: (tag: string) => void;
     };
   }
 }
@@ -344,12 +345,15 @@ export const useNotifications = () => {
 
   const sendTestNotification = async () => {
     if (isAndroidBridge && window.AndroidBridge) {
+      // Cancel any previous test alarm so it doesn't keep repeating
+      window.AndroidBridge.cancelAlarm?.('test');
       const result = window.AndroidBridge.notify(JSON.stringify({
         channel: 'task-reminders',
         title: '🧪 Test Notification',
         body: 'Native Android notification working correctly.',
         deepLink: '/',
-        tag: 'test'
+        tag: 'test',
+        repeat: false
       }));
       // Show result toast FIRST (before any async work that could mask it)
       let parsed: any = null;
