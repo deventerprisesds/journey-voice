@@ -17,6 +17,15 @@
   },
   "channels": [
     {
+      "id": "task-reminders",
+      "name": "Task Reminders",
+      "deepLink": "/tasks",
+      "importance": "high",
+      "sound": "default",
+      "repeatEnabled": true,
+      "description": "Task due date and overdue reminders"
+    },
+    {
       "id": "push_notifications",
       "name": "Push Notifications",
       "deepLink": "/tasks",

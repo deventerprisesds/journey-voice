@@ -380,7 +380,8 @@ export const useNotifications = () => {
         user_agent: navigator.userAgent,
         js_bundle: (import.meta as any).url ?? 'unknown',
         window_android_bridge_present: true,
-        apk_capabilities: parsed ?? { raw: String(result) },
+        fcm_token_present: false,
+        apk_notifications: parsed?.success ?? false,
       } as any).then(({ error }) => { if (error) console.warn('bridge_diagnostics insert:', error.message); });
       return;
     }
