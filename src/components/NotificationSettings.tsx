@@ -570,6 +570,12 @@ const NotificationSettings = () => {
 
   const sendTestPush = async () => {
     if (!pushNotifications.subscription) { toast({ title: "Not Subscribed", variant: "destructive" }); return; }
+    // On Android bridge: fire a local native notification immediately via the bridge.
+    // This tests the native notification channel without requiring FCM round-trip.
+    if (pushNotifications.isAndroidBridge) {
+      await pushNotifications.sendTestNotification();
+      return;
+    }
     setIsTestingPush(true);
     try {
       const { error } = await supabase.functions.invoke('send-push-notification', {
