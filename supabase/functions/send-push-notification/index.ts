@@ -198,6 +198,7 @@ serve(async (req) => {
       type: data?.type ?? '',
       taskId: data?.taskId ?? '',
       notificationId: data?.notificationId ?? '',
+      channel: 'task-reminders',
     };
 
     const results = await Promise.allSettled(
