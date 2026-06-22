@@ -98,7 +98,7 @@ async function sendFcmNotification(
       android: {
         priority: 'high',
         notification: {
-          channel_id: channel ?? 'task-reminders',
+          channel_id: data['channel'] ?? 'task-reminders',
           default_vibrate_timings: true,
           default_sound: true,
         },
