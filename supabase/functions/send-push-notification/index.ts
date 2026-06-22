@@ -11,6 +11,7 @@ interface NotificationRequest {
   userId: string;
   title: string;
   body: string;
+  channel?: string;
   data?: {
     type: string;
     taskId?: string;
@@ -94,7 +95,7 @@ async function sendFcmNotification(
       android: {
         priority: 'high',
         notification: {
-          channel_id: 'task-reminders',
+          channel_id: channel ?? 'task-reminders',
           default_vibrate_timings: true,
           default_sound: true,
         },
@@ -128,7 +129,7 @@ serve(async (req) => {
   }
 
   try {
-    const { userId, title, body, data }: NotificationRequest = await req.json();
+    const { userId, title, body, channel, data }: NotificationRequest = await req.json();
 
     console.log('[send-push-notification] Processing:', { userId, title, body, data });
 
@@ -198,7 +199,7 @@ serve(async (req) => {
       type: data?.type ?? '',
       taskId: data?.taskId ?? '',
       notificationId: data?.notificationId ?? '',
-      channel: 'task-reminders',
+      channel: channel ?? 'task-reminders',
     };
 
     const results = await Promise.allSettled(
