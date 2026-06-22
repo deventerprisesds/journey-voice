@@ -593,44 +593,10 @@ serve(async (req) => {
     }
     // ============== END OUTLOOK HANDLING ==============
 
-    // ============== HANDLE PUSH DIRECTLY ==============
+    // Strip PUSH from webhook channels — handled separately below after webhook
     if (channels.includes('PUSH')) {
-      console.log('[Notification] Processing PUSH channel directly...');
       remainingChannels = remainingChannels.filter(c => c !== 'PUSH');
-
-      // Determine Android channel from notification type
-      const notifType = data?.type || '';
-      let androidChannel = 'task-reminders';
-      if (notifType === 'calendar_event_reminder') androidChannel = 'calendar_events';
-      else if (notifType === 'daily_digest' || notifType === 'batched_reminders') androidChannel = 'messages';
-      else if (notifType === 'task_created') androidChannel = 'messages';
-
-      const { error: pushError } = await supabaseClient.functions.invoke('send-push-notification', {
-        body: {
-          userId,
-          title,
-          body,
-          channel: androidChannel,
-          data: {
-            type: notifType,
-            taskId: data?.taskId,
-            notificationId: data?.notificationId || notificationId,
-          }
-        }
-      });
-
-      result.channelResults.push = pushError
-        ? { success: false, error: pushError.message }
-        : { success: true };
-
-      if (pushError) {
-        console.error('[Notification] Push failed:', pushError.message);
-        result.errors.push(`Push: ${pushError.message}`);
-      } else {
-        console.log('[Notification] Push delivered successfully');
-      }
     }
-    // ============== END PUSH HANDLING ==============
 
     // Only call external webhook for remaining channels
     if (remainingChannels.length > 0) {
@@ -658,6 +624,26 @@ serve(async (req) => {
       console.log('[Notification] No notificationId provided - skipping record creation (notification-delivery handles status)');
     }
     
+    // ============== HANDLE PUSH (fire after Slack/Email so it never blocks them) ==============
+    if (channels.includes('PUSH')) {
+      const notifType = data?.type || '';
+      let androidChannel = 'task-reminders';
+      if (['calendar_event_reminder', 'task_start_now', 'task_start_reminder'].includes(notifType)) androidChannel = 'calendar_events';
+      else if (['daily_digest', 'batched_reminders', 'task_created', 'test_task_created'].includes(notifType)) androidChannel = 'messages';
+
+      supabaseClient.functions.invoke('send-push-notification', {
+        body: {
+          userId, title, body,
+          channel: androidChannel,
+          data: { type: notifType, taskId: data?.taskId, notificationId: data?.notificationId || notificationId }
+        }
+      }).then(({ error: pushError }) => {
+        if (pushError) console.error('[Notification] Push failed:', pushError.message);
+        else console.log('[Notification] Push fired successfully, channel:', androidChannel);
+      }).catch((e: any) => console.error('[Notification] Push invoke error:', e.message));
+    }
+    // ============== END PUSH HANDLING ==============
+
     // Determine overall success - at least one channel succeeded
     const channelSuccesses = Object.values(result.channelResults).filter(r => r?.success);
     result.success = channelSuccesses.length > 0 || result.errors.length === 0;
