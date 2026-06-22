@@ -575,7 +575,7 @@ serve(async (req) => {
           // Determine the Android notification channel based on notification type
           const primaryType = batchNotifications.length === 1 ? batchNotifications[0].notification_type : 'batched_reminders';
           let androidChannel = 'task-reminders';
-          if (primaryType === 'calendar_event_reminder') androidChannel = 'calendar_events';
+          if (['calendar_event_reminder', 'task_start_now', 'task_start_reminder'].includes(primaryType)) androidChannel = 'calendar_events';
           else if (primaryType === 'daily_digest' || primaryType === 'batched_reminders') androidChannel = 'messages';
 
           const { error: pushError } = await supabaseClient.functions.invoke('send-push-notification', {

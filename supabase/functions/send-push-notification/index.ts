@@ -202,27 +202,33 @@ serve(async (req) => {
       channel: channel ?? 'task-reminders',
     };
 
-    // If the user has any FCM token registered, send only via FCM.
-    // This prevents duplicate notifications from both the Android app and the browser.
-    const hasFcmToken = subscriptions.some((s: any) => s.fcm_token);
-    const subsToNotify = hasFcmToken
-      ? subscriptions.filter((s: any) => s.fcm_token)
-      : subscriptions;
-
     const results = await Promise.allSettled(
-      subsToNotify.map(async (sub) => {
+      subscriptions.map(async (sub) => {
         // Route FCM subscriptions to Firebase
         if (sub.fcm_token) {
           if (!serviceAccountJson) {
             console.warn('[send-push-notification] FCM token present but FIREBASE_SERVICE_ACCOUNT_KEY not set');
+            await supabaseClient.from('activity_log').insert({
+              user_id: userId, activity_type: 'fcm_send_skipped', status: 'error',
+              metadata: { reason: 'no_service_account', token_prefix: sub.fcm_token.substring(0, 20) }
+            }).then(() => {}).catch(() => {});
             return { success: false, endpoint: sub.endpoint, error: 'No FCM credentials' };
           }
           try {
             await sendFcmNotification(sub.fcm_token, title, body, fcmData, serviceAccountJson);
             console.log('[send-push-notification] FCM sent to token:', sub.fcm_token.substring(0, 20));
+            await supabaseClient.from('activity_log').insert({
+              user_id: userId, activity_type: 'fcm_send_success', status: 'completed',
+              metadata: { token_prefix: sub.fcm_token.substring(0, 20), channel: fcmData.channel, title }
+            }).then(() => {}).catch(() => {});
             return { success: true, endpoint: sub.endpoint };
           } catch (err: any) {
             console.error('[send-push-notification] FCM send failed:', err.message);
+            await supabaseClient.from('activity_log').insert({
+              user_id: userId, activity_type: 'fcm_send_failed', status: 'error',
+              error_message: err.message,
+              metadata: { token_prefix: sub.fcm_token.substring(0, 20), channel: fcmData.channel, title }
+            }).then(() => {}).catch(() => {});
             return { success: false, endpoint: sub.endpoint, error: err.message };
           }
         }
