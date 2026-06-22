@@ -1,140 +1,76 @@
 {
-  "appName": "LifeOS",
+  "appName": "Journey Voice",
   "baseUrl": "https://journey-voice.lovable.app",
-  "themeColor": "#1b4f5c",
-  "iconUrl": "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/116f4683-33fc-4d3e-a43c-1ac4773b54fd/id-preview-5740bc24--0fb8c311-c754-4e43-8846-ca6a35f90cac.lovable.app-1776529565720.png",
+  "themeColor": "#1e40af",
+  "notifications": {
+    "channels": [
+      {
+        "id": "task-reminders",
+        "name": "Task Reminders",
+        "deepLink": "/tasks",
+        "importance": "high",
+        "sound": "default",
+        "vibrate": true,
+        "repeatEnabled": true,
+        "repeatIntervalSeconds": 60,
+        "repeatMaxTimes": 5,
+        "ledColor": "",
+        "description": "Fires when a task is due soon as a reminder."
+      },
+      {
+        "id": "push-notifications",
+        "name": "Push Notifications",
+        "deepLink": "/settings",
+        "importance": "default",
+        "sound": "default",
+        "vibrate": true,
+        "repeatEnabled": false,
+        "repeatIntervalSeconds": 60,
+        "repeatMaxTimes": 5,
+        "ledColor": "",
+        "description": "Acts when the device receives general push notifications for updates."
+      },
+      {
+        "id": "calendar-reminders",
+        "name": "Calendar Reminders",
+        "deepLink": "/calendar",
+        "importance": "default",
+        "sound": "default",
+        "vibrate": true,
+        "repeatEnabled": true,
+        "repeatIntervalSeconds": 60,
+        "repeatMaxTimes": 5,
+        "ledColor": "",
+        "description": "Notifies users of upcoming calendar events."
+      }
+    ]
+  },
+  "widget": {
+    "enabled": false,
+    "name": "Journey Voice",
+    "dataUrl": "https://wwxgajrtmslzklnyplah.supabase.co/external_calendar_events",
+    "refreshMinutes": 15,
+    "tapDeepLink": "/"
+  },
   "deepLinks": {
     "Authentication": "/auth",
     "Debug": "/debug",
     "Tasks": "/tasks",
-    "Agenda": "/agenda",
+    "Daily Priorities": "/agenda",
     "Admin Panel": "/admin",
     "Settings": "/settings",
     "Calendar": "/calendar",
     "Priorities": "/priorities",
     "Assignments": "/assignments",
-    "Not Found": "*"
+    "Catch All": "/*"
   },
-  "channels": [
-    {
-      "id": "push_notifications",
-      "name": "Push Notifications",
-      "deepLink": "/tasks",
-      "importance": "high",
-      "sound": "default",
-      "repeatEnabled": false,
-      "description": "General push notifications from the app"
-    },
-    {
-      "id": "due_date_reminders",
-      "name": "Due Date Reminders",
-      "deepLink": "/tasks",
-      "importance": "high",
-      "sound": "default",
-      "repeatEnabled": true,
-      "description": "Alerts when tasks are approaching their due date"
-    },
-    {
-      "id": "overdue_alerts",
-      "name": "Overdue Alerts",
-      "deepLink": "/tasks",
-      "importance": "high",
-      "sound": "default",
-      "repeatEnabled": true,
-      "description": "Alerts when tasks become overdue"
-    },
-    {
-      "id": "task_created",
-      "name": "Task Created",
-      "deepLink": "/tasks",
-      "importance": "default",
-      "sound": "default",
-      "repeatEnabled": false,
-      "description": "Notification when new tasks are added"
-    },
-    {
-      "id": "calendar_reminders",
-      "name": "Calendar Event Reminders",
-      "deepLink": "/calendar",
-      "importance": "high",
-      "sound": "default",
-      "repeatEnabled": false,
-      "description": "Alerts before synced Outlook and Google calendar events start"
-    },
-    {
-      "id": "outlook_events",
-      "name": "Outlook Events",
-      "deepLink": "/calendar",
-      "importance": "high",
-      "sound": "default",
-      "repeatEnabled": false,
-      "description": "Microsoft Outlook calendar event notifications"
-    },
-    {
-      "id": "google_events",
-      "name": "Google Calendar Events",
-      "deepLink": "/calendar",
-      "importance": "high",
-      "sound": "default",
-      "repeatEnabled": false,
-      "description": "Google Calendar event notifications"
-    },
-    {
-      "id": "daily_digest",
-      "name": "Daily Digest",
-      "deepLink": "/agenda",
-      "importance": "default",
-      "sound": "none",
-      "repeatEnabled": true,
-      "description": "Daily summary of tasks and progress"
-    },
-    {
-      "id": "weekly_digest",
-      "name": "Weekly Digest",
-      "deepLink": "/agenda",
-      "importance": "default",
-      "sound": "none",
-      "repeatEnabled": true,
-      "description": "Weekly overview of completed tasks and upcoming deadlines"
-    },
-    {
-      "id": "in_app_toast",
-      "name": "In-App Notifications",
-      "deepLink": "/tasks",
-      "importance": "default",
-      "sound": "none",
-      "repeatEnabled": false,
-      "description": "In-app toast and banner notifications"
-    },
-    {
-      "id": "email_notifications",
-      "name": "Email Notifications",
-      "deepLink": "/settings",
-      "importance": "default",
-      "sound": "none",
-      "repeatEnabled": false,
-      "description": "Email delivery of task and calendar alerts"
-    },
-    {
-      "id": "slack_notifications",
-      "name": "Slack Notifications",
-      "deepLink": "/settings",
-      "importance": "default",
-      "sound": "none",
-      "repeatEnabled": false,
-      "description": "Slack integration notifications"
-    }
-  ],
-  "widgetDataUrl": "https://wwxgajrtmslzklnyplah.supabase.co/functions/v1/send-chat-message",
   "auth": {
     "loginPath": "/auth",
     "persistSession": true,
     "trustedAuthDomains": []
   },
-  "interactiveWidget": {
-    "enabled": true,
-    "chatDeepLink": "/",
-    "hintText": "Ask LifeOS anything…"
-  },
-  "version": "2.0"
+  "voice": {
+    "enabled": false,
+    "floatingButton": false
+  }
 }
