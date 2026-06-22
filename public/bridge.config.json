@@ -1,52 +1,40 @@
 {
+  "schemaVersion": 1,
   "appName": "Journey Voice",
   "baseUrl": "https://journey-voice.lovable.app",
   "themeColor": "#1e40af",
   "notifications": {
     "channels": [
       {
-        "id": "task-reminders",
-        "name": "Task Reminders",
-        "deepLink": "/tasks",
+        "id": "messages",
+        "name": "Messages",
+        "description": "AI assistant messages and chat responses",
         "importance": "high",
         "sound": "default",
         "vibrate": true,
         "repeatEnabled": false,
-        "repeatIntervalSeconds": 60,
-        "repeatMaxTimes": 5,
+        "repeatIntervalSeconds": 0,
+        "repeatMaxTimes": 0,
         "ledColor": "",
-        "description": "Fires when a task is due soon as a reminder."
+        "deepLink": "/tasks"
       },
       {
-        "id": "push-notifications",
-        "name": "Push Notifications",
-        "deepLink": "/settings",
-        "importance": "default",
+        "id": "task_reminders",
+        "name": "Task Reminders",
+        "description": "Overdue and due-soon task alerts",
+        "importance": "high",
         "sound": "default",
         "vibrate": true,
         "repeatEnabled": false,
-        "repeatIntervalSeconds": 60,
-        "repeatMaxTimes": 5,
+        "repeatIntervalSeconds": 0,
+        "repeatMaxTimes": 0,
         "ledColor": "",
-        "description": "Acts when the device receives general push notifications for updates."
+        "deepLink": "/tasks"
       },
       {
-        "id": "calendar-reminders",
-        "name": "Calendar Reminders",
-        "deepLink": "/calendar",
-        "importance": "default",
-        "sound": "default",
-        "vibrate": true,
-        "repeatEnabled": false,
-        "repeatIntervalSeconds": 60,
-        "repeatMaxTimes": 5,
-        "ledColor": "",
-        "description": "Notifies users of upcoming calendar events."
-      },
-      {
-        "id": "calendar-events",
+        "id": "calendar_events",
         "name": "Calendar Events",
-        "deepLink": "/calendar",
+        "description": "Event start alarms — plays alarm ringtone with Snooze and Dismiss",
         "importance": "alarm",
         "sound": "alarm",
         "vibrate": true,
@@ -54,7 +42,20 @@
         "repeatIntervalSeconds": 0,
         "repeatMaxTimes": 0,
         "ledColor": "",
-        "description": "Event start alarms — plays alarm ringtone with Snooze and Dismiss."
+        "deepLink": "/calendar"
+      },
+      {
+        "id": "agenda",
+        "name": "Daily Agenda",
+        "description": "Morning briefing and daily summary",
+        "importance": "default",
+        "sound": "default",
+        "vibrate": false,
+        "repeatEnabled": false,
+        "repeatIntervalSeconds": 0,
+        "repeatMaxTimes": 0,
+        "ledColor": "",
+        "deepLink": "/agenda"
       }
     ]
   },

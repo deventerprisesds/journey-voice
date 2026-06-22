@@ -574,7 +574,7 @@ const NotificationSettings = () => {
     if (!window.AndroidBridge) return;
     window.AndroidBridge.cancelAlarm?.('test-alarm');
     window.AndroidBridge.notify(JSON.stringify({
-      channel: 'calendar-events',
+      channel: 'calendar_events',
       title: '🔔 Event Starting Now',
       body: 'Test: alarm notification with Snooze and Dismiss',
       deepLink: '/calendar',
