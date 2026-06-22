@@ -13,6 +13,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { z } from "zod";
 import { CalendarOAuthManager } from "./CalendarOAuthManager";
 import { useNotifications } from "@/hooks/useNotifications";
+import { useBridgeDiagnostics } from "@/hooks/useBridgeDiagnostics";
 
 // Per-calendar toggle sub-component
 function CalendarPullToggles({ connection, onUpdate }: { connection: CalendarConnection; onUpdate: () => void }) {
@@ -306,6 +307,7 @@ const NotificationSettings = () => {
   const { toast } = useToast();
   const { user, isDemoMode } = useAuth();
   const pushNotifications = useNotifications();
+  const bridgeDiag = useBridgeDiagnostics();
 
   useEffect(() => {
     if (isDemoMode) {
@@ -943,6 +945,41 @@ const NotificationSettings = () => {
         </CardContent>
       </Card>
 
+      {/* Bridge Diagnostics — shows ground-truth state logged on load */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Smartphone className="h-5 w-5" />
+            Bridge Diagnostics
+          </CardTitle>
+          <CardDescription>Logged on this page load — confirms what the app actually detected</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {!bridgeDiag ? (
+            <p className="text-sm text-muted-foreground">Collecting diagnostics...</p>
+          ) : (
+            <div className="space-y-2 text-sm font-mono">
+              <Row label="isAndroidBridge" value={String(bridgeDiag.isAndroidBridge)} ok={bridgeDiag.isAndroidBridge} />
+              <Row label="window.AndroidBridge" value={String(bridgeDiag.windowAndroidBridgePresent)} ok={bridgeDiag.windowAndroidBridgePresent} />
+              <Row label="BridgeApp/ in UA" value={String(bridgeDiag.userAgentHasBridgeApp)} ok={bridgeDiag.userAgentHasBridgeApp} />
+              <Row label="__BRIDGE_PLATFORM__" value={bridgeDiag.bridgePlatformFlag ?? 'undefined'} ok={bridgeDiag.bridgePlatformFlag === 'android'} />
+              <Row label="APK version" value={bridgeDiag.apkVersion ?? 'n/a'} ok={!!bridgeDiag.apkVersion} />
+              <Row label="FCM token present" value={String(bridgeDiag.fcmTokenPresent)} ok={bridgeDiag.fcmTokenPresent} />
+              {bridgeDiag.fcmTokenPrefix && (
+                <Row label="FCM token prefix" value={bridgeDiag.fcmTokenPrefix + '...'} ok={true} />
+              )}
+              <Row label="Push sub endpoint" value={bridgeDiag.pushSubEndpoint ? bridgeDiag.pushSubEndpoint.slice(0, 40) + '...' : 'none'} ok={!!bridgeDiag.pushSubEndpoint} />
+              <div className="pt-2 border-t text-xs text-muted-foreground break-all">
+                <span className="font-semibold">JS bundle: </span>{bridgeDiag.jsBundle.split('/').pop() ?? bridgeDiag.jsBundle}
+              </div>
+              <div className="text-xs text-muted-foreground break-all">
+                <span className="font-semibold">UA: </span>{bridgeDiag.userAgent}
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       {/* Save Button */}
       <div className="flex justify-end">
         <Button onClick={saveNotificationPrefs} disabled={isSaving} className="min-w-[120px]">
@@ -952,5 +989,14 @@ const NotificationSettings = () => {
     </div>
   );
 };
+
+function Row({ label, value, ok }: { label: string; value: string; ok: boolean }) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <span className="text-muted-foreground">{label}</span>
+      <span className={ok ? 'text-green-600 font-semibold' : 'text-red-500 font-semibold'}>{value}</span>
+    </div>
+  );
+}
 
 export default NotificationSettings;
