@@ -61,6 +61,7 @@ interface OutlookEventData {
   endTime: string;
   description?: string;
   reminderMinutes?: number;
+  timezone?: string;
 }
 
 async function getOutlookConnection(supabaseClient: any, userId: string): Promise<{
@@ -308,11 +309,11 @@ async function createOutlookEventDirect(
     },
     start: {
       dateTime: eventData.startTime,
-      timeZone: 'UTC',
+      timeZone: eventData.timezone || 'UTC',
     },
     end: {
       dateTime: eventData.endTime,
-      timeZone: 'UTC',
+      timeZone: eventData.timezone || 'UTC',
     },
     isReminderOn: true,
     reminderMinutesBeforeStart: eventData.reminderMinutes || 15,
@@ -362,6 +363,15 @@ async function createOutlookEventDirect(
 }
 
 // ============== END DIRECT OUTLOOK INTEGRATION ==============
+
+function toLocalDateTimeString(date: Date, tz: string): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+  }).formatToParts(date);
+  const get = (t: string) => parts.find(p => p.type === t)?.value ?? '00';
+  return `${get('year')}-${get('month')}-${get('day')}T${get('hour')}:${get('minute')}:${get('second')}`;
+}
 
 serve(async (req) => {
   // Handle CORS preflight requests
@@ -550,10 +560,11 @@ serve(async (req) => {
           userId,
           {
             title: eventTitle,
-            startTime: startTime.toISOString(),
-            endTime: endTime.toISOString(),
+            startTime: toLocalDateTimeString(startTime, userTimezone),
+            endTime: toLocalDateTimeString(endTime, userTimezone),
             description: eventDescription,
             reminderMinutes: 15,
+            timezone: userTimezone,
           }
         );
 
@@ -863,10 +874,12 @@ async function callUnifiedWebhook(
     const duration = taskData?.estimateMinutes || 60;
     const endTime = new Date(startTime.getTime() + duration * 60 * 1000);
 
+    const googleTz = payload.userTimezone || 'UTC';
     dynamicGoogleEvent = {
       title: eventTitle,
-      startTime: startTime.toISOString(),
-      endTime: endTime.toISOString(),
+      startTime: toLocalDateTimeString(startTime, googleTz),
+      endTime: toLocalDateTimeString(endTime, googleTz),
+      timezone: googleTz,
       description: eventDescription,
       reminder: '15'
     };
