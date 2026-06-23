@@ -99,9 +99,9 @@ async function getOutlookConnectionForUser(supabaseClient: any, userId: string):
     // Direct query for service-level access (notification system needs to access user's tokens)
     // Accept both 'outlook' and 'office365' as valid provider names
     // Use "pick best connection" logic: prefer non-expired, then most recently updated
-    
+
     const nowISO = new Date().toISOString();
-    
+
     // Query A: Try to find a valid (non-expired) connection first
     const { data: validConnection, error: validError } = await supabaseClient
       .from('calendar_connections')
@@ -187,10 +187,10 @@ async function refreshOutlookToken(
 ): Promise<{ access_token: string; expires_at: string } | null> {
   try {
     console.log('[Outlook] Refreshing expired token...');
-    
+
     const clientId = Deno.env.get('MICROSOFT_CLIENT_ID') || Deno.env.get('AZURE_AD_CLIENT_ID');
     const clientSecret = Deno.env.get('MICROSOFT_CLIENT_SECRET') || Deno.env.get('AZURE_AD_CLIENT_SECRET');
-    
+
     if (!clientId || !clientSecret) {
       console.error('[Outlook] Missing Azure AD credentials for token refresh');
       return null;
@@ -259,14 +259,14 @@ async function createOutlookEventDirect(
   eventData: OutlookEventData
 ): Promise<ChannelResult> {
   console.log('[Outlook] Creating event directly via Microsoft Graph API for user:', userId);
-  
+
   // Get user's Office 365 connection with decrypted tokens
   const connection = await getOutlookConnectionForUser(supabaseClient, userId);
-  
+
   if (!connection) {
-    return { 
-      success: false, 
-      error: 'No Office 365 connection found. Please connect your Outlook account in Calendar settings.' 
+    return {
+      success: false,
+      error: 'No Office 365 connection found. Please connect your Outlook account in Calendar settings.'
     };
   }
 
@@ -279,7 +279,7 @@ async function createOutlookEventDirect(
 
   if (expiresAt.getTime() - bufferMs < now.getTime()) {
     console.log('[Outlook] Token expired or expiring soon, refreshing...');
-    
+
     if (!connection.refresh_token) {
       return { success: false, error: 'Token expired and no refresh token available. Please reconnect your Outlook account.' };
     }
@@ -333,25 +333,25 @@ async function createOutlookEventDirect(
     );
 
     const responseText = await response.text();
-    
+
     if (!response.ok) {
       console.error('[Outlook] Graph API error:', response.status, responseText);
-      return { 
-        success: false, 
-        error: `Microsoft Graph API error: ${response.status} - ${responseText.substring(0, 200)}` 
+      return {
+        success: false,
+        error: `Microsoft Graph API error: ${response.status} - ${responseText.substring(0, 200)}`
       };
     }
 
     const result = JSON.parse(responseText);
     console.log('[Outlook] Event created successfully:', result.id);
-    
-    return { 
-      success: true, 
-      details: { 
-        eventId: result.id, 
+
+    return {
+      success: true,
+      details: {
+        eventId: result.id,
         webLink: result.webLink,
-        account: connection.provider_account_email 
-      } 
+        account: connection.provider_account_email
+      }
     };
   } catch (fetchError) {
     const errorMsg = fetchError instanceof Error ? fetchError.message : 'Network error calling Microsoft Graph API';
@@ -380,12 +380,12 @@ serve(async (req) => {
   };
 
   try {
-    const { 
-      userId, 
-      title, 
-      body, 
-      channels, 
-      data = {}, 
+    const {
+      userId,
+      title,
+      body,
+      channels,
+      data = {},
       slackWebhook,
       notificationId,
       userProfile,
@@ -394,7 +394,7 @@ serve(async (req) => {
     }: NotificationPayload = await req.json();
 
     const correlationId = notificationId || crypto.randomUUID();
-    
+
     console.log('Sending unified notification:', {
       userId,
       title,
@@ -439,21 +439,44 @@ serve(async (req) => {
         console.error('Error fetching user profile:', profileError);
         result.errors.push(`Profile fetch error: ${profileError.message}`);
       }
-      
+
       profile = dbProfile || profile || {};
     }
 
     // ============== HANDLE OUTLOOK DIRECTLY ==============
     // Process Outlook events directly via Graph API instead of external webhook
     let remainingChannels = [...channels];
-    
+
     if (channels.includes('OUTLOOK_EVENT')) {
       console.log('[Notification] Processing OUTLOOK_EVENT channel directly...');
-      
+
       // Build event data from task data or provided event
       // CRITICAL: Use task's actual start_time passed from notification-delivery
       const taskData = data;
-      
+
+      supabaseClient.from('activity_log').insert({
+        user_id: userId,
+        activity_type: 'calendar_event_creation_attempt',
+        session_id: correlationId,
+        status: 'started',
+        stage: 'outlook_pre_create',
+        metadata: {
+          channel: 'OUTLOOK_EVENT',
+          channelsRequested: channels,
+          notificationId: notificationId || null,
+          taskId: taskData?.taskId || null,
+          startTimeSource: taskData?.startTime
+            ? 'task_start_time'
+            : (taskData?.dueDate || taskData?.due_date)
+              ? 'task_due_date'
+              : 'fallback_now_plus_1h',
+          rawStartTime: taskData?.startTime || null,
+          rawDueDate: taskData?.dueDate || taskData?.due_date || null,
+          notificationType: taskData?.type || null,
+          timestamp: new Date().toISOString()
+        }
+      }).then(() => {}).catch(() => {});
+
       // IDEMPOTENCY CHECK: Skip if Outlook event already exists for this task today
       if (taskData?.taskId) {
         const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
@@ -463,7 +486,7 @@ serve(async (req) => {
           .eq('source_task_id', taskData.taskId)
           .gte('created_at', oneDayAgo)
           .maybeSingle();
-        
+
         if (existingEvent) {
           console.log('[Notification] Outlook event already exists for task, skipping duplicate creation');
           result.channelResults.outlook = { success: true, details: 'Skipped - event already exists' };
@@ -471,22 +494,22 @@ serve(async (req) => {
           // Skip the rest of Outlook processing
         }
       }
-      
+
       // Only proceed if we haven't skipped due to existing event
       if (remainingChannels.includes('OUTLOOK_EVENT')) {
         const currentTime = new Date();
         const eventTitle = taskData?.taskTitle || title || 'Task Reminder';
         const eventDescription = taskData?.taskDescription || body || 'Reminder from Journey Voice';
-        
+
         // Prioritize passed start_time from notification-delivery over fallback
         let startTime: Date;
         let endTime: Date;
-        
+
         if (taskData?.startTime) {
           // Use the task's actual scheduled time
           startTime = new Date(taskData.startTime);
           console.log('[Notification] Using task start_time:', taskData.startTime);
-          
+
           if (taskData?.endTime) {
             endTime = new Date(taskData.endTime);
           } else {
@@ -501,13 +524,13 @@ serve(async (req) => {
           const duration = taskData?.estimateMinutes || 60;
           endTime = new Date(startTime.getTime() + duration * 60 * 1000);
         }
-        
+
         console.log('[Notification] Creating Outlook event:', {
           title: eventTitle,
           startTime: startTime.toISOString(),
           endTime: endTime.toISOString()
         });
-        
+
         const outlookResult = await createOutlookEventDirect(
           supabaseClient,
           userId,
@@ -519,21 +542,21 @@ serve(async (req) => {
             reminderMinutes: 15,
           }
         );
-        
+
         result.channelResults.outlook = outlookResult;
-        
+
         // Remove OUTLOOK_EVENT from channels going to external webhook
         remainingChannels = remainingChannels.filter(c => c !== 'OUTLOOK_EVENT');
-        
+
         if (outlookResult.success) {
           console.log('[Notification] Outlook event created successfully');
-          
+
           // Record the event in external_calendar_events for deduplication and tracing
           if (outlookResult.details?.eventId && taskData?.taskId) {
             try {
               const connection = await getOutlookConnectionForUser(supabaseClient, userId);
               const calendarId = connection?.provider_account_email || 'primary';
-              
+
               await supabaseClient.from('external_calendar_events').insert({
                 user_id: userId,
                 connection_id: connection?.id || null,
@@ -551,7 +574,7 @@ serve(async (req) => {
               // Don't fail the notification - event was created successfully
             }
           }
-          
+
           // Log to activity_log for tracing (fire and forget)
           supabaseClient.from('activity_log').insert({
             user_id: userId,
@@ -559,7 +582,7 @@ serve(async (req) => {
             session_id: outlookResult.details?.eventId || 'unknown',
             status: 'completed',
             stage: 'outlook_event',
-            metadata: { 
+            metadata: {
               task_id: taskData?.taskId,
               start_time: startTime.toISOString(),
               event_id: outlookResult.details?.eventId,
@@ -573,7 +596,7 @@ serve(async (req) => {
         } else {
           console.error('[Notification] Outlook event creation failed:', outlookResult.error);
           result.errors.push(`Outlook: ${outlookResult.error}`);
-          
+
           // Log failure for tracing (fire and forget)
           supabaseClient.from('activity_log').insert({
             user_id: userId,
@@ -623,7 +646,7 @@ serve(async (req) => {
       // and notification-delivery will mark it as delivered
       console.log('[Notification] No notificationId provided - skipping record creation (notification-delivery handles status)');
     }
-    
+
     // ============== HANDLE PUSH (fire after Slack/Email so it never blocks them) ==============
     if (channels.includes('PUSH')) {
       const notifType = data?.type || '';
@@ -665,12 +688,12 @@ serve(async (req) => {
     console.error('Error in send-unified-notification function:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     result.errors.push(errorMessage);
-    
+
     return new Response(
-      JSON.stringify({ 
+      JSON.stringify({
         ...result,
-        error: 'Internal server error', 
-        details: errorMessage 
+        error: 'Internal server error',
+        details: errorMessage
       }),
       {
         status: 500,
@@ -710,19 +733,19 @@ interface WebhookResult {
 }
 
 async function updateNotificationStatus(
-  supabaseClient: any, 
-  notificationId: string, 
+  supabaseClient: any,
+  notificationId: string,
   result: NotificationResult
 ) {
   try {
-    const hasErrors = result.errors.length > 0 || 
+    const hasErrors = result.errors.length > 0 ||
       Object.values(result.channelResults).some(r => r && !r.success);
-    
+
     const failedChannels = Object.entries(result.channelResults)
       .filter(([_, r]) => r && !r.success)
       .map(([channel, r]) => `${channel}: ${r?.error || 'Unknown error'}`)
       .join('; ');
-    
+
     const allErrors = [...result.errors, failedChannels].filter(Boolean).join('; ');
 
     if (hasErrors && allErrors) {
@@ -759,19 +782,19 @@ async function callUnifiedWebhook(
   };
 
   const webhookUrl = Deno.env.get('UNIFIED_WEBHOOK_URL');
-  
+
   if (!webhookUrl) {
     console.error('UNIFIED_WEBHOOK_URL environment variable is not configured!');
     console.log('Available environment variables:', Object.keys(Deno.env.toObject()).join(', '));
     result.errors.push('UNIFIED_WEBHOOK_URL not configured - notifications cannot be delivered');
-    
+
     // Don't create duplicate notification records - notification-delivery owns the lifecycle
     if (existingNotificationId) {
       result.notificationId = existingNotificationId;
     } else {
       console.log('[Webhook] No notificationId provided - skipping record creation (notification-delivery handles status)');
     }
-    
+
     return result;
   }
 
@@ -779,18 +802,41 @@ async function callUnifiedWebhook(
 
   // Generate AI-powered calendar events for calendar channels (Google only now, Outlook handled directly)
   let dynamicGoogleEvent;
-  
+
   if (payload.channels.includes('GOOGLE_EVENT')) {
     const taskData = payload.taskData;
     const currentTime = new Date();
-    
+
+    supabaseClient.from('activity_log').insert({
+      user_id: payload.userId,
+      activity_type: 'calendar_event_creation_attempt',
+      session_id: existingNotificationId || 'no-id',
+      status: 'started',
+      stage: 'google_pre_create',
+      metadata: {
+        channel: 'GOOGLE_EVENT',
+        channelsRequested: payload.channels,
+        notificationId: existingNotificationId || null,
+        taskId: payload.taskData?.taskId || null,
+        startTimeSource: payload.taskData?.startTime
+          ? 'task_start_time'
+          : (payload.taskData?.dueDate || payload.taskData?.due_date)
+            ? 'task_due_date'
+            : 'fallback_now_plus_1h',
+        rawStartTime: payload.taskData?.startTime || null,
+        rawDueDate: payload.taskData?.dueDate || payload.taskData?.due_date || null,
+        notificationType: payload.taskData?.type || null,
+        timestamp: new Date().toISOString()
+      }
+    }).then(() => {}).catch(() => {});
+
     // Create intelligent event details based on task data
     const eventTitle = taskData?.taskTitle || payload.title || 'Task Event';
     const eventDescription = taskData?.taskDescription || payload.body || 'AI-generated calendar event from task scheduling';
     const startTime = taskData?.startTime ? new Date(taskData.startTime) : new Date(currentTime.getTime() + 60 * 60 * 1000);
     const duration = taskData?.estimateMinutes || 60;
     const endTime = new Date(startTime.getTime() + duration * 60 * 1000);
-    
+
     dynamicGoogleEvent = {
       title: eventTitle,
       startTime: startTime.toISOString(),
@@ -845,7 +891,7 @@ async function callUnifiedWebhook(
 
     const responseText = await response.text();
     let responseJson: any;
-    
+
     try {
       responseJson = JSON.parse(responseText);
     } catch {
@@ -873,7 +919,7 @@ async function callUnifiedWebhook(
           timestamp: new Date().toISOString()
         }
       }).then(() => {}).catch(() => {});
-      
+
       // Try to extract per-channel errors from response
       if (responseJson?.errors) {
         for (const [channel, error] of Object.entries(responseJson.errors)) {
@@ -901,7 +947,7 @@ async function callUnifiedWebhook(
           timestamp: new Date().toISOString()
         }
       }).then(() => {}).catch(() => {});
-      
+
       // Parse n8n response for channel-specific results
       if (responseJson?.message === 'Workflow was started') {
         for (const channel of payload.channels) {
