@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+import { normalizeDateTime } from "../_shared/timezone.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -443,6 +444,13 @@ serve(async (req) => {
       profile = dbProfile || profile || {};
     }
 
+    const { data: schedPrefs } = await supabaseClient
+      .from('user_scheduling_prefs')
+      .select('timezone')
+      .eq('user_id', userId)
+      .maybeSingle();
+    const userTimezone = schedPrefs?.timezone || 'UTC';
+
     // ============== HANDLE OUTLOOK DIRECTLY ==============
     // Process Outlook events directly via Graph API instead of external webhook
     let remainingChannels = [...channels];
@@ -517,9 +525,15 @@ serve(async (req) => {
             const duration = taskData?.estimateMinutes || 60;
             endTime = new Date(startTime.getTime() + duration * 60 * 1000);
           }
+        } else if (taskData?.dueDate || taskData?.due_date) {
+          const rawDue = taskData.dueDate || taskData.due_date;
+          startTime = new Date(normalizeDateTime(rawDue, userTimezone) || rawDue);
+          const duration = taskData?.estimateMinutes || 60;
+          endTime = new Date(startTime.getTime() + duration * 60 * 1000);
+          console.log('[Notification] Using task dueDate as start_time:', startTime.toISOString());
         } else {
-          // Fallback: 1 hour from now (only for edge cases without start_time)
-          console.log('[Notification] ⚠️ No task start_time provided, using fallback (1 hour from now)');
+          // No startTime and no dueDate — last resort
+          console.log('[Notification] ⚠️ No startTime or dueDate — using fallback now+1h');
           startTime = new Date(currentTime.getTime() + 60 * 60 * 1000);
           const duration = taskData?.estimateMinutes || 60;
           endTime = new Date(startTime.getTime() + duration * 60 * 1000);
@@ -632,7 +646,8 @@ serve(async (req) => {
         taskData: data,
         slackWebhook: slackWebhook || Deno.env.get('SLACK_WEBHOOK_URL') || '',
         outlookEvent,
-        googleEvent
+        googleEvent,
+        userTimezone
       }, supabaseClient, notificationId);
 
       // Merge channel results
@@ -711,6 +726,7 @@ interface UnifiedWebhookPayload {
   userProfile: any;
   taskData: any;
   slackWebhook?: string;
+  userTimezone?: string;
   outlookEvent?: {
     title: string;
     startTime: string;
@@ -833,7 +849,17 @@ async function callUnifiedWebhook(
     // Create intelligent event details based on task data
     const eventTitle = taskData?.taskTitle || payload.title || 'Task Event';
     const eventDescription = taskData?.taskDescription || payload.body || 'AI-generated calendar event from task scheduling';
-    const startTime = taskData?.startTime ? new Date(taskData.startTime) : new Date(currentTime.getTime() + 60 * 60 * 1000);
+    let startTime: Date;
+    if (taskData?.startTime) {
+      startTime = new Date(taskData.startTime);
+    } else if (taskData?.dueDate || taskData?.due_date) {
+      const rawDue = taskData.dueDate || taskData.due_date;
+      startTime = new Date(normalizeDateTime(rawDue, payload.userTimezone || 'UTC') || rawDue);
+      console.log('[Webhook] Using task dueDate as Google event start_time:', startTime.toISOString());
+    } else {
+      console.log('[Webhook] ⚠️ No startTime or dueDate — using fallback now+1h');
+      startTime = new Date(currentTime.getTime() + 60 * 60 * 1000);
+    }
     const duration = taskData?.estimateMinutes || 60;
     const endTime = new Date(startTime.getTime() + duration * 60 * 1000);
 
