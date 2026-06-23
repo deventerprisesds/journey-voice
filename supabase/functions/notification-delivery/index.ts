@@ -619,6 +619,7 @@ serve(async (req) => {
               notificationData.estimateMinutes = taskInfo.estimate_minutes;
               notificationData.taskTitle = taskInfo.title;
             }
+            notificationData.userTimezone = userTzForFilter;
             
             // TRACE: Pre-handoff to send-unified-notification
             const handoffCorrelation = notificationIds[0] || crypto.randomUUID();
