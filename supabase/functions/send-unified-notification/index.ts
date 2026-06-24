@@ -1,6 +1,5 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
-import { normalizeDateTime } from "../_shared/timezone.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -482,17 +481,14 @@ serve(async (req) => {
         // Prioritize passed start_time from notification-delivery over fallback
         let startTime: Date;
         let endTime: Date;
-        const userTz = taskData?.userTimezone || 'America/New_York';
-
+        
         if (taskData?.startTime) {
-          // Normalize to UTC, treating naive datetimes as local to the user's timezone
-          const normalizedStart = normalizeDateTime(taskData.startTime, userTz) ?? taskData.startTime;
-          startTime = new Date(normalizedStart);
-          console.log('[Notification] Using task start_time:', taskData.startTime, '→', normalizedStart, `(tz: ${userTz})`);
-
+          // Use the task's actual scheduled time
+          startTime = new Date(taskData.startTime);
+          console.log('[Notification] Using task start_time:', taskData.startTime);
+          
           if (taskData?.endTime) {
-            const normalizedEnd = normalizeDateTime(taskData.endTime, userTz) ?? taskData.endTime;
-            endTime = new Date(normalizedEnd);
+            endTime = new Date(taskData.endTime);
           } else {
             // Calculate end time based on estimate or default 60 mins
             const duration = taskData?.estimateMinutes || 60;
