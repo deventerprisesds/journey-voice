@@ -564,16 +564,24 @@ const NotificationSettings = () => {
   const sendTestSamsungCalendar = async () => {
     setIsTestingGoogleCal(true);
     try {
-      const { data, error } = await supabase.functions.invoke('test-google-calendar', {
-        body: { userId: user?.id }
+      const startMs = Date.now() + 3 * 60 * 1000;
+      const { error } = await supabase.functions.invoke('send-android-calendar-event', {
+        body: {
+          userId: user?.id,
+          title: 'Test Event — Journey Voice',
+          startMs,
+          endMs: startMs + 60 * 60 * 1000,
+          description: 'Test event sent from Journey Voice settings',
+          reminderMinutes: [0, 5],
+        }
       });
       if (error) throw error;
       toast({
-        title: 'Samsung Calendar Test Sent',
-        description: `Event starting in 3 minutes created on ${data?.account ?? 'Google Calendar'}. Check Samsung Calendar shortly.`
+        title: 'Android Calendar Test Sent',
+        description: 'Event starting in 3 minutes dispatched to your device calendar via FCM.'
       });
     } catch (err: any) {
-      toast({ title: 'Samsung Calendar Test Failed', description: err.message, variant: 'destructive' });
+      toast({ title: 'Android Calendar Test Failed', description: err.message, variant: 'destructive' });
     } finally {
       setIsTestingGoogleCal(false);
     }
@@ -997,9 +1005,9 @@ const NotificationSettings = () => {
             <Button onClick={sendTestGoogleEvent} variant="outline" className="w-full" disabled={!googleConnections.some(c => c.purposes?.includes('WRITE'))}>
               <Calendar className="h-4 w-4 mr-2" />Test Google Event
             </Button>
-            <Button onClick={sendTestSamsungCalendar} variant="outline" className="w-full" disabled={!googleConnections.some(c => c.purposes?.includes('WRITE')) || isTestingGoogleCal}>
+            <Button onClick={sendTestSamsungCalendar} variant="outline" className="w-full" disabled={isTestingGoogleCal}>
               {isTestingGoogleCal ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Smartphone className="h-4 w-4 mr-2" />}
-              Test Samsung Calendar
+              Test Android Calendar
             </Button>
             <Button onClick={sendTestSlack} variant="outline" className="w-full" disabled={!prefs.channels.includes('SLACK')}>
               <MessageSquare className="h-4 w-4 mr-2" />Test Slack
