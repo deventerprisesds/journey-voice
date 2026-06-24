@@ -23,7 +23,7 @@ import NotFound from "./pages/NotFound";
 import DemoModeBadge from "./components/DemoModeBadge";
 import QuotaAlertBanner from "./components/QuotaAlertBanner";
 import ErrorBoundary from "./components/ErrorBoundary";
-import { supabase } from "@/integrations/supabase/client";
+import { supabase, SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from "@/integrations/supabase/client";
 import { useEffect } from "react";
 import { bootTrace } from "@/utils/bootTrace";
 
@@ -45,6 +45,24 @@ const App = () => {
     });
 
     // test-external-db removed — invoke manually from Debug page if needed
+  }, []);
+
+  // Bridge Supabase auth tokens to native EncryptedPrefs so widget can make direct API calls
+  useEffect(() => {
+    const bridge = (window as any).AndroidBridge;
+    if (!bridge?.secureStore) return;
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session) {
+        bridge.secureStore('supabase_url', SUPABASE_URL);
+        bridge.secureStore('supabase_anon_key', SUPABASE_PUBLISHABLE_KEY);
+        bridge.secureStore('supabase_access_token', session.access_token);
+        bridge.secureStore('supabase_user_id', session.user.id);
+      } else {
+        bridge.secureStore('supabase_access_token', '');
+        bridge.secureStore('supabase_user_id', '');
+      }
+    });
+    return () => subscription.unsubscribe();
   }, []);
 
   return (
