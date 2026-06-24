@@ -564,22 +564,22 @@ const NotificationSettings = () => {
   const sendTestSamsungCalendar = async () => {
     setIsTestingGoogleCal(true);
     try {
-      const startMs = Date.now() + 3 * 60 * 1000;
-      const { error } = await supabase.functions.invoke('send-android-calendar-event', {
+      const { error } = await supabase.functions.invoke('send-unified-notification', {
         body: {
           userId: user?.id,
-          title: 'Test Event — Journey Voice',
-          startMs,
-          endMs: startMs + 60 * 60 * 1000,
-          description: 'Test event sent from Journey Voice settings',
-          reminderMinutes: [0, 5],
+          channels: ['GOOGLE_EVENT'],
+          userProfile: { email },
+          data: {
+            type: 'test_notification',
+            taskTitle: 'Test Android Calendar Event',
+            taskDescription: 'Test event from Android Calendar settings.',
+            startTime: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+            estimateMinutes: 60,
+          },
         }
       });
       if (error) throw error;
-      toast({
-        title: 'Android Calendar Test Sent',
-        description: 'Event starting in 3 minutes dispatched to your device calendar via FCM.'
-      });
+      toast({ title: 'Android Calendar Test Sent', description: 'Event created in your Google Calendar (syncs to device).' });
     } catch (err: any) {
       toast({ title: 'Android Calendar Test Failed', description: err.message, variant: 'destructive' });
     } finally {
