@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+import { formatInTimezone } from '../_shared/timezone.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -35,6 +36,13 @@ serve(async (req) => {
         }
       );
     }
+
+    const { data: tzPref } = await supabaseClient
+      .from('user_scheduling_prefs')
+      .select('timezone')
+      .eq('user_id', userId)
+      .maybeSingle();
+    const userTz = tzPref?.timezone || 'America/New_York';
 
     const now = new Date();
     let dueDate: Date;
@@ -118,7 +126,7 @@ serve(async (req) => {
       .from('tasks')
       .insert({
         title: taskTitle,
-        description: `This is a test task created to verify notification functionality. It will be due at ${dueDate.toLocaleString()}.`,
+        description: `This is a test task created to verify notification functionality. It will be due at ${formatInTimezone(dueDate.toISOString(), userTz)}.`,
         board_id: targetBoardId,
         user_id: userId,
         priority: 'MEDIUM',
@@ -144,13 +152,13 @@ serve(async (req) => {
     console.log('Test task created:', task);
 
     // Send immediate test notification via webhook
-    await sendImmediateTestNotification(supabaseClient, task, userId);
+    await sendImmediateTestNotification(supabaseClient, task, userId, userTz);
 
     return new Response(
       JSON.stringify({ 
         success: true, 
         task,
-        message: `Test task created successfully. Due at ${dueDate.toLocaleString()}`,
+        message: `Test task created successfully. Due at ${formatInTimezone(dueDate.toISOString(), userTz)}.`,
         remindersScheduled: true,
         immediateNotificationSent: true
       }),
@@ -227,7 +235,7 @@ async function generateTaskReminders(supabaseClient: any, task: any, now: Date) 
   }
 }
 
-async function sendImmediateTestNotification(supabaseClient: any, task: any, userId: string) {
+async function sendImmediateTestNotification(supabaseClient: any, task: any, userId: string, userTz: string) {
   try {
     // Get user profile for notification
     const { data: profile } = await supabaseClient
@@ -250,7 +258,7 @@ async function sendImmediateTestNotification(supabaseClient: any, task: any, use
       body: {
         userId: userId,
         title: 'Test Task Created',
-        body: `Test task "${task.title}" has been created and will be due at ${new Date(task.due_date).toLocaleString()}`,
+        body: `Test task "${task.title}" has been created and will be due at ${formatInTimezone(task.due_date, userTz)}.`,
         channels: channels,
         userProfile: profile || { email: 'test@example.com' },
         data: {

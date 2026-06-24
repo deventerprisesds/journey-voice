@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+import { formatInTimezone } from '../_shared/timezone.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -38,6 +39,13 @@ serve(async (req) => {
     const startTime = new Date(now.getTime() + 5 * 60 * 1000); // 5 minutes from now (allows 3-min reminder)
     const endTime = new Date(now.getTime() + 6 * 60 * 1000); // 6 minutes from now (1 min duration)
     const taskTitle = "🚀 Quick Test Task - Starting in 5 minutes";
+
+    const { data: tzPref } = await supabaseClient
+      .from('user_scheduling_prefs')
+      .select('timezone')
+      .eq('user_id', userId)
+      .maybeSingle();
+    const userTz = tzPref?.timezone || 'America/New_York';
 
     console.log('Creating quick test task at:', now.toISOString());
     console.log('Task will start at:', startTime.toISOString());
@@ -99,7 +107,7 @@ serve(async (req) => {
       .from('tasks')
       .insert({
         title: taskTitle,
-        description: `This is a quick test task to verify notifications work immediately. Created at ${now.toLocaleString()} and will start at ${startTime.toLocaleString()}.`,
+        description: `This is a quick test task to verify notifications work immediately. Created at ${formatInTimezone(now.toISOString(), userTz)} and will start at ${formatInTimezone(startTime.toISOString(), userTz)}.`,
         board_id: targetBoardId,
         user_id: userId,
         priority: 'HIGH',
@@ -141,7 +149,7 @@ serve(async (req) => {
     } else {
       console.log(`Task trigger created ${reminderCount} reminders for task`);
       createdReminders?.forEach(reminder => {
-        console.log(`  - ${reminder.notification_type} at ${new Date(reminder.scheduled_for).toLocaleString()}`);
+        console.log(`  - ${reminder.notification_type} at ${new Date(reminder.scheduled_for).toISOString()}`);
       });
     }
 
@@ -149,7 +157,7 @@ serve(async (req) => {
       JSON.stringify({ 
         success: true, 
         task,
-        message: `Quick test task created! It will start at ${startTime.toLocaleString()}`,
+        message: `Quick test task created! It will start at ${formatInTimezone(startTime.toISOString(), userTz)}.`,
         remindersCreated: reminderCount,
         reminders: createdReminders?.map(r => ({
           type: r.notification_type,
