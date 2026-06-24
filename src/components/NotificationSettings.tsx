@@ -143,7 +143,7 @@ function RecurringEventsToggle({ connectionId, onRefresh }: { connectionId: stri
   );
 }
 
-type NotificationChannel = 'EMAIL' | 'SLACK' | 'PUSH' | 'OUTLOOK_EVENT' | 'GOOGLE_EVENT';
+type NotificationChannel = 'EMAIL' | 'SLACK' | 'PUSH' | 'OUTLOOK_EVENT' | 'GOOGLE_EVENT' | 'ANDROID_CALENDAR';
 type DatabaseChannel = NotificationChannel;
 
 interface NotificationPrefs {
@@ -930,6 +930,23 @@ const NotificationSettings = () => {
 
           {/* Google Calendar — multi-account */}
           {renderCalendarSection('Google', 'google', googleConnections, 'text-primary')}
+
+          {/* Android Calendar — direct device write, no Google dependency */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Smartphone className="h-5 w-5 text-green-600" />
+                <div>
+                  <h4 className="font-medium">Android Calendar</h4>
+                  <p className="text-sm text-muted-foreground">Writes tasks directly to your device calendar — no Google account needed. Requires the Journey Voice Android app.</p>
+                </div>
+              </div>
+              <Switch
+                checked={prefs.channels.includes('ANDROID_CALENDAR')}
+                onCheckedChange={() => handleToggleChannel('ANDROID_CALENDAR')}
+              />
+            </div>
+          </div>
 
           {/* Slack */}
           <div className="space-y-4">
