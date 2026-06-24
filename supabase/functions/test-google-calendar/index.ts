@@ -64,7 +64,7 @@ serve(async (req) => {
         dateTime: endTime.toISOString(),
         timeZone: 'UTC',
       },
-      reminders: { useDefault: false, overrides: [] },
+      reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 2 }] },
     };
 
     console.log('[test-google-calendar] Sending event to Google Calendar API:', JSON.stringify(event));
