@@ -1,6 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { normalizeDateTime } from '../_shared/timezone.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -233,14 +232,7 @@ async function createCalendarEvent(supabaseClient: any, connectionId: string, bo
   const { access_token, provider } = await getValidAccessToken(supabaseClient, connectionId, connInfo.user_id);
   const connection = { access_token, provider };
 
-  const { data: userPrefs } = await supabaseClient
-    .from('user_scheduling_prefs')
-    .select('timezone')
-    .eq('user_id', connInfo.user_id)
-    .maybeSingle();
-  const userTz = userPrefs?.timezone || 'America/New_York';
-
-  const externalEventId = await createExternalCalendarEvent(connection, task, userTz);
+  const externalEventId = await createExternalCalendarEvent(connection, task);
   
   if (task?.id) {
     await supabaseClient.from('tasks').update({ external_event_id: externalEventId }).eq('id', task.id);
@@ -292,31 +284,27 @@ async function fetchOutlookCalendarEvents(connection: any, startDate: string, en
   })) || [];
 }
 
-async function createExternalCalendarEvent(connection: any, task: any, userTz: string): Promise<string> {
-  if (connection.provider === 'google') return await createGoogleCalendarEvent(connection, task, userTz);
-  if (connection.provider === 'outlook' || connection.provider === 'office365') return await createOutlookCalendarEvent(connection, task, userTz);
+async function createExternalCalendarEvent(connection: any, task: any): Promise<string> {
+  if (connection.provider === 'google') return await createGoogleCalendarEvent(connection, task);
+  if (connection.provider === 'outlook' || connection.provider === 'office365') return await createOutlookCalendarEvent(connection, task);
   throw new Error('Unsupported calendar provider');
 }
 
-async function createGoogleCalendarEvent(connection: any, task: any, userTz: string): Promise<string> {
-  const startTime = normalizeDateTime(task.start_time, userTz) ?? task.start_time;
-  const endTime = normalizeDateTime(task.end_time, userTz) ?? task.end_time;
+async function createGoogleCalendarEvent(connection: any, task: any): Promise<string> {
   const response = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${connection.access_token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ summary: task.title, description: task.description, start: { dateTime: startTime, timeZone: 'UTC' }, end: { dateTime: endTime, timeZone: 'UTC' } }),
+    body: JSON.stringify({ summary: task.title, description: task.description, start: { dateTime: task.start_time, timeZone: 'UTC' }, end: { dateTime: task.end_time, timeZone: 'UTC' } }),
   });
   if (!response.ok) throw new Error(`Failed to create Google Calendar event: ${response.statusText}`);
   return (await response.json()).id;
 }
 
-async function createOutlookCalendarEvent(connection: any, task: any, userTz: string): Promise<string> {
-  const startTime = normalizeDateTime(task.start_time, userTz) ?? task.start_time;
-  const endTime = normalizeDateTime(task.end_time, userTz) ?? task.end_time;
+async function createOutlookCalendarEvent(connection: any, task: any): Promise<string> {
   const response = await fetch('https://graph.microsoft.com/v1.0/me/calendar/events', {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${connection.access_token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ subject: task.title, body: { contentType: 'text', content: task.description || '' }, start: { dateTime: startTime, timeZone: 'UTC' }, end: { dateTime: endTime, timeZone: 'UTC' } }),
+    body: JSON.stringify({ subject: task.title, body: { contentType: 'text', content: task.description || '' }, start: { dateTime: task.start_time, timeZone: 'UTC' }, end: { dateTime: task.end_time, timeZone: 'UTC' } }),
   });
   if (!response.ok) throw new Error(`Failed to create Outlook Calendar event: ${response.statusText}`);
   return (await response.json()).id;
