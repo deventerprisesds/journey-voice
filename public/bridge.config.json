@@ -59,8 +59,13 @@
       }
     ]
   },
+  "interactiveWidget": {
+    "enabled": true,
+    "chatDeepLink": "/tasks",
+    "hintText": "Add a task for today..."
+  },
   "widget": {
-    "enabled": false,
+    "enabled": true,
     "name": "Journey Voice",
     "dataUrl": "https://wwxgajrtmslzklnyplah.supabase.co/external_calendar_events",
     "refreshMinutes": 15,
@@ -84,7 +89,12 @@
     "trustedAuthDomains": []
   },
   "voice": {
-    "enabled": false,
-    "floatingButton": false
+    "enabled": true,
+    "floatingButton": true,
+    "buttonPosition": "bottom-right",
+    "buttonOffsetDp": { "x": 24, "y": 100 },
+    "ttsLocale": "en-US",
+    "conversationMode": true,
+    "silenceTimeoutMs": 1500
   }
 }
