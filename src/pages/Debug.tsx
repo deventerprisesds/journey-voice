@@ -63,6 +63,9 @@ const Debug = () => {
     { name: 'Edge Functions', status: 'pending' }
   ]);
   const [testLogSent, setTestLogSent] = useState(false);
+  const [widgetLog, setWidgetLog] = useState<string>('');
+  const [credAudit, setCredAudit] = useState<Record<string, string>>({});
+  const bridge = (window as any).AndroidBridge;
 
   // Refresh entries periodically
   useEffect(() => {
@@ -71,6 +74,46 @@ const Debug = () => {
     }, 1000);
     return () => clearInterval(interval);
   }, []);
+
+  const refreshWidgetLog = () => {
+    const log = bridge?.getWidgetDebugLog?.() ?? '(AndroidBridge not available — open this page inside the app)';
+    setWidgetLog(log);
+  };
+
+  const clearWidgetLog = () => {
+    bridge?.clearWidgetDebugLog?.();
+    setWidgetLog('(cleared)');
+  };
+
+  useEffect(() => { refreshWidgetLog(); }, []);
+
+  const CRED_KEYS = [
+    'supabase_url',
+    'supabase_anon_key',
+    'supabase_access_token',
+    'supabase_refresh_token',
+    'supabase_user_id',
+    'fcm_token',
+  ];
+
+  const checkCreds = () => {
+    if (!bridge?.secureGet) {
+      setCredAudit({ error: 'AndroidBridge.secureGet not available' });
+      return;
+    }
+    const result: Record<string, string> = {};
+    for (const key of CRED_KEYS) {
+      const val = bridge.secureGet(key) as string;
+      if (!val) {
+        result[key] = '✗ missing';
+      } else if (key.includes('token') || key.includes('key')) {
+        result[key] = `✓ present (${val.length} chars)`;
+      } else {
+        result[key] = `✓ ${val}`;
+      }
+    }
+    setCredAudit(result);
+  };
 
   // Check service worker status
   useEffect(() => {
@@ -451,6 +494,69 @@ const Debug = () => {
               </Button>
               <Button onClick={handleUnregisterSW} variant="destructive" size="sm">
                 Unregister SW
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Widget Credential Audit */}
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-lg flex items-center gap-2">
+              <CheckCircle className="w-5 h-5" />
+              Widget Credential Audit
+            </CardTitle>
+            <CardDescription>
+              Shows which keys are present in EncryptedPrefs (values hidden for tokens/keys)
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {Object.keys(credAudit).length > 0 && (
+              <div className="space-y-1 font-mono text-xs rounded border bg-muted/50 p-2">
+                {Object.entries(credAudit).map(([k, v]) => (
+                  <div key={k} className="flex gap-2">
+                    <span className={`flex-shrink-0 ${v.startsWith('✗') ? 'text-destructive' : 'text-green-500'}`}>
+                      {v.startsWith('✗') ? '✗' : '✓'}
+                    </span>
+                    <span className="text-muted-foreground w-40 flex-shrink-0">{k}</span>
+                    <span>{v.replace(/^[✓✗] ?/, '')}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <Button onClick={checkCreds} size="sm" disabled={!bridge}>
+              <RefreshCw className="w-4 h-4 mr-2" />
+              Check Credentials
+            </Button>
+          </CardContent>
+        </Card>
+
+        {/* Widget Debug Log */}
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Activity className="w-5 h-5" />
+              Widget Debug Log
+            </CardTitle>
+            <CardDescription>
+              Live trace from SupabaseTaskClient — credential checks, HTTP statuses, row counts
+              {!bridge && <span className="text-destructive ml-2">• AndroidBridge not detected (open inside app)</span>}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <ScrollArea className="h-48 rounded border bg-muted/50 p-2">
+              <pre className="text-xs font-mono whitespace-pre-wrap">
+                {widgetLog || '(tap Refresh to load)'}
+              </pre>
+            </ScrollArea>
+            <div className="flex gap-2">
+              <Button onClick={refreshWidgetLog} size="sm">
+                <RefreshCw className="w-4 h-4 mr-2" />
+                Refresh
+              </Button>
+              <Button onClick={clearWidgetLog} size="sm" variant="outline" disabled={!bridge}>
+                <Trash2 className="w-4 h-4 mr-2" />
+                Clear Log
               </Button>
             </div>
           </CardContent>

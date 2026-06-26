@@ -56,9 +56,11 @@ const App = () => {
         bridge.secureStore('supabase_url', SUPABASE_URL);
         bridge.secureStore('supabase_anon_key', SUPABASE_PUBLISHABLE_KEY);
         bridge.secureStore('supabase_access_token', session.access_token);
+        bridge.secureStore('supabase_refresh_token', session.refresh_token ?? '');
         bridge.secureStore('supabase_user_id', session.user.id);
       } else {
         bridge.secureStore('supabase_access_token', '');
+        bridge.secureStore('supabase_refresh_token', '');
         bridge.secureStore('supabase_user_id', '');
       }
     });
