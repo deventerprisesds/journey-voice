@@ -603,11 +603,26 @@ const NotificationSettings = () => {
     window.AndroidBridge.notify(JSON.stringify({
       channel: 'calendar_events',
       title: '🔔 Event Starting Now',
-      body: 'Test: alarm notification with Snooze and Dismiss',
+      body: 'Test: system alarm with Snooze and Dismiss',
       deepLink: '/calendar',
-      tag: 'test-alarm'
+      tag: 'test-alarm',
+      soundSource: 'system',
     }));
-    toast({ title: 'Alarm fired', description: 'Check your notification shade' });
+    toast({ title: 'System alarm fired', description: 'Check your notification shade' });
+  };
+
+  const sendTestCustomAlarm = () => {
+    if (!window.AndroidBridge) return;
+    window.AndroidBridge.cancelAlarm?.('test-alarm-custom');
+    window.AndroidBridge.notify(JSON.stringify({
+      channel: 'calendar_events',
+      title: '🔔 Event Starting Now',
+      body: 'Test: custom sound alarm with Snooze and Dismiss',
+      deepLink: '/calendar',
+      tag: 'test-alarm-custom',
+      soundSource: 'custom',
+    }));
+    toast({ title: 'Custom alarm fired', description: 'Check your notification shade' });
   };
 
   const sendTestMessage = () => {
@@ -1024,7 +1039,12 @@ const NotificationSettings = () => {
             </Button>
             {pushNotifications.isAndroidBridge && (
               <Button onClick={sendTestAlarm} variant="outline" className="w-full">
-                <Bell className="h-4 w-4 mr-2" />Test Alarm
+                <Bell className="h-4 w-4 mr-2" />Test System Alarm
+              </Button>
+            )}
+            {pushNotifications.isAndroidBridge && (
+              <Button onClick={sendTestCustomAlarm} variant="outline" className="w-full">
+                <Bell className="h-4 w-4 mr-2" />Test Custom Sound
               </Button>
             )}
             {pushNotifications.isAndroidBridge && (

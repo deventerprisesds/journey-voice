@@ -93,16 +93,8 @@ async function sendFcmNotification(
   const message = {
     message: {
       token: fcmToken,
-      notification: { title, body },
       data,
-      android: {
-        priority: 'high',
-        notification: {
-          channel_id: data['channel'] ?? 'task-reminders',
-          default_vibrate_timings: true,
-          default_sound: true,
-        },
-      },
+      android: { priority: 'high' },
     },
   };
 
@@ -195,7 +187,12 @@ serve(async (req) => {
       requireInteraction: true,
     });
 
-    // Flatten data values to strings for FCM data payload
+    // Flatten data values to strings for FCM data payload.
+    // Note: no top-level `notification` object — this is intentionally a data-only
+    // message so onMessageReceived fires even when the app is backgrounded. The
+    // Android bridge routes alarm-channel payloads to AlarmSoundService (looping),
+    // which would be bypassed if FCM auto-displays the notification from a
+    // `notification` object.
     const fcmData: Record<string, string> = {
       title,
       body,
@@ -203,6 +200,8 @@ serve(async (req) => {
       taskId: data?.taskId ?? '',
       notificationId: data?.notificationId ?? '',
       channel: channel ?? 'task-reminders',
+      deepLink: data?.deepLink ?? '/',
+      tag: data?.tag ?? data?.notificationId ?? 'fcm',
     };
 
     const results = await Promise.allSettled(
