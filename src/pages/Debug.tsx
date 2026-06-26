@@ -63,6 +63,8 @@ const Debug = () => {
     { name: 'Edge Functions', status: 'pending' }
   ]);
   const [testLogSent, setTestLogSent] = useState(false);
+  const [widgetLog, setWidgetLog] = useState<string>('');
+  const bridge = (window as any).AndroidBridge;
 
   // Refresh entries periodically
   useEffect(() => {
@@ -71,6 +73,18 @@ const Debug = () => {
     }, 1000);
     return () => clearInterval(interval);
   }, []);
+
+  const refreshWidgetLog = () => {
+    const log = bridge?.getWidgetDebugLog?.() ?? '(AndroidBridge not available — open this page inside the app)';
+    setWidgetLog(log);
+  };
+
+  const clearWidgetLog = () => {
+    bridge?.clearWidgetDebugLog?.();
+    setWidgetLog('(cleared)');
+  };
+
+  useEffect(() => { refreshWidgetLog(); }, []);
 
   // Check service worker status
   useEffect(() => {
@@ -451,6 +465,37 @@ const Debug = () => {
               </Button>
               <Button onClick={handleUnregisterSW} variant="destructive" size="sm">
                 Unregister SW
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Widget Debug Log */}
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Activity className="w-5 h-5" />
+              Widget Debug Log
+            </CardTitle>
+            <CardDescription>
+              Live trace from SupabaseTaskClient — credential checks, HTTP statuses, row counts
+              {!bridge && <span className="text-destructive ml-2">• AndroidBridge not detected (open inside app)</span>}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <ScrollArea className="h-48 rounded border bg-muted/50 p-2">
+              <pre className="text-xs font-mono whitespace-pre-wrap">
+                {widgetLog || '(tap Refresh to load)'}
+              </pre>
+            </ScrollArea>
+            <div className="flex gap-2">
+              <Button onClick={refreshWidgetLog} size="sm">
+                <RefreshCw className="w-4 h-4 mr-2" />
+                Refresh
+              </Button>
+              <Button onClick={clearWidgetLog} size="sm" variant="outline" disabled={!bridge}>
+                <Trash2 className="w-4 h-4 mr-2" />
+                Clear Log
               </Button>
             </div>
           </CardContent>
