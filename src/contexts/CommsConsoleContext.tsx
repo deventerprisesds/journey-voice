@@ -574,7 +574,20 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
       window.removeEventListener('bridgeMessage', handleBridgeMessage);
     };
   }, [userId, dbThreadId]);
-  
+
+  // Android widget relay bar: routes transcript to chat thread via bridgeVoiceResult event.
+  // Fired by JavascriptBridge.dispatchVoiceResult() when user submits text from a widget.
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const transcript = (event as CustomEvent).detail?.transcript;
+      if (transcript) {
+        sendMessage(transcript);
+      }
+    };
+    window.addEventListener('bridgeVoiceResult', handler);
+    return () => window.removeEventListener('bridgeVoiceResult', handler);
+  }, [sendMessage]);
+
   // ============================================================
   // Track last message timestamp for smart visibility reload
   // ============================================================
