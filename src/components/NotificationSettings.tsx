@@ -487,9 +487,9 @@ const NotificationSettings = () => {
       };
       const dbPrefs = { ...normalizedPrefs, channels: normalizedPrefs.channels as DatabaseChannel[] };
 
-      const { error: updatePrefsError } = await supabase.from('notification_prefs').update(dbPrefs).eq('user_id', user.id);
+      const { error: updatePrefsError } = await supabase.from('notification_prefs').update(dbPrefs as any).eq('user_id', user.id);
       if (updatePrefsError && updatePrefsError.code === 'PGRST116') {
-        const { error: insertPrefsError } = await supabase.from('notification_prefs').insert({ user_id: user.id, ...dbPrefs });
+        const { error: insertPrefsError } = await supabase.from('notification_prefs').insert({ user_id: user.id, ...dbPrefs } as any);
         if (insertPrefsError) throw new Error(`Failed to save notification preferences: ${insertPrefsError.message}`);
       } else if (updatePrefsError) {
         throw new Error(`Failed to update notification preferences: ${updatePrefsError.message}`);

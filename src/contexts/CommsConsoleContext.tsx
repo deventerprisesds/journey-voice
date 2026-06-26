@@ -575,18 +575,7 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     };
   }, [userId, dbThreadId]);
 
-  // Android widget relay bar: routes transcript to chat thread via bridgeVoiceResult event.
-  // Fired by JavascriptBridge.dispatchVoiceResult() when user submits text from a widget.
-  useEffect(() => {
-    const handler = (event: Event) => {
-      const transcript = (event as CustomEvent).detail?.transcript;
-      if (transcript) {
-        sendMessage(transcript);
-      }
-    };
-    window.addEventListener('bridgeVoiceResult', handler);
-    return () => window.removeEventListener('bridgeVoiceResult', handler);
-  }, [sendMessage]);
+  // Android widget relay bar handler is registered after sendMessage is defined (see below).
 
   // ============================================================
   // Track last message timestamp for smart visibility reload
@@ -1107,6 +1096,18 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
       await sendMessage(lastUserMessage);
     }
   }, [lastUserMessage, sendMessage]);
+
+  // Android widget relay bar: routes transcript to chat thread via bridgeVoiceResult event.
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const transcript = (event as CustomEvent).detail?.transcript;
+      if (transcript) {
+        sendMessage(transcript);
+      }
+    };
+    window.addEventListener('bridgeVoiceResult', handler);
+    return () => window.removeEventListener('bridgeVoiceResult', handler);
+  }, [sendMessage]);
 
   // Start a new conversation (clear messages but keep thread for history)
   const startNewConversation = useCallback(() => {
