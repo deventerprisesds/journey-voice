@@ -124,6 +124,16 @@ async function sendFcmNotification(
   }
 }
 
+function computeDeepLink(type: string, callType?: string): string {
+  if (type === 'chat_message') {
+    if (callType === 'morning_standup') return '/tasks?view=focus';
+    if (callType === 'priority_alert') return '/priorities';
+    return '/chat';
+  }
+  if (type === 'priority_alert' || type === 'priority_update') return '/priorities';
+  return '/';
+}
+
 // ── Main handler ─────────────────────────────────────────────────────────────
 
 serve(async (req) => {
@@ -195,6 +205,8 @@ serve(async (req) => {
       requireInteraction: true,
     });
 
+    const deepLink = computeDeepLink(data?.type ?? '', data?.callType);
+
     // Flatten data values to strings for FCM data payload
     const fcmData: Record<string, string> = {
       title,
@@ -203,6 +215,9 @@ serve(async (req) => {
       taskId: data?.taskId ?? '',
       notificationId: data?.notificationId ?? '',
       channel: channel ?? 'task-reminders',
+      callType: data?.callType ?? '',
+      deepLink,
+      messageData: data?.messageData ? JSON.stringify(data.messageData) : '',
     };
 
     const results = await Promise.allSettled(
