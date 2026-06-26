@@ -64,6 +64,14 @@
     "chatDeepLink": "/tasks",
     "hintText": "Add a task for today..."
   },
+  "scheduleWidget": {
+    "enabled": true,
+    "hintText": "What's next..."
+  },
+  "prioritiesWidget": {
+    "enabled": true,
+    "categories": ["Work", "Personal", "Health", "Learning", "Career"]
+  },
   "widget": {
     "enabled": true,
     "name": "Journey Voice",
