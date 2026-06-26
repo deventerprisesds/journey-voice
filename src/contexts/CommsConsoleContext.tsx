@@ -1097,6 +1097,18 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     }
   }, [lastUserMessage, sendMessage]);
 
+  // Android widget relay bar: routes transcript to chat thread via bridgeVoiceResult event.
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const transcript = (event as CustomEvent).detail?.transcript;
+      if (transcript) {
+        sendMessage(transcript);
+      }
+    };
+    window.addEventListener('bridgeVoiceResult', handler);
+    return () => window.removeEventListener('bridgeVoiceResult', handler);
+  }, [sendMessage]);
+
   // Start a new conversation (clear messages but keep thread for history)
   const startNewConversation = useCallback(() => {
     setMessages([]);
