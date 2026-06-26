@@ -152,13 +152,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // changes. SupabaseTaskClient reads these keys from EncryptedPrefs to make
   // direct REST calls for widget data (outside the WebView).
   useEffect(() => {
-    if (!session || session.access_token === 'mock-token') return;
-    const bridge = (window as any).AndroidBridge;
-    if (!bridge?.secureStore) return;
-    bridge.secureStore('supabase_url', SUPABASE_URL);
-    bridge.secureStore('supabase_anon_key', SUPABASE_PUBLISHABLE_KEY);
-    bridge.secureStore('supabase_access_token', session.access_token);
-    bridge.secureStore('supabase_user_id', session.user.id);
+    try {
+      if (!session || session.access_token === 'mock-token') return;
+      const bridge = (window as any).AndroidBridge;
+      if (!bridge?.secureStore) return;
+      bridge.secureStore('supabase_url', SUPABASE_URL);
+      bridge.secureStore('supabase_anon_key', SUPABASE_PUBLISHABLE_KEY);
+      bridge.secureStore('supabase_access_token', session.access_token);
+      bridge.secureStore('supabase_user_id', session.user.id);
+    } catch (e) {
+      console.warn('[Auth] Failed to sync credentials to native bridge', e);
+    }
   }, [session]);
 
   // ============================================================================
