@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { normalizeDueDate, normalizeDateTime, getTodayInTimezone } from "../_shared/timezone.ts";
+import { normalizeDueDate, normalizeDateTime, getTodayInTimezone, formatInTimezone } from "../_shared/timezone.ts";
 import { getToolDefinitions } from "../_shared/tool-definitions.ts";
 import { getTopicGroupsManual, WINDOW_RANGES, CATEGORY_WINDOW_MAPPING } from "../_shared/call-context-builder.ts";
 import { resolveConfig, validateTaskWindow } from "../_shared/scheduling-defaults.ts";
@@ -965,7 +965,7 @@ async function scheduleTask(supabase: any, args: any, timezone?: string): Promis
       return { 
         success: true, 
         result: { task: existingTask, skipped: true },
-        message: `Task "${existingTask.title}" is already scheduled for ${existingTask.start_time}. Use reschedule_task to change the time.`
+        message: `Task "${existingTask.title}" is already scheduled for ${formatInTimezone(existingTask.start_time, tz, { hour: 'numeric', minute: '2-digit', hour12: true, month: 'short', day: 'numeric' })}. Use reschedule_task to change the time.`
       };
     }
 

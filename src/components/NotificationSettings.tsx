@@ -143,7 +143,7 @@ function RecurringEventsToggle({ connectionId, onRefresh }: { connectionId: stri
   );
 }
 
-type NotificationChannel = 'EMAIL' | 'SLACK' | 'PUSH' | 'OUTLOOK_EVENT' | 'GOOGLE_EVENT';
+type NotificationChannel = 'EMAIL' | 'SLACK' | 'PUSH' | 'OUTLOOK_EVENT' | 'GOOGLE_EVENT' | 'ANDROID_CALENDAR';
 type DatabaseChannel = NotificationChannel;
 
 interface NotificationPrefs {
@@ -304,6 +304,7 @@ const NotificationSettings = () => {
   const [googleConnections, setGoogleConnections] = useState<CalendarConnection[]>([]);
   const [isTestingOutlook, setIsTestingOutlook] = useState(false);
   const [isTestingPush, setIsTestingPush] = useState(false);
+  const [isTestingGoogleCal, setIsTestingGoogleCal] = useState(false);
   const { toast } = useToast();
   const { user, isDemoMode } = useAuth();
   const pushNotifications = useNotifications();
@@ -560,6 +561,32 @@ const NotificationSettings = () => {
     }
   };
 
+  const sendTestSamsungCalendar = async () => {
+    setIsTestingGoogleCal(true);
+    try {
+      const { error } = await supabase.functions.invoke('send-unified-notification', {
+        body: {
+          userId: user?.id,
+          channels: ['GOOGLE_EVENT'],
+          userProfile: { email },
+          data: {
+            type: 'test_notification',
+            taskTitle: 'Test Android Calendar Event',
+            taskDescription: 'Test event from Android Calendar settings.',
+            startTime: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+            estimateMinutes: 60,
+          },
+        }
+      });
+      if (error) throw error;
+      toast({ title: 'Android Calendar Test Sent', description: 'Event created in your Google Calendar (syncs to device).' });
+    } catch (err: any) {
+      toast({ title: 'Android Calendar Test Failed', description: err.message, variant: 'destructive' });
+    } finally {
+      setIsTestingGoogleCal(false);
+    }
+  };
+
   const sendTestSlack = async () => {
     try {
       if (useCustomSlackWebhook && !slackWebhookUrl) { toast({ title: "Custom webhook URL is empty", variant: "destructive" }); return; }
@@ -576,11 +603,26 @@ const NotificationSettings = () => {
     window.AndroidBridge.notify(JSON.stringify({
       channel: 'calendar_events',
       title: '🔔 Event Starting Now',
-      body: 'Test: alarm notification with Snooze and Dismiss',
+      body: 'Test: system alarm with Snooze and Dismiss',
       deepLink: '/calendar',
-      tag: 'test-alarm'
+      tag: 'test-alarm',
+      soundSource: 'system',
     }));
-    toast({ title: 'Alarm fired', description: 'Check your notification shade' });
+    toast({ title: 'System alarm fired', description: 'Check your notification shade' });
+  };
+
+  const sendTestCustomAlarm = () => {
+    if (!window.AndroidBridge) return;
+    window.AndroidBridge.cancelAlarm?.('test-alarm-custom');
+    window.AndroidBridge.notify(JSON.stringify({
+      channel: 'calendar_events',
+      title: '🔔 Event Starting Now',
+      body: 'Test: custom sound alarm with Snooze and Dismiss',
+      deepLink: '/calendar',
+      tag: 'test-alarm-custom',
+      soundSource: 'custom',
+    }));
+    toast({ title: 'Custom alarm fired', description: 'Check your notification shade' });
   };
 
   const sendTestMessage = () => {
@@ -912,6 +954,23 @@ const NotificationSettings = () => {
           {/* Google Calendar — multi-account */}
           {renderCalendarSection('Google', 'google', googleConnections, 'text-primary')}
 
+          {/* Android Calendar — direct device write, no Google dependency */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Smartphone className="h-5 w-5 text-green-600" />
+                <div>
+                  <h4 className="font-medium">Android Calendar</h4>
+                  <p className="text-sm text-muted-foreground">Writes tasks directly to your device calendar — no Google account needed. Requires the Journey Voice Android app.</p>
+                </div>
+              </div>
+              <Switch
+                checked={prefs.channels.includes('ANDROID_CALENDAR')}
+                onCheckedChange={() => handleToggleChannel('ANDROID_CALENDAR')}
+              />
+            </div>
+          </div>
+
           {/* Slack */}
           <div className="space-y-4">
             <div className="flex items-center justify-between">
@@ -961,6 +1020,10 @@ const NotificationSettings = () => {
             <Button onClick={sendTestGoogleEvent} variant="outline" className="w-full" disabled={!googleConnections.some(c => c.purposes?.includes('WRITE'))}>
               <Calendar className="h-4 w-4 mr-2" />Test Google Event
             </Button>
+            <Button onClick={sendTestSamsungCalendar} variant="outline" className="w-full" disabled={isTestingGoogleCal}>
+              {isTestingGoogleCal ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Smartphone className="h-4 w-4 mr-2" />}
+              Test Android Calendar
+            </Button>
             <Button onClick={sendTestSlack} variant="outline" className="w-full" disabled={!prefs.channels.includes('SLACK')}>
               <MessageSquare className="h-4 w-4 mr-2" />Test Slack
             </Button>
@@ -976,7 +1039,12 @@ const NotificationSettings = () => {
             </Button>
             {pushNotifications.isAndroidBridge && (
               <Button onClick={sendTestAlarm} variant="outline" className="w-full">
-                <Bell className="h-4 w-4 mr-2" />Test Alarm
+                <Bell className="h-4 w-4 mr-2" />Test System Alarm
+              </Button>
+            )}
+            {pushNotifications.isAndroidBridge && (
+              <Button onClick={sendTestCustomAlarm} variant="outline" className="w-full">
+                <Bell className="h-4 w-4 mr-2" />Test Custom Sound
               </Button>
             )}
             {pushNotifications.isAndroidBridge && (

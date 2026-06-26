@@ -269,12 +269,17 @@ async function fetchGoogleCalendarEvents(connection: any, startDate: string, end
 
 async function fetchOutlookCalendarEvents(connection: any, startDate: string, endDate: string): Promise<CalendarEvent[]> {
   const url = `https://graph.microsoft.com/v1.0/me/calendar/events?$filter=start/dateTime ge '${startDate}' and end/dateTime le '${endDate}'&$orderby=start/dateTime`;
-  const response = await fetch(url, { headers: { 'Authorization': `Bearer ${connection.access_token}` } });
+  const response = await fetch(url, {
+    headers: {
+      'Authorization': `Bearer ${connection.access_token}`,
+      'Prefer': 'outlook.timezone="UTC"',
+    },
+  });
   if (!response.ok) throw new Error(`Outlook Calendar API error: ${response.status} ${response.statusText}`);
   const data = await response.json();
   return data.value?.map((event: any) => ({
     id: event.id, title: event.subject || 'Untitled Event', description: event.body?.content,
-    start_time: event.start.dateTime, end_time: event.end.dateTime,
+    start_time: event.start.dateTime + 'Z', end_time: event.end.dateTime + 'Z',
     is_all_day: event.isAllDay, location: event.location?.displayName, calendar_id: 'primary',
   })) || [];
 }
