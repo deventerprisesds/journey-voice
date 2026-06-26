@@ -5,7 +5,7 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
-import { Calendar, Mail, MessageSquare, Volume2, VolumeX, CheckCircle2, AlertCircle, Loader2, RefreshCw, Bell, BellOff, Smartphone, X } from "lucide-react";
+import { Calendar, Mail, MessageSquare, Volume2, VolumeX, CheckCircle2, AlertCircle, Loader2, RefreshCw, Bell, BellOff, Smartphone, X, Settings } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
@@ -305,6 +305,7 @@ const NotificationSettings = () => {
   const [isTestingOutlook, setIsTestingOutlook] = useState(false);
   const [isTestingPush, setIsTestingPush] = useState(false);
   const [isTestingGoogleCal, setIsTestingGoogleCal] = useState(false);
+  const [alarmSoundName, setAlarmSoundName] = useState<string>('Default');
   const { toast } = useToast();
   const { user, isDemoMode } = useAuth();
   const pushNotifications = useNotifications();
@@ -318,6 +319,18 @@ const NotificationSettings = () => {
       loadCalendarConnections();
     }
   }, [isDemoMode, user]);
+
+  useEffect(() => {
+    if (window.AndroidBridge?.getAlarmSoundName) {
+      setAlarmSoundName(window.AndroidBridge.getAlarmSoundName());
+    }
+    const onSoundSelected = (e: Event) => {
+      const name = (e as CustomEvent<{ name: string }>).detail?.name;
+      if (name) setAlarmSoundName(name);
+    };
+    window.addEventListener('bridgeAlarmSoundSelected', onSoundSelected);
+    return () => window.removeEventListener('bridgeAlarmSoundSelected', onSoundSelected);
+  }, []);
 
   useEffect(() => {
     const handleConnectionUpdate = () => {
@@ -609,6 +622,11 @@ const NotificationSettings = () => {
       soundSource: 'system',
     }));
     toast({ title: 'System alarm fired', description: 'Check your notification shade' });
+  };
+
+  const openAlarmSoundPicker = () => {
+    if (!window.AndroidBridge?.openAlarmSoundPicker) return;
+    window.AndroidBridge.openAlarmSoundPicker();
   };
 
   const sendTestCustomAlarm = () => {
@@ -1037,6 +1055,18 @@ const NotificationSettings = () => {
             <Button onClick={createTestTaskWithNotifications} variant="outline" className="w-full col-span-2">
               <Calendar className="h-4 w-4 mr-2" />Create Test Task
             </Button>
+            {pushNotifications.isAndroidBridge && (
+              <div className="col-span-2 flex items-center justify-between rounded-md border px-3 py-2">
+                <div className="flex items-center gap-2 text-sm">
+                  <Bell className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-muted-foreground">Alarm sound:</span>
+                  <span className="font-medium">{alarmSoundName}</span>
+                </div>
+                <Button variant="ghost" size="sm" onClick={openAlarmSoundPicker} className="h-7 w-7 p-0">
+                  <Settings className="h-4 w-4" />
+                </Button>
+              </div>
+            )}
             {pushNotifications.isAndroidBridge && (
               <Button onClick={sendTestAlarm} variant="outline" className="w-full">
                 <Bell className="h-4 w-4 mr-2" />Test System Alarm
