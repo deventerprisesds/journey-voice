@@ -17,7 +17,7 @@ jobs:
         run: |
           OFFSET="${{ github.event.inputs.timezone_offset_hours }}"
           OFFSET=${OFFSET:--4}
-          RESULT=$(python3 -c "import datetime; offset=float('$OFFSET'); now=datetime.datetime.utcnow(); local=(now+datetime.timedelta(hours=offset)).date(); start=datetime.datetime.combine(local,datetime.time.min)-datetime.timedelta(hours=offset); end=start+datetime.timedelta(days=1); print(f'{local},{start.strftime(\"%Y-%m-%dT%H:%M:%SZ\")},{end.strftime(\"%Y-%m-%dT%H:%M:%SZ\")}'  )")
+          RESULT=$(python3 -c "import datetime; offset=float('$OFFSET'); now=datetime.datetime.utcnow(); local=(now+datetime.timedelta(hours=offset)).date(); start=datetime.datetime.combine(local,datetime.time.min)-datetime.timedelta(hours=offset); end=start+datetime.timedelta(days=1); print(f'{local},{start.strftime(\"%Y-%m-%dT%H:%M:%SZ\")},{end.strftime(\"%Y-%m-%dT%H:%M:%SZ\")}')")
           TODAY_LOCAL=$(echo "$RESULT" | cut -d, -f1)
           TODAY_START=$(echo "$RESULT" | cut -d, -f2)
           TOMORROW_START=$(echo "$RESULT" | cut -d, -f3)
@@ -32,7 +32,7 @@ jobs:
         env:
           SB_KEY: ${{ secrets.CF_SUPABASE_SERVICE_KEY }}
         run: |
-          RAW=$(curl -sf \
+          RAW=$(curl -s \
             -H "Authorization: Bearer $SB_KEY" \
             -H "apikey: $SB_KEY" \
             "https://wwxgajrtmslzklnyplah.supabase.co/auth/v1/admin/users?per_page=50")
@@ -53,24 +53,40 @@ jobs:
           TOMORROW_START="${{ steps.window.outputs.tomorrow_start }}"
           TODAY_LOCAL="${{ steps.window.outputs.today_local }}"
           USER_ID="${{ steps.user.outputs.user_id }}"
-          USER_FILTER=""
-          [ -n "$USER_ID" ] && USER_FILTER="&user_id=eq.${USER_ID}"
           echo "=== EXACT WIDGET QUERY: getTodayTasks() ==="
           echo "Today: $TODAY_LOCAL | Window: $TODAY_START .. $TOMORROW_START"
           echo "select=id,title,status,priority,start_time,due_date"
           echo "or=(status.eq.DOING,and(start_time.gte.X,start_time.lt.Y))"
           echo "order=start_time.asc.nullslast limit=30"
-          RESULT=$(curl -sf \
-            -H "apikey: $SB_KEY" \
-            -H "Authorization: Bearer $SB_KEY" \
-            -H "Accept: application/json" \
-            "https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/tasks?select=id,title,status,priority,start_time,due_date${USER_FILTER}&or=(status.eq.DOING,and(start_time.gte.${TODAY_START},start_time.lt.${TOMORROW_START}))&order=start_time.asc.nullslast&limit=30")
+          # Use -G with --data-urlencode so parentheses/colons in filters are safely encoded
+          ARGS=(
+            -G
+            -s
+            -w "\nHTTP_STATUS:%{http_code}"
+            -H "apikey: $SB_KEY"
+            -H "Authorization: Bearer $SB_KEY"
+            -H "Accept: application/json"
+            --data-urlencode "select=id,title,status,priority,start_time,due_date"
+            --data-urlencode "or=(status.eq.DOING,and(start_time.gte.${TODAY_START},start_time.lt.${TOMORROW_START}))"
+            --data-urlencode "order=start_time.asc.nullslast"
+            --data-urlencode "limit=30"
+          )
+          if [ -n "$USER_ID" ]; then
+            ARGS+=(--data-urlencode "user_id=eq.${USER_ID}")
+          fi
+          FULL=$(curl "${ARGS[@]}" "https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/tasks")
+          HTTP_CODE=$(echo "$FULL" | grep 'HTTP_STATUS:' | tail -1 | cut -d: -f2)
+          RESULT=$(echo "$FULL" | sed '/HTTP_STATUS:/d')
+          echo "HTTP status: $HTTP_CODE"
           echo "$RESULT" | python3 -m json.tool || echo "RAW: $RESULT"
+          COUNT=$(echo "$RESULT" | python3 -c "import json,sys; arr=json.load(sys.stdin); print(len(arr))" 2>/dev/null || echo "?")
+          echo "=== $COUNT task(s) returned ==="
           echo "## Exact widget query: getTodayTasks()" >> $GITHUB_STEP_SUMMARY
-          echo "Today: $TODAY_LOCAL | Window: $TODAY_START .. $TOMORROW_START" >> $GITHUB_STEP_SUMMARY
+          echo "Today: $TODAY_LOCAL | Window: $TODAY_START .. $TOMORROW_START | HTTP: $HTTP_CODE" >> $GITHUB_STEP_SUMMARY
           echo '```json' >> $GITHUB_STEP_SUMMARY
           echo "$RESULT" | python3 -m json.tool >> $GITHUB_STEP_SUMMARY || echo "$RESULT" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+          [ "$HTTP_CODE" = "200" ] || exit 1
 
       - name: FocusView equivalent - start_time window only
         env:
@@ -79,12 +95,32 @@ jobs:
           TODAY_START="${{ steps.window.outputs.today_start }}"
           TOMORROW_START="${{ steps.window.outputs.tomorrow_start }}"
           USER_ID="${{ steps.user.outputs.user_id }}"
-          USER_FILTER=""
-          [ -n "$USER_ID" ] && USER_FILTER="&user_id=eq.${USER_ID}"
           echo "=== FOCUSVIEW EQUIVALENT: start_time window only ==="
-          RESULT=$(curl -sf \
-            -H "apikey: $SB_KEY" \
-            -H "Authorization: Bearer $SB_KEY" \
-            -H "Accept: application/json" \
-            "https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/tasks?select=id,title,status,start_time${USER_FILTER}&start_time=gte.${TODAY_START}&start_time=lt.${TOMORROW_START}&order=start_time.asc&limit=30")
+          ARGS=(
+            -G
+            -s
+            -w "\nHTTP_STATUS:%{http_code}"
+            -H "apikey: $SB_KEY"
+            -H "Authorization: Bearer $SB_KEY"
+            -H "Accept: application/json"
+            --data-urlencode "select=id,title,status,start_time"
+            --data-urlencode "start_time=gte.${TODAY_START}"
+            --data-urlencode "start_time=lt.${TOMORROW_START}"
+            --data-urlencode "order=start_time.asc"
+            --data-urlencode "limit=30"
+          )
+          if [ -n "$USER_ID" ]; then
+            ARGS+=(--data-urlencode "user_id=eq.${USER_ID}")
+          fi
+          FULL=$(curl "${ARGS[@]}" "https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/tasks")
+          HTTP_CODE=$(echo "$FULL" | grep 'HTTP_STATUS:' | tail -1 | cut -d: -f2)
+          RESULT=$(echo "$FULL" | sed '/HTTP_STATUS:/d')
+          echo "HTTP status: $HTTP_CODE"
           echo "$RESULT" | python3 -m json.tool || echo "RAW: $RESULT"
+          COUNT=$(echo "$RESULT" | python3 -c "import json,sys; arr=json.load(sys.stdin); print(len(arr))" 2>/dev/null || echo "?")
+          echo "=== $COUNT task(s) returned ==="
+          echo "## FocusView equivalent: start_time window only" >> $GITHUB_STEP_SUMMARY
+          echo "HTTP: $HTTP_CODE" >> $GITHUB_STEP_SUMMARY
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          echo "$RESULT" | python3 -m json.tool >> $GITHUB_STEP_SUMMARY || echo "$RESULT" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
