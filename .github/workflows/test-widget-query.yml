@@ -1,0 +1,105 @@
+name: Test Schedule Widget Query
+
+on:
+  workflow_dispatch:
+    inputs:
+      user_id:
+        description: 'Supabase user_id to filter tasks (leave blank to see schema + sample rows from all users)'
+        required: false
+        default: ''
+      timezone_offset_hours:
+        description: 'Device timezone UTC offset in hours (e.g. -5 for EST, -7 for PDT, 0 for UTC)'
+        required: false
+        default: '0'
+
+jobs:
+  test-query:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Compute today UTC window for given timezone
+        id: window
+        run: |
+          OFFSET="${{ github.event.inputs.timezone_offset_hours }}"
+          OFFSET=${OFFSET:-0}
+          # today start = UTC midnight + offset hours back
+          TODAY_START=$(python3 -c "
+import datetime, sys
+offset = float('$OFFSET')
+now = datetime.datetime.utcnow()
+todayLocal = (now + datetime.timedelta(hours=offset)).date()
+todayStartUTC = datetime.datetime.combine(todayLocal, datetime.time.min) - datetime.timedelta(hours=offset)
+tomorrowStartUTC = todayStartUTC + datetime.timedelta(days=1)
+print(todayStartUTC.strftime('%Y-%m-%dT%H:%M:%SZ') + ' ' + tomorrowStartUTC.strftime('%Y-%m-%dT%H:%M:%SZ') + ' ' + str(todayLocal))
+")
+          TODAY_UTC=$(echo $TODAY_START | cut -d' ' -f1)
+          TOMORROW_UTC=$(echo $TODAY_START | cut -d' ' -f2)
+          TODAY_LOCAL=$(echo $TODAY_START | cut -d' ' -f3)
+          echo "today_start=$TODAY_UTC" >> $GITHUB_OUTPUT
+          echo "tomorrow_start=$TOMORROW_UTC" >> $GITHUB_OUTPUT
+          echo "today_local=$TODAY_LOCAL" >> $GITHUB_OUTPUT
+          echo "Today local: $TODAY_LOCAL"
+          echo "UTC window: $TODAY_UTC .. $TOMORROW_UTC"
+
+      - name: Query 1 - Schema check (first 3 rows, no filter)
+        run: |
+          echo "## Query 1: Schema check — first 3 rows" >> $GITHUB_STEP_SUMMARY
+          echo "Confirms column names and start_time format" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
+          curl -sf \
+            -H "apikey: ${{ secrets.CF_SUPABASE_SERVICE_KEY }}" \
+            -H "Authorization: Bearer ${{ secrets.CF_SUPABASE_SERVICE_KEY }}" \
+            -H "Accept: application/json" \
+            "${{ vars.SUPABASE_URL || 'https://wwxgajrtmslzklnyplah.supabase.co' }}/rest/v1/tasks?select=id,title,status,start_time,due_date&order=start_time.desc.nullslast&limit=3" \
+            | python3 -m json.tool >> $GITHUB_STEP_SUMMARY || echo "(query failed or empty)" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Query 2 - start_time window filter (no user filter)
+        run: |
+          TODAY_START="${{ steps.window.outputs.today_start }}"
+          TOMORROW_START="${{ steps.window.outputs.tomorrow_start }}"
+          TODAY_LOCAL="${{ steps.window.outputs.today_local }}"
+          echo "## Query 2: start_time window filter" >> $GITHUB_STEP_SUMMARY
+          echo "Today: $TODAY_LOCAL | UTC window: $TODAY_START .. $TOMORROW_START" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
+          curl -sf \
+            -H "apikey: ${{ secrets.CF_SUPABASE_SERVICE_KEY }}" \
+            -H "Authorization: Bearer ${{ secrets.CF_SUPABASE_SERVICE_KEY }}" \
+            -H "Accept: application/json" \
+            "${{ vars.SUPABASE_URL || 'https://wwxgajrtmslzklnyplah.supabase.co' }}/rest/v1/tasks?select=id,title,status,start_time&start_time=gte.${TODAY_START}&start_time=lt.${TOMORROW_START}&order=start_time.asc&limit=20" \
+            | python3 -m json.tool >> $GITHUB_STEP_SUMMARY || echo "(query failed or empty)" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Query 3 - Widget query (DOING OR start_time today) with optional user filter
+        run: |
+          TODAY_START="${{ steps.window.outputs.today_start }}"
+          TOMORROW_START="${{ steps.window.outputs.tomorrow_start }}"
+          TODAY_LOCAL="${{ steps.window.outputs.today_local }}"
+          USER_ID="${{ github.event.inputs.user_id }}"
+          echo "## Query 3: Full widget query" >> $GITHUB_STEP_SUMMARY
+          echo "Matches what Android widget sends: status=DOING OR start_time in today's UTC window" >> $GITHUB_STEP_SUMMARY
+          echo "Today: $TODAY_LOCAL | UTC window: $TODAY_START .. $TOMORROW_START" >> $GITHUB_STEP_SUMMARY
+
+          if [ -n "$USER_ID" ]; then
+            USER_FILTER="&user_id=eq.${USER_ID}"
+            echo "User filter: $USER_ID" >> $GITHUB_STEP_SUMMARY
+          else
+            USER_FILTER=""
+            echo "No user filter (showing all users)" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
+          curl -sf \
+            -H "apikey: ${{ secrets.CF_SUPABASE_SERVICE_KEY }}" \
+            -H "Authorization: Bearer ${{ secrets.CF_SUPABASE_SERVICE_KEY }}" \
+            -H "Accept: application/json" \
+            "${{ vars.SUPABASE_URL || 'https://wwxgajrtmslzklnyplah.supabase.co' }}/rest/v1/tasks?select=id,title,status,start_time${USER_FILTER}&or=(status.eq.DOING,and(start_time.gte.${TODAY_START},start_time.lt.${TOMORROW_START}))&order=start_time.asc.nullslast&limit=30" \
+            | python3 -m json.tool >> $GITHUB_STEP_SUMMARY || echo "(query failed or empty)" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Instructions
+        run: |
+          echo "## How to compare with FocusView" >> $GITHUB_STEP_SUMMARY
+          echo "1. Open the app and go to Tasks > Focus tab" >> $GITHUB_STEP_SUMMARY
+          echo "2. The 'Today\'s Schedule' section shows tasks from Query 2 above (start_time today)" >> $GITHUB_STEP_SUMMARY
+          echo "3. Re-run this workflow with your user_id and the correct timezone offset for your device" >> $GITHUB_STEP_SUMMARY
+          echo "4. Your user_id is visible on the /debug page under Auth State" >> $GITHUB_STEP_SUMMARY
