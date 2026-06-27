@@ -5,12 +5,19 @@ import { Button } from '@/components/ui/button';
 import CommsConsole from '@/components/CommsConsole/CommsConsole';
 import { useCommsConsole } from '@/contexts/CommsConsoleContext';
 
-const CommsHome: React.FC = () => {
+interface CommsHomeProps {
+  autoConnect?: boolean;
+}
+
+const CommsHome: React.FC<CommsHomeProps> = ({ autoConnect = false }) => {
   const { user } = useAuth();
-  const { setMode } = useCommsConsole();
+  const { setMode, connectVoice } = useCommsConsole();
 
   useEffect(() => {
     setMode('voice');
+    if (autoConnect) {
+      connectVoice();
+    }
     return () => setMode('chat');
   }, []);
 
