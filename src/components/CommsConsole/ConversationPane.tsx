@@ -63,8 +63,8 @@ const ConversationPane: React.FC<ConversationPaneProps> = ({
         </ScrollArea>
       )}
 
-      {/* Transcript area - only show when not in phone mode */}
-      {mode !== 'phone' && (
+      {/* Transcript area - chat mode only, or voice when actively connected */}
+      {(mode === 'chat' || (mode === 'voice' && isConnected)) && (
         <TranscriptScroll
           messages={messages}
           isLoading={isLoading}
