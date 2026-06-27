@@ -112,7 +112,7 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const [currentAssistant, setCurrentAssistant] = useState<Assistant | null>(null);
 
   // Communication state
-  const [currentMode, setCurrentMode] = useState<CommunicationMode>('chat');
+  const [currentMode, setCurrentMode] = useState<CommunicationMode>('voice');
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [threadId, setThreadId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
