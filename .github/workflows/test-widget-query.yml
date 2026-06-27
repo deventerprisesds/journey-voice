@@ -36,32 +36,43 @@ jobs:
             -H "Authorization: Bearer $SB_KEY" \
             -H "apikey: $SB_KEY" \
             "https://wwxgajrtmslzklnyplah.supabase.co/auth/v1/admin/users?per_page=50")
-          echo "Auth admin response type: $(echo $RAW | python3 -c 'import json,sys; d=json.load(sys.stdin); print(type(d).__name__, list(d.keys()) if isinstance(d,dict) else len(d))')" || echo "Response was not JSON: $RAW"
+          echo "Auth admin response: $(echo $RAW | python3 -c 'import json,sys; d=json.load(sys.stdin); print(type(d).__name__, list(d.keys()) if isinstance(d,dict) else len(d))')" || echo "Not JSON: $RAW"
           USER_ID=$(echo "$RAW" | python3 -c "import json,sys; data=json.load(sys.stdin); users=data.get('users',data) if isinstance(data,dict) else data; matches=[u['id'] for u in users if u.get('email','').lower()=='tiggapoohtv@yahoo.com']; print(matches[0] if matches else '')")
           if [ -z "$USER_ID" ]; then
-            echo "Could not find user - querying without user filter"
+            echo "user not found via email — querying without user filter"
           else
             echo "Found user_id: ${USER_ID:0:8}..."
           fi
           echo "user_id=$USER_ID" >> $GITHUB_OUTPUT
 
-      - name: Query 1 - Schema check (3 rows with start_time)
+      - name: EXACT widget query - getTodayTasks() from SupabaseTaskClient
         env:
           SB_KEY: ${{ secrets.CF_SUPABASE_SERVICE_KEY }}
         run: |
-          echo "=== QUERY 1: Schema check (3 tasks with start_time) ==="
+          TODAY_START="${{ steps.window.outputs.today_start }}"
+          TOMORROW_START="${{ steps.window.outputs.tomorrow_start }}"
+          TODAY_LOCAL="${{ steps.window.outputs.today_local }}"
+          USER_ID="${{ steps.user.outputs.user_id }}"
+          USER_FILTER=""
+          [ -n "$USER_ID" ] && USER_FILTER="&user_id=eq.${USER_ID}"
+          echo "=== EXACT WIDGET QUERY: getTodayTasks() ==="
+          echo "Today: $TODAY_LOCAL | Window: $TODAY_START .. $TOMORROW_START"
+          echo "select=id,title,status,priority,start_time,due_date"
+          echo "or=(status.eq.DOING,and(start_time.gte.X,start_time.lt.Y))"
+          echo "order=start_time.asc.nullslast limit=30"
           RESULT=$(curl -sf \
             -H "apikey: $SB_KEY" \
             -H "Authorization: Bearer $SB_KEY" \
             -H "Accept: application/json" \
-            "https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/tasks?select=id,title,status,start_time,due_date&start_time=not.is.null&order=start_time.desc&limit=3")
+            "https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/tasks?select=id,title,status,priority,start_time,due_date${USER_FILTER}&or=(status.eq.DOING,and(start_time.gte.${TODAY_START},start_time.lt.${TOMORROW_START}))&order=start_time.asc.nullslast&limit=30")
           echo "$RESULT" | python3 -m json.tool || echo "RAW: $RESULT"
-          echo "## Query 1: Schema check (3 tasks with start_time)" >> $GITHUB_STEP_SUMMARY
+          echo "## Exact widget query: getTodayTasks()" >> $GITHUB_STEP_SUMMARY
+          echo "Today: $TODAY_LOCAL | Window: $TODAY_START .. $TOMORROW_START" >> $GITHUB_STEP_SUMMARY
           echo '```json' >> $GITHUB_STEP_SUMMARY
           echo "$RESULT" | python3 -m json.tool >> $GITHUB_STEP_SUMMARY || echo "$RESULT" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
-      - name: Query 2 - start_time window for this user today
+      - name: FocusView equivalent - start_time window only
         env:
           SB_KEY: ${{ secrets.CF_SUPABASE_SERVICE_KEY }}
         run: |
@@ -70,36 +81,10 @@ jobs:
           USER_ID="${{ steps.user.outputs.user_id }}"
           USER_FILTER=""
           [ -n "$USER_ID" ] && USER_FILTER="&user_id=eq.${USER_ID}"
-          echo "=== QUERY 2: start_time window $TODAY_START .. $TOMORROW_START (user_filter: ${USER_FILTER:-none}) ==="
+          echo "=== FOCUSVIEW EQUIVALENT: start_time window only ==="
           RESULT=$(curl -sf \
             -H "apikey: $SB_KEY" \
             -H "Authorization: Bearer $SB_KEY" \
             -H "Accept: application/json" \
             "https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/tasks?select=id,title,status,start_time${USER_FILTER}&start_time=gte.${TODAY_START}&start_time=lt.${TOMORROW_START}&order=start_time.asc&limit=30")
           echo "$RESULT" | python3 -m json.tool || echo "RAW: $RESULT"
-          echo "## Query 2: start_time in today UTC window" >> $GITHUB_STEP_SUMMARY
-          echo "Window: $TODAY_START .. $TOMORROW_START" >> $GITHUB_STEP_SUMMARY
-          echo '```json' >> $GITHUB_STEP_SUMMARY
-          echo "$RESULT" | python3 -m json.tool >> $GITHUB_STEP_SUMMARY || echo "$RESULT" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-
-      - name: Query 3 - Full widget query (DOING/UP_NEXT/READY/TODO OR start_time today)
-        env:
-          SB_KEY: ${{ secrets.CF_SUPABASE_SERVICE_KEY }}
-        run: |
-          TODAY_START="${{ steps.window.outputs.today_start }}"
-          TOMORROW_START="${{ steps.window.outputs.tomorrow_start }}"
-          USER_ID="${{ steps.user.outputs.user_id }}"
-          USER_FILTER=""
-          [ -n "$USER_ID" ] && USER_FILTER="&user_id=eq.${USER_ID}"
-          echo "=== QUERY 3: Full widget query (user_filter: ${USER_FILTER:-none}) ==="
-          RESULT=$(curl -sf \
-            -H "apikey: $SB_KEY" \
-            -H "Authorization: Bearer $SB_KEY" \
-            -H "Accept: application/json" \
-            "https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/tasks?select=id,title,status,start_time${USER_FILTER}&or=(status.eq.DOING,status.eq.UP_NEXT,status.eq.READY,status.eq.TODO,and(start_time.gte.${TODAY_START},start_time.lt.${TOMORROW_START}))&order=start_time.asc.nullslast&limit=30")
-          echo "$RESULT" | python3 -m json.tool || echo "RAW: $RESULT"
-          echo "## Query 3: Full widget query" >> $GITHUB_STEP_SUMMARY
-          echo '```json' >> $GITHUB_STEP_SUMMARY
-          echo "$RESULT" | python3 -m json.tool >> $GITHUB_STEP_SUMMARY || echo "$RESULT" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
