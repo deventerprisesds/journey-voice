@@ -64,7 +64,9 @@ const Debug = () => {
   ]);
   const [testLogSent, setTestLogSent] = useState(false);
   const [widgetLog, setWidgetLog] = useState<string>('');
+  const [widgetLogRefreshedAt, setWidgetLogRefreshedAt] = useState<string>('');
   const [credAudit, setCredAudit] = useState<Record<string, string>>({});
+  const [apkVersion, setApkVersion] = useState<string>('');
   const bridge = (window as any).AndroidBridge;
 
   // Refresh entries periodically
@@ -75,14 +77,35 @@ const Debug = () => {
     return () => clearInterval(interval);
   }, []);
 
+  // Read APK version from bridge capabilities
+  useEffect(() => {
+    if (bridge?.getCapabilities) {
+      try {
+        const caps = JSON.parse(bridge.getCapabilities());
+        setApkVersion(caps.version ?? '');
+      } catch {}
+    }
+  }, []);
+
   const refreshWidgetLog = () => {
     const log = bridge?.getWidgetDebugLog?.() ?? '(AndroidBridge not available — open this page inside the app)';
     setWidgetLog(log);
+    setWidgetLogRefreshedAt(new Date().toLocaleTimeString());
   };
 
   const clearWidgetLog = () => {
     bridge?.clearWidgetDebugLog?.();
     setWidgetLog('(cleared)');
+    setWidgetLogRefreshedAt(new Date().toLocaleTimeString());
+  };
+
+  const handleCopyWidgetLog = async () => {
+    try {
+      await navigator.clipboard.writeText(widgetLog);
+      toast({ title: 'Copied!', description: 'Widget debug log copied to clipboard' });
+    } catch {
+      toast({ variant: 'destructive', title: 'Failed to copy', description: 'Select and copy manually' });
+    }
   };
 
   useEffect(() => { refreshWidgetLog(); }, []);
@@ -383,6 +406,12 @@ const Debug = () => {
               <span className="truncate">{serviceWorkerStatus}</span>
               <span className="text-muted-foreground">Online:</span>
               <span>{navigator.onLine ? '✅ Yes' : '❌ No'}</span>
+              {apkVersion && (
+                <>
+                  <span className="text-muted-foreground">APK Version:</span>
+                  <span><strong>{apkVersion}</strong></span>
+                </>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -544,6 +573,9 @@ const Debug = () => {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
+            {widgetLogRefreshedAt && (
+              <p className="text-xs text-muted-foreground">Log captured at {widgetLogRefreshedAt}</p>
+            )}
             <ScrollArea className="h-48 rounded border bg-muted/50 p-2">
               <pre className="text-xs font-mono whitespace-pre-wrap">
                 {widgetLog || '(tap Refresh to load)'}
@@ -553,6 +585,10 @@ const Debug = () => {
               <Button onClick={refreshWidgetLog} size="sm">
                 <RefreshCw className="w-4 h-4 mr-2" />
                 Refresh
+              </Button>
+              <Button onClick={handleCopyWidgetLog} size="sm" variant="outline" disabled={!widgetLog}>
+                <Copy className="w-4 h-4 mr-2" />
+                Copy Log
               </Button>
               <Button onClick={clearWidgetLog} size="sm" variant="outline" disabled={!bridge}>
                 <Trash2 className="w-4 h-4 mr-2" />
