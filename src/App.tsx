@@ -85,6 +85,7 @@ const App = () => {
                       <Route path="/auth" element={<Auth />} />
                       <Route path="/debug" element={<Debug />} />
                       <Route path="/comms" element={<CommsHome />} />
+                      <Route path="/comms/active" element={<CommsHome autoConnect />} />
                       {/* All authenticated routes wrapped in MainLayout */}
                       <Route path="/*" element={
                         <ProtectedRoute>
