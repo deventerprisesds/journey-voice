@@ -19,7 +19,6 @@ import Calendar from "./pages/Calendar";
 import Priorities from "./pages/Priorities";
 import Assignments from "./pages/Assignments";
 import Debug from "./pages/Debug";
-import CommsHome from "./pages/CommsHome";
 import NotFound from "./pages/NotFound";
 import DemoModeBadge from "./components/DemoModeBadge";
 import QuotaAlertBanner from "./components/QuotaAlertBanner";
@@ -84,7 +83,6 @@ const App = () => {
                     <Routes>
                       <Route path="/auth" element={<Auth />} />
                       <Route path="/debug" element={<Debug />} />
-                      <Route path="/comms" element={<CommsHome />} />
                       {/* All authenticated routes wrapped in MainLayout */}
                       <Route path="/*" element={
                         <ProtectedRoute>
