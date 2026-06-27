@@ -1,11 +1,18 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { Button } from '@/components/ui/button';
 import CommsConsole from '@/components/CommsConsole/CommsConsole';
+import { useCommsConsole } from '@/contexts/CommsConsoleContext';
 
 const CommsHome: React.FC = () => {
   const { user } = useAuth();
+  const { setMode } = useCommsConsole();
+
+  useEffect(() => {
+    setMode('voice');
+    return () => setMode('chat');
+  }, []);
 
   // Redirect to auth if not logged in
   if (!user) {
