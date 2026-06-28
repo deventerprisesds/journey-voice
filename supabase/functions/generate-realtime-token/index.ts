@@ -168,20 +168,26 @@ USER: ${userName}`;
         session: {
           type: "realtime",
           model: "gpt-4o-realtime-preview-2025-06-03",
-          voice: openaiVoice,
-          modalities: modalities,
-          input_audio_format: "pcm16",
-          output_audio_format: "pcm16",
-          input_audio_transcription: {
-            model: "gpt-4o-mini-transcribe",
-            language: "en",
-            prompt: "tasks, schedule, calendar, reschedule, today, tomorrow, priorities"
-          },
-          turn_detection: {
-            type: "semantic_vad",
-            eagerness: "medium",
-            create_response: true,
-            interrupt_response: true
+          output_modalities: modalities.includes('audio') ? ["audio"] : ["text"],
+          audio: {
+            input: {
+              format: { type: "audio/pcm", rate: 24000 },
+              transcription: {
+                model: "gpt-4o-mini-transcribe",
+                language: "en",
+                prompt: "tasks, schedule, calendar, reschedule, today, tomorrow, priorities"
+              },
+              turn_detection: {
+                type: "semantic_vad",
+                eagerness: "medium",
+                create_response: true,
+                interrupt_response: true
+              }
+            },
+            output: {
+              format: { type: "audio/pcm", rate: 24000 },
+              voice: openaiVoice
+            }
           },
           tool_choice: "auto",
           tools: getToolDefinitions(),
