@@ -125,6 +125,7 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
   // Realtime subscription state for logging
   const [realtimeStatus, setRealtimeStatus] = useState<string>('idle');
   const subscribeStartTimeRef = useRef<number | null>(null);
+  const bridgePendingRef = useRef(false);
 
   const userId = user?.id || (isDemoMode ? DEMO_USER_ID : null);
 
@@ -1102,12 +1103,24 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     const handler = (event: Event) => {
       const transcript = (event as CustomEvent).detail?.transcript;
       if (transcript) {
+        bridgePendingRef.current = true;
         sendMessage(transcript);
       }
     };
     window.addEventListener('bridgeVoiceResult', handler);
     return () => window.removeEventListener('bridgeVoiceResult', handler);
   }, [sendMessage]);
+
+  // Notify Android overlay with AI response once streaming is complete
+  useEffect(() => {
+    if (!bridgePendingRef.current || isLoading) return;
+    const lastMsg = messages[messages.length - 1];
+    if (lastMsg?.role === 'assistant' && lastMsg.content) {
+      bridgePendingRef.current = false;
+      const bridge = (window as any).AndroidBridge;
+      bridge?.postAiResponse?.(lastMsg.content.substring(0, 500));
+    }
+  }, [messages, isLoading]);
 
   // Start a new conversation (clear messages but keep thread for history)
   const startNewConversation = useCallback(() => {
