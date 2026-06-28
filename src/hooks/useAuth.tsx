@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, useCallback, useMemo, ReactNode } from 'react';
 import { User, Session } from '@supabase/supabase-js';
-import { supabase } from '@/integrations/supabase/client';
+import { supabase, SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from '@/integrations/supabase/client';
 import { bootTrace } from '@/utils/bootTrace';
 import { logToErrorLog } from '@/utils/directLog';
 import { fastPathGetSession } from '@/utils/directAuth';
@@ -147,6 +147,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       bootTrace.mark('admin_check_error');
     }
   }, []);
+
+  // Sync Supabase credentials to the native Android bridge whenever the session
+  // changes. SupabaseTaskClient reads these keys from EncryptedPrefs to make
+  // direct REST calls for widget data (outside the WebView).
+  useEffect(() => {
+    try {
+      if (!session || session.access_token === 'mock-token') return;
+      const bridge = (window as any).AndroidBridge;
+      if (!bridge?.secureStore) return;
+      bridge.secureStore('supabase_url', SUPABASE_URL);
+      bridge.secureStore('supabase_anon_key', SUPABASE_PUBLISHABLE_KEY);
+      bridge.secureStore('supabase_access_token', session.access_token);
+      bridge.secureStore('supabase_refresh_token', session.refresh_token ?? '');
+      bridge.secureStore('supabase_user_id', session.user.id);
+    } catch (e) {
+      console.warn('[Auth] Failed to sync credentials to native bridge', e);
+    }
+  }, [session]);
 
   // ============================================================================
   // V1: ORIGINAL AUTH INITIALIZATION (preserved as backup)
