@@ -105,7 +105,9 @@ const withTimeout = <T,>(promise: Promise<T>, ms: number, errorMessage: string):
   ]);
 };
 
-const AUTH_TIMEOUT_MS = 10000; // 10 seconds
+// Device Supabase auth latency confirmed ~10.6s on Samsung Galaxy fold (boot trace).
+// 25s gives headroom for a slow but successful token refresh without a premature cutoff.
+const AUTH_TIMEOUT_MS = 25000;
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -364,6 +366,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       bootTrace.mark('v2_race_start');
 
       // Fast path promise - direct REST validation (bypasses supabase-js)
+      // NOTE: fast path returns null for expired tokens to avoid concurrent
+      // refresh with supabase-js (which causes 409 + SIGNED_OUT cascade)
       const fastPathPromise = (async (): Promise<{ session: Session | null; source: 'fast' } | null> => {
         bootTrace.mark('fast_path_attempt');
         try {
@@ -373,14 +377,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             return { session, source: 'fast' as const };
           }
           bootTrace.mark('fast_path_no_session');
-          return null; // No cached session
+          return null; // No cached session or token expired — yield to slow path
         } catch (e) {
           bootTrace.mark('fast_path_error', { error: String(e) });
           return null;
         }
       })();
 
-      // Slow path promise - standard supabase-js (may hang due to internal locks)
+      // Slow path promise - standard supabase-js (authoritative for expired token refresh)
       const slowPathPromise = (async (): Promise<{ session: Session | null; source: 'slow' }> => {
         bootTrace.mark('slow_path_start');
         const { data: { session }, error } = await withTimeout(

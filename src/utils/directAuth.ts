@@ -162,6 +162,11 @@ function isSessionExpired(session: StoredSession): boolean {
  * 
  * This is designed to race against supabase.auth.getSession() to provide
  * instant auth for users with valid cached sessions.
+ * 
+ * IMPORTANT: When the token is expired, this function returns null immediately
+ * and yields entirely to supabase.auth.getSession(). Attempting to refresh
+ * here concurrently causes HTTP 409 (Supabase rejects double refresh-token
+ * consumption) which triggers a SIGNED_OUT event and clears localStorage.
  */
 export async function fastPathGetSession(): Promise<Session | null> {
   const startTime = Date.now();
@@ -175,39 +180,13 @@ export async function fastPathGetSession(): Promise<Session | null> {
       return null;
     }
 
-    // Step 2: Check if token is expired
+    // Step 2: If token is expired, yield to supabase.auth.getSession().
+    // Do NOT call refreshTokenDirect() here — supabase.auth.getSession() also
+    // refreshes expired tokens internally. Concurrent calls with the same
+    // refresh token cause HTTP 409 + SIGNED_OUT, clearing the session entirely.
     if (isSessionExpired(stored)) {
       bootTrace.mark('fast_path_token_expired');
-      
-      // Try to refresh
-      if (stored.refresh_token) {
-        const refreshed = await refreshTokenDirect(stored.refresh_token);
-        if (refreshed) {
-          // Update localStorage with new tokens
-          try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(refreshed));
-            bootTrace.mark('fast_path_session_refreshed');
-          } catch (e) {
-            console.warn('[DirectAuth] Failed to persist refreshed session:', e);
-          }
-          
-          // Return refreshed session
-          const latencyMs = Date.now() - startTime;
-          bootTrace.mark('fast_path_complete_refreshed', { latencyMs });
-          
-          return {
-            access_token: refreshed.access_token,
-            refresh_token: refreshed.refresh_token,
-            expires_in: refreshed.expires_in || 3600,
-            expires_at: refreshed.expires_at || Math.floor(Date.now() / 1000) + 3600,
-            token_type: (refreshed.token_type || 'bearer') as 'bearer',
-            user: refreshed.user!
-          };
-        }
-      }
-      
-      // Refresh failed
-      bootTrace.mark('fast_path_refresh_failed_no_session');
+      bootTrace.mark('fast_path_yield_to_slow_path');
       return null;
     }
 
