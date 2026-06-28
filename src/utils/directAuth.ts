@@ -211,7 +211,23 @@ export async function fastPathGetSession(): Promise<Session | null> {
       return null;
     }
 
-    // Step 3: Validate the access token
+    // Step 3: Token is not expired — return from cache if user data is present.
+    // Skip the validateTokenDirect() network call: on slow connections it was
+    // timing out and causing the fast path to return null, forcing 2-3 retries.
+    if (stored.user) {
+      const latencyMs = Date.now() - startTime;
+      bootTrace.mark('fast_path_complete_cached', { latencyMs });
+      return {
+        access_token: stored.access_token,
+        refresh_token: stored.refresh_token,
+        expires_in: stored.expires_in || 3600,
+        expires_at: stored.expires_at || Math.floor(Date.now() / 1000) + 3600,
+        token_type: (stored.token_type || 'bearer') as 'bearer',
+        user: stored.user
+      };
+    }
+
+    // Fallback: no cached user — validate via network
     const user = await validateTokenDirect(stored.access_token);
     if (!user) {
       bootTrace.mark('fast_path_token_invalid');
