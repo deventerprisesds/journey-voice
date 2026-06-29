@@ -1103,6 +1103,7 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     const handler = (event: Event) => {
       const transcript = (event as CustomEvent).detail?.transcript;
       if (transcript) {
+        console.log('[Bridge] bridgeVoiceResult received:', transcript.substring(0, 80));
         bridgePendingRef.current = true;
         sendMessage(transcript);
       }
@@ -1111,16 +1112,20 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     return () => window.removeEventListener('bridgeVoiceResult', handler);
   }, [sendMessage]);
 
-  // Notify Android overlay with AI response once streaming is complete
+  // Fires postAiResponse back to the widget overlay once the AI finishes responding.
   useEffect(() => {
+    const bridge = (window as any).AndroidBridge;
+    console.log('[Bridge] response watcher: pending=', bridgePendingRef.current, 'loading=', isLoading, 'msgs=', messages.length, 'bridgeExists=', !!bridge, 'postAiResponseExists=', !!bridge?.postAiResponse);
     if (!bridgePendingRef.current || isLoading) return;
     const lastMsg = messages[messages.length - 1];
     if (lastMsg?.role === 'assistant' && lastMsg.content) {
       bridgePendingRef.current = false;
-      const bridge = (window as any).AndroidBridge;
-      bridge?.postAiResponse?.(lastMsg.content.substring(0, 500));
+      const text = lastMsg.content.substring(0, 500);
+      console.log('[Bridge] calling postAiResponse:', text.substring(0, 80));
+      bridge?.postAiResponse?.(text);
     }
   }, [messages, isLoading]);
+
 
   // Start a new conversation (clear messages but keep thread for history)
   const startNewConversation = useCallback(() => {
