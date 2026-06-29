@@ -43,8 +43,11 @@ export interface CategoryRef {
   label: string;
 }
 
+// Fixed display categories — always rendered first in this order
 const DISPLAY_CATEGORIES = ['LIFE', 'CAREER', 'VENTURES', 'EDUCATION', 'FAMILY'] as const;
 
+// Maps raw DB category values to a display category.
+// Any key NOT present here is treated as a dynamic category and appended after.
 const CATEGORY_DISPLAY_MAP: Record<string, string> = {
   LIFE: 'LIFE',
   PERSONAL: 'LIFE',
@@ -70,6 +73,15 @@ const CATEGORY_LABELS: Record<string, string> = {
   EDUCATION: 'Education',
   FAMILY: 'Family',
 };
+
+// Color palette cycled for dynamically detected categories
+const DYNAMIC_CATEGORY_PALETTE = [
+  'hsl(280 60% 55%)',
+  'hsl(340 60% 55%)',
+  'hsl(20 65% 55%)',
+  'hsl(160 55% 45%)',
+  'hsl(200 65% 50%)',
+];
 
 const PRIORITY_SORT = (a: Task, b: Task) => {
   const order: Record<string, number> = { URGENT: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
@@ -233,7 +245,8 @@ const Priorities: React.FC = () => {
 
       const assignedTaskIds = new Set<string>(mappings.map((m: any) => m.task_id));
 
-      // Map each topic to a display category
+      // Map each topic to a display category.
+      // Unknown category values pass through as-is so dynamic sections can pick them up.
       const topicCategoryMap = new Map<string, string>();
       allTopics.forEach((topic: any) => {
         const topicTasks = topicTasksMap.get(topic.id) || [];
@@ -246,11 +259,10 @@ const Priorities: React.FC = () => {
           const majorCat = Object.entries(catCounts).sort((a, b) => b[1] - a[1])[0][0];
           topicCategoryMap.set(topic.id, majorCat);
         } else if (topic.category_affinity) {
-          const mapped = CATEGORY_DISPLAY_MAP[topic.category_affinity];
-          if (mapped) topicCategoryMap.set(topic.id, mapped);
+          // Pass through unknown affinities instead of dropping them
+          topicCategoryMap.set(topic.id, CATEGORY_DISPLAY_MAP[topic.category_affinity] || topic.category_affinity);
         } else if (topic.window_affinity && topic.window_affinity.length > 0) {
-          const mapped = CATEGORY_DISPLAY_MAP[topic.window_affinity[0]];
-          if (mapped) topicCategoryMap.set(topic.id, mapped);
+          topicCategoryMap.set(topic.id, CATEGORY_DISPLAY_MAP[topic.window_affinity[0]] || topic.window_affinity[0]);
         }
       });
 
@@ -264,7 +276,8 @@ const Priorities: React.FC = () => {
       const positionMap = new Map<string, number>();
       allTopics.forEach((t: any) => positionMap.set(t.id, t.position ?? 0));
 
-      const catData: CategoryData[] = DISPLAY_CATEGORIES.map(key => {
+      // Helper to build topic group entries for a given display category key
+      const buildTopicGroups = (key: string) => {
         const catTopics = topics
           .filter((t: any) => topicCategoryMap.get(t.id) === key)
           .map((t: any) => ({
@@ -282,24 +295,48 @@ const Priorities: React.FC = () => {
               children: [],
             })),
           }));
-
         catTopics.sort((a: any, b: any) => {
           const diff = (positionMap.get(a.id) ?? 0) - (positionMap.get(b.id) ?? 0);
           return diff !== 0 ? diff : a.topic_name.localeCompare(b.topic_name);
         });
+        return catTopics;
+      };
 
-        const uncategorized = tasks.filter(t => {
+      // --- Static (known) categories ---
+      const catData: CategoryData[] = DISPLAY_CATEGORIES.map(key => ({
+        key,
+        label: CATEGORY_LABELS[key],
+        color: CATEGORY_COLORS[key],
+        topicGroups: buildTopicGroups(key),
+        uncategorizedTasks: tasks.filter(t => {
           const displayCat = CATEGORY_DISPLAY_MAP[t.category] || t.category || 'LIFE';
           return displayCat === key && !assignedTaskIds.has(t.id);
-        });
+        }),
+      }));
 
-        return {
+      // --- Dynamic categories: keys in the data not covered by CATEGORY_DISPLAY_MAP ---
+      const knownDisplaySet = new Set<string>(DISPLAY_CATEGORIES);
+      const dynamicKeys = new Set<string>();
+
+      tasks.forEach(t => {
+        if (t.category && !CATEGORY_DISPLAY_MAP[t.category]) dynamicKeys.add(t.category);
+      });
+      topicCategoryMap.forEach(cat => {
+        if (!knownDisplaySet.has(cat)) dynamicKeys.add(cat);
+      });
+
+      let paletteIdx = 0;
+      Array.from(dynamicKeys).sort().forEach(key => {
+        const topicGroups = buildTopicGroups(key);
+        const uncategorizedTasks = tasks.filter(t => t.category === key && !assignedTaskIds.has(t.id));
+        if (topicGroups.length === 0 && uncategorizedTasks.length === 0) return;
+        catData.push({
           key,
-          label: CATEGORY_LABELS[key] || key,
-          color: CATEGORY_COLORS[key] || 'hsl(var(--muted-foreground))',
-          topicGroups: catTopics,
-          uncategorizedTasks: uncategorized,
-        };
+          label: key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+          color: DYNAMIC_CATEGORY_PALETTE[paletteIdx++ % DYNAMIC_CATEGORY_PALETTE.length],
+          topicGroups,
+          uncategorizedTasks,
+        });
       });
 
       const refs: TopicGroupRef[] = allTopics
@@ -553,17 +590,14 @@ const Priorities: React.FC = () => {
               />
             ))
           ) : (
-            // Group mode: groups are top-level, categories shown as section labels
+            // Group mode: groups are top-level, categories shown as colour-dot section labels
             categories.map(cat => {
               const hasContent = cat.topicGroups.length > 0 || cat.uncategorizedTasks.length > 0;
               if (!hasContent) return null;
               return (
                 <div key={cat.key}>
                   <div className="flex items-center gap-2 mb-1.5 px-1">
-                    <div
-                      className="h-2 w-2 rounded-full flex-shrink-0"
-                      style={{ backgroundColor: cat.color }}
-                    />
+                    <div className="h-2 w-2 rounded-full flex-shrink-0" style={{ backgroundColor: cat.color }} />
                     <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                       {cat.label}
                     </span>
