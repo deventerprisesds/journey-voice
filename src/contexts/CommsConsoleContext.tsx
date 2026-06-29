@@ -127,6 +127,13 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const subscribeStartTimeRef = useRef<number | null>(null);
   const bridgePendingRef = useRef(false);
 
+  const notifyBridgeIfPending = useCallback((responseText: string) => {
+    if (!bridgePendingRef.current) return;
+    bridgePendingRef.current = false;
+    console.log('[Bridge] notifyBridgeIfPending:', responseText.substring(0, 80));
+    (window as any).AndroidBridge?.postAiResponse?.(responseText.substring(0, 500));
+  }, []);
+
   const userId = user?.id || (isDemoMode ? DEMO_USER_ID : null);
 
   // Feature flags
@@ -847,7 +854,7 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
             }
             
             const fallbackContent = fallbackResponse.data?.response || 'Sorry, I could not process your request.';
-            
+
             setMessages((prev) => [...prev, {
               id: `assistant-${Date.now()}`,
               role: 'assistant',
@@ -856,7 +863,8 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
               assistant_id: currentAssistant?.id || null,
               created_at: new Date().toISOString(),
             }]);
-            
+            notifyBridgeIfPending(fallbackContent);
+
             if (fallbackResponse.data?.threadId && USE_UNIFIED_THREADS && updateOpenaiThreadId) {
               updateOpenaiThreadId(fallbackResponse.data.threadId);
               receivedThreadId = fallbackResponse.data.threadId;
@@ -897,6 +905,7 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
                 streamed: true
               }
             );
+            notifyBridgeIfPending(fullContent);
           }
 
         } else {
@@ -936,6 +945,7 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
               fast_path: data.fastPath || false
             }
           );
+          notifyBridgeIfPending(assistantContent);
         }
 
       } else {
@@ -964,11 +974,12 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
         };
 
         setMessages((prev) => [...prev, assistantMessage]);
+        notifyBridgeIfPending(assistantMessage.content);
 
         if (data?.threadId && !USE_UNIFIED_THREADS) {
           setThreadId(data.threadId);
         }
-        
+
         if (data?.threadId && USE_UNIFIED_THREADS && updateOpenaiThreadId) {
           updateOpenaiThreadId(data.threadId);
         }
@@ -1010,7 +1021,7 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     } finally {
       setIsLoading(false);
     }
-  }, [userId, threadId, currentAssistant, currentMode, dbThreadId, updateOpenaiThreadId, session]);
+  }, [userId, threadId, currentAssistant, currentMode, dbThreadId, updateOpenaiThreadId, session, notifyBridgeIfPending]);
 
   // ============================================================
   // PHASE 3: Persist Messages with Latency Metrics
@@ -1112,19 +1123,6 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     return () => window.removeEventListener('bridgeVoiceResult', handler);
   }, [sendMessage]);
 
-  // Fires postAiResponse back to the widget overlay once the AI finishes responding.
-  useEffect(() => {
-    const bridge = (window as any).AndroidBridge;
-    console.log('[Bridge] response watcher: pending=', bridgePendingRef.current, 'loading=', isLoading, 'msgs=', messages.length, 'bridgeExists=', !!bridge, 'postAiResponseExists=', !!bridge?.postAiResponse);
-    if (!bridgePendingRef.current || isLoading) return;
-    const lastMsg = messages[messages.length - 1];
-    if (lastMsg?.role === 'assistant' && lastMsg.content) {
-      bridgePendingRef.current = false;
-      const text = lastMsg.content.substring(0, 500);
-      console.log('[Bridge] calling postAiResponse:', text.substring(0, 80));
-      bridge?.postAiResponse?.(text);
-    }
-  }, [messages, isLoading]);
 
 
   // Start a new conversation (clear messages but keep thread for history)
