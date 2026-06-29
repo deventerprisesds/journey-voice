@@ -70,7 +70,7 @@
   },
   "prioritiesWidget": {
     "enabled": true,
-    "categories": ["CAREER", "VENTURES", "PROF_EDUCATION", "LIFE", "PERSONAL", "EDUCATION"]
+    "categories": ["CAREER", "VENTURES", "EDUCATION", "LIFE", "FAMILY"]
   },
   "widget": {
     "enabled": true,
