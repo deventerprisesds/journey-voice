@@ -1,14 +1,13 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { DragDropContext, DropResult } from '@hello-pangea/dnd';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { Button } from '@/components/ui/button';
-import { Sparkles, Loader2, X, ArrowRight, CircleDot, Layers, ChevronDown } from 'lucide-react';
-import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+import { Layers, List, Sparkles, Loader2, X, ArrowRight, CircleDot } from 'lucide-react';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { supabase, SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
-import CategoryTreeSection from '@/components/priorities/CategoryTreeSection';
-import TopicGroupPanel from '@/components/priorities/TopicGroupPanel';
+import { DEFAULT_SCHEDULING_CONFIG, mergeSchedulingConfig } from '@/config/schedulingRules';
+import CategoryColumn from '@/components/priorities/CategoryColumn';
 import PriorityLane from '@/components/priorities/PriorityLane';
 import TaskDetailModal from '@/components/TaskDetailModal';
 import type { Task } from '@/types/task';
@@ -22,7 +21,6 @@ export interface TopicGroupData {
   tasks: Task[];
   children?: TopicGroupData[];
 }
-
 export interface CategoryData {
   key: string;
   label: string;
@@ -43,54 +41,27 @@ export interface CategoryRef {
   label: string;
 }
 
-// Fixed display categories — always rendered first in this order
-const DISPLAY_CATEGORIES = ['LIFE', 'CAREER', 'VENTURES', 'EDUCATION', 'FAMILY'] as const;
-
-// Maps raw DB category values to a display category.
-// Any key NOT present here is treated as a dynamic category and appended after.
-const CATEGORY_DISPLAY_MAP: Record<string, string> = {
-  LIFE: 'LIFE',
-  PERSONAL: 'LIFE',
-  CAREER: 'CAREER',
-  VENTURES: 'VENTURES',
-  EDUCATION: 'EDUCATION',
-  PROF_EDUCATION: 'EDUCATION',
-  FAMILY: 'FAMILY',
-};
-
 const CATEGORY_COLORS: Record<string, string> = {
-  LIFE: 'hsl(var(--category-life))',
   CAREER: 'hsl(var(--category-career))',
-  VENTURES: 'hsl(var(--category-ventures))',
+  PROF_EDUCATION: 'hsl(var(--category-education))',
   EDUCATION: 'hsl(var(--category-education))',
-  FAMILY: 'hsl(220 14% 55%)',
+  VENTURES: 'hsl(var(--category-ventures))',
+  LIFE: 'hsl(var(--category-life))',
+  PERSONAL: 'hsl(var(--category-life))',
 };
 
 const CATEGORY_LABELS: Record<string, string> = {
-  LIFE: 'Life & Personal',
   CAREER: 'Career',
-  VENTURES: 'Ventures',
+  PROF_EDUCATION: 'Prof. Education',
   EDUCATION: 'Education',
-  FAMILY: 'Family',
-};
-
-// Color palette cycled for dynamically detected categories
-const DYNAMIC_CATEGORY_PALETTE = [
-  'hsl(280 60% 55%)',
-  'hsl(340 60% 55%)',
-  'hsl(20 65% 55%)',
-  'hsl(160 55% 45%)',
-  'hsl(200 65% 50%)',
-];
-
-const PRIORITY_SORT = (a: Task, b: Task) => {
-  const order: Record<string, number> = { URGENT: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
-  return (order[a.priority] ?? 3) - (order[b.priority] ?? 3);
+  VENTURES: 'Ventures',
+  LIFE: 'Life',
+  PERSONAL: 'Personal',
 };
 
 const Priorities: React.FC = () => {
   const { user } = useAuth();
-  const [topLevel, setTopLevel] = useState<'category' | 'group'>('category');
+  const [viewMode, setViewMode] = useState<'group' | 'task'>('group');
   const [categories, setCategories] = useState<CategoryData[]>([]);
   const [priorityLaneTasks, setPriorityLaneTasks] = useState<Task[]>([]);
   const [allTopicGroupRefs, setAllTopicGroupRefs] = useState<TopicGroupRef[]>([]);
@@ -116,9 +87,22 @@ const Priorities: React.FC = () => {
   const batchMoveToCategory = useCallback(async (targetCategory: string) => {
     if (!user || selectedTaskIds.size === 0) return;
     const ids = Array.from(selectedTaskIds);
+    
+    // Optimistic update
+    setCategories(prev => prev.map(cat => ({
+      ...cat,
+      topicGroups: cat.topicGroups.map(tg => ({
+        ...tg,
+        tasks: tg.tasks.filter(t => !selectedTaskIds.has(t.id) || cat.key === targetCategory),
+      })),
+      uncategorizedTasks: cat.uncategorizedTasks.filter(t => !selectedTaskIds.has(t.id) || cat.key === targetCategory),
+    })));
+
+    // Persist
     const { error } = await supabase.from('tasks').update({ category: targetCategory } as any).in('id', ids);
     if (error) {
       toast.error('Failed to move tasks');
+      loadDataRef.current();
     } else {
       toast.success(`Moved ${ids.length} tasks to ${CATEGORY_LABELS[targetCategory] || targetCategory}`);
       clearSelection();
@@ -142,13 +126,18 @@ const Priorities: React.FC = () => {
   const batchMoveToGroup = useCallback(async (targetTopicId: string, targetCategoryKey: string) => {
     if (!user || selectedTaskIds.size === 0) return;
     const ids = Array.from(selectedTaskIds);
+
     try {
+      // Delete existing mappings
       await supabase.from('task_topic_mappings').delete().in('task_id', ids);
-      const { error } = await supabase.from('task_topic_mappings').insert(
-        ids.map(task_id => ({ task_id, topic_id: targetTopicId }))
-      );
-      if (error) throw error;
+      // Insert new mappings
+      const mappings = ids.map(task_id => ({ task_id, topic_id: targetTopicId }));
+      const { error: insertError } = await supabase.from('task_topic_mappings').insert(mappings);
+      if (insertError) throw insertError;
+
+      // Update task categories to match the group's category
       await supabase.from('tasks').update({ category: targetCategoryKey } as any).in('id', ids);
+
       toast.success(`Moved ${ids.length} tasks to group`);
       clearSelection();
       loadDataRef.current();
@@ -158,11 +147,14 @@ const Priorities: React.FC = () => {
       loadDataRef.current();
     }
   }, [user, selectedTaskIds, clearSelection]);
-
+  // Classify a single task via edge function
   const classifySingleTask = useCallback(async (task: Task) => {
     const res = await fetch(`${SUPABASE_URL}/functions/v1/classify-task-topic`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_PUBLISHABLE_KEY },
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': SUPABASE_PUBLISHABLE_KEY,
+      },
       body: JSON.stringify({
         task_id: task.id,
         task_title: task.title,
@@ -174,30 +166,42 @@ const Priorities: React.FC = () => {
     return res.json();
   }, []);
 
+  // Bulk classify unmapped tasks
   const classifyUnmapped = useCallback(async (limit?: number) => {
     if (!user) return;
     setClassifying(true);
+
     try {
+      // Get all tasks and existing mappings
       const [tasksRes, mappingsRes] = await Promise.all([
         supabase.from('tasks').select('id, title, category, user_id').eq('user_id', user.id).not('status', 'in', '("DONE","BLOCKED")'),
         supabase.from('task_topic_mappings').select('task_id'),
       ]);
+
       const tasks = (tasksRes.data || []) as unknown as Task[];
       const mappedIds = new Set((mappingsRes.data || []).map(m => m.task_id));
       let unmapped = tasks.filter(t => !mappedIds.has(t.id) && !t.title.toLowerCase().includes('test'));
+
       if (limit) unmapped = unmapped.slice(0, limit);
+
       if (unmapped.length === 0) {
         if (!limit) toast.info('All tasks are already classified');
         setClassifying(false);
         return;
       }
+
       if (!limit) toast.info(`Classifying ${unmapped.length} tasks...`);
+
+      // Process in batches of 3 with 500ms delay
       const BATCH = 3;
       for (let i = 0; i < unmapped.length; i += BATCH) {
         const batch = unmapped.slice(i, i + BATCH);
         await Promise.all(batch.map(t => classifySingleTask(t)));
-        if (i + BATCH < unmapped.length) await new Promise(r => setTimeout(r, 500));
+        if (i + BATCH < unmapped.length) {
+          await new Promise(r => setTimeout(r, 500));
+        }
       }
+
       if (!limit) toast.success(`Classified ${unmapped.length} tasks`);
       await loadDataRef.current();
     } catch (err) {
@@ -211,22 +215,29 @@ const Priorities: React.FC = () => {
   const loadData = useCallback(async () => {
     if (!user) return;
     setLoading(true);
+
     try {
-      const [topicsRes, mappingsRes, tasksRes] = await Promise.all([
+      const [prefsRes, topicsRes, mappingsRes, tasksRes] = await Promise.all([
+        supabase.from('user_scheduling_prefs').select('config').eq('user_id', user.id).maybeSingle(),
         supabase.from('task_topic_index').select('*').eq('user_id', user.id),
         supabase.from('task_topic_mappings').select('*'),
         supabase.from('tasks').select('*').eq('user_id', user.id).not('status', 'in', '("DONE","BLOCKED")'),
       ]);
 
+      const userConfig = prefsRes.data?.config as any;
+      const config = userConfig ? mergeSchedulingConfig(userConfig) : DEFAULT_SCHEDULING_CONFIG;
+
+      const categoryKeys = Object.keys(config.categoryMappings);
       const allTopics = topicsRes.data || [];
+      // Filter to top-level topics; children will be nested
       const topics = allTopics.filter((t: any) => !t.parent_topic_id);
+      // Build children map for sub-groups
       const childrenMap = new Map<string, any[]>();
       allTopics.filter((t: any) => t.parent_topic_id).forEach((t: any) => {
         const list = childrenMap.get(t.parent_topic_id) || [];
         list.push(t);
         childrenMap.set(t.parent_topic_id, list);
       });
-
       const mappings = mappingsRes.data || [];
       const tasks = (tasksRes.data || []) as unknown as Task[];
 
@@ -234,7 +245,7 @@ const Priorities: React.FC = () => {
       tasks.forEach(t => taskMap.set(t.id, t));
 
       const topicTasksMap = new Map<string, Task[]>();
-      mappings.forEach((m: any) => {
+      mappings.forEach(m => {
         const task = taskMap.get(m.task_id);
         if (task) {
           const existing = topicTasksMap.get(m.topic_id) || [];
@@ -243,41 +254,34 @@ const Priorities: React.FC = () => {
         }
       });
 
-      const assignedTaskIds = new Set<string>(mappings.map((m: any) => m.task_id));
+      const assignedTaskIds = new Set<string>();
+      mappings.forEach(m => assignedTaskIds.add(m.task_id));
 
-      // Map each topic to a display category.
-      // Unknown category values pass through as-is so dynamic sections can pick them up.
+      // Determine majority category for each topic (with category_affinity / window_affinity fallback)
       const topicCategoryMap = new Map<string, string>();
       allTopics.forEach((topic: any) => {
         const topicTasks = topicTasksMap.get(topic.id) || [];
         if (topicTasks.length > 0) {
           const catCounts: Record<string, number> = {};
           topicTasks.forEach(t => {
-            const cat = CATEGORY_DISPLAY_MAP[t.category] || t.category || 'LIFE';
+            const cat = t.category || 'LIFE';
             catCounts[cat] = (catCounts[cat] || 0) + 1;
           });
           const majorCat = Object.entries(catCounts).sort((a, b) => b[1] - a[1])[0][0];
           topicCategoryMap.set(topic.id, majorCat);
-        } else if (topic.category_affinity) {
-          // Pass through unknown affinities instead of dropping them
-          topicCategoryMap.set(topic.id, CATEGORY_DISPLAY_MAP[topic.category_affinity] || topic.category_affinity);
-        } else if (topic.window_affinity && topic.window_affinity.length > 0) {
-          topicCategoryMap.set(topic.id, CATEGORY_DISPLAY_MAP[topic.window_affinity[0]] || topic.window_affinity[0]);
+        } else if (topic.category_affinity && categoryKeys.includes(topic.category_affinity)) {
+          topicCategoryMap.set(topic.id, topic.category_affinity);
+        } else if (topic.window_affinity && topic.window_affinity.length > 0 && categoryKeys.includes(topic.window_affinity[0])) {
+          topicCategoryMap.set(topic.id, topic.window_affinity[0]);
         }
       });
 
-      // Child topics inherit parent category if unset
-      allTopics.filter((t: any) => t.parent_topic_id).forEach((t: any) => {
-        if (!topicCategoryMap.has(t.id) && topicCategoryMap.has(t.parent_topic_id)) {
-          topicCategoryMap.set(t.id, topicCategoryMap.get(t.parent_topic_id)!);
-        }
-      });
-
+      // Build a position lookup from the raw DB rows so the sort is driven
+      // entirely by task_topic_index.position — not localStorage.
       const positionMap = new Map<string, number>();
       allTopics.forEach((t: any) => positionMap.set(t.id, t.position ?? 0));
 
-      // Helper to build topic group entries for a given display category key
-      const buildTopicGroups = (key: string) => {
+      const catData: CategoryData[] = categoryKeys.map(key => {
         const catTopics = topics
           .filter((t: any) => topicCategoryMap.get(t.id) === key)
           .map((t: any) => ({
@@ -285,76 +289,61 @@ const Priorities: React.FC = () => {
             topic_name: t.topic_name,
             topic_summary: t.topic_summary,
             task_count: t.task_count,
-            tasks: (topicTasksMap.get(t.id) || []).sort(PRIORITY_SORT),
+            tasks: (topicTasksMap.get(t.id) || []).sort((a, b) => {
+              const pOrder: Record<string, number> = { URGENT: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
+              return (pOrder[a.priority] ?? 3) - (pOrder[b.priority] ?? 3);
+            }),
             children: (childrenMap.get(t.id) || []).map((child: any) => ({
               id: child.id,
               topic_name: child.topic_name,
               topic_summary: child.topic_summary,
               task_count: child.task_count,
-              tasks: (topicTasksMap.get(child.id) || []).sort(PRIORITY_SORT),
+              tasks: (topicTasksMap.get(child.id) || []).sort((a: Task, b: Task) => {
+                const pOrder: Record<string, number> = { URGENT: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
+                return (pOrder[a.priority] ?? 3) - (pOrder[b.priority] ?? 3);
+              }),
               children: [],
             })),
           }));
+        // Sort by DB position; fall back to alphabetical for ties (position defaults to 0).
         catTopics.sort((a: any, b: any) => {
           const diff = (positionMap.get(a.id) ?? 0) - (positionMap.get(b.id) ?? 0);
           return diff !== 0 ? diff : a.topic_name.localeCompare(b.topic_name);
         });
-        return catTopics;
-      };
 
-      // --- Static (known) categories ---
-      const catData: CategoryData[] = DISPLAY_CATEGORIES.map(key => ({
-        key,
-        label: CATEGORY_LABELS[key],
-        color: CATEGORY_COLORS[key],
-        topicGroups: buildTopicGroups(key),
-        uncategorizedTasks: tasks.filter(t => {
-          const displayCat = CATEGORY_DISPLAY_MAP[t.category] || t.category || 'LIFE';
-          return displayCat === key && !assignedTaskIds.has(t.id);
-        }),
-      }));
+        const uncategorized = tasks.filter(
+          t => (t.category === key || (!t.category && key === 'LIFE')) && !assignedTaskIds.has(t.id)
+        );
 
-      // --- Dynamic categories: keys in the data not covered by CATEGORY_DISPLAY_MAP ---
-      const knownDisplaySet = new Set<string>(DISPLAY_CATEGORIES);
-      const dynamicKeys = new Set<string>();
-
-      tasks.forEach(t => {
-        if (t.category && !CATEGORY_DISPLAY_MAP[t.category]) dynamicKeys.add(t.category);
-      });
-      topicCategoryMap.forEach(cat => {
-        if (!knownDisplaySet.has(cat)) dynamicKeys.add(cat);
-      });
-
-      let paletteIdx = 0;
-      Array.from(dynamicKeys).sort().forEach(key => {
-        const topicGroups = buildTopicGroups(key);
-        const uncategorizedTasks = tasks.filter(t => t.category === key && !assignedTaskIds.has(t.id));
-        if (topicGroups.length === 0 && uncategorizedTasks.length === 0) return;
-        catData.push({
+        return {
           key,
-          label: key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
-          color: DYNAMIC_CATEGORY_PALETTE[paletteIdx++ % DYNAMIC_CATEGORY_PALETTE.length],
-          topicGroups,
-          uncategorizedTasks,
-        });
+          label: CATEGORY_LABELS[key] || key,
+          color: CATEGORY_COLORS[key] || 'hsl(var(--muted-foreground))',
+          topicGroups: catTopics,
+          uncategorizedTasks: uncategorized,
+        };
+      });
+
+      // Ensure children inherit parent's category if they don't have their own
+      allTopics.filter((t: any) => t.parent_topic_id).forEach((t: any) => {
+        if (!topicCategoryMap.has(t.id) && topicCategoryMap.has(t.parent_topic_id)) {
+          topicCategoryMap.set(t.id, topicCategoryMap.get(t.parent_topic_id)!);
+        }
       });
 
       const refs: TopicGroupRef[] = allTopics
         .filter((t: any) => topicCategoryMap.has(t.id))
-        .map((t: any) => ({
-          id: t.id,
-          topic_name: t.topic_name,
-          categoryKey: topicCategoryMap.get(t.id)!,
-          parentTopicId: t.parent_topic_id || undefined,
-        }));
+        .map((t: any) => ({ id: t.id, topic_name: t.topic_name, categoryKey: topicCategoryMap.get(t.id)!, parentTopicId: t.parent_topic_id || undefined }));
       setAllTopicGroupRefs(refs);
       setCategories(catData);
 
+      // Load priority lane tasks
       const priorityTasks = tasks
         .filter(t => t.is_priority)
         .sort((a, b) => (a.priority_rank ?? 999) - (b.priority_rank ?? 999));
       setPriorityLaneTasks(priorityTasks);
 
+      // Track unmapped count for UI
       const unmapped = tasks.filter(t => !assignedTaskIds.has(t.id) && !t.title.toLowerCase().includes('test'));
       setUnmappedCount(unmapped.length);
     } catch (err) {
@@ -367,6 +356,7 @@ const Priorities: React.FC = () => {
   loadDataRef.current = loadData;
   useEffect(() => { loadData(); }, [loadData]);
 
+  // Auto-classify up to 10 unmapped tasks on first load
   useEffect(() => {
     if (!loading && unmappedCount > 0 && !autoClassifyRan.current && !classifying) {
       autoClassifyRan.current = true;
@@ -375,20 +365,23 @@ const Priorities: React.FC = () => {
     }
   }, [loading, unmappedCount, classifying, classifyUnmapped]);
 
+  // Helper: persist priority lane ranks
   const persistPriorityRanks = useCallback(async (laneTasks: Task[]) => {
-    await Promise.all(
-      laneTasks.map((t, i) =>
-        supabase.from('tasks').update({ is_priority: true, priority_rank: i } as any).eq('id', t.id)
-      )
+    const updates = laneTasks.map((t, i) =>
+      supabase.from('tasks').update({ is_priority: true, priority_rank: i } as any).eq('id', t.id)
     );
+    await Promise.all(updates);
   }, []);
 
   const removePriority = useCallback(async (taskId: string) => {
+    // Optimistic
     setPriorityLaneTasks(prev => {
       const updated = prev.filter(t => t.id !== taskId);
+      // Re-index ranks in background
       persistPriorityRanks(updated).catch(console.error);
       return updated;
     });
+    // Clear priority on removed task
     await supabase.from('tasks').update({ is_priority: false, priority_rank: null } as any).eq('id', taskId);
   }, [persistPriorityRanks]);
 
@@ -402,24 +395,225 @@ const Priorities: React.FC = () => {
   }, [persistPriorityRanks]);
 
   const handleDragEnd = useCallback(async (result: DropResult) => {
-    if (!result.destination || !user) return;
-    const { source, destination } = result;
-    if (source.droppableId === 'priority-lane' && destination.droppableId === 'priority-lane') {
-      setPriorityLaneTasks(prev => {
-        const items = [...prev];
-        const [moved] = items.splice(source.index, 1);
-        items.splice(destination.index, 0, moved);
-        persistPriorityRanks(items).catch(console.error);
-        return items;
-      });
+    console.log('[DragEnd] Raw result:', JSON.stringify(result));
+    if (!result.destination || !user) {
+      console.log('[DragEnd] Abort: no destination or no user');
+      return;
     }
-  }, [user, persistPriorityRanks]);
+    const { source, destination, type, draggableId } = result;
+    console.log('[DragEnd] Type:', type, 'From:', source.droppableId, '->', destination.droppableId);
+
+    if (type === 'TASK') {
+      const srcId = source.droppableId;
+      const dstId = destination.droppableId;
+
+      // --- Priority Lane reorder ---
+      if (srcId === 'priority-lane' && dstId === 'priority-lane') {
+        setPriorityLaneTasks(prev => {
+          const items = [...prev];
+          const [moved] = items.splice(source.index, 1);
+          items.splice(destination.index, 0, moved);
+          persistPriorityRanks(items).catch(console.error);
+          return items;
+        });
+        return;
+      }
+
+      // --- Priority Lane → Category (remove from lane) ---
+      if (srcId === 'priority-lane' && dstId !== 'priority-lane') {
+        const task = priorityLaneTasks[source.index];
+        if (!task) return;
+        setPriorityLaneTasks(prev => {
+          const updated = prev.filter(t => t.id !== task.id);
+          persistPriorityRanks(updated).catch(console.error);
+          return updated;
+        });
+        await supabase.from('tasks').update({ is_priority: false, priority_rank: null } as any).eq('id', task.id);
+        // If destination is a category column, update category
+        const dstCatKey = dstId.replace('tasks-', '');
+        if (dstCatKey !== dstId) {
+          await supabase.from('tasks').update({ category: dstCatKey } as any).eq('id', task.id);
+        }
+        loadData();
+        return;
+      }
+
+      // --- Category → Priority Lane ---
+      if (dstId === 'priority-lane' && srcId !== 'priority-lane') {
+        // Find the task from categories
+        const srcCatKey = srcId.replace('tasks-', '');
+        const srcCat = categories.find(c => c.key === srcCatKey);
+        if (!srcCat) return;
+        const allSrcTasks = [...srcCat.topicGroups.flatMap(tg => tg.tasks), ...srcCat.uncategorizedTasks];
+        const seen = new Set<string>();
+        const dedupedSrcTasks = allSrcTasks.filter(t => {
+          if (seen.has(t.id)) return false;
+          seen.add(t.id);
+          return true;
+        });
+        const task = dedupedSrcTasks[source.index];
+        if (!task) return;
+
+        // Add to priority lane at destination index
+        setPriorityLaneTasks(prev => {
+          if (prev.some(t => t.id === task.id)) return prev;
+          const items = [...prev];
+          const newTask = { ...task, is_priority: true };
+          items.splice(destination.index, 0, newTask);
+          persistPriorityRanks(items).catch(console.error);
+          return items;
+        });
+        return;
+      }
+
+      // --- Category → Category (existing logic) ---
+      const srcCatKey = srcId.replace('tasks-', '');
+      const dstCatKey = dstId.replace('tasks-', '');
+      console.log('[DragEnd:TASK] srcCat:', srcCatKey, 'dstCat:', dstCatKey, 'srcIdx:', source.index, 'dstIdx:', destination.index);
+      if (srcCatKey === dstCatKey && source.index === destination.index) {
+        return;
+      }
+
+      const srcCat = categories.find(c => c.key === srcCatKey);
+      if (!srcCat) return;
+      const allSrcTasks = [
+        ...srcCat.topicGroups.flatMap(tg => tg.tasks),
+        ...srcCat.uncategorizedTasks,
+      ];
+      const seen = new Set<string>();
+      const dedupedSrcTasks = allSrcTasks.filter(t => {
+        if (seen.has(t.id)) return false;
+        seen.add(t.id);
+        return true;
+      });
+      const task = dedupedSrcTasks[source.index];
+      if (!task) return;
+
+      // Optimistic update
+      setCategories(prev => prev.map(cat => {
+        if (cat.key === srcCatKey) {
+          return {
+            ...cat,
+            topicGroups: cat.topicGroups.map(tg => ({
+              ...tg,
+              tasks: tg.tasks.filter(t => t.id !== task.id),
+            })),
+            uncategorizedTasks: cat.uncategorizedTasks.filter(t => t.id !== task.id),
+          };
+        }
+        if (cat.key === dstCatKey) {
+          const updatedTask = { ...task, category: dstCatKey as Task['category'] };
+          return {
+            ...cat,
+            uncategorizedTasks: [...cat.uncategorizedTasks, updatedTask],
+          };
+        }
+        return cat;
+      }));
+
+      // Persist
+      const { error } = await supabase.from('tasks').update({ category: dstCatKey } as any).eq('id', task.id);
+      if (error) {
+        toast.error('Failed to move task');
+        loadData();
+      }
+      return;
+    }
+
+    // Group drag (type === 'GROUP')
+    const srcCatKey = source.droppableId;
+    const dstCatKey = destination.droppableId;
+    console.log('[DragEnd:GROUP] draggableId:', draggableId, 'srcCat:', srcCatKey, 'dstCat:', dstCatKey);
+
+    // Helper to persist positions to database
+    const persistPositions = async (groups: TopicGroupData[]) => {
+      const updates = groups.map((g, i) =>
+        supabase.from('task_topic_index').update({ position: i } as any).eq('id', g.id)
+      );
+      await Promise.all(updates);
+    };
+
+    if (srcCatKey === dstCatKey) {
+      console.log('[DragEnd:GROUP] Reorder within same column');
+      // Reorder within same column
+      let reorderedGroups: TopicGroupData[] = [];
+      setCategories(prev => prev.map(cat => {
+        if (cat.key !== srcCatKey) return cat;
+        const groups = [...cat.topicGroups];
+        const [moved] = groups.splice(source.index, 1);
+        groups.splice(destination.index, 0, moved);
+        reorderedGroups = groups;
+        return { ...cat, topicGroups: groups };
+      }));
+      // Persist positions to DB
+      if (reorderedGroups.length > 0) {
+        persistPositions(reorderedGroups).catch(err => console.error('[DragEnd:GROUP] Position persist error:', err));
+      }
+    } else {
+      // Move group to different category
+      console.log('[DragEnd:GROUP] Cross-column move from', srcCatKey, 'to', dstCatKey);
+
+      // Capture group data BEFORE optimistic update (categories is stale after setCategories)
+      const srcCat = categories.find(c => c.key === srcCatKey);
+      const groupBeforeMove = srcCat?.topicGroups.find(g => g.id === draggableId);
+      const taskIdsToMove = groupBeforeMove?.tasks.map(t => t.id) || [];
+
+      let movedGroup: TopicGroupData | null = null;
+      let srcGroups: TopicGroupData[] = [];
+      let dstGroups: TopicGroupData[] = [];
+
+      setCategories(prev => {
+        const updated = prev.map(cat => {
+          if (cat.key === srcCatKey) {
+            const groups = [...cat.topicGroups];
+            const [removed] = groups.splice(source.index, 1);
+            movedGroup = removed;
+            srcGroups = groups;
+            return { ...cat, topicGroups: groups };
+          }
+          return cat;
+        });
+
+        if (!movedGroup) return updated;
+
+        return updated.map(cat => {
+          if (cat.key === dstCatKey) {
+            const groups = [...cat.topicGroups];
+            groups.splice(destination.index, 0, movedGroup!);
+            dstGroups = groups;
+            return { ...cat, topicGroups: groups };
+          }
+          return cat;
+        });
+      });
+
+      // Persist category_affinity + positions + update task categories
+      const groupId = draggableId;
+      const res1 = await supabase.from('task_topic_index').update({ category_affinity: dstCatKey } as any).eq('id', groupId);
+
+      // Persist positions for both source and destination columns
+      const positionPromises: Promise<any>[] = [];
+      if (srcGroups.length > 0) positionPromises.push(persistPositions(srcGroups));
+      if (dstGroups.length > 0) positionPromises.push(persistPositions(dstGroups));
+      Promise.all(positionPromises).catch(err => console.error('[DragEnd:GROUP] Position persist error:', err));
+
+      let res2: any = { error: null };
+      if (taskIdsToMove.length > 0) {
+        res2 = await supabase.from('tasks').update({ category: dstCatKey } as any).in('id', taskIdsToMove);
+      }
+
+      if (res1.error || res2.error) {
+        toast.error('Failed to move group');
+        loadData();
+      } else {
+        toast.success(`Moved group to ${CATEGORY_LABELS[dstCatKey] || dstCatKey}`);
+      }
+    }
+  }, [user, categories, loadData]);
 
   const totalTasks = useMemo(() =>
     categories.reduce((sum, cat) =>
-      sum + cat.topicGroups.reduce((s, tg) =>
-        s + tg.tasks.length + (tg.children || []).reduce((cs, c) => cs + c.tasks.length, 0), 0
-      ) + cat.uncategorizedTasks.length, 0
+      sum + cat.topicGroups.reduce((s, tg) => s + tg.tasks.length, 0) + cat.uncategorizedTasks.length, 0
     ), [categories]);
 
   const categoryRefs: CategoryRef[] = useMemo(() =>
@@ -435,13 +629,10 @@ const Priorities: React.FC = () => {
 
   return (
     <div className="p-4 md:p-6 space-y-4">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Priorities</h1>
-          <p className="text-sm text-muted-foreground">
-            {totalTasks} active tasks across {categories.filter(c => c.topicGroups.length > 0 || c.uncategorizedTasks.length > 0).length} categories
-          </p>
+          <p className="text-sm text-muted-foreground">{totalTasks} active tasks across {categories.length} categories</p>
         </div>
         <div className="flex items-center gap-2">
           {unmappedCount > 0 && (
@@ -457,23 +648,16 @@ const Priorities: React.FC = () => {
               <span className="text-xs text-muted-foreground">({unmappedCount})</span>
             </Button>
           )}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" className="gap-1.5 text-sm min-w-[110px] justify-between">
-                <span className="text-xs text-muted-foreground">View by</span>
-                <span className="font-medium">{topLevel === 'category' ? 'Category' : 'Group'}</span>
-                <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => setTopLevel('category')}>
-                Category
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setTopLevel('group')}>
-                Group
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+        <ToggleGroup type="single" value={viewMode} onValueChange={(v) => v && setViewMode(v as 'group' | 'task')}>
+          <ToggleGroupItem value="group" aria-label="Group view" className="gap-1.5">
+            <Layers className="h-4 w-4" />
+            <span className="hidden sm:inline text-sm">Group</span>
+          </ToggleGroupItem>
+          <ToggleGroupItem value="task" aria-label="Task view" className="gap-1.5">
+            <List className="h-4 w-4" />
+            <span className="hidden sm:inline text-sm">Task</span>
+          </ToggleGroupItem>
+        </ToggleGroup>
         </div>
       </div>
 
@@ -554,95 +738,34 @@ const Priorities: React.FC = () => {
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
-          <Button
-            size="sm"
-            variant="ghost"
-            className="ml-auto text-primary-foreground/80 hover:text-primary-foreground"
-            onClick={clearSelection}
-          >
+          <Button size="sm" variant="ghost" className="ml-auto text-primary-foreground/80 hover:text-primary-foreground" onClick={clearSelection}>
             <X className="h-4 w-4" />
           </Button>
         </div>
       )}
 
       <DragDropContext onDragEnd={handleDragEnd}>
-        {/* Priority Lane */}
         <PriorityLane
           tasks={priorityLaneTasks}
           onRemove={removePriority}
           onOpenTask={setSelectedTask}
         />
 
-        {/* Tree view */}
-        <div className="space-y-3 mt-4">
-          {topLevel === 'category' ? (
-            categories.map(cat => (
-              <CategoryTreeSection
-                key={cat.key}
-                category={cat}
-                onRefresh={loadData}
-                allCategories={categoryRefs}
-                allTopicGroupRefs={allTopicGroupRefs}
-                selectedTaskIds={selectedTaskIds}
-                onToggleTaskSelection={toggleTaskSelection}
-                onOpenTask={setSelectedTask}
-                onAddToPriority={addToPriorityLane}
-              />
-            ))
-          ) : (
-            // Group mode: groups are top-level, categories shown as colour-dot section labels
-            categories.map(cat => {
-              const hasContent = cat.topicGroups.length > 0 || cat.uncategorizedTasks.length > 0;
-              if (!hasContent) return null;
-              return (
-                <div key={cat.key}>
-                  <div className="flex items-center gap-2 mb-1.5 px-1">
-                    <div className="h-2 w-2 rounded-full flex-shrink-0" style={{ backgroundColor: cat.color }} />
-                    <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                      {cat.label}
-                    </span>
-                  </div>
-                  <div className="space-y-0.5 border rounded-lg p-2">
-                    {cat.topicGroups.map(tg => (
-                      <TopicGroupPanel
-                        key={tg.id}
-                        topicGroup={tg}
-                        isDeletable
-                        onRefresh={loadData}
-                        allCategories={categoryRefs}
-                        allTopicGroupRefs={allTopicGroupRefs}
-                        selectedTaskIds={selectedTaskIds}
-                        onToggleTaskSelection={toggleTaskSelection}
-                        onOpenTask={setSelectedTask}
-                        onAddToPriority={addToPriorityLane}
-                        categoryKey={cat.key}
-                      />
-                    ))}
-                    {cat.uncategorizedTasks.length > 0 && (
-                      <TopicGroupPanel
-                        topicGroup={{
-                          id: `uncategorized-${cat.key}`,
-                          topic_name: 'Uncategorized',
-                          topic_summary: null,
-                          task_count: cat.uncategorizedTasks.length,
-                          tasks: cat.uncategorizedTasks,
-                        }}
-                        isDeletable={false}
-                        onRefresh={loadData}
-                        allCategories={categoryRefs}
-                        allTopicGroupRefs={allTopicGroupRefs}
-                        selectedTaskIds={selectedTaskIds}
-                        onToggleTaskSelection={toggleTaskSelection}
-                        onOpenTask={setSelectedTask}
-                        onAddToPriority={addToPriorityLane}
-                        categoryKey={cat.key}
-                      />
-                    )}
-                  </div>
-                </div>
-              );
-            })
-          )}
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 mt-4">
+          {categories.map(cat => (
+            <CategoryColumn
+              key={cat.key}
+              category={cat}
+              viewMode={viewMode}
+              onRefresh={loadData}
+              allCategories={categoryRefs}
+              allTopicGroupRefs={allTopicGroupRefs}
+              selectedTaskIds={selectedTaskIds}
+              onToggleTaskSelection={toggleTaskSelection}
+              onOpenTask={setSelectedTask}
+              onAddToPriority={addToPriorityLane}
+            />
+          ))}
         </div>
       </DragDropContext>
 
