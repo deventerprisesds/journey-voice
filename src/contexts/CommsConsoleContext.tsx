@@ -125,6 +125,7 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
   // Realtime subscription state for logging
   const [realtimeStatus, setRealtimeStatus] = useState<string>('idle');
   const subscribeStartTimeRef = useRef<number | null>(null);
+  const bridgePendingRef = useRef(false);
 
   const userId = user?.id || (isDemoMode ? DEMO_USER_ID : null);
 
@@ -1094,6 +1095,35 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
       await sendMessage(lastUserMessage);
     }
   }, [lastUserMessage, sendMessage]);
+
+  // Android widget relay bar: routes transcript to chat thread via bridgeVoiceResult event.
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const transcript = (event as CustomEvent).detail?.transcript;
+      if (transcript) {
+        console.log('[Bridge] bridgeVoiceResult received:', transcript.substring(0, 80));
+        bridgePendingRef.current = true;
+        sendMessage(transcript);
+      }
+    };
+    window.addEventListener('bridgeVoiceResult', handler);
+    return () => window.removeEventListener('bridgeVoiceResult', handler);
+  }, [sendMessage]);
+
+  // Fires postAiResponse back to the widget overlay once the AI finishes responding.
+  useEffect(() => {
+    const bridge = (window as any).AndroidBridge;
+    console.log('[Bridge] response watcher: pending=', bridgePendingRef.current, 'loading=', isLoading, 'msgs=', messages.length, 'bridgeExists=', !!bridge, 'postAiResponseExists=', !!bridge?.postAiResponse);
+    if (!bridgePendingRef.current || isLoading) return;
+    const lastMsg = messages[messages.length - 1];
+    if (lastMsg?.role === 'assistant' && lastMsg.content) {
+      bridgePendingRef.current = false;
+      const text = lastMsg.content.substring(0, 500);
+      console.log('[Bridge] calling postAiResponse:', text.substring(0, 80));
+      bridge?.postAiResponse?.(text);
+    }
+  }, [messages, isLoading]);
+
 
   // Start a new conversation (clear messages but keep thread for history)
   const startNewConversation = useCallback(() => {
