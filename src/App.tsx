@@ -29,7 +29,13 @@ import { useEffect } from "react";
 import { bootTrace } from "@/utils/bootTrace";
 
 const queryClient = new QueryClient({
-  defaultOptions: { queries: { retry: 1 } },
+  defaultOptions: {
+    queries: {
+      retry: 1,
+      staleTime: 5 * 60 * 1000,  // 5 minutes — prevents redundant refetches on every mount/focus
+      gcTime: 10 * 60 * 1000,    // 10 minutes — keeps cached data in memory across route changes
+    },
+  },
 });
 
 const App = () => {
