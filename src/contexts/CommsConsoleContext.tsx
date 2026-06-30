@@ -6,6 +6,7 @@ import { useVoiceAssistant } from '@/contexts/VoiceAssistantContext';
 import { useUnifiedThread } from '@/hooks/useUnifiedThread';
 import { usePresenceTracking } from '@/hooks/usePresenceTracking';
 import { logRealtime, logChat } from '@/utils/activityLogger';
+import { logToErrorLog } from '@/utils/directLog';
 import type {
   Assistant,
   ConversationMessage,
@@ -128,19 +129,40 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const bridgePendingRef = useRef(false);
 
   const notifyBridgeIfPending = useCallback((responseText: string) => {
-    console.log('[Bridge] notifyBridgeIfPending called, bridgePending:', bridgePendingRef.current, 'text:', responseText.substring(0, 60));
-    if (!bridgePendingRef.current) {
+    const pending = bridgePendingRef.current;
+    console.log('[Bridge] notifyBridgeIfPending called, bridgePending:', pending, 'text:', responseText.substring(0, 60));
+    logToErrorLog({
+      component: 'Bridge',
+      error_type: 'bridge_notify',
+      error_message: 'notifyBridgeIfPending_called',
+      context: { pending, textLen: responseText.length, textPreview: responseText.substring(0, 60) }
+    });
+    if (!pending) {
       console.log('[Bridge] notifyBridgeIfPending: no pending bridge request, skipping');
       return;
     }
     bridgePendingRef.current = false;
     const bridge = (window as any).AndroidBridge;
-    console.log('[Bridge] AndroidBridge present:', !!bridge, 'postAiResponse type:', typeof bridge?.postAiResponse);
+    const bridgePresent = !!bridge;
+    const hasPostAiResponse = typeof bridge?.postAiResponse === 'function';
+    console.log('[Bridge] AndroidBridge present:', bridgePresent, 'postAiResponse type:', typeof bridge?.postAiResponse);
+    logToErrorLog({
+      component: 'Bridge',
+      error_type: 'bridge_notify',
+      error_message: 'postAiResponse_dispatch',
+      context: { bridgePresent, hasPostAiResponse, textLen: responseText.length }
+    });
     try {
       bridge?.postAiResponse?.(responseText.substring(0, 500));
       console.log('[Bridge] postAiResponse dispatched successfully');
     } catch (err) {
       console.error('[Bridge] postAiResponse threw error:', err);
+      logToErrorLog({
+        component: 'Bridge',
+        error_type: 'bridge_error',
+        error_message: 'postAiResponse_threw',
+        context: { error: String(err) }
+      });
     }
   }, []);
 
@@ -1135,11 +1157,23 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     const handler = (event: Event) => {
       const transcript = (event as CustomEvent).detail?.transcript;
       console.log('[Bridge] bridgeVoiceResult event fired, transcript:', transcript?.substring(0, 80) ?? '(none)', 'bridgePendingRef before:', bridgePendingRef.current);
+      logToErrorLog({
+        component: 'Bridge',
+        error_type: 'bridge_event',
+        error_message: 'bridgeVoiceResult_fired',
+        context: { hasTranscript: !!transcript, transcriptPreview: transcript?.substring(0, 60) ?? null }
+      });
       if (transcript) {
         bridgePendingRef.current = true;
         console.log('[Bridge] bridgePendingRef set to true, dispatching sendMessage');
         sendMessage(transcript).catch(err => {
           console.error('[Bridge] sendMessage rejected:', err);
+          logToErrorLog({
+            component: 'Bridge',
+            error_type: 'bridge_error',
+            error_message: 'sendMessage_rejected',
+            context: { error: String(err) }
+          });
         });
       } else {
         console.warn('[Bridge] bridgeVoiceResult received with no transcript in event.detail');
