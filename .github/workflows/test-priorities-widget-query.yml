@@ -33,13 +33,9 @@ jobs:
               except urllib.error.HTTPError as e:
                   return json.loads(e.read()), e.code
 
-          # ── Step 1: getPriorityGroups ────────────────────────────────────────
+          # Step 1: getPriorityGroups
           print("\n=== STEP 1: getPriorityGroups (task_topic_index) ===")
-          # Find user_id from the table (service role bypasses RLS)
           rows, code = get("/rest/v1/task_topic_index", {"select": "user_id", "limit": "1"})
-          if not rows:
-              print("ERROR: task_topic_index is empty or inaccessible")
-              sys.exit(1)
           user_id = rows[0]["user_id"]
           print(f"user_id prefix: {user_id[:8]}...")
 
@@ -48,33 +44,23 @@ jobs:
               "user_id": f"eq.{user_id}",
               "order": "position.asc",
           })
-          print(f"HTTP {code} — {len(groups)} groups returned")
+          print(f"HTTP {code} -- {len(groups)} groups returned")
           if code != 200:
               print(f"ERROR: {groups}")
               sys.exit(1)
 
-          # category_affinity distribution
           cat_dist = collections.Counter(str(g.get("category_affinity")) for g in groups)
           print("\ncategory_affinity distribution:")
           for k, v in sorted(cat_dist.items()):
               print(f"  {k!s:20} : {v}")
 
-          # window_affinity[0] for groups with null category_affinity
           null_cat = [g for g in groups if g.get("category_affinity") is None]
-          wa_dist = collections.Counter(
-              (g.get("window_affinity") or ["NULL"])[0] for g in null_cat
-          )
           print(f"\nGroups with null category_affinity: {len(null_cat)}")
-          print("  window_affinity[0] distribution:")
-          for k, v in sorted(wa_dist.items()):
-              print(f"    {k!s:20} : {v}")
 
-          # parent_topic_id check
           has_parent = [g for g in groups if g.get("parent_topic_id")]
-          print(f"\nTop-level groups (parent_topic_id=null): {len(groups) - len(has_parent)}")
+          print(f"Top-level groups (parent_topic_id=null): {len(groups) - len(has_parent)}")
           print(f"Sub-groups (parent_topic_id set):         {len(has_parent)}")
 
-          # Sample rows
           print("\nFirst 5 groups:")
           for g in groups[:5]:
               name = g["topic_name"][:35]
@@ -84,7 +70,7 @@ jobs:
 
           topic_ids = [g["id"] for g in groups]
 
-          # ── Step 2: getTasksForTopics — task_topic_mappings ─────────────────
+          # Step 2: task_topic_mappings
           print(f"\n=== STEP 2: task_topic_mappings for {len(topic_ids)} topics ===")
           joined = ",".join(topic_ids)
           print(f"topic_id=in.(...) param length: {len(joined)} chars")
@@ -93,7 +79,7 @@ jobs:
               "select": "task_id,topic_id",
               "topic_id": f"in.({joined})",
           })
-          print(f"HTTP {code} — {len(mappings)} mappings returned")
+          print(f"HTTP {code} -- {len(mappings)} mappings returned")
           if code != 200:
               print(f"ERROR: {mappings}")
               sys.exit(1)
@@ -108,10 +94,10 @@ jobs:
               print(f"  {name[:35]:35}  {cnt} tasks")
 
           if not topic_by_task:
-              print("\nNo task mappings found — widget would show counts of 0")
+              print("\nNo task mappings found")
               sys.exit(0)
 
-          # ── Step 3: getTasksForTopics — tasks ───────────────────────────────
+          # Step 3: tasks
           task_ids = list(topic_by_task.keys())
           print(f"\n=== STEP 3: tasks for {len(task_ids)} task IDs ===")
           joined_tasks = ",".join(task_ids)
@@ -123,31 +109,70 @@ jobs:
               "user_id": f"eq.{user_id}",
               "order": "is_priority.desc,priority_rank.asc.nullslast",
           })
-          print(f"HTTP {code} — {len(tasks)} tasks returned")
+          print(f"HTTP {code} -- {len(tasks)} tasks returned")
           if code != 200:
               print(f"ERROR: {tasks}")
               sys.exit(1)
 
-          # Stitch topic_id back in
           for t in tasks:
               t["topic_id"] = topic_by_task.get(t["id"], "")
 
-          # Count per topic (as widget does)
           count_map = collections.Counter(t["topic_id"] for t in tasks if t.get("topic_id"))
           print(f"\nTask counts per topic ({len(count_map)} topics have tasks):")
           for tid, cnt in count_map.most_common(10):
               name = next((g["topic_name"] for g in groups if g["id"] == tid), tid[:8])
               print(f"  {name[:35]:35}  {cnt} tasks")
 
-          print("\nFirst 10 tasks (as widget would cache them):")
-          for t in tasks[:10]:
-              topic_name = next((g["topic_name"] for g in groups if g["id"] == t.get("topic_id")), "?")
-              print(f"  [{t.get('status','?'):10}] {t['title'][:40]:40}  (topic: {topic_name[:25]})")
-
-          print("\n=== SUMMARY ===")
-          print(f"Groups:   {len(groups)}")
-          print(f"Mappings: {len(mappings)}")
-          print(f"Tasks:    {len(tasks)}")
-          print(f"Topics with tasks: {len(count_map)} / {len(groups)}")
+          print(f"\nGroups: {len(groups)} | Mappings: {len(mappings)} | Tasks: {len(tasks)}")
           print("All three queries succeeded.")
+          PYEOF
+
+      - name: Read widget debug log from error_log table
+        run: |
+          python3 - <<'PYEOF'
+          import json, urllib.request, urllib.parse, urllib.error, os, sys
+
+          SB_URL = os.environ["SB_URL"]
+          SB_KEY = os.environ["SB_KEY"]
+
+          def get(path, params):
+              url = f"{SB_URL}{path}?" + urllib.parse.urlencode(params)
+              req = urllib.request.Request(url, headers={
+                  "apikey": SB_KEY,
+                  "Authorization": f"Bearer {SB_KEY}",
+                  "Accept": "application/json",
+              })
+              try:
+                  with urllib.request.urlopen(req) as r:
+                      return json.loads(r.read()), r.status
+              except urllib.error.HTTPError as e:
+                  return json.loads(e.read()), e.code
+
+          print("\n=== WIDGET DEBUG LOG (error_log table, source=widget) ===")
+          rows, code = get("/rest/v1/error_log", {
+              "select": "id,created_at,source,component,error_type,context",
+              "source": "eq.widget",
+              "order": "created_at.desc",
+              "limit": "10",
+          })
+          print(f"HTTP {code} -- {len(rows) if isinstance(rows, list) else '?'} entries")
+          if code != 200:
+              print(f"ERROR fetching error_log: {rows}")
+              sys.exit(0)
+          if not rows:
+              print("No widget entries in error_log yet.")
+              print("This means pushWidgetLogToDatabase() has not been called from the device.")
+              sys.exit(0)
+          for r in rows:
+              ctx = r.get("context") or {}
+              log = ctx.get("widget_log", "")
+              ts = (r.get("created_at") or "")[:19]
+              comp = r.get("component", "")
+              uid = (ctx.get("user_id_prefix") or "")[:8]
+              print(f"\n=== {ts} [{comp}] uid={uid} ===")
+              if log:
+                  print(log[-3000:])
+              else:
+                  print("(no widget_log in context)")
+                  print(f"  context keys: {list(ctx.keys())}")
           PYEOF
