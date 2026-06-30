@@ -2,7 +2,9 @@
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient } from "@tanstack/react-query";
+import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
+import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persister";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "@/hooks/useAuth";
 import { AssignmentSelectionProvider } from "@/contexts/AssignmentSelectionContext";
@@ -29,7 +31,23 @@ import { useEffect } from "react";
 import { bootTrace } from "@/utils/bootTrace";
 
 const queryClient = new QueryClient({
-  defaultOptions: { queries: { retry: 1 } },
+  defaultOptions: {
+    queries: {
+      retry: 1,
+      staleTime: 5 * 60 * 1000,
+      gcTime: 24 * 60 * 60 * 1000,   // 24 hours — persisted cache survives page reloads
+      refetchOnWindowFocus: false,    // Realtime subscriptions handle live updates
+      refetchOnReconnect: true,       // Do re-sync after network reconnects
+    },
+  },
+});
+
+// Persist the React Query cache to localStorage so data survives WebView kills
+// and page reloads. maxAge matches gcTime so stale entries are evicted together.
+const localStoragePersister = createSyncStoragePersister({
+  storage: window.localStorage,
+  key: 'jv-rq-cache-v1',
+  throttleTime: 1000,
 });
 
 const App = () => {
@@ -69,7 +87,17 @@ const App = () => {
   }, []);
 
   return (
-    <QueryClientProvider client={queryClient}>
+    <PersistQueryClientProvider
+      client={queryClient}
+      persistOptions={{
+        persister: localStoragePersister,
+        maxAge: 24 * 60 * 60 * 1000,
+        dehydrateOptions: {
+          // Only persist queries that have successfully returned data
+          shouldDehydrateQuery: (query) => query.state.status === 'success',
+        },
+      }}
+    >
       <TooltipProvider>
         <Toaster />
         <Sonner />
@@ -112,7 +140,7 @@ const App = () => {
           </AuthProvider>
         </BrowserRouter>
       </TooltipProvider>
-    </QueryClientProvider>
+    </PersistQueryClientProvider>
   );
 };
 

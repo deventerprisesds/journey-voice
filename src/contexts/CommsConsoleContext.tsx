@@ -1,11 +1,14 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef } from 'react';
-import { useLocation, useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { useVoiceAssistant } from '@/contexts/VoiceAssistantContext';
 import { useUnifiedThread } from '@/hooks/useUnifiedThread';
 import { usePresenceTracking } from '@/hooks/usePresenceTracking';
 import { logRealtime, logChat } from '@/utils/activityLogger';
+import { useAssistants } from '@/hooks/useAssistants';
+import { useChatHistory, chatHistoryQueryKey } from '@/hooks/useChatHistory';
 import type {
   Assistant,
   ConversationMessage,
@@ -41,27 +44,8 @@ const CommsConsoleContext = createContext<CommsConsoleContextValue | null>(null)
 // Demo user ID for preview mode
 const DEMO_USER_ID = '00000000-0000-0000-0000-000000000001';
 
-// Dev user ID - demo mode shares dev's assistants
-const DEV_USER_ID = 'a3378f93-d655-4913-b2fa-ca5b1d8020f1';
-
 // Supabase edge function URL
 const SUPABASE_URL = 'https://wwxgajrtmslzklnyplah.supabase.co';
-
-// Default Iris assistant
-const DEFAULT_IRIS: Omit<Assistant, 'id' | 'user_id' | 'created_at' | 'updated_at'> = {
-  name: 'Iris',
-  description: 'Personal AI assistant for tasks, calendar, and communications',
-  avatar_url: null,
-  avatar_initial: 'I',
-  orb_color: '#3B82F6',
-  orb_animation: 'pulse',
-  openai_assistant_id: null,
-  voice_id: null,
-  persona_prompt: null,
-  tools_enabled: [],
-  is_default: true,
-  is_active: true,
-};
 
 // ============================================================
 // SSE Streaming Helpers
@@ -95,6 +79,7 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const { user, isDemoMode, session } = useAuth();
   const voiceAssistant = useVoiceAssistant();
   const [searchParams, setSearchParams] = useSearchParams();
+  const queryClient = useQueryClient();
 
   // Panel state - default to open on desktop
   const [isPanelOpen, setIsPanelOpen] = useState(() => {
@@ -107,8 +92,9 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
   });
   const [isMobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
-  // Assistant state
-  const [assistants, setAssistants] = useState<Assistant[]>([]);
+  // Assistant state — cached via React Query; local state only for user-selected override
+  const { data: assistantsData } = useAssistants(userId, isDemoMode);
+  const assistants = assistantsData ?? [];
   const [currentAssistant, setCurrentAssistant] = useState<Assistant | null>(null);
 
   // Communication state
@@ -117,7 +103,6 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const [threadId, setThreadId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
-  const [historyLoaded, setHistoryLoaded] = useState(false);
   const [lastUserMessage, setLastUserMessage] = useState<string | null>(null);
   // Phone state
   const [phoneCallState, setPhoneCallState] = useState<PhoneCallState>('idle');
@@ -176,177 +161,37 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     localStorage.setItem('comms-panel-open', JSON.stringify(isPanelOpen));
   }, [isPanelOpen]);
 
-  // Fetch assistants when userId becomes available
+  // Sync initial assistant selection from cached query data
   useEffect(() => {
-    console.log('[CommsConsole] Assistants effect triggered, userId:', userId, 'isDemoMode:', isDemoMode);
-    
-    if (!userId) {
-      console.log('[CommsConsole] No userId yet, skipping assistant fetch');
-      return;
+    if (assistants.length > 0 && !currentAssistant) {
+      setCurrentAssistant(assistants[0]);
     }
-
-    const fetchAssistants = async () => {
-      console.log('[CommsConsole] Fetching assistants for userId:', userId);
-      try {
-        // For demo mode, fetch dev user's assistants (shared Iris approach)
-        const targetUserId = isDemoMode ? DEV_USER_ID : userId;
-        
-        const { data, error } = await supabase
-          .from('assistants')
-          .select('*')
-          .eq('user_id', targetUserId)
-          .eq('is_active', true)
-          .order('is_default', { ascending: false })
-          .order('created_at', { ascending: true });
-
-        if (error) throw error;
-
-        console.log('[CommsConsole] Fetched assistants:', data?.length || 0, 'assistants');
-
-        if (data && data.length > 0) {
-          // Map to proper Assistant type
-          const mapped: Assistant[] = data.map((a: Record<string, unknown>) => ({
-            id: a.id as string,
-            user_id: a.user_id as string,
-            name: a.name as string,
-            description: a.description as string | null,
-            avatar_url: a.avatar_url as string | null,
-            avatar_initial: a.avatar_initial as string | null,
-            orb_color: (a.orb_color as string) || '#3B82F6',
-            orb_animation: (a.orb_animation as string) || 'pulse',
-            openai_assistant_id: a.openai_assistant_id as string | null,
-            voice_id: a.voice_id as string | null,
-            persona_prompt: a.persona_prompt as string | null,
-            tools_enabled: (a.tools_enabled as string[]) || [],
-            is_default: a.is_default as boolean,
-            is_active: a.is_active as boolean,
-            created_at: a.created_at as string,
-            updated_at: a.updated_at as string,
-          }));
-          setAssistants(mapped);
-          setCurrentAssistant(mapped[0]);
-          console.log('[CommsConsole] Set current assistant:', mapped[0].name);
-        } else {
-          // In demo mode, don't create a new assistant - dev's Iris should exist
-          if (isDemoMode) {
-            console.error('Demo mode: Dev Iris assistant not found. Expected it to exist.');
-            const mockIris: Assistant = {
-              id: 'mock-iris-id',
-              user_id: userId,
-              ...DEFAULT_IRIS,
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            };
-            setAssistants([mockIris]);
-            setCurrentAssistant(mockIris);
-            return;
-          }
-          
-          // Create default Iris assistant for authenticated users
-          console.log('[CommsConsole] No assistants found, creating default Iris');
-          const { data: newAssistant, error: createError } = await supabase
-            .from('assistants')
-            .insert({ ...DEFAULT_IRIS, user_id: userId })
-            .select()
-            .single();
-
-          if (createError) {
-            console.error('Failed to create default assistant:', createError);
-            // Use a mock assistant as fallback
-            const mockIris: Assistant = {
-              id: 'mock-iris-id',
-              user_id: userId,
-              ...DEFAULT_IRIS,
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            };
-            setAssistants([mockIris]);
-            setCurrentAssistant(mockIris);
-          } else if (newAssistant) {
-            const mapped: Assistant = {
-              id: newAssistant.id,
-              user_id: newAssistant.user_id,
-              name: newAssistant.name,
-              description: newAssistant.description,
-              avatar_url: newAssistant.avatar_url,
-              avatar_initial: newAssistant.avatar_initial,
-              orb_color: newAssistant.orb_color || '#3B82F6',
-              orb_animation: newAssistant.orb_animation || 'pulse',
-              openai_assistant_id: newAssistant.openai_assistant_id,
-              voice_id: newAssistant.voice_id,
-              persona_prompt: newAssistant.persona_prompt,
-              tools_enabled: newAssistant.tools_enabled as string[] || [],
-              is_default: newAssistant.is_default,
-              is_active: newAssistant.is_active,
-              created_at: newAssistant.created_at,
-              updated_at: newAssistant.updated_at,
-            };
-            setAssistants([mapped]);
-            setCurrentAssistant(mapped);
-            console.log('[CommsConsole] Created and set default assistant:', mapped.name);
-          }
-        }
-      } catch (err) {
-        console.error('[CommsConsole] Error fetching assistants:', err);
-        // Fallback to mock for demo
-        const mockIris: Assistant = {
-          id: 'mock-iris-id',
-          user_id: userId,
-          ...DEFAULT_IRIS,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        };
-        setAssistants([mockIris]);
-        setCurrentAssistant(mockIris);
-      }
-    };
-
-    fetchAssistants();
-  }, [userId, isDemoMode]);
+  }, [assistants, currentAssistant]);
 
   // ============================================================
-  // Load chat history from database on mount
+  // Chat history — cached via React Query (useChatHistory)
+  // Realtime subscription below handles live appends.
   // ============================================================
+  const { data: chatHistoryData } = useChatHistory(dbThreadId, userId);
+
+  // Reset local messages when thread changes so stale messages don't flash
   useEffect(() => {
-    if (!dbThreadId || !userId || historyLoaded) return;
+    setMessages([]);
+  }, [dbThreadId]);
 
-    const loadChatHistory = async () => {
-      try {
-        console.log('[CommsConsole] Loading chat history for thread:', dbThreadId);
-        const { data, error } = await supabase
-          .from('conversation_messages')
-          .select('id, role, content, source, created_at, assistant_id')
-          .eq('thread_id', dbThreadId)
-          .eq('user_id', userId)
-          .eq('source', 'chat')
-          // IMPORTANT: load most recent messages first, then reverse for chronological display.
-          // If we order ascending + limit, we'd only ever see the *oldest* 50 messages.
-          .order('created_at', { ascending: false })
-          .limit(50);
-
-        if (error) throw error;
-
-        if (data && data.length > 0) {
-          console.log(`[CommsConsole] Loaded ${data.length} messages from history`);
-          const chronological = [...data].reverse();
-          setMessages(chronological.map(msg => ({
-            id: msg.id,
-            role: msg.role as 'user' | 'assistant' | 'system',
-            content: msg.content,
-            source: (msg.source || 'chat') as CommunicationMode,
-            assistant_id: msg.assistant_id,
-            created_at: msg.created_at,
-          })));
-        }
-        setHistoryLoaded(true);
-      } catch (err) {
-        console.error('[CommsConsole] Failed to load chat history:', err);
-        setHistoryLoaded(true); // Mark as loaded to prevent retry loop
-      }
-    };
-
-    loadChatHistory();
-  }, [dbThreadId, userId, historyLoaded]);
+  // Merge history into local messages state; deduplicates against any
+  // messages already appended by the Realtime subscription.
+  useEffect(() => {
+    if (!chatHistoryData || chatHistoryData.length === 0) return;
+    setMessages(prev => {
+      const existingIds = new Set(prev.map(m => m.id));
+      const fresh = chatHistoryData.filter(m => !existingIds.has(m.id));
+      if (fresh.length === 0) return prev;
+      return [...fresh, ...prev].sort((a, b) =>
+        (a.created_at || '').localeCompare(b.created_at || '')
+      );
+    });
+  }, [chatHistoryData]);
 
   // ============================================================
   // Realtime subscription for new messages (instant delivery)
@@ -522,7 +367,7 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
           setCurrentMode('chat');
           
           // Reload messages to include the new system-initiated message
-          setHistoryLoaded(false);
+          queryClient.invalidateQueries({ queryKey: chatHistoryQueryKey(dbThreadId) });
         }
       }
       
@@ -636,12 +481,12 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
         if (data && data.length > 0) {
           // There are newer messages, reload history
           console.log('[CommsConsole] Visibility check found newer messages, reloading');
-          logChat(userId, 'visibility_reload', 'started', { 
-            threadId: dbThreadId, 
+          logChat(userId, 'visibility_reload', 'started', {
+            threadId: dbThreadId,
             lastSeen,
-            foundNew: true 
+            foundNew: true
           });
-          setHistoryLoaded(false);
+          queryClient.invalidateQueries({ queryKey: chatHistoryQueryKey(dbThreadId) });
         } else {
           // No new messages, skip reload
           logChat(userId, 'visibility_check', 'completed', { 
@@ -668,7 +513,7 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
       setCurrentMode('chat');
       
       // Reload messages to show latest
-      setHistoryLoaded(false);
+      queryClient.invalidateQueries({ queryKey: chatHistoryQueryKey(dbThreadId) });
       
       // Clean up URL without triggering navigation
       searchParams.delete('openComms');
@@ -1129,7 +974,7 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const startNewConversation = useCallback(() => {
     setMessages([]);
     setLastUserMessage(null);
-    setHistoryLoaded(false); // Will reload if user navigates back
+    queryClient.invalidateQueries({ queryKey: chatHistoryQueryKey(dbThreadId) });
     console.log('[CommsConsole] Started new conversation');
   }, []);
 
