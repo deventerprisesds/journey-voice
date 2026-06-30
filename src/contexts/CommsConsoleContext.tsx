@@ -128,10 +128,20 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const bridgePendingRef = useRef(false);
 
   const notifyBridgeIfPending = useCallback((responseText: string) => {
-    if (!bridgePendingRef.current) return;
+    console.log('[Bridge] notifyBridgeIfPending called, bridgePending:', bridgePendingRef.current, 'text:', responseText.substring(0, 60));
+    if (!bridgePendingRef.current) {
+      console.log('[Bridge] notifyBridgeIfPending: no pending bridge request, skipping');
+      return;
+    }
     bridgePendingRef.current = false;
-    console.log('[Bridge] notifyBridgeIfPending:', responseText.substring(0, 80));
-    (window as any).AndroidBridge?.postAiResponse?.(responseText.substring(0, 500));
+    const bridge = (window as any).AndroidBridge;
+    console.log('[Bridge] AndroidBridge present:', !!bridge, 'postAiResponse type:', typeof bridge?.postAiResponse);
+    try {
+      bridge?.postAiResponse?.(responseText.substring(0, 500));
+      console.log('[Bridge] postAiResponse dispatched successfully');
+    } catch (err) {
+      console.error('[Bridge] postAiResponse threw error:', err);
+    }
   }, []);
 
   const userId = user?.id || (isDemoMode ? DEMO_USER_ID : null);
@@ -389,7 +399,7 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
         },
         (payload) => {
           const newMessage = payload.new as any;
-          console.log('[CommsConsole] Realtime message received:', newMessage.id, 'content:', newMessage.content?.substring(0, 50));
+          console.log('[CommsConsole] Realtime message received:', newMessage.id, 'role:', newMessage.role, 'content:', newMessage.content?.substring(0, 50));
           
           // Log message receipt
           logChat(userId, 'realtime_received', 'completed', {
@@ -399,6 +409,14 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
             source: newMessage.source,
             threadId: dbThreadId
           });
+
+          // Notify the Android overlay whenever an assistant message is persisted.
+          // This mirrors the same path the chat uses to display responses, so the
+          // overlay gets the real content even if the SSE stream failed partway through.
+          if (newMessage.role === 'assistant' && newMessage.content) {
+            console.log('[Bridge] Realtime assistant INSERT — attempting bridge notification');
+            notifyBridgeIfPending(newMessage.content);
+          }
           
           // Deduplicate - skip if already in state
           setMessages(prev => {
@@ -469,7 +487,7 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
       supabase.removeChannel(channel);
       setRealtimeStatus('idle');
     };
-  }, [dbThreadId, userId, currentAssistant?.id]);
+  }, [dbThreadId, userId, currentAssistant?.id, notifyBridgeIfPending]);
 
   // ============================================================
   // Realtime subscription watchdog - log if not subscribed within 5s
@@ -1018,6 +1036,9 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
         created_at: new Date().toISOString(),
       };
       setMessages((prev) => [...prev, errorMessage]);
+      // Do NOT call notifyBridgeIfPending here — if the AI did respond despite the
+      // streaming error, the Realtime INSERT handler above will deliver the real content.
+      console.log('[Bridge] sendMessage caught error; Realtime handler will notify bridge if AI responded');
     } finally {
       setIsLoading(false);
     }
@@ -1113,10 +1134,15 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
   useEffect(() => {
     const handler = (event: Event) => {
       const transcript = (event as CustomEvent).detail?.transcript;
+      console.log('[Bridge] bridgeVoiceResult event fired, transcript:', transcript?.substring(0, 80) ?? '(none)', 'bridgePendingRef before:', bridgePendingRef.current);
       if (transcript) {
-        console.log('[Bridge] bridgeVoiceResult received:', transcript.substring(0, 80));
         bridgePendingRef.current = true;
-        sendMessage(transcript);
+        console.log('[Bridge] bridgePendingRef set to true, dispatching sendMessage');
+        sendMessage(transcript).catch(err => {
+          console.error('[Bridge] sendMessage rejected:', err);
+        });
+      } else {
+        console.warn('[Bridge] bridgeVoiceResult received with no transcript in event.detail');
       }
     };
     window.addEventListener('bridgeVoiceResult', handler);
