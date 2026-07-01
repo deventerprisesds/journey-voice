@@ -1152,7 +1152,15 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     }
   }, [lastUserMessage, sendMessage]);
 
+  // Keep ref always pointing to latest sendMessage so the listener below never captures a stale closure.
+  const sendMessageRef = useRef(sendMessage);
+  useEffect(() => {
+    sendMessageRef.current = sendMessage;
+  });
+
   // Android widget relay bar: routes transcript to chat thread via bridgeVoiceResult event.
+  // Registered ONCE (empty deps) — eliminates the re-registration gap that silently drops events
+  // when sendMessage changes identity after an auth token refresh.
   useEffect(() => {
     const handler = (event: Event) => {
       const transcript = (event as CustomEvent).detail?.transcript;
@@ -1163,25 +1171,25 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
         error_message: 'bridgeVoiceResult_fired',
         context: { hasTranscript: !!transcript, transcriptPreview: transcript?.substring(0, 60) ?? null }
       });
-      if (transcript) {
-        bridgePendingRef.current = true;
-        console.log('[Bridge] bridgePendingRef set to true, dispatching sendMessage');
-        sendMessage(transcript).catch(err => {
-          console.error('[Bridge] sendMessage rejected:', err);
-          logToErrorLog({
-            component: 'Bridge',
-            error_type: 'bridge_error',
-            error_message: 'sendMessage_rejected',
-            context: { error: String(err) }
-          });
-        });
-      } else {
+      if (!transcript) {
         console.warn('[Bridge] bridgeVoiceResult received with no transcript in event.detail');
+        return;
       }
+      bridgePendingRef.current = true;
+      console.log('[Bridge] bridgePendingRef set to true, dispatching sendMessage');
+      sendMessageRef.current(transcript).catch(err => {
+        console.error('[Bridge] sendMessage rejected:', err);
+        logToErrorLog({
+          component: 'Bridge',
+          error_type: 'bridge_error',
+          error_message: 'sendMessage_rejected',
+          context: { error: String(err) }
+        });
+      });
     };
     window.addEventListener('bridgeVoiceResult', handler);
     return () => window.removeEventListener('bridgeVoiceResult', handler);
-  }, [sendMessage]);
+  }, []);
 
 
 
