@@ -1188,6 +1188,9 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
       });
     };
     window.addEventListener('bridgeVoiceResult', handler);
+    // Signal Android that the listener is live — any transcript buffered before this
+    // mount (relay bar tapped while app was still loading) will be dispatched now.
+    (window as any).AndroidBridge?.notifyBridgeReady?.();
     return () => window.removeEventListener('bridgeVoiceResult', handler);
   }, []);
 
