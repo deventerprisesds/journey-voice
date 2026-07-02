@@ -33,23 +33,20 @@ jobs:
           echo "Investigating nightly schedule run for: $TARGET (UTC offset ${OFFSET}h)"
           echo "Cutoff: $CUTOFF"
 
-      - name: Query activity_log — most recent nightly_schedule_built
-        id: fetch
+      - name: Find most recent nightly_schedule_built row (id only)
+        id: find
         env:
           SB_KEY: ${{ secrets.CF_SUPABASE_SERVICE_KEY }}
         run: |
-          TARGET_DATE="${{ steps.date.outputs.target_date }}"
-          echo "=== QUERYING activity_log for nightly_schedule_built ==="
-          echo "Target date: $TARGET_DATE"
-
           CUTOFF="${{ steps.date.outputs.cutoff }}"
+          echo "=== FINDING recent nightly_schedule_built rows (id,created_at,status only) ==="
 
-          # Fetch the 5 most recent nightly_schedule_built entries (limited to last 7 days to avoid table scan timeout)
+          # Select only id,created_at,status — avoids loading the large metadata JSONB blob
           FULL=$(curl -G -s -w "\nHTTP_STATUS:%{http_code}" \
             -H "apikey: $SB_KEY" \
             -H "Authorization: Bearer $SB_KEY" \
             -H "Accept: application/json" \
-            --data-urlencode "select=id,created_at,status,metadata" \
+            --data-urlencode "select=id,created_at,status" \
             --data-urlencode "activity_type=eq.nightly_schedule_built" \
             --data-urlencode "created_at=gte.${CUTOFF}" \
             --data-urlencode "order=created_at.desc" \
@@ -66,43 +63,68 @@ jobs:
             exit 1
           fi
 
-          COUNT=$(echo "$RESULT" | python3 -c "import json,sys; arr=json.load(sys.stdin); print(len(arr))" 2>/dev/null || echo "?")
-          echo "Found $COUNT activity_log entries"
-          echo "raw_result=$RESULT" >> $GITHUB_OUTPUT
+          echo "Recent rows: $RESULT"
 
-          # Print summary of recent runs
+          ROW_ID=$(echo "$RESULT" | python3 -c "import json,sys; arr=json.load(sys.stdin); print(arr[0]['id'] if arr else '')" 2>/dev/null || echo "")
+          COUNT=$(echo "$RESULT" | python3 -c "import json,sys; arr=json.load(sys.stdin); print(len(arr))" 2>/dev/null || echo "?")
+          echo "Found $COUNT rows. Using row id: $ROW_ID"
+          echo "row_id=$ROW_ID" >> $GITHUB_OUTPUT
+
           python3 -c "
           import json, sys
-          data = json.loads('''$RESULT''')
+          data = json.loads('$RESULT')
           for row in data:
-              meta = row.get('metadata', {})
-              print(f\"  Run: {row['created_at'][:16]}  status={row['status']}  scheduled={meta.get('total_scheduled','?')}  days={meta.get('days_processed','?')}  trigger={meta.get('triggerSource','?')}\")
-          " || echo "Could not parse entries"
+              print(f\"  id={row['id'][:8]}  created={row['created_at'][:16]}  status={row['status']}\")
+          " || echo "Could not parse"
+
+      - name: Fetch metadata for that row by primary key
+        id: fetch
+        env:
+          SB_KEY: ${{ secrets.CF_SUPABASE_SERVICE_KEY }}
+        run: |
+          ROW_ID="${{ steps.find.outputs.row_id }}"
+          if [ -z "$ROW_ID" ]; then
+            echo "No row ID found — no nightly_schedule_built entries in the last 7 days."
+            exit 0
+          fi
+          echo "=== FETCHING metadata for row $ROW_ID ==="
+
+          # Fetch metadata by primary key — fast single-row lookup
+          FULL=$(curl -G -s -w "\nHTTP_STATUS:%{http_code}" \
+            -H "apikey: $SB_KEY" \
+            -H "Authorization: Bearer $SB_KEY" \
+            -H "Accept: application/json" \
+            --data-urlencode "select=created_at,status,metadata" \
+            --data-urlencode "id=eq.${ROW_ID}" \
+            "https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/activity_log")
+
+          HTTP_CODE=$(echo "$FULL" | grep 'HTTP_STATUS:' | tail -1 | cut -d: -f2)
+          RESULT=$(echo "$FULL" | sed '/HTTP_STATUS:/d')
+          echo "HTTP status: $HTTP_CODE"
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "ERROR: HTTP $HTTP_CODE"
+            echo "Response: $RESULT"
+            exit 1
+          fi
+
+          echo "raw_result=$RESULT" >> $GITHUB_OUTPUT
+          echo "Metadata fetched successfully ($(echo "$RESULT" | wc -c) bytes)"
 
       - name: Extract scoring and placement for target date
         env:
           SB_KEY: ${{ secrets.CF_SUPABASE_SERVICE_KEY }}
         run: |
           TARGET_DATE="${{ steps.date.outputs.target_date }}"
+          RESULT='${{ steps.fetch.outputs.raw_result }}'
+
+          if [ -z "$RESULT" ] || [ "$RESULT" = "[]" ]; then
+            echo "No metadata available — either no row found or previous step skipped."
+            exit 0
+          fi
+
           echo ""
           echo "=== SCORING AUDIT + PLACEMENT STEPS for $TARGET_DATE ==="
-
-          CUTOFF="${{ steps.date.outputs.cutoff }}"
-
-          # Fetch the most recent entry (limited to last 7 days to avoid table scan timeout)
-          FULL=$(curl -G -s -w "\nHTTP_STATUS:%{http_code}" \
-            -H "apikey: $SB_KEY" \
-            -H "Authorization: Bearer $SB_KEY" \
-            -H "Accept: application/json" \
-            --data-urlencode "select=created_at,status,metadata" \
-            --data-urlencode "activity_type=eq.nightly_schedule_built" \
-            --data-urlencode "created_at=gte.${CUTOFF}" \
-            --data-urlencode "order=created_at.desc" \
-            --data-urlencode "limit=1" \
-            "https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/activity_log")
-
-          HTTP_CODE=$(echo "$FULL" | grep 'HTTP_STATUS:' | tail -1 | cut -d: -f2)
-          RESULT=$(echo "$FULL" | sed '/HTTP_STATUS:/d')
 
           python3 -c "
           import json, sys
@@ -194,7 +216,7 @@ jobs:
                           for d in deferred:
                               print(f'    {d.get(\"title\",\"?\")[:50]:<50} reason={d.get(\"reason\",\"?\")}')
                   print()
-          " || echo "Python parse error — raw RESULT: $RESULT"
+          " || echo "Python parse error"
 
           # Summary to step summary
           echo "## Schedule Debug: $TARGET_DATE" >> $GITHUB_STEP_SUMMARY
