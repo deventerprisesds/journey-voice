@@ -1,0 +1,193 @@
+name: Debug Schedule Log
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_date:
+        description: 'Date to investigate (YYYY-MM-DD, local timezone). Leave blank for today.'
+        required: false
+        default: ''
+      timezone_offset_hours:
+        description: 'Device timezone UTC offset in hours (e.g. -4 for EDT, -7 for PDT)'
+        required: false
+        default: '-4'
+
+jobs:
+  debug-log:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Compute target date
+        id: date
+        run: |
+          OFFSET="${{ github.event.inputs.timezone_offset_hours }}"
+          OFFSET=${OFFSET:--4}
+          INPUT_DATE="${{ github.event.inputs.target_date }}"
+          if [ -z "$INPUT_DATE" ]; then
+            TARGET=$(python3 -c "import datetime; offset=float('$OFFSET'); now=datetime.datetime.utcnow(); local=(now+datetime.timedelta(hours=offset)).date(); print(local)")
+          else
+            TARGET="$INPUT_DATE"
+          fi
+          echo "target_date=$TARGET" >> $GITHUB_OUTPUT
+          echo "Investigating nightly schedule run for: $TARGET (UTC offset ${OFFSET}h)"
+
+      - name: Query activity_log — most recent nightly_schedule_built
+        id: fetch
+        env:
+          SB_KEY: ${{ secrets.CF_SUPABASE_SERVICE_KEY }}
+        run: |
+          TARGET_DATE="${{ steps.date.outputs.target_date }}"
+          echo "=== QUERYING activity_log for nightly_schedule_built ==="
+          echo "Target date: $TARGET_DATE"
+
+          # Fetch the 5 most recent nightly_schedule_built entries
+          FULL=$(curl -G -s -w "\nHTTP_STATUS:%{http_code}" \
+            -H "apikey: $SB_KEY" \
+            -H "Authorization: Bearer $SB_KEY" \
+            -H "Accept: application/json" \
+            --data-urlencode "select=id,created_at,status,metadata" \
+            --data-urlencode "activity_type=eq.nightly_schedule_built" \
+            --data-urlencode "order=created_at.desc" \
+            --data-urlencode "limit=5" \
+            "https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/activity_log")
+
+          HTTP_CODE=$(echo "$FULL" | grep 'HTTP_STATUS:' | tail -1 | cut -d: -f2)
+          RESULT=$(echo "$FULL" | sed '/HTTP_STATUS:/d')
+          echo "HTTP status: $HTTP_CODE"
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "ERROR: HTTP $HTTP_CODE"
+            echo "Response: $RESULT"
+            exit 1
+          fi
+
+          COUNT=$(echo "$RESULT" | python3 -c "import json,sys; arr=json.load(sys.stdin); print(len(arr))" 2>/dev/null || echo "?")
+          echo "Found $COUNT activity_log entries"
+          echo "raw_result=$RESULT" >> $GITHUB_OUTPUT
+
+          # Print summary of recent runs
+          python3 -c "
+          import json, sys
+          data = json.loads('''$RESULT''')
+          for row in data:
+              meta = row.get('metadata', {})
+              print(f\"  Run: {row['created_at'][:16]}  status={row['status']}  scheduled={meta.get('total_scheduled','?')}  days={meta.get('days_processed','?')}  trigger={meta.get('triggerSource','?')}\")
+          " || echo "Could not parse entries"
+
+      - name: Extract scoring and placement for target date
+        env:
+          SB_KEY: ${{ secrets.CF_SUPABASE_SERVICE_KEY }}
+        run: |
+          TARGET_DATE="${{ steps.date.outputs.target_date }}"
+          echo ""
+          echo "=== SCORING AUDIT + PLACEMENT STEPS for $TARGET_DATE ==="
+
+          # Fetch the most recent entry and find steps for the target date
+          FULL=$(curl -G -s -w "\nHTTP_STATUS:%{http_code}" \
+            -H "apikey: $SB_KEY" \
+            -H "Authorization: Bearer $SB_KEY" \
+            -H "Accept: application/json" \
+            --data-urlencode "select=created_at,status,metadata" \
+            --data-urlencode "activity_type=eq.nightly_schedule_built" \
+            --data-urlencode "order=created_at.desc" \
+            --data-urlencode "limit=1" \
+            "https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/activity_log")
+
+          HTTP_CODE=$(echo "$FULL" | grep 'HTTP_STATUS:' | tail -1 | cut -d: -f2)
+          RESULT=$(echo "$FULL" | sed '/HTTP_STATUS:/d')
+
+          python3 -c "
+          import json, sys
+
+          target_date = '$TARGET_DATE'
+          data = json.loads(r'''$RESULT''')
+          if not data:
+              print('No activity_log entries found.')
+              sys.exit(0)
+
+          row = data[0]
+          meta = row.get('metadata', {})
+          steps = meta.get('steps', [])
+
+          print(f'Run timestamp: {row[\"created_at\"]}')
+          print(f'Status: {row[\"status\"]}')
+          print(f'Trigger: {meta.get(\"triggerSource\", \"?\")}')
+          print(f'Total scheduled: {meta.get(\"total_scheduled\", \"?\")}')
+          print(f'Days processed: {meta.get(\"days_processed\", \"?\")}')
+          print(f'Rolled over: {meta.get(\"rolled_over\", \"?\")}')
+          print()
+
+          # Assignment tiers
+          at = meta.get('assignment_tiers', {})
+          if at:
+              print('=== ASSIGNMENT TIERS ===')
+              for k,v in at.items():
+                  print(f'  {k}: {v}')
+              print()
+
+          # Calendar status
+          cs = meta.get('calendar_status', {})
+          if cs:
+              print(f'=== CALENDAR STATUS: {cs.get(\"state\",\"?\")} | events_today={cs.get(\"events_today\",\"?\")} ===')
+              print()
+
+          # Week results
+          wr = meta.get('week_results', {})
+          if wr:
+              print('=== WEEK RESULTS ===')
+              for date, info in wr.items():
+                  print(f'  {date}: scheduled={info.get(\"scheduled\",\"?\")} candidates={info.get(\"candidates\",\"?\")}')
+                  if info.get('rejections'):
+                      print(f'    rejections: {info[\"rejections\"]}')
+              print()
+
+          # Steps for the target date
+          target_steps = [s for s in steps if target_date in s.get('step', '')]
+          if not target_steps:
+              all_step_names = [s.get('step','?') for s in steps]
+              print(f'No steps found for date {target_date}')
+              print(f'Available step names: {all_step_names}')
+          else:
+              for step in target_steps:
+                  step_name = step.get('step', '?')
+                  inputs = step.get('inputs', {})
+                  outputs = step.get('outputs', {})
+                  dur = step.get('durationMs', '?')
+                  print(f'=== STEP: {step_name} ({dur}ms) ===')
+                  if 'SCORING_AUDIT' in step_name:
+                      print(f'  Candidates: {inputs.get(\"candidateCount\", \"?\")}')
+                      top = outputs.get('topTwenty', [])
+                      print(f'  Top {len(top)} scored tasks:')
+                      for t in top:
+                          print(f'    [{t.get(\"score\",0):>3}] {t.get(\"title\",\"?\")[:50]:<50} est={t.get(\"estimate_minutes\",\"?\"):>4}min  is_priority={t.get(\"is_priority\",False)}  pushed={t.get(\"pushed_count\",0)}  tier={t.get(\"assignment_tier\",\"-\")}')
+                  elif 'PLACEMENT' in step_name:
+                      accepted = outputs.get('accepted', [])
+                      rejected = outputs.get('rejected', [])
+                      kw = outputs.get('keywordOverrides', [])
+                      print(f'  Windows: {inputs.get(\"activeWindows\",[])}')
+                      print(f'  Window capacities: {inputs.get(\"windowCapacities\",{})}')
+                      print(f'  Accepted ({len(accepted)}):')
+                      for a in accepted:
+                          print(f'    {a.get(\"title\",\"?\")[:50]:<50} window={a.get(\"window\",\"?\")}  dur={a.get(\"duration\",\"?\")}min  score={a.get(\"score\",\"?\")}  tier={a.get(\"tier\",\"-\")}')
+                      if rejected:
+                          print(f'  Rejected ({len(rejected)}):')
+                          for r in rejected:
+                              print(f'    {r.get(\"title\",\"?\")[:50]:<50} reason={r.get(\"reason\",\"?\")}')
+                      if kw:
+                          print(f'  Keyword overrides ({len(kw)}):')
+                          for k in kw:
+                              print(f'    {k.get(\"title\",\"?\")[:40]} matched={k.get(\"matchedKeyword\",\"?\")} override_window={k.get(\"overrideWindow\",\"?\")}')
+                  elif 'RESCHEDULE_RETRY' in step_name:
+                      print(f'  AI rejected: {inputs.get(\"aiRejectedCount\",\"?\")}  retry eligible: {inputs.get(\"retryEligibleCount\",\"?\")}')
+                      print(f'  Committed: {outputs.get(\"committed\",\"?\")}')
+                      deferred = outputs.get('deferred', [])
+                      if deferred:
+                          print(f'  Deferred ({len(deferred)}):')
+                          for d in deferred:
+                              print(f'    {d.get(\"title\",\"?\")[:50]:<50} reason={d.get(\"reason\",\"?\")}')
+                  print()
+          " || echo "Python parse error — raw RESULT: $RESULT"
+
+          # Summary to step summary
+          echo "## Schedule Debug: $TARGET_DATE" >> $GITHUB_STEP_SUMMARY
+          echo "Run workflow with a specific \`target_date\` to analyze that day's scheduling run." >> $GITHUB_STEP_SUMMARY
+          echo "Check the job log above for full SCORING_AUDIT and PLACEMENT details." >> $GITHUB_STEP_SUMMARY
