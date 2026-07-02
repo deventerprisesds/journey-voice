@@ -1,6 +1,7 @@
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { getTodayInTimezone } from '../_shared/timezone.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -357,20 +358,24 @@ function getCurrentTimeString(timezone: string = 'America/New_York'): string {
       hour12: true
     });
     
-    // Calculate next occurrences of weekdays for AI reference
+    // Anchor all relative date strings to the user's LOCAL date, not UTC.
+    // Without this, US-timezone users get the wrong "tomorrow" during the hour gap
+    // between midnight UTC and midnight local time.
+    const todayStr = getTodayInTimezone(timezone); // "YYYY-MM-DD" in user's timezone
+    const [todayYear, todayMonth, todayDay] = todayStr.split('-').map(Number);
+
+    // Calculate current day of week (timezone-aware)
     const dayOfWeek = now.toLocaleDateString('en-US', { timeZone: timezone, weekday: 'short' });
     const currentDayIndex = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(dayOfWeek);
-    
-    // Calculate next Tuesday (day index 2)
-    const daysUntilTuesday = (2 - currentDayIndex + 7) % 7 || 7; // If today is Tuesday, next Tuesday is 7 days away
-    const nextTuesday = new Date(now);
-    nextTuesday.setDate(now.getDate() + daysUntilTuesday);
-    const nextTuesdayStr = nextTuesday.toLocaleDateString('en-CA', { timeZone: timezone });
-    
-    // Calculate tomorrow
-    const tomorrow = new Date(now);
-    tomorrow.setDate(now.getDate() + 1);
-    const tomorrowStr = tomorrow.toLocaleDateString('en-CA', { timeZone: timezone });
+
+    // Tomorrow: add 1 to the local date
+    const tomorrowStr = new Date(Date.UTC(todayYear, todayMonth - 1, todayDay + 1))
+      .toISOString().substring(0, 10);
+
+    // Next Tuesday (day index 2)
+    const daysUntilTuesday = (2 - currentDayIndex + 7) % 7 || 7;
+    const nextTuesdayStr = new Date(Date.UTC(todayYear, todayMonth - 1, todayDay + daysUntilTuesday))
+      .toISOString().substring(0, 10);
     
     // Return enhanced context
     return `${fullDateTime}. Day-of-week context: Today is ${dayName}. Tomorrow = ${tomorrowStr}. Next Tuesday = ${nextTuesdayStr}.`;
