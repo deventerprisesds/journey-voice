@@ -19,6 +19,17 @@
 
   <body>
     <div id="root"></div>
+    <!-- Pre-React bridge buffer: catches bridgeVoiceResult events that arrive before React mounts.
+         React replays this buffer in CommsConsoleContext and swaps in its own handler. -->
+    <script>
+      window.__bridgeVoiceBuffer = [];
+      window.__bridgeListenerActive = false;
+      window.addEventListener('bridgeVoiceResult', function(e) {
+        if (!window.__bridgeListenerActive) {
+          window.__bridgeVoiceBuffer.push(e.detail);
+        }
+      });
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

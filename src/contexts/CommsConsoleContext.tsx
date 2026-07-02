@@ -1188,8 +1188,20 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
       });
     };
     window.addEventListener('bridgeVoiceResult', handler);
-    // Signal Android that the listener is live — any transcript buffered before this
-    // mount (relay bar tapped while app was still loading) will be dispatched now.
+    // Mark pre-React buffer inactive and replay any events that arrived before mount.
+    (window as any).__bridgeListenerActive = true;
+    const buffered: Array<{ transcript?: string }> = (window as any).__bridgeVoiceBuffer ?? [];
+    (window as any).__bridgeVoiceBuffer = [];
+    for (const detail of buffered) {
+      if (detail?.transcript) {
+        console.log('[Bridge] replaying buffered transcript:', detail.transcript.substring(0, 80));
+        bridgePendingRef.current = true;
+        sendMessageRef.current(detail.transcript).catch(err => {
+          console.error('[Bridge] sendMessage rejected (replay):', err);
+        });
+      }
+    }
+    // Signal Android that the listener is live — kept for compatibility with older APKs.
     (window as any).AndroidBridge?.notifyBridgeReady?.();
     return () => window.removeEventListener('bridgeVoiceResult', handler);
   }, []);
