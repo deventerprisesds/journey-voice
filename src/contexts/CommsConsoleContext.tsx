@@ -153,7 +153,7 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
       context: { bridgePresent, hasPostAiResponse, textLen: responseText.length }
     });
     try {
-      bridge?.postAiResponse?.(responseText.substring(0, 500));
+      bridge?.postAiResponse?.(responseText.substring(0, 2000));
       console.log('[Bridge] postAiResponse dispatched successfully');
     } catch (err) {
       console.error('[Bridge] postAiResponse threw error:', err);
