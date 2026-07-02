@@ -27,8 +27,11 @@ jobs:
           else
             TARGET="$INPUT_DATE"
           fi
+          CUTOFF=$(python3 -c "import datetime; print((datetime.datetime.utcnow()-datetime.timedelta(days=7)).strftime('%Y-%m-%dT%H:%M:%SZ'))")
           echo "target_date=$TARGET" >> $GITHUB_OUTPUT
+          echo "cutoff=$CUTOFF" >> $GITHUB_OUTPUT
           echo "Investigating nightly schedule run for: $TARGET (UTC offset ${OFFSET}h)"
+          echo "Cutoff: $CUTOFF"
 
       - name: Query activity_log — most recent nightly_schedule_built
         id: fetch
@@ -39,13 +42,16 @@ jobs:
           echo "=== QUERYING activity_log for nightly_schedule_built ==="
           echo "Target date: $TARGET_DATE"
 
-          # Fetch the 5 most recent nightly_schedule_built entries
+          CUTOFF="${{ steps.date.outputs.cutoff }}"
+
+          # Fetch the 5 most recent nightly_schedule_built entries (limited to last 7 days to avoid table scan timeout)
           FULL=$(curl -G -s -w "\nHTTP_STATUS:%{http_code}" \
             -H "apikey: $SB_KEY" \
             -H "Authorization: Bearer $SB_KEY" \
             -H "Accept: application/json" \
             --data-urlencode "select=id,created_at,status,metadata" \
             --data-urlencode "activity_type=eq.nightly_schedule_built" \
+            --data-urlencode "created_at=gte.${CUTOFF}" \
             --data-urlencode "order=created_at.desc" \
             --data-urlencode "limit=5" \
             "https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/activity_log")
@@ -81,13 +87,16 @@ jobs:
           echo ""
           echo "=== SCORING AUDIT + PLACEMENT STEPS for $TARGET_DATE ==="
 
-          # Fetch the most recent entry and find steps for the target date
+          CUTOFF="${{ steps.date.outputs.cutoff }}"
+
+          # Fetch the most recent entry (limited to last 7 days to avoid table scan timeout)
           FULL=$(curl -G -s -w "\nHTTP_STATUS:%{http_code}" \
             -H "apikey: $SB_KEY" \
             -H "Authorization: Bearer $SB_KEY" \
             -H "Accept: application/json" \
             --data-urlencode "select=created_at,status,metadata" \
             --data-urlencode "activity_type=eq.nightly_schedule_built" \
+            --data-urlencode "created_at=gte.${CUTOFF}" \
             --data-urlencode "order=created_at.desc" \
             --data-urlencode "limit=1" \
             "https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/activity_log")
