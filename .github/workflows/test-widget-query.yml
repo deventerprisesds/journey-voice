@@ -55,7 +55,7 @@ jobs:
           USER_ID="${{ steps.user.outputs.user_id }}"
           echo "=== EXACT WIDGET QUERY: getTodayTasks() ==="
           echo "Today: $TODAY_LOCAL | Window: $TODAY_START .. $TOMORROW_START"
-          echo "select=id,title,status,priority,start_time,due_date"
+          echo "select=id,title,status,priority,start_time,due_date,estimate_minutes"
           echo "or=(status.eq.DOING,and(start_time.gte.X,start_time.lt.Y))"
           echo "order=start_time.asc.nullslast limit=30"
           # Use -G with --data-urlencode so parentheses/colons in filters are safely encoded
@@ -66,7 +66,7 @@ jobs:
             -H "apikey: $SB_KEY"
             -H "Authorization: Bearer $SB_KEY"
             -H "Accept: application/json"
-            --data-urlencode "select=id,title,status,priority,start_time,due_date"
+            --data-urlencode "select=id,title,status,priority,start_time,due_date,estimate_minutes"
             --data-urlencode "or=(status.eq.DOING,and(start_time.gte.${TODAY_START},start_time.lt.${TOMORROW_START}))"
             --data-urlencode "order=start_time.asc.nullslast"
             --data-urlencode "limit=30"
@@ -78,9 +78,18 @@ jobs:
           HTTP_CODE=$(echo "$FULL" | grep 'HTTP_STATUS:' | tail -1 | cut -d: -f2)
           RESULT=$(echo "$FULL" | sed '/HTTP_STATUS:/d')
           echo "HTTP status: $HTTP_CODE"
-          echo "$RESULT" | python3 -m json.tool || echo "RAW: $RESULT"
           COUNT=$(echo "$RESULT" | python3 -c "import json,sys; arr=json.load(sys.stdin); print(len(arr))" 2>/dev/null || echo "?")
           echo "=== $COUNT task(s) returned ==="
+          echo "$RESULT" | python3 -c "
+          import json, sys
+          tasks = json.load(sys.stdin)
+          print('=== SCHEDULED TASKS WITH DURATIONS ===')
+          for t in tasks:
+              start = (t.get('start_time') or 'no-time')[:16]
+              est = t.get('estimate_minutes')
+              est_str = f'{est}min ({est//60}h{est%60:02d}m)' if est else 'no estimate'
+              print(f'  [{start}] {t.get(\"title\",\"?\")[:55]:<55} est={est_str}  status={t.get(\"status\",\"?\")}')
+          " || echo "Could not parse"
           echo "## Exact widget query: getTodayTasks()" >> $GITHUB_STEP_SUMMARY
           echo "Today: $TODAY_LOCAL | Window: $TODAY_START .. $TOMORROW_START | HTTP: $HTTP_CODE" >> $GITHUB_STEP_SUMMARY
           echo '```json' >> $GITHUB_STEP_SUMMARY
