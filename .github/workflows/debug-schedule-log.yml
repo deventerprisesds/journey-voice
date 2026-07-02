@@ -23,15 +23,15 @@ jobs:
           OFFSET=${OFFSET:--4}
           INPUT_DATE="${{ github.event.inputs.target_date }}"
           if [ -z "$INPUT_DATE" ]; then
-            TARGET=$(python3 -c "import datetime; offset=float('$OFFSET'); now=datetime.datetime.utcnow(); local=(now+datetime.timedelta(hours=offset)).date(); print(local)")
+            TARGET=$(python3 -c "import datetime; offset=float('$OFFSET'); now=datetime.datetime.now(datetime.timezone.utc); local=(now+datetime.timedelta(hours=offset)).date(); print(local)")
           else
             TARGET="$INPUT_DATE"
           fi
-          CUTOFF=$(python3 -c "import datetime; print((datetime.datetime.utcnow()-datetime.timedelta(days=7)).strftime('%Y-%m-%dT%H:%M:%SZ'))")
+          CUTOFF=$(python3 -c "import datetime; print((datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(hours=48)).strftime('%Y-%m-%dT%H:%M:%SZ'))")
           echo "target_date=$TARGET" >> $GITHUB_OUTPUT
           echo "cutoff=$CUTOFF" >> $GITHUB_OUTPUT
           echo "Investigating nightly schedule run for: $TARGET (UTC offset ${OFFSET}h)"
-          echo "Cutoff: $CUTOFF"
+          echo "Cutoff (48h): $CUTOFF"
 
       - name: Find most recent nightly_schedule_built row (id only)
         id: find
@@ -39,18 +39,19 @@ jobs:
           SB_KEY: ${{ secrets.CF_SUPABASE_SERVICE_KEY }}
         run: |
           CUTOFF="${{ steps.date.outputs.cutoff }}"
-          echo "=== FINDING recent nightly_schedule_built rows (id,created_at,status only) ==="
+          echo "=== FINDING recent activity_log rows (last 48h, no type filter) ==="
+          echo "Will filter for nightly_schedule_built in Python after fetch"
 
-          # Select only id,created_at,status — avoids loading the large metadata JSONB blob
+          # No activity_type filter — that column has no index and causes full table scan.
+          # Use tight 48h created_at window (indexed) + limit=50, filter type in Python.
           FULL=$(curl -G -s -w "\nHTTP_STATUS:%{http_code}" \
             -H "apikey: $SB_KEY" \
             -H "Authorization: Bearer $SB_KEY" \
             -H "Accept: application/json" \
-            --data-urlencode "select=id,created_at,status" \
-            --data-urlencode "activity_type=eq.nightly_schedule_built" \
+            --data-urlencode "select=id,created_at,status,activity_type" \
             --data-urlencode "created_at=gte.${CUTOFF}" \
             --data-urlencode "order=created_at.desc" \
-            --data-urlencode "limit=5" \
+            --data-urlencode "limit=50" \
             "https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/activity_log")
 
           HTTP_CODE=$(echo "$FULL" | grep 'HTTP_STATUS:' | tail -1 | cut -d: -f2)
@@ -63,19 +64,29 @@ jobs:
             exit 1
           fi
 
-          echo "Recent rows: $RESULT"
-
-          ROW_ID=$(echo "$RESULT" | python3 -c "import json,sys; arr=json.load(sys.stdin); print(arr[0]['id'] if arr else '')" 2>/dev/null || echo "")
           COUNT=$(echo "$RESULT" | python3 -c "import json,sys; arr=json.load(sys.stdin); print(len(arr))" 2>/dev/null || echo "?")
-          echo "Found $COUNT rows. Using row id: $ROW_ID"
-          echo "row_id=$ROW_ID" >> $GITHUB_OUTPUT
+          echo "Total rows returned (last 48h): $COUNT"
 
-          python3 -c "
+          ROW_ID=$(echo "$RESULT" | python3 -c "
+          import json,sys
+          arr=json.load(sys.stdin)
+          for r in arr:
+              if r.get('activity_type') == 'nightly_schedule_built':
+                  print(r['id'])
+                  break
+          " 2>/dev/null || echo "")
+
+          echo "$RESULT" | python3 -c "
           import json, sys
-          data = json.loads('$RESULT')
+          data = json.load(sys.stdin)
+          print('All activity types in last 48h:')
           for row in data:
-              print(f\"  id={row['id'][:8]}  created={row['created_at'][:16]}  status={row['status']}\")
+              marker = ' <<< TARGET' if row.get('activity_type') == 'nightly_schedule_built' else ''
+              print(f\"  id={row['id'][:8]}  created={row['created_at'][:16]}  type={row.get('activity_type','?')}{marker}\")
           " || echo "Could not parse"
+
+          echo "Found nightly_schedule_built row id: $ROW_ID"
+          echo "row_id=$ROW_ID" >> $GITHUB_OUTPUT
 
       - name: Fetch metadata for that row by primary key
         id: fetch
