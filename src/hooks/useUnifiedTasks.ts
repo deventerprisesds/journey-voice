@@ -5,6 +5,14 @@ import { Task } from '@/types/task';
 import { toast } from 'sonner';
 import { getTodayInTimezone, getDefaultTimezone } from '@/lib/date';
 
+const withTimeout = <T>(promise: Promise<T>, ms: number): Promise<T> =>
+  Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`Query timed out after ${ms}ms`)), ms)
+    ),
+  ]);
+
 /**
  * Unified task loader that merges:
  * - Live tasks from `tasks` table (always current source of truth)
@@ -17,20 +25,36 @@ export function useUnifiedTasks() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const loadTasks = useCallback(async () => {
+  // showSpinner=false lets realtime updates refresh data without flashing the loading screen
+  const loadTasks = useCallback(async (showSpinner = true) => {
     if (!user) {
       setLoading(false);
       return;
     }
 
-    setLoading(true);
+    if (showSpinner) setLoading(true);
+    const todayStr = getTodayInTimezone(getDefaultTimezone());
     try {
-      // 1. Always load live tasks
-      const { data: liveTasks, error: liveError } = await supabase
-        .from('tasks')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false });
+      // Run both queries in parallel; bail out after 10 seconds rather than hanging forever
+      const [liveResult, historyResult] = await withTimeout(
+        Promise.all([
+          supabase
+            .from('tasks')
+            .select('*')
+            .eq('user_id', user.id)
+            .order('created_at', { ascending: false }),
+          supabase
+            .from('tasks_with_schedule' as any)
+            .select('*')
+            .eq('user_id', user.id)
+            .eq('from_history', true)
+            .lt('scheduled_date', todayStr),
+        ]),
+        10_000
+      );
+
+      const { data: liveTasks, error: liveError } = liveResult;
+      const { data: historyRows } = historyResult;
 
       if (liveError) {
         console.error('[useUnifiedTasks] Live tasks error:', liveError);
@@ -45,16 +69,7 @@ export function useUnifiedTasks() {
 
       const live = (liveTasks || []) as Task[];
 
-      // 2. Load historical rows (past dates where start_time was cleared by rollover)
-      const todayStr = getTodayInTimezone(getDefaultTimezone());
-      const { data: historyRows } = await supabase
-        .from('tasks_with_schedule' as any)
-        .select('*')
-        .eq('user_id', user.id)
-        .eq('from_history', true)
-        .lt('scheduled_date', todayStr);
-
-      // 3. Merge: add history-only entries that don't duplicate live scheduled tasks
+      // Merge: add history-only entries that don't duplicate live scheduled tasks
       const liveTaskIds = new Set(live.map(t => t.id));
       const liveScheduledKeys = new Set(
         live.filter(t => t.start_time).map(t => `${t.id}::${t.start_time}`)
@@ -143,7 +158,7 @@ export function useUnifiedTasks() {
             toast.success(`Task Scheduled: "${newTask?.title}"`);
           }
 
-          loadTasks();
+          loadTasks(false);
         }
       )
       .subscribe();
