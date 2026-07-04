@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import { format, parseISO, isPast, formatDistanceToNow, addMinutes, startOfDay, differenceInMinutes } from 'date-fns';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
@@ -7,11 +7,11 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
 import { 
-  Target, 
-  Play, 
-  Pause, 
-  CheckCircle2, 
-  Clock, 
+  Target,
+  Play,
+  Pause,
+  CheckCircle2,
+  Clock,
   GripVertical,
   Sunrise,
   Coffee,
@@ -26,7 +26,8 @@ import {
   RotateCcw,
   X,
   Trash2,
-  RefreshCw
+  RefreshCw,
+  Sparkles
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Task, ExternalCalendarEvent } from '@/types/task';
@@ -159,7 +160,21 @@ const FocusView: React.FC<FocusViewProps> = ({
     }
   }, [user?.id]);
 
-  // Check if daily review has been confirmed today
+  // Close handler that also writes schedule_confirmed_date so the modal
+  // doesn't re-open on next mount (X button previously skipped this).
+  const handleDailyReviewClose = useCallback(async () => {
+    setShowDailyReview(false);
+    if (!user?.id) return;
+    const todayStr = getTodayInTimezone(getDefaultTimezone());
+    await supabase
+      .from('notification_prefs')
+      .update({ schedule_confirmed_date: todayStr } as any)
+      .eq('user_id', user.id);
+  }, [user?.id]);
+
+  // Send daily review as a chat message on first Focus visit of the day.
+  // Writes schedule_confirmed_date before invoking to prevent duplicate triggers
+  // if the component remounts. send-chat-message has its own 90s dedup guard.
   useEffect(() => {
     if (!user?.id) return;
     (async () => {
@@ -167,12 +182,23 @@ const FocusView: React.FC<FocusViewProps> = ({
       const todayKey = getTodayInTimezone(tz);
       const { data } = await supabase
         .from('notification_prefs')
-        .select('schedule_confirmed_date')
+        .select('schedule_confirmed_date, morning_review_enabled')
         .eq('user_id', user.id)
         .maybeSingle();
       const confirmedDate = (data as any)?.schedule_confirmed_date || '';
-      if (confirmedDate !== todayKey) {
-        setShowDailyReview(true);
+      const reviewEnabled = (data as any)?.morning_review_enabled !== false;
+      if (confirmedDate !== todayKey && reviewEnabled) {
+        await supabase
+          .from('notification_prefs')
+          .update({ schedule_confirmed_date: todayKey } as any)
+          .eq('user_id', user.id);
+        supabase.functions.invoke('send-chat-message', {
+          body: {
+            userId: user.id,
+            generateFromContext: { callType: 'morning_standup', context: '[WINDOW:morning]' },
+            sendPush: true,
+          },
+        }).catch(e => console.warn('[FocusView] Daily review message failed:', e));
       }
     })();
   }, [user?.id]);
@@ -950,6 +976,16 @@ const FocusView: React.FC<FocusViewProps> = ({
                   <Button
                     variant="ghost"
                     size="sm"
+                    onClick={() => setShowDailyReview(true)}
+                    className="text-xs h-7"
+                    title="Open today's briefing"
+                  >
+                    <Sparkles className="h-3 w-3 mr-1" />
+                    Briefing
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     onClick={handleClearAll}
                     disabled={isClearing || scheduledToday.length === 0}
                     className="text-xs h-7 text-destructive hover:text-destructive"
@@ -1633,7 +1669,7 @@ const FocusView: React.FC<FocusViewProps> = ({
       )}
       <DailyReviewModal
         open={showDailyReview}
-        onClose={() => setShowDailyReview(false)}
+        onClose={handleDailyReviewClose}
         tasks={tasks}
         externalEvents={externalEvents}
         onTaskUpdate={onTaskUpdate}
