@@ -148,8 +148,17 @@ serve(async (req) => {
           callConfig = { call_id: 'custom', context: callNotification.body };
         }
 
-        const commsMode = callConfig.comms_mode || 'phone';
-        console.log(`📞 Scheduled call comms_mode: ${commsMode}`);
+        // Live lookup: read commsMode from user_scheduling_prefs, not the stale notification body
+        const { data: userPrefs } = await supabaseClient
+          .from('user_scheduling_prefs')
+          .select('timezone, scheduled_calls')
+          .eq('user_id', userId)
+          .maybeSingle();
+
+        const liveCall = (userPrefs?.scheduled_calls ?? [])
+          .find((c: any) => c.id === callConfig.call_id);
+        const commsMode = liveCall?.commsMode ?? callConfig.comms_mode ?? 'phone';
+        console.log(`📞 Scheduled call commsMode (live): ${commsMode} (body had: ${callConfig.comms_mode || '?'})`);
 
         // Day-of-week guard: skip if today is not in the allowed days
         if (callConfig.days_of_week && Array.isArray(callConfig.days_of_week) && callConfig.days_of_week.length > 0) {
@@ -171,12 +180,6 @@ serve(async (req) => {
             continue;
           }
         }
-
-        const { data: userPrefs } = await supabaseClient
-          .from('user_scheduling_prefs')
-          .select('timezone')
-          .eq('user_id', userId)
-          .maybeSingle();
 
         let deliverySuccess = false;
         let deliveryError: any = null;
