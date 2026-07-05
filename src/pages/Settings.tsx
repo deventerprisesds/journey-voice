@@ -204,6 +204,16 @@ const Settings: React.FC = () => {
                 </p>
               </CardContent>
             </Card>
+            <Card className="mt-4">
+              <CardHeader>
+                <CardTitle>Developer Tools</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <Button variant="outline" onClick={() => window.location.href = '/debug'}>
+                  Open Debug Page
+                </Button>
+              </CardContent>
+            </Card>
           </TabsContent>
         </Tabs>
       </div>

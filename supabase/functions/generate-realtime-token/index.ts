@@ -157,36 +157,42 @@ USER: ${userName}`;
 
     console.log(`TTS Provider: ${ttsProvider}, OpenAI Voice: ${openaiVoice}, Modalities: ${JSON.stringify(modalities)}`);
 
-    // Request an ephemeral token from OpenAI
-    const response = await fetch("https://api.openai.com/v1/realtime/sessions", {
+    // Request an ephemeral token from OpenAI (client_secrets endpoint)
+    const response = await fetch("https://api.openai.com/v1/realtime/client_secrets", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${OPENAI_API_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "gpt-4o-realtime-preview-2025-06-03",
-        voice: openaiVoice,  // Use user's selected OpenAI voice
-        modalities: modalities,  // Dynamic based on TTS provider
-        input_audio_format: "pcm16",
-        output_audio_format: "pcm16",
-        // Enable transcription for user speech - required for transcript persistence
-        input_audio_transcription: {
-          model: "gpt-4o-mini-transcribe",
-          language: "en",
-          prompt: "tasks, schedule, calendar, reschedule, today, tomorrow, priorities"
-        },
-        // Use semantic VAD (AI-based) instead of server_vad (amplitude-based)
-        // "medium" eagerness balances responsiveness with letting user finish thoughts
-        turn_detection: {
-          type: "semantic_vad",
-          eagerness: "medium",
-          create_response: true,
-          interrupt_response: true
-        },
-        tool_choice: "auto",
-        tools: getToolDefinitions(),
-        instructions: fullInstructions
+        session: {
+          type: "realtime",
+          model: "gpt-4o-realtime-preview-2025-06-03",
+          output_modalities: modalities.includes('audio') ? ["audio"] : ["text"],
+          audio: {
+            input: {
+              format: { type: "audio/pcm", rate: 24000 },
+              transcription: {
+                model: "gpt-4o-mini-transcribe",
+                language: "en",
+                prompt: "tasks, schedule, calendar, reschedule, today, tomorrow, priorities"
+              },
+              turn_detection: {
+                type: "semantic_vad",
+                eagerness: "medium",
+                create_response: true,
+                interrupt_response: true
+              }
+            },
+            output: {
+              format: { type: "audio/pcm", rate: 24000 },
+              voice: openaiVoice
+            }
+          },
+          tool_choice: "auto",
+          tools: getToolDefinitions(),
+          instructions: fullInstructions
+        }
       }),
     });
 

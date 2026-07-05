@@ -12,6 +12,8 @@ declare global {
       getFcmToken: () => string;
       isBridgeApp: () => boolean;
       cancelAlarm?: (tag: string) => void;
+      openAlarmSoundPicker?: () => void;
+      getAlarmSoundName?: () => string;
     };
   }
 }

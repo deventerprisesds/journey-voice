@@ -1,0 +1,136 @@
+name: Check Scheduling Prefs
+
+on:
+  workflow_dispatch:
+    inputs:
+      note:
+        description: 'Optional note'
+        required: false
+        default: ''
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Query user_scheduling_prefs scheduled_calls
+        env:
+          SB_KEY: ${{ secrets.CF_SUPABASE_SERVICE_KEY }}
+        run: |
+          echo "=== user_scheduling_prefs.scheduled_calls ==="
+          PREFS=$(curl -G -s -w "\nHTTP_STATUS:%{http_code}" \
+            -H "apikey: $SB_KEY" -H "Authorization: Bearer $SB_KEY" -H "Accept: application/json" \
+            --data-urlencode "select=user_id,timezone,scheduled_calls" \
+            "https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/user_scheduling_prefs")
+          HTTP=$(echo "$PREFS" | grep 'HTTP_STATUS:' | tail -1 | cut -d: -f2)
+          BODY=$(echo "$PREFS" | sed '/HTTP_STATUS:/d')
+          echo "HTTP $HTTP"
+          if [ "$HTTP" != "200" ]; then echo "ERROR: $BODY"; exit 1; fi
+          echo "$BODY" | python3 -c "
+          import json, sys
+          rows = json.load(sys.stdin)
+          print(f'{len(rows)} row(s)')
+          for row in rows:
+              uid = row.get('user_id','?')[:8]
+              tz = row.get('timezone','?')
+              calls = row.get('scheduled_calls') or []
+              print(f'user_id={uid}...  timezone={tz}  ({len(calls)} calls)')
+              for c in calls:
+                  status = 'ON ' if c.get('enabled', False) else 'OFF'
+                  cid = str(c.get('id','?'))
+                  mode = str(c.get('commsMode','?'))
+                  time = str(c.get('time','?'))
+                  name = str(c.get('name','?'))
+                  print('  [' + status + '] ' + cid.ljust(22) + ' commsMode=' + mode.ljust(14) + ' time=' + time + '  name=' + name)
+          " || echo "parse error"
+
+      - name: Query pending scheduled_notifications
+        env:
+          SB_KEY: ${{ secrets.CF_SUPABASE_SERVICE_KEY }}
+        run: |
+          echo ""
+          echo "=== pending scheduled_notifications (scheduled_call, not yet delivered) ==="
+          NOTIFS=$(curl -G -s -w "\nHTTP_STATUS:%{http_code}" \
+            -H "apikey: $SB_KEY" -H "Authorization: Bearer $SB_KEY" -H "Accept: application/json" \
+            --data-urlencode "select=id,user_id,notification_type,body,scheduled_for,delivered_at" \
+            --data-urlencode "notification_type=eq.scheduled_call" \
+            --data-urlencode "delivered_at=is.null" \
+            --data-urlencode "order=scheduled_for.asc" \
+            --data-urlencode "limit=20" \
+            "https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/scheduled_notifications")
+          HTTP2=$(echo "$NOTIFS" | grep 'HTTP_STATUS:' | tail -1 | cut -d: -f2)
+          BODY2=$(echo "$NOTIFS" | sed '/HTTP_STATUS:/d')
+          echo "HTTP $HTTP2"
+          if [ "$HTTP2" != "200" ]; then echo "ERROR: $BODY2"; exit 1; fi
+          echo "$BODY2" | python3 -c "
+          import json, sys
+          rows = json.load(sys.stdin)
+          print(f'{len(rows)} pending row(s)')
+          for r in rows:
+              body = r.get('body') or {}
+              if isinstance(body, str):
+                  try: body = json.loads(body)
+                  except: pass
+              call_id = str(body.get('call_id','?'))
+              comms = str(body.get('commsMode','?'))
+              sched = str(r.get('scheduled_for','?'))[:16]
+              uid = str(r.get('user_id','?'))[:8]
+              print('  uid=' + uid + '...  call_id=' + call_id.ljust(22) + ' commsMode=' + comms.ljust(14) + ' scheduled_for=' + sched)
+          " || echo "parse error"
+
+          echo ""
+          echo "=== newest pending scheduled_notifications (scheduled_call, most recent first) ==="
+          NEWEST=$(curl -G -s -w "\nHTTP_STATUS:%{http_code}" \
+            -H "apikey: $SB_KEY" -H "Authorization: Bearer $SB_KEY" -H "Accept: application/json" \
+            --data-urlencode "select=id,user_id,notification_type,body,scheduled_for,delivered_at" \
+            --data-urlencode "notification_type=eq.scheduled_call" \
+            --data-urlencode "delivered_at=is.null" \
+            --data-urlencode "order=scheduled_for.desc" \
+            --data-urlencode "limit=10" \
+            "https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/scheduled_notifications")
+          HTTP_N=$(echo "$NEWEST" | grep 'HTTP_STATUS:' | tail -1 | cut -d: -f2)
+          BODY_N=$(echo "$NEWEST" | sed '/HTTP_STATUS:/d')
+          echo "HTTP $HTTP_N"
+          echo "$BODY_N" | python3 -c "
+          import json, sys
+          rows = json.load(sys.stdin)
+          print(f'{len(rows)} newest pending row(s)')
+          for r in rows:
+              body = r.get('body') or {}
+              if isinstance(body, str):
+                  try: body = json.loads(body)
+                  except: pass
+              call_id = str(body.get('call_id','?'))
+              comms = str(body.get('commsMode','?'))
+              sched = str(r.get('scheduled_for','?'))[:16]
+              uid = str(r.get('user_id','?'))[:8]
+              print('  uid=' + uid + '...  call_id=' + call_id.ljust(22) + ' commsMode=' + comms.ljust(14) + ' scheduled_for=' + sched)
+          " || echo "parse error"
+
+          echo ""
+          echo "=== recently delivered scheduled_notifications (last 24h) ==="
+          RECENT=$(curl -G -s -w "\nHTTP_STATUS:%{http_code}" \
+            -H "apikey: $SB_KEY" -H "Authorization: Bearer $SB_KEY" -H "Accept: application/json" \
+            --data-urlencode "select=id,user_id,notification_type,body,scheduled_for,delivered_at" \
+            --data-urlencode "notification_type=eq.scheduled_call" \
+            --data-urlencode "delivered_at=gte.$(python3 -c "import datetime; print((datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(hours=24)).strftime('%Y-%m-%dT%H:%M:%SZ'))")" \
+            --data-urlencode "order=delivered_at.desc" \
+            --data-urlencode "limit=10" \
+            "https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/scheduled_notifications")
+          HTTP3=$(echo "$RECENT" | grep 'HTTP_STATUS:' | tail -1 | cut -d: -f2)
+          BODY3=$(echo "$RECENT" | sed '/HTTP_STATUS:/d')
+          echo "HTTP $HTTP3"
+          echo "$BODY3" | python3 -c "
+          import json, sys
+          rows = json.load(sys.stdin)
+          print(f'{len(rows)} recently delivered row(s)')
+          for r in rows:
+              body = r.get('body') or {}
+              if isinstance(body, str):
+                  try: body = json.loads(body)
+                  except: pass
+              call_id = str(body.get('call_id','?'))
+              comms = str(body.get('commsMode','?'))
+              sched = str(r.get('scheduled_for','?'))[:16]
+              deliv = str(r.get('delivered_at','?'))[:16]
+              print('  call_id=' + call_id.ljust(22) + ' commsMode=' + comms.ljust(14) + ' scheduled_for=' + sched + '  delivered_at=' + deliv)
+          " || echo "parse error"

@@ -19,7 +19,9 @@ import Calendar from "./pages/Calendar";
 import Priorities from "./pages/Priorities";
 import Assignments from "./pages/Assignments";
 import Debug from "./pages/Debug";
+import CommsHome from "./pages/CommsHome";
 import NotFound from "./pages/NotFound";
+import OAuthConsent from "./pages/OAuthConsent";
 import DemoModeBadge from "./components/DemoModeBadge";
 import QuotaAlertBanner from "./components/QuotaAlertBanner";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -56,9 +58,11 @@ const App = () => {
         bridge.secureStore('supabase_url', SUPABASE_URL);
         bridge.secureStore('supabase_anon_key', SUPABASE_PUBLISHABLE_KEY);
         bridge.secureStore('supabase_access_token', session.access_token);
+        bridge.secureStore('supabase_refresh_token', session.refresh_token ?? '');
         bridge.secureStore('supabase_user_id', session.user.id);
       } else {
         bridge.secureStore('supabase_access_token', '');
+        bridge.secureStore('supabase_refresh_token', '');
         bridge.secureStore('supabase_user_id', '');
       }
     });
@@ -80,7 +84,10 @@ const App = () => {
                   <ErrorBoundary>
                     <Routes>
                       <Route path="/auth" element={<Auth />} />
+                      <Route path="/.lovable/oauth/consent" element={<OAuthConsent />} />
                       <Route path="/debug" element={<Debug />} />
+                      <Route path="/comms" element={<CommsHome />} />
+                      <Route path="/comms/active" element={<CommsHome autoConnect />} />
                       {/* All authenticated routes wrapped in MainLayout */}
                       <Route path="/*" element={
                         <ProtectedRoute>

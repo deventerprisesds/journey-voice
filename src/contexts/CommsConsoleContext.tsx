@@ -6,6 +6,7 @@ import { useVoiceAssistant } from '@/contexts/VoiceAssistantContext';
 import { useUnifiedThread } from '@/hooks/useUnifiedThread';
 import { usePresenceTracking } from '@/hooks/usePresenceTracking';
 import { logRealtime, logChat } from '@/utils/activityLogger';
+import { logToErrorLog } from '@/utils/directLog';
 import type {
   Assistant,
   ConversationMessage,
@@ -126,6 +127,44 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const [realtimeStatus, setRealtimeStatus] = useState<string>('idle');
   const subscribeStartTimeRef = useRef<number | null>(null);
   const bridgePendingRef = useRef(false);
+
+  const notifyBridgeIfPending = useCallback((responseText: string) => {
+    const pending = bridgePendingRef.current;
+    console.log('[Bridge] notifyBridgeIfPending called, bridgePending:', pending, 'text:', responseText.substring(0, 60));
+    logToErrorLog({
+      component: 'Bridge',
+      error_type: 'bridge_notify',
+      error_message: 'notifyBridgeIfPending_called',
+      context: { pending, textLen: responseText.length, textPreview: responseText.substring(0, 60) }
+    });
+    if (!pending) {
+      console.log('[Bridge] notifyBridgeIfPending: no pending bridge request, skipping');
+      return;
+    }
+    bridgePendingRef.current = false;
+    const bridge = (window as any).AndroidBridge;
+    const bridgePresent = !!bridge;
+    const hasPostAiResponse = typeof bridge?.postAiResponse === 'function';
+    console.log('[Bridge] AndroidBridge present:', bridgePresent, 'postAiResponse type:', typeof bridge?.postAiResponse);
+    logToErrorLog({
+      component: 'Bridge',
+      error_type: 'bridge_notify',
+      error_message: 'postAiResponse_dispatch',
+      context: { bridgePresent, hasPostAiResponse, textLen: responseText.length }
+    });
+    try {
+      bridge?.postAiResponse?.(responseText.substring(0, 2000));
+      console.log('[Bridge] postAiResponse dispatched successfully');
+    } catch (err) {
+      console.error('[Bridge] postAiResponse threw error:', err);
+      logToErrorLog({
+        component: 'Bridge',
+        error_type: 'bridge_error',
+        error_message: 'postAiResponse_threw',
+        context: { error: String(err) }
+      });
+    }
+  }, []);
 
   const userId = user?.id || (isDemoMode ? DEMO_USER_ID : null);
 
@@ -382,7 +421,7 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
         },
         (payload) => {
           const newMessage = payload.new as any;
-          console.log('[CommsConsole] Realtime message received:', newMessage.id, 'content:', newMessage.content?.substring(0, 50));
+          console.log('[CommsConsole] Realtime message received:', newMessage.id, 'role:', newMessage.role, 'content:', newMessage.content?.substring(0, 50));
           
           // Log message receipt
           logChat(userId, 'realtime_received', 'completed', {
@@ -392,6 +431,14 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
             source: newMessage.source,
             threadId: dbThreadId
           });
+
+          // Notify the Android overlay whenever an assistant message is persisted.
+          // This mirrors the same path the chat uses to display responses, so the
+          // overlay gets the real content even if the SSE stream failed partway through.
+          if (newMessage.role === 'assistant' && newMessage.content) {
+            console.log('[Bridge] Realtime assistant INSERT — attempting bridge notification');
+            notifyBridgeIfPending(newMessage.content);
+          }
           
           // Deduplicate - skip if already in state
           setMessages(prev => {
@@ -462,7 +509,7 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
       supabase.removeChannel(channel);
       setRealtimeStatus('idle');
     };
-  }, [dbThreadId, userId, currentAssistant?.id]);
+  }, [dbThreadId, userId, currentAssistant?.id, notifyBridgeIfPending]);
 
   // ============================================================
   // Realtime subscription watchdog - log if not subscribed within 5s
@@ -575,7 +622,9 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
       window.removeEventListener('bridgeMessage', handleBridgeMessage);
     };
   }, [userId, dbThreadId]);
-  
+
+  // Android widget relay bar handler is registered after sendMessage is defined (see below).
+
   // ============================================================
   // Track last message timestamp for smart visibility reload
   // ============================================================
@@ -845,7 +894,7 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
             }
             
             const fallbackContent = fallbackResponse.data?.response || 'Sorry, I could not process your request.';
-            
+
             setMessages((prev) => [...prev, {
               id: `assistant-${Date.now()}`,
               role: 'assistant',
@@ -854,7 +903,8 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
               assistant_id: currentAssistant?.id || null,
               created_at: new Date().toISOString(),
             }]);
-            
+            notifyBridgeIfPending(fallbackContent);
+
             if (fallbackResponse.data?.threadId && USE_UNIFIED_THREADS && updateOpenaiThreadId) {
               updateOpenaiThreadId(fallbackResponse.data.threadId);
               receivedThreadId = fallbackResponse.data.threadId;
@@ -895,6 +945,7 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
                 streamed: true
               }
             );
+            notifyBridgeIfPending(fullContent);
           }
 
         } else {
@@ -934,6 +985,7 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
               fast_path: data.fastPath || false
             }
           );
+          notifyBridgeIfPending(assistantContent);
         }
 
       } else {
@@ -962,11 +1014,12 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
         };
 
         setMessages((prev) => [...prev, assistantMessage]);
+        notifyBridgeIfPending(assistantMessage.content);
 
         if (data?.threadId && !USE_UNIFIED_THREADS) {
           setThreadId(data.threadId);
         }
-        
+
         if (data?.threadId && USE_UNIFIED_THREADS && updateOpenaiThreadId) {
           updateOpenaiThreadId(data.threadId);
         }
@@ -1005,10 +1058,13 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
         created_at: new Date().toISOString(),
       };
       setMessages((prev) => [...prev, errorMessage]);
+      // Do NOT call notifyBridgeIfPending here — if the AI did respond despite the
+      // streaming error, the Realtime INSERT handler above will deliver the real content.
+      console.log('[Bridge] sendMessage caught error; Realtime handler will notify bridge if AI responded');
     } finally {
       setIsLoading(false);
     }
-  }, [userId, threadId, currentAssistant, currentMode, dbThreadId, updateOpenaiThreadId, session]);
+  }, [userId, threadId, currentAssistant, currentMode, dbThreadId, updateOpenaiThreadId, session, notifyBridgeIfPending]);
 
   // ============================================================
   // PHASE 3: Persist Messages with Latency Metrics
@@ -1096,33 +1152,59 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     }
   }, [lastUserMessage, sendMessage]);
 
+  // Keep ref always pointing to latest sendMessage so the listener below never captures a stale closure.
+  const sendMessageRef = useRef(sendMessage);
+  useEffect(() => {
+    sendMessageRef.current = sendMessage;
+  });
+
   // Android widget relay bar: routes transcript to chat thread via bridgeVoiceResult event.
+  // Registered ONCE (empty deps) — eliminates the re-registration gap that silently drops events
+  // when sendMessage changes identity after an auth token refresh.
   useEffect(() => {
     const handler = (event: Event) => {
       const transcript = (event as CustomEvent).detail?.transcript;
-      if (transcript) {
-        console.log('[Bridge] bridgeVoiceResult received:', transcript.substring(0, 80));
-        bridgePendingRef.current = true;
-        sendMessage(transcript);
+      console.log('[Bridge] bridgeVoiceResult event fired, transcript:', transcript?.substring(0, 80) ?? '(none)', 'bridgePendingRef before:', bridgePendingRef.current);
+      logToErrorLog({
+        component: 'Bridge',
+        error_type: 'bridge_event',
+        error_message: 'bridgeVoiceResult_fired',
+        context: { hasTranscript: !!transcript, transcriptPreview: transcript?.substring(0, 60) ?? null }
+      });
+      if (!transcript) {
+        console.warn('[Bridge] bridgeVoiceResult received with no transcript in event.detail');
+        return;
       }
+      bridgePendingRef.current = true;
+      console.log('[Bridge] bridgePendingRef set to true, dispatching sendMessage');
+      sendMessageRef.current(transcript).catch(err => {
+        console.error('[Bridge] sendMessage rejected:', err);
+        logToErrorLog({
+          component: 'Bridge',
+          error_type: 'bridge_error',
+          error_message: 'sendMessage_rejected',
+          context: { error: String(err) }
+        });
+      });
     };
     window.addEventListener('bridgeVoiceResult', handler);
-    return () => window.removeEventListener('bridgeVoiceResult', handler);
-  }, [sendMessage]);
-
-  // Fires postAiResponse back to the widget overlay once the AI finishes responding.
-  useEffect(() => {
-    const bridge = (window as any).AndroidBridge;
-    console.log('[Bridge] response watcher: pending=', bridgePendingRef.current, 'loading=', isLoading, 'msgs=', messages.length, 'bridgeExists=', !!bridge, 'postAiResponseExists=', !!bridge?.postAiResponse);
-    if (!bridgePendingRef.current || isLoading) return;
-    const lastMsg = messages[messages.length - 1];
-    if (lastMsg?.role === 'assistant' && lastMsg.content) {
-      bridgePendingRef.current = false;
-      const text = lastMsg.content.substring(0, 500);
-      console.log('[Bridge] calling postAiResponse:', text.substring(0, 80));
-      bridge?.postAiResponse?.(text);
+    // Mark pre-React buffer inactive and replay any events that arrived before mount.
+    (window as any).__bridgeListenerActive = true;
+    const buffered: Array<{ transcript?: string }> = (window as any).__bridgeVoiceBuffer ?? [];
+    (window as any).__bridgeVoiceBuffer = [];
+    for (const detail of buffered) {
+      if (detail?.transcript) {
+        console.log('[Bridge] replaying buffered transcript:', detail.transcript.substring(0, 80));
+        bridgePendingRef.current = true;
+        sendMessageRef.current(detail.transcript).catch(err => {
+          console.error('[Bridge] sendMessage rejected (replay):', err);
+        });
+      }
     }
-  }, [messages, isLoading]);
+    // Signal Android that the listener is live — kept for compatibility with older APKs.
+    (window as any).AndroidBridge?.notifyBridgeReady?.();
+    return () => window.removeEventListener('bridgeVoiceResult', handler);
+  }, []);
 
 
   // Start a new conversation (clear messages but keep thread for history)
