@@ -2,6 +2,11 @@ name: Check Scheduling Prefs
 
 on:
   workflow_dispatch:
+    inputs:
+      note:
+        description: 'Optional note'
+        required: false
+        default: ''
 
 jobs:
   check:
