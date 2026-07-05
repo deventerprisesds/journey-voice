@@ -1090,6 +1090,11 @@ const NotificationSettings = () => {
                 <Bell className="h-4 w-4 mr-2" />Test Message
               </Button>
             )}
+            {pushNotifications.isAndroidBridge && (
+              <Button onClick={() => (window as any).AndroidBridge?.testAlarmConfirmScreen?.()} variant="outline" className="w-full">
+                <Bell className="h-4 w-4 mr-2" />Test Alarm Screen
+              </Button>
+            )}
           </div>
         </CardContent>
       </Card>
