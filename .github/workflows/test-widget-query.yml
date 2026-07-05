@@ -132,7 +132,8 @@ if code == 200:
             enabled = c.get('enabled', False)
             mode = c.get('commsMode','?')
             time = c.get('time','?')
-            print(f'  [{\"ON \" if enabled else \"OFF\"}] {cid:<20} commsMode={mode:<12} time={time}')
+            status = 'ON ' if enabled else 'OFF'
+            print(f'  [{status}] {cid:<20} commsMode={mode:<12} time={time}')
 
 print()
 print('=== pending scheduled_notifications (scheduled_call type) ===')
