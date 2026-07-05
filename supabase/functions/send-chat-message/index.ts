@@ -651,6 +651,7 @@ serve(async (req) => {
           userId,
           title: 'Iris',
           body: truncateText(content, 100),
+          channel: 'messages',
           data: {
             type: 'chat_message',
             callType: callType || 'direct',
