@@ -21,6 +21,7 @@ import Assignments from "./pages/Assignments";
 import Debug from "./pages/Debug";
 import CommsHome from "./pages/CommsHome";
 import NotFound from "./pages/NotFound";
+import OAuthConsent from "./pages/OAuthConsent";
 import DemoModeBadge from "./components/DemoModeBadge";
 import QuotaAlertBanner from "./components/QuotaAlertBanner";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -83,6 +84,7 @@ const App = () => {
                   <ErrorBoundary>
                     <Routes>
                       <Route path="/auth" element={<Auth />} />
+                      <Route path="/.lovable/oauth/consent" element={<OAuthConsent />} />
                       <Route path="/debug" element={<Debug />} />
                       <Route path="/comms" element={<CommsHome />} />
                       <Route path="/comms/active" element={<CommsHome autoConnect />} />
