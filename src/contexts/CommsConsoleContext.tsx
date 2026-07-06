@@ -140,11 +140,12 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
       error_message: 'notifyBridgeIfPending_called',
       context: { pending, textLen: responseText.length, textPreview: responseText.substring(0, 60) }
     });
-    if (!pending) {
-      console.log('[Bridge] notifyBridgeIfPending: no pending bridge request, skipping');
-      return;
+    if (pending) {
+      bridgePendingRef.current = false;
     }
-    bridgePendingRef.current = false;
+    // Always call postAiResponse for both overlay and main-chat paths.
+    // Android routes based on app state: overlay/chat foreground → AI_RESPONSE broadcast;
+    // app backgrounded → messages channel notification.
     const bridge = (window as any).AndroidBridge;
     const bridgePresent = !!bridge;
     const hasPostAiResponse = typeof bridge?.postAiResponse === 'function';
@@ -153,11 +154,11 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
       component: 'Bridge',
       error_type: 'bridge_notify',
       error_message: 'postAiResponse_dispatch',
-      context: { bridgePresent, hasPostAiResponse, textLen: responseText.length }
+      context: { bridgePresent, hasPostAiResponse, pending, textLen: responseText.length }
     });
     try {
       bridge?.postAiResponse?.(responseText.substring(0, 2000));
-      console.log('[Bridge] postAiResponse dispatched successfully');
+      console.log('[Bridge] postAiResponse dispatched, pending was:', pending);
     } catch (err) {
       console.error('[Bridge] postAiResponse threw error:', err);
       logToErrorLog({
@@ -712,6 +713,14 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
           console.log('[CommsConsole] Visibility restored with connection error — auto-retrying');
           retryLastMessageRef.current();
         }
+
+        // Refresh auth session and reconnect Realtime so long-idle sessions stay alive.
+        const { error: refreshError } = await supabase.auth.refreshSession();
+        if (refreshError) {
+          console.warn('[CommsConsole] Session refresh failed:', refreshError.message);
+        }
+        supabase.realtime.disconnect();
+        supabase.realtime.connect();
       } catch (err) {
         console.error('[CommsConsole] Visibility check error:', err);
       }

@@ -152,7 +152,6 @@ interface NotificationPrefs {
   task_created_enabled: boolean;
   daily_digest_enabled: boolean;
   weekly_digest_enabled: boolean;
-  morning_review_enabled: boolean;
   quiet_hours_start: string;
   quiet_hours_end: string;
   timezone: string;
@@ -288,7 +287,6 @@ const NotificationSettings = () => {
     task_created_enabled: true,
     daily_digest_enabled: false,
     weekly_digest_enabled: false,
-    morning_review_enabled: true,
     quiet_hours_start: '22:00',
     quiet_hours_end: '08:00',
     timezone: 'UTC',
@@ -422,7 +420,6 @@ const NotificationSettings = () => {
           task_created_enabled: prefsData.task_created_enabled ?? true,
           daily_digest_enabled: prefsData.daily_digest_enabled ?? false,
           weekly_digest_enabled: prefsData.weekly_digest_enabled ?? false,
-          morning_review_enabled: prefsData.morning_review_enabled ?? true,
           quiet_hours_start: prefsData.quiet_hours_start ?? '22:00',
           quiet_hours_end: prefsData.quiet_hours_end ?? '08:00',
           timezone: prefsData.timezone ?? 'UTC',
@@ -458,7 +455,6 @@ const NotificationSettings = () => {
           task_created_enabled: parsed.task_created_enabled ?? true,
           daily_digest_enabled: parsed.daily_digest_enabled ?? false,
           weekly_digest_enabled: parsed.weekly_digest_enabled ?? false,
-          morning_review_enabled: parsed.morning_review_enabled ?? true,
           quiet_hours_start: parsed.quiet_hours_start ?? '22:00',
           quiet_hours_end: parsed.quiet_hours_end ?? '08:00',
           timezone: parsed.timezone ?? 'UTC',
@@ -791,10 +787,6 @@ const NotificationSettings = () => {
           <div className="flex items-center justify-between">
             <div><Label className="text-sm font-medium">Weekly Digest</Label><p className="text-xs text-muted-foreground">Weekly overview of completed tasks and upcoming deadlines</p></div>
             <Switch checked={prefs.weekly_digest_enabled} onCheckedChange={(checked) => setPrefs({ ...prefs, weekly_digest_enabled: checked })} />
-          </div>
-          <div className="flex items-center justify-between">
-            <div><Label className="text-sm font-medium">Daily Focus Briefing</Label><p className="text-xs text-muted-foreground">Auto-send a daily schedule summary to chat when you open the Focus tab</p></div>
-            <Switch checked={prefs.morning_review_enabled} onCheckedChange={(checked) => setPrefs({ ...prefs, morning_review_enabled: checked })} />
           </div>
         </CardContent>
       </Card>

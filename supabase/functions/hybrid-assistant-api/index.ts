@@ -1229,30 +1229,37 @@ ${contextualInstructions || ''}`;
       
       console.log('[HYBRID] ==========================================================');
 
-      // Save both messages server-side
-      const [userMsgResult, assistantMsgResult] = await Promise.all([
-        supabase.from('conversation_messages').insert({
-          thread_id: threadId,
-          user_id: userId,
-          role: 'user',
-          content: userInput,
-          source: 'chat'
-        }).select('id').single(),
-        supabase.from('conversation_messages').insert({
-          thread_id: threadId,
-          user_id: userId,
-          role: 'assistant',
-          content: finalResponse,
-          source: 'chat'
-        }).select('id').single()
-      ]);
-      
+      // Save messages server-side.
+      // For system-initiated calls (systemInitiated=true), send-chat-message is the caller
+      // and stores the assistant message itself with proper metadata — skip both inserts here
+      // so the raw context string doesn't appear as a user bubble in the chat UI.
+      let userMsgResult: any = { data: null };
+      let assistantMsgResult: any = { data: null };
+      if (!systemInitiated) {
+        [userMsgResult, assistantMsgResult] = await Promise.all([
+          supabase.from('conversation_messages').insert({
+            thread_id: threadId,
+            user_id: userId,
+            role: 'user',
+            content: userInput,
+            source: 'chat'
+          }).select('id').single(),
+          supabase.from('conversation_messages').insert({
+            thread_id: threadId,
+            user_id: userId,
+            role: 'assistant',
+            content: finalResponse,
+            source: 'chat'
+          }).select('id').single()
+        ]);
+      }
+
       // Update thread timestamp
       await supabase.from('ai_threads')
         .update({ updated_at: new Date().toISOString() })
         .eq('id', threadId);
-      
-      console.log(`[HYBRID] Saved messages server-side: user=${userMsgResult.data?.id}, assistant=${assistantMsgResult.data?.id}`);
+
+      console.log(`[HYBRID] Saved messages server-side: user=${userMsgResult.data?.id}, assistant=${assistantMsgResult.data?.id} (systemInitiated=${systemInitiated})`);
 
       return {
         success: true,
@@ -1292,7 +1299,8 @@ serve(async (req) => {
       contextualInstructions: rawContextual,
       dayContext,             // NEW: structured day snapshot for itinerary mode
       interface: ifaceParam,  // NEW: 'daily_review' | 'chat' | 'phone'
-      stream = false
+      stream = false,
+      systemInitiated = false // When true, send-chat-message is the caller and stores messages itself
     } = body || {};
 
     const iface = ifaceParam || (dayContext ? 'daily_review' : 'chat');
