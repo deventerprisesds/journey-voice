@@ -159,6 +159,7 @@ interface NotificationPrefs {
   calendar_reminders_enabled: boolean;
   calendar_reminder_minutes: number;
   calendar_reminder_channels: string[];
+  morning_review_enabled: boolean;
 }
 
 interface CalendarConnection {
@@ -293,7 +294,8 @@ const NotificationSettings = () => {
     channels: ['EMAIL'],
     calendar_reminders_enabled: true,
     calendar_reminder_minutes: 15,
-    calendar_reminder_channels: ['PUSH']
+    calendar_reminder_channels: ['PUSH'],
+    morning_review_enabled: true
   });
   const [isSaving, setIsSaving] = useState(false);
   const [phone, setPhone] = useState('');
@@ -426,7 +428,8 @@ const NotificationSettings = () => {
           channels: (prefsData.channels ?? ['EMAIL']) as NotificationChannel[],
           calendar_reminders_enabled: (prefsData as any).calendar_reminders_enabled ?? true,
           calendar_reminder_minutes: (prefsData as any).calendar_reminder_minutes ?? 15,
-          calendar_reminder_channels: (prefsData as any).calendar_reminder_channels ?? ['PUSH']
+          calendar_reminder_channels: (prefsData as any).calendar_reminder_channels ?? ['PUSH'],
+          morning_review_enabled: (prefsData as any).morning_review_enabled ?? true
         });
       }
       const { data: profileData } = await supabase
@@ -461,7 +464,8 @@ const NotificationSettings = () => {
           channels: parsed.channels ?? ['EMAIL'],
           calendar_reminders_enabled: parsed.calendar_reminders_enabled ?? true,
           calendar_reminder_minutes: parsed.calendar_reminder_minutes ?? 15,
-          calendar_reminder_channels: parsed.calendar_reminder_channels ?? ['PUSH']
+          calendar_reminder_channels: parsed.calendar_reminder_channels ?? ['PUSH'],
+          morning_review_enabled: parsed.morning_review_enabled ?? true
         });
       } catch {}
     }
@@ -787,6 +791,10 @@ const NotificationSettings = () => {
           <div className="flex items-center justify-between">
             <div><Label className="text-sm font-medium">Weekly Digest</Label><p className="text-xs text-muted-foreground">Weekly overview of completed tasks and upcoming deadlines</p></div>
             <Switch checked={prefs.weekly_digest_enabled} onCheckedChange={(checked) => setPrefs({ ...prefs, weekly_digest_enabled: checked })} />
+          </div>
+          <div className="flex items-center justify-between">
+            <div><Label className="text-sm font-medium">Daily Focus Briefing</Label><p className="text-xs text-muted-foreground">Automatically open today's briefing panel on first Focus tab visit</p></div>
+            <Switch checked={prefs.morning_review_enabled} onCheckedChange={(checked) => setPrefs({ ...prefs, morning_review_enabled: checked })} />
           </div>
         </CardContent>
       </Card>

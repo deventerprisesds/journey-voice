@@ -799,7 +799,8 @@ async function handleAssistantRequest(
   userId: string,
   threadId: string,
   assistantId: string,
-  contextualInstructions?: string
+  contextualInstructions?: string,
+  systemInitiated: boolean = false
 ) {
   console.log(`Processing assistant request for user ${userId}, thread ${threadId}`);
 
@@ -1355,7 +1356,8 @@ ${JSON.stringify(dayContext)}
       userId,
       threadId,
       assistantId,
-      contextualInstructions
+      contextualInstructions,
+      systemInitiated
     );
 
     // Itinerary mode: synthesize a fallback response if model returned empty

@@ -169,11 +169,12 @@ const FocusView: React.FC<FocusViewProps> = ({
       const todayKey = getTodayInTimezone(tz);
       const { data } = await supabase
         .from('notification_prefs')
-        .select('schedule_confirmed_date')
+        .select('schedule_confirmed_date, morning_review_enabled')
         .eq('user_id', user.id)
         .maybeSingle();
       const confirmedDate = (data as any)?.schedule_confirmed_date || '';
-      if (confirmedDate !== todayKey) {
+      const reviewEnabled = (data as any)?.morning_review_enabled !== false;
+      if (confirmedDate !== todayKey && reviewEnabled) {
         await supabase
           .from('notification_prefs')
           .update({ schedule_confirmed_date: todayKey } as any)

@@ -600,6 +600,25 @@ serve(async (req) => {
             }).then(() => {}).catch(() => {});
           }
 
+          // Digest types go through the chat channel so they appear in conversation history
+          if (primaryType === 'daily_digest' || primaryType === 'weekly_digest') {
+            console.log(`📨 Routing ${primaryType} through send-chat-message for user ${userId}`);
+            await supabaseClient.functions.invoke('send-chat-message', {
+              body: { userId, message: `${title}\n\n${body}`, sendPush: true },
+            });
+            const { error: updateError } = await supabaseClient
+              .from('scheduled_notifications')
+              .update({ delivered_at: new Date().toISOString(), failure_reason: null })
+              .in('id', notificationIds);
+            if (updateError) {
+              console.error('Error updating digest notification status:', updateError);
+              failed += batchNotifications.length;
+            } else {
+              delivered += batchNotifications.length;
+            }
+            continue;
+          }
+
           const { error: pushError } = await supabaseClient.functions.invoke('send-push-notification', {
             body: {
               userId: userId,
