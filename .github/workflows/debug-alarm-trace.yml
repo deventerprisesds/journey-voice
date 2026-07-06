@@ -109,6 +109,35 @@ jobs:
                   print(f'  [{r[\"created_at\"][:19]}] chan={m.get(\"channel\",\"?\")} error={r.get(\"error_message\",\"?\")}')
           " || echo "parse error: $BODY"
 
+      - name: Fetch android_alarm_trace entries (from device via Supabase)
+        env:
+          SB_KEY: ${{ secrets.CF_SUPABASE_SERVICE_KEY }}
+        run: |
+          CUTOFF="${{ steps.cutoff.outputs.cutoff }}"
+          echo ""
+          echo "=== ANDROID: android_alarm_trace (device pushAlarmTrace) ==="
+          FULL=$(curl -G -s -w "\nHTTP_STATUS:%{http_code}" \
+            -H "apikey: $SB_KEY" \
+            -H "Authorization: Bearer $SB_KEY" \
+            -H "Accept: application/json" \
+            --data-urlencode "select=created_at,metadata" \
+            --data-urlencode "activity_type=eq.android_alarm_trace" \
+            --data-urlencode "created_at=gte.${CUTOFF}" \
+            --data-urlencode "order=created_at.asc" \
+            --data-urlencode "limit=50" \
+            "https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/activity_log")
+          HTTP=$(echo "$FULL" | grep 'HTTP_STATUS:' | tail -1 | cut -d: -f2)
+          BODY=$(echo "$FULL" | sed '/HTTP_STATUS:/d')
+          echo "HTTP $HTTP"
+          echo "$BODY" | python3 -c "
+          import json, sys
+          rows = json.load(sys.stdin)
+          print(f'{len(rows)} row(s) found')
+          for r in rows:
+              m = r.get('metadata', {})
+              print(f'  [{r[\"created_at\"][11:19]}] {m.get(\"message\",\"?\")}')
+          " || echo "parse error: $BODY"
+
       - name: Summary
         run: |
           echo ""
