@@ -127,6 +127,9 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const [realtimeStatus, setRealtimeStatus] = useState<string>('idle');
   const subscribeStartTimeRef = useRef<number | null>(null);
   const bridgePendingRef = useRef(false);
+  const messagesRef = useRef<ConversationMessage[]>([]);
+  const isLoadingRef = useRef(false);
+  const lastUserMessageRef = useRef<string | null>(null);
 
   const notifyBridgeIfPending = useCallback((responseText: string) => {
     const pending = bridgePendingRef.current;
@@ -438,8 +441,13 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
           if (newMessage.role === 'assistant' && newMessage.content) {
             console.log('[Bridge] Realtime assistant INSERT — attempting bridge notification');
             notifyBridgeIfPending(newMessage.content);
+            // AI finished while screen was off — clear any "Connection interrupted" error so
+            // the user sees only the real response, not the error alongside it.
+            setMessages(prev => prev.filter(m =>
+              !(m.role === 'system' && m.content?.includes('Connection interrupted'))
+            ));
           }
-          
+
           // Deduplicate - skip if already in state
           setMessages(prev => {
             if (prev.some(m => m.id === newMessage.id)) {
@@ -625,6 +633,11 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
   // Android widget relay bar handler is registered after sendMessage is defined (see below).
 
+  // Keep live refs for values that visibility/retry handlers read without re-registering.
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
+  useEffect(() => { isLoadingRef.current = isLoading; }, [isLoading]);
+  useEffect(() => { lastUserMessageRef.current = lastUserMessage; }, [lastUserMessage]);
+
   // ============================================================
   // Track last message timestamp for smart visibility reload
   // ============================================================
@@ -684,16 +697,26 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
           setHistoryLoaded(false);
         } else {
           // No new messages, skip reload
-          logChat(userId, 'visibility_check', 'completed', { 
+          logChat(userId, 'visibility_check', 'completed', {
             result: 'no_new_messages',
-            lastSeen 
+            lastSeen
           });
+        }
+
+        // Auto-retry: if a "Connection interrupted" error is still showing and we're not
+        // already loading (AI hasn't responded yet), kick off a retry automatically.
+        const hasConnectionError = messagesRef.current.some(
+          m => m.role === 'system' && m.content?.includes('Connection interrupted')
+        );
+        if (hasConnectionError && !isLoadingRef.current && lastUserMessageRef.current) {
+          console.log('[CommsConsole] Visibility restored with connection error — auto-retrying');
+          retryLastMessageRef.current();
         }
       } catch (err) {
         console.error('[CommsConsole] Visibility check error:', err);
       }
     };
-    
+
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, [dbThreadId, userId]);
@@ -1046,7 +1069,13 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
       console.error('Error sending message:', err);
       const errorText = err instanceof Error ? err.message : 'Unknown error';
       const isConnectionError = errorText.includes('connection') || errorText.includes('network') || errorText.includes('fetch');
-      
+
+      // Remove the empty streaming placeholder added before the failed fetch so Retry
+      // doesn't leave a double assistant bubble.
+      setMessages(prev => prev.filter(m =>
+        !(m.role === 'assistant' && typeof m.id === 'string' && m.id.startsWith('assistant-') && m.content === '')
+      ));
+
       const errorMessage: ConversationMessage = {
         id: `error-${Date.now()}`,
         role: 'system',
@@ -1152,11 +1181,12 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     }
   }, [lastUserMessage, sendMessage]);
 
-  // Keep ref always pointing to latest sendMessage so the listener below never captures a stale closure.
+  // Keep refs always pointing to latest callbacks so listeners registered with empty deps never
+  // capture stale closures.
   const sendMessageRef = useRef(sendMessage);
-  useEffect(() => {
-    sendMessageRef.current = sendMessage;
-  });
+  useEffect(() => { sendMessageRef.current = sendMessage; });
+  const retryLastMessageRef = useRef(retryLastMessage);
+  useEffect(() => { retryLastMessageRef.current = retryLastMessage; });
 
   // Android widget relay bar: routes transcript to chat thread via bridgeVoiceResult event.
   // Registered ONCE (empty deps) — eliminates the re-registration gap that silently drops events
