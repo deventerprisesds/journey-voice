@@ -581,6 +581,25 @@ serve(async (req) => {
           if (['calendar_event_reminder', 'task_start_now', 'task_start_reminder'].includes(primaryType)) androidChannel = 'calendar_events';
           else if (primaryType === 'daily_digest' || primaryType === 'batched_reminders') androidChannel = 'messages';
 
+          // Server-side trace for alarm-channel dispatches
+          if (androidChannel === 'calendar_events') {
+            supabaseClient.from('activity_log').insert({
+              user_id: userId,
+              activity_type: 'alarm_notification_dispatched',
+              status: 'started',
+              metadata: {
+                primaryType,
+                androidChannel,
+                fcmTag: 'fcm',
+                taskId: batchNotifications.length === 1 ? batchNotifications[0].task_id : null,
+                notificationIds,
+                batchSize: batchNotifications.length,
+                title,
+                timestamp: new Date().toISOString()
+              }
+            }).then(() => {}).catch(() => {});
+          }
+
           // Digest types go through chat channel so they appear in conversation history
           if (primaryType === 'daily_digest' || primaryType === 'weekly_digest') {
             console.log(`📨 Routing ${primaryType} through send-chat-message for user ${userId}`);

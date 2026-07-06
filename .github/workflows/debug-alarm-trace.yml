@@ -1,0 +1,143 @@
+name: Debug Alarm Trace
+
+on:
+  workflow_dispatch:
+    inputs:
+      hours_back:
+        description: 'How many hours back to search (default 2)'
+        required: false
+        default: '2'
+
+jobs:
+  trace:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Compute cutoff timestamp
+        id: cutoff
+        run: |
+          HOURS="${{ github.event.inputs.hours_back }}"
+          HOURS=${HOURS:-2}
+          CUTOFF=$(python3 -c "import datetime; print((datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(hours=float('$HOURS'))).strftime('%Y-%m-%dT%H:%M:%SZ'))")
+          echo "cutoff=$CUTOFF" >> $GITHUB_OUTPUT
+          echo "Searching last ${HOURS}h — cutoff: $CUTOFF"
+
+      - name: Fetch alarm_notification_dispatched entries
+        env:
+          SB_KEY: ${{ secrets.CF_SUPABASE_SERVICE_KEY }}
+        run: |
+          CUTOFF="${{ steps.cutoff.outputs.cutoff }}"
+          echo "=== SERVER: alarm_notification_dispatched (notification-delivery) ==="
+          FULL=$(curl -G -s -w "\nHTTP_STATUS:%{http_code}" \
+            -H "apikey: $SB_KEY" \
+            -H "Authorization: Bearer $SB_KEY" \
+            -H "Accept: application/json" \
+            --data-urlencode "select=created_at,metadata" \
+            --data-urlencode "activity_type=eq.alarm_notification_dispatched" \
+            --data-urlencode "created_at=gte.${CUTOFF}" \
+            --data-urlencode "order=created_at.desc" \
+            --data-urlencode "limit=20" \
+            "https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/activity_log")
+          HTTP=$(echo "$FULL" | grep 'HTTP_STATUS:' | tail -1 | cut -d: -f2)
+          BODY=$(echo "$FULL" | sed '/HTTP_STATUS:/d')
+          echo "HTTP $HTTP"
+          echo "$BODY" | python3 -c "
+          import json, sys
+          rows = json.load(sys.stdin)
+          print(f'{len(rows)} row(s) found')
+          for r in rows:
+              m = r.get('metadata', {})
+              print(f'  [{r[\"created_at\"][:19]}] type={m.get(\"primaryType\",\"?\")} chan={m.get(\"androidChannel\",\"?\")} fcmTag={m.get(\"fcmTag\",\"?\")} taskId={str(m.get(\"taskId\",\"-\"))[:8]} batch={m.get(\"batchSize\",\"?\")} title={str(m.get(\"title\",\"-\"))[:40]}')
+          " || echo "parse error: $BODY"
+
+      - name: Fetch fcm_send_success entries
+        env:
+          SB_KEY: ${{ secrets.CF_SUPABASE_SERVICE_KEY }}
+        run: |
+          CUTOFF="${{ steps.cutoff.outputs.cutoff }}"
+          echo ""
+          echo "=== SERVER: fcm_send_success (send-push-notification) ==="
+          FULL=$(curl -G -s -w "\nHTTP_STATUS:%{http_code}" \
+            -H "apikey: $SB_KEY" \
+            -H "Authorization: Bearer $SB_KEY" \
+            -H "Accept: application/json" \
+            --data-urlencode "select=created_at,metadata" \
+            --data-urlencode "activity_type=eq.fcm_send_success" \
+            --data-urlencode "created_at=gte.${CUTOFF}" \
+            --data-urlencode "order=created_at.desc" \
+            --data-urlencode "limit=20" \
+            "https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/activity_log")
+          HTTP=$(echo "$FULL" | grep 'HTTP_STATUS:' | tail -1 | cut -d: -f2)
+          BODY=$(echo "$FULL" | sed '/HTTP_STATUS:/d')
+          echo "HTTP $HTTP"
+          echo "$BODY" | python3 -c "
+          import json, sys
+          rows = json.load(sys.stdin)
+          print(f'{len(rows)} row(s) found')
+          for r in rows:
+              m = r.get('metadata', {})
+              print(f'  [{r[\"created_at\"][:19]}] chan={m.get(\"channel\",\"?\")} title={str(m.get(\"title\",\"-\"))[:40]} token={m.get(\"token_prefix\",\"?\")}')
+          " || echo "parse error: $BODY"
+
+      - name: Fetch fcm_send_failed entries
+        env:
+          SB_KEY: ${{ secrets.CF_SUPABASE_SERVICE_KEY }}
+        run: |
+          CUTOFF="${{ steps.cutoff.outputs.cutoff }}"
+          echo ""
+          echo "=== SERVER: fcm_send_failed (send-push-notification) ==="
+          FULL=$(curl -G -s -w "\nHTTP_STATUS:%{http_code}" \
+            -H "apikey: $SB_KEY" \
+            -H "Authorization: Bearer $SB_KEY" \
+            -H "Accept: application/json" \
+            --data-urlencode "select=created_at,metadata,error_message" \
+            --data-urlencode "activity_type=eq.fcm_send_failed" \
+            --data-urlencode "created_at=gte.${CUTOFF}" \
+            --data-urlencode "order=created_at.desc" \
+            --data-urlencode "limit=10" \
+            "https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/activity_log")
+          HTTP=$(echo "$FULL" | grep 'HTTP_STATUS:' | tail -1 | cut -d: -f2)
+          BODY=$(echo "$FULL" | sed '/HTTP_STATUS:/d')
+          echo "HTTP $HTTP"
+          echo "$BODY" | python3 -c "
+          import json, sys
+          rows = json.load(sys.stdin)
+          if not rows:
+              print('  (none)')
+          else:
+              for r in rows:
+                  m = r.get('metadata', {})
+                  print(f'  [{r[\"created_at\"][:19]}] chan={m.get(\"channel\",\"?\")} error={r.get(\"error_message\",\"?\")}')
+          " || echo "parse error: $BODY"
+
+      - name: Summary
+        run: |
+          echo ""
+          echo "=== HOW TO READ THIS ==="
+          echo "1. alarm_notification_dispatched → notification-delivery decided to send an alarm FCM"
+          echo "   - androidChannel should be 'calendar_events'"
+          echo "   - fcmTag will be 'fcm' (known bug: all alarms share this tag)"
+          echo "2. fcm_send_success → send-push-notification sent FCM to device"
+          echo "   - chan should be 'calendar_events'"
+          echo "   - If this row is present but ALARM_CONFIRM_LAUNCHED is NOT in the Android /debug log,"
+          echo "     the FCM was delivered but AlarmConfirmActivity never launched"
+          echo ""
+          echo "=== ANDROID SIDE ==="
+          echo "Open Journey Voice app → Settings or /debug → Widget Debug Log"
+          echo "Look for lines:"
+          echo "  FCM_RX       — FCM received by BridgeFirebaseService"
+          echo "  FCM_FIRE     — NotificationEngine.fire() return value"
+          echo "  GATE         — calendar_events gate reached (confirmed=true/false)"
+          echo "  GATE→FULLSCREEN — gate posted notification with fullScreenIntent"
+          echo "  GATE→ALARM   — gate was bypassed (Confirm was tapped before)"
+          echo "  ALARM_CONFIRM_LAUNCHED — AlarmConfirmActivity.onCreate() ran"
+          echo "  ALARM_BTN    — user tapped Confirm/Snooze/Dismiss"
+          echo ""
+          echo "=== EXPECTED HAPPY PATH ==="
+          echo "FCM_RX chan=calendar_events"
+          echo "FCM_FIRE fired=true"
+          echo "GATE chan=calendar_events tag=fcm confirmed=false"
+          echo "GATE→FULLSCREEN tag=fcm"
+          echo "--- (fullScreenIntent fires) ---"
+          echo "ALARM_CONFIRM_LAUNCHED tag=fcm"
+          echo "--- (user taps a button) ---"
+          echo "ALARM_BTN action=com.bridgetemplate.CALENDAR_CONFIRM tag=fcm"
