@@ -346,7 +346,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
           "font-bold bg-gradient-to-r from-primary to-productivity bg-clip-text text-transparent transition-all",
           (!isSidebarExpanded && !isMobile) ? "text-lg" : "text-xl"
         )}>
-          {(!isSidebarExpanded && !isMobile) ? "J" : "Journey"}
+          {(!isSidebarExpanded && !isMobile) ? "T" : "TaskOS"}
         </h2>
         {!isMobile && (
           <Button
@@ -453,9 +453,10 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
           {/* Title - only on mobile since desktop has sidebar */}
           {isMobile && (
             <h1 className="font-bold text-lg bg-gradient-to-r from-primary to-productivity bg-clip-text text-transparent">
-              Journey
+              TaskOS
             </h1>
           )}
+
           
           <div className="flex-1" />
           

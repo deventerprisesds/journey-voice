@@ -6,7 +6,7 @@
 
 ## Overview
 
-**Journey** is a voice-first task management platform built on React + Vite, backed by Supabase (auth, database, 30+ Edge Functions) and a Cloudflare Durable Objects worker for unlimited-duration phone calls. Users interact via three communication modes — **chat**, **browser voice (WebRTC)**, and **phone (Twilio)** — all unified through a single assistant persona ("Iris") with shared conversation memory.
+**TaskOS** is a voice-first task management platform built on React + Vite, backed by Supabase (auth, database, 30+ Edge Functions) and a Cloudflare Durable Objects worker for unlimited-duration phone calls. Users interact via three communication modes — **chat**, **browser voice (WebRTC)**, and **phone (Twilio)** — all unified through a single assistant persona ("Iris") with shared conversation memory.
 
 ---
 
