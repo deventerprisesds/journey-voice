@@ -145,6 +145,31 @@ const FocusView: React.FC<FocusViewProps> = ({
 
   const { user } = useAuth();
 
+  // Auto-open DailyReviewModal once per day on first Focus tab visit.
+  // Completely independent of the morning wake-up chat message delivered by notification-delivery.
+  useEffect(() => {
+    if (!user?.id) return;
+    (async () => {
+      const tz = getDefaultTimezone();
+      const todayKey = getTodayInTimezone(tz);
+      const { data } = await supabase
+        .from('notification_prefs')
+        .select('schedule_confirmed_date, morning_review_enabled')
+        .eq('user_id', user.id)
+        .maybeSingle();
+      const confirmedDate = (data as any)?.schedule_confirmed_date || '';
+      const reviewEnabled = (data as any)?.morning_review_enabled !== false;
+      if (confirmedDate !== todayKey && reviewEnabled) {
+        // Write date first so X-close doesn't need a separate DB write
+        await supabase
+          .from('notification_prefs')
+          .update({ schedule_confirmed_date: todayKey } as any)
+          .eq('user_id', user.id);
+        setShowDailyReview(true);
+      }
+    })();
+  }, [user?.id]);
+
   // Load user's authoritative scheduling config
   useEffect(() => {
     if (user?.id) {
