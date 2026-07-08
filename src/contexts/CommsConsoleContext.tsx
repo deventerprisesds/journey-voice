@@ -664,15 +664,25 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
   useEffect(() => {
     const handleVisibilityChange = async () => {
       if (document.visibilityState !== 'visible' || !dbThreadId || !userId) return;
-      
-      logChat(userId, 'visibility_check', 'started', { 
+
+      logChat(userId, 'visibility_check', 'started', {
         threadId: dbThreadId,
-        lastSeen: lastMessageTimestampRef.current 
+        lastSeen: lastMessageTimestampRef.current
       });
-      
+
+      // Refresh auth session and reconnect Realtime FIRST — if the token is expired
+      // the subsequent DB query will fail with 401 and return early, never triggering
+      // a history reload. Refresh before any query so the token is always valid.
+      const { error: refreshError } = await supabase.auth.refreshSession();
+      if (refreshError) {
+        console.warn('[CommsConsole] Session refresh failed:', refreshError.message);
+      }
+      supabase.realtime.disconnect();
+      supabase.realtime.connect();
+
       // Quick query: any messages newer than our last seen?
       const lastSeen = lastMessageTimestampRef.current || new Date(0).toISOString();
-      
+
       try {
         const { data, error } = await supabase
           .from('conversation_messages')
@@ -681,19 +691,19 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
           .eq('user_id', userId)
           .gt('created_at', lastSeen)
           .limit(1);
-        
+
         if (error) {
           logChat(userId, 'visibility_check', 'error', { error: error.message }, error.message);
           return;
         }
-        
+
         if (data && data.length > 0) {
           // There are newer messages, reload history
           console.log('[CommsConsole] Visibility check found newer messages, reloading');
-          logChat(userId, 'visibility_reload', 'started', { 
-            threadId: dbThreadId, 
+          logChat(userId, 'visibility_reload', 'started', {
+            threadId: dbThreadId,
             lastSeen,
-            foundNew: true 
+            foundNew: true
           });
           setHistoryLoaded(false);
         } else {
@@ -713,14 +723,6 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
           console.log('[CommsConsole] Visibility restored with connection error — auto-retrying');
           retryLastMessageRef.current();
         }
-
-        // Refresh auth session and reconnect Realtime so long-idle sessions stay alive.
-        const { error: refreshError } = await supabase.auth.refreshSession();
-        if (refreshError) {
-          console.warn('[CommsConsole] Session refresh failed:', refreshError.message);
-        }
-        supabase.realtime.disconnect();
-        supabase.realtime.connect();
       } catch (err) {
         console.error('[CommsConsole] Visibility check error:', err);
       }
@@ -729,6 +731,25 @@ export const CommsConsoleProvider: React.FC<{ children: React.ReactNode }> = ({ 
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, [dbThreadId, userId]);
+
+  // Expose __bridgeRefreshSession for the Android native layer to call via
+  // evaluateJavascript — used by SessionKeepAliveWorker (50-min periodic) and
+  // BridgeFirebaseService (on FCM receipt) to keep the Supabase session alive
+  // while the app is backgrounded.
+  useEffect(() => {
+    (window as any).__bridgeRefreshSession = async () => {
+      try {
+        const { error } = await supabase.auth.refreshSession();
+        if (error) console.warn('[Bridge] Session refresh failed:', error.message);
+        supabase.realtime.disconnect();
+        supabase.realtime.connect();
+        console.log('[Bridge] __bridgeRefreshSession: session refreshed, Realtime reconnected');
+      } catch (err) {
+        console.warn('[Bridge] __bridgeRefreshSession error:', err);
+      }
+    };
+    return () => { delete (window as any).__bridgeRefreshSession; };
+  }, []);
 
   // ============================================================
   // Check URL params on mount for fresh app opens
