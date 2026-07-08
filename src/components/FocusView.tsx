@@ -160,29 +160,6 @@ const FocusView: React.FC<FocusViewProps> = ({
     }
   }, [user?.id]);
 
-  // Check if daily review has been confirmed today; auto-open modal once per day.
-  // Writes schedule_confirmed_date BEFORE opening so X-close doesn't need a DB write.
-  useEffect(() => {
-    if (!user?.id) return;
-    (async () => {
-      const tz = getDefaultTimezone();
-      const todayKey = getTodayInTimezone(tz);
-      const { data } = await supabase
-        .from('notification_prefs')
-        .select('schedule_confirmed_date, morning_review_enabled')
-        .eq('user_id', user.id)
-        .maybeSingle();
-      const confirmedDate = (data as any)?.schedule_confirmed_date || '';
-      const reviewEnabled = (data as any)?.morning_review_enabled !== false;
-      if (confirmedDate !== todayKey && reviewEnabled) {
-        await supabase
-          .from('notification_prefs')
-          .update({ schedule_confirmed_date: todayKey } as any)
-          .eq('user_id', user.id);
-        setShowDailyReview(true);
-      }
-    })();
-  }, [user?.id]);
 
   // Periodic delta sync + load external calendar events
   useEffect(() => {
