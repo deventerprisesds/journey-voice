@@ -8,7 +8,8 @@
     "build": "vite build",
     "build:dev": "vite build --mode development",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --experimental-strip-types --test src/utils/*.test.ts"
   },
   "dependencies": {
     "@hello-pangea/dnd": "^18.0.1",

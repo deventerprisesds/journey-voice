@@ -43,6 +43,7 @@ import { humanizeCalendarId } from '@/lib/calendarUtils';
 import QuickTaskInput from './QuickTaskInput';
 import TaskCreationModal from './TaskCreationModal';
 import { getOrCreateDefaultBoardId } from '@/utils/demoData';
+import { shouldOpenDailyReview } from '@/utils/dailyReviewGuard';
 import { selectSchedulingCandidates } from '@/lib/schedulingCandidates';
 import DailyReviewModal from './DailyReviewModal';
 
@@ -159,7 +160,7 @@ const FocusView: React.FC<FocusViewProps> = ({
         .maybeSingle();
       const confirmedDate = (data as any)?.schedule_confirmed_date || '';
       const reviewEnabled = (data as any)?.morning_review_enabled !== false;
-      if (confirmedDate !== todayKey && reviewEnabled) {
+      if (shouldOpenDailyReview(confirmedDate, todayKey, reviewEnabled)) {
         // Write date first so X-close doesn't need a separate DB write
         await supabase
           .from('notification_prefs')
