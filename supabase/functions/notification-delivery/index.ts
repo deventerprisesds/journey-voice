@@ -184,9 +184,31 @@ serve(async (req) => {
         let deliverySuccess = false;
         let deliveryError: any = null;
 
-        if (commsMode === 'app_message') {
+        // window_morning is handled by FocusView's DailyReviewModal — only send a push to wake the phone.
+        const callId = callConfig.call_id || '';
+        const isWindowMorning = callId === 'window_morning' || callId === 'morning_standup';
+
+        if (commsMode === 'app_message' && isWindowMorning) {
+          console.log(`🌅 window_morning: sending push-only (modal handles content in app)`);
+          const { error: pushError } = await supabaseClient.functions.invoke('send-push-notification', {
+            body: {
+              userId,
+              title: callConfig.call_name || 'Good morning',
+              body: 'Your daily review is ready. Open the app to see today\'s schedule.',
+              data: { type: 'morning_review', deepLink: '/tasks' },
+            },
+          });
+          if (pushError) {
+            console.error(`🌅 Morning push failed for user ${userId}:`, pushError);
+            deliveryError = pushError;
+          } else {
+            console.log(`✅ Morning push delivered for user ${userId}`);
+            deliverySuccess = true;
+          }
+
+        } else if (commsMode === 'app_message') {
           console.log(`💬 Routing scheduled call to app chat for user ${userId}`);
-          
+
           const { data: chatResult, error: chatError } = await supabaseClient.functions.invoke('send-chat-message', {
             body: {
               userId,
