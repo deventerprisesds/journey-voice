@@ -63,7 +63,8 @@ jobs:
             else
               echo "Changed functions: $CHANGED"
               echo "mode=list" >> "$GITHUB_OUTPUT"
-              echo "fns=$CHANGED" >> "$GITHUB_OUTPUT"
+              # Collapse newlines to spaces — GITHUB_OUTPUT rejects multi-line values
+              echo "fns=$(echo "$CHANGED" | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
             fi
           fi
 
