@@ -80,7 +80,7 @@ serve(async (req) => {
 
     if (subError) throw subError;
     if (!subscriptions || subscriptions.length === 0) {
-      return new Response(JSON.stringify({ error: 'No Android device found for user — install the Journey Voice app first' }),
+      return new Response(JSON.stringify({ error: 'No Android device found for user — install the TaskOS app first' }),
         { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 

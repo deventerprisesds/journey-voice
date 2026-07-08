@@ -303,7 +303,7 @@ async function createOutlookEventDirect(
     subject: eventData.title,
     body: {
       contentType: 'text',
-      content: eventData.description || `Task reminder from Journey Voice`,
+      content: eventData.description || `Task reminder from TaskOS`,
     },
     start: {
       dateTime: eventData.startTime,
@@ -476,7 +476,7 @@ serve(async (req) => {
       if (remainingChannels.includes('OUTLOOK_EVENT')) {
         const currentTime = new Date();
         const eventTitle = taskData?.taskTitle || title || 'Task Reminder';
-        const eventDescription = taskData?.taskDescription || body || 'Reminder from Journey Voice';
+        const eventDescription = taskData?.taskDescription || body || 'Reminder from TaskOS';
         
         // Prioritize passed start_time from notification-delivery over fallback
         let startTime: Date;

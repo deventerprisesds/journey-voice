@@ -651,7 +651,7 @@ const NotificationSettings = () => {
     if (!window.AndroidBridge) return;
     const result = window.AndroidBridge.notify(JSON.stringify({
       channel: 'messages',
-      title: '💬 Journey Voice',
+      title: '💬 TaskOS',
       body: 'Test: new message notification — tap to open chat',
       deepLink: '/',
       tag: 'test-message'
@@ -987,7 +987,7 @@ const NotificationSettings = () => {
                 <Smartphone className="h-5 w-5 text-green-600" />
                 <div>
                   <h4 className="font-medium">Android Calendar</h4>
-                  <p className="text-sm text-muted-foreground">Writes tasks directly to your device calendar — no Google account needed. Requires the Journey Voice Android app.</p>
+                  <p className="text-sm text-muted-foreground">Writes tasks directly to your device calendar — no Google account needed. Requires the TaskOS Android app.</p>
                 </div>
               </div>
               <Switch
