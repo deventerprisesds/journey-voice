@@ -9,8 +9,8 @@ import getTodayScheduleTool from "./tools/get-today-schedule";
 const projectRef = import.meta.env.VITE_SUPABASE_PROJECT_ID ?? "project-ref-unset";
 
 export default defineMcp({
-  name: "journey-voice-mcp",
-  title: "Journey Voice — Tasks & Schedule",
+  name: "taskos-mcp",
+  title: "TaskOS — Tasks & Schedule",
   version: "0.1.0",
   instructions:
     "Tools for the signed-in user's tasks and daily schedule. Use `list_tasks` to browse work, `create_task` to add a task, `complete_task` to mark one done, and `get_today_schedule` to see what's on the calendar today.",

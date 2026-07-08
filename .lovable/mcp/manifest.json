@@ -11,9 +11,9 @@
   },
   "mcp": {
     "server": {
-      "name": "journey-voice-mcp",
+      "name": "taskos-mcp",
       "version": "0.1.0",
-      "title": "Journey Voice — Tasks & Schedule"
+      "title": "TaskOS — Tasks & Schedule"
     },
     "tools": [
       {

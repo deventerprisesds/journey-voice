@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "appName": "Journey Voice",
+  "appName": "TaskOS",
   "baseUrl": "https://journey-voice.lovable.app",
   "themeColor": "#1e40af",
   "notifications": {
@@ -74,7 +74,7 @@
   },
   "widget": {
     "enabled": true,
-    "name": "Journey Voice",
+    "name": "TaskOS",
     "dataUrl": "https://wwxgajrtmslzklnyplah.supabase.co/external_calendar_events",
     "refreshMinutes": 15,
     "tapDeepLink": "/"
