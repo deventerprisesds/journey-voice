@@ -713,9 +713,13 @@ const NotificationSettings = () => {
 
   const createTestTaskWithNotifications = async () => {
     try {
-      const { error } = await supabase.functions.invoke('create-test-task', { body: { userId: user?.id || 'demo-user' } });
+      const { data, error } = await supabase.functions.invoke('create-quick-test-task', { body: { userId: user?.id || 'demo-user' } });
       if (error) throw error;
-      toast({ title: "Test task created", description: "A test task has been created with due reminders." });
+      const reminders = (data as any)?.reminders ?? [];
+      const when = reminders.length > 0
+        ? `Alarm fires in ~2 min (${reminders.length} notification${reminders.length !== 1 ? 's' : ''} scheduled).`
+        : 'Alarm fires in ~2 min — switch apps or lock screen now.';
+      toast({ title: "Test task created", description: when });
     } catch { toast({ title: "Error", description: "Failed to create test task.", variant: "destructive" }); }
   };
 
@@ -1061,7 +1065,7 @@ const NotificationSettings = () => {
               <Volume2 className="h-4 w-4 mr-2" />Test In-App Toast
             </Button>
             <Button onClick={createTestTaskWithNotifications} variant="outline" className="w-full col-span-2">
-              <Calendar className="h-4 w-4 mr-2" />Create Test Task
+              <Calendar className="h-4 w-4 mr-2" />Create Test Task (alarm in ~2 min)
             </Button>
             {pushNotifications.isAndroidBridge && (
               <div className="col-span-2 flex items-center justify-between rounded-md border px-3 py-2">

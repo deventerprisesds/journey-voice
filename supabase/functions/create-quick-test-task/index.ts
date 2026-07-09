@@ -36,9 +36,9 @@ serve(async (req) => {
     }
 
     const now = new Date();
-    const startTime = new Date(now.getTime() + 5 * 60 * 1000); // 5 minutes from now (allows 3-min reminder)
-    const endTime = new Date(now.getTime() + 6 * 60 * 1000); // 6 minutes from now (1 min duration)
-    const taskTitle = "🚀 Quick Test Task - Starting in 5 minutes";
+    const startTime = new Date(now.getTime() + 2 * 60 * 1000); // 2 minutes from now
+    const endTime = new Date(now.getTime() + 3 * 60 * 1000); // 3 minutes from now (1 min duration)
+    const taskTitle = "🚀 Quick Test Task - Starting in 2 minutes";
 
     const { data: tzPref } = await supabaseClient
       .from('user_scheduling_prefs')
@@ -107,7 +107,7 @@ serve(async (req) => {
       .from('tasks')
       .insert({
         title: taskTitle,
-        description: `This is a quick test task to verify notifications work immediately. Created at ${formatInTimezone(now.toISOString(), userTz)} and will start at ${formatInTimezone(startTime.toISOString(), userTz)}.`,
+        description: `Test alarm task. Created at ${formatInTimezone(now.toISOString(), userTz)}, starts at ${formatInTimezone(startTime.toISOString(), userTz)}.`,
         board_id: targetBoardId,
         user_id: userId,
         priority: 'HIGH',
