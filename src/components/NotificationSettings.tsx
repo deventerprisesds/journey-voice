@@ -1095,6 +1095,14 @@ const NotificationSettings = () => {
                 <Bell className="h-4 w-4 mr-2" />Test Alarm Screen
               </Button>
             )}
+            {pushNotifications.isAndroidBridge && (
+              <Button onClick={() => {
+                (window as any).AndroidBridge?.testFullScreenAlarm?.();
+                toast({ title: "Alarm scheduled in 15s", description: "Lock screen or switch apps now. Check Widget Debug Log for scenario trace." });
+              }} variant="outline" className="w-full">
+                <Bell className="h-4 w-4 mr-2" />Test Full Screen Alarm (15s)
+              </Button>
+            )}
           </div>
         </CardContent>
       </Card>
