@@ -14,8 +14,6 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { getToolDefinitions } from "../_shared/tool-definitions.ts";
-import { GLOBAL_VERSION } from "../_shared/config.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -28,13 +26,30 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const PROXY_TOKEN = (Deno.env.get("JOURNEY_PROXY_TOKEN") ?? "").trim();
 
-const toolDefs = getToolDefinitions();
+const EXECUTE_TOOL_URL = `${SUPABASE_URL}/functions/v1/execute-tool`;
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
+}
+
+// Tool definitions are owned by the execute-tool function (single source of
+// truth); fetch them at runtime so this proxy stays a thin, self-contained
+// adapter and never drifts from the real catalog.
+async function fetchToolDefs(): Promise<{ ok: boolean; tools: unknown[]; error?: string }> {
+  try {
+    const res = await fetch(`${EXECUTE_TOOL_URL}/definitions`, {
+      method: "GET",
+      headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}` },
+    });
+    if (!res.ok) return { ok: false, tools: [], error: `execute-tool/definitions ${res.status}` };
+    const body = (await res.json()) as { tools?: unknown[] };
+    return { ok: true, tools: body.tools ?? [] };
+  } catch (err) {
+    return { ok: false, tools: [], error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 interface JourneyTask {
@@ -104,10 +119,18 @@ serve(async (req) => {
   const path = new URL(req.url).pathname;
 
   if (req.method === "GET" && path.endsWith("/health")) {
-    return json({ ok: true, version: GLOBAL_VERSION, toolCount: toolDefs.length });
+    const defs = await fetchToolDefs();
+    return json({
+      ok: defs.ok,
+      version: "huddle-proxy-1",
+      toolCount: defs.tools.length,
+      error: defs.ok ? undefined : defs.error,
+    });
   }
   if (req.method === "GET" && path.endsWith("/tools")) {
-    return json({ ok: true, tools: toolDefs });
+    const defs = await fetchToolDefs();
+    if (!defs.ok) return json({ ok: false, tools: [], error: defs.error });
+    return json({ ok: true, tools: defs.tools });
   }
   if (req.method === "POST" && path.endsWith("/tool")) {
     try {
