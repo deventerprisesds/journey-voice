@@ -40,6 +40,20 @@ jobs:
             echo "SUPABASE_ACCESS_TOKEN=${{ secrets.SUPERBASE_ACCESS_TOKEN }}" >> "$GITHUB_ENV"
           fi
 
+      - name: Sync edge function secrets from GitHub
+        # GitHub org secrets are the single source of truth. Copy the shared
+        # huddle↔journey proxy token into Supabase so it never has to be set by
+        # hand and can't drift from Huddle's copy (both read the same org secret).
+        env:
+          JOURNEY_PROXY_TOKEN: ${{ secrets.JOURNEY_PROXY_TOKEN }}
+        run: |
+          if [ -z "$JOURNEY_PROXY_TOKEN" ]; then
+            echo "JOURNEY_PROXY_TOKEN not set as a GitHub secret — skipping sync."
+            exit 0
+          fi
+          supabase secrets set JOURNEY_PROXY_TOKEN="$JOURNEY_PROXY_TOKEN" --project-ref wwxgajrtmslzklnyplah
+          echo "Synced JOURNEY_PROXY_TOKEN to Supabase edge secrets"
+
       - name: Determine functions to deploy
         id: changed
         run: |
