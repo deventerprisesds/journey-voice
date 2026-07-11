@@ -95,15 +95,27 @@ async function resolveUserId(
 ): Promise<{ userId?: string; error?: string }> {
   const email = (caller?.entra_email ?? "").trim();
   if (!email) return { error: "no caller email provided — cannot map to a journey-voice user" };
-  const { data, error } = await supabase
+  // 1) Primary identity: profiles.email.
+  const prof = await supabase
     .from("profiles")
     .select("user_id")
     .ilike("email", email) // exact, case-insensitive
     .limit(1)
     .maybeSingle();
-  if (error) return { error: `profile lookup failed: ${error.message}` };
-  if (!data?.user_id) return { error: `no journey-voice account found for ${email}` };
-  return { userId: data.user_id as string };
+  if (prof.error) return { error: `profile lookup failed: ${prof.error.message}` };
+  if (prof.data?.user_id) return { userId: prof.data.user_id as string };
+  // 2) Fallback: an additional email mapped to an existing user. This implements
+  //    "one user, many emails" so a person can sign in to Huddle with any of
+  //    their addresses and reach the same journey-voice records.
+  const alias = await supabase
+    .from("user_email_aliases")
+    .select("user_id")
+    .ilike("email", email)
+    .limit(1)
+    .maybeSingle();
+  if (alias.error) return { error: `alias lookup failed: ${alias.error.message}` };
+  if (alias.data?.user_id) return { userId: alias.data.user_id as string };
+  return { error: `no journey-voice account found for ${email}` };
 }
 
 serve(async (req) => {
