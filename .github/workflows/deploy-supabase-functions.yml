@@ -41,29 +41,20 @@ jobs:
           fi
 
       - name: Sync edge function secrets from GitHub
-        # GitHub org secrets are the single source of truth. Copy shared secrets into
-        # Supabase so they never have to be set by hand and can't drift from Huddle's
-        # copy (both sides read the same org secret):
-        #   - JOURNEY_PROXY_TOKEN: huddle↔journey proxy auth.
-        #   - TASKS_SYNC_SECRET + HUDDLE_SYNC_URL: the huddle-task-sync webhook forward
-        #     (must match Huddle's TASKS_SYNC_SECRET appsetting).
+        # GitHub org secrets are the single source of truth. Copy the shared
+        # huddle↔journey proxy token into Supabase so it never has to be set by
+        # hand and can't drift from Huddle's copy (both read the same org secret).
+        # huddle-task-sync reuses this same JOURNEY_PROXY_TOKEN as its webhook auth,
+        # so no new org secret is introduced.
         env:
           JOURNEY_PROXY_TOKEN: ${{ secrets.JOURNEY_PROXY_TOKEN }}
-          TASKS_SYNC_SECRET: ${{ secrets.TASKS_SYNC_SECRET }}
-          HUDDLE_SYNC_URL: ${{ secrets.HUDDLE_SYNC_URL || 'https://icy-flower-0f415200f.7.azurestaticapps.net/api/public/tasks-sync' }}
         run: |
-          if [ -n "$JOURNEY_PROXY_TOKEN" ]; then
-            supabase secrets set JOURNEY_PROXY_TOKEN="$JOURNEY_PROXY_TOKEN" --project-ref wwxgajrtmslzklnyplah
-            echo "Synced JOURNEY_PROXY_TOKEN to Supabase edge secrets"
-          else
-            echo "JOURNEY_PROXY_TOKEN not set — skipping."
+          if [ -z "$JOURNEY_PROXY_TOKEN" ]; then
+            echo "JOURNEY_PROXY_TOKEN not set as a GitHub secret — skipping sync."
+            exit 0
           fi
-          if [ -n "$TASKS_SYNC_SECRET" ]; then
-            supabase secrets set TASKS_SYNC_SECRET="$TASKS_SYNC_SECRET" HUDDLE_SYNC_URL="$HUDDLE_SYNC_URL" --project-ref wwxgajrtmslzklnyplah
-            echo "Synced TASKS_SYNC_SECRET + HUDDLE_SYNC_URL to Supabase edge secrets"
-          else
-            echo "TASKS_SYNC_SECRET not set — huddle-task-sync will no-op until the org secret exists."
-          fi
+          supabase secrets set JOURNEY_PROXY_TOKEN="$JOURNEY_PROXY_TOKEN" --project-ref wwxgajrtmslzklnyplah
+          echo "Synced JOURNEY_PROXY_TOKEN to Supabase edge secrets"
 
       - name: Determine functions to deploy
         id: changed

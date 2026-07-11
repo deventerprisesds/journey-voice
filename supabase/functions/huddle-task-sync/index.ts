@@ -4,18 +4,20 @@
 // INSERT/UPDATE/DELETE. It resolves the owner's email (profiles.email) and POSTs
 // the change to Huddle's /api/public/tasks-sync webhook with the shared secret.
 //
-// The Huddle URL + secret live in Supabase edge secrets (HUDDLE_SYNC_URL,
-// TASKS_SYNC_SECRET), synced from the GitHub org secrets by deploy-supabase-functions.yml
-// — same "org secrets are the single source of truth" pattern as JOURNEY_PROXY_TOKEN,
-// so the value can't drift from Huddle's copy and is never hand-typed.
+// Auth reuses the EXISTING shared secret JOURNEY_PROXY_TOKEN (already the auth token
+// bridging Huddle↔journey, already synced into edge secrets) — no new org credential.
+// The Huddle webhook URL defaults to the deployed SWA (not sensitive); override with the
+// HUDDLE_SYNC_URL edge secret only if the host changes.
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const HUDDLE_SYNC_URL = (Deno.env.get("HUDDLE_SYNC_URL") ?? "").trim();
-const TASKS_SYNC_SECRET = (Deno.env.get("TASKS_SYNC_SECRET") ?? "").trim();
+const HUDDLE_SYNC_URL = (
+  Deno.env.get("HUDDLE_SYNC_URL") ?? "https://icy-flower-0f415200f.7.azurestaticapps.net/api/public/tasks-sync"
+).trim();
+const TASKS_SYNC_SECRET = (Deno.env.get("JOURNEY_PROXY_TOKEN") ?? "").trim();
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
