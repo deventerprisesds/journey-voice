@@ -1,34 +1,26 @@
 -- Mirror every task change to the Huddle app so Huddle can run prioritization
--- supabase-independently. Modeled on notify_task_topic_classification (20260205142334):
--- the trigger POSTs to a journey edge function (huddle-task-sync) using the already-configured
--- app.settings.supabase_url + service_role_key; that edge function forwards to Huddle's webhook
--- with the shared secret (kept in Supabase edge secrets, synced from the GitHub org secret by
--- deploy-supabase-functions.yml — no DB-level secret and nothing hand-typed).
+-- supabase-independently. The trigger POSTs to the huddle-task-sync edge function; that
+-- function resolves the owner email (with its own injected service key) and forwards the
+-- change to Huddle's webhook using the shared JOURNEY_PROXY_TOKEN (an edge secret).
 -- Covers INSERT/UPDATE/DELETE; DELETE is the only deletion signal (tasks are hard-deleted).
 -- SECURITY DEFINER + errors swallowed so task writes never fail on the mirror.
+--
+-- The project URL and anon key below are PUBLIC (the anon key ships in the client app), so
+-- hardcoding them here exposes no secret. The anon key only satisfies the edge function's
+-- verify_jwt; no service key or private secret is stored in the database.
 
 CREATE OR REPLACE FUNCTION public.notify_huddle_task_sync()
 RETURNS TRIGGER AS $$
 DECLARE
-  supabase_url TEXT;
-  service_key  TEXT;
-  rec          RECORD;
+  rec RECORD;
 BEGIN
-  supabase_url := current_setting('app.settings.supabase_url', true);
-  service_key  := current_setting('app.settings.service_role_key', true);
-
-  -- Not configured → skip silently (task writes must never fail on the mirror).
-  IF supabase_url IS NULL OR service_key IS NULL THEN
-    RETURN COALESCE(NEW, OLD);
-  END IF;
-
   rec := COALESCE(NEW, OLD);
 
   PERFORM net.http_post(
-    url := supabase_url || '/functions/v1/huddle-task-sync',
+    url := 'https://wwxgajrtmslzklnyplah.supabase.co/functions/v1/huddle-task-sync',
     headers := jsonb_build_object(
       'Content-Type', 'application/json',
-      'Authorization', 'Bearer ' || service_key
+      'Authorization', 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind3eGdhanJ0bXNsemtsbnlwbGFoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg0MDI3MzIsImV4cCI6MjA3Mzk3ODczMn0._M_B3093_wjfFe4vwXmKXVCcw-QG5UhRAT4-H-aGoHE'
     ),
     body := jsonb_build_object(
       'operation', TG_OP,
