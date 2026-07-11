@@ -1,44 +1,38 @@
--- Mirror every task change to the Huddle app's Azure-PG store so Huddle can run
--- prioritization supabase-independently. Modeled on notify_task_topic_classification
--- (20260205142334): pg_net POST, SECURITY DEFINER, errors swallowed so task writes never fail.
--- Covers INSERT/UPDATE/DELETE (the DELETE branch is the only deletion signal — tasks are hard-deleted).
---
--- One-time config (run once, values from the Huddle deploy):
---   ALTER DATABASE postgres SET app.settings.huddle_sync_url    = 'https://<swa-host>/api/public/tasks-sync';
---   ALTER DATABASE postgres SET app.settings.huddle_sync_secret = '<same value as Huddle TASKS_SYNC_SECRET>';
--- (pg_net is already enabled in this project.)
+-- Mirror every task change to the Huddle app so Huddle can run prioritization
+-- supabase-independently. Modeled on notify_task_topic_classification (20260205142334):
+-- the trigger POSTs to a journey edge function (huddle-task-sync) using the already-configured
+-- app.settings.supabase_url + service_role_key; that edge function forwards to Huddle's webhook
+-- with the shared secret (kept in Supabase edge secrets, synced from the GitHub org secret by
+-- deploy-supabase-functions.yml — no DB-level secret and nothing hand-typed).
+-- Covers INSERT/UPDATE/DELETE; DELETE is the only deletion signal (tasks are hard-deleted).
+-- SECURITY DEFINER + errors swallowed so task writes never fail on the mirror.
 
 CREATE OR REPLACE FUNCTION public.notify_huddle_task_sync()
 RETURNS TRIGGER AS $$
 DECLARE
-  huddle_url    TEXT;
-  huddle_secret TEXT;
-  rec           RECORD;
-  u_email       TEXT;
+  supabase_url TEXT;
+  service_key  TEXT;
+  rec          RECORD;
 BEGIN
-  huddle_url    := current_setting('app.settings.huddle_sync_url', true);
-  huddle_secret := current_setting('app.settings.huddle_sync_secret', true);
+  supabase_url := current_setting('app.settings.supabase_url', true);
+  service_key  := current_setting('app.settings.service_role_key', true);
 
-  -- Not configured yet → skip silently (task writes must never fail on the mirror).
-  IF huddle_url IS NULL OR huddle_secret IS NULL THEN
+  -- Not configured → skip silently (task writes must never fail on the mirror).
+  IF supabase_url IS NULL OR service_key IS NULL THEN
     RETURN COALESCE(NEW, OLD);
   END IF;
 
   rec := COALESCE(NEW, OLD);
 
-  -- Attach a human-meaningful identity (Huddle scopes by email).
-  SELECT email INTO u_email FROM public.profiles WHERE user_id = rec.user_id LIMIT 1;
-
   PERFORM net.http_post(
-    url := huddle_url,
+    url := supabase_url || '/functions/v1/huddle-task-sync',
     headers := jsonb_build_object(
       'Content-Type', 'application/json',
-      'x-webhook-secret', huddle_secret
+      'Authorization', 'Bearer ' || service_key
     ),
     body := jsonb_build_object(
       'operation', TG_OP,
       'user_id', rec.user_id,
-      'user_email', u_email,
       'task', to_jsonb(rec)
     )
   );
