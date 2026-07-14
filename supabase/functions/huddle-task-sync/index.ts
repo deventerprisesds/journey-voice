@@ -59,7 +59,9 @@ serve(async (req) => {
       headers: { "Content-Type": "application/json", "x-webhook-secret": TASKS_SYNC_SECRET },
       body: JSON.stringify({ operation: payload.operation ?? "UPDATE", user_id: userId, user_email: userEmail, task }),
     });
-    return json({ ok: res.ok, status: res.status });
+    // Surface the webhook's body so a mirror failure is diagnosable from net._http_response.
+    const respBody = await res.text();
+    return json({ ok: res.ok, status: res.status, body: respBody.slice(0, 500) });
   } catch (err) {
     console.error("[huddle-task-sync] forward failed", err instanceof Error ? err.message : err);
     return json({ ok: false, error: "forward_failed" }, 502);
