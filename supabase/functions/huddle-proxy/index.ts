@@ -160,6 +160,22 @@ serve(async (req) => {
         return json({ ok: false, output: JSON.stringify({ error: resolved.error }), error: resolved.error });
       }
 
+      // Identity resolution for Huddle's read-side scoping: map the caller's Entra sign-in email
+      // (possibly an alias like von.ellis@) to the canonical journey user_id + profile email
+      // (dev@) that the task-sync writes the mirror under. Handled here, before execute-tool.
+      if (toolName === "whoami") {
+        const prof = await supabase
+          .from("profiles")
+          .select("email")
+          .eq("user_id", resolved.userId)
+          .limit(1)
+          .maybeSingle();
+        return json({
+          ok: true,
+          output: JSON.stringify({ user_id: resolved.userId, email: prof.data?.email ?? null }),
+        });
+      }
+
       // Delegate to the deployed execute-tool function (single source of truth).
       const execRes = await fetch(`${SUPABASE_URL}/functions/v1/execute-tool`, {
         method: "POST",
