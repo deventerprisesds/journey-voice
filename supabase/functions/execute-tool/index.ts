@@ -346,7 +346,10 @@ async function executeToolCall(
       
       case 'update_task':
         return await updateTask(supabase, args);
-      
+
+      case 'batch_update_tasks':
+        return await batchUpdateTasks(supabase, userId, args);
+
       case 'reschedule_task':
         return await rescheduleTask(supabase, args);
       
@@ -869,6 +872,37 @@ async function updateTask(supabase: any, args: any): Promise<ExecuteToolResponse
   } catch (error) {
     return { success: false, error: extractErrorMessage(error) };
   }
+}
+
+// Batch grooming write: apply many task updates (assignee/tags/priority/status/category + priority
+// rank) in ONE edge invocation, so Huddle sends a single call instead of N per-task round-trips.
+async function batchUpdateTasks(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
+  const updates: any[] = Array.isArray(args?.updates) ? args.updates : [];
+  if (!updates.length) return { success: false, error: "updates array is required" };
+  let updated = 0;
+  const failed: Array<{ task_id?: string; error: string }> = [];
+  for (const u of updates) {
+    if (!u?.task_id) { failed.push({ error: "missing task_id" }); continue; }
+    const data: any = {};
+    if (u.title) data.title = u.title;
+    if (u.description !== undefined) data.description = u.description;
+    if (u.status) data.status = String(u.status).toUpperCase();
+    if (u.priority) data.priority = String(u.priority).toUpperCase();
+    if (u.category) data.category = String(u.category).toUpperCase();
+    if (u.assigned_agent !== undefined) data.assigned_agent = u.assigned_agent ? String(u.assigned_agent) : null;
+    if (u.tags !== undefined) data.tags = Array.isArray(u.tags) ? u.tags.map((t: unknown) => String(t)) : [];
+    if (typeof u.rank === "number") { data.is_priority = true; data.priority_rank = u.rank; }
+    else if (u.unset_rank) { data.is_priority = false; data.priority_rank = null; }
+    if (!Object.keys(data).length) { failed.push({ task_id: u.task_id, error: "no fields to update" }); continue; }
+    const { error } = await supabase.from('tasks').update(data).eq('id', u.task_id).eq('user_id', userId);
+    if (error) failed.push({ task_id: u.task_id, error: error.message });
+    else updated++;
+  }
+  return {
+    success: true,
+    result: { updated, failed_count: failed.length, failed: failed.slice(0, 10) },
+    message: `Updated ${updated} of ${updates.length} tasks`,
+  };
 }
 
 async function rescheduleTask(supabase: any, args: any, timezone?: string): Promise<ExecuteToolResponse> {
