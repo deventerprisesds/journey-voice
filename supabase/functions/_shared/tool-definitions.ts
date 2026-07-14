@@ -72,20 +72,22 @@ export function getToolDefinitions(): ToolDefinition[] {
     {
       type: "function",
       name: "update_task",
-      description: "Update an existing task's properties.",
+      description: "Update an existing task's properties, including scrum-master grooming: assign it to a specific agent and apply labels.",
       parameters: {
         type: "object",
         properties: {
           task_id: { type: "string", description: "ID of the task to update" },
           title: { type: "string" },
           description: { type: "string" },
-          status: { 
-            type: "string", 
+          status: {
+            type: "string",
             enum: ["BACKLOG", "TODO", "READY", "UP_NEXT", "DOING", "DONE", "BLOCKED", "PLANNING"],
             description: "Task workflow status"
           },
           priority: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "URGENT"] },
-          category: { type: "string", enum: ["LIFE", "CAREER", "VENTURES", "EDUCATION"] }
+          category: { type: "string", enum: ["LIFE", "CAREER", "VENTURES", "EDUCATION"] },
+          assigned_agent: { type: "string", description: "Huddle agent id to assign this task to (e.g. finn-reid). Pass empty string to unassign." },
+          tags: { type: "array", items: { type: "string" }, description: "Labels for the task (e.g. needs-plaid, quick-win). Replaces existing tags." }
         },
         required: ["task_id"]
       }

@@ -843,6 +843,14 @@ async function updateTask(supabase: any, args: any): Promise<ExecuteToolResponse
     if (args.status) updateData.status = args.status.toUpperCase();
     if (args.priority) updateData.priority = args.priority.toUpperCase();
     if (args.category) updateData.category = args.category.toUpperCase();
+    // Huddle scrum-master grooming: assign the task to a specific agent + apply labels.
+    // assigned_agent is a Huddle agent id (e.g. "finn-reid"); pass null/"" to clear.
+    if (args.assigned_agent !== undefined) {
+      updateData.assigned_agent = args.assigned_agent ? String(args.assigned_agent) : null;
+    }
+    if (args.tags !== undefined) {
+      updateData.tags = Array.isArray(args.tags) ? args.tags.map((t: unknown) => String(t)) : [];
+    }
 
     const { data, error } = await supabase
       .from('tasks')
