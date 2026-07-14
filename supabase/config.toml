@@ -129,3 +129,8 @@ verify_jwt = false
 
 [functions.huddle-proxy]
 verify_jwt = false
+
+# Pinged every minute by pg_cron (no JWT) to drain Huddle's queued/stale chat turns — auth to Huddle
+# is the shared JOURNEY_PROXY_TOKEN inside the function, not a Supabase JWT.
+[functions.drain-huddle-turns]
+verify_jwt = false
