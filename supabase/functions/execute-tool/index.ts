@@ -389,6 +389,12 @@ async function executeToolCall(
       case 'send_chat_message':
         return await sendScheduledChatMessage(supabase, userId, args);
 
+      // Internal: fire an immediate push on a specific Android channel. Huddle calls this at reminder
+      // fire time so a "reminder" lands as a heads-up (channel `messages`) and an "alarm" lands as the
+      // bridge's full-screen alarm (channel `calendar_events`). Not advertised to LLMs.
+      case 'send_push':
+        return await sendPushNow(supabase, userId, args);
+
       // ============ SEARCH TOOLS ============
       case 'web_search':
         return await webSearch(args, context.timezone);
@@ -1785,6 +1791,32 @@ async function initiatePhoneCall(supabase: any, userId: string, args: any, inter
 // ============================================================================
 // SCHEDULED CHAT MESSAGE FUNCTION
 // ============================================================================
+
+// Fire an immediate device push on a chosen Android notification channel via send-push-notification.
+// `channel`: 'messages' / 'task-reminders' → heads-up; 'calendar_events' → the bridge's full-screen
+// alarm (looping sound over the lock screen). Used by Huddle's reminder/alarm firing.
+async function sendPushNow(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
+  const title = String(args.title ?? 'Reminder');
+  const body = String(args.body ?? '');
+  const channel = ['messages', 'task-reminders', 'calendar_events'].includes(args.channel)
+    ? args.channel
+    : 'messages';
+  try {
+    const { error } = await supabase.functions.invoke('send-push-notification', {
+      body: {
+        userId,
+        title,
+        body,
+        channel,
+        data: { type: channel === 'calendar_events' ? 'alarm' : 'reminder', source: 'huddle', ...(args.data || {}) },
+      },
+    });
+    if (error) return { success: false, error: extractErrorMessage(error) };
+    return { success: true, message: `Push sent on ${channel}.` };
+  } catch (error) {
+    return { success: false, error: extractErrorMessage(error) };
+  }
+}
 
 async function sendScheduledChatMessage(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
   const delayMinutes = args.delay_minutes || 0;
