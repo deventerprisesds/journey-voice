@@ -885,10 +885,12 @@ async function updateTask(supabase: any, args: any): Promise<ExecuteToolResponse
 async function batchUpdateTasks(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
   const updates: any[] = Array.isArray(args?.updates) ? args.updates : [];
   if (!updates.length) return { success: false, error: "updates array is required" };
-  let updated = 0;
   const failed: Array<{ task_id?: string; error: string }> = [];
-  for (const u of updates) {
-    if (!u?.task_id) { failed.push({ error: "missing task_id" }); continue; }
+  // Fire every task update CONCURRENTLY. These rows are independent, so there's no reason to wait for
+  // one before starting the next — sequential awaits here were the whole reason grooming felt slow
+  // (N round-trips back-to-back). Promise.all collapses that to ~one round-trip of wall time.
+  const results = await Promise.all(updates.map(async (u): Promise<{ ok: boolean; task_id?: string; error?: string }> => {
+    if (!u?.task_id) return { ok: false, error: "missing task_id" };
     const data: any = {};
     if (u.title) data.title = u.title;
     if (u.description !== undefined) data.description = u.description;
@@ -899,10 +901,14 @@ async function batchUpdateTasks(supabase: any, userId: string, args: any): Promi
     if (u.tags !== undefined) data.tags = Array.isArray(u.tags) ? u.tags.map((t: unknown) => String(t)) : [];
     if (typeof u.rank === "number") { data.is_priority = true; data.priority_rank = u.rank; }
     else if (u.unset_rank) { data.is_priority = false; data.priority_rank = null; }
-    if (!Object.keys(data).length) { failed.push({ task_id: u.task_id, error: "no fields to update" }); continue; }
+    if (!Object.keys(data).length) return { ok: false, task_id: u.task_id, error: "no fields to update" };
     const { error } = await supabase.from('tasks').update(data).eq('id', u.task_id).eq('user_id', userId);
-    if (error) failed.push({ task_id: u.task_id, error: error.message });
-    else updated++;
+    return error ? { ok: false, task_id: u.task_id, error: error.message } : { ok: true, task_id: u.task_id };
+  }));
+  let updated = 0;
+  for (const r of results) {
+    if (r.ok) updated++;
+    else failed.push({ task_id: r.task_id, error: r.error ?? "update failed" });
   }
   return {
     success: true,
