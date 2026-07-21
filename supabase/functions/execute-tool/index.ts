@@ -2340,8 +2340,13 @@ function explainSchedulingScoreServer(task: any): {
     const delta = dueMs - nowMs;
     if (delta <= 48 * 3600 * 1000 && delta >= -48 * 3600 * 1000) dueSoon = 5;
     if (delta > 48 * 3600 * 1000 && delta <= 7 * 24 * 3600 * 1000) dueWindow = 3;
-    if (delta < -30 * 24 * 3600 * 1000) staleness = -10;
-    else if (delta < -14 * 24 * 3600 * 1000) staleness = -3;
+    // Mirror the scheduler: important-but-old work (priority lane / HIGH / URGENT) is not
+    // penalized for staleness, so it stays visible instead of decaying toward auto-archive.
+    const isImportant = task.is_priority === true || task.priority === 'HIGH' || task.priority === 'URGENT';
+    if (!isImportant) {
+      if (delta < -30 * 24 * 3600 * 1000) staleness = -10;
+      else if (delta < -14 * 24 * 3600 * 1000) staleness = -3;
+    }
   }
   const createdAt = new Date(task.created_at).getTime();
   const daysSince = (nowMs - createdAt) / (24 * 3600 * 1000);
