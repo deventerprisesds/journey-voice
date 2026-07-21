@@ -20,7 +20,8 @@ import {
   FileSpreadsheet,
   Sparkles,
   Home,
-  ListChecks
+  ListChecks,
+  CalendarClock
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { useIsMobile } from '@/hooks/use-mobile';
@@ -30,6 +31,7 @@ import CronJobTesting from '@/components/CronJobTesting';
 import UpcomingReminders from '@/components/UpcomingReminders';
 import NotificationStatusDashboard from '@/components/NotificationStatusDashboard';
 import SchedulingSettings from '@/components/SchedulingSettings';
+import CeremonySettings from '@/components/CeremonySettings';
 import VoiceAssistantSettings from '@/components/VoiceAssistantSettings';
 import ProfileSettings from '@/components/ProfileSettings';
 import { AssignmentSyncSettings } from '@/components/AssignmentSyncSettings';
@@ -39,6 +41,7 @@ import { useOAuthCallback } from '@/hooks/useOAuthCallback';
 const tabConfig = [
   { value: 'notifications', label: 'Notifications', icon: Bell },
   { value: 'scheduling', label: 'Scheduling', icon: SettingsIcon },
+  { value: 'ceremonies', label: 'Ceremonies', icon: CalendarClock },
   { value: 'tasks', label: 'Tasks', icon: ListChecks },
   
   { value: 'ai', label: 'AI Instructions', icon: Sparkles },
@@ -157,6 +160,10 @@ const Settings: React.FC = () => {
 
           <TabsContent value="scheduling" className="mt-6">
             <SchedulingSettings />
+          </TabsContent>
+
+          <TabsContent value="ceremonies" className="mt-6">
+            <CeremonySettings />
           </TabsContent>
 
           <TabsContent value="tasks" className="mt-6">

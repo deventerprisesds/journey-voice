@@ -95,15 +95,27 @@ async function resolveUserId(
 ): Promise<{ userId?: string; error?: string }> {
   const email = (caller?.entra_email ?? "").trim();
   if (!email) return { error: "no caller email provided — cannot map to a journey-voice user" };
-  const { data, error } = await supabase
+  // 1) Primary identity: profiles.email.
+  const prof = await supabase
     .from("profiles")
     .select("user_id")
     .ilike("email", email) // exact, case-insensitive
     .limit(1)
     .maybeSingle();
-  if (error) return { error: `profile lookup failed: ${error.message}` };
-  if (!data?.user_id) return { error: `no journey-voice account found for ${email}` };
-  return { userId: data.user_id as string };
+  if (prof.error) return { error: `profile lookup failed: ${prof.error.message}` };
+  if (prof.data?.user_id) return { userId: prof.data.user_id as string };
+  // 2) Fallback: an additional email mapped to an existing user. This implements
+  //    "one user, many emails" so a person can sign in to Huddle with any of
+  //    their addresses and reach the same journey-voice records.
+  const alias = await supabase
+    .from("user_email_aliases")
+    .select("user_id")
+    .ilike("email", email)
+    .limit(1)
+    .maybeSingle();
+  if (alias.error) return { error: `alias lookup failed: ${alias.error.message}` };
+  if (alias.data?.user_id) return { userId: alias.data.user_id as string };
+  return { error: `no journey-voice account found for ${email}` };
 }
 
 serve(async (req) => {
@@ -146,6 +158,22 @@ serve(async (req) => {
         // Return 200 with ok=false so Huddle surfaces a visible fallback rather
         // than a hard error — the agent reply degrades gracefully.
         return json({ ok: false, output: JSON.stringify({ error: resolved.error }), error: resolved.error });
+      }
+
+      // Identity resolution for Huddle's read-side scoping: map the caller's Entra sign-in email
+      // (possibly an alias like von.ellis@) to the canonical journey user_id + profile email
+      // (dev@) that the task-sync writes the mirror under. Handled here, before execute-tool.
+      if (toolName === "whoami") {
+        const prof = await supabase
+          .from("profiles")
+          .select("email")
+          .eq("user_id", resolved.userId)
+          .limit(1)
+          .maybeSingle();
+        return json({
+          ok: true,
+          output: JSON.stringify({ user_id: resolved.userId, email: prof.data?.email ?? null }),
+        });
       }
 
       // Delegate to the deployed execute-tool function (single source of truth).

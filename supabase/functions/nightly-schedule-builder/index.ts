@@ -549,7 +549,7 @@ serve(async (req) => {
         
         const { data: staleTasks, error: staleError } = await supabase
           .from('tasks')
-          .select('id, title, pushed_count, due_date, category')
+          .select('id, title, pushed_count, due_date, category, is_priority, priority')
           .eq('user_id', userId)
           .not('status', 'eq', 'DONE')
           .is('completed_at', null)
@@ -559,6 +559,13 @@ serve(async (req) => {
         let archivedStaleCount = 0;
         if (!staleError && staleTasks && staleTasks.length > 0) {
           for (const stale of staleTasks) {
+            // Never auto-complete important work — old ≠ unimportant. Priority-lane and
+            // HIGH/URGENT tasks stay visible (they surface in the overdue/priority views)
+            // instead of being silently archived to DONE and lost.
+            if ((stale as any).is_priority === true || stale.priority === 'HIGH' || stale.priority === 'URGENT') {
+              console.log(`  🛡️ Kept important stale task (not archived): "${stale.title}" (pushed ×${stale.pushed_count}, due ${stale.due_date}, priority ${stale.priority}${(stale as any).is_priority ? ', on priority lane' : ''})`);
+              continue;
+            }
             const { error: archError } = await supabase
               .from('tasks')
               .update({
@@ -1047,7 +1054,11 @@ serve(async (req) => {
                 const thirtyDaysAgoDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
                 const daysOverdue = dueDate < targetDate ? Math.floor((targetDate.getTime() - dueDate.getTime()) / 86400000) : 0;
                 const isAssignmentInGrace = (task as any).assignment_id && daysOverdue > 0 && daysOverdue <= 7;
-                if (!isAssignmentInGrace) {
+                // Don't bury important-but-old work with the staleness penalty — that penalty is
+                // what keeps it from ever winning a slot, so it rolls over until it trips the stale
+                // auto-archive. Keep priority-lane and HIGH/URGENT tasks competitive instead.
+                const isImportant = (task as any).is_priority === true || task.priority === 'HIGH' || task.priority === 'URGENT';
+                if (!isAssignmentInGrace && !isImportant) {
                   if (dueDate < thirtyDaysAgoDate) {
                     score -= 10;
                     console.log(`      📉 Heavy staleness penalty for "${task.title}" (due ${task.due_date}, 30+ days overdue)`);

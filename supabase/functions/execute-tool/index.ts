@@ -346,7 +346,10 @@ async function executeToolCall(
       
       case 'update_task':
         return await updateTask(supabase, args);
-      
+
+      case 'batch_update_tasks':
+        return await batchUpdateTasks(supabase, userId, args);
+
       case 'reschedule_task':
         return await rescheduleTask(supabase, args);
       
@@ -385,6 +388,12 @@ async function executeToolCall(
       
       case 'send_chat_message':
         return await sendScheduledChatMessage(supabase, userId, args);
+
+      // Internal: fire an immediate push on a specific Android channel. Huddle calls this at reminder
+      // fire time so a "reminder" lands as a heads-up (channel `messages`) and an "alarm" lands as the
+      // bridge's full-screen alarm (channel `calendar_events`). Not advertised to LLMs.
+      case 'send_push':
+        return await sendPushNow(supabase, userId, args);
 
       // ============ SEARCH TOOLS ============
       case 'web_search':
@@ -843,6 +852,14 @@ async function updateTask(supabase: any, args: any): Promise<ExecuteToolResponse
     if (args.status) updateData.status = args.status.toUpperCase();
     if (args.priority) updateData.priority = args.priority.toUpperCase();
     if (args.category) updateData.category = args.category.toUpperCase();
+    // Huddle scrum-master grooming: assign the task to a specific agent + apply labels.
+    // assigned_agent is a Huddle agent id (e.g. "finn-reid"); pass null/"" to clear.
+    if (args.assigned_agent !== undefined) {
+      updateData.assigned_agent = args.assigned_agent ? String(args.assigned_agent) : null;
+    }
+    if (args.tags !== undefined) {
+      updateData.tags = Array.isArray(args.tags) ? args.tags.map((t: unknown) => String(t)) : [];
+    }
 
     const { data, error } = await supabase
       .from('tasks')
@@ -861,6 +878,43 @@ async function updateTask(supabase: any, args: any): Promise<ExecuteToolResponse
   } catch (error) {
     return { success: false, error: extractErrorMessage(error) };
   }
+}
+
+// Batch grooming write: apply many task updates (assignee/tags/priority/status/category + priority
+// rank) in ONE edge invocation, so Huddle sends a single call instead of N per-task round-trips.
+async function batchUpdateTasks(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
+  const updates: any[] = Array.isArray(args?.updates) ? args.updates : [];
+  if (!updates.length) return { success: false, error: "updates array is required" };
+  const failed: Array<{ task_id?: string; error: string }> = [];
+  // Fire every task update CONCURRENTLY. These rows are independent, so there's no reason to wait for
+  // one before starting the next — sequential awaits here were the whole reason grooming felt slow
+  // (N round-trips back-to-back). Promise.all collapses that to ~one round-trip of wall time.
+  const results = await Promise.all(updates.map(async (u): Promise<{ ok: boolean; task_id?: string; error?: string }> => {
+    if (!u?.task_id) return { ok: false, error: "missing task_id" };
+    const data: any = {};
+    if (u.title) data.title = u.title;
+    if (u.description !== undefined) data.description = u.description;
+    if (u.status) data.status = String(u.status).toUpperCase();
+    if (u.priority) data.priority = String(u.priority).toUpperCase();
+    if (u.category) data.category = String(u.category).toUpperCase();
+    if (u.assigned_agent !== undefined) data.assigned_agent = u.assigned_agent ? String(u.assigned_agent) : null;
+    if (u.tags !== undefined) data.tags = Array.isArray(u.tags) ? u.tags.map((t: unknown) => String(t)) : [];
+    if (typeof u.rank === "number") { data.is_priority = true; data.priority_rank = u.rank; }
+    else if (u.unset_rank) { data.is_priority = false; data.priority_rank = null; }
+    if (!Object.keys(data).length) return { ok: false, task_id: u.task_id, error: "no fields to update" };
+    const { error } = await supabase.from('tasks').update(data).eq('id', u.task_id).eq('user_id', userId);
+    return error ? { ok: false, task_id: u.task_id, error: error.message } : { ok: true, task_id: u.task_id };
+  }));
+  let updated = 0;
+  for (const r of results) {
+    if (r.ok) updated++;
+    else failed.push({ task_id: r.task_id, error: r.error ?? "update failed" });
+  }
+  return {
+    success: true,
+    result: { updated, failed_count: failed.length, failed: failed.slice(0, 10) },
+    message: `Updated ${updated} of ${updates.length} tasks`,
+  };
 }
 
 async function rescheduleTask(supabase: any, args: any, timezone?: string): Promise<ExecuteToolResponse> {
@@ -1744,6 +1798,32 @@ async function initiatePhoneCall(supabase: any, userId: string, args: any, inter
 // SCHEDULED CHAT MESSAGE FUNCTION
 // ============================================================================
 
+// Fire an immediate device push on a chosen Android notification channel via send-push-notification.
+// `channel`: 'messages' / 'task-reminders' → heads-up; 'calendar_events' → the bridge's full-screen
+// alarm (looping sound over the lock screen). Used by Huddle's reminder/alarm firing.
+async function sendPushNow(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
+  const title = String(args.title ?? 'Reminder');
+  const body = String(args.body ?? '');
+  const channel = ['messages', 'task-reminders', 'calendar_events'].includes(args.channel)
+    ? args.channel
+    : 'messages';
+  try {
+    const { error } = await supabase.functions.invoke('send-push-notification', {
+      body: {
+        userId,
+        title,
+        body,
+        channel,
+        data: { type: channel === 'calendar_events' ? 'alarm' : 'reminder', source: 'huddle', ...(args.data || {}) },
+      },
+    });
+    if (error) return { success: false, error: extractErrorMessage(error) };
+    return { success: true, message: `Push sent on ${channel}.` };
+  } catch (error) {
+    return { success: false, error: extractErrorMessage(error) };
+  }
+}
+
 async function sendScheduledChatMessage(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
   const delayMinutes = args.delay_minutes || 0;
   const scheduledTime = args.scheduled_time;
@@ -2260,8 +2340,13 @@ function explainSchedulingScoreServer(task: any): {
     const delta = dueMs - nowMs;
     if (delta <= 48 * 3600 * 1000 && delta >= -48 * 3600 * 1000) dueSoon = 5;
     if (delta > 48 * 3600 * 1000 && delta <= 7 * 24 * 3600 * 1000) dueWindow = 3;
-    if (delta < -30 * 24 * 3600 * 1000) staleness = -10;
-    else if (delta < -14 * 24 * 3600 * 1000) staleness = -3;
+    // Mirror the scheduler: important-but-old work (priority lane / HIGH / URGENT) is not
+    // penalized for staleness, so it stays visible instead of decaying toward auto-archive.
+    const isImportant = task.is_priority === true || task.priority === 'HIGH' || task.priority === 'URGENT';
+    if (!isImportant) {
+      if (delta < -30 * 24 * 3600 * 1000) staleness = -10;
+      else if (delta < -14 * 24 * 3600 * 1000) staleness = -3;
+    }
   }
   const createdAt = new Date(task.created_at).getTime();
   const daysSince = (nowMs - createdAt) / (24 * 3600 * 1000);

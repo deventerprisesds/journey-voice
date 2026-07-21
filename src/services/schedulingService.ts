@@ -41,6 +41,26 @@ export interface ScheduledCall {
 // Communication mode for delivery method
 export type CommsMode = 'phone' | 'app_message' | 'slack' | 'email';
 
+// Scrum ceremonies scheduled as recurring "virtual meetings" (run in Huddle, grounded in tasks).
+export type CeremonyType = 'planning' | 'standup' | 'review_retro';
+export type CeremonyRunMode = 'round-robin' | 'narrate';
+export interface CeremonySchedule {
+  id: string;
+  ceremonyType: CeremonyType;
+  time: string; // HH:mm
+  daysOfWeek: number[]; // 0=Sun..6=Sat
+  enabled: boolean;
+  mode: CeremonyRunMode;
+  autoRun: boolean; // false = remind me to run it; true = run unattended and report
+}
+
+// Default cadence (1-week sprint): planning Mon noon, stand-up noon M–F, review+retro Fri 12:30.
+export const DEFAULT_CEREMONY_SCHEDULE: CeremonySchedule[] = [
+  { id: 'planning', ceremonyType: 'planning', time: '12:00', daysOfWeek: [1], enabled: true, mode: 'round-robin', autoRun: false },
+  { id: 'standup', ceremonyType: 'standup', time: '12:00', daysOfWeek: [1, 2, 3, 4, 5], enabled: true, mode: 'round-robin', autoRun: false },
+  { id: 'review_retro', ceremonyType: 'review_retro', time: '12:30', daysOfWeek: [5], enabled: true, mode: 'round-robin', autoRun: false },
+];
+
 // Phone call mode for infrastructure selection
 export type PhoneCallMode = 'media_streams' | 'conversation_relay' | 'cloudflare';
 
@@ -57,6 +77,7 @@ export interface SchedulingConfigWithInstructions extends SchedulingConfig {
   scheduled_calls?: ScheduledCall[];
   recurring_calls_enabled?: boolean;
   phone_call_mode?: PhoneCallMode;
+  ceremony_schedule?: CeremonySchedule[];
 }
 
 /**
@@ -78,7 +99,7 @@ export async function loadUserSchedulingConfig(userId?: string): Promise<Schedul
   try {
     const { data, error } = await supabase
       .from('user_scheduling_prefs')
-      .select('config, timezone, core_instructions, realtime_extensions, assistant_extensions, auto_greeting_timeout, tts_provider, elevenlabs_voice_id, openai_voice, custom_voices, scheduled_calls, recurring_calls_enabled, phone_call_mode')
+      .select('config, timezone, core_instructions, realtime_extensions, assistant_extensions, auto_greeting_timeout, tts_provider, elevenlabs_voice_id, openai_voice, custom_voices, scheduled_calls, recurring_calls_enabled, phone_call_mode, ceremony_schedule')
       .eq('user_id', userId)
       .maybeSingle();
 
@@ -115,6 +136,11 @@ export async function loadUserSchedulingConfig(userId?: string): Promise<Schedul
         scheduled_calls: Array.isArray(data.scheduled_calls) ? (data.scheduled_calls as unknown as ScheduledCall[]) : [],
         recurring_calls_enabled: data.recurring_calls_enabled ?? true,
         phone_call_mode: (data.phone_call_mode as PhoneCallMode) || 'media_streams',
+        // Empty → show the default cadence; the user edits from there.
+        ceremony_schedule:
+          Array.isArray(data.ceremony_schedule) && data.ceremony_schedule.length
+            ? (data.ceremony_schedule as unknown as CeremonySchedule[])
+            : DEFAULT_CEREMONY_SCHEDULE,
       };
       cachedConfig = mergedConfig;
       cachedUserId = userId;
@@ -160,7 +186,8 @@ export async function saveUserSchedulingConfig(
       scheduled_calls,
       recurring_calls_enabled,
       phone_call_mode,
-      ...restConfig 
+      ceremony_schedule,
+      ...restConfig
     } = config;
     
     const updateData: any = {
@@ -219,7 +246,11 @@ export async function saveUserSchedulingConfig(
     if (phone_call_mode !== undefined) {
       updateData.phone_call_mode = phone_call_mode;
     }
-    
+
+    if (ceremony_schedule !== undefined) {
+      updateData.ceremony_schedule = ceremony_schedule;
+    }
+
     const { error } = await supabase
       .from('user_scheduling_prefs')
       .upsert(updateData, { onConflict: 'user_id' });

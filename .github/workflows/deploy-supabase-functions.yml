@@ -44,6 +44,8 @@ jobs:
         # GitHub org secrets are the single source of truth. Copy the shared
         # huddle↔journey proxy token into Supabase so it never has to be set by
         # hand and can't drift from Huddle's copy (both read the same org secret).
+        # huddle-task-sync reuses this same JOURNEY_PROXY_TOKEN as its webhook auth,
+        # so no new org secret is introduced.
         env:
           JOURNEY_PROXY_TOKEN: ${{ secrets.JOURNEY_PROXY_TOKEN }}
         run: |
