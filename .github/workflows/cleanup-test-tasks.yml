@@ -33,13 +33,16 @@ jobs:
         run: |
           python3 - <<'PY'
           import json, os, urllib.request, urllib.parse, urllib.error, collections
+          from urllib.parse import urlencode, quote
 
           SB_URL = os.environ['SB_URL']; SB_KEY = os.environ['SB_KEY']; MODE = os.environ['MODE']
           BASE = f'{SB_URL}/rest/v1/tasks'
           H = {'apikey': SB_KEY, 'Authorization': f'Bearer {SB_KEY}', 'Accept': 'application/json'}
 
-          def req(method, query, prefer=None):
-              url = BASE + ('?' + query if query else '')
+          def req(method, params, prefer=None):
+              # params: list of (key, value) tuples — every value is URL-encoded (spaces, quotes, parens).
+              qs = urlencode(params, quote_via=quote)
+              url = BASE + ('?' + qs if qs else '')
               h = dict(H)
               if prefer: h['Prefer'] = prefer
               r = urllib.request.Request(url, method=method, headers=h)
@@ -50,26 +53,26 @@ jobs:
               except urllib.error.HTTPError as e:
                   return json.loads(e.read().decode() or '{}'), e.code
 
-          def q(*parts): return '&'.join(parts)
-
-          # --- delete buckets (PostgREST filters) ---
           titles_exact = ['Reconcile Q3 vendor invoices','Book Q3 Board Dinner Venue',
                           'Reserve Q3 board dinner venue','Redesign onboarding wizard',
                           'Perform backlog grooming','Assign team members to tasks',
                           'Prepare investor pitch deck']
           def inlist(vals):
-              return 'title=in.(' + ','.join('"' + v.replace('"','\\"') + '"' for v in vals) + ')'
+              return 'in.(' + ','.join('"' + v.replace('"','\\"') + '"' for v in vals) + ')'
 
+          # each bucket = list of PostgREST filter (key,value) tuples
           buckets = {
             'A venture MVP/GTM burst (VENTURES, 07-21..07-22)':
-                q('category=eq.VENTURES','created_at=gte.2026-07-21T00:00:00Z','created_at=lt.2026-07-23T00:00:00Z'),
-            'B named agent/test tasks': inlist(titles_exact),
-            'C "%test task%"': 'title=ilike.*test task*',
-            'D "Create a test task"/"Chat task 1"': inlist(['Create a test task','Chat task 1']),
+                [('category','eq.VENTURES'),
+                 ('created_at','gte.2026-07-21T00:00:00Z'),
+                 ('created_at','lt.2026-07-23T00:00:00Z')],
+            'B named agent/test tasks': [('title', inlist(titles_exact))],
+            'C "%test task%"': [('title','ilike.*test task*')],
+            'D "Create a test task"/"Chat task 1"': [('title', inlist(['Create a test task','Chat task 1']))],
           }
 
           print('=== TOTAL before ===')
-          allrows, _ = req('GET', 'select=id,user_id&limit=100000')
+          allrows, _ = req('GET', [('select','id,user_id'),('limit','100000')])
           print(f'total tasks: {len(allrows)}')
           users = collections.Counter(r.get('user_id') for r in allrows)
           print(f'distinct user_ids: {len(users)}')
@@ -77,13 +80,15 @@ jobs:
               print(f'  {str(u)[:8]}...: {c}')
 
           print('\n=== DELETE BUCKETS (preview counts) ===')
-          to_delete_ids = set()
+          to_delete = {}
           for name, flt in buckets.items():
-              rows, code = req('GET', 'select=id,title,created_at&' + flt + '&limit=100000')
-              ids = [r['id'] for r in rows] if isinstance(rows, list) else []
-              for i in ids: to_delete_ids.add(i)
-              print(f'{name}: {len(ids)} row(s) (HTTP {code})')
-          print(f'\nUnique rows matched by delete buckets: {len(to_delete_ids)}')
+              rows, code = req('GET', [('select','id,title,user_id,created_at')] + flt + [('limit','100000')])
+              rows = rows if isinstance(rows, list) else []
+              for r in rows: to_delete[r['id']] = r
+              # per-user breakdown so we can see if any real-account rows are caught unexpectedly
+              bu = collections.Counter(str(r.get('user_id'))[:8] for r in rows)
+              print(f'{name}: {len(rows)} row(s) (HTTP {code})  by-user: {dict(bu)}')
+          print(f'\nUnique rows matched by delete buckets: {len(to_delete)}')
 
           if MODE != 'execute':
               print('\nMODE=preview — nothing deleted. Re-run with mode=execute to apply.')
@@ -96,14 +101,14 @@ jobs:
               n = len(rows) if isinstance(rows, list) else 0
               deleted += n
               print(f'deleted {name}: {n} (HTTP {code})')
-          print(f'spam deleted (with overlap): {deleted}')
+          print(f'spam delete calls removed (with bucket overlap): {deleted}')
 
-          # --- dedup remaining: keep earliest per (lower(title), category) ---
-          print('\n=== DEDUP remaining real tasks ===')
-          rows, _ = req('GET', 'select=id,title,category,created_at&limit=100000')
+          # --- dedup remaining: keep earliest per (user_id, lower(title), category) ---
+          print('\n=== DEDUP remaining real tasks (per user) ===')
+          rows, _ = req('GET', [('select','id,user_id,title,category,created_at'),('limit','100000')])
           groups = collections.defaultdict(list)
           for r in rows:
-              key = ((r.get('title') or '').strip().lower(), r.get('category'))
+              key = (r.get('user_id'), (r.get('title') or '').strip().lower(), r.get('category'))
               groups[key].append(r)
           dup_ids = []
           for key, items in groups.items():
@@ -114,11 +119,10 @@ jobs:
           dd = 0
           for i in range(0, len(dup_ids), 50):
               chunk = dup_ids[i:i+50]
-              flt = 'id=in.(' + ','.join(chunk) + ')'
-              d, code = req('DELETE', flt, prefer='return=representation')
+              d, code = req('DELETE', [('id', 'in.(' + ','.join(chunk) + ')')], prefer='return=representation')
               dd += len(d) if isinstance(d, list) else 0
           print(f'duplicates deleted: {dd}')
 
-          final, _ = req('GET', 'select=id&limit=100000')
+          final, _ = req('GET', [('select','id'),('limit','100000')])
           print(f'\n=== TOTAL after: {len(final)} tasks ===')
           PY
