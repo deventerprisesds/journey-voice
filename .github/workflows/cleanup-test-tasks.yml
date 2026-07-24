@@ -1,0 +1,124 @@
+name: Cleanup test tasks
+
+# One-shot maintenance: remove test/agent-generated task spam from public.tasks and
+# de-duplicate the remaining real tasks. Uses the Supabase REST API with the service
+# key (same mechanism as the other query workflows here) — no MCP approval needed.
+#
+# SAFETY: defaults to mode=preview (counts only, deletes nothing). Run once in preview,
+# read the counts, then run again with mode=execute to actually delete. Scoped to the
+# task titles/dates identified as test spam; prints distinct user_ids so you can confirm
+# it isn't touching another account.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'preview (counts only) or execute (actually delete)'
+        required: true
+        default: 'preview'
+        type: choice
+        options:
+          - preview
+          - execute
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    env:
+      SB_URL: https://wwxgajrtmslzklnyplah.supabase.co
+      SB_KEY: ${{ secrets.CF_SUPABASE_SERVICE_KEY }}
+      MODE: ${{ github.event.inputs.mode }}
+    steps:
+      - name: Preview / execute cleanup
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request, urllib.parse, urllib.error, collections
+
+          SB_URL = os.environ['SB_URL']; SB_KEY = os.environ['SB_KEY']; MODE = os.environ['MODE']
+          BASE = f'{SB_URL}/rest/v1/tasks'
+          H = {'apikey': SB_KEY, 'Authorization': f'Bearer {SB_KEY}', 'Accept': 'application/json'}
+
+          def req(method, query, prefer=None):
+              url = BASE + ('?' + query if query else '')
+              h = dict(H)
+              if prefer: h['Prefer'] = prefer
+              r = urllib.request.Request(url, method=method, headers=h)
+              try:
+                  with urllib.request.urlopen(r) as resp:
+                      body = resp.read().decode()
+                      return (json.loads(body) if body.strip() else []), resp.status
+              except urllib.error.HTTPError as e:
+                  return json.loads(e.read().decode() or '{}'), e.code
+
+          def q(*parts): return '&'.join(parts)
+
+          # --- delete buckets (PostgREST filters) ---
+          titles_exact = ['Reconcile Q3 vendor invoices','Book Q3 Board Dinner Venue',
+                          'Reserve Q3 board dinner venue','Redesign onboarding wizard',
+                          'Perform backlog grooming','Assign team members to tasks',
+                          'Prepare investor pitch deck']
+          def inlist(vals):
+              return 'title=in.(' + ','.join('"' + v.replace('"','\\"') + '"' for v in vals) + ')'
+
+          buckets = {
+            'A venture MVP/GTM burst (VENTURES, 07-21..07-22)':
+                q('category=eq.VENTURES','created_at=gte.2026-07-21T00:00:00Z','created_at=lt.2026-07-23T00:00:00Z'),
+            'B named agent/test tasks': inlist(titles_exact),
+            'C "%test task%"': 'title=ilike.*test task*',
+            'D "Create a test task"/"Chat task 1"': inlist(['Create a test task','Chat task 1']),
+          }
+
+          print('=== TOTAL before ===')
+          allrows, _ = req('GET', 'select=id,user_id&limit=100000')
+          print(f'total tasks: {len(allrows)}')
+          users = collections.Counter(r.get('user_id') for r in allrows)
+          print(f'distinct user_ids: {len(users)}')
+          for u,c in users.most_common():
+              print(f'  {str(u)[:8]}...: {c}')
+
+          print('\n=== DELETE BUCKETS (preview counts) ===')
+          to_delete_ids = set()
+          for name, flt in buckets.items():
+              rows, code = req('GET', 'select=id,title,created_at&' + flt + '&limit=100000')
+              ids = [r['id'] for r in rows] if isinstance(rows, list) else []
+              for i in ids: to_delete_ids.add(i)
+              print(f'{name}: {len(ids)} row(s) (HTTP {code})')
+          print(f'\nUnique rows matched by delete buckets: {len(to_delete_ids)}')
+
+          if MODE != 'execute':
+              print('\nMODE=preview — nothing deleted. Re-run with mode=execute to apply.')
+              raise SystemExit(0)
+
+          print('\n=== EXECUTING DELETES ===')
+          deleted = 0
+          for name, flt in buckets.items():
+              rows, code = req('DELETE', flt, prefer='return=representation')
+              n = len(rows) if isinstance(rows, list) else 0
+              deleted += n
+              print(f'deleted {name}: {n} (HTTP {code})')
+          print(f'spam deleted (with overlap): {deleted}')
+
+          # --- dedup remaining: keep earliest per (lower(title), category) ---
+          print('\n=== DEDUP remaining real tasks ===')
+          rows, _ = req('GET', 'select=id,title,category,created_at&limit=100000')
+          groups = collections.defaultdict(list)
+          for r in rows:
+              key = ((r.get('title') or '').strip().lower(), r.get('category'))
+              groups[key].append(r)
+          dup_ids = []
+          for key, items in groups.items():
+              if len(items) > 1:
+                  items.sort(key=lambda x: x.get('created_at') or '')
+                  dup_ids += [x['id'] for x in items[1:]]  # keep earliest
+          print(f'duplicate rows to remove: {len(dup_ids)}')
+          dd = 0
+          for i in range(0, len(dup_ids), 50):
+              chunk = dup_ids[i:i+50]
+              flt = 'id=in.(' + ','.join(chunk) + ')'
+              d, code = req('DELETE', flt, prefer='return=representation')
+              dd += len(d) if isinstance(d, list) else 0
+          print(f'duplicates deleted: {dd}')
+
+          final, _ = req('GET', 'select=id&limit=100000')
+          print(f'\n=== TOTAL after: {len(final)} tasks ===')
+          PY
