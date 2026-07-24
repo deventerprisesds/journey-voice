@@ -29,7 +29,8 @@ export interface CategoryMapping {
 export const DEFAULT_TIME_WINDOWS: Record<string, TimeWindow> = {
   morning:        { start: 6,  end: 9,  days: [1, 2, 3, 4, 5] },
   business_hours: { start: 9,  end: 17, days: [1, 2, 3, 4, 5] },
-  after_work:     { start: 17, end: 22, days: [1, 2, 3, 4, 5] },
+  // after_work ends where evening begins (17–19) so the two never overlap.
+  after_work:     { start: 17, end: 19, days: [1, 2, 3, 4, 5] },
   evening:        { start: 19, end: 22, days: [0, 1, 2, 3, 4, 5, 6] },
   flexible:       { start: 9,  end: 22, days: [0, 1, 2, 3, 4, 5, 6] },
   weekends:       { start: 10, end: 20, days: [0, 6] },

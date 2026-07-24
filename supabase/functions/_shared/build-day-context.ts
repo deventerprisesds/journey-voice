@@ -85,7 +85,7 @@ const WINDOW_RANGES: Record<string, { start: number; end: number }> = {
   morning: { start: 6, end: 9 },
   business_hours: { start: 9, end: 17 },
   after_work: { start: 17, end: 19 },
-  evening: { start: 19, end: 23 },
+  evening: { start: 19, end: 22 },
 };
 
 function detectWindow(hour: number, isWeekend: boolean): string {
