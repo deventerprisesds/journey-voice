@@ -32,7 +32,7 @@ jobs:
       - name: Preview / execute cleanup
         run: |
           python3 - <<'PY'
-          import json, os, urllib.request, urllib.parse, urllib.error, collections
+          import json, os, time, urllib.request, urllib.parse, urllib.error, collections
           from urllib.parse import urlencode, quote
 
           SB_URL = os.environ['SB_URL']; SB_KEY = os.environ['SB_KEY']; MODE = os.environ['MODE']
@@ -94,14 +94,24 @@ jobs:
               print('\nMODE=preview — nothing deleted. Re-run with mode=execute to apply.')
               raise SystemExit(0)
 
-          print('\n=== EXECUTING DELETES ===')
-          deleted = 0
-          for name, flt in buckets.items():
-              rows, code = req('DELETE', flt, prefer='return=representation')
-              n = len(rows) if isinstance(rows, list) else 0
-              deleted += n
-              print(f'deleted {name}: {n} (HTTP {code})')
-          print(f'spam delete calls removed (with bucket overlap): {deleted}')
+          # Delete by id in SMALL batches with return=minimal + retry. Large single-filter
+          # deletes 500 (each removed row fires the Huddle-sync trigger; a big delete times
+          # out). Small id-batches bound each statement so it completes.
+          def delete_ids(ids, label):
+              ids = list(ids); CH = 20; done = 0; failed = 0
+              for i in range(0, len(ids), CH):
+                  chunk = ids[i:i+CH]
+                  ok = False
+                  for attempt in range(4):
+                      _, code = req('DELETE', [('id', 'in.(' + ','.join(chunk) + ')')], prefer='return=minimal')
+                      if code in (200, 204): ok = True; done += len(chunk); break
+                      time.sleep(1 + attempt)
+                  if not ok: failed += len(chunk)
+              print(f'{label}: deleted {done}/{len(ids)}' + (f'  ({failed} failed)' if failed else ''))
+              return done
+
+          print('\n=== EXECUTING SPAM DELETE (batched) ===')
+          delete_ids(to_delete.keys(), 'spam')
 
           # --- dedup remaining: keep earliest per (user_id, lower(title), category) ---
           print('\n=== DEDUP remaining real tasks (per user) ===')
@@ -116,12 +126,7 @@ jobs:
                   items.sort(key=lambda x: x.get('created_at') or '')
                   dup_ids += [x['id'] for x in items[1:]]  # keep earliest
           print(f'duplicate rows to remove: {len(dup_ids)}')
-          dd = 0
-          for i in range(0, len(dup_ids), 50):
-              chunk = dup_ids[i:i+50]
-              d, code = req('DELETE', [('id', 'in.(' + ','.join(chunk) + ')')], prefer='return=representation')
-              dd += len(d) if isinstance(d, list) else 0
-          print(f'duplicates deleted: {dd}')
+          delete_ids(dup_ids, 'duplicates')
 
           final, _ = req('GET', [('select','id'),('limit','100000')])
           print(f'\n=== TOTAL after: {len(final)} tasks ===')
