@@ -5,6 +5,8 @@ import {
   DEFAULT_CATEGORY_MAPPINGS,
   resolveConfig,
   validateTaskWindow,
+  getKeywordWindowOverride,
+  resolvePriorityWeight,
   MAX_ASSIGNMENTS_PER_DAY,
   ASSIGNMENT_URGENT_HOURS,
   ASSIGNMENT_PRIORITY_DAYS,
@@ -216,31 +218,8 @@ function getPreferredWindows(
  * Returns { window, matchedKeyword } when a match is found AND the resulting
  * window is in the active window set for the day. Returns null otherwise.
  */
-function getKeywordWindowOverride(
-  title: string,
-  contextKeywords: Record<string, string[]> | undefined,
-  activeWindowNames: string[]
-): { window: string; matchedKeyword: string } | null {
-  if (!contextKeywords || !title) return null;
-  const lower = title.toLowerCase();
-
-  for (const [keyword, mapping] of Object.entries(contextKeywords)) {
-    // mapping is [timeWindow, status] per schedulingRules.ts
-    if (!Array.isArray(mapping) || mapping.length === 0) continue;
-    const targetWindow = mapping[0];
-    if (!targetWindow || targetWindow === 'flexible') continue;
-
-    // Match by word boundary (and underscore→space variant for keys like "follow_up")
-    const kw = keyword.toLowerCase().replace(/_/g, ' ');
-    if (kw.length < 3) continue;
-    if (lower.includes(kw)) {
-      if (activeWindowNames.includes(targetWindow)) {
-        return { window: targetWindow, matchedKeyword: keyword };
-      }
-    }
-  }
-  return null;
-}
+// getKeywordWindowOverride now lives in _shared/scheduling-defaults.ts so the
+// voice/manual smart scheduler honors the same keyword rules as this nightly builder.
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -985,7 +964,9 @@ serve(async (req) => {
           }
 
           // STEP 4: SCORE and FILL by window capacity (with dedup)
-          const priorityWeight: Record<string, number> = { URGENT: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
+          // Priority weights come from the user's GUI config (contextRules.priorityMappings)
+          // instead of a hardcoded map — falls back to 4/3/2/1 when unset.
+          const priorityWeight: Record<string, number> = resolvePriorityWeight(config);
           
           // Same-day title dedup: normalize and keep highest-scored only
           const seenTitlesThisDay = new Set<string>();

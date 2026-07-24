@@ -45,6 +45,56 @@ export const DEFAULT_CATEGORY_MAPPINGS: Record<string, CategoryMapping> = {
   PERSONAL:       { defaultTimeWindow: ['flexible'],                  estimatedDuration: 60,  defaultStatus: 'LIFE' },
 };
 
+export const DEFAULT_PRIORITY_WEIGHT: Record<string, number> = { URGENT: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
+
+/**
+ * Resolve the priority→weight map from the user's config
+ * (contextRules.priorityMappings, keyed lowercase e.g. {urgent:4}) falling back to
+ * DEFAULT_PRIORITY_WEIGHT. Returns an UPPERCASE-keyed map so callers can index by
+ * task.priority ('URGENT' | 'HIGH' | 'MEDIUM' | 'LOW'). Previously every scorer
+ * hardcoded 4/3/2/1 and silently ignored this GUI setting.
+ */
+export function resolvePriorityWeight(userConfig: any): Record<string, number> {
+  const pm = userConfig?.contextRules?.priorityMappings;
+  if (!pm || typeof pm !== 'object') return { ...DEFAULT_PRIORITY_WEIGHT };
+  const out: Record<string, number> = { ...DEFAULT_PRIORITY_WEIGHT };
+  for (const [k, v] of Object.entries(pm)) {
+    if (typeof v === 'number') out[k.toUpperCase()] = v;
+  }
+  return out;
+}
+
+/**
+ * Inspect a task title for contextRules.keywords matches and return the preferred
+ * window that should override the category default, if any. Shared so EVERY scheduler
+ * (nightly builder + the voice/manual smart scheduler) honors the user's keyword rules
+ * — previously only the nightly builder did, so a "bank" task created by voice ignored
+ * the business_hours mapping.
+ *
+ * contextKeywords maps keyword -> [timeWindow, status] (per schedulingRules.ts).
+ * Returns { window, matchedKeyword } when a keyword substring-matches the title AND the
+ * resulting window is in activeWindowNames; null otherwise. 'flexible' is never an override.
+ */
+export function getKeywordWindowOverride(
+  title: string,
+  contextKeywords: Record<string, string[]> | undefined,
+  activeWindowNames: string[]
+): { window: string; matchedKeyword: string } | null {
+  if (!contextKeywords || !title) return null;
+  const lower = title.toLowerCase();
+  for (const [keyword, mapping] of Object.entries(contextKeywords)) {
+    if (!Array.isArray(mapping) || mapping.length === 0) continue;
+    const targetWindow = mapping[0];
+    if (!targetWindow || targetWindow === 'flexible') continue;
+    const kw = keyword.toLowerCase().replace(/_/g, ' ');
+    if (kw.length < 3) continue;
+    if (lower.includes(kw) && activeWindowNames.includes(targetWindow)) {
+      return { window: targetWindow, matchedKeyword: keyword };
+    }
+  }
+  return null;
+}
+
 /**
  * Merge user config with defaults. User config takes precedence.
  */

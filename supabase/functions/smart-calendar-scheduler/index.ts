@@ -4,6 +4,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import {
   validateTaskWindow,
   resolveConfig,
+  getKeywordWindowOverride,
   DEFAULT_TIME_WINDOWS,
   DEFAULT_CATEGORY_MAPPINGS,
 } from "../_shared/scheduling-defaults.ts";
@@ -501,6 +502,21 @@ Return ONLY valid JSON (no markdown):
       allowedWindows = allowedWindowsOf(mapping);
       suggestedStatus = mapping.defaultStatus;
       estimatedDuration = mapping.estimatedDuration;
+    }
+
+    // contextRules.keywords override — voice/manual now honors the SAME keyword rules as
+    // the nightly builder (e.g. "bank"/"post office" -> business_hours, "errands" ->
+    // after_work), so a task's title beats the category default. Skipped when the window
+    // was set explicitly by an AI suggestion or a timeWindow: context hint.
+    const windowSetExplicitly = !!(aiSuggestion && aiSuggestion.suggested_time_window)
+      || scheduling_context.some((ctx: string) => ctx.startsWith('timeWindow:'));
+    if (!windowSetExplicitly) {
+      const contextKeywords = loadedUserConfig?.contextRules?.keywords as Record<string, string[]> | undefined;
+      const kw = getKeywordWindowOverride(taskText, contextKeywords, Object.keys(config.timeWindows));
+      if (kw) {
+        console.log(`🔑 keyword "${kw.matchedKeyword}" → window ${kw.window} (overrides category default)`);
+        allowedWindows = [kw.window, ...allowedWindows.filter((w) => w !== kw.window)];
+      }
     }
 
     // Override with explicit estimate from caller if provided
