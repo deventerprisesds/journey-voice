@@ -1,7 +1,12 @@
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { validateTaskWindow } from "../_shared/scheduling-defaults.ts";
+import {
+  validateTaskWindow,
+  resolveConfig,
+  DEFAULT_TIME_WINDOWS,
+  DEFAULT_CATEGORY_MAPPINGS,
+} from "../_shared/scheduling-defaults.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -135,13 +140,22 @@ interface SchedulingConfig {
   };
   categoryMappings: {
     [category: string]: {
-      defaultTimeWindow: string;
+      // Ordered list of allowed windows (preference first). A bare string is
+      // accepted for backward-compat and normalized to a 1-element array.
+      defaultTimeWindow: string | string[];
       defaultStatus: string;
       estimatedDuration: number;
       maxPerDay?: number;
     };
   };
   customAIInstructions?: string;
+}
+
+/** Normalize a category's defaultTimeWindow (string | string[]) to an ordered array. */
+function allowedWindowsOf(mapping: any): string[] {
+  const w = mapping?.defaultTimeWindow;
+  if (Array.isArray(w)) return w.length ? w : ['flexible'];
+  return w ? [w] : ['flexible'];
 }
 
 interface BusySlot {
@@ -212,16 +226,11 @@ serve(async (req) => {
       if (loadedUserConfig.categoryMappings) {
         console.log('📋 Category mappings found:', Object.keys(loadedUserConfig.categoryMappings));
         
-        // Validate each category's defaultTimeWindow type
+        // Log each category's allowed windows. Arrays are now fully honored
+        // (searched in preference order) — a single string is also accepted.
         Object.entries(loadedUserConfig.categoryMappings).forEach(([category, mapping]: [string, any]) => {
           if (mapping.defaultTimeWindow) {
-            if (Array.isArray(mapping.defaultTimeWindow)) {
-              console.warn(`⚠️ WARNING: ${category}.defaultTimeWindow is an ARRAY, but scheduler expects a STRING`);
-              console.warn(`   Value: ${JSON.stringify(mapping.defaultTimeWindow)}`);
-              console.warn(`   Will use first value: ${mapping.defaultTimeWindow[0]}`);
-            } else {
-              console.log(`✅ ${category}.defaultTimeWindow: ${mapping.defaultTimeWindow}`);
-            }
+            console.log(`✅ ${category}.defaultTimeWindow: ${JSON.stringify(mapping.defaultTimeWindow)}`);
           }
         });
       } else {
@@ -239,66 +248,26 @@ serve(async (req) => {
       console.warn('   This means VENTURES will be scheduled after_work (5pm-10pm) by default');
     }
 
-    // Define default config constants
-    const DEFAULT_CONFIG: SchedulingConfig = {
+    // Canonical windows + category maps come from the shared source of truth
+    // (scheduling-defaults.ts) so this path matches the nightly builder EXACTLY.
+    // Only workingHours / workloadBalance are smart-scheduler-local.
+    const DEFAULT_CONFIG: any = {
       timezone: 'America/New_York',
-      timeWindows: {
-        morning: { start: 6, end: 9, days: [1, 2, 3, 4, 5] },
-        business_hours: { start: 9, end: 17, days: [1, 2, 3, 4, 5] },
-        after_work: { start: 17, end: 22, days: [1, 2, 3, 4, 5, 6] },
-        evening: { start: 19, end: 22, days: [0, 1, 2, 3, 4, 5, 6] },
-        flexible: { start: 9, end: 22, days: [0, 1, 2, 3, 4, 5, 6] },
-        weekends: { start: 10, end: 20, days: [0, 6] },
-      },
-      workingHours: {
-        defaultStart: 9,
-        defaultEnd: 17,
-        breakMinutes: 60,
-        maxDailyHours: 7,
-      },
+      timeWindows: DEFAULT_TIME_WINDOWS,
+      workingHours: { defaultStart: 9, defaultEnd: 17, breakMinutes: 60, maxDailyHours: 7 },
       workloadBalance: { projectToTaskRatio: 0.6, oneOffTaskRatio: 0.3, bufferRatio: 0.1 },
-      categoryMappings: {
-        CAREER: { defaultTimeWindow: 'business_hours', defaultStatus: 'CAREER', estimatedDuration: 120 },
-        PROF_EDUCATION: { defaultTimeWindow: 'after_work', defaultStatus: 'PROF_EDUCATION', estimatedDuration: 90 },
-        EDUCATION: { defaultTimeWindow: 'after_work', defaultStatus: 'PROF_EDUCATION', estimatedDuration: 90 },
-        VENTURES: { defaultTimeWindow: 'after_work', defaultStatus: 'VENTURES', estimatedDuration: 120 },
-        LIFE: { defaultTimeWindow: 'flexible', defaultStatus: 'LIFE', estimatedDuration: 60 },
-      },
+      categoryMappings: DEFAULT_CATEGORY_MAPPINGS,
     };
 
-    // Helper to normalize category mappings - handle both array and string formats
-    const normalizeCategory = (userMapping: any, defaultMapping: any) => {
-      if (!userMapping) return defaultMapping;
-      
-      const normalized = { ...userMapping };
-      
-      // If defaultTimeWindow is an array, pick the first value as the primary window
-      if (Array.isArray(userMapping.defaultTimeWindow)) {
-        console.log(`📝 Converting array defaultTimeWindow to string: ${userMapping.defaultTimeWindow[0]}`);
-        normalized.defaultTimeWindow = userMapping.defaultTimeWindow[0]; // Use first preference
-      }
-      
-      return normalized;
-    };
-
-    // Merge user config with defaults - user values take precedence
-    const config: SchedulingConfig = {
+    // Merge user config with the shared defaults via resolveConfig — the SAME
+    // helper the nightly builder uses. This preserves the FULL ordered window
+    // arrays (no more [0] collapse) and keeps every scheduler path in lock-step.
+    const resolved = resolveConfig(loadedUserConfig);
+    const config = {
       timezone: loadedUserConfig?.timezone || DEFAULT_CONFIG.timezone,
-      
-      // Deep merge time windows - use custom values if they exist, otherwise defaults
-      timeWindows: loadedUserConfig?.timeWindows 
-        ? {
-            morning: loadedUserConfig.timeWindows.morning || DEFAULT_CONFIG.timeWindows.morning,
-            business_hours: loadedUserConfig.timeWindows.business_hours || DEFAULT_CONFIG.timeWindows.business_hours,
-            after_work: loadedUserConfig.timeWindows.after_work || DEFAULT_CONFIG.timeWindows.after_work,
-            evening: loadedUserConfig.timeWindows.evening || DEFAULT_CONFIG.timeWindows.evening,
-            flexible: loadedUserConfig.timeWindows.flexible || DEFAULT_CONFIG.timeWindows.flexible,
-            weekends: loadedUserConfig.timeWindows.weekends || DEFAULT_CONFIG.timeWindows.weekends,
-          }
-        : DEFAULT_CONFIG.timeWindows,
-      
-      // Deep merge working hours
-      workingHours: loadedUserConfig?.workingHours 
+      timeWindows: resolved.timeWindows,
+      categoryMappings: resolved.categoryMappings,
+      workingHours: loadedUserConfig?.workingHours
         ? {
             defaultStart: loadedUserConfig.workingHours.defaultStart ?? DEFAULT_CONFIG.workingHours.defaultStart,
             defaultEnd: loadedUserConfig.workingHours.defaultEnd ?? DEFAULT_CONFIG.workingHours.defaultEnd,
@@ -306,8 +275,6 @@ serve(async (req) => {
             maxDailyHours: loadedUserConfig.workingHours.maxDailyHours ?? DEFAULT_CONFIG.workingHours.maxDailyHours,
           }
         : DEFAULT_CONFIG.workingHours,
-      
-      // Deep merge workload balance
       workloadBalance: loadedUserConfig?.workloadBalance
         ? {
             projectToTaskRatio: loadedUserConfig.workloadBalance.projectToTaskRatio ?? DEFAULT_CONFIG.workloadBalance.projectToTaskRatio,
@@ -315,18 +282,7 @@ serve(async (req) => {
             bufferRatio: loadedUserConfig.workloadBalance.bufferRatio ?? DEFAULT_CONFIG.workloadBalance.bufferRatio,
           }
         : DEFAULT_CONFIG.workloadBalance,
-
-      // Deep merge category mappings
-      categoryMappings: loadedUserConfig?.categoryMappings
-        ? {
-            CAREER: normalizeCategory(loadedUserConfig.categoryMappings.CAREER, DEFAULT_CONFIG.categoryMappings.CAREER),
-            PROF_EDUCATION: normalizeCategory(loadedUserConfig.categoryMappings.PROF_EDUCATION, DEFAULT_CONFIG.categoryMappings.PROF_EDUCATION),
-            EDUCATION: normalizeCategory(loadedUserConfig.categoryMappings.EDUCATION, DEFAULT_CONFIG.categoryMappings.EDUCATION),
-            VENTURES: normalizeCategory(loadedUserConfig.categoryMappings.VENTURES, DEFAULT_CONFIG.categoryMappings.VENTURES),
-            LIFE: normalizeCategory(loadedUserConfig.categoryMappings.LIFE, DEFAULT_CONFIG.categoryMappings.LIFE),
-          }
-        : DEFAULT_CONFIG.categoryMappings,
-    };
+    } as SchedulingConfig & { timezone: string };
     
     console.log('🔧 User config loaded:', loadedUserConfig ? 'YES' : 'NO');
     
@@ -430,12 +386,14 @@ Social & Personal:
 - Family time: 7:00-9:00 PM
 - Hobbies: Weekends 2:00-4:00 PM or weekday evenings 6:00-8:00 PM
 
-CATEGORY-SPECIFIC DEFAULTS:
+CATEGORY-SPECIFIC DEFAULTS (allowed windows, in preference order):
 ${Object.entries(config.categoryMappings).map(([category, mapping]) => {
-  const windowName = mapping.defaultTimeWindow;
-  const window = config.timeWindows[windowName];
-  const timeDesc = window ? `${window.start}:00-${window.end}:00` : windowName;
-  return `- ${category}: ${windowName} (${timeDesc})`;
+  const windows = allowedWindowsOf(mapping);
+  const desc = windows.map((wn) => {
+    const w = config.timeWindows[wn];
+    return w ? `${wn} (${w.start}:00-${w.end}:00)` : wn;
+  }).join(' or ');
+  return `- ${category}: ${desc}`;
 }).join('\n')}
 
 INSTRUCTIONS:
@@ -504,8 +462,11 @@ Return ONLY valid JSON (no markdown):
       busySlotsCount: busySlots?.length || 0
     });
 
-    // Extract time window and status from scheduling context
-    let timeWindow = 'flexible';
+    // Extract the ORDERED list of allowed windows (preference first) + status.
+    // The search below tries each allowed window in order — so a category mapped to
+    // e.g. ["after_work","weekends"] falls back to weekends when after_work can't fit,
+    // instead of the old behavior that silently used only the first ([0]).
+    let allowedWindows: string[] = ['flexible'];
     let suggestedStatus = null; // Don't suggest status changes - preserve existing status
     let estimatedDuration = 60;
     let preferredTimeMinutes: number | null = null;
@@ -514,29 +475,30 @@ Return ONLY valid JSON (no markdown):
     if (aiSuggestion) {
       const aiHour = aiSuggestion.ideal_hour;
       const aiMinute = aiSuggestion.ideal_minute || 0;
-      timeWindow = aiSuggestion.suggested_time_window || timeWindow;
-      
+      const aiWindow = aiSuggestion.suggested_time_window;
+      if (aiWindow) allowedWindows = [aiWindow];
+
       // Get window constraints to validate AI time
-      const windowConstraints = config.timeWindows[timeWindow] || config.timeWindows.flexible;
+      const windowConstraints = config.timeWindows[allowedWindows[0]] || config.timeWindows.flexible;
       const aiTimeInWindow = (aiHour >= windowConstraints.start && aiHour < windowConstraints.end);
-      
+
       if (aiTimeInWindow) {
         preferredTimeMinutes = (aiHour * 60) + aiMinute;
-        console.log(`✅ AI time ${aiHour}:${aiMinute.toString().padStart(2, '0')} is within ${timeWindow} window (${windowConstraints.start}:00-${windowConstraints.end}:00) - using as preferred starting point`);
+        console.log(`✅ AI time ${aiHour}:${aiMinute.toString().padStart(2, '0')} is within ${allowedWindows[0]} window (${windowConstraints.start}:00-${windowConstraints.end}:00) - using as preferred starting point`);
       } else {
-        console.log(`❌ AI time ${aiHour}:${aiMinute.toString().padStart(2, '0')} is OUTSIDE ${timeWindow} window (${windowConstraints.start}:00-${windowConstraints.end}:00) - ignoring, will find nearest available`);
+        console.log(`❌ AI time ${aiHour}:${aiMinute.toString().padStart(2, '0')} is OUTSIDE ${allowedWindows[0]} window (${windowConstraints.start}:00-${windowConstraints.end}:00) - ignoring, will find nearest available`);
         preferredTimeMinutes = null; // Ignore AI time, let scheduler figure it out
       }
     }
     // PRIORITY 2: Check if context specifies time window
     else if (scheduling_context.find((ctx: string) => ctx.startsWith('timeWindow:'))) {
       const timeWindowContext = scheduling_context.find((ctx: string) => ctx.startsWith('timeWindow:'));
-      timeWindow = timeWindowContext!.split(':')[1];
-    } 
-    // PRIORITY 3: Use category mapping
+      allowedWindows = [timeWindowContext!.split(':')[1]];
+    }
+    // PRIORITY 3: Use category mapping (full ordered array of allowed windows)
     else if (taskCategory && config.categoryMappings[taskCategory]) {
       const mapping = config.categoryMappings[taskCategory];
-      timeWindow = mapping.defaultTimeWindow;
+      allowedWindows = allowedWindowsOf(mapping);
       suggestedStatus = mapping.defaultStatus;
       estimatedDuration = mapping.estimatedDuration;
     }
@@ -564,11 +526,8 @@ Return ONLY valid JSON (no markdown):
       suggestedStatus = statusContext.split(':')[1];
     }
 
-    console.log('Determined time window:', timeWindow);
+    console.log('Determined allowed windows:', allowedWindows.join(', '));
     console.log('Suggested status:', suggestedStatus);
-
-    // Get time window constraints
-    const constraints = config.timeWindows[timeWindow] || config.timeWindows.flexible;
 
     // Determine search start date and search window
     let searchStartDate: Date;
@@ -619,7 +578,7 @@ for (const task of existingTasks) {
     const taskStart = new Date(task.start_time);
     const taskParts = getZonedDayParts(taskStart, timezone);
     const dayKey = `${taskParts.year}-${taskParts.month}-${taskParts.day}`;
-    
+
     if (!tasksPerDayPerCategory.has(dayKey)) {
       tasksPerDayPerCategory.set(dayKey, new Map());
     }
@@ -627,6 +586,12 @@ for (const task of existingTasks) {
     dayMap.set(task.category, (dayMap.get(task.category) || 0) + 1);
   }
 }
+
+// Try each allowed window in preference order (e.g. after_work → weekends).
+// Earliest-day-first is preserved WITHIN each window; if a window can't fit the
+// task, we fall through to the next allowed window rather than leaving it unscheduled.
+for (const timeWindow of allowedWindows) {
+  const constraints = config.timeWindows[timeWindow] || config.timeWindows.flexible;
 
 for (let dayOffset = 0; dayOffset < maxSearchDays; dayOffset++) {
   // Calculate the date in user's timezone
@@ -774,8 +739,9 @@ for (let dayOffset = 0; dayOffset < maxSearchDays; dayOffset++) {
         console.log(`No slot found on day ${dayOffset}, trying next day`);
       }
     }
-    
-    // If we get here, no slots found in any day
+  } // end window-preference loop (allowedWindows)
+
+    // If we get here, no slots found in any allowed window on any day
     const scheduledSlot = null;
     
     if (scheduledSlot && candidateSlots.length > 0) {
@@ -814,8 +780,8 @@ for (let dayOffset = 0; dayOffset < maxSearchDays; dayOffset++) {
         },
         suggestedCategory: taskCategory,
         suggestedStatus: suggestedStatus,
-        timeWindow: timeWindow,
-        reasoning: `Scheduled in ${timeWindow} time window on ${scheduledSlot.start.toLocaleDateString()} based on category ${taskCategory}`,
+        timeWindow: allowedWindows[0],
+        reasoning: `Scheduled in ${allowedWindows[0]} time window on ${scheduledSlot.start.toLocaleDateString()} based on category ${taskCategory}`,
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
