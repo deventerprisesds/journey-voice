@@ -315,7 +315,14 @@ OVERFLOW RULES:
     // Day name for context-aware scheduling
     const dayName = new Date(`${targetDateISO}T12:00:00Z`).toLocaleDateString('en-US', { timeZone: timezone, weekday: 'long' }).toUpperCase();
     
-    const batchPrompt = `You are a scheduling assistant. Schedule ALL ${tasks.length} tasks efficiently, avoiding conflicts.
+    // Honor the user's free-text scheduling instructions from the GUI
+    // (contextRules customAIInstructions). Previously only the smart scheduler used
+    // these; the nightly/batch placer ignored them.
+    const customInstr = (typeof userConfig?.customAIInstructions === 'string' && userConfig.customAIInstructions.trim())
+      ? `\n\n=== USER'S CUSTOM SCHEDULING INSTRUCTIONS (honor these) ===\n${userConfig.customAIInstructions.trim()}`
+      : '';
+
+    const batchPrompt = `You are a scheduling assistant. Schedule ALL ${tasks.length} tasks efficiently, avoiding conflicts.${customInstr}
 
 === CRITICAL DATE CONTEXT (READ CAREFULLY) ===
 TODAY'S DATE (ISO format): ${todayISO}
