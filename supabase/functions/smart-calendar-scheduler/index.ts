@@ -4,7 +4,8 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import {
   validateTaskWindow,
   resolveConfig,
-  getKeywordWindowOverride,
+  resolveWindowPlan,
+  allowedWindowsOf,
   DEFAULT_TIME_WINDOWS,
   DEFAULT_CATEGORY_MAPPINGS,
 } from "../_shared/scheduling-defaults.ts";
@@ -151,13 +152,7 @@ interface SchedulingConfig {
   };
   customAIInstructions?: string;
 }
-
-/** Normalize a category's defaultTimeWindow (string | string[]) to an ordered array. */
-function allowedWindowsOf(mapping: any): string[] {
-  const w = mapping?.defaultTimeWindow;
-  if (Array.isArray(w)) return w.length ? w : ['flexible'];
-  return w ? [w] : ['flexible'];
-}
+// allowedWindowsOf is imported from _shared/scheduling-defaults.ts (single source).
 
 interface BusySlot {
   start: Date;
@@ -467,57 +462,48 @@ Return ONLY valid JSON (no markdown):
     // The search below tries each allowed window in order — so a category mapped to
     // e.g. ["after_work","weekends"] falls back to weekends when after_work can't fit,
     // instead of the old behavior that silently used only the first ([0]).
-    let allowedWindows: string[] = ['flexible'];
     let suggestedStatus = null; // Don't suggest status changes - preserve existing status
     let estimatedDuration = 60;
     let preferredTimeMinutes: number | null = null;
 
-    // PRIORITY 1: Use AI suggestion if available AND validate against window
+    // Determine an EXPLICIT window (AI suggestion or a timeWindow: context hint). An
+    // explicit request wins outright in the precedence below.
+    let explicitWindow: string | null = null;
     if (aiSuggestion) {
       const aiHour = aiSuggestion.ideal_hour;
       const aiMinute = aiSuggestion.ideal_minute || 0;
-      const aiWindow = aiSuggestion.suggested_time_window;
-      if (aiWindow) allowedWindows = [aiWindow];
-
-      // Get window constraints to validate AI time
-      const windowConstraints = config.timeWindows[allowedWindows[0]] || config.timeWindows.flexible;
-      const aiTimeInWindow = (aiHour >= windowConstraints.start && aiHour < windowConstraints.end);
-
-      if (aiTimeInWindow) {
-        preferredTimeMinutes = (aiHour * 60) + aiMinute;
-        console.log(`✅ AI time ${aiHour}:${aiMinute.toString().padStart(2, '0')} is within ${allowedWindows[0]} window (${windowConstraints.start}:00-${windowConstraints.end}:00) - using as preferred starting point`);
-      } else {
-        console.log(`❌ AI time ${aiHour}:${aiMinute.toString().padStart(2, '0')} is OUTSIDE ${allowedWindows[0]} window (${windowConstraints.start}:00-${windowConstraints.end}:00) - ignoring, will find nearest available`);
-        preferredTimeMinutes = null; // Ignore AI time, let scheduler figure it out
+      explicitWindow = aiSuggestion.suggested_time_window || null;
+      if (explicitWindow) {
+        const wc = config.timeWindows[explicitWindow] || config.timeWindows.flexible;
+        if (aiHour >= wc.start && aiHour < wc.end) {
+          preferredTimeMinutes = (aiHour * 60) + aiMinute;
+          console.log(`✅ AI time ${aiHour}:${aiMinute} within ${explicitWindow} (${wc.start}-${wc.end}) — preferred start`);
+        } else {
+          console.log(`❌ AI time ${aiHour}:${aiMinute} outside ${explicitWindow} — ignoring preferred time`);
+        }
       }
-    }
-    // PRIORITY 2: Check if context specifies time window
-    else if (scheduling_context.find((ctx: string) => ctx.startsWith('timeWindow:'))) {
-      const timeWindowContext = scheduling_context.find((ctx: string) => ctx.startsWith('timeWindow:'));
-      allowedWindows = [timeWindowContext!.split(':')[1]];
-    }
-    // PRIORITY 3: Use category mapping (full ordered array of allowed windows)
-    else if (taskCategory && config.categoryMappings[taskCategory]) {
-      const mapping = config.categoryMappings[taskCategory];
-      allowedWindows = allowedWindowsOf(mapping);
-      suggestedStatus = mapping.defaultStatus;
-      estimatedDuration = mapping.estimatedDuration;
+    } else {
+      const twCtx = scheduling_context.find((ctx: string) => ctx.startsWith('timeWindow:'));
+      if (twCtx) explicitWindow = twCtx.split(':')[1];
     }
 
-    // contextRules.keywords override — voice/manual now honors the SAME keyword rules as
-    // the nightly builder (e.g. "bank"/"post office" -> business_hours, "errands" ->
-    // after_work), so a task's title beats the category default. Skipped when the window
-    // was set explicitly by an AI suggestion or a timeWindow: context hint.
-    const windowSetExplicitly = !!(aiSuggestion && aiSuggestion.suggested_time_window)
-      || scheduling_context.some((ctx: string) => ctx.startsWith('timeWindow:'));
-    if (!windowSetExplicitly) {
-      const contextKeywords = loadedUserConfig?.contextRules?.keywords as Record<string, string[]> | undefined;
-      const kw = getKeywordWindowOverride(taskText, contextKeywords, Object.keys(config.timeWindows));
-      if (kw) {
-        console.log(`🔑 keyword "${kw.matchedKeyword}" → window ${kw.window} (overrides category default)`);
-        allowedWindows = [kw.window, ...allowedWindows.filter((w) => w !== kw.window)];
-      }
+    // Category status/duration are independent of the window choice.
+    if (taskCategory && config.categoryMappings[taskCategory]) {
+      suggestedStatus = config.categoryMappings[taskCategory].defaultStatus;
+      estimatedDuration = config.categoryMappings[taskCategory].estimatedDuration;
     }
+
+    // Resolve allowed windows via the SHARED precedence (identical to the nightly path):
+    //   explicit > trait (appointment / venue-dependent) > keyword table (FALLBACK) > category.
+    // Keywords are a FALLBACK now — a trait (e.g. "bank" is venue-dependent → after-work
+    // with a business-hours nudge) beats the old "bank → business_hours" keyword mapping.
+    const plan = resolveWindowPlan(
+      taskText, taskCategory, loadedUserConfig, config.timeWindows, config.categoryMappings,
+      { explicitWindow },
+    );
+    const allowedWindows = plan.allowedWindows;
+    const nudgeToBusinessHours = plan.nudgeToBusinessHours;
+    console.log(`🧭 window plan: source=${plan.source} trait=${plan.trait ?? '-'} keyword=${plan.matchedKeyword ?? '-'} nudgeBiz=${plan.nudgeToBusinessHours} windows=[${allowedWindows.join(', ')}]`);
 
     // Override with explicit estimate from caller if provided
     if (typeof estimateMinutes === 'number' && !Number.isNaN(estimateMinutes)) {
@@ -746,7 +732,14 @@ for (let dayOffset = 0; dayOffset < maxSearchDays; dayOffset++) {
               suggestedCategory: taskCategory,
               suggestedStatus: suggestedStatus,
               timeWindow: timeWindow,
-              reasoning: `Scheduled in ${timeWindow} time window on ${scheduledSlot.start.toLocaleDateString()} based on category ${taskCategory}`,
+              // Venue-dependent tasks default to after-work; the caller/agent should
+              // offer to move it into business hours when the venue is likely open.
+              trait: plan.trait,
+              nudgeToBusinessHours,
+              nudge: nudgeToBusinessHours
+                ? `"${taskText}" needs a place that's usually open business hours — want to move it to a business-hours slot?`
+                : null,
+              reasoning: `Scheduled in ${timeWindow} time window on ${scheduledSlot.start.toLocaleDateString()} based on ${plan.trait ? `trait ${plan.trait}` : (plan.matchedKeyword ? `keyword ${plan.matchedKeyword}` : `category ${taskCategory}`)}`,
             }),
             { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
           );

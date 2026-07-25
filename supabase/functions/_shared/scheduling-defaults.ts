@@ -95,6 +95,98 @@ export function getKeywordWindowOverride(
   return null;
 }
 
+/** Normalize a category mapping's defaultTimeWindow (string | string[]) to an ordered array. */
+export function allowedWindowsOf(mapping: any): string[] {
+  const w = mapping?.defaultTimeWindow;
+  if (Array.isArray(w)) return w.length ? w : ['flexible'];
+  return w ? [w] : ['flexible'];
+}
+
+// ── Trait-based classification (systematic layer) ─────────────────────────────
+// We classify a task by WHAT IT IS (traits), then rules act on the trait — instead
+// of mapping specific nouns to windows. The anchor sets below are the deterministic
+// FLOOR + the test oracle; a common-sense/LLM layer (added next) generalizes to
+// unlisted siblings (optometrist, vet, DMV…). doctor/dentist and bank/post office are
+// the agreed hardcoded anchors used to verify the systematic layer generalizes.
+const VENUE_DEPENDENT_ANCHORS = ['bank', 'post office', 'post_office'];
+const APPOINTMENT_ANCHORS = ['doctor', 'dentist'];
+
+export interface TaskTraits {
+  venueDependent: boolean; // needs a place/service with fixed operating hours
+  appointment: boolean;    // an appointment (doctor/dentist-type)
+}
+
+function matchesAnyAnchor(lowerTitle: string, anchors: string[]): boolean {
+  return anchors.some((a) => {
+    const needle = a.replace(/_/g, ' ');
+    return needle.length >= 3 && lowerTitle.includes(needle);
+  });
+}
+
+/** Deterministic trait floor. The LLM layer (next increment) augments this. */
+export function classifyTaskTraits(title: string): TaskTraits {
+  const lower = (title || '').toLowerCase();
+  return {
+    appointment: matchesAnyAnchor(lower, APPOINTMENT_ANCHORS),
+    venueDependent: matchesAnyAnchor(lower, VENUE_DEPENDENT_ANCHORS),
+  };
+}
+
+export interface WindowPlan {
+  allowedWindows: string[];               // ordered preference for placement
+  trait: 'appointment' | 'venue_dependent' | null;
+  matchedKeyword: string | null;          // set only when the keyword FALLBACK decided it
+  nudgeToBusinessHours: boolean;          // venue-dependent: offer to move into business hours
+  source: 'explicit' | 'trait' | 'keyword' | 'category';
+}
+
+/**
+ * Resolve the ordered allowed windows for a task using the AGREED precedence:
+ *   explicit request  >  trait (appointment / venue-dependent)  >  keyword table (FALLBACK)  >  category default
+ * The keyword table is a FALLBACK — it only decides the window when no trait fired.
+ * Shared by every scheduler so the voice/manual and nightly paths behave identically.
+ */
+export function resolveWindowPlan(
+  title: string,
+  category: string | undefined,
+  userConfig: any,
+  timeWindows: Record<string, TimeWindow>,
+  categoryMappings: Record<string, CategoryMapping>,
+  opts?: { explicitWindow?: string | null },
+): WindowPlan {
+  const catWindows = (category && categoryMappings[category])
+    ? allowedWindowsOf(categoryMappings[category])
+    : ['flexible'];
+
+  // 1) explicit user/AI request wins outright
+  if (opts?.explicitWindow) {
+    return { allowedWindows: [opts.explicitWindow], trait: null, matchedKeyword: null, nudgeToBusinessHours: false, source: 'explicit' };
+  }
+
+  // 2) traits (systematic) beat both keyword and category
+  const traits = classifyTaskTraits(title);
+  if (traits.appointment) {
+    // Unbooked appointment: flexible, NOT forced into business hours.
+    // (A booked appointment carries a fixed time and is pinned elsewhere.)
+    return { allowedWindows: ['flexible'], trait: 'appointment', matchedKeyword: null, nudgeToBusinessHours: false, source: 'trait' };
+  }
+  if (traits.venueDependent) {
+    // Default to after-work (personal time); nudge the user to move it into
+    // business hours when the venue is likely open then.
+    const windows = ['after_work', ...catWindows.filter((w) => w !== 'after_work')];
+    return { allowedWindows: windows, trait: 'venue_dependent', matchedKeyword: null, nudgeToBusinessHours: true, source: 'trait' };
+  }
+
+  // 3) keyword table — FALLBACK only (never beats a trait)
+  const kw = getKeywordWindowOverride(title, userConfig?.contextRules?.keywords, Object.keys(timeWindows));
+  if (kw) {
+    return { allowedWindows: [kw.window, ...catWindows.filter((w) => w !== kw.window)], trait: null, matchedKeyword: kw.matchedKeyword, nudgeToBusinessHours: false, source: 'keyword' };
+  }
+
+  // 4) category default
+  return { allowedWindows: catWindows, trait: null, matchedKeyword: null, nudgeToBusinessHours: false, source: 'category' };
+}
+
 /**
  * Merge user config with defaults. User config takes precedence.
  */

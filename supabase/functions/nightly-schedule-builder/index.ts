@@ -5,7 +5,7 @@ import {
   DEFAULT_CATEGORY_MAPPINGS,
   resolveConfig,
   validateTaskWindow,
-  getKeywordWindowOverride,
+  resolveWindowPlan,
   resolvePriorityWeight,
   MAX_ASSIGNMENTS_PER_DAY,
   ASSIGNMENT_URGENT_HOURS,
@@ -1152,19 +1152,25 @@ serve(async (req) => {
               continue;
             }
 
-            // KEYWORD OVERRIDE: contextRules.keywords beats category default.
-            const keywordOverride = getKeywordWindowOverride(task.title, contextKeywords, activeWindowNames);
-            let preferredWindows: string[];
-            if (keywordOverride) {
-              preferredWindows = [keywordOverride.window];
+            // AGREED precedence: explicit > trait (appointment / venue-dependent) >
+            // keyword table (FALLBACK) > category default. Keywords no longer beat a
+            // trait — "bank" is venue-dependent → after-work (with a business-hours nudge)
+            // rather than the old "bank → business_hours" keyword mapping.
+            const plan = resolveWindowPlan(task.title, task.category, config, timeWindows, categoryMappings);
+            let preferredWindows = plan.allowedWindows.filter((w) => activeWindowNames.includes(w));
+            if (preferredWindows.length === 0) {
+              preferredWindows = getPreferredWindows(task.category, categoryMappings, activeWindowNames);
+            }
+            const windowConstrained = plan.source === 'trait' || plan.source === 'keyword' || plan.source === 'explicit';
+            if (plan.matchedKeyword) {
               dayKeywordOverrides.push({
                 taskId: task.id, title: task.title, category: task.category,
-                matchedKeyword: keywordOverride.matchedKeyword,
-                overrideWindow: keywordOverride.window,
+                matchedKeyword: plan.matchedKeyword,
+                overrideWindow: preferredWindows[0],
               });
-              console.log(`      🔑 Keyword override: "${task.title}" matched "${keywordOverride.matchedKeyword}" → ${keywordOverride.window}`);
-            } else {
-              preferredWindows = getPreferredWindows(task.category, categoryMappings, activeWindowNames);
+              console.log(`      🔑 Keyword fallback: "${task.title}" matched "${plan.matchedKeyword}" → ${preferredWindows[0]}`);
+            } else if (plan.trait) {
+              console.log(`      🧭 Trait ${plan.trait}: "${task.title}" → [${preferredWindows.join(', ')}]${plan.nudgeToBusinessHours ? ' (nudge → business hours)' : ''}`);
             }
 
             let assigned = false;
@@ -1181,7 +1187,7 @@ serve(async (req) => {
 
             // Flexible capacity aggregation: ONLY for non-assignment tasks without keyword override.
             // Assignments must respect their category windows; aggregate-fit would bypass that.
-            if (!assigned && !isAssignment && !keywordOverride && preferredWindows.length === activeWindowNames.length) {
+            if (!assigned && !isAssignment && !windowConstrained && preferredWindows.length === activeWindowNames.length) {
               const totalRemaining = Object.values(windowRemaining).reduce((s, v) => s + v, 0);
               if (totalRemaining >= duration) {
                 const bestWindow = Object.entries(windowRemaining)
@@ -1203,7 +1209,8 @@ serve(async (req) => {
               dayPlacements.push({
                 taskId: task.id, title: task.title, category: task.category,
                 score: task.score, duration, window: assignedWindow,
-                keywordOverride: keywordOverride?.matchedKeyword ?? null,
+                keywordOverride: plan.matchedKeyword ?? null,
+                trait: plan.trait ?? null,
                 tier,
               });
             } else {
@@ -1214,7 +1221,8 @@ serve(async (req) => {
                 taskId: task.id, title: task.title, category: task.category,
                 score: task.score, duration, preferredWindows,
                 reason: 'no_window_capacity',
-                keywordOverride: keywordOverride?.matchedKeyword ?? null,
+                keywordOverride: plan.matchedKeyword ?? null,
+                trait: plan.trait ?? null,
                 tier,
               });
               console.log(`    ⚠️ "${task.title}" doesn't fit any allowed window — skipping`);
