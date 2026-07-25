@@ -45,6 +45,29 @@ export const DEFAULT_CATEGORY_MAPPINGS: Record<string, CategoryMapping> = {
   PERSONAL:       { defaultTimeWindow: ['flexible'],                  estimatedDuration: 60,  defaultStatus: 'LIFE' },
 };
 
+// Default keyword→[window, category] FALLBACK table. Used when a user has not saved
+// their own contextRules.keywords, so the fallback layer actually applies on the edge
+// (placement) side too — not just the frontend. KEEP IN SYNC with the frontend
+// src/config/schedulingRules.ts contextRules.keywords (until a shared source lands).
+// Note: bank/post_office/doctor/dentist are intentionally ABSENT — the trait layer owns
+// them (venue-dependent / appointment) and overrides keywords anyway.
+export const DEFAULT_CONTEXT_KEYWORDS: Record<string, string[]> = {
+  morning: ['morning', 'flexible'], workout: ['morning', 'LIFE'], exercise: ['morning', 'LIFE'], breakfast: ['morning', 'LIFE'],
+  meeting: ['business_hours', 'CAREER'], work: ['business_hours', 'CAREER'], office: ['business_hours', 'CAREER'],
+  call: ['business_hours', 'CAREER'], interview: ['business_hours', 'CAREER'], review: ['business_hours', 'CAREER'],
+  study: ['evening', 'PROF_EDUCATION'], class: ['evening', 'PROF_EDUCATION'], lecture: ['evening', 'PROF_EDUCATION'],
+  assignment: ['evening', 'PROF_EDUCATION'], homework: ['after_work', 'PROF_EDUCATION'],
+  project: ['after_work', 'VENTURES'], side: ['after_work', 'VENTURES'], startup: ['after_work', 'VENTURES'], business: ['after_work', 'VENTURES'],
+  lunch: ['business_hours', 'LIFE'], brunch: ['morning', 'LIFE'], dinner: ['evening', 'LIFE'], family: ['evening', 'LIFE'],
+  relax: ['evening', 'LIFE'], social: ['evening', 'LIFE'], weekend: ['weekends', 'LIFE'], hobby: ['weekends', 'LIFE'],
+  errands: ['after_work', 'LIFE'], shopping: ['after_work', 'LIFE'], mall: ['after_work', 'LIFE'], store: ['after_work', 'LIFE'],
+  grocery: ['after_work', 'LIFE'], groceries: ['after_work', 'LIFE'], appointment: ['flexible', 'LIFE'],
+  payment: ['flexible', 'LIFE'], invoice: ['flexible', 'CAREER'], bill: ['flexible', 'LIFE'], tax: ['flexible', 'LIFE'],
+  budget: ['flexible', 'CAREER'], contract: ['flexible', 'CAREER'],
+  email: ['business_hours', 'CAREER'], follow_up: ['business_hours', 'CAREER'], respond: ['business_hours', 'CAREER'],
+  reply: ['business_hours', 'CAREER'], text: ['business_hours', 'LIFE'], message: ['business_hours', 'CAREER'],
+};
+
 export const DEFAULT_PRIORITY_WEIGHT: Record<string, number> = { URGENT: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
 
 /**
@@ -75,6 +98,17 @@ export function resolvePriorityWeight(userConfig: any): Record<string, number> {
  * Returns { window, matchedKeyword } when a keyword substring-matches the title AND the
  * resulting window is in activeWindowNames; null otherwise. 'flexible' is never an override.
  */
+/**
+ * Whole-word match: "work" matches "extra work" but NOT "homework"/"workout". Underscores
+ * in keys become spaces (follow_up → "follow up"). Prevents substring collisions.
+ */
+export function wordMatch(lowerText: string, phrase: string): boolean {
+  const p = (phrase || '').toLowerCase().replace(/_/g, ' ').trim();
+  if (p.length < 3) return false;
+  const re = new RegExp('\\b' + p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b');
+  return re.test(lowerText);
+}
+
 export function getKeywordWindowOverride(
   title: string,
   contextKeywords: Record<string, string[]> | undefined,
@@ -85,10 +119,10 @@ export function getKeywordWindowOverride(
   for (const [keyword, mapping] of Object.entries(contextKeywords)) {
     if (!Array.isArray(mapping) || mapping.length === 0) continue;
     const targetWindow = mapping[0];
-    if (!targetWindow || targetWindow === 'flexible') continue;
-    const kw = keyword.toLowerCase().replace(/_/g, ' ');
-    if (kw.length < 3) continue;
-    if (lower.includes(kw) && activeWindowNames.includes(targetWindow)) {
+    // 'flexible' IS a valid keyword target now (e.g. financial tasks → flexible) — it
+    // must win over the category default, so it is no longer skipped as a no-op.
+    if (!targetWindow) continue;
+    if (wordMatch(lower, keyword) && activeWindowNames.includes(targetWindow)) {
       return { window: targetWindow, matchedKeyword: keyword };
     }
   }
@@ -117,10 +151,7 @@ export interface TaskTraits {
 }
 
 function matchesAnyAnchor(lowerTitle: string, anchors: string[]): boolean {
-  return anchors.some((a) => {
-    const needle = a.replace(/_/g, ' ');
-    return needle.length >= 3 && lowerTitle.includes(needle);
-  });
+  return anchors.some((a) => wordMatch(lowerTitle, a));
 }
 
 /** Deterministic trait floor. The LLM layer (next increment) augments this. */
@@ -177,8 +208,11 @@ export function resolveWindowPlan(
     return { allowedWindows: windows, trait: 'venue_dependent', matchedKeyword: null, nudgeToBusinessHours: true, source: 'trait' };
   }
 
-  // 3) keyword table — FALLBACK only (never beats a trait)
-  const kw = getKeywordWindowOverride(title, userConfig?.contextRules?.keywords, Object.keys(timeWindows));
+  // 3) keyword table — FALLBACK only (never beats a trait). Uses the user's saved
+  //    keywords if present, otherwise the shared DEFAULT_CONTEXT_KEYWORDS so the
+  //    fallback layer applies even for users who never customized it.
+  const keywords = userConfig?.contextRules?.keywords ?? DEFAULT_CONTEXT_KEYWORDS;
+  const kw = getKeywordWindowOverride(title, keywords, Object.keys(timeWindows));
   if (kw) {
     return { allowedWindows: [kw.window, ...catWindows.filter((w) => w !== kw.window)], trait: null, matchedKeyword: kw.matchedKeyword, nudgeToBusinessHours: false, source: 'keyword' };
   }
