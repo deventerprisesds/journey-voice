@@ -338,7 +338,7 @@ TIMEZONE: ${timezone}
 ⚠️ Use ISO format for all times: "${targetDateISO}T10:00:00${tzOffset}"
 
 === DAY-SPECIFIC RULES ===
-${dayName === 'SATURDAY' || dayName === 'SUNDAY' ? '- This is a WEEKEND day. Use weekend-appropriate scheduling.\n' : '- This is a WEEKDAY. Use business-hour scheduling.\n'}
+${dayName === 'SATURDAY' || dayName === 'SUNDAY' ? '- This is a WEEKEND day. Use weekend-appropriate scheduling.\n- PROTECTED: Do NOT auto-schedule tasks in the evening (after 7:00 PM) on this weekend day. Weekend evenings are protected downtime — leave them free UNLESS the task is an appointment/fixed-time commitment or was explicitly requested for that time. Prefer daytime weekend slots; if only weekend-evening is left, mark the task OVERFLOW instead.\n' : '- This is a WEEKDAY. Use business-hour scheduling.\n'}
 === RULE 1c: COMMON-SENSE DAY/TIME MATCHING ===
 Consider whether the ACTIVITY described in each task title makes sense on ${dayName} at the time you pick. Apply general knowledge:
 - Weekly religious/worship activities belong on their traditional day (e.g., church on Sunday, mosque on Friday)

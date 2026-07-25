@@ -222,6 +222,24 @@ export function resolveWindowPlan(
 }
 
 /**
+ * Weekend-evening protection: the `evening` window (19:00–22:00) on Saturday/Sunday is
+ * VALID (validateTaskWindow still accepts it) but must NOT be AUTO-filled by the scheduler
+ * — it's protected downtime — UNLESS the placement is an explicit user request or an
+ * appointment (fixed-time). Returns true if `windowName` may be auto-placed on `dayOfWeek`.
+ */
+export function isAutoPlaceableWindow(
+  windowName: string,
+  dayOfWeek: number,
+  plan: { source?: string; trait?: string | null },
+): boolean {
+  const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+  if (windowName === 'evening' && isWeekend) {
+    return plan.source === 'explicit' || plan.trait === 'appointment';
+  }
+  return true;
+}
+
+/**
  * Merge user config with defaults. User config takes precedence.
  */
 export function resolveConfig(userConfig: any): {

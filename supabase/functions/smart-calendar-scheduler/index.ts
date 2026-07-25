@@ -6,6 +6,7 @@ import {
   resolveConfig,
   resolveWindowPlan,
   allowedWindowsOf,
+  isAutoPlaceableWindow,
   DEFAULT_TIME_WINDOWS,
   DEFAULT_CATEGORY_MAPPINGS,
 } from "../_shared/scheduling-defaults.ts";
@@ -645,6 +646,12 @@ for (let dayOffset = 0; dayOffset < maxSearchDays; dayOffset++) {
       const dayOfWeek = getDayOfWeekInTz(dayStartUTC, timezone);
       if (!constraints.days.includes(dayOfWeek)) {
         console.log(`Day ${dayOfWeek} not allowed for time window ${timeWindow}, skipping`);
+        continue;
+      }
+      // Weekend-evening protection: don't AUTO-fill evening on Sat/Sun (protected downtime)
+      // unless this is an explicit request or an appointment.
+      if (!isAutoPlaceableWindow(timeWindow, dayOfWeek, plan)) {
+        console.log(`🛡️ ${timeWindow} on weekend is protected — not auto-scheduling "${taskText}" here`);
         continue;
       }
 
