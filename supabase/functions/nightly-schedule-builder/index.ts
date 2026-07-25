@@ -1168,7 +1168,8 @@ serve(async (req) => {
                 matchedKeyword: plan.matchedKeyword,
                 overrideWindow: preferredWindows[0],
               });
-              console.log(`      🔑 Keyword fallback: "${task.title}" matched "${plan.matchedKeyword}" → ${preferredWindows[0]}`);
+              // LOUD: placement fell to the low-confidence keyword fallback (no trait).
+              console.warn(`      ⚠️⚠️ KEYWORD FALLBACK: "${task.title}" matched "${plan.matchedKeyword}" → ${preferredWindows[0]} (no trait — low-confidence placement)`);
             } else if (plan.trait) {
               console.log(`      🧭 Trait ${plan.trait}: "${task.title}" → [${preferredWindows.join(', ')}]${plan.nudgeToBusinessHours ? ' (nudge → business hours)' : ''}`);
             }

@@ -504,6 +504,9 @@ Return ONLY valid JSON (no markdown):
     const allowedWindows = plan.allowedWindows;
     const nudgeToBusinessHours = plan.nudgeToBusinessHours;
     console.log(`🧭 window plan: source=${plan.source} trait=${plan.trait ?? '-'} keyword=${plan.matchedKeyword ?? '-'} nudgeBiz=${plan.nudgeToBusinessHours} windows=[${allowedWindows.join(', ')}]`);
+    if (plan.source === 'keyword') {
+      console.warn(`⚠️⚠️ KEYWORD FALLBACK used for "${taskText}" (matched "${plan.matchedKeyword}" → ${allowedWindows[0]}). No trait matched — low-confidence placement.`);
+    }
 
     // Override with explicit estimate from caller if provided
     if (typeof estimateMinutes === 'number' && !Number.isNaN(estimateMinutes)) {
@@ -739,7 +742,15 @@ for (let dayOffset = 0; dayOffset < maxSearchDays; dayOffset++) {
               nudge: nudgeToBusinessHours
                 ? `"${taskText}" needs a place that's usually open business hours — want to move it to a business-hours slot?`
                 : null,
-              reasoning: `Scheduled in ${timeWindow} time window on ${scheduledSlot.start.toLocaleDateString()} based on ${plan.trait ? `trait ${plan.trait}` : (plan.matchedKeyword ? `keyword ${plan.matchedKeyword}` : `category ${taskCategory}`)}`,
+              // LOUD signal when placement fell to the low-confidence keyword fallback
+              // (not systematic trait reasoning). The caller/agent should surface this.
+              placementBasis: plan.source, // 'explicit' | 'trait' | 'keyword' | 'category'
+              keywordFallbackUsed: plan.source === 'keyword',
+              placementConfidence: plan.source === 'keyword' ? 'low' : (plan.source === 'category' ? 'medium' : 'high'),
+              keywordFallbackNotice: plan.source === 'keyword'
+                ? `⚠️ This time was chosen by KEYWORD FALLBACK (matched "${plan.matchedKeyword}"), not systematic reasoning — double-check the window.`
+                : null,
+              reasoning: `Scheduled in ${timeWindow} time window on ${scheduledSlot.start.toLocaleDateString()} based on ${plan.trait ? `trait ${plan.trait}` : (plan.matchedKeyword ? `KEYWORD FALLBACK ${plan.matchedKeyword}` : `category ${taskCategory}`)}`,
             }),
             { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
           );
