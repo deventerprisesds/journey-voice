@@ -16,16 +16,18 @@ jobs:
         run: |
           curl -G -sS \
             -H "apikey: $SB_KEY" -H "Authorization: Bearer $SB_KEY" -H "Accept: application/json" \
-            --data-urlencode "select=id,user_id,platform,created_at,updated_at,fcm_token" \
-            --data-urlencode "order=updated_at.desc" \
+            --data-urlencode "select=*" \
+            --data-urlencode "order=created_at.desc" \
             --data-urlencode "limit=20" \
             "https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/push_subscriptions" \
           | python3 -c "
           import json,sys
           rows=json.load(sys.stdin)
           if not isinstance(rows,list): print('unexpected:',rows); sys.exit(0)
-          print(f'{len(rows)} push_subscription row(s):')
+          print(f'{len(rows)} push_subscription row(s). columns: {list(rows[0].keys()) if rows else []}')
           for r in rows:
-              tok=(r.get('fcm_token') or '')
-              print(f\"  plat={r.get('platform','?'):8} created={str(r.get('created_at'))[:19]} updated={str(r.get('updated_at'))[:19]} token={tok[:18]}…{tok[-6:] if len(tok)>24 else ''}\")
+              tok=str(r.get('fcm_token') or r.get('token') or '')
+              created=str(r.get('created_at') or r.get('inserted_at') or '')[:19]
+              updated=str(r.get('updated_at') or '')[:19]
+              print(f\"  created={created} updated={updated} token={tok[:20]}…{tok[-8:] if len(tok)>28 else ''}\")
           "
