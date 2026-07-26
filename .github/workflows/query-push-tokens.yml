@@ -27,7 +27,8 @@ jobs:
           print(f'{len(rows)} push_subscription row(s). columns: {list(rows[0].keys()) if rows else []}')
           for r in rows:
               tok=str(r.get('fcm_token') or r.get('token') or '')
+              ep=str(r.get('endpoint') or '')
               created=str(r.get('created_at') or r.get('inserted_at') or '')[:19]
               updated=str(r.get('updated_at') or '')[:19]
-              print(f\"  created={created} updated={updated} token={tok[:20]}…{tok[-8:] if len(tok)>28 else ''}\")
+              print(f\"  user={str(r.get('user_id'))[:8]} endpoint={ep[:48]} updated={updated} token={tok[:14]}…{tok[-6:] if len(tok)>22 else ''}\")
           "
