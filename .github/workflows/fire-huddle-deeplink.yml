@@ -1,0 +1,54 @@
+name: Fire Huddle Deep-Link Push (one-shot)
+
+# Fires ONE Huddle-style push (channel `messages`) carrying a source-aware deepLink so tapping it in
+# the standalone Huddle app opens that channel. Reuses huddle-proxy → execute-tool send_push (shared
+# JOURNEY_PROXY_TOKEN). Dispatch-only; remove after use.
+on:
+  workflow_dispatch:
+    inputs:
+      huddle_id:
+        description: "Target huddle (e.g. dm-sam-trent, all-members)"
+        required: false
+        default: "dm-sam-trent"
+      title:
+        description: "Notification title"
+        required: false
+        default: "Sam Trent"
+      body:
+        description: "Notification body"
+        required: false
+        default: "Tap to open our chat 👋 (deep-link test)"
+      caller_email:
+        description: "Entra email of the target user"
+        required: false
+        default: "von.ellis@enterpriseds.io"
+
+jobs:
+  fire:
+    runs-on: ubuntu-latest
+    env:
+      PROXY: "https://wwxgajrtmslzklnyplah.supabase.co/functions/v1/huddle-proxy"
+      TOKEN: ${{ secrets.JOURNEY_PROXY_TOKEN }}
+    steps:
+      - name: Fire deep-link push
+        run: |
+          set -euo pipefail
+          if [ -z "${TOKEN}" ]; then echo "::error::JOURNEY_PROXY_TOKEN not set"; exit 1; fi
+          HID="${{ github.event.inputs.huddle_id }}"
+          BODY=$(python3 -c "import json,sys
+print(json.dumps({
+  'toolName':'send_push',
+  'args':{
+    'title':sys.argv[1],
+    'body':sys.argv[2],
+    'channel':'messages',
+    'data':{'deepLink':'/?huddle='+sys.argv[3],'source':'huddle-message','huddleId':sys.argv[3]}
+  },
+  'caller':{'entra_email':sys.argv[4]}
+}))" "${{ github.event.inputs.title }}" "${{ github.event.inputs.body }}" "$HID" "${{ github.event.inputs.caller_email }}")
+          echo "Payload: $BODY"
+          RESP=$(curl -sS -X POST "${PROXY}/tool" \
+            -H "Authorization: Bearer ${TOKEN}" -H "x-huddle-proxy: 1" -H "Content-Type: application/json" \
+            -d "$BODY")
+          echo "Response: $RESP"
+          echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print('OK — deepLink /?huddle='+'${{ github.event.inputs.huddle_id }}' , msg:', d.get('output') or d.get('message')) if d.get('ok') else (print('FAIL:', d.get('error') or d.get('output')), sys.exit(1))"
