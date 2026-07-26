@@ -154,13 +154,61 @@ function matchesAnyAnchor(lowerTitle: string, anchors: string[]): boolean {
   return anchors.some((a) => wordMatch(lowerTitle, a));
 }
 
-/** Deterministic trait floor. The LLM layer (next increment) augments this. */
+/** Deterministic trait floor. Anchors + the guard when the LLM is unavailable. */
 export function classifyTaskTraits(title: string): TaskTraits {
   const lower = (title || '').toLowerCase();
   return {
     appointment: matchesAnyAnchor(lower, APPOINTMENT_ANCHORS),
     venueDependent: matchesAnyAnchor(lower, VENUE_DEPENDENT_ANCHORS),
   };
+}
+
+/** OR-merge two trait sets — a trait is set if EITHER source detected it. */
+export function mergeTraits(a: TaskTraits, b: TaskTraits | null | undefined): TaskTraits {
+  if (!b) return a;
+  return { venueDependent: a.venueDependent || b.venueDependent, appointment: a.appointment || b.appointment };
+}
+
+/**
+ * LLM common-sense trait classification — generalizes BEYOND the deterministic anchors
+ * (catches optometrist, DMV, pharmacy, vet, physio, …) so the keyword fallback is rarely
+ * reached. Returns null on ANY failure (no key, network, bad JSON) so the caller falls
+ * back to the deterministic floor — the guard is NEVER silently lost. Uses the Lovable
+ * AI gateway (same as the smart scheduler's aiSuggestion path).
+ */
+export async function classifyTaskTraitsLLM(title: string, apiKey: string | undefined): Promise<TaskTraits | null> {
+  if (!apiKey || !title) return null;
+  try {
+    const resp = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'google/gemini-2.5-flash',
+        temperature: 0,
+        messages: [{
+          role: 'user',
+          content:
+            `Classify this to-do by two INDEPENDENT boolean traits. Return ONLY compact JSON.\n` +
+            `Task: "${title}"\n` +
+            `venueDependent = true ONLY if completing it REQUIRES physically visiting a place/service with fixed operating hours ` +
+            `(bank, post office, government office/DMV, pharmacy pickup, in-person store, library, clinic front desk). ` +
+            `false for anything doable from anywhere (calls, email, online, chores at home, exercise).\n` +
+            `appointment = true if it is an appointment or booked in-person service ` +
+            `(doctor, dentist, optometrist, physical therapy, vet, haircut, a booked meeting). false otherwise.\n` +
+            `Respond with exactly: {"venueDependent":true|false,"appointment":true|false}`,
+        }],
+      }),
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const text: string = data?.choices?.[0]?.message?.content ?? '';
+    const m = text.match(/\{[^}]*\}/);
+    if (!m) return null;
+    const parsed = JSON.parse(m[0]);
+    return { venueDependent: parsed.venueDependent === true, appointment: parsed.appointment === true };
+  } catch (_e) {
+    return null;
+  }
 }
 
 export interface WindowPlan {
@@ -183,7 +231,7 @@ export function resolveWindowPlan(
   userConfig: any,
   timeWindows: Record<string, TimeWindow>,
   categoryMappings: Record<string, CategoryMapping>,
-  opts?: { explicitWindow?: string | null },
+  opts?: { explicitWindow?: string | null; traits?: TaskTraits },
 ): WindowPlan {
   const catWindows = (category && categoryMappings[category])
     ? allowedWindowsOf(categoryMappings[category])
@@ -194,8 +242,10 @@ export function resolveWindowPlan(
     return { allowedWindows: [opts.explicitWindow], trait: null, matchedKeyword: null, nudgeToBusinessHours: false, source: 'explicit' };
   }
 
-  // 2) traits (systematic) beat both keyword and category
-  const traits = classifyTaskTraits(title);
+  // 2) traits (systematic) beat both keyword and category. Callers may pass a richer
+  //    trait classification (e.g. an LLM common-sense pass that generalizes beyond the
+  //    deterministic anchors); otherwise we use the deterministic anchor floor.
+  const traits = opts?.traits ?? classifyTaskTraits(title);
   if (traits.appointment) {
     // Unbooked appointment: flexible, NOT forced into business hours.
     // (A booked appointment carries a fixed time and is pinned elsewhere.)

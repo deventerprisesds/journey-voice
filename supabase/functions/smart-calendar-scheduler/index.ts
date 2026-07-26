@@ -7,6 +7,9 @@ import {
   resolveWindowPlan,
   allowedWindowsOf,
   isAutoPlaceableWindow,
+  classifyTaskTraits,
+  classifyTaskTraitsLLM,
+  mergeTraits,
   DEFAULT_TIME_WINDOWS,
   DEFAULT_CATEGORY_MAPPINGS,
 } from "../_shared/scheduling-defaults.ts";
@@ -494,13 +497,26 @@ Return ONLY valid JSON (no markdown):
       estimatedDuration = config.categoryMappings[taskCategory].estimatedDuration;
     }
 
+    // Classify TRAITS systematically so the keyword table is only a rare fallback. The
+    // deterministic anchors (doctor/dentist → appointment; bank/post office → venue-
+    // dependent) are the floor + test oracle; the LLM pass GENERALIZES to unlisted
+    // siblings (optometrist, DMV, pharmacy, vet, physio…). The LLM returns null on ANY
+    // failure so the deterministic floor is never silently lost, and OR-merge means the
+    // LLM can only ADD a trait the anchors missed, never erase an anchor.
+    const anchorTraits = classifyTaskTraits(taskText);
+    const llmTraits = explicitWindow ? null : await classifyTaskTraitsLLM(taskText, Deno.env.get('LOVABLE_API_KEY'));
+    const mergedTraits = mergeTraits(anchorTraits, llmTraits);
+    if (llmTraits && (llmTraits.venueDependent !== anchorTraits.venueDependent || llmTraits.appointment !== anchorTraits.appointment)) {
+      console.log(`🤖 LLM trait generalization for "${taskText}": anchor=${JSON.stringify(anchorTraits)} llm=${JSON.stringify(llmTraits)} merged=${JSON.stringify(mergedTraits)}`);
+    }
+
     // Resolve allowed windows via the SHARED precedence (identical to the nightly path):
     //   explicit > trait (appointment / venue-dependent) > keyword table (FALLBACK) > category.
     // Keywords are a FALLBACK now — a trait (e.g. "bank" is venue-dependent → after-work
     // with a business-hours nudge) beats the old "bank → business_hours" keyword mapping.
     const plan = resolveWindowPlan(
       taskText, taskCategory, loadedUserConfig, config.timeWindows, config.categoryMappings,
-      { explicitWindow },
+      { explicitWindow, traits: mergedTraits },
     );
     const allowedWindows = plan.allowedWindows;
     const nudgeToBusinessHours = plan.nudgeToBusinessHours;

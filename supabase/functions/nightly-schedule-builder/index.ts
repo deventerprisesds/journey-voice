@@ -7,6 +7,10 @@ import {
   validateTaskWindow,
   resolveWindowPlan,
   resolvePriorityWeight,
+  classifyTaskTraits,
+  classifyTaskTraitsLLM,
+  mergeTraits,
+  type TaskTraits,
   MAX_ASSIGNMENTS_PER_DAY,
   ASSIGNMENT_URGENT_HOURS,
   ASSIGNMENT_PRIORITY_DAYS,
@@ -841,6 +845,46 @@ serve(async (req) => {
         let totalScheduledAcrossWeek = 0;
         const weekResults: Record<string, any> = {};
 
+        // ── Warm the trait cache ONCE for the whole run ──────────────────────────
+        // Trait classification depends only on the title, so we compute it a single
+        // time per unique title (bounded concurrency) BEFORE the per-day loop rather
+        // than calling the LLM inside the nested day×task placement loops. The LLM
+        // pass GENERALIZES beyond the deterministic anchors (optometrist, DMV, vet…)
+        // so the keyword fallback is rarely reached; it returns null on any failure so
+        // the deterministic anchor floor is never lost. Keyed by normalized title.
+        const traitsByTitle = new Map<string, TaskTraits>();
+        try {
+          const { data: warmTasks } = await supabase
+            .from('tasks')
+            .select('title')
+            .eq('user_id', userId)
+            .in('status', ['READY', 'UP_NEXT', 'TODO', 'BACKLOG'])
+            .is('is_scheduled', false)
+            .is('completed_at', null)
+            .not('title', 'ilike', '%Test Task%');
+          const uniqueTitles = [...new Set((warmTasks || [])
+            .map((t: any) => (t.title || '').trim())
+            .filter((t: string) => t.length > 0))];
+          const lovableKey = Deno.env.get('LOVABLE_API_KEY');
+          let llmHits = 0, llmGeneralized = 0;
+          const CONCURRENCY = 5;
+          for (let i = 0; i < uniqueTitles.length; i += CONCURRENCY) {
+            const batch = uniqueTitles.slice(i, i + CONCURRENCY);
+            await Promise.all(batch.map(async (title) => {
+              const anchor = classifyTaskTraits(title);
+              const llm = lovableKey ? await classifyTaskTraitsLLM(title, lovableKey) : null;
+              if (llm) {
+                llmHits++;
+                if (llm.venueDependent !== anchor.venueDependent || llm.appointment !== anchor.appointment) llmGeneralized++;
+              }
+              traitsByTitle.set(title.toLowerCase(), mergeTraits(anchor, llm));
+            }));
+          }
+          console.log(`  🤖 Trait warm-up: ${uniqueTitles.length} titles, ${llmHits} LLM-classified, ${llmGeneralized} generalized beyond anchors${lovableKey ? '' : ' (no LOVABLE_API_KEY — deterministic anchors only)'}`);
+        } catch (warmErr) {
+          console.warn(`  ⚠️ Trait warm-up failed (falling back to per-task deterministic anchors):`, warmErr);
+        }
+
         for (let dayOffset = 0; dayOffset < totalDays; dayOffset++) {
           // Compute target date from todayISO (timezone-correct) to avoid UTC drift
           const [tY, tM, tD] = todayISO.split('-').map(Number);
@@ -1156,7 +1200,8 @@ serve(async (req) => {
             // keyword table (FALLBACK) > category default. Keywords no longer beat a
             // trait — "bank" is venue-dependent → after-work (with a business-hours nudge)
             // rather than the old "bank → business_hours" keyword mapping.
-            const plan = resolveWindowPlan(task.title, task.category, config, timeWindows, categoryMappings);
+            const cachedTraits = traitsByTitle.get((task.title || '').trim().toLowerCase());
+            const plan = resolveWindowPlan(task.title, task.category, config, timeWindows, categoryMappings, { traits: cachedTraits });
             let preferredWindows = plan.allowedWindows.filter((w) => activeWindowNames.includes(w));
             if (preferredWindows.length === 0) {
               preferredWindows = getPreferredWindows(task.category, categoryMappings, activeWindowNames);
