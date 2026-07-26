@@ -106,6 +106,8 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
   const [builderLog, setBuilderLog] = useState<any>(null);
   const [userConfig, setUserConfig] = useState<any>(null);
   const [overflowQueue, setOverflowQueue] = useState<Array<{ id: string; task_id: string; message: string; impact_factors: string[]; suggested_bump_title: string | null }>>([]);
+  const [meetingDecisions, setMeetingDecisions] = useState<Record<string, string>>({}); // external_event_id -> status
+  const [meetingBusy, setMeetingBusy] = useState<string | null>(null); // external_event_id currently deciding
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
 
   // Stable per-open review session id used to isolate chat shown in this modal
@@ -205,6 +207,21 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
       }
       setOverflowQueue(data ?? []);
     })();
+
+    // 6. Fetch external-meeting attendance decisions so we only ask about undecided ones.
+    (async () => {
+      const { data, error } = await supabase
+        .from('external_event_attendance')
+        .select('external_event_id, status')
+        .eq('user_id', user.id);
+      if (error) {
+        console.warn('[DailyReviewModal] attendance fetch error:', error.message);
+        return;
+      }
+      const map: Record<string, string> = {};
+      for (const row of data ?? []) map[row.external_event_id] = row.status;
+      setMeetingDecisions(map);
+    })();
   }, [open, user?.id]);
 
   // 5. Realtime: refresh builderLog whenever a fresh nightly_schedule_built row lands
@@ -264,6 +281,50 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
       })),
     [scheduledToday, tz]
   );
+
+  // Today's external meetings the user hasn't yet confirmed/declined — the review asks
+  // "are you attending?" so a declined meeting can free its slot for the next task.
+  const pendingMeetingsToday = useMemo(() =>
+    (externalEvents || [])
+      .filter(e => e.start_time && !e.is_all_day &&
+        new Date(e.start_time).toLocaleDateString('en-CA', { timeZone: tz }) === todayStr)
+      .filter(e => {
+        const d = meetingDecisions[e.external_event_id];
+        return d !== 'attending' && d !== 'declined' && d !== 'no_show';
+      })
+      .map(e => ({
+        id: e.id,
+        externalEventId: e.external_event_id,
+        title: e.title,
+        startLocal: e.start_time ? new Date(e.start_time).toLocaleTimeString('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit', hour12: true }) : null,
+      })),
+    [externalEvents, meetingDecisions, tz, todayStr]
+  );
+
+  const handleMeetingDecision = async (externalEventId: string, decision: 'attending' | 'declined') => {
+    if (!user?.id) return;
+    setMeetingBusy(externalEventId);
+    try {
+      const { data, error } = await supabase.functions.invoke('confirm-external-meeting', {
+        body: { user_id: user.id, external_event_id: externalEventId, decision },
+      });
+      if (error) throw error;
+      setMeetingDecisions(prev => ({ ...prev, [externalEventId]: decision }));
+      if (decision === 'declined' && data?.backfillTaskTitle) {
+        toast.success(`Slot freed — scheduled "${data.backfillTaskTitle}" in its place`);
+      } else if (decision === 'declined') {
+        toast.success('Meeting declined — slot freed');
+      } else {
+        toast.success('Meeting confirmed');
+      }
+      setTimeout(() => onTaskUpdate(), 1500);
+    } catch (e) {
+      console.error('[DailyReviewModal] meeting decision error:', e);
+      toast.error('Could not update the meeting — please try again.');
+    } finally {
+      setMeetingBusy(null);
+    }
+  };
 
   // Handle confirm & fill gaps. Wait for the matching nightly_schedule_built
   // activity_log row so we don't close the modal before the run actually finished
@@ -357,6 +418,11 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
     (dayContext as any).overflowQueue = overflowQueue.map(o => ({
       taskId: o.task_id, message: o.message, impactFactors: o.impact_factors,
       suggestedBump: o.suggested_bump_title,
+    }));
+    // Undecided external meetings today — the assistant can ask about attendance and, on
+    // a decline, the slot is freed for the next same-category task.
+    (dayContext as any).pendingMeetings = pendingMeetingsToday.map(m => ({
+      externalEventId: m.externalEventId, title: m.title, startLocal: m.startLocal,
     }));
 
     try {
@@ -615,6 +681,37 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
                       <p className="text-xs text-muted-foreground">
                         {formatTimeInTimezone(event.start_time, tz)} – {formatTimeInTimezone(event.end_time, tz)}
                       </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* External-meeting confirmation — decline frees the slot for the next task */}
+            {pendingMeetingsToday.length > 0 && (
+              <div className="space-y-1.5">
+                {pendingMeetingsToday.map(m => (
+                  <div
+                    key={m.id}
+                    className="flex items-center gap-2 py-2 px-2.5 rounded-md bg-sky-50 dark:bg-sky-950/30 border border-sky-200 dark:border-sky-900/50"
+                  >
+                    <Calendar className="h-4 w-4 text-sky-600 dark:text-sky-500 shrink-0" />
+                    <p className="text-xs text-sky-800 dark:text-sky-300 leading-snug flex-1 min-w-0">
+                      Attending <span className="font-medium">{m.title}</span>{m.startLocal ? ` at ${m.startLocal}` : ''}?
+                    </p>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <Button
+                        size="sm" variant="ghost"
+                        className="h-6 px-2 text-[11px] text-sky-700 dark:text-sky-300 hover:bg-sky-100 dark:hover:bg-sky-900/40"
+                        disabled={meetingBusy === m.externalEventId}
+                        onClick={() => handleMeetingDecision(m.externalEventId, 'attending')}
+                      >Yes</Button>
+                      <Button
+                        size="sm" variant="ghost"
+                        className="h-6 px-2 text-[11px] text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900/40"
+                        disabled={meetingBusy === m.externalEventId}
+                        onClick={() => handleMeetingDecision(m.externalEventId, 'declined')}
+                      >Decline & free slot</Button>
                     </div>
                   </div>
                 ))}
