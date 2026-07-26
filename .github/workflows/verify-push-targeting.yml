@@ -1,0 +1,29 @@
+name: Verify Push Targeting (one-shot)
+
+# Read-only proof that source-app targeting partitions push_subscriptions correctly:
+#   - journey-native push (no app)  -> endpoints NOT LIKE 'fcm:app:%'
+#   - huddle push (app="huddle")    -> endpoints LIKE 'fcm:app:huddle:%'
+# These mirror the exact filters send-push-notification applies (supabase-js .not/.like). The two
+# sets must be DISJOINT. Dispatch-only; remove after use.
+on:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      SB: "https://wwxgajrtmslzklnyplah.supabase.co/rest/v1/push_subscriptions"
+      SB_KEY: ${{ secrets.CF_SUPABASE_SERVICE_KEY }}
+    steps:
+      - name: Journey-native target set (NOT LIKE fcm:app:%)
+        run: |
+          curl -G -sS -H "apikey: $SB_KEY" -H "Authorization: Bearer $SB_KEY" \
+            --data-urlencode "select=endpoint,updated_at" \
+            --data-urlencode "endpoint=not.like.fcm:app:*" \
+            "$SB" | python3 -c "import sys,json;r=json.load(sys.stdin);print('JOURNEY push reaches',len(r),'row(s):');[print('  ',x['endpoint'][:52]) for x in r]"
+      - name: Huddle target set (LIKE fcm:app:huddle:%)
+        run: |
+          curl -G -sS -H "apikey: $SB_KEY" -H "Authorization: Bearer $SB_KEY" \
+            --data-urlencode "select=endpoint,updated_at" \
+            --data-urlencode "endpoint=like.fcm:app:huddle:*" \
+            "$SB" | python3 -c "import sys,json;r=json.load(sys.stdin);print('HUDDLE push reaches',len(r),'row(s):');[print('  ',x['endpoint'][:64]) for x in r]"
