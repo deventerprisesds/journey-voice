@@ -1,0 +1,59 @@
+name: Fire Multi Notify (one-shot test)
+
+# Fires N Huddle-style pushes (channel `messages`, app `huddle`) a few seconds apart, each with a
+# UNIQUE tag/notificationId + deepLink — to verify the phone shows each as its OWN shade notification
+# (one at a time), not collapsed into one. Reuses huddle-proxy -> execute-tool send_push. Dispatch-only.
+on:
+  workflow_dispatch:
+    inputs:
+      count:
+        description: "How many notifications to fire"
+        required: false
+        default: "3"
+      interval:
+        description: "Seconds between each"
+        required: false
+        default: "7"
+      huddle_id:
+        description: "Target huddle for the deep link"
+        required: false
+        default: "dm-terry-locke"
+      caller_email:
+        description: "Entra email of the target user"
+        required: false
+        default: "von.ellis@enterpriseds.io"
+
+jobs:
+  fire:
+    runs-on: ubuntu-latest
+    env:
+      PROXY: "https://wwxgajrtmslzklnyplah.supabase.co/functions/v1/huddle-proxy"
+      TOKEN: ${{ secrets.JOURNEY_PROXY_TOKEN }}
+      COUNT: ${{ github.event.inputs.count }}
+      INTERVAL: ${{ github.event.inputs.interval }}
+      HID: ${{ github.event.inputs.huddle_id }}
+      EMAIL: ${{ github.event.inputs.caller_email }}
+    steps:
+      - name: Fire N unique-tag pushes
+        run: |
+          set -euo pipefail
+          if [ -z "${TOKEN}" ]; then echo "::error::JOURNEY_PROXY_TOKEN not set"; exit 1; fi
+          RUNID="notiftest-$(date -u +%H%M%S)"
+          for i in $(seq 1 "${COUNT}"); do
+            TAG="${RUNID}-${i}"
+            PAYLOAD=$(jq -n --arg t "Test $i of ${COUNT}" --arg b "Notification $i — should be its own shade entry" \
+              --arg h "$HID" --arg e "$EMAIL" --arg tag "$TAG" '{
+              toolName: "send_push",
+              args: { title: $t, body: $b, channel: "messages", app: "huddle",
+                      data: { deepLink: ("/?huddle=" + $h), source: "huddle-message", huddleId: $h,
+                              tag: $tag, notificationId: $tag } },
+              caller: { entra_email: $e }
+            }')
+            RESP=$(curl -sS -X POST "${PROXY}/tool" \
+              -H "Authorization: Bearer ${TOKEN}" -H "x-huddle-proxy: 1" -H "Content-Type: application/json" \
+              -d "$PAYLOAD")
+            echo "[$i/$COUNT] tag=$TAG -> $RESP"
+            echo "$RESP" | jq -e '.ok == true' >/dev/null || { echo "FAIL on $i: $RESP"; exit 1; }
+            if [ "$i" -lt "${COUNT}" ]; then sleep "${INTERVAL}"; fi
+          done
+          echo "Fired ${COUNT} unique-tag notifications."
