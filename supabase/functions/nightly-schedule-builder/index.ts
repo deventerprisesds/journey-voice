@@ -13,6 +13,7 @@ import {
   type TaskTraits,
   resolveMaxDailyMinutes,
   withinDailyCap,
+  classifyImpact,
   MAX_ASSIGNMENTS_PER_DAY,
   ASSIGNMENT_URGENT_HOURS,
   ASSIGNMENT_PRIORITY_DAYS,
@@ -847,6 +848,23 @@ serve(async (req) => {
         let totalScheduledAcrossWeek = 0;
         const weekResults: Record<string, any> = {};
 
+        // ── Value-aware overflow queue (per-user, this run) ──────────────────────
+        // High-impact tasks that overflow a full window/day are collected here and
+        // upserted after the week loop; ordinary overflows quietly roll (unchanged).
+        // We clear this user's OPEN rows first so the queue reflects the CURRENT run
+        // (a task placed this run should not linger in the queue).
+        const overflowRows: Array<{
+          user_id: string; task_id: string; overflow_date: string; reason: string;
+          score: number | null; impact_factors: string[]; duration_minutes: number | null;
+          suggested_bump_task_id: string | null; suggested_bump_title: string | null; message: string;
+        }> = [];
+        const overflowSeen = new Set<string>(); // task_id|date dedup across passes
+        try {
+          await supabase.from('task_overflow_queue').delete().eq('user_id', userId).eq('status', 'open');
+        } catch (e) {
+          console.warn('  ⚠️ Could not clear open overflow queue rows:', e);
+        }
+
         // ── Warm the trait cache ONCE for the whole run ──────────────────────────
         // Trait classification depends only on the title, so we compute it a single
         // time per unique title (bounded concurrency) BEFORE the per-day loop rather
@@ -1196,6 +1214,38 @@ serve(async (req) => {
           const venueNudgeByTaskId = new Map<string, { toWindow: string; message: string }>();
           const deferredAssignmentsToday: Array<{ id: string; tier: 'B' | 'C' }> = [];
 
+          // Value-aware overflow: when a task can't be placed, ORDINARY tasks quietly
+          // roll to the next day (nothing queued). A HIGH-IMPACT task instead lands in
+          // the overflow queue with a nudge + a suggested lower-value item to bump.
+          const nowMsForImpact = now.getTime();
+          const collectOverflow = (task: any, duration: number, reason: string) => {
+            const key = `${task.id}|${targetISO}`;
+            if (overflowSeen.has(key)) return;
+            const impact = classifyImpact({
+              title: task.title, score: task.score, isPriority: !!task.is_priority,
+              dueDate: task.due_date ?? null, nowMs: nowMsForImpact,
+            });
+            if (!impact.highImpact) return; // ordinary tasks quietly roll — not queued
+            overflowSeen.add(key);
+            // Suggested bump: the lowest-scored task ALREADY placed today whose score is
+            // below this task's — displacing it would free room for the higher-value item.
+            const bumpable = dayPlacements
+              .filter((p: any) => typeof p.score === 'number' && p.score < (task.score ?? 0))
+              .sort((a: any, b: any) => (a.score as number) - (b.score as number))[0] as any;
+            const factorText = impact.factors.length ? ` (${impact.factors.join(', ')})` : '';
+            const bumpText = bumpable
+              ? ` You could bump "${bumpable.title}" (lower value) to make room today.`
+              : '';
+            overflowRows.push({
+              user_id: userId, task_id: task.id, overflow_date: targetISO, reason,
+              score: typeof task.score === 'number' ? task.score : null,
+              impact_factors: impact.factors, duration_minutes: duration,
+              suggested_bump_task_id: bumpable?.taskId ?? null,
+              suggested_bump_title: bumpable?.title ?? null,
+              message: `"${task.title}" is high-impact${factorText} but couldn't fit ${targetISO} (${reason === 'daily_hours_cap' ? 'daily hours budget reached' : 'no window capacity'}).${bumpText}`,
+            });
+          };
+
           for (const task of dedupedCandidates) {
             const duration = task.estimate_minutes ||
               categoryMappings[task.category]?.estimatedDuration || 60;
@@ -1258,6 +1308,7 @@ serve(async (req) => {
                 dayMinutesUsed: Math.round(dayTaskMinutesUsed), maxDailyMinutes,
                 tier,
               });
+              collectOverflow(task, duration, 'daily_hours_cap');
               if (isAssignment && tier && tier !== 'A') {
                 deferredAssignmentsToday.push({ id: task.id, tier: tier as 'B' | 'C' });
               }
@@ -1317,6 +1368,7 @@ serve(async (req) => {
                 trait: plan.trait ?? null,
                 tier,
               });
+              collectOverflow(task, duration, 'no_window_capacity');
               console.log(`    ⚠️ "${task.title}" doesn't fit any allowed window — skipping`);
             }
 
@@ -1726,6 +1778,29 @@ serve(async (req) => {
           },
           { attempted: 0, committed: 0, deferred: 0 },
         );
+
+        // ── Persist the value-aware overflow queue ───────────────────────────────
+        // Keep only tasks that NEVER got scheduled anywhere in this run (a task that
+        // overflowed an early day but was placed later must not linger), and collapse
+        // to one row per task (earliest overflow date).
+        try {
+          const perTask = new Map<string, typeof overflowRows[number]>();
+          for (const row of overflowRows) {
+            if (scheduledTaskIds.has(row.task_id)) continue; // ended up scheduled — skip
+            const existing = perTask.get(row.task_id);
+            if (!existing || row.overflow_date < existing.overflow_date) perTask.set(row.task_id, row);
+          }
+          const finalRows = [...perTask.values()];
+          if (finalRows.length > 0) {
+            const { error: ofErr } = await supabase
+              .from('task_overflow_queue')
+              .upsert(finalRows, { onConflict: 'task_id,overflow_date' });
+            if (ofErr) console.warn('  ⚠️ overflow queue upsert failed:', ofErr.message);
+            else console.log(`  📥 Overflow queue: ${finalRows.length} high-impact task(s) queued for review`);
+          }
+        } catch (e) {
+          console.warn('  ⚠️ overflow queue persist error:', e);
+        }
 
         // Calendar status snapshot for today (used by daily-review pipeline messaging)
         // Tri-state: connected_with_events | connected_no_events | not_connected | query_failed

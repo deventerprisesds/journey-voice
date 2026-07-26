@@ -39,6 +39,49 @@ export function withinDailyCap(usedMinutes: number, durationMinutes: number, max
   return usedMinutes + durationMinutes <= maxDailyMinutes;
 }
 
+// ── Impact classification (value-aware overflow) ──────────────────────────────
+// When a window/day is full, ORDINARY tasks quietly roll to the next day, but a
+// HIGH-IMPACT task should instead nudge the user (so it can bump a lower-value item)
+// and land in the overflow queue. Impact reuses signals the scorer already elevates —
+// we do NOT recompute a score here, just detect the factors.
+export const FINANCIAL_KEYWORDS = ['payment', 'invoice', 'bill', 'tax', 'budget', 'contract', 'rent', 'mortgage', 'refund', 'fee', 'deposit'];
+export const COMMUNICATION_KEYWORDS = ['email', 'call', 'reply', 'respond', 'follow up', 'message', 'meeting', 'text back', 'rsvp'];
+
+export interface ImpactResult { highImpact: boolean; factors: string[] }
+
+/**
+ * Classify whether an overflowed task is HIGH-IMPACT (financial / communication /
+ * time-sensitive / pinned / user-priority). Factors are additive and human-readable so
+ * the nudge can explain WHY. `score` is the scorer's existing value — a high score alone
+ * (>= scoreThreshold, default 12 so an is_priority +10 base clears it) also counts.
+ */
+export function classifyImpact(p: {
+  title: string;
+  score?: number;
+  isPriority?: boolean;
+  dueDate?: string | null;
+  nowMs: number;
+  pinned?: boolean;
+  scoreThreshold?: number;
+}): ImpactResult {
+  const factors: string[] = [];
+  const lower = (p.title || '').toLowerCase();
+  if (FINANCIAL_KEYWORDS.some((k) => wordMatch(lower, k))) factors.push('financial');
+  if (COMMUNICATION_KEYWORDS.some((k) => wordMatch(lower, k))) factors.push('communication');
+  if (p.isPriority) factors.push('is_priority');
+  if (p.pinned) factors.push('pinned');
+  if (p.dueDate) {
+    const due = new Date(p.dueDate).getTime();
+    if (!Number.isNaN(due)) {
+      if (due <= p.nowMs) factors.push('overdue');
+      else if (due - p.nowMs <= ASSIGNMENT_URGENT_HOURS * 3600000) factors.push('due_soon');
+    }
+  }
+  const threshold = p.scoreThreshold ?? 12;
+  const highImpact = factors.length > 0 || (typeof p.score === 'number' && p.score >= threshold);
+  return { highImpact, factors };
+}
+
 export interface CategoryMapping {
   defaultTimeWindow: string[];
   estimatedDuration: number;

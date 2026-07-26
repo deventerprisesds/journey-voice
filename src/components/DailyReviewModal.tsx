@@ -105,6 +105,7 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
   const [isConfirming, setIsConfirming] = useState(false);
   const [builderLog, setBuilderLog] = useState<any>(null);
   const [userConfig, setUserConfig] = useState<any>(null);
+  const [overflowQueue, setOverflowQueue] = useState<Array<{ id: string; task_id: string; message: string; impact_factors: string[]; suggested_bump_title: string | null }>>([]);
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
 
   // Stable per-open review session id used to isolate chat shown in this modal
@@ -187,6 +188,22 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
       } else {
         console.log('[DailyReviewModal] no user_scheduling_prefs row — pipeline will use defaults');
       }
+    })();
+
+    // 5. Fetch OPEN value-aware overflow queue — high-impact tasks that couldn't fit,
+    //    so the review can offer to bump a lower-value item to make room.
+    (async () => {
+      const { data, error } = await supabase
+        .from('task_overflow_queue')
+        .select('id, task_id, message, impact_factors, suggested_bump_title')
+        .eq('user_id', user.id)
+        .eq('status', 'open')
+        .order('score', { ascending: false, nullsFirst: false });
+      if (error) {
+        console.warn('[DailyReviewModal] overflow queue fetch error:', error.message);
+        return;
+      }
+      setOverflowQueue(data ?? []);
     })();
   }, [open, user?.id]);
 
@@ -335,6 +352,12 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
       tasks, externalEvents, reasoning, pendingAssignmentTasks, builderLog,
       tz, todayStr, isWeekend
     });
+    // Attach the value-aware overflow queue so the assistant can proactively offer to
+    // bump a lower-value item to make room for a high-impact task that couldn't fit.
+    (dayContext as any).overflowQueue = overflowQueue.map(o => ({
+      taskId: o.task_id, message: o.message, impactFactors: o.impact_factors,
+      suggestedBump: o.suggested_bump_title,
+    }));
 
     try {
       const result = await sendMessage(msg, { dayContext, interface: 'daily_review' });
@@ -593,6 +616,21 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
                         {formatTimeInTimezone(event.start_time, tz)} – {formatTimeInTimezone(event.end_time, tz)}
                       </p>
                     </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Value-aware overflow — high-impact tasks that couldn't fit; offer to bump */}
+            {overflowQueue.length > 0 && (
+              <div className="space-y-1.5">
+                {overflowQueue.map(o => (
+                  <div
+                    key={o.id}
+                    className="flex items-start gap-2 py-2 px-2.5 rounded-md bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50"
+                  >
+                    <AlertTriangle className="h-4 w-4 text-rose-600 dark:text-rose-500 shrink-0 mt-0.5" />
+                    <p className="text-xs text-rose-800 dark:text-rose-300 leading-snug">{o.message}</p>
                   </div>
                 ))}
               </div>

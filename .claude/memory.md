@@ -148,6 +148,49 @@ LLM proposing and the deterministic layer validating — LLM not the only guardr
 - Confirm which user_scheduling_prefs row is the live account.
 
 ## Active work
-Assessment COMPLETE + corrected; trait model + plan AGREED. No scheduler code changed yet.
-Next: finalize settings sweep → write acceptance criteria (define-acceptance-criteria) → implement.
-Also queued (separate, pre-existing): android-bridge-template ScheduleWidget sort bug + inline-reply RemoteInput wiring.
+Assessment COMPLETE. IMPLEMENTATION IN PROGRESS on branch
+`claude/mobile-widget-web-bridge-debug-nsishi` (journey-voice). Section A (source of
+truth / de-fork / array-vs-string) + Section B #1–#4 DONE, deployed, verified:
+
+### DONE + deployed (Section B)
+- **B1 LLM trait generalization** (`_shared/scheduling-defaults.ts`): `classifyTaskTraitsLLM`
+  (Lovable gateway google/gemini-2.5-flash, temp 0, returns null on any failure → deterministic
+  anchor floor never lost), `mergeTraits` (OR-merge, LLM can only ADD a trait). Wired into
+  smart-scheduler (per-task) + nightly (warm a title→traits cache ONCE, concurrency 5, before the
+  day loop). Keyword fallback now RARE; LOUD ⚠️⚠️ warn + placementBasis/keywordFallbackNotice
+  when it IS hit. LIVE-verified: DMV→venue_dependent, optometrist→appointment (both source=trait,
+  keywordFallbackUsed=false).
+- **B2 Appointment pinning** (`scheduling-defaults.ts` + smart-scheduler): `parseFixedClockTime`
+  (title time, requires am/pm or colon), `WindowPlan.pinned`/`fixedTimeMinutes`, source `'pinned'`.
+  Booked appt (appointment trait + concrete time) → pinned at EXACT time, immovable, ANY window
+  (smart-scheduler fast-path BYPASSES window validation so a 7am appt isn't rejected); unbooked →
+  flexible (unchanged). `isAutoPlaceableWindow` lets pinned fill weekend evening. LIVE-verified:
+  3pm→15:00, 7am→07:00 (out-of-window honored), no-time→flexible.
+- **B3 Venue nudge delivery** (nightly + build-day-context server+client + DailyReviewModal):
+  nightly persists `scheduling_context.venue_nudge={toWindow,message}` at both write sites; day
+  context exposes `venueNudges` + lists them in `summarizeDayContext` (→ morning-review assistant
+  gets them in DAY_CONTEXT); modal shows an amber banner. NOTE: server `build-day-context.ts` is a
+  parity MIRROR not yet imported by any edge fn — the LIVE path is the frontend `src/utils/
+  buildDayContext.ts`.
+- **B4 maxDailyHours cap** (nightly + scheduling-defaults): `resolveMaxDailyMinutes(config)` /
+  `withinDailyCap()` / `DEFAULT_MAX_DAILY_HOURS=7`. Nightly seeds day-used from already-scheduled
+  tasks (NOT external events), defers tasks past the budget (reason `daily_hours_cap`), stops the
+  day at budget, surfaces overcommit in the PLACEMENT trace. Unit-tested (helper); no live builder
+  run (would mutate real schedule).
+
+Verification method (egress: supabase.co BLOCKED from sandbox): `deno check` on the shared module
+(only fully type-checkable file); deterministic `deno run` unit tests off the shared module; LIVE
+smoke via `net.http_post` from the DB → read `net._http_response` (pass `timeout_milliseconds:=20000`
+— default 5000 sometimes DNS-times-out on the FIRST call, retry once). Do NOT run the nightly builder
+live (mutates the user's real schedule).
+
+### NEXT (Section B remaining — design-heavy)
+- **B5 Value-aware overflow + queue.** Quiet roll for ordinary items (KEEP); NUDGE + bump only when
+  a HIGH-IMPACT item (financial / time-sensitive / pinned / communication) overflows a full window;
+  an overflow QUEUE the agent watches. NEW schema (queue table/status). Reuse the existing high
+  score signal (don't recompute impact).
+- **B6 External-meeting confirmation.** "Are you doing this?" on external meetings; on decline/no-show
+  release the slot → next same-category task. NEW flow.
+
+Also queued (separate, pre-existing): android-bridge-template ScheduleWidget sort bug + inline-reply
+RemoteInput wiring (the ORIGINAL task, not yet started).
