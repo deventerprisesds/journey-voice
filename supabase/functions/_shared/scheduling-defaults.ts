@@ -19,6 +19,26 @@ export const MAX_ASSIGNMENTS_PER_DAY = 2;
 export const ASSIGNMENT_URGENT_HOURS = 48;
 export const ASSIGNMENT_PRIORITY_DAYS = 7;
 
+/**
+ * Default cap on how many hours of TASKS the builder will schedule into a single day
+ * (mirrors DEFAULT_SCHEDULING_CONFIG.workingHours.maxDailyHours in the frontend). The
+ * per-window capacities alone don't bound the day — weekday windows sum to ~16h — so
+ * without this the builder can over-pack a day. Users override via
+ * config.workingHours.maxDailyHours.
+ */
+export const DEFAULT_MAX_DAILY_HOURS = 7;
+
+/** Resolve the day's task-minute budget from user config (workingHours.maxDailyHours). */
+export function resolveMaxDailyMinutes(userConfig: any): number {
+  const h = userConfig?.workingHours?.maxDailyHours;
+  return (typeof h === 'number' && h > 0 ? h : DEFAULT_MAX_DAILY_HOURS) * 60;
+}
+
+/** True if scheduling `durationMinutes` more keeps the day within `maxDailyMinutes`. */
+export function withinDailyCap(usedMinutes: number, durationMinutes: number, maxDailyMinutes: number): boolean {
+  return usedMinutes + durationMinutes <= maxDailyMinutes;
+}
+
 export interface CategoryMapping {
   defaultTimeWindow: string[];
   estimatedDuration: number;

@@ -11,6 +11,8 @@ import {
   classifyTaskTraitsLLM,
   mergeTraits,
   type TaskTraits,
+  resolveMaxDailyMinutes,
+  withinDailyCap,
   MAX_ASSIGNMENTS_PER_DAY,
   ASSIGNMENT_URGENT_HOURS,
   ASSIGNMENT_PRIORITY_DAYS,
@@ -942,10 +944,25 @@ serve(async (req) => {
           ];
 
           const windowCapacities = computeUsedMinutes(allScheduledItems, activeWindows, targetISO, timezone);
-          
+
           const totalRemainingMinutes = Object.values(windowCapacities).reduce(
             (sum, wc) => sum + wc.remainingMinutes, 0
           );
+
+          // ── Daily working-hours cap ──────────────────────────────────────────
+          // The per-window capacities don't bound the whole day (weekday windows sum
+          // to ~16h), so enforce config.workingHours.maxDailyHours (default 7h) on the
+          // total TASK minutes placed per day. Seed from tasks ALREADY scheduled today
+          // (prior runs + Tier A committed earlier this run) so we don't over-pack across
+          // passes. External calendar events are the user's own commitments and are NOT
+          // counted against the task budget.
+          const maxDailyMinutes = resolveMaxDailyMinutes(config);
+          let dayTaskMinutesUsed = (dayScheduled || []).reduce((sum: number, t: any) => {
+            if (!t.start_time || !t.end_time) return sum;
+            return sum + Math.max(0, (new Date(t.end_time).getTime() - new Date(t.start_time).getTime()) / 60000);
+          }, 0);
+          let dayCapDeferrals = 0;
+          console.log(`      ⏱️ Daily hours cap: ${Math.round(dayTaskMinutesUsed)}/${maxDailyMinutes} min already used (max ${maxDailyMinutes / 60}h)`);
 
           console.log(`    📊 Window capacities for ${targetISO}:`);
           for (const [name, cap] of Object.entries(windowCapacities)) {
@@ -1229,6 +1246,24 @@ serve(async (req) => {
               });
             }
 
+            // Daily working-hours cap: don't schedule TASKS beyond maxDailyHours for the
+            // day, even if a window still has clock-time left. Overcommitment is flagged
+            // (deferred to a later day) instead of packed into an over-long day.
+            if (!withinDailyCap(dayTaskMinutesUsed, duration, maxDailyMinutes)) {
+              dayCapDeferrals++;
+              dayRejections.push({
+                taskId: task.id, title: task.title, category: task.category,
+                score: task.score, duration,
+                reason: 'daily_hours_cap',
+                dayMinutesUsed: Math.round(dayTaskMinutesUsed), maxDailyMinutes,
+                tier,
+              });
+              if (isAssignment && tier && tier !== 'A') {
+                deferredAssignmentsToday.push({ id: task.id, tier: tier as 'B' | 'C' });
+              }
+              continue;
+            }
+
             let assigned = false;
             let assignedWindow: string | null = null;
             for (const winName of preferredWindows) {
@@ -1259,6 +1294,7 @@ serve(async (req) => {
             }
 
             if (assigned) {
+              dayTaskMinutesUsed += duration; // count toward the daily working-hours cap
               if (isAssignment) {
                 dailyAssignmentCount[targetISO] = placedAssignmentsToday + 1;
               }
@@ -1286,6 +1322,15 @@ serve(async (req) => {
 
             const totalRemaining = Object.values(windowRemaining).reduce((s, v) => s + v, 0);
             if (totalRemaining <= 0) break;
+            // Day is at its working-hours budget — stop placing further tasks today.
+            if (dayTaskMinutesUsed >= maxDailyMinutes) {
+              console.log(`      ⏱️ Daily hours cap reached (${Math.round(dayTaskMinutesUsed)}/${maxDailyMinutes} min) — deferring remaining candidates to later days`);
+              break;
+            }
+          }
+
+          if (dayCapDeferrals > 0) {
+            console.warn(`      ⚠️ OVERCOMMIT: ${dayCapDeferrals} task(s) deferred from ${targetISO} — day already at the ${maxDailyMinutes / 60}h working-hours budget (${Math.round(dayTaskMinutesUsed)}/${maxDailyMinutes} min used)`);
           }
 
           pushStep(
@@ -1299,6 +1344,9 @@ serve(async (req) => {
                 Object.entries(windowCapacities).map(([n, c]) => [n, { total: c.totalMinutes, remaining: c.remainingMinutes }])
               ),
               candidateCount: dedupedCandidates.length,
+              maxDailyMinutes,
+              dayTaskMinutesUsed: Math.round(dayTaskMinutesUsed),
+              capDeferrals: dayCapDeferrals,
             },
             {
               accepted: dayPlacements,
