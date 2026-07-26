@@ -170,6 +170,30 @@ export function mergeTraits(a: TaskTraits, b: TaskTraits | null | undefined): Ta
 }
 
 /**
+ * Extract an explicit clock time (minutes-from-midnight) from a task title, if one is
+ * stated — e.g. "dentist at 3pm" → 900, "eye exam 10:30am" → 630, "call at 14:00" → 840.
+ * A stated time is the booked/fixed-time signal for an appointment (→ pinned). To avoid
+ * false positives ("30 minutes", "week 3", "top 5"), a match REQUIRES an am/pm suffix or
+ * a colon — a bare number is never treated as a time. Returns null when none is found.
+ */
+export function parseFixedClockTime(title: string): number | null {
+  if (!title) return null;
+  const t = title.toLowerCase();
+  // 12-hour with am/pm: "3pm", "3:30 pm", "at 3 pm"
+  const ampm = t.match(/\b(1[0-2]|0?[1-9])(?::([0-5][0-9]))?\s*(a\.?m\.?|p\.?m\.?)\b/);
+  if (ampm) {
+    let hour = parseInt(ampm[1], 10) % 12;
+    const min = ampm[2] ? parseInt(ampm[2], 10) : 0;
+    if (ampm[3].startsWith('p')) hour += 12;
+    return hour * 60 + min;
+  }
+  // 24-hour with a colon: "14:00", "at 9:15" (colon required — no bare integer)
+  const h24 = t.match(/\b([01]?[0-9]|2[0-3]):([0-5][0-9])\b/);
+  if (h24) return parseInt(h24[1], 10) * 60 + parseInt(h24[2], 10);
+  return null;
+}
+
+/**
  * LLM common-sense trait classification — generalizes BEYOND the deterministic anchors
  * (catches optometrist, DMV, pharmacy, vet, physio, …) so the keyword fallback is rarely
  * reached. Returns null on ANY failure (no key, network, bad JSON) so the caller falls
@@ -216,7 +240,9 @@ export interface WindowPlan {
   trait: 'appointment' | 'venue_dependent' | null;
   matchedKeyword: string | null;          // set only when the keyword FALLBACK decided it
   nudgeToBusinessHours: boolean;          // venue-dependent: offer to move into business hours
-  source: 'explicit' | 'trait' | 'keyword' | 'category';
+  pinned: boolean;                        // booked appointment: place at fixedTimeMinutes, immovable, ANY window
+  fixedTimeMinutes: number | null;        // the booked time (minutes-from-midnight) when pinned
+  source: 'explicit' | 'trait' | 'keyword' | 'category' | 'pinned';
 }
 
 /**
@@ -231,7 +257,7 @@ export function resolveWindowPlan(
   userConfig: any,
   timeWindows: Record<string, TimeWindow>,
   categoryMappings: Record<string, CategoryMapping>,
-  opts?: { explicitWindow?: string | null; traits?: TaskTraits },
+  opts?: { explicitWindow?: string | null; traits?: TaskTraits; fixedTimeMinutes?: number | null },
 ): WindowPlan {
   const catWindows = (category && categoryMappings[category])
     ? allowedWindowsOf(categoryMappings[category])
@@ -239,7 +265,7 @@ export function resolveWindowPlan(
 
   // 1) explicit user/AI request wins outright
   if (opts?.explicitWindow) {
-    return { allowedWindows: [opts.explicitWindow], trait: null, matchedKeyword: null, nudgeToBusinessHours: false, source: 'explicit' };
+    return { allowedWindows: [opts.explicitWindow], trait: null, matchedKeyword: null, nudgeToBusinessHours: false, pinned: false, fixedTimeMinutes: null, source: 'explicit' };
   }
 
   // 2) traits (systematic) beat both keyword and category. Callers may pass a richer
@@ -247,15 +273,20 @@ export function resolveWindowPlan(
   //    deterministic anchors); otherwise we use the deterministic anchor floor.
   const traits = opts?.traits ?? classifyTaskTraits(title);
   if (traits.appointment) {
-    // Unbooked appointment: flexible, NOT forced into business hours.
-    // (A booked appointment carries a fixed time and is pinned elsewhere.)
-    return { allowedWindows: ['flexible'], trait: 'appointment', matchedKeyword: null, nudgeToBusinessHours: false, source: 'trait' };
+    // A stated clock time (caller-supplied or parsed from the title) is the booked/
+    // fixed-time signal. BOOKED → pinned at that time, immovable, valid in ANY window
+    // ("appointed outside your control"). UNBOOKED → flexible, NOT forced to business hours.
+    const fixed = (opts?.fixedTimeMinutes ?? null) !== null ? opts!.fixedTimeMinutes! : parseFixedClockTime(title);
+    if (fixed !== null) {
+      return { allowedWindows: ['flexible'], trait: 'appointment', matchedKeyword: null, nudgeToBusinessHours: false, pinned: true, fixedTimeMinutes: fixed, source: 'pinned' };
+    }
+    return { allowedWindows: ['flexible'], trait: 'appointment', matchedKeyword: null, nudgeToBusinessHours: false, pinned: false, fixedTimeMinutes: null, source: 'trait' };
   }
   if (traits.venueDependent) {
     // Default to after-work (personal time); nudge the user to move it into
     // business hours when the venue is likely open then.
     const windows = ['after_work', ...catWindows.filter((w) => w !== 'after_work')];
-    return { allowedWindows: windows, trait: 'venue_dependent', matchedKeyword: null, nudgeToBusinessHours: true, source: 'trait' };
+    return { allowedWindows: windows, trait: 'venue_dependent', matchedKeyword: null, nudgeToBusinessHours: true, pinned: false, fixedTimeMinutes: null, source: 'trait' };
   }
 
   // 3) keyword table — FALLBACK only (never beats a trait). Uses the user's saved
@@ -264,11 +295,11 @@ export function resolveWindowPlan(
   const keywords = userConfig?.contextRules?.keywords ?? DEFAULT_CONTEXT_KEYWORDS;
   const kw = getKeywordWindowOverride(title, keywords, Object.keys(timeWindows));
   if (kw) {
-    return { allowedWindows: [kw.window, ...catWindows.filter((w) => w !== kw.window)], trait: null, matchedKeyword: kw.matchedKeyword, nudgeToBusinessHours: false, source: 'keyword' };
+    return { allowedWindows: [kw.window, ...catWindows.filter((w) => w !== kw.window)], trait: null, matchedKeyword: kw.matchedKeyword, nudgeToBusinessHours: false, pinned: false, fixedTimeMinutes: null, source: 'keyword' };
   }
 
   // 4) category default
-  return { allowedWindows: catWindows, trait: null, matchedKeyword: null, nudgeToBusinessHours: false, source: 'category' };
+  return { allowedWindows: catWindows, trait: null, matchedKeyword: null, nudgeToBusinessHours: false, pinned: false, fixedTimeMinutes: null, source: 'category' };
 }
 
 /**
@@ -284,7 +315,8 @@ export function isAutoPlaceableWindow(
 ): boolean {
   const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
   if (windowName === 'evening' && isWeekend) {
-    return plan.source === 'explicit' || plan.trait === 'appointment';
+    // Explicit requests, appointments, and pinned (booked) items may fill weekend evening.
+    return plan.source === 'explicit' || plan.source === 'pinned' || plan.trait === 'appointment';
   }
   return true;
 }

@@ -520,9 +520,15 @@ Return ONLY valid JSON (no markdown):
     );
     const allowedWindows = plan.allowedWindows;
     const nudgeToBusinessHours = plan.nudgeToBusinessHours;
-    console.log(`🧭 window plan: source=${plan.source} trait=${plan.trait ?? '-'} keyword=${plan.matchedKeyword ?? '-'} nudgeBiz=${plan.nudgeToBusinessHours} windows=[${allowedWindows.join(', ')}]`);
+    console.log(`🧭 window plan: source=${plan.source} trait=${plan.trait ?? '-'} keyword=${plan.matchedKeyword ?? '-'} nudgeBiz=${plan.nudgeToBusinessHours} pinned=${plan.pinned} windows=[${allowedWindows.join(', ')}]`);
     if (plan.source === 'keyword') {
       console.warn(`⚠️⚠️ KEYWORD FALLBACK used for "${taskText}" (matched "${plan.matchedKeyword}" → ${allowedWindows[0]}). No trait matched — low-confidence placement.`);
+    }
+    // Booked appointment: seed the search with the fixed time parsed from the title
+    // (e.g. "dentist at 3pm"). A caller-supplied time (AI / suggested_time: context) is
+    // picked up below; either way an appointment WITH a concrete time is pinned/immovable.
+    if (plan.pinned && plan.fixedTimeMinutes !== null && preferredTimeMinutes === null) {
+      preferredTimeMinutes = plan.fixedTimeMinutes;
     }
 
     // Override with explicit estimate from caller if provided
@@ -607,6 +613,64 @@ for (const task of existingTasks) {
     const dayMap = tasksPerDayPerCategory.get(dayKey)!;
     dayMap.set(task.category, (dayMap.get(task.category) || 0) + 1);
   }
+}
+
+// ── PINNED (booked appointment) FAST-PATH ────────────────────────────────────
+// An appointment WITH a concrete time is booked = immovable: place it at the EXACT
+// time on the earliest valid day, valid in ANY window (skip window bounds + the
+// post-placement window validation that would otherwise reject e.g. a 7am appt). If it
+// overlaps an existing item we still keep it at its fixed time (it's externally booked)
+// and surface a conflict flag rather than moving it.
+const isPinnedAppt = plan.trait === 'appointment' && preferredTimeMinutes !== null;
+if (isPinnedAppt) {
+  const prefHour = Math.floor(preferredTimeMinutes! / 60);
+  const prefMinute = preferredTimeMinutes! % 60;
+  for (let dayOffset = 0; dayOffset < maxSearchDays; dayOffset++) {
+    const checkYear = baseParts.year;
+    const checkMonth = baseParts.month;
+    const checkDay = baseParts.day + dayOffset;
+    const pinnedStartUTC = zonedTimeToUtc(checkYear, checkMonth, checkDay, prefHour, prefMinute, timezone);
+    if (pinnedStartUTC <= now) continue; // never pin in the past
+    // Respect a still-future due date (a booked appt shouldn't be pushed past it)
+    if (dueDateObj && dueDateObj.getTime() >= now.getTime() && pinnedStartUTC > dueDateObj) break;
+    const pinnedEndUTC = addMinutes(pinnedStartUTC, estimatedDuration);
+    const dayStartUTC = zonedTimeToUtc(checkYear, checkMonth, checkDay, 0, 0, timezone);
+    const dayEndUTC = zonedTimeToUtc(checkYear, checkMonth, checkDay + 1, 0, 0, timezone);
+    const dayBusySlots = getAllBusySlotsForDay(dayStartUTC, dayEndUTC, existingTasks, busySlots);
+    const hasConflict = dayBusySlots.some((b) => pinnedStartUTC < b.end && pinnedEndUTC > b.start);
+    const localTime = pinnedStartUTC.toLocaleString('en-US', { timeZone: timezone });
+    console.log(`📌 PINNED appointment "${taskText}" at fixed ${prefHour}:${String(prefMinute).padStart(2, '0')} → ${localTime}${hasConflict ? ' (CONFLICT — kept anyway, booked/immovable)' : ''}`);
+    return new Response(
+      JSON.stringify({
+        success: true,
+        scheduledSlot: {
+          startTime: pinnedStartUTC.toISOString(),
+          endTime: pinnedEndUTC.toISOString(),
+          estimateMinutes: estimatedDuration,
+        },
+        suggestedCategory: taskCategory,
+        suggestedStatus,
+        timeWindow: 'pinned',
+        trait: plan.trait,
+        pinned: true,
+        immovable: true,
+        fixedTime: `${String(prefHour).padStart(2, '0')}:${String(prefMinute).padStart(2, '0')}`,
+        conflict: hasConflict,
+        conflictNotice: hasConflict
+          ? `⚠️ "${taskText}" is a booked appointment at ${localTime} that overlaps another item — kept at its fixed time (immovable); resolve the overlap manually.`
+          : null,
+        nudgeToBusinessHours: false,
+        nudge: null,
+        placementBasis: 'pinned',
+        keywordFallbackUsed: false,
+        placementConfidence: 'high',
+        keywordFallbackNotice: null,
+        reasoning: `Pinned booked appointment at fixed time ${localTime} (immovable, any window).`,
+      }),
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+    );
+  }
+  console.log(`📌 Pinned appointment "${taskText}" had no valid future day within ${maxSearchDays}d — falling through to window search`);
 }
 
 // Try each allowed window in preference order (e.g. after_work → weekends).
