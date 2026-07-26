@@ -184,13 +184,44 @@ smoke via `net.http_post` from the DB → read `net._http_response` (pass `timeo
 — default 5000 sometimes DNS-times-out on the FIRST call, retry once). Do NOT run the nightly builder
 live (mutates the user's real schedule).
 
-### NEXT (Section B remaining — design-heavy)
-- **B5 Value-aware overflow + queue.** Quiet roll for ordinary items (KEEP); NUDGE + bump only when
-  a HIGH-IMPACT item (financial / time-sensitive / pinned / communication) overflows a full window;
-  an overflow QUEUE the agent watches. NEW schema (queue table/status). Reuse the existing high
-  score signal (don't recompute impact).
-- **B6 External-meeting confirmation.** "Are you doing this?" on external meetings; on decline/no-show
-  release the slot → next same-category task. NEW flow.
+- **B5 Value-aware overflow + queue** DONE, deployed, LIVE-verified. NEW table
+  `public.task_overflow_queue` (migration `20260726000000`; RLS own-row read/update; builder writes
+  service-role). `classifyImpact()` in scheduling-defaults reuses scorer signals (FINANCIAL_KEYWORDS /
+  COMMUNICATION_KEYWORDS whole-word, is_priority, due_soon/overdue, high score) — NO recompute.
+  Nightly clears the user's OPEN rows at run start, collects high-impact overflows at BOTH rejection
+  sites (daily_hours_cap + no_window_capacity) with a suggested bump (lowest-scored placed task below
+  it), upserts after the week loop keeping only tasks never scheduled in the run (one row/task).
+  Ordinary overflows quietly roll (unchanged). DailyReviewModal fetches OPEN rows → rose banner +
+  attaches to assistant dayContext. Write-contract verified live (insert/upsert idempotent/cleanup).
+- **B6 External-meeting confirmation + slot release** DONE, deployed, LIVE-verified end-to-end.
+  NEW table `public.external_event_attendance` (migration `20260726010000`; keyed by STABLE
+  external_event_id so it survives calendar delta re-sync; RLS own-row). NEW edge fn
+  `confirm-external-meeting`: records decision (idempotent upsert); on decline/no-show RELEASES the
+  freed window → next unscheduled same-category task that fits, scheduled into the exact slot
+  (`scheduling_context.backfilled_from_meeting`), marks released+backfill_task_id; idempotent (no
+  double-fill); attending just records. Ranks candidates like the builder. LIVE test: declined a
+  synthetic 60m meeting → 45m CAREER task backfilled into 18:00–18:45, attendance released=true
+  (synthetic rows cleaned up). DailyReviewModal shows a sky banner with Yes / "Decline & free slot"
+  buttons calling the fn + attaches pendingMeetings to dayContext.
 
-Also queued (separate, pre-existing): android-bridge-template ScheduleWidget sort bug + inline-reply
-RemoteInput wiring (the ORIGINAL task, not yet started).
+### SECTION B COMPLETE (B1–B6 all done, deployed, verified). Test-verification method unchanged
+(deno check + deno unit tests off the shared module + pg_net live smoke with timeout_ms:=20000;
+never run the nightly builder live — it mutates the real schedule; for B6 use synthetic event+task
+rows and CLEAN UP). Shared unit suites live in scratch (trait_wiring 11 / pinned 19 / nudge 10 /
+cap 9 / impact 10 = 59 green).
+
+### Remaining direction items NOT yet done
+- **Section D — overdue front-loading** (memory gap #5): stop scheduling overdue tasks PAST their due
+  date; front-load them. Not started.
+- **Section A leftovers**: drift sweep across the 5 duplicated window configs (execute-tool:2305-2322,
+  timeWindows.ts, buildDayContext, call-context-builder:803-806) — verify all read after_work 17–19;
+  wire dead GUI settings (customAIInstructions into batch prompt). Partially addressed via
+  scheduling-defaults; full sweep not re-confirmed.
+- **Agent TOOL for confirm-external-meeting**: the DailyReviewModal has confirm/decline BUTTONS + the
+  assistant SEES pendingMeetings in dayContext, but there is NO registered agent tool yet so the
+  assistant can't itself CALL confirm-external-meeting from a spoken "I'm skipping the 2pm". Add a
+  `confirm_external_meeting` tool (tool-definitions.ts + execute-tool dispatch) if conversational
+  action is wanted. Product-decision: buttons may be enough.
+
+Also queued (separate, pre-existing, NOT started): android-bridge-template ScheduleWidget sort bug +
+inline-reply RemoteInput wiring (the ORIGINAL task of this session).
