@@ -395,6 +395,13 @@ async function executeToolCall(
       case 'send_push':
         return await sendPushNow(supabase, userId, args);
 
+      // Internal: register a device's FCM token so send-push-notification can reach it. Huddle's
+      // STANDALONE bridge app calls this (via the huddle-proxy, which resolves the user) so its own
+      // token lands in the SAME push_subscriptions store journey already delivers to — reuse, no new
+      // sender/registration. Mirrors manage-push-subscription's `subscribe_fcm`. Not advertised to LLMs.
+      case 'register_push_token':
+        return await registerPushToken(supabase, userId, args);
+
       // ============ SEARCH TOOLS ============
       case 'web_search':
         return await webSearch(args, context.timezone);
@@ -1819,6 +1826,32 @@ async function sendPushNow(supabase: any, userId: string, args: any): Promise<Ex
     });
     if (error) return { success: false, error: extractErrorMessage(error) };
     return { success: true, message: `Push sent on ${channel}.` };
+  } catch (error) {
+    return { success: false, error: extractErrorMessage(error) };
+  }
+}
+
+// Register/refresh a device FCM token for this user so send-push-notification can reach it. Called by
+// Huddle's standalone bridge app (via the huddle-proxy, which resolves `userId` from the caller email)
+// so its own token joins the SAME push_subscriptions store — reuse of journey's delivery, not a new
+// sender. Idempotent per (user_id, endpoint) with endpoint keyed on the token so a user's multiple
+// bridge apps (journey + Huddle) each keep their own row instead of overwriting one another.
+async function registerPushToken(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
+  const fcmToken = String(args?.fcm_token ?? args?.fcmToken ?? '').trim();
+  if (!fcmToken) return { success: false, error: 'fcm_token required' };
+  try {
+    const { error } = await supabase
+      .from('push_subscriptions')
+      .upsert({
+        user_id: userId,
+        endpoint: `fcm:${fcmToken.slice(0, 32)}`,
+        p256dh_key: '',
+        auth_key: '',
+        fcm_token: fcmToken,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'user_id,endpoint' });
+    if (error) return { success: false, error: extractErrorMessage(error) };
+    return { success: true, message: 'Device token registered.' };
   } catch (error) {
     return { success: false, error: extractErrorMessage(error) };
   }
