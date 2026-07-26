@@ -69,6 +69,14 @@ export interface DayContextCalendarHold {
   endLocal: string;
 }
 
+export interface DayContextVenueNudge {
+  id: string;
+  title: string;
+  startLocal: string | null;
+  toWindow: string;
+  message: string;
+}
+
 export interface DayContext {
   date: string;
   timezone: string;
@@ -82,6 +90,7 @@ export interface DayContext {
   backlogOverdueCount: number;
   pendingAssignments: DayContextPendingAssignment[];
   calendarHolds: DayContextCalendarHold[];
+  venueNudges: DayContextVenueNudge[];
   windowSummaries: Array<{ window: string; label: string; count: number; categories: string[]; missing: string[] }>;
   explanations: string[];
   missingExplanations: string[];
@@ -239,6 +248,19 @@ export function buildDayContext(params: {
     endLocal: formatTimeInTimezone(e.end_time, tz),
   }));
 
+  // Venue-dependent nudges: tasks the builder placed after-work with a
+  // scheduling_context.venue_nudge marker — surfaced so the Daily Review can offer to
+  // move them into business hours (when the venue is likely open).
+  const venueNudges: DayContextVenueNudge[] = todayTasks
+    .filter(t => (t.scheduling_context as any)?.venue_nudge?.message)
+    .map(t => ({
+      id: t.id,
+      title: t.title,
+      startLocal: t.start_time ? formatTimeInTimezone(t.start_time, tz) : null,
+      toWindow: (t.scheduling_context as any).venue_nudge.toWindow || 'business_hours',
+      message: (t.scheduling_context as any).venue_nudge.message,
+    }));
+
   return {
     date: todayStr,
     timezone: tz,
@@ -252,6 +274,7 @@ export function buildDayContext(params: {
     backlogOverdueCount: reasoning.stats.backlogOverdue,
     pendingAssignments,
     calendarHolds,
+    venueNudges,
     windowSummaries: reasoning.windowSummaries.map(w => ({
       window: w.window,
       label: w.label,
@@ -297,6 +320,10 @@ export function summarizeDayContext(ctx: DayContext): string {
   if (ctx.rolledOver.length) lines.push(`Rolled over: ${ctx.rolledOver.map(t => t.title).join(', ')}`);
   if (ctx.overdue.length) lines.push(`Overdue today: ${ctx.overdue.map(t => t.title).join(', ')}`);
   if (ctx.backlogOverdueCount) lines.push(`Backlog overdue: ${ctx.backlogOverdueCount}`);
+  if (ctx.venueNudges.length) {
+    lines.push(`Venue nudges (${ctx.venueNudges.length}) — after-work errands you may want to move to business hours:`);
+    for (const n of ctx.venueNudges) lines.push(`  - [${n.id}] ${n.startLocal ?? '—'} ${n.title} → ${n.toWindow}`);
+  }
   if (ctx.explanations.length) lines.push(`Why: ${ctx.explanations.slice(0, 3).join(' | ')}`);
   if (ctx.missingExplanations.length) lines.push(`Gaps explained: ${ctx.missingExplanations.slice(0, 3).join(' | ')}`);
   return lines.join('\n');

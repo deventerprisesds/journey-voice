@@ -1173,6 +1173,10 @@ serve(async (req) => {
           const dayPlacements: Array<Record<string, unknown>> = [];
           const dayRejections: Array<Record<string, unknown>> = [];
           const dayKeywordOverrides: Array<Record<string, unknown>> = [];
+          // Venue-dependent tasks placed after-work carry a nudge to move them into
+          // business hours (when the venue is likely open). We persist that nudge on the
+          // task so the morning review / day context can DELIVER it to the user.
+          const venueNudgeByTaskId = new Map<string, { toWindow: string; message: string }>();
           const deferredAssignmentsToday: Array<{ id: string; tier: 'B' | 'C' }> = [];
 
           for (const task of dedupedCandidates) {
@@ -1217,6 +1221,12 @@ serve(async (req) => {
               console.warn(`      ⚠️⚠️ KEYWORD FALLBACK: "${task.title}" matched "${plan.matchedKeyword}" → ${preferredWindows[0]} (no trait — low-confidence placement)`);
             } else if (plan.trait) {
               console.log(`      🧭 Trait ${plan.trait}: "${task.title}" → [${preferredWindows.join(', ')}]${plan.nudgeToBusinessHours ? ' (nudge → business hours)' : ''}`);
+            }
+            if (plan.nudgeToBusinessHours) {
+              venueNudgeByTaskId.set(task.id, {
+                toWindow: 'business_hours',
+                message: `"${task.title}" is scheduled after work, but this kind of errand usually needs a place that's open during business hours. Want to move it into a business-hours slot?`,
+              });
             }
 
             let assigned = false;
@@ -1368,6 +1378,7 @@ serve(async (req) => {
 
             const candidate = selectedCandidates.find(c => c.id === slot.taskId);
             const preScheduleStatus = candidate?.status || 'TODO';
+            const venueNudge = venueNudgeByTaskId.get(slot.taskId);
 
             const { error: scheduleError } = await supabase
               .from('tasks')
@@ -1375,7 +1386,10 @@ serve(async (req) => {
                 start_time: slot.start_time,
                 end_time: slot.end_time,
                 is_scheduled: true,
-                scheduling_context: { pre_schedule_status: preScheduleStatus },
+                scheduling_context: {
+                  pre_schedule_status: preScheduleStatus,
+                  ...(venueNudge ? { venue_nudge: venueNudge } : {}),
+                },
                 status: 'TODO',
                 updated_at: now.toISOString(),
               })
@@ -1479,13 +1493,18 @@ serve(async (req) => {
                     if (!slot.taskId || !slot.start_time || !slot.end_time) continue;
                     const candidate = retryEligible.find(c => c.id === slot.taskId);
                     const preScheduleStatus = candidate?.status || 'TODO';
+                    const retryVenueNudge = venueNudgeByTaskId.get(slot.taskId);
                     const { error: retryErr } = await supabase
                       .from('tasks')
                       .update({
                         start_time: slot.start_time,
                         end_time: slot.end_time,
                         is_scheduled: true,
-                        scheduling_context: { pre_schedule_status: preScheduleStatus, reshuffle_retry: true },
+                        scheduling_context: {
+                          pre_schedule_status: preScheduleStatus,
+                          reshuffle_retry: true,
+                          ...(retryVenueNudge ? { venue_nudge: retryVenueNudge } : {}),
+                        },
                         status: 'TODO',
                         updated_at: now.toISOString(),
                       })

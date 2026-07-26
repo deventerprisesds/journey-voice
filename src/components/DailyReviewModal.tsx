@@ -233,6 +233,21 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
     [tasks, todayStr, tz]
   );
 
+  // Venue-dependent nudges for today: tasks the builder placed after-work with a
+  // scheduling_context.venue_nudge marker. Surfaced so the user can move them into
+  // business hours (when the venue is likely open) right from the morning review.
+  const venueNudgesToday = useMemo(() =>
+    scheduledToday
+      .filter(t => (t.scheduling_context as any)?.venue_nudge?.message)
+      .map(t => ({
+        id: t.id,
+        title: t.title,
+        startLocal: t.start_time ? new Date(t.start_time).toLocaleTimeString('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit', hour12: true }) : null,
+        message: (t.scheduling_context as any).venue_nudge.message as string,
+      })),
+    [scheduledToday, tz]
+  );
+
   // Handle confirm & fill gaps. Wait for the matching nightly_schedule_built
   // activity_log row so we don't close the modal before the run actually finished
   // (and the realtime subscription above has had a chance to refresh builderLog).
@@ -578,6 +593,21 @@ const DailyReviewModal: React.FC<DailyReviewModalProps> = ({
                         {formatTimeInTimezone(event.start_time, tz)} – {formatTimeInTimezone(event.end_time, tz)}
                       </p>
                     </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Venue-dependent nudges — after-work errands that may want a business-hours slot */}
+            {venueNudgesToday.length > 0 && (
+              <div className="space-y-1.5">
+                {venueNudgesToday.map(n => (
+                  <div
+                    key={n.id}
+                    className="flex items-start gap-2 py-2 px-2.5 rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50"
+                  >
+                    <Clock className="h-4 w-4 text-amber-600 dark:text-amber-500 shrink-0 mt-0.5" />
+                    <p className="text-xs text-amber-800 dark:text-amber-300 leading-snug">{n.message}</p>
                   </div>
                 ))}
               </div>
