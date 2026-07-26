@@ -12,6 +12,12 @@ interface NotificationRequest {
   title: string;
   body: string;
   channel?: string;
+  // Source app that originated this push (e.g. "huddle" for the standalone Huddle bridge app). When
+  // set, delivery is targeted to ONLY that app's device tokens (endpoints `fcm:app:<app>:<token>`),
+  // so a Huddle-agent push doesn't also fan out to journey's web + bridge subscriptions (the
+  // duplicate-notification bug). When absent, this is a journey-native push and delivery goes to
+  // everything EXCEPT app-namespaced tokens — byte-identical to the pre-multi-app fan-out.
+  app?: string;
   data?: {
     type: string;
     taskId?: string;
@@ -124,19 +130,30 @@ serve(async (req) => {
   }
 
   try {
-    const { userId, title, body, channel, data }: NotificationRequest = await req.json();
+    const { userId, title, body, channel, data, app }: NotificationRequest = await req.json();
 
-    console.log('[send-push-notification] Processing:', { userId, title, body, data });
+    console.log('[send-push-notification] Processing:', { userId, title, body, app, data });
 
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
-    const { data: subscriptions, error: fetchError } = await supabaseClient
+    // Source-app-aware targeting. App-specific device tokens are namespaced `fcm:app:<app>:<token>`
+    // (see manage-push-subscription / execute-tool register_push_token). A push carrying `app` reaches
+    // ONLY that app's tokens; a journey-native push (no `app`) reaches everything EXCEPT app-namespaced
+    // tokens, which is exactly the set that existed before any standalone app registered — so journey's
+    // own reminders/messages don't newly fan out to Huddle, and a Huddle push doesn't hit journey.
+    let subQuery = supabaseClient
       .from('push_subscriptions')
       .select('*')
       .eq('user_id', userId);
+    if (app) {
+      subQuery = subQuery.like('endpoint', `fcm:app:${app}:%`);
+    } else {
+      subQuery = subQuery.not('endpoint', 'like', 'fcm:app:%');
+    }
+    const { data: subscriptions, error: fetchError } = await subQuery;
 
     if (fetchError) {
       console.error('[send-push-notification] Error fetching subscriptions:', fetchError);

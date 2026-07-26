@@ -1821,6 +1821,10 @@ async function sendPushNow(supabase: any, userId: string, args: any): Promise<Ex
         title,
         body,
         channel,
+        // Optional source-app tag. When a Huddle agent fires this (`app:"huddle"`), send-push-notification
+        // targets ONLY the Huddle bridge app's token, so the same reply doesn't also buzz journey's web +
+        // bridge subscriptions. Absent for journey-native callers → unchanged fan-out.
+        app: (typeof args.app === 'string' && args.app.trim()) ? args.app.trim().toLowerCase() : undefined,
         data: { type: channel === 'calendar_events' ? 'alarm' : 'reminder', source: 'huddle', ...(args.data || {}) },
       },
     });
@@ -1839,12 +1843,18 @@ async function sendPushNow(supabase: any, userId: string, args: any): Promise<Ex
 async function registerPushToken(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
   const fcmToken = String(args?.fcm_token ?? args?.fcmToken ?? '').trim();
   if (!fcmToken) return { success: false, error: 'fcm_token required' };
+  // Namespace app-specific device tokens as `fcm:app:<app>:<token>` so send-push-notification can
+  // deliver a push to ONE source app and journey-native pushes can exclude standalone apps. The
+  // standalone Huddle bridge registers with `app:"huddle"`; a caller with no `app` keeps the legacy
+  // `fcm:<token>` endpoint (unchanged for any existing journey-side registrant).
+  const app = (typeof args?.app === 'string' && args.app.trim()) ? args.app.trim().toLowerCase() : '';
+  const endpoint = app ? `fcm:app:${app}:${fcmToken.slice(0, 32)}` : `fcm:${fcmToken.slice(0, 32)}`;
   try {
     const { error } = await supabase
       .from('push_subscriptions')
       .upsert({
         user_id: userId,
-        endpoint: `fcm:${fcmToken.slice(0, 32)}`,
+        endpoint,
         p256dh_key: '',
         auth_key: '',
         fcm_token: fcmToken,
