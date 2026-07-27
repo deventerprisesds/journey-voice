@@ -12,7 +12,7 @@ export interface Task {
   id: string;
   title: string;
   description?: string;
-  status: 'BLOCKED' | 'LIFE' | 'CAREER' | 'PROF_EDUCATION' | 'VENTURES' | 'PLANNING' | 'READY' | 'UP_NEXT' | 'DOING' | 'DONE' | 'BACKLOG' | 'TODO';
+  status: 'BLOCKED' | 'LIFE' | 'CAREER' | 'PROF_EDUCATION' | 'VENTURES' | 'PLANNING' | 'READY' | 'UP_NEXT' | 'DOING' | 'IN_REVIEW' | 'DONE' | 'BACKLOG' | 'TODO';
   priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
   category: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION' | 'PROF_EDUCATION' | 'PERSONAL';
   due_date?: string;
@@ -88,5 +88,5 @@ export interface Column {
   name: string;
   board_id: string;
   position: number;
-  status: 'BLOCKED' | 'LIFE' | 'CAREER' | 'PROF_EDUCATION' | 'VENTURES' | 'PLANNING' | 'READY' | 'UP_NEXT' | 'DOING' | 'DONE' | 'BACKLOG' | 'TODO';
+  status: 'BLOCKED' | 'LIFE' | 'CAREER' | 'PROF_EDUCATION' | 'VENTURES' | 'PLANNING' | 'READY' | 'UP_NEXT' | 'DOING' | 'IN_REVIEW' | 'DONE' | 'BACKLOG' | 'TODO';
 }

@@ -16,7 +16,7 @@ interface AddColumnModalProps {
 }
 
 const availableStatuses: Task['status'][] = [
-  'BACKLOG', 'TODO', 'DOING', 'DONE', 'BLOCKED', 'LIFE', 'CAREER', 
+  'BACKLOG', 'TODO', 'DOING', 'IN_REVIEW', 'DONE', 'BLOCKED', 'LIFE', 'CAREER',
   'PROF_EDUCATION', 'VENTURES', 'PLANNING', 'READY', 'UP_NEXT'
 ];
 
@@ -24,6 +24,7 @@ const statusDisplayNames: Record<Task['status'], string> = {
   'BACKLOG': 'Backlog',
   'TODO': 'To Do',
   'DOING': 'Doing',
+  'IN_REVIEW': 'In Review',
   'DONE': 'Done',
   'BLOCKED': 'Blocked',
   'LIFE': 'Life',
