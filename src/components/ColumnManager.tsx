@@ -43,6 +43,7 @@ const statusColors = {
   READY: '#f97316',
   UP_NEXT: '#6366f1',
   DOING: '#ec4899',
+  IN_REVIEW: '#eab308',
   DONE: '#10b981',
   BACKLOG: '#6b7280',
   TODO: '#64748b',

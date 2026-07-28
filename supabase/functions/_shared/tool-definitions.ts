@@ -40,8 +40,8 @@ export function getToolDefinitions(): ToolDefinition[] {
           time_filter: { type: "string", description: "Time period like 'past week', 'yesterday'" },
           status: { 
             type: "string", 
-            enum: ["BACKLOG", "TODO", "READY", "UP_NEXT", "DOING", "DONE", "BLOCKED", "PLANNING", "ACTIVE", "WORKABLE"],
-            description: "Task workflow status. BACKLOG=not yet planned, TODO=planned but not started, READY=ready to work on, UP_NEXT=queued to start soon, DOING=in progress, DONE=completed, BLOCKED=waiting on something, PLANNING=needs more detail. ACTIVE=everything not DONE/BLOCKED. WORKABLE=READY+UP_NEXT+DOING (ready to act on now)."
+            enum: ["BACKLOG", "TODO", "READY", "UP_NEXT", "DOING", "IN_REVIEW", "DONE", "BLOCKED", "PLANNING", "ACTIVE", "WORKABLE"],
+            description: "Task workflow status. BACKLOG=not yet planned, TODO=planned but not started, READY=ready to work on, UP_NEXT=queued to start soon, DOING=in progress, IN_REVIEW=work finished, awaiting the user's approval before it can be DONE, DONE=completed, BLOCKED=waiting on something, PLANNING=needs more detail. ACTIVE=everything not DONE/BLOCKED. WORKABLE=READY+UP_NEXT+DOING (ready to act on now)."
           },
           category: {
             type: "string",
@@ -81,8 +81,8 @@ export function getToolDefinitions(): ToolDefinition[] {
           description: { type: "string" },
           status: {
             type: "string",
-            enum: ["BACKLOG", "TODO", "READY", "UP_NEXT", "DOING", "DONE", "BLOCKED", "PLANNING"],
-            description: "Task workflow status"
+            enum: ["BACKLOG", "TODO", "READY", "UP_NEXT", "DOING", "IN_REVIEW", "DONE", "BLOCKED", "PLANNING"],
+            description: "Task workflow status. IN_REVIEW = finished, awaiting the user's approval before DONE."
           },
           priority: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "URGENT"] },
           category: { type: "string", enum: ["LIFE", "CAREER", "VENTURES", "EDUCATION"] },
