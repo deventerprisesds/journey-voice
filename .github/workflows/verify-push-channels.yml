@@ -1,0 +1,90 @@
+name: Verify Push Channels (one-shot)
+
+# One-shot proof that all three Android notification channels fire through journey's existing
+# bridge wiring: huddle-proxy /tool → execute-tool send_push → send-push-notification → FCM →
+# the user's registered device (push_subscriptions.fcm_token), routed by the `channel` field.
+#   messages         → heads-up chat notification
+#   task-reminders   → heads-up reminder
+#   calendar_events  → full-screen, ring-until-dismissed alarm
+# Reuses the shared JOURNEY_PROXY_TOKEN (same secret Huddle uses) and confirms delivery from the
+# server side via activity_log (fcm_send_success/fcm_send_failed). Dispatch-only; remove after use.
+on:
+  workflow_dispatch:
+    inputs:
+      caller_email:
+        description: "Entra email that maps to the journey user whose device should buzz"
+        required: false
+        default: "von.ellis@enterpriseds.io"
+
+jobs:
+  fire:
+    runs-on: ubuntu-latest
+    env:
+      PROXY: "https://wwxgajrtmslzklnyplah.supabase.co/functions/v1/huddle-proxy"
+      REST: "https://wwxgajrtmslzklnyplah.supabase.co/rest/v1"
+      TOKEN: ${{ secrets.JOURNEY_PROXY_TOKEN }}
+      SB_KEY: ${{ secrets.CF_SUPABASE_SERVICE_KEY }}
+      CALLER: ${{ github.event.inputs.caller_email }}
+    steps:
+      - name: Resolve caller → journey user (whoami)
+        run: |
+          set -euo pipefail
+          if [ -z "${TOKEN}" ]; then echo "::error::JOURNEY_PROXY_TOKEN not set"; exit 1; fi
+          echo "Caller: ${CALLER}"
+          RESP=$(curl -sS -X POST "${PROXY}/tool" \
+            -H "Authorization: Bearer ${TOKEN}" -H "x-huddle-proxy: 1" -H "Content-Type: application/json" \
+            -d "{\"toolName\":\"whoami\",\"args\":{},\"caller\":{\"entra_email\":\"${CALLER}\"}}")
+          echo "whoami → $RESP"
+          echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); o=json.loads(d.get('output','{}')) if isinstance(d.get('output'),str) else {}; assert d.get('ok') and o.get('user_id'), 'caller did not resolve to a journey user'; print('Resolved user_id=%s email=%s' % (o.get('user_id'), o.get('email')))"
+
+      - name: Fire all three channels
+        run: |
+          set -euo pipefail
+          fire() { # $1=channel  $2=title  $3=body  $4=deepLink
+            echo "--- send_push channel=$1 ---"
+            RESP=$(curl -sS -X POST "${PROXY}/tool" \
+              -H "Authorization: Bearer ${TOKEN}" -H "x-huddle-proxy: 1" -H "Content-Type: application/json" \
+              -d "$(python3 -c "import json,sys; print(json.dumps({'toolName':'send_push','args':{'title':sys.argv[2],'body':sys.argv[3],'channel':sys.argv[1],'data':{'deepLink':sys.argv[4],'tag':'verify-'+sys.argv[1]}},'caller':{'entra_email':'${CALLER}'}}))" "$1" "$2" "$3" "$4")")
+            echo "response: $RESP"
+            echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print('OK:', d.get('message') or d.get('output')) if d.get('ok') else (print('FAIL:', d.get('error') or d.get('output')), sys.exit(1))"
+          }
+          fire "messages"        "Huddle · channel test 1/3" "Messages channel — heads-up chat notification. (test)"        "/"
+          sleep 3
+          fire "task-reminders"  "Huddle · channel test 2/3" "Task-reminders channel — heads-up reminder. (test)"          "/tasks"
+          sleep 3
+          fire "calendar_events" "Huddle · channel test 3/3" "Calendar-events channel — full-screen alarm; tap Dismiss. (test)" "/calendar"
+          echo "All three send_push calls returned ok."
+
+      - name: Confirm delivery from the server (activity_log)
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -z "${SB_KEY:-}" ]; then echo "CF_SUPABASE_SERVICE_KEY not set — skipping server-side confirmation."; exit 0; fi
+          # Give FCM a moment to record the send outcome.
+          sleep 8
+          CUTOFF=$(python3 -c "import datetime; print((datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(minutes=5)).strftime('%Y-%m-%dT%H:%M:%SZ'))")
+          echo "=== activity_log fcm_send_* since ${CUTOFF} ==="
+          BODY=$(curl -G -sS \
+            -H "apikey: ${SB_KEY}" -H "Authorization: Bearer ${SB_KEY}" -H "Accept: application/json" \
+            --data-urlencode "select=created_at,activity_type,status,metadata" \
+            --data-urlencode "activity_type=in.(fcm_send_success,fcm_send_failed,fcm_send_skipped)" \
+            --data-urlencode "created_at=gte.${CUTOFF}" \
+            --data-urlencode "order=created_at.desc" \
+            --data-urlencode "limit=20" \
+            "${REST}/activity_log")
+          echo "$BODY" | python3 -c "
+          import json,sys
+          data=json.load(sys.stdin)
+          if not isinstance(data,list): print('unexpected:',data); sys.exit(0)
+          seen=set()
+          for r in data:
+              m=r.get('metadata',{})
+              if isinstance(m,str): m=json.loads(m)
+              ch=m.get('channel','?'); print(f\"  [{r['created_at'][:19]}] {r['activity_type']} status={r.get('status')} channel={ch} title={str(m.get('title','-'))[:40]}\")
+              if r['activity_type']=='fcm_send_success': seen.add(ch)
+          print()
+          want={'messages','task-reminders','calendar_events'}
+          got=want & seen
+          print('Channels with fcm_send_success:', sorted(got) or 'none')
+          print('RESULT:', 'ALL-THREE-DELIVERED' if want<=seen else f'MISSING {sorted(want-seen)}')
+          "

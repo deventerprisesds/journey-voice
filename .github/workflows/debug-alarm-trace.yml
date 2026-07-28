@@ -40,14 +40,17 @@ jobs:
           HTTP=$(echo "$FULL" | grep 'HTTP_STATUS:' | tail -1 | cut -d: -f2)
           BODY=$(echo "$FULL" | sed '/HTTP_STATUS:/d')
           echo "HTTP $HTTP"
+          if [ "$HTTP" != "200" ]; then echo "ERROR: Supabase returned HTTP $HTTP — $BODY"; else
           echo "$BODY" | python3 -c "
           import json, sys
-          rows = json.load(sys.stdin)
-          print(f'{len(rows)} row(s) found')
-          for r in rows:
+          data = json.load(sys.stdin)
+          if not isinstance(data, list): print(f'Unexpected: {data}'); sys.exit(0)
+          print(f'{len(data)} row(s) found')
+          for r in data:
               m = r.get('metadata', {})
+              if isinstance(m, str): m = json.loads(m)
               print(f'  [{r[\"created_at\"][:19]}] type={m.get(\"primaryType\",\"?\")} chan={m.get(\"androidChannel\",\"?\")} fcmTag={m.get(\"fcmTag\",\"?\")} taskId={str(m.get(\"taskId\",\"-\"))[:8]} batch={m.get(\"batchSize\",\"?\")} title={str(m.get(\"title\",\"-\"))[:40]}')
-          " || echo "parse error: $BODY"
+          "; fi
 
       - name: Fetch fcm_send_success entries
         env:
@@ -69,14 +72,17 @@ jobs:
           HTTP=$(echo "$FULL" | grep 'HTTP_STATUS:' | tail -1 | cut -d: -f2)
           BODY=$(echo "$FULL" | sed '/HTTP_STATUS:/d')
           echo "HTTP $HTTP"
+          if [ "$HTTP" != "200" ]; then echo "ERROR: Supabase returned HTTP $HTTP — $BODY"; else
           echo "$BODY" | python3 -c "
           import json, sys
-          rows = json.load(sys.stdin)
-          print(f'{len(rows)} row(s) found')
-          for r in rows:
+          data = json.load(sys.stdin)
+          if not isinstance(data, list): print(f'Unexpected: {data}'); sys.exit(0)
+          print(f'{len(data)} row(s) found')
+          for r in data:
               m = r.get('metadata', {})
+              if isinstance(m, str): m = json.loads(m)
               print(f'  [{r[\"created_at\"][:19]}] chan={m.get(\"channel\",\"?\")} title={str(m.get(\"title\",\"-\"))[:40]} token={m.get(\"token_prefix\",\"?\")}')
-          " || echo "parse error: $BODY"
+          "; fi
 
       - name: Fetch fcm_send_failed entries
         env:
@@ -98,16 +104,18 @@ jobs:
           HTTP=$(echo "$FULL" | grep 'HTTP_STATUS:' | tail -1 | cut -d: -f2)
           BODY=$(echo "$FULL" | sed '/HTTP_STATUS:/d')
           echo "HTTP $HTTP"
+          if [ "$HTTP" != "200" ]; then echo "ERROR: Supabase returned HTTP $HTTP — $BODY"; else
           echo "$BODY" | python3 -c "
           import json, sys
-          rows = json.load(sys.stdin)
-          if not rows:
-              print('  (none)')
+          data = json.load(sys.stdin)
+          if not isinstance(data, list): print(f'Unexpected: {data}'); sys.exit(0)
+          if not data: print('  (none)')
           else:
-              for r in rows:
+              for r in data:
                   m = r.get('metadata', {})
+                  if isinstance(m, str): m = json.loads(m)
                   print(f'  [{r[\"created_at\"][:19]}] chan={m.get(\"channel\",\"?\")} error={r.get(\"error_message\",\"?\")}')
-          " || echo "parse error: $BODY"
+          "; fi
 
       - name: Fetch android_alarm_trace entries (from device via Supabase)
         env:
@@ -129,14 +137,20 @@ jobs:
           HTTP=$(echo "$FULL" | grep 'HTTP_STATUS:' | tail -1 | cut -d: -f2)
           BODY=$(echo "$FULL" | sed '/HTTP_STATUS:/d')
           echo "HTTP $HTTP"
+          if [ "$HTTP" != "200" ]; then
+            echo "ERROR: Supabase returned HTTP $HTTP — $BODY"
+            echo "HINT: If code 57014 (query timeout), run migration 20260721000000_add_activity_log_index.sql"
+          else
           echo "$BODY" | python3 -c "
           import json, sys
-          rows = json.load(sys.stdin)
-          print(f'{len(rows)} row(s) found')
-          for r in rows:
+          data = json.load(sys.stdin)
+          if not isinstance(data, list): print(f'Unexpected: {data}'); sys.exit(0)
+          print(f'{len(data)} row(s) found')
+          for r in data:
               m = r.get('metadata', {})
+              if isinstance(m, str): m = json.loads(m)
               print(f'  [{r[\"created_at\"][11:19]}] {m.get(\"message\",\"?\")}')
-          " || echo "parse error: $BODY"
+          "; fi
 
       - name: Summary
         run: |
@@ -155,18 +169,24 @@ jobs:
           echo "Look for lines:"
           echo "  FCM_RX       — FCM received by BridgeFirebaseService"
           echo "  FCM_FIRE     — NotificationEngine.fire() return value"
-          echo "  GATE         — calendar_events gate reached (confirmed=true/false)"
-          echo "  GATE→FULLSCREEN — gate posted notification with fullScreenIntent"
-          echo "  GATE→ALARM   — gate was bypassed (Confirm was tapped before)"
-          echo "  ALARM_CONFIRM_LAUNCHED — AlarmConfirmActivity.onCreate() ran"
-          echo "  ALARM_BTN    — user tapped Confirm/Snooze/Dismiss"
+          echo "  GATE              — calendar_events gate reached (confirmed=true/false)"
+          echo "  GATE→FULLSCREEN   — gate posted fullScreenIntent (first fire, confirmed=false)"
+          echo "  GATE→ALARM        — confirmed=true: overlay+sound dispatched"
+          echo "  ALARM_OVERLAY_SHOWN — overlay window added successfully (canDrawOverlays=true)"
+          echo "  ALARM_OVERLAY_FAIL  — overlay addView threw (check error message)"
+          echo "  ALARM_REPEAT_FIRE   — AlarmRepeater.RepeatReceiver fired (re-fire)"
+          echo "  ALARM_CONFIRM_LAUNCHED — AlarmConfirmActivity.onCreate() ran (lock-screen path)"
+          echo "  ALARM_BTN         — user tapped Confirm/Snooze/Dismiss"
           echo ""
-          echo "=== EXPECTED HAPPY PATH ==="
+          echo "=== EXPECTED HAPPY PATH (Confirm tap → 5-min re-fire) ==="
           echo "FCM_RX chan=calendar_events"
           echo "FCM_FIRE fired=true"
           echo "GATE chan=calendar_events tag=fcm confirmed=false"
           echo "GATE→FULLSCREEN tag=fcm"
-          echo "--- (fullScreenIntent fires) ---"
-          echo "ALARM_CONFIRM_LAUNCHED tag=fcm"
-          echo "--- (user taps a button) ---"
-          echo "ALARM_BTN action=com.bridgetemplate.CALENDAR_CONFIRM tag=fcm"
+          echo "ALARM_OVERLAY_SHOWN tag=fcm  (or ALARM_CONFIRM_LAUNCHED if screen-off)"
+          echo "ALARM_BTN action=...CONFIRM tag=fcm"
+          echo "--- 5 minutes later ---"
+          echo "ALARM_REPEAT_FIRE tag=fcm fireCount=0 chan=calendar_events"
+          echo "GATE chan=calendar_events tag=fcm confirmed=true"
+          echo "GATE→ALARM tag=fcm (confirmed was true, showing overlay+sound)"
+          echo "ALARM_OVERLAY_SHOWN tag=fcm"
