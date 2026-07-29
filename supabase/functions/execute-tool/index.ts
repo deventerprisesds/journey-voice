@@ -867,6 +867,9 @@ async function updateTask(supabase: any, args: any): Promise<ExecuteToolResponse
     if (args.tags !== undefined) {
       updateData.tags = Array.isArray(args.tags) ? args.tags.map((t: unknown) => String(t)) : [];
     }
+    if (args.definition_of_done !== undefined) {
+      updateData.definition_of_done = args.definition_of_done ? String(args.definition_of_done) : null;
+    }
 
     const { data, error } = await supabase
       .from('tasks')
@@ -906,6 +909,7 @@ async function batchUpdateTasks(supabase: any, userId: string, args: any): Promi
     if (u.category) data.category = String(u.category).toUpperCase();
     if (u.assigned_agent !== undefined) data.assigned_agent = u.assigned_agent ? String(u.assigned_agent) : null;
     if (u.tags !== undefined) data.tags = Array.isArray(u.tags) ? u.tags.map((t: unknown) => String(t)) : [];
+    if (u.definition_of_done !== undefined) data.definition_of_done = u.definition_of_done ? String(u.definition_of_done) : null;
     if (typeof u.rank === "number") { data.is_priority = true; data.priority_rank = u.rank; }
     else if (u.unset_rank) { data.is_priority = false; data.priority_rank = null; }
     if (!Object.keys(data).length) return { ok: false, task_id: u.task_id, error: "no fields to update" };
