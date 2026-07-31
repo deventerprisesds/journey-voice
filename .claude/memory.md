@@ -272,3 +272,18 @@ cap 9 / impact 10 = 59 green).
 
 Also queued (separate, pre-existing, NOT started): android-bridge-template ScheduleWidget sort bug +
 inline-reply RemoteInput wiring (the ORIGINAL task of this session).
+
+## User config is NOW SET (was empty — root cause of silent fallback)
+`tiggapoohtv@yahoo.com` (user_id `656ab792-d5fc-4715-b77e-8d0e215fe38e`) had **no**
+`user_scheduling_prefs` row → every path fell back to `DEFAULT_SCHEDULING_CONFIG`. A full
+config is now written (2026-07). Authoritative category→window map (user-confirmed):
+- CAREER → business_hours + weekends (career trajectory, not just day job)
+- VENTURES → business_hours + evening + weekends (entrepreneurship/startups)
+- EDUCATION → evening + weekends (formal degrees; the assignment lane)
+- PROF_EDUCATION → business_hours + weekends (training/courses/certs; maxPerDay 2)
+- LIFE → morning + after_work + evening + weekends (personal + FAMILY)
+- PERSONAL → LIFE (same windows)
+Also fixed keyword drift: study/class/lecture/assignment/homework → EDUCATION (were
+PROF_EDUCATION); added certification/course/training → PROF_EDUCATION; project/business → VENTURES.
+Open: (1) smart-calendar-scheduler array-vs-string bug still drops these arrays on voice/manual;
+(2) EDUCATION↔assignment link still conceptual (assignment_id-keyed, not category).
