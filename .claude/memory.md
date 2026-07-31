@@ -22,6 +22,29 @@ window. Hard rules (also in CLAUDE.md):
 - ❌ DROPPED (my over-reach, 2026-07-31): putting VENTURES in weekday business hours; a new
   "institution-hours" trait; soft evening ceilings. All rejected — they broke the windows.
 
+### LIVE STATE (2026-07-31) — ROOT CAUSE + what's done/open
+- **ROOT CAUSE of "never adheres to my config":** the live working account **`a3378f93`**
+  (dev@enterpriseds.io, ~19 VENTURES-heavy open tasks) had an **EMPTY `config`** → the builder ran on
+  hardcoded defaults the ENTIRE time. Only DEMO `…0001` (0 tasks) had a populated config. RLS + the
+  save code are fine — it was simply never saved; `loadUserSchedulingConfig` shows merged defaults so the
+  page LOOKS configured (UX trap). (Supersedes line ~101's "confirm which account".)
+- **DONE (user-approved):** duplicated DEMO config → `a3378f93`, reconciled `after_work`→**17-19 [1-5]**
+  (demo had the OLD overlap bug after_work 17-**22** [Mon-**Sat**]) and `maxDailyHours`→**0** (uncapped;
+  builder treats 0/absent as Infinity — for the 9am-10pm goal).
+- **OPEN demo-config mismatches (config edits = user's call, DO NOT guess):**
+  - `VENTURES/CAREER → [business_hours, weekends]` only → weekday work stops 5pm, evening empty → NO
+    9-10pm. To hit the goal, add `after_work`+`evening` to VENTURES/CAREER.
+  - `EDUCATION → [flexible, business_hours, weekends]`, `PROF_EDUCATION → [after_work, weekends,
+    business_hours, evening, flexible]` — neither matches the user's intended **evenings + weekends**.
+  - **Education split NOT enforced in code:** EDUCATION vs PROF_EDUCATION are enums the builder LUMPS
+    (stale-archive `category IN (EDUCATION,PROF_EDUCATION)`). "Assignments to submit" keys on
+    **`assignment_id`, NOT category** (tiers A/B/C, maxPerDay 2, 7-day grace, never-archive). User's model:
+    EDUCATION = formal degree (MBA/doctorate) → assignments, deadline-tiered, evenings+weekends;
+    PROF_EDUCATION = training/courses → flexible, evenings+weekends. Currently 0 assignment-linked tasks.
+- **Manual rebuild (verify without cron wait):** `net.http_post` the builder `{userId, triggerSource}`;
+  read `activity_log`(`nightly_schedule_built`) + its PLACEMENT steps. Rebuild MUTATES the real schedule
+  → only with user approval. NOTE: memory line ~88 "after_work 17–22" is STALE; canonical is 17-19 [1-5].
+
 ## THE ASK (2026-07-24)
 Get **consistent** scheduler results — priorities, external calendar events, new AND
 old tasks — **without old-but-important items dropping off**. Tasks land in a
