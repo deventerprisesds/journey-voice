@@ -173,10 +173,17 @@ truth / de-fork / array-vs-string) + Section B #1–#4 DONE, deployed, verified:
   parity MIRROR not yet imported by any edge fn — the LIVE path is the frontend `src/utils/
   buildDayContext.ts`.
 - **B4 maxDailyHours cap** (nightly + scheduling-defaults): `resolveMaxDailyMinutes(config)` /
-  `withinDailyCap()` / `DEFAULT_MAX_DAILY_HOURS=7`. Nightly seeds day-used from already-scheduled
-  tasks (NOT external events), defers tasks past the budget (reason `daily_hours_cap`), stops the
-  day at budget, surfaces overcommit in the PLACEMENT trace. Unit-tested (helper); no live builder
-  run (would mutate real schedule).
+  `withinDailyCap()`. Nightly seeds day-used from already-scheduled tasks (NOT external events),
+  defers tasks past the budget (reason `daily_hours_cap`), stops the day at budget, surfaces
+  overcommit in the PLACEMENT trace.
+  **⚠️ REGRESSION FOUND + FIXED (2026-07-31):** B4 originally defaulted the cap to 7h when unset,
+  which silently THINNED every day — live proof: days hit exactly 420 min and deferred 6 & 16 tasks
+  purely to the cap; user saw sparse days. Fix: `resolveMaxDailyMinutes` returns **Infinity when the
+  user hasn't set a positive `workingHours.maxDailyHours`** → NO cap by default, day fills by window
+  capacity as before (OPT-IN only). Verified live: rebuild after fix → maxDailyMinutes=null,
+  cap_deferrals=0, first days fill to ~600 min (10h), today 6→9 tasks. **Lesson: a default-on
+  numeric cap is SUBTRACTIVE — keep new limiters opt-in.** The `manual_rebuild` invocation:
+  `net.http_post` the builder with body `{userId, triggerSource}` (single-user full rebuild).
 
 Verification method (egress: supabase.co BLOCKED from sandbox): `deno check` on the shared module
 (only fully type-checkable file); deterministic `deno run` unit tests off the shared module; LIVE
