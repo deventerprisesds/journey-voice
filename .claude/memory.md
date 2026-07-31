@@ -5,6 +5,23 @@ Last updated: 2026-07-24 by session 017C29GJuPwR4Z4gJmiyCyGf
 > old/new, placed into sensible time windows) and the agreed direction to make it
 > reliable. Companion: huddle-extension-app `.claude/memory.md` (Huddle = ranking only).
 
+## ⭐ CONFIG-AUTHORITATIVE PLACEMENT (LOCKED 2026-07-31 — supersedes any earlier "load-up" idea)
+The user's in-app **config page** → `public.user_scheduling_prefs.config` (timeWindows +
+categoryMappings + contextRules) is the **SINGLE SOURCE OF TRUTH** for what can be placed in which
+window. Hard rules (also in CLAUDE.md):
+- **GO BY THE CONFIG.** Never reassign a category to a non-allowed window; never "load up" outside
+  config-allowed windows. `_shared/scheduling-defaults.ts` is only a FALLBACK when config is absent.
+- **Only an APPOINTED (pinned) time overrides a configured window.** Traits/keywords/priority/load-up
+  affect ONLY ordering + preference AMONG already-allowed windows.
+- **"Load up" = pack each category's ALLOWED windows on the earliest days first** so the week trails
+  off — WITHIN the windows, never by breaking them.
+- **Empty allowed window (capacity, no eligible task) → Iris NUDGES the user** ("fill this window with
+  other items, or add new tasks?") reusing the B3 nudge mechanism. The scheduler does NOT auto-fill by
+  relaxing rules. THIS is the sanctioned fix for gap/thin days — not window overrides.
+- **NAIL the existing config/window/trait/priority behavior before adding anything new.**
+- ❌ DROPPED (my over-reach, 2026-07-31): putting VENTURES in weekday business hours; a new
+  "institution-hours" trait; soft evening ceilings. All rejected — they broke the windows.
+
 ## THE ASK (2026-07-24)
 Get **consistent** scheduler results — priorities, external calendar events, new AND
 old tasks — **without old-but-important items dropping off**. Tasks land in a

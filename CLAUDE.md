@@ -55,3 +55,23 @@ A heavy, evidence-based assessment of the time-window scheduler + the agreed dir
 - Direction (scoped 80%→100%, **no meal windows**): single source of truth + trait-based common-sense
   in every path (venue-dependent / pinned / impact-if-missed) + value-aware overflow nudge + external-
   meeting confirmation + overdue front-loading. Full trait model + file list in `.claude/memory.md`.
+
+## Scheduler placement is CONFIG-AUTHORITATIVE (HARD RULE — do not drift from this)
+The user configures **what can be placed in which window** on an in-app config page, persisted to
+`public.user_scheduling_prefs.config` (timeWindows + categoryMappings + contextRules). That config is
+the **single source of truth** for placement. Non-negotiable rules:
+- **Go by the config. Never reassign a category to a window the config doesn't allow, and never
+  "load up" by placing work outside its config-allowed windows.** `_shared/scheduling-defaults.ts`
+  values are FALLBACKS used only when the config is absent — they are NOT a license to override the
+  user's configured windows.
+- **The ONLY thing that overrides a configured window is an APPOINTED (pinned) time** — a booked
+  appointment carrying a fixed time (B2). Traits / keywords / priority / "load-up" may only affect
+  ordering and *preference among already-allowed* windows; they must never place a task in a window
+  the config disallows.
+- **"Load up" means: pack each category's ALLOWED windows on the earliest days first so the week
+  trails off when work runs out** — within the windows, never by breaking them.
+- **Empty windows → Iris NUDGES the user; the scheduler does NOT auto-fill by relaxing rules.** When
+  an allowed window has open capacity but no eligible tasks, surface it through the nudge mechanism
+  (B3) so Iris asks whether to fill it with other items or add new tasks. Do not widen windows or
+  move categories to close a gap.
+- **Nail the existing config/window/trait/priority behavior before introducing anything new.**
