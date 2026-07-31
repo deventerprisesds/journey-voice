@@ -980,7 +980,8 @@ serve(async (req) => {
             return sum + Math.max(0, (new Date(t.end_time).getTime() - new Date(t.start_time).getTime()) / 60000);
           }, 0);
           let dayCapDeferrals = 0;
-          console.log(`      ⏱️ Daily hours cap: ${Math.round(dayTaskMinutesUsed)}/${maxDailyMinutes} min already used (max ${maxDailyMinutes / 60}h)`);
+          const capLabel = Number.isFinite(maxDailyMinutes) ? `${maxDailyMinutes / 60}h` : 'uncapped';
+          console.log(`      ⏱️ Daily hours cap: ${Math.round(dayTaskMinutesUsed)} min already used (max ${capLabel})`);
 
           console.log(`    📊 Window capacities for ${targetISO}:`);
           for (const [name, cap] of Object.entries(windowCapacities)) {
@@ -1382,7 +1383,7 @@ serve(async (req) => {
           }
 
           if (dayCapDeferrals > 0) {
-            console.warn(`      ⚠️ OVERCOMMIT: ${dayCapDeferrals} task(s) deferred from ${targetISO} — day already at the ${maxDailyMinutes / 60}h working-hours budget (${Math.round(dayTaskMinutesUsed)}/${maxDailyMinutes} min used)`);
+            console.warn(`      ⚠️ OVERCOMMIT: ${dayCapDeferrals} task(s) deferred from ${targetISO} — day already at the ${capLabel} working-hours budget (${Math.round(dayTaskMinutesUsed)} min used)`);
           }
 
           pushStep(

@@ -28,10 +28,16 @@ export const ASSIGNMENT_PRIORITY_DAYS = 7;
  */
 export const DEFAULT_MAX_DAILY_HOURS = 7;
 
-/** Resolve the day's task-minute budget from user config (workingHours.maxDailyHours). */
+/**
+ * Resolve the day's task-minute budget from user config (workingHours.maxDailyHours).
+ * OPT-IN ONLY: if the user has not set a positive daily-hours limit, returns Infinity —
+ * i.e. NO daily cap, so the day fills by window capacity exactly as it did before the cap
+ * existed. This prevents the guard from silently thinning days nobody asked to limit;
+ * the cap only bites when the user explicitly chooses a maxDailyHours.
+ */
 export function resolveMaxDailyMinutes(userConfig: any): number {
   const h = userConfig?.workingHours?.maxDailyHours;
-  return (typeof h === 'number' && h > 0 ? h : DEFAULT_MAX_DAILY_HOURS) * 60;
+  return (typeof h === 'number' && h > 0) ? h * 60 : Infinity;
 }
 
 /** True if scheduling `durationMinutes` more keeps the day within `maxDailyMinutes`. */
