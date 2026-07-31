@@ -52,3 +52,15 @@ poll/retry, not assume the mirror updates synchronously.
 The Huddle side (mirror table, scoring engine, `prioritize` tool, receiver webhook) lives in the
 **huddle-extension-app** repo — see its CLAUDE.md for those facts and the `verify-task-sync` /
 `test-agent-serverfn` skills.
+
+## Test-task naming convention (hard rule — makes cleanup possible)
+**Any task written to `public.tasks` for testing/verification purposes — a test harness script, a
+live UAT run, an ad-hoc SQL seed during development — MUST use a `Test-` title prefix**, e.g.
+`Test-walk the dog`, `Test-verify barge-in reply`. The real caller identity (`von.ellis@enterpriseds.io`)
+resolves to the live user for both `create_huddle_task` and direct `public.tasks` writes, so every
+test task lands on the user's REAL board unless explicitly tagged — this has repeatedly polluted the
+live board (see `cleanup-test-tasks.yml` history, and the 2026-07-31 incident in
+huddle-extension-app's `.claude/memory.md`). The `Test-` prefix is what lets a cleanup pass tell
+"definitely a test artifact" apart from "needs human judgment" instead of guessing from content.
+**Use the `cleanup-board` skill** (`.claude/skills/cleanup-board/SKILL.md`) to review, present, and
+(only after explicit user confirmation) remove stray/test tasks — never bulk-delete on inference alone.
