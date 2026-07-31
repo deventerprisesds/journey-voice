@@ -1,0 +1,27 @@
+name: Apply Migration / Ad-hoc SQL
+
+on:
+  workflow_dispatch:
+    inputs:
+      sql:
+        description: "SQL to run against the live Supabase project (one statement/transaction per dispatch)"
+        required: true
+        type: string
+
+jobs:
+  run-sql:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST SQL to Supabase Management API
+        env:
+          SQL: ${{ inputs.sql }}
+          TOKEN: ${{ secrets.SUPERBASE_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "----- QUERY OUTPUT -----"
+          curl -sS -w "\nHTTP_STATUS:%{http_code}\n" \
+            "https://api.supabase.com/v1/projects/wwxgajrtmslzklnyplah/database/query" \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "$(python3 -c 'import json,sys,os; print(json.dumps({"query": os.environ["SQL"]}))')"
+          echo "----- END QUERY OUTPUT -----"
