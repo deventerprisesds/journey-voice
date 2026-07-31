@@ -867,6 +867,9 @@ async function updateTask(supabase: any, args: any): Promise<ExecuteToolResponse
     if (args.tags !== undefined) {
       updateData.tags = Array.isArray(args.tags) ? args.tags.map((t: unknown) => String(t)) : [];
     }
+    if (args.definition_of_done !== undefined) {
+      updateData.definition_of_done = args.definition_of_done ? String(args.definition_of_done) : null;
+    }
 
     const { data, error } = await supabase
       .from('tasks')
@@ -906,6 +909,7 @@ async function batchUpdateTasks(supabase: any, userId: string, args: any): Promi
     if (u.category) data.category = String(u.category).toUpperCase();
     if (u.assigned_agent !== undefined) data.assigned_agent = u.assigned_agent ? String(u.assigned_agent) : null;
     if (u.tags !== undefined) data.tags = Array.isArray(u.tags) ? u.tags.map((t: unknown) => String(t)) : [];
+    if (u.definition_of_done !== undefined) data.definition_of_done = u.definition_of_done ? String(u.definition_of_done) : null;
     if (typeof u.rank === "number") { data.is_priority = true; data.priority_rank = u.rank; }
     else if (u.unset_rank) { data.is_priority = false; data.priority_rank = null; }
     if (!Object.keys(data).length) return { ok: false, task_id: u.task_id, error: "no fields to update" };
@@ -1190,7 +1194,12 @@ async function parseAndCreateTasks(
     // 2. Parse target_date keywords
     let targetDate = args.target_date;
     const today = new Date().toLocaleDateString('en-CA', { timeZone: tz }); // YYYY-MM-DD
-    
+    const tomorrow = (() => {
+      const d = new Date();
+      d.setDate(d.getDate() + 1);
+      return d.toLocaleDateString('en-CA', { timeZone: tz });
+    })(); // YYYY-MM-DD — the outer bound the same-turn scheduler ever legitimately targets (today + overflow)
+
     if (targetDate) {
       const lowerDate = targetDate.toLowerCase().trim();
       if (lowerDate === 'today') {
@@ -1386,13 +1395,30 @@ async function parseAndCreateTasks(
     }
 
     // 6. If auto_schedule is enabled and tasks need scheduling, call batch-calendar-scheduler
-    // Filter out tasks that already have start_time (they're already scheduled)
+    // Filter out tasks that already have start_time (they're already scheduled), AND tasks whose
+    // due_date is meaningfully in the future (later than tomorrow). The batch call below only ever
+    // targets `targetDate || today` (today, or tomorrow on overflow) — it has no way to aim at a
+    // later due date, so attempting it for e.g. "renew passport by Friday" would silently place the
+    // task on the WRONG day. Worse, nightly-schedule-builder's cron run wipes and re-derives every
+    // scheduled task's placement from durable fields (due_date/priority/category) every night
+    // regardless — so a same-turn slot beyond tomorrow is both wrong AND thrown away by morning.
+    // Skip it here and let the correctly due-date-aware nightly builder place it for real.
+    const deferredToNightly: Array<{ title: string; due_date: string }> = [];
     const unscheduledTasks = createdTasks.filter(t => {
       if (t.start_time) {
         console.log(`[PARSE_AND_CREATE] Task "${t.title}" has start_time, skipping batch scheduler`);
         return false;
       }
-      return !t.is_scheduled;
+      if (t.is_scheduled) return false;
+      if (t.due_date) {
+        const dueDay = new Date(t.due_date).toLocaleDateString('en-CA', { timeZone: tz });
+        if (dueDay > tomorrow) {
+          console.log(`[PARSE_AND_CREATE] Task "${t.title}" due ${dueDay} (beyond tomorrow) — deferring to nightly planner instead of same-turn scheduling`);
+          deferredToNightly.push({ title: t.title, due_date: dueDay });
+          return false;
+        }
+      }
+      return true;
     });
     const scheduledResults: Array<{ title: string; time: string }> = [];
 
@@ -1501,12 +1527,25 @@ async function parseAndCreateTasks(
     // 7. Build response message
     const taskCount = createdTasks.length;
     let message = `Created ${taskCount} task${taskCount > 1 ? 's' : ''}`;
-    
+
+    const messageParts: string[] = [];
     if (scheduledResults.length > 0) {
-      const scheduleDetails = scheduledResults.map(s => `${s.title} at ${s.time}`).join(', ');
-      message += `. Scheduled: ${scheduleDetails}`;
-    } else if (autoSchedule && unscheduledTasks.length > 0) {
-      message += ` (scheduling was requested but no optimal slots found)`;
+      messageParts.push(`Scheduled: ${scheduledResults.map(s => `${s.title} at ${s.time}`).join(', ')}`);
+    }
+    if (deferredToNightly.length > 0) {
+      // Honest: no same-turn slot was attempted (or found) — due date is set, exact time comes
+      // from the nightly planner, which is the real placement authority for anything beyond tomorrow.
+      messageParts.push(
+        `Due (no time yet — the nightly planner will schedule it): ${deferredToNightly
+          .map(d => `${d.title} on ${d.due_date}`)
+          .join(', ')}`,
+      );
+    }
+    if (messageParts.length === 0 && autoSchedule && unscheduledTasks.length > 0) {
+      messageParts.push(`scheduling was requested but no optimal slots found`);
+    }
+    if (messageParts.length > 0) {
+      message += `. ${messageParts.join('. ')}`;
     }
 
     console.log(`[PARSE_AND_CREATE] Complete. ${message}`);
@@ -1516,6 +1555,7 @@ async function parseAndCreateTasks(
       result: {
         created: createdTasks.length,
         scheduled: scheduledResults,
+        deferredToNightly,
         tasks: createdTasks.map(t => ({
           id: t.id,
           title: t.title,
@@ -1527,8 +1567,8 @@ async function parseAndCreateTasks(
         }))
       },
       message,
-      extractedFacts: { 
-        type: 'task_created', 
+      extractedFacts: {
+        type: 'task_created',
         count: createdTasks.length,
         scheduled: scheduledResults.length
       }

@@ -87,7 +87,8 @@ export function getToolDefinitions(): ToolDefinition[] {
           priority: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "URGENT"] },
           category: { type: "string", enum: ["LIFE", "CAREER", "VENTURES", "EDUCATION"] },
           assigned_agent: { type: "string", description: "Huddle agent id to assign this task to (e.g. finn-reid). Pass empty string to unassign." },
-          tags: { type: "array", items: { type: "string" }, description: "Labels for the task (e.g. needs-plaid, quick-win). Replaces existing tags." }
+          tags: { type: "array", items: { type: "string" }, description: "Labels for the task (e.g. needs-plaid, quick-win). Replaces existing tags." },
+          definition_of_done: { type: "string", description: "Huddle confirm-intent gate: the concrete, testable Definition of Done the assigned agent confirmed with the user before starting work. Set once confirmed; leave unset otherwise." }
         },
         required: ["task_id"]
       }
