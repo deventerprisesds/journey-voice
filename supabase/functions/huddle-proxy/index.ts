@@ -170,13 +170,27 @@ serve(async (req) => {
       if (toolName === "whoami") {
         const prof = await supabase
           .from("profiles")
-          .select("email")
+          .select("email, timezone")
           .eq("user_id", resolved.userId)
           .limit(1)
           .maybeSingle();
+        // Canonical timezone lives on the profile. Self-SEED it from the caller's browser zone when
+        // still unset (first resolved turn from a browser) so it becomes the source of truth without
+        // a settings screen — then server/cron paths (reminders, nightly builder) can read it too.
+        let timezone: string | null = prof.data?.timezone ?? null;
+        const seedTz = typeof args?.timeZone === "string" ? args.timeZone.trim() : "";
+        if (!timezone && seedTz) {
+          const upd = await supabase
+            .from("profiles")
+            .update({ timezone: seedTz })
+            .eq("user_id", resolved.userId)
+            .select("timezone")
+            .maybeSingle();
+          if (!upd.error && upd.data?.timezone) timezone = upd.data.timezone;
+        }
         return json({
           ok: true,
-          output: JSON.stringify({ user_id: resolved.userId, email: prof.data?.email ?? null }),
+          output: JSON.stringify({ user_id: resolved.userId, email: prof.data?.email ?? null, timezone }),
         });
       }
 
