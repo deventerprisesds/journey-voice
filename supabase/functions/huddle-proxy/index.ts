@@ -95,26 +95,30 @@ async function resolveUserId(
 ): Promise<{ userId?: string; error?: string }> {
   const email = (caller?.entra_email ?? "").trim();
   if (!email) return { error: "no caller email provided — cannot map to a journey-voice user" };
-  // 1) Primary identity: profiles.email.
-  const prof = await supabase
-    .from("profiles")
+  // 1) ALIAS FIRST (authoritative). An aliased address always belongs to its canonical owner —
+  //    that's the whole point of "one user, many emails". Checking the alias table BEFORE
+  //    profiles.email prevents a DUPLICATE/shadow profiles row for an aliased address from
+  //    hijacking resolution away from the canonical account. Real incident (2026-08-01): an
+  //    auto-created profile for the aliased sign-in `von.ellis@` shadowed its alias → dev@, so the
+  //    user's agents read an empty board instead of their real one. A canonical (non-aliased) email
+  //    is never in this table, so normal users fall straight through to step 2 unchanged.
+  const alias = await supabase
+    .from("user_email_aliases")
     .select("user_id")
     .ilike("email", email) // exact, case-insensitive
     .limit(1)
     .maybeSingle();
-  if (prof.error) return { error: `profile lookup failed: ${prof.error.message}` };
-  if (prof.data?.user_id) return { userId: prof.data.user_id as string };
-  // 2) Fallback: an additional email mapped to an existing user. This implements
-  //    "one user, many emails" so a person can sign in to Huddle with any of
-  //    their addresses and reach the same journey-voice records.
-  const alias = await supabase
-    .from("user_email_aliases")
+  if (alias.error) return { error: `alias lookup failed: ${alias.error.message}` };
+  if (alias.data?.user_id) return { userId: alias.data.user_id as string };
+  // 2) Otherwise the email IS the canonical identity: profiles.email.
+  const prof = await supabase
+    .from("profiles")
     .select("user_id")
     .ilike("email", email)
     .limit(1)
     .maybeSingle();
-  if (alias.error) return { error: `alias lookup failed: ${alias.error.message}` };
-  if (alias.data?.user_id) return { userId: alias.data.user_id as string };
+  if (prof.error) return { error: `profile lookup failed: ${prof.error.message}` };
+  if (prof.data?.user_id) return { userId: prof.data.user_id as string };
   return { error: `no journey-voice account found for ${email}` };
 }
 
