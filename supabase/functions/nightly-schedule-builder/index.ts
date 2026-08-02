@@ -658,7 +658,8 @@ serve(async (req) => {
           .not('assignment_id', 'is', null)
           .not('status', 'in', '("DONE","BLOCKED")')
           .is('completed_at', null)
-          .is('is_scheduled', false);
+          .is('is_scheduled', false)
+          .not('tags', 'cs', '{parking-lot}'); // parking-lot opts a task OUT of nightly scheduling (ACT-13)
 
         const urgentMs = ASSIGNMENT_URGENT_HOURS * 60 * 60 * 1000;
         const priorityMs = ASSIGNMENT_PRIORITY_DAYS * 24 * 60 * 60 * 1000;
@@ -956,7 +957,8 @@ serve(async (req) => {
             .in('status', ['READY', 'UP_NEXT', 'TODO', 'BACKLOG'])
             .is('is_scheduled', false)
             .is('completed_at', null)
-            .not('title', 'ilike', '%Test Task%');
+            .not('title', 'ilike', '%Test Task%')
+            .not('tags', 'cs', '{parking-lot}'); // parking-lot opts OUT of nightly scheduling (ACT-13)
 
           const readyIds = (readyUpNextTasks || []).map((t: any) => t.id);
           const allCandidateIds = [...new Set([...mappedIds, ...readyIds])]
@@ -976,6 +978,7 @@ serve(async (req) => {
             .not('title', 'ilike', '%Test Task%')
             .is('is_scheduled', false)
             .is('completed_at', null)
+            .not('tags', 'cs', '{parking-lot}') // parking-lot opts OUT of nightly scheduling (ACT-13)
             .order('created_at', { ascending: true });
 
           if (!candidates || candidates.length === 0) {
