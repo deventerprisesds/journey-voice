@@ -1,5 +1,25 @@
 # Project Memory — journey-voice
-Last updated: 2026-07-31
+Last updated: 2026-08-02
+
+## get_tasks now honors the advertised `query` param (fuzzy title search) — 2026-08-02
+`getTasks` (`supabase/functions/execute-tool/index.ts`) previously IGNORED the `query`/`keyword` param
+its own tool schema (`_shared/tool-definitions.ts`) advertised. On the large real board (234 tasks, 208
+DONE) the legacy terminal `.order('start_time', {ascending:true, nullsFirst:false}).limit(50)` truncates
+unscheduled/DONE tasks out of the top 50, so an agent couldn't resolve them BY NAME to then update them.
+- **Fix (additive, executor-only):** when `args.query`/`args.keyword` is non-empty → tokenize, sanitize
+  each token to alphanumerics only (`replace(/[^a-z0-9]/g,'')` — this is what makes the PostgREST `.or()`
+  string injection-proof: no `,`/`(`/`)`/`.`/`*` can survive), drop stopwords + <2-char tokens, then
+  `query.or(tokens.map(t=>\`title.ilike.*${t}*\`).join(','))`, SKIP the time_filter branch, order
+  `created_at` desc, limit 50. Status/category filters still AND-compose. Zero significant tokens (e.g.
+  "the task") → returns EMPTY (not a board dump). Absent/empty query → byte-identical legacy path.
+- **Both consumers inherit it with zero extra work:** journey's own assistant AND Huddle (which fetches
+  journey's tool catalog dynamically and proxies `get_tasks` through this same executor). No schema edit.
+- **Proven (real rows, user `a3378f93-…`):** "Prepare investor pitch" (DONE, unscheduled) is ABSENT from
+  the legacy top-50 but PRESENT via `query:"investor pitch"`; injection token collapses to a harmless
+  single alnum ILIKE; query+status AND-composes. Deployed via `deploy-supabase-functions.yml` run
+  30753410276 ("Deploy single function → success"). Chosen over a parallel Huddle-side fuzzy search
+  (the "extend, don't duplicate" call).
+
 
 ## Purpose
 journey is the primary life-assistant app (voice + chat, Iris the voice agent). It owns the OUTBOUND
