@@ -345,7 +345,7 @@ async function executeToolCall(
         }, context?.timezone);
       
       case 'update_task':
-        return await updateTask(supabase, args);
+        return await updateTask(supabase, userId, args);
 
       case 'batch_update_tasks':
         return await batchUpdateTasks(supabase, userId, args);
@@ -892,10 +892,42 @@ async function createTask(supabase: any, userId: string, args: any): Promise<Exe
   }
 }
 
-async function updateTask(supabase: any, args: any): Promise<ExecuteToolResponse> {
-  if (!args.task_id) return { success: false, error: "Task ID is required" };
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Resolve a task by fuzzy title (same tokenization as getTasks) → the best OPEN match's id, most
+// recent first. Lets an agent act on a task by NAME ("investor pitch" → "Lock investor pitch") when it
+// passes a title instead of a uuid. Tokens are sanitized to alphanumerics (no PostgREST .or injection).
+async function resolveTaskIdByTitle(supabase: any, userId: string, raw: string): Promise<string | null> {
+  const STOP = new Set(['the','and','for','you','your','that','this','with','from','task','tasks','please','can','will','are','was','has','have','get','about','all','any','let','put','in','it','to','my','on','off']);
+  const tokens = (raw || '').toLowerCase().split(/\s+/).map((t) => t.replace(/[^a-z0-9]/g, '')).filter((t) => t.length >= 2 && !STOP.has(t));
+  if (!tokens.length) return null;
+  const { data } = await supabase
+    .from('tasks')
+    .select('id,title,status,updated_at')
+    .eq('user_id', userId)
+    .or(tokens.map((t) => `title.ilike.*${t}*`).join(','))
+    .order('updated_at', { ascending: false })
+    .limit(10);
+  if (!data || !data.length) return null;
+  const open = data.find((t: any) => t.status !== 'DONE');
+  return (open ?? data[0]).id;
+}
+
+async function updateTask(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
+  const identifier = args.task_id ?? args.title;
+  if (!identifier) return { success: false, error: "Task ID or title is required" };
 
   try {
+    // Resolve the target id: a real UUID is used directly; anything else (e.g. "investor pitch") is
+    // fuzzy-matched by title. This is the fix for barge "park the investor pitch" — the agent called
+    // update_task with the title as the id, which 404'd because the row lookup is by uuid.
+    let taskId: string | null = (typeof args.task_id === 'string' && UUID_RE.test(args.task_id)) ? args.task_id : null;
+    if (!taskId) {
+      const nameForLookup = (typeof args.task_id === 'string' && args.task_id) ? args.task_id : String(args.title ?? '');
+      taskId = await resolveTaskIdByTitle(supabase, userId, nameForLookup);
+    }
+    if (!taskId) return { success: false, error: `No task found matching "${identifier}"` };
+
     const updateData: any = {};
     if (args.title) updateData.title = args.title;
     if (args.description !== undefined) updateData.description = args.description;
@@ -910,18 +942,27 @@ async function updateTask(supabase: any, args: any): Promise<ExecuteToolResponse
     if (args.tags !== undefined) {
       updateData.tags = Array.isArray(args.tags) ? args.tags.map((t: unknown) => String(t)) : [];
     }
+    // Parking a task removes it from the schedule too: clear the placed slot so a parked item stops
+    // showing on the board/calendar "sooner". The tag exclusion only blocks FUTURE scheduling; an
+    // already-scheduled task keeps its slot unless we clear it here.
+    if (Array.isArray(updateData.tags) && updateData.tags.includes('parking-lot')) {
+      updateData.is_scheduled = false;
+      updateData.start_time = null;
+      updateData.end_time = null;
+    }
 
     const { data, error } = await supabase
       .from('tasks')
       .update(updateData)
-      .eq('id', args.task_id)
+      .eq('id', taskId)
+      .eq('user_id', userId)
       .select()
       .single();
 
     if (error) throw error;
 
-    return { 
-      success: true, 
+    return {
+      success: true,
       result: { task: data },
       message: `Updated task "${data.title}"`
     };
