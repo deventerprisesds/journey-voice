@@ -899,7 +899,9 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // passes a title instead of a uuid. Tokens are sanitized to alphanumerics (no PostgREST .or injection).
 async function resolveTaskIdByTitle(supabase: any, userId: string, raw: string): Promise<string | null> {
   const STOP = new Set(['the','and','for','you','your','that','this','with','from','task','tasks','please','can','will','are','was','has','have','get','about','all','any','let','put','in','it','to','my','on','off']);
-  const tokens = (raw || '').toLowerCase().split(/\s+/).map((t) => t.replace(/[^a-z0-9]/g, '')).filter((t) => t.length >= 2 && !STOP.has(t));
+  // Split on ANY non-alphanumeric run so a hyphenated slug the agent may pass ("investor-pitch") tokenizes
+  // to ["investor","pitch"] and matches "Lock investor pitch" — not one glued "investorpitch" that matches nothing.
+  const tokens = (raw || '').toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 2 && !STOP.has(t));
   if (!tokens.length) return null;
   const { data } = await supabase
     .from('tasks')
