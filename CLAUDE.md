@@ -10,8 +10,11 @@
   Put PUBLIC config (project URL, anon key) **inline** in the SQL; keep real secrets in **edge
   function secrets** (`supabase secrets set`) and read them with `Deno.env.get(...)` in the function.
 - Applying schema changes: use MCP `apply_migration` (goes straight to the remote project). Edge
-  functions deploy via the `deploy-supabase-functions.yml` workflow (`workflow_dispatch`, runs on the
-  working branch). `pg_net` is already enabled; async HTTP responses land in `net._http_response`.
+  functions **auto-deploy on every push to `main`** (`deploy-supabase-functions.yml`, `on: push:
+  branches:[main] paths: supabase/functions/**` — it deploys the CHANGED functions) — so the ship flow
+  for an edge-fn fix is: merge it to `main` and the deploy fires itself. `workflow_dispatch` is also
+  available for a manual re-run against a working branch (input `function_name`, blank = changed, "all"
+  = force everything). `pg_net` is already enabled; async HTTP responses land in `net._http_response`.
   The vault is empty — don't rely on it.
 
 ## Huddle task-sync (this repo's outbound half)
