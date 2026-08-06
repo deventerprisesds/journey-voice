@@ -563,7 +563,27 @@ async function enrichTasksWithTopics(
 async function getTasks(supabase: any, userId: string, args: any, timezone: string = 'America/New_York'): Promise<ExecuteToolResponse> {
   try {
     console.log(`[GET_TASKS] Args:`, args, `Timezone: ${timezone}`);
-    
+
+    // Fuzzy title search: honor the `query`/`keyword` param the tool schema advertises.
+    // Tokenize, sanitize each token to alphanumerics ONLY (neutralizes PostgREST .or()
+    // filter-string injection — a token can never terminate a clause, open/close a group,
+    // or inject a second comma-separated predicate), drop stopwords/short tokens, then
+    // OR-match the significant tokens against `title` (case-insensitive). Status-agnostic
+    // and time-agnostic (a name lookup isn't date-bounded), ordered by recency.
+    const rawSearch = (args.query ?? args.keyword ?? '').toString().trim();
+    const TASK_STOPWORDS = new Set([
+      'the', 'and', 'for', 'you', 'your', 'that', 'this', 'with', 'from', 'task', 'tasks',
+      'please', 'can', 'will', 'are', 'was', 'has', 'have', 'get', 'about', 'all', 'any', 'let',
+    ]);
+    const searchTokens = rawSearch
+      ? rawSearch
+          .toLowerCase()
+          .split(/\s+/)
+          .map((tok) => tok.replace(/[^a-z0-9]/g, '')) // strip $ , . ( ) : * and every non-alnum char
+          .filter((tok) => tok.length >= 2 && !TASK_STOPWORDS.has(tok))
+      : [];
+    const isSearch = rawSearch.length > 0;
+
     let query = supabase.from('tasks').select('*').eq('user_id', userId);
     
     // Apply status filter (V2: support group aliases ACTIVE/WORKABLE)
@@ -586,8 +606,9 @@ async function getTasks(supabase: any, userId: string, args: any, timezone: stri
       query = query.eq('category', args.category.toUpperCase());
     }
     
-    // Apply date filtering if time_filter provided
-    if (args.time_filter) {
+    // Apply date filtering if time_filter provided — a title search is NOT date-bounded,
+    // so a search suppresses the time window entirely (AC-2).
+    if (!isSearch && args.time_filter) {
       console.log(`[GET_TASKS] Applying time_filter: "${args.time_filter}"`);
       
       const intent = detectTemporalIntent(args.time_filter);
@@ -654,8 +675,30 @@ async function getTasks(supabase: any, userId: string, args: any, timezone: stri
       }
     }
     
-    const { data, error } = await query.order('start_time', { ascending: true, nullsFirst: false }).limit(50);
-    
+    // Title search: OR-match significant tokens against title (case-insensitive).
+    if (isSearch) {
+      if (searchTokens.length === 0) {
+        // Query was only stopwords/short tokens (e.g. "the task") — a name search that
+        // resolves to nothing returns nothing, rather than dumping the whole board (AC-9).
+        console.log(`[GET_TASKS] Search "${rawSearch}" yielded no significant tokens — empty result`);
+        const empty = await enrichTasksWithTopics(supabase, [], userId, timezone);
+        return {
+          success: true,
+          result: empty,
+          message: `Found 0 tasks matching "${rawSearch}"`,
+          extractedFacts: { type: 'task_list', count: 0, scheduled: 0, unscheduled: 0, topicGroups: [] },
+        };
+      }
+      // Tokens are alphanumeric-only, so this .or() string cannot be injection-tampered.
+      query = query.or(searchTokens.map((tok) => `title.ilike.*${tok}*`).join(','));
+    }
+
+    // Search results order by recency (created_at desc); legacy path keeps start_time asc.
+    const ordered = isSearch
+      ? query.order('created_at', { ascending: false })
+      : query.order('start_time', { ascending: true, nullsFirst: false });
+    const { data, error } = await ordered.limit(50);
+
     if (error) throw error;
     
     const count = data?.length || 0;
@@ -670,7 +713,7 @@ async function getTasks(supabase: any, userId: string, args: any, timezone: stri
     return { 
       success: true, 
       result: enrichedTasks,
-      message: `Found ${count} tasks${args.time_filter ? ` for "${args.time_filter}"` : ''} (${scheduled} scheduled, ${unscheduled} unscheduled)`,
+      message: `Found ${count} tasks${isSearch ? ` matching "${rawSearch}"` : args.time_filter ? ` for "${args.time_filter}"` : ''} (${scheduled} scheduled, ${unscheduled} unscheduled)`,
       extractedFacts: { type: 'task_list', count, scheduled, unscheduled, topicGroups: enrichedTasks.topic_groups?.map((t: any) => t.topic_name) || [] }
     };
   } catch (error) {
