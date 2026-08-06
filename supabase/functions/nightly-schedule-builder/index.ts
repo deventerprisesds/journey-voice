@@ -19,6 +19,15 @@ const corsHeaders = {
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
 const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
+// WIP-advanced statuses (Huddle's board lanes). Assigning a scheduled time to a task must NOT knock it
+// out of its lane back to 'TODO': doing so made UP_NEXT items "disappear" from the Huddle board overnight
+// without ever traversing the WIP flow (UP_NEXT→DOING→IN_REVIEW→DONE). The nightly planner's job is to
+// assign a TIME, not to reset the lane. So when a scheduled candidate is already in a WIP lane, preserve
+// that status; only genuinely un-staged tasks (READY/BACKLOG/TODO/null) become 'TODO' as before.
+const WIP_ADVANCED_STATUSES = ['UP_NEXT', 'DOING', 'IN_REVIEW'];
+const statusAfterSchedule = (prev?: string | null): string =>
+  prev && WIP_ADVANCED_STATUSES.includes(prev) ? prev : 'TODO';
+
 // Priority keywords that get a scheduling boost
 const PRIORITY_KEYWORDS = {
   financial: ['payment', 'invoice', 'bill', 'tax', 'budget', 'contract', 'financial', 'money', 'pay', 'credit'],
@@ -834,7 +843,7 @@ serve(async (req) => {
               end_time: slot.end_time,
               is_scheduled: true,
               scheduling_context: { pre_schedule_status: task.status || 'TODO', assignment_tier: 'A' },
-              status: 'TODO',
+              status: statusAfterSchedule(task.status),
               updated_at: now.toISOString(),
             }).eq('id', slot.taskId);
             if (error) return false;
@@ -1341,7 +1350,7 @@ serve(async (req) => {
                 end_time: slot.end_time,
                 is_scheduled: true,
                 scheduling_context: { pre_schedule_status: preScheduleStatus },
-                status: 'TODO',
+                status: statusAfterSchedule(preScheduleStatus),
                 updated_at: now.toISOString(),
               })
               .eq('id', slot.taskId);
@@ -1451,7 +1460,7 @@ serve(async (req) => {
                         end_time: slot.end_time,
                         is_scheduled: true,
                         scheduling_context: { pre_schedule_status: preScheduleStatus, reshuffle_retry: true },
-                        status: 'TODO',
+                        status: statusAfterSchedule(preScheduleStatus),
                         updated_at: now.toISOString(),
                       })
                       .eq('id', slot.taskId);
