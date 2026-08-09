@@ -28,6 +28,10 @@ interface NotificationRequest {
     openCommsConsole?: boolean;
     batchSize?: number;
     notificationIds?: string[];
+    // Opt-in delivery controls (default omitted → unchanged behavior). ttl = seconds FCM/web-push may
+    // retry an undelivered push; collapseKey = a newer push replaces an older undelivered one.
+    ttl?: number | string;
+    collapseKey?: string;
     messageData?: {
       id: string;
       role: string;
@@ -92,15 +96,27 @@ async function sendFcmNotification(
   body: string,
   data: Record<string, string>,
   serviceAccountJson: string,
+  opts?: { ttlSeconds?: number; collapseKey?: string },
 ): Promise<void> {
   const sa = JSON.parse(serviceAccountJson);
   const accessToken = await getFcmAccessToken(serviceAccountJson);
+
+  // OPT-IN delivery controls (default path unchanged → reminders/alarms/messages are unaffected):
+  //  - ttl caps how long FCM will retry an undelivered message (so a stale diagnostic can't sit in the
+  //    queue and redeliver later); omitted → FCM default (~4 weeks).
+  //  - collapse_key makes a newer message REPLACE an older undelivered one with the same key instead of
+  //    stacking; omitted → no collapsing (each message independent, as before).
+  const android: Record<string, unknown> = { priority: 'high' };
+  if (opts?.ttlSeconds != null && Number.isFinite(opts.ttlSeconds)) {
+    android.ttl = `${Math.max(0, Math.floor(opts.ttlSeconds))}s`;
+  }
+  if (opts?.collapseKey) android.collapse_key = opts.collapseKey;
 
   const message = {
     message: {
       token: fcmToken,
       data,
-      android: { priority: 'high' },
+      android,
     },
   };
 
@@ -133,6 +149,13 @@ serve(async (req) => {
     const { userId, title, body, channel, data, app }: NotificationRequest = await req.json();
 
     console.log('[send-push-notification] Processing:', { userId, title, body, app, data });
+
+    // OPT-IN delivery controls (see sendFcmNotification). Only take effect when the caller passes them
+    // in `data` — every existing caller (reminders, alarms, messages) omits them, so their behavior is
+    // unchanged. Used by the test-push diagnostic so a stale test push expires fast and collapses.
+    const ttlSeconds = data?.ttl != null && data.ttl !== '' ? Number(data.ttl) : undefined;
+    const collapseKey = typeof data?.collapseKey === 'string' && data.collapseKey ? data.collapseKey : undefined;
+    const sendOpts = { ttlSeconds: Number.isFinite(ttlSeconds as number) ? (ttlSeconds as number) : undefined, collapseKey };
 
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
@@ -234,7 +257,7 @@ serve(async (req) => {
             return { success: false, endpoint: sub.endpoint, error: 'No FCM credentials' };
           }
           try {
-            await sendFcmNotification(sub.fcm_token, title, body, fcmData, serviceAccountJson);
+            await sendFcmNotification(sub.fcm_token, title, body, fcmData, serviceAccountJson, sendOpts);
             console.log('[send-push-notification] FCM sent to token:', sub.fcm_token.substring(0, 20));
             await supabaseClient.from('activity_log').insert({
               user_id: userId, activity_type: 'fcm_send_success', status: 'completed',
@@ -264,7 +287,11 @@ serve(async (req) => {
         };
 
         try {
-          await webpush.sendNotification(pushSubscription, webPayload);
+          await webpush.sendNotification(
+            pushSubscription,
+            webPayload,
+            sendOpts.ttlSeconds != null ? { TTL: sendOpts.ttlSeconds } : undefined,
+          );
           console.log('[send-push-notification] Web push sent to:', sub.endpoint.substring(0, 50));
           return { success: true, endpoint: sub.endpoint };
         } catch (pushError: any) {
