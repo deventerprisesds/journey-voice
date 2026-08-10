@@ -929,12 +929,20 @@ async function updateTask(supabase: any, args: any): Promise<ExecuteToolResponse
       .update(updateData)
       .eq('id', args.task_id)
       .select()
-      .single();
+      .maybeSingle();
 
     if (error) throw error;
+    if (!data) {
+      // No row matched this id. Surface WHICH id failed instead of PostgREST's opaque "Cannot coerce
+      // the result to a single JSON object" that .single() raises on 0 rows — that message hid a
+      // stale/incorrect task_id (e.g. a caller passing an id that isn't in public.tasks) and made the
+      // failure look like an unrelated parsing bug. Service-role client, so this is a true not-found,
+      // not an RLS filter.
+      return { success: false, error: `No task matched id ${args.task_id} (0 rows updated)` };
+    }
 
-    return { 
-      success: true, 
+    return {
+      success: true,
       result: { task: data },
       message: `Updated task "${data.title}"`
     };
