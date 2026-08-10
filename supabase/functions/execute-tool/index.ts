@@ -910,6 +910,19 @@ async function updateTask(supabase: any, args: any): Promise<ExecuteToolResponse
     if (args.tags !== undefined) {
       updateData.tags = Array.isArray(args.tags) ? args.tags.map((t: unknown) => String(t)) : [];
     }
+    // Confirmed Definition of Done from Huddle's confirm_task_intent flow. Without this mapping a
+    // {task_id, definition_of_done}-only call built an EMPTY updateData, so `.update({})…single()`
+    // returned 0 rows → "Cannot coerce the result to a single JSON object" and the DoD never reached
+    // journey's canonical task (nor, via the sync trigger, the Huddle mirror). pass "" to clear.
+    if (args.definition_of_done !== undefined) {
+      updateData.definition_of_done = args.definition_of_done ? String(args.definition_of_done) : null;
+    }
+
+    // Guard the empty-update case cleanly instead of letting `.update({})…single()` surface the
+    // opaque coerce error (an unmapped-only args set would otherwise repeat the bug above).
+    if (!Object.keys(updateData).length) {
+      return { success: false, error: "No updatable fields provided" };
+    }
 
     const { data, error } = await supabase
       .from('tasks')
@@ -949,6 +962,7 @@ async function batchUpdateTasks(supabase: any, userId: string, args: any): Promi
     if (u.category) data.category = String(u.category).toUpperCase();
     if (u.assigned_agent !== undefined) data.assigned_agent = u.assigned_agent ? String(u.assigned_agent) : null;
     if (u.tags !== undefined) data.tags = Array.isArray(u.tags) ? u.tags.map((t: unknown) => String(t)) : [];
+    if (u.definition_of_done !== undefined) data.definition_of_done = u.definition_of_done ? String(u.definition_of_done) : null;
     if (typeof u.rank === "number") { data.is_priority = true; data.priority_rank = u.rank; }
     else if (u.unset_rank) { data.is_priority = false; data.priority_rank = null; }
     if (!Object.keys(data).length) return { ok: false, task_id: u.task_id, error: "no fields to update" };
