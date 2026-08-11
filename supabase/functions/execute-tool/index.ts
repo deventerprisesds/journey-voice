@@ -1223,11 +1223,16 @@ function getEndOfSundayISO(tz: string): string {
 async function parseAndCreateTasks(
   supabase: any,
   userId: string,
-  args: { text: string; target_date?: string; auto_schedule?: boolean; source_topic_id?: string },
+  args: { text: string; target_date?: string; auto_schedule?: boolean; source_topic_id?: string; default_status?: string; dryRun?: boolean },
   timezone?: string
 ): Promise<ExecuteToolResponse> {
   const tz = timezone || 'America/New_York';
   const autoSchedule = args.auto_schedule !== false; // Default true
+  // DRY-RUN: run the SAME real flow (real ai-task-parser + real batch-calendar-scheduler, both
+  // read-only) but perform ZERO writes — no task INSERT, no schedule UPDATE, no activity_log, no
+  // Outlook event, no topic mapping. Returns the computed PLAN so we can see exactly what the button
+  // would produce. Only the literal `true` enables it.
+  const dryRun = args.dryRun === true;
   const hasThisWeek = /this\s+week/i.test(args.text);
   // Detect any explicit date phrase — used to avoid inventing a deadline for priority tasks
   const hasDatePhrase = /\b(today|tonight|tomorrow|this\s+week|next\s+week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(args.text);
@@ -1365,15 +1370,19 @@ async function parseAndCreateTasks(
         user_id: userId
       };
 
-      const { data, error } = await supabase
-        .from('tasks')
-        .insert([taskData])
-        .select()
-        .single();
+      // DRY-RUN: skip the INSERT (W1); build an in-memory task carrying the same normalized fields
+      // + a synthetic id, so the rest of the flow (scheduler call by index, plan collection) runs.
+      const { data, error } = dryRun
+        ? { data: { ...taskData, id: `dryrun-${createdTasks.length}` }, error: null }
+        : await supabase
+            .from('tasks')
+            .insert([taskData])
+            .select()
+            .single();
 
       if (data) {
         createdTasks.push(data);
-        console.log(`[PARSE_AND_CREATE] Created task: ${data.title} (${data.id}) is_priority=${isPriority} at ${new Date().toISOString()}`);
+        console.log(`[PARSE_AND_CREATE]${dryRun ? ' (dry-run)' : ''} ${dryRun ? 'Planned' : 'Created'} task: ${data.title} (${data.id}) is_priority=${isPriority} at ${new Date().toISOString()}`);
 
         // Wire priority board mapping when intent === "priority"
         if (isPriority) {
@@ -1391,7 +1400,7 @@ async function parseAndCreateTasks(
                 topicId = (exact || partial)?.id || null;
               }
             }
-            if (topicId) {
+            if (topicId && !dryRun) { // W2: skip topic-mapping insert in dryRun
               await supabase.from('task_topic_mappings').insert({ task_id: data.id, topic_id: topicId });
               console.log(`[PARSE_AND_CREATE] Priority task "${data.title}" mapped to topic ${topicId}`);
             } else {
@@ -1402,10 +1411,11 @@ async function parseAndCreateTasks(
           }
         }
 
-        // Create Outlook calendar event IMMEDIATELY if task has scheduled time
-        if (data.start_time) {
+        // Create Outlook calendar event IMMEDIATELY if task has scheduled time (W3: skip in dryRun —
+        // gate the CALL, not its result, since it's fire-and-forget)
+        if (data.start_time && !dryRun) {
           console.log(`[PARSE_AND_CREATE] Creating immediate Outlook event for "${data.title}" at ${data.start_time}`);
-          
+
           supabase.functions.invoke('send-unified-notification', {
             body: {
               userId: userId,
@@ -1428,8 +1438,8 @@ async function parseAndCreateTasks(
           });
         }
         
-        // Best-effort activity logging (fire and forget)
-        supabase.from('activity_log').insert({
+        // Best-effort activity logging (fire and forget) — W4: skip in dryRun
+        if (!dryRun) supabase.from('activity_log').insert({
           user_id: userId,
           activity_type: 'task_created',
           session_id: data.id,
@@ -1459,7 +1469,8 @@ async function parseAndCreateTasks(
       }
       return !t.is_scheduled;
     });
-    const scheduledResults: Array<{ title: string; time: string }> = [];
+    const scheduledResults: Array<{ title: string; time: string; start_time?: string; end_time?: string; reasoning?: string | null }> = [];
+    let rejectedSlots: any[] = []; // batch-scheduler overflow/rejects (surfaced in the dry-run plan)
 
     if (autoSchedule && unscheduledTasks.length > 0) {
       console.log(`[PARSE_AND_CREATE] Auto-scheduling ${unscheduledTasks.length} tasks...`);
@@ -1494,6 +1505,7 @@ async function parseAndCreateTasks(
         if (batchResponse.ok) {
           const batchResult = await batchResponse.json();
           console.log('[PARSE_AND_CREATE] Batch scheduler result:', batchResult);
+          rejectedSlots = batchResult.rejected || []; // capture overflow/rejects for the plan
           
           // Apply scheduled times to tasks (already normalized by batch-calendar-scheduler)
           const todayInTz = new Date().toLocaleDateString('en-CA', { timeZone: tz });
@@ -1515,16 +1527,19 @@ async function parseAndCreateTasks(
               
               console.log(`[PARSE_AND_CREATE] Applying schedule: task="${task.title}", start=${slot.start_time}, synced_due=${syncedDueDate}, status=UP_NEXT, today=${todayInTz}`);
               
-              const { error: updateError } = await supabase
-                .from('tasks')
-                .update({
-                  start_time: slot.start_time,
-                  end_time: slot.end_time,
-                  due_date: syncedDueDate, // Sync due_date with scheduled date
-                  is_scheduled: true,
-                  status: 'UP_NEXT'  // Has start_time now, so UP_NEXT
-                })
-                .eq('id', task.id);
+              // W5: skip the schedule UPDATE in dryRun; collect the slot into the plan instead.
+              const { error: updateError } = dryRun
+                ? { error: null }
+                : await supabase
+                    .from('tasks')
+                    .update({
+                      start_time: slot.start_time,
+                      end_time: slot.end_time,
+                      due_date: syncedDueDate, // Sync due_date with scheduled date
+                      is_scheduled: true,
+                      status: 'UP_NEXT'  // Has start_time now, so UP_NEXT
+                    })
+                    .eq('id', task.id);
 
               if (!updateError) {
                 scheduledResults.push({
@@ -1534,12 +1549,14 @@ async function parseAndCreateTasks(
                     minute: '2-digit',
                     timeZone: tz
                   }),
-                  start_time: slot.start_time
+                  start_time: slot.start_time,
+                  end_time: slot.end_time,        // included so the dry-run plan shows the full slot
+                  reasoning: slot.reasoning ?? null
                 });
-                console.log(`[PARSE_AND_CREATE] Scheduled "${task.title}" at ${slot.start_time} with status UP_NEXT`);
-                
-                // Best-effort activity logging (fire and forget)
-                supabase.from('activity_log').insert({
+                console.log(`[PARSE_AND_CREATE]${dryRun ? ' (dry-run)' : ''} ${dryRun ? 'Planned' : 'Scheduled'} "${task.title}" at ${slot.start_time} with status UP_NEXT`);
+
+                // Best-effort activity logging (fire and forget) — W6: skip in dryRun
+                if (!dryRun) supabase.from('activity_log').insert({
                   user_id: userId,
                   activity_type: 'task_scheduled',
                   session_id: task.id,
@@ -1565,35 +1582,42 @@ async function parseAndCreateTasks(
 
     // 7. Build response message
     const taskCount = createdTasks.length;
-    let message = `Created ${taskCount} task${taskCount > 1 ? 's' : ''}`;
-    
+    const verb = dryRun ? 'Would create' : 'Created';
+    let message = `${verb} ${taskCount} task${taskCount > 1 ? 's' : ''}`;
+
     if (scheduledResults.length > 0) {
       const scheduleDetails = scheduledResults.map(s => `${s.title} at ${s.time}`).join(', ');
-      message += `. Scheduled: ${scheduleDetails}`;
+      message += dryRun ? `. Would schedule: ${scheduleDetails}` : `. Scheduled: ${scheduleDetails}`;
     } else if (autoSchedule && unscheduledTasks.length > 0) {
       message += ` (scheduling was requested but no optimal slots found)`;
     }
+    if (dryRun) message = `Dry run — no changes written. ${message}.`;
 
-    console.log(`[PARSE_AND_CREATE] Complete. ${message}`);
+    console.log(`[PARSE_AND_CREATE]${dryRun ? ' (dry-run)' : ''} Complete. ${message}`);
 
     return {
       success: true,
       result: {
+        ...(dryRun ? { dryRun: true } : {}),
         created: createdTasks.length,
         scheduled: scheduledResults,
+        // DRY-RUN: expose the scheduler's overflow/rejected set (normally discarded) so the plan is complete.
+        ...(dryRun ? { rejected: rejectedSlots } : {}),
         tasks: createdTasks.map(t => ({
           id: t.id,
           title: t.title,
           priority: t.priority,
           category: t.category,
+          status: t.status,
           due_date: t.due_date,
           start_time: t.start_time,
+          end_time: t.end_time,
           is_scheduled: t.is_scheduled
         }))
       },
       message,
-      extractedFacts: { 
-        type: 'task_created', 
+      extractedFacts: {
+        type: dryRun ? 'task_plan_preview' : 'task_created',
         count: createdTasks.length,
         scheduled: scheduledResults.length
       }
