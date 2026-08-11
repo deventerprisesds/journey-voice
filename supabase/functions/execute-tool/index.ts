@@ -1237,7 +1237,7 @@ function intervalsOverlap(aStart: number, aEnd: number, bStart: number, bEnd: nu
   return aStart < bEnd && bStart < aEnd;
 }
 
-interface Blocker { start: number; end: number; }
+interface Blocker { start: number; end: number; kind?: 'event' | 'task' | 'placed'; id?: string; title?: string; priority?: string; rank?: number; tags?: string[]; displaced?: boolean; }
 interface WinRange { name: string; start: number; end: number; }
 
 /** Earliest [cursor, cursor+durMs) that fits inside one of `windows` (each already clamped to the
@@ -1247,7 +1247,6 @@ function findFreeSlot(windows: WinRange[], durMs: number, blockers: Blocker[]): 
   const sorted = [...windows].sort((a, b) => a.start - b.start);
   for (const win of sorted) {
     let cursor = win.start;
-    // guard against pathological input
     let iterations = 0;
     while (cursor + durMs <= win.end && iterations < 1000) {
       iterations++;
@@ -1255,6 +1254,30 @@ function findFreeSlot(windows: WinRange[], durMs: number, blockers: Blocker[]): 
       const hit = blockers.find(b => intervalsOverlap(cursor, end, b.start, b.end));
       if (!hit) return { start: cursor, end, window: win.name };
       cursor = Math.max(hit.end, cursor + 1); // strictly advance → terminates
+    }
+  }
+  return null;
+}
+
+/** Earliest slot that has NO `hard` blocker overlap (events, already-placed, and any existing task
+ *  the incoming item does NOT strictly outrank). `soft` are the strictly-lower-priority existing
+ *  TASKS the incoming item may displace; the returned `displaced` set is every soft blocker the
+ *  chosen slot overlaps — ALL of them must be vacated (never a partial clear that leaves an overlap). */
+function findSlotWithDisplacement(
+  windows: WinRange[], durMs: number, hard: Blocker[], soft: Blocker[]
+): { start: number; end: number; window: string; displaced: Blocker[] } | null {
+  const sorted = [...windows].sort((a, b) => a.start - b.start);
+  for (const win of sorted) {
+    let cursor = win.start;
+    let iterations = 0;
+    while (cursor + durMs <= win.end && iterations < 1000) {
+      iterations++;
+      const end = cursor + durMs;
+      const hardHit = hard.find(b => intervalsOverlap(cursor, end, b.start, b.end));
+      if (hardHit) { cursor = Math.max(hardHit.end, cursor + 1); continue; }
+      // No hard conflict here — clearable. Every soft task this slot overlaps gets displaced.
+      const displaced = soft.filter(b => intervalsOverlap(cursor, end, b.start, b.end));
+      return { start: cursor, end, window: win.name, displaced };
     }
   }
   return null;
@@ -1598,16 +1621,17 @@ async function parseAndCreateTasks(
             const existingTasks = (existingTasksRes.data || []).filter((t: any) => !createdIds.has(t.id));
             const externalEvents = eventsRes.data || [];
 
-            // Blockers: external events (INVIOLABLE) + existing tasks. Displaceable = existing tasks only.
+            // Blockers: external events (kind 'event', INVIOLABLE) + existing scheduled tasks (kind
+            // 'task', displaceable only by a STRICTLY higher-priority incoming item). Newly placed
+            // items get kind 'placed' (inviolable within the run). `.displaced` marks a task removed
+            // from today so it stops counting as a blocker.
             const blockers: Blocker[] = [];
-            for (const e of externalEvents) blockers.push({ start: new Date(e.start_time).getTime(), end: new Date(e.end_time).getTime() });
-            const displaceable = existingTasks.map((t: any) => ({
-              id: t.id, title: t.title, priority: t.priority, tags: t.tags || [],
+            for (const e of externalEvents) blockers.push({ kind: 'event', start: new Date(e.start_time).getTime(), end: new Date(e.end_time).getTime() });
+            for (const t of existingTasks) blockers.push({
+              kind: 'task', id: t.id, title: t.title, priority: t.priority, tags: t.tags || [],
               rank: priorityRank(t.priority, t.is_priority),
-              start: new Date(t.start_time).getTime(), end: new Date(t.end_time).getTime(),
-              displaced: false,
-            }));
-            for (const d of displaceable) blockers.push({ start: d.start, end: d.end });
+              start: new Date(t.start_time).getTime(), end: new Date(t.end_time).getTime(), displaced: false,
+            });
 
             // Candidate windows for a task's category on the target weekday (config-driven).
             const windowsFor = (category: string): WinRange[] => {
@@ -1648,51 +1672,48 @@ async function parseAndCreateTasks(
             const placements: Array<{ idx: number; task: any; start: number; end: number; window: string; reasoning: string }> = [];
             for (const { t: task, idx } of order) {
               const durMs = (task.estimate_minutes || 60) * 60000;
+              const incomingRank = priorityRank(task.priority, task.is_priority);
               const wins = windowsFor(task.category);
+              // Active blockers = everything not already displaced this run.
+              const active = blockers.filter(b => !b.displaced);
               let placed: { start: number; end: number; window: string } | null = null;
               let via = 'window';
+              let toDisplace: Blocker[] = [];
 
               // 1) Honor the AI's chosen time if it is free, in-day, and not in the past.
               const ai = aiByIndex.get(idx);
               if (ai && ai.start >= floorMs && ai.start + durMs <= dayEndMs &&
-                  !blockers.some(b => intervalsOverlap(ai.start, ai.start + durMs, b.start, b.end))) {
+                  !active.some(b => intervalsOverlap(ai.start, ai.start + durMs, b.start, b.end))) {
                 placed = { start: ai.start, end: ai.start + durMs, window: 'ai-slot' };
                 via = 'ai-slot';
               }
-              // 2) Windows-first: earliest free slot in the category's allowed windows.
-              if (!placed) placed = findFreeSlot(wins, durMs, blockers);
-              // 3) Flexible round: anywhere free today (06:00–22:00 local).
-              if (!placed) { placed = findFreeSlot(flexibleDay, durMs, blockers); if (placed) via = 'flexible'; }
-              // 4) Displacement: bump the lowest-priority ORIGINAL the incoming strictly outranks.
+              // 2) Windows-first: earliest free slot in the category's allowed windows (no displacement).
+              if (!placed) { const s = findFreeSlot(wins, durMs, active); if (s) { placed = s; via = 'window'; } }
+              // 3) Flexible round: anywhere free today, 06:00–22:00 local (no displacement).
+              if (!placed) { const s = findFreeSlot(flexibleDay, durMs, active); if (s) { placed = s; via = 'flexible'; } }
+              // 4) Displacement: the earliest slot whose ONLY occupants are existing tasks the incoming
+              //    item STRICTLY outranks. Events, already-placed items, and equal/higher-priority tasks
+              //    are HARD — never cleared — so the placed interval can never overlap them.
               if (!placed) {
-                const incomingRank = priorityRank(task.priority, task.is_priority);
-                const cands = displaceable
-                  .filter(d => !d.displaced && d.rank < incomingRank)
-                  .sort((a, b) => (a.rank - b.rank) || (a.start - b.start) || (a.id < b.id ? -1 : 1));
-                for (const cand of cands) {
-                  const without = blockers.filter(b => !(b.start === cand.start && b.end === cand.end));
-                  const slot = findFreeSlot(flexibleDay, durMs, without);
-                  if (slot) {
-                    cand.displaced = true;
-                    // permanently drop this original's interval from the blocker set
-                    const bi = blockers.findIndex(b => b.start === cand.start && b.end === cand.end);
-                    if (bi >= 0) blockers.splice(bi, 1);
-                    displacedResults.push({ id: cand.id, title: cand.title, priority: cand.priority, freed_for: task.title });
-                    placed = slot; via = 'displacement';
-                    // persist the bump (W7) — guarded; the original leaves today's schedule
-                    if (!dryRun) {
-                      const newTags = Array.from(new Set([...(cand.tags || []), `displaced-${effTargetDate}`]));
-                      await supabase.from('tasks').update({
-                        is_scheduled: false, start_time: null, end_time: null, status: 'UP_NEXT', tags: newTags,
-                      }).eq('id', cand.id);
-                    }
-                    break;
-                  }
-                }
+                const hard = active.filter(b => b.kind !== 'task' || (b.rank ?? 0) >= incomingRank);
+                const soft = active.filter(b => b.kind === 'task' && (b.rank ?? 0) < incomingRank);
+                const s = findSlotWithDisplacement(flexibleDay, durMs, hard, soft);
+                if (s) { placed = { start: s.start, end: s.end, window: s.window }; via = 'displacement'; toDisplace = s.displaced; }
               }
 
               if (placed) {
-                blockers.push({ start: placed.start, end: placed.end });
+                // Vacate every original this placement displaces (ALL overlapping soft tasks).
+                for (const d of toDisplace) {
+                  d.displaced = true;
+                  displacedResults.push({ id: d.id!, title: d.title || '(untitled)', priority: d.priority || 'MEDIUM', freed_for: task.title });
+                  if (!dryRun) {
+                    const newTags = Array.from(new Set([...(d.tags || []), `displaced-${effTargetDate}`]));
+                    await supabase.from('tasks').update({
+                      is_scheduled: false, start_time: null, end_time: null, status: 'UP_NEXT', tags: newTags,
+                    }).eq('id', d.id);
+                  }
+                }
+                blockers.push({ kind: 'placed', start: placed.start, end: placed.end });
                 placements.push({ idx, task, start: placed.start, end: placed.end, window: placed.window, reasoning: via });
               } else {
                 // 5) Overflow — surfaced (merged with the scheduler's own rejects), never stacked.
