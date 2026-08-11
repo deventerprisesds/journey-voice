@@ -77,3 +77,22 @@ Owner for validation: a3378f93 (rich custom config), project wwxgajrtmslzklnypla
 independent subagent. NOT the toy sim (that was scrapped — invented weights/no-AI/wrong owner; the
 "stacked at 20:00" was a toy artifact, prod works). Redesign logic changes (composite-sort switch +
 same-day flexibility nudge) come AFTER dryRun reproduces the live board.
+
+## ⚙️ DEPLOYED: nightly-schedule-builder `dryRun` mode (2026-08-11) — REVERT + DISCOVERY NOTE
+**What shipped:** `nightly-schedule-builder` now accepts `{dryRun:true}` → runs the FULL real pipeline
+(incl. the read-only batch-calendar-scheduler AI slotter) with ZERO writes, returns the computed `plan`.
+Commits `1697014` (scaffold) + `d113cc6` (impl) on branch `claude/huddle-journey-integration-xokgv1`,
+PR deventerprisesds/journey-voice#26. Deployed to the LIVE journey project (ref wwxgajrtmslzklnyplah).
+**The non-dryRun path is BYTE-IDENTICAL** (every change is an `if(!dryRun)` guard / conditional query
+chain / `dryRun?collect:write` branch), so the nightly cron + every existing caller behave exactly as
+before. This is why deploying was low-risk.
+**HOW TO FIND IT LATER:** grep `dryRun` in `supabase/functions/nightly-schedule-builder/index.ts`, or
+search memory for "faithful dryRun harness".
+**HOW TO REVERT (if any unforeseen issue):**
+  1. Code: `git revert d113cc6 1697014` on the branch (main was never touched — the PR is unmerged), OR
+     close PR #26.
+  2. Live function: redeploy the pre-change version by dispatching `deploy-supabase-functions.yml` with
+     `ref=main, function_name=nightly-schedule-builder` (main still has the original). The dryRun path is
+     opt-in + read-only, so leaving it deployed is harmless if reverting isn't urgent.
+**Suspect this change if:** the nightly build ever behaves oddly → confirm by checking whether callers
+pass `dryRun` (only an explicit `{dryRun:true}` invocation changes behavior; cron never sets it).
