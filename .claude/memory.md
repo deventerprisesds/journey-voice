@@ -61,3 +61,19 @@ file / the SDK source, not web search alone.)
 ## Related
 - Huddle side of the task-sync mirror + agent brains: `deventerpriseds-org/huddle-extension-app`.
 - Supabase project ref, edge-function deploy, and the outbound task-sync trigger facts: see `CLAUDE.md`.
+
+## Scheduling redesign — faithful dryRun harness (IN PROGRESS 2026-08-11)
+Goal: test the scheduler by running the REAL pipeline verbatim (incl. the batch-calendar-scheduler AI
+slotter — user is firm the AI is a MUST; deterministic keyword rules would be a REGRESSION). Approach:
+add `dryRun` to `nightly-schedule-builder` that runs the full pipeline but performs ZERO writes; the AI
+slotter is READ-ONLY (verified: no update/insert/upsert/delete — all writes are caller-side), so dryRun
+fires the real AI and just collects the returned slots into `dryRunPlan` instead of persisting.
+FIDELITY TRAP (R3, handled): the candidate pool filters `is_scheduled=false`, which is set by the
+rollover/future-clear WRITES we skip in dryRun. So dryRun must (a) still SELECT the would-clear tasks and
+add their ids to `dryRunClearedIds`, (b) drop the `is_scheduled=false` filter in the candidate + busy
+queries, (c) exclude `dryRunClearedIds` from busy-slot capacity. Assert fidelity at the DETERMINISTIC
+layer (task→day/window/tier/inclusion/archival), NOT exact AI minutes (non-deterministic by design).
+Owner for validation: a3378f93 (rich custom config), project wwxgajrtmslzklnyplah. 20 ACs written by an
+independent subagent. NOT the toy sim (that was scrapped — invented weights/no-AI/wrong owner; the
+"stacked at 20:00" was a toy artifact, prod works). Redesign logic changes (composite-sort switch +
+same-day flexibility nudge) come AFTER dryRun reproduces the live board.

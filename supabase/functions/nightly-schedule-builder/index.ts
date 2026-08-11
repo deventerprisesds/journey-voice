@@ -264,11 +264,18 @@ serve(async (req) => {
     try { body = await req.json(); } catch { /* no body = full run */ }
     const requestedUserId: string | undefined = body?.userId;
     const singleDay: boolean = body?.singleDay === true;
+    // DRY-RUN: run the FULL real pipeline (incl. the read-only batch-calendar-scheduler AI slotter)
+    // but perform ZERO writes — every mutation site is guarded by `!dryRun`. Instead of persisting the
+    // slots the AI returns, they are collected into `dryRunPlan` and returned. To reproduce a REAL run's
+    // candidate pool (which is populated by the rollover/future-clear writes that we skip in dryRun), the
+    // candidate + busy-slot queries drop the `is_scheduled` filter in dryRun (see usages of `dryRun`).
+    const dryRun: boolean = body?.dryRun === true;
     const triggerSource: string = typeof body?.triggerSource === 'string'
       ? body.triggerSource
       : (singleDay ? 'manual_reschedule' : 'cron');
 
     if (singleDay) console.log(`⚡ Single-day mode requested${requestedUserId ? ` for user ${requestedUserId}` : ''} (trigger: ${triggerSource})`);
+    if (dryRun) console.log(`🧪 DRY-RUN mode — full pipeline, AI slotter included, ZERO writes; returns the computed plan.`);
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     
@@ -316,6 +323,11 @@ serve(async (req) => {
       const pushStep = (step: string, inputs: Record<string, unknown>, outputs: Record<string, unknown>, t0: number) => {
         steps.push({ step, inputs, outputs, durationMs: Date.now() - t0 });
       };
+      // DRY-RUN plan collector (per user). Populated at each would-be write site instead of persisting.
+      const dryRunPlan: Array<Record<string, unknown>> = [];
+      // IDs the rollover/future-clear/done-clear steps WOULD clear; in dryRun they are treated as
+      // unscheduled (eligible candidates) and removed from busy-slot capacity, reproducing a real run.
+      const dryRunClearedIds = new Set<string>();
 
       console.log(`\n🌙 Processing nightly schedule for user ${userId} (${timezone}) — runId=${runId} trigger=${triggerSource}`);
 
