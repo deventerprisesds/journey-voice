@@ -127,3 +127,24 @@ Before/after dryRun (default 563238 vs composite 563239, real AI, both 36 tasks)
 Not all due-today LIFE items reach 08-11 (LIFE window = mornings/evenings only, fills up) → that's what the
 FLEXIBILITY NUDGE (next lever) addresses: relax same-day-signaled items to flexible so they take today's daytime,
 displacing lower-priority originals. Independent verifier running.
+
+## ✅ parse_and_create_tasks dryRun (the "Add a task for today" BUTTON) — 1:1 baseline (2026-08-11)
+Commit 8d70611 (deploy run 31534153742). `execute-tool` toolName `parse_and_create_tasks` now accepts
+`args.dryRun:true` → runs the EXACT button flow (real ai-task-parser + real batch-calendar-scheduler,
+both read-only) with ZERO writes; returns the plan (parsed tasks + scheduled slots + the previously-
+discarded `rejected` set). 6 write sites guarded (W1 insert→synthetic in-memory task+index mapping,
+W2 topic-map, W3 Outlook invoke [fire-and-forget — gate the CALL], W4/W6 activity_log, W5 schedule
+update). Non-dryRun byte-identical. Invoke via pg_net: execute-tool body {toolName,userId,context,args}.
+**Baseline it reveals (req 563558, 15 today-items, targetDate 08-11):** "would create 15", scheduler
+places only **3** and REJECTS **12** — and the 3 include a DOUBLE-BOOK: Make Amex payment + Have kids
+outfits BOTH 18:00-19:00. Rejects: "no available slot in window" (congested board, no displacement of
+originals). This 1:1 reproduces the user's screenshot breakage (double-booking + external not blocked +
+20:00-style piling). **ZERO writes proven:** tasks 257/mappings 197/create+sched-log 431 all pinned,
+tasks.max(updated_at) pinned 13:24:36.
+LESSON (important): earlier reconstructions were NOT 1:1 — the toy sim, the nightly-builder dryRun (spreads
+across 7d, allowOverflow=false), and the isolated batch-calendar-scheduler call all diverged from the
+real button (parse_and_create → batch targetDate=today allowOverflow=true → apply WITHOUT conflict re-check
+→ double-books). Always test the EXACT function behind the UI control, not an adjacent one. The user had to
+correct this 3x. NEXT (awaiting user go-ahead): fix the double-booking in this path — block existing tasks
++ external_calendar_events as busy, require end_times, and windows-first→displace lower-priority originals
+(complaint #2) instead of rejecting; dry-run before/after.
