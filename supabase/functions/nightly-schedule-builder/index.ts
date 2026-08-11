@@ -270,6 +270,10 @@ serve(async (req) => {
     // candidate pool (which is populated by the rollover/future-clear writes that we skip in dryRun), the
     // candidate + busy-slot queries drop the `is_scheduled` filter in dryRun (see usages of `dryRun`).
     const dryRun: boolean = body?.dryRun === true;
+    // SWITCHABLE SCORING MODEL. Default 'priority-rank' = today's behavior (byte-identical). Only the
+    // exact string 'composite' activates the new composite ordering (recency/deadline/finance lead;
+    // explicit priority becomes a small differentiator). A typo can never silently enable it.
+    const scoringModel: 'composite' | 'priority-rank' = body?.scoringModel === 'composite' ? 'composite' : 'priority-rank';
     const triggerSource: string = typeof body?.triggerSource === 'string'
       ? body.triggerSource
       : (singleDay ? 'manual_reschedule' : 'cron');
@@ -328,6 +332,9 @@ serve(async (req) => {
       // IDs the rollover/future-clear/done-clear steps WOULD clear; in dryRun they are treated as
       // unscheduled (eligible candidates) and removed from busy-slot capacity, reproducing a real run.
       const dryRunClearedIds = new Set<string>();
+      // Ids the run's OWN stale-archive steps (1.5/1.6) would archive → excluded from the dryRun
+      // candidate pool so it matches a real run (which excludes them via the status='DONE' write).
+      const dryRunArchivedIds = new Set<string>();
 
       console.log(`\n🌙 Processing nightly schedule for user ${userId} (${timezone}) — runId=${runId} trigger=${triggerSource}`);
 
@@ -613,6 +620,7 @@ serve(async (req) => {
               continue;
             }
             if (dryRun) {
+              dryRunArchivedIds.add(stale.id); // a real run would archive→DONE; exclude from dryRun candidates
               archivedStaleCount++;
               continue;
             }
@@ -658,6 +666,7 @@ serve(async (req) => {
         if (!staleEduError && staleEduTasks && staleEduTasks.length > 0) {
           for (const stale of staleEduTasks) {
             if (dryRun) {
+              dryRunArchivedIds.add(stale.id); // exclude would-be-archived edu tasks from dryRun candidates
               archivedEduCount++;
               continue;
             }
@@ -1054,7 +1063,8 @@ serve(async (req) => {
 
           const readyIds = (readyUpNextTasks || []).map((t: any) => t.id);
           const allCandidateIds = [...new Set([...mappedIds, ...readyIds])]
-            .filter(id => !scheduledTaskIds.has(id)); // Exclude already-scheduled
+            .filter(id => !scheduledTaskIds.has(id))   // Exclude already-scheduled
+            .filter(id => !dryRunArchivedIds.has(id)); // dryRun: exclude tasks a real run would archive (empty in real mode)
 
           if (allCandidateIds.length === 0) {
             console.log(`    ℹ️ No candidates remaining for ${targetISO}`);
@@ -1091,9 +1101,14 @@ serve(async (req) => {
             .map(task => {
               let score = priorityWeight[task.priority] || 1;
               
-              // Explicit user priority — base +10, rank bonus up to +5
+              // Explicit user priority. priority-rank (default): base +10, rank bonus up to +5 (dominant).
+              // composite: a SMALL differentiator (+2 base, up to +1 rank) so recency/deadline/finance lead.
               if ((task as any).is_priority) {
-                score += 10 + Math.max(5 - ((task as any).priority_rank ?? 0), 0);
+                if (scoringModel === 'composite') {
+                  score += 2 + Math.max(5 - ((task as any).priority_rank ?? 0), 0) * 0.2;
+                } else {
+                  score += 10 + Math.max(5 - ((task as any).priority_rank ?? 0), 0);
+                }
               }
               
               // Topic-mapped — organizational nudge only (not the same as user priority)
@@ -1191,9 +1206,23 @@ serve(async (req) => {
               return aDue - bDue;
             }
 
-            // Everyone else (Tier C + non-assignment) competes on the same comparator
+            // Everyone else (Tier C + non-assignment). Tier A/B above is UNCHANGED in both modes.
             const aPri = (a as any).is_priority ? 1 : 0;
             const bPri = (b as any).is_priority ? 1 : 0;
+            if (scoringModel === 'composite') {
+              // COMPOSITE: composite score leads (recency/deadline/finance already baked into it);
+              // is_priority / priority_rank are only lower tiebreakers.
+              if (b.score !== a.score) return b.score - a.score;
+              if (aPri !== bPri) return bPri - aPri;
+              const aRankC = (a as any).priority_rank ?? 9999;
+              const bRankC = (b as any).priority_rank ?? 9999;
+              if (aRankC !== bRankC) return aRankC - bRankC;
+              if (a.due_date && b.due_date) return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
+              if (a.due_date) return -1;
+              if (b.due_date) return 1;
+              return 0;
+            }
+            // PRIORITY-RANK (default) — unchanged: is_priority → priority_rank → score → due ASC NULLS LAST
             if (aPri !== bPri) return bPri - aPri;
             if (aPri && bPri) {
               const aRank = (a as any).priority_rank ?? 9999;
@@ -1873,11 +1902,13 @@ serve(async (req) => {
             topUpPlaced,
             dailyAssignmentCount,
           },
+          scoringModel, // auditable: which ordering ran ('priority-rank' default | 'composite')
           // DRY-RUN: nothing was persisted; expose the computed plan + would-clear set.
           ...(dryRun ? {
             dryRun: true,
             plan: dryRunPlan,
             clearedCount: dryRunClearedIds.size,
+            archivedCount: dryRunArchivedIds.size,
             cleared: [...dryRunClearedIds],
             steps,
           } : {}),
@@ -1909,6 +1940,7 @@ serve(async (req) => {
 
     return new Response(JSON.stringify({
       success: true,
+      scoringModel,
       ...(dryRun ? { dryRun: true } : {}),
       results,
       processingTimeMs: totalTime,
