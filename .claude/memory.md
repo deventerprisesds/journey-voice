@@ -148,3 +148,32 @@ real button (parse_and_create → batch targetDate=today allowOverflow=true → 
 correct this 3x. NEXT (awaiting user go-ahead): fix the double-booking in this path — block existing tasks
 + external_calendar_events as busy, require end_times, and windows-first→displace lower-priority originals
 (complaint #2) instead of rejecting; dry-run before/after.
+
+## ✅ Conflict-aware apply for parse_and_create_tasks (the "Add a task for today" BUTTON) — 2026-08-11
+Flag `args.conflictAware:true` (default off = byte-identical). Commits 4ef7b8c (feat) + 0d9bb68 (fix),
+deployed to live via deploy-supabase-functions.yml (function_name=execute-tool, branch
+claude/huddle-journey-integration-xokgv1). Solves the two complaints: recency/"work-on-these-today"
+items get scheduled TODAY (windows-first, flexible round) instead of the AI slotter pushing overflow to
+next day, and no double-booking / external events blocked.
+- **How:** after the real batch-calendar-scheduler runs (AI stays central), the apply step loads the live
+  busy set (existing is_scheduled tasks + non-all-day external_calendar_events) and places every created
+  task via: (1) honor AI slot if free; (2) windows-first (user_scheduling_prefs config via resolveConfig,
+  data-driven — NOT keyword rules); (3) flexible round anywhere free 06:00–22:00 local today;
+  (4) displacement — earliest slot whose ONLY occupants are existing TASKS the incoming STRICTLY outranks
+  (LOW<MED<HIGH<URGENT, tie is_priority); events + already-placed + equal/higher tasks are HARD, never
+  cleared; ALL soft occupants of the taken slot are vacated together (tagged displaced-<date>, status
+  UP_NEXT); (5) overflow surfaced. end_time ALWAYS = start+estimate. dryRun computes it all ZERO-write.
+- **BUG caught by ground-truth (why 0d9bb68):** first cut displaced ONE occupant of a multi-occupant slot
+  and placed anyway → live overlap (an URGENT item landed on a still-present task AND an inviolable event).
+  Fixed with findSlotWithDisplacement (hard vs soft blockers, typed event/task/placed). RE-verified live.
+- **Proven live (dryRun, user a3378f93, 08-11):** congested all-LOW 10-task input → packs the 2 real free
+  gaps (3 placed, no overlap), overflow the rest, 0 displaced (LOW can't outrank existing MED — correct).
+  URGENT/HIGH 3-task input → Submit 18:00 (flexible gap), Wire 19:00 (displaces LOW "Review 10 rules" +
+  MED "Research Slack" — BOTH occupants of 19-20), Finalize 21:00 (skips the 20:00 "Pack bags" EVENT →
+  correctly can't take the event slot, takes 21:00 displacing MED "Find sample"). Overlap SQL against the
+  true busy set (excluding displaced ids): overlapping_tasks=0, overlapping_events=0, overlapping_placed=0
+  for all 3. Zero-write confirmed: displaced-3 still is_scheduled=true, 0 test tasks created, 0 displaced tags.
+- **Note (follow-on, not a bug):** the parser assigns LOW to unqualified "add these for today" items, so
+  they won't displace existing MED originals — the "signaled for today = important" intent would need the
+  parser/UI to raise their priority for displacement to fire on plain phrasing. Flag stays off until the
+  user turns it on (QuickTaskInput would pass conflictAware:true).
