@@ -112,3 +112,18 @@ supabase.co; DB→fn works: `select net.http_post(...)` then read `net._http_res
   "before" the redesign must fix.
 NEXT: implement switchable composite sort + same-day flexibility nudge behind flags; dry-run before/after to
 show those due-today items move to 08-11.
+
+## ✅ Composite scoring switch VALIDATED (2026-08-11) — recency fix works through the real pipeline
+Commit 925d9df (deploy run 31525401213). `body.scoringModel:'composite'|'priority-rank'` (default priority-rank
+= byte-identical). Composite = is_priority bonus +10/+5→+2/+1 + comparator orders by composite score first.
+Before/after dryRun (default 563238 vs composite 563239, real AI, both 36 tasks):
+- **Due-today items bubble up:** Make Amex payment 08-14→**08-11**; Complete MIT 08-14→**08-11**; Reserve hotel
+  08-13→**08-11**; Confirm MIT/Push packets/Review rules/Style hair 08-15→08-13; Take out braids 08-16→08-13.
+- **Default BYTE-IDENTICAL:** 08-11 SCORING_AUDIT top-10 hash identical old(562911) vs new(563238) = 35685991…
+- **ZERO scheduler writes:** tasks.max(updated_at) pinned 13:24:36, history 912, notifications 8553, and 0
+  nightly_schedule_built/reschedule_deferred rows since baseline. (Raw activity_log grew from LIVE-app
+  push/alarm/chat noise — a3378f93 is an active production account — NOT from the dryRun. Lesson: on a live
+  account, zero-write = tasks/history/notifications + scheduler-attributable activity rows, not raw activity count.)
+Not all due-today LIFE items reach 08-11 (LIFE window = mornings/evenings only, fills up) → that's what the
+FLEXIBILITY NUDGE (next lever) addresses: relax same-day-signaled items to flexible so they take today's daytime,
+displacing lower-priority originals. Independent verifier running.
