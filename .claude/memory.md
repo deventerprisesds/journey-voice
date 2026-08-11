@@ -96,3 +96,19 @@ search memory for "faithful dryRun harness".
      opt-in + read-only, so leaving it deployed is harmless if reverting isn't urgent.
 **Suspect this change if:** the nightly build ever behaves oddly → confirm by checking whether callers
 pass `dryRun` (only an explicit `{dryRun:true}` invocation changes behavior; cron never sets it).
+
+## ✅ dryRun harness VALIDATED live (2026-08-11) — faithful + zero-write PROVEN
+Deployed nightly-schedule-builder (branch, run 31515722282) → invoked via pg_net (egress blocks
+supabase.co; DB→fn works: `select net.http_post(...)` then read `net._http_response`; anon key as Bearer).
+- **Zero writes PROVEN ×2** (singleDay + full week): tasks count/max(updated_at)/scheduled, task_schedule_history,
+  activity_log, scheduled_notifications ALL byte-identical before/after (257 / 2026-08-11 13:24:36 / 35 / 912 /
+  51684 / 8553). The AI slotter fired for real; nothing persisted.
+- **Faithful:** full-week dryRun placed 36 tasks across 08-11..08-15, both main+reshuffle passes; 08-11 is CLEAN
+  (church 07:30, pack-kids 08:30, consulting 10-12, biz-arch 12-14, nexus 14-16, AI-cert 16-17, research 19:00) —
+  NO 20:00 stacking (that was the scrapped toy's artifact; prod works, as the user said).
+- **Reproduces the reported RECENCY BUG:** fresh due-TODAY items pushed days out — "Make Amex payment due today"
+  → 08-13, Complete MIT → 08-13, funding → 08-14, hair/braids → 08-14, packets/Review → 08-15. i.e. the real
+  is_priority→rank→score sort buries fresh due-today items under old priority ventures. This is the faithful
+  "before" the redesign must fix.
+NEXT: implement switchable composite sort + same-day flexibility nudge behind flags; dry-run before/after to
+show those due-today items move to 08-11.
