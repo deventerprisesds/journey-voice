@@ -335,6 +335,8 @@ serve(async (req) => {
         // ==========================================
         // STEP 0: SYNC ASSIGNMENTS (EMBA + MIT)
         // ==========================================
+        // DRY-RUN: assignment sync CREATES/ARCHIVES tasks — skip it (no writes).
+        if (!dryRun) {
         try {
           console.log(`  📚 Running assignment sync for ${userId}...`);
           const syncResponse = await fetch(
@@ -356,6 +358,7 @@ serve(async (req) => {
           }
         } catch (syncErr) {
           console.warn(`  ⚠️ Assignment sync error (non-fatal):`, syncErr);
+        }
         }
 
         // ==========================================
@@ -393,7 +396,7 @@ serve(async (req) => {
               action: 'rollover',
               pushed_count: (task.pushed_count || 0) + 1,
             }));
-          if (historyRows.length > 0) {
+          if (!dryRun && historyRows.length > 0) {
             const { error: histError } = await supabase
               .from('task_schedule_history')
               .insert(historyRows);
@@ -405,6 +408,12 @@ serve(async (req) => {
           }
 
           for (const task of expiredTasks) {
+            // In dryRun these tasks WOULD be cleared → treat as unscheduled candidates.
+            dryRunClearedIds.add(task.id);
+            if (dryRun) {
+              rolledOverCount++;
+              continue;
+            }
             // Clear scheduling but preserve status so they flow into candidate pool
             const { error: updateError } = await supabase
               .from('tasks')
@@ -446,10 +455,16 @@ serve(async (req) => {
 
           let clearedFutureCount = 0;
           if (!futureError && futureTasks && futureTasks.length > 0) {
-            // Delete app-originated calendar events before clearing
-            await deleteAppOriginatedEvents(supabase, userId, futureTasks);
+            // Delete app-originated calendar events before clearing (skipped in dryRun — it mutates)
+            if (!dryRun) await deleteAppOriginatedEvents(supabase, userId, futureTasks);
 
             for (const ft of futureTasks) {
+              // In dryRun these WOULD be cleared → treat as unscheduled candidates.
+              dryRunClearedIds.add(ft.id);
+              if (dryRun) {
+                clearedFutureCount++;
+                continue;
+              }
               const { error: clearError } = await supabase
                 .from('tasks')
                 .update({
@@ -485,10 +500,16 @@ serve(async (req) => {
 
           let clearedTodayCount = 0;
           if (!todayError && todayTasks && todayTasks.length > 0) {
-            // Delete app-originated calendar events before clearing
-            await deleteAppOriginatedEvents(supabase, userId, todayTasks);
+            // Delete app-originated calendar events before clearing (skipped in dryRun — it mutates)
+            if (!dryRun) await deleteAppOriginatedEvents(supabase, userId, todayTasks);
 
             for (const ft of todayTasks) {
+              // In dryRun these WOULD be cleared → treat as unscheduled candidates.
+              dryRunClearedIds.add(ft.id);
+              if (dryRun) {
+                clearedTodayCount++;
+                continue;
+              }
               const { error: clearError } = await supabase
                 .from('tasks')
                 .update({
@@ -507,8 +528,8 @@ serve(async (req) => {
             console.log(`  🔄 [single-day] Cleared ${clearedTodayCount} today-scheduled tasks for rebuild`);
           }
 
-          // Also purge pending notifications for today (timezone-safe bounds)
-          try {
+          // Also purge pending notifications for today (timezone-safe bounds) — skipped in dryRun
+          if (!dryRun) try {
             await supabase
               .from('scheduled_notifications')
               .delete()
@@ -546,15 +567,19 @@ serve(async (req) => {
               action: 'completed',
               pushed_count: 0,
             }));
-          if (doneHistory.length > 0) {
+          if (!dryRun && doneHistory.length > 0) {
             await supabase.from('task_schedule_history').insert(doneHistory);
           }
 
           for (const dt of doneTasks) {
-            await supabase.from('tasks').update({
-              start_time: null, end_time: null, is_scheduled: false,
-              updated_at: now.toISOString(),
-            }).eq('id', dt.id);
+            // In dryRun these WOULD be cleared → remove from busy-slot capacity.
+            dryRunClearedIds.add(dt.id);
+            if (!dryRun) {
+              await supabase.from('tasks').update({
+                start_time: null, end_time: null, is_scheduled: false,
+                updated_at: now.toISOString(),
+              }).eq('id', dt.id);
+            }
           }
           console.log(`  🧹 Cleared scheduling from ${doneTasks.length} completed tasks`);
         }
@@ -585,6 +610,10 @@ serve(async (req) => {
             // instead of being silently archived to DONE and lost.
             if ((stale as any).is_priority === true || stale.priority === 'HIGH' || stale.priority === 'URGENT') {
               console.log(`  🛡️ Kept important stale task (not archived): "${stale.title}" (pushed ×${stale.pushed_count}, due ${stale.due_date}, priority ${stale.priority}${(stale as any).is_priority ? ', on priority lane' : ''})`);
+              continue;
+            }
+            if (dryRun) {
+              archivedStaleCount++;
               continue;
             }
             const { error: archError } = await supabase
@@ -628,6 +657,10 @@ serve(async (req) => {
         let archivedEduCount = 0;
         if (!staleEduError && staleEduTasks && staleEduTasks.length > 0) {
           for (const stale of staleEduTasks) {
+            if (dryRun) {
+              archivedEduCount++;
+              continue;
+            }
             const { error: archError } = await supabase
               .from('tasks')
               .update({
@@ -653,7 +686,8 @@ serve(async (req) => {
 
         // PULL EXTERNAL CALENDAR EVENTS BEFORE SCHEDULING
         // ==========================================
-        try {
+        // DRY-RUN: calendar-delta-sync writes external_calendar_events — skip it (no writes).
+        if (!dryRun) try {
           console.log(`[nightly-builder] Invoking calendar-delta-sync for user ${userId}...`);
           const { error: syncError } = await supabase.functions.invoke('calendar-delta-sync', {
             body: { user_id: userId }
@@ -744,7 +778,7 @@ serve(async (req) => {
 
             const bounds = _ldub(isoDay, timezone);
             const { data: dayScheduled } = await supabase
-              .from('tasks').select('start_time, end_time, estimate_minutes')
+              .from('tasks').select('id, start_time, end_time, estimate_minutes')
               .eq('user_id', userId).eq('is_scheduled', true)
               .gte('start_time', bounds.start).lt('start_time', bounds.end);
             const { data: dayEvents } = await supabase
@@ -752,8 +786,12 @@ serve(async (req) => {
               .eq('user_id', userId).gte('start_time', bounds.start).lt('start_time', bounds.end)
               .eq('is_all_day', false);
             const accumulated = accumulatedBusySlots.filter(s => s.start_time >= bounds.start && s.start_time < bounds.end);
+            // DRY-RUN: drop tasks that WOULD be cleared so they don't count as busy.
+            const dayScheduledBusy = dryRun
+              ? (dayScheduled || []).filter((t: any) => !dryRunClearedIds.has(t.id))
+              : (dayScheduled || []);
             const items = [
-              ...(dayScheduled || []),
+              ...dayScheduledBusy,
               ...(dayEvents || []).map(e => ({ ...e, estimate_minutes: undefined })),
               ...accumulated.map(s => ({ ...s, estimate_minutes: undefined })),
             ];
@@ -783,7 +821,7 @@ serve(async (req) => {
 
               const bounds = _ldub(isoDay, timezone);
               const { data: dayScheduled } = await supabase
-                .from('tasks').select('start_time, end_time, estimate_minutes')
+                .from('tasks').select('id, start_time, end_time, estimate_minutes')
                 .eq('user_id', userId).eq('is_scheduled', true)
                 .gte('start_time', bounds.start).lt('start_time', bounds.end);
               const { data: dayEvents } = await supabase
@@ -791,11 +829,15 @@ serve(async (req) => {
                 .eq('user_id', userId).gte('start_time', bounds.start).lt('start_time', bounds.end)
                 .eq('is_all_day', false);
               const accumulated = accumulatedBusySlots.filter(s => s.start_time >= bounds.start && s.start_time < bounds.end);
+              // DRY-RUN: drop tasks that WOULD be cleared so they don't count as busy.
+              const dayScheduledBusy = dryRun
+                ? (dayScheduled || []).filter((t: any) => !dryRunClearedIds.has(t.id))
+                : (dayScheduled || []);
               const flexActive = {
                 flexible: { start: flexWindow.start, end: flexWindow.end, totalMinutes: (flexWindow.end - flexWindow.start) * 60 }
               };
               const items = [
-                ...(dayScheduled || []),
+                ...dayScheduledBusy,
                 ...(dayEvents || []).map(e => ({ ...e, estimate_minutes: undefined })),
                 ...accumulated.map(s => ({ ...s, estimate_minutes: undefined })),
               ];
@@ -819,7 +861,8 @@ serve(async (req) => {
           targetISO: string,
           caps: Record<string, WindowCapacity>,
           active: Record<string, { start: number; end: number; totalMinutes: number }>,
-          flexibleOverride: boolean
+          flexibleOverride: boolean,
+          passLabel: 'tierA' | 'topup' = 'tierA'
         ): Promise<boolean> {
           const payload = {
             tasks: [{
@@ -851,6 +894,26 @@ serve(async (req) => {
             const result = await resp.json();
             const slot = (result.scheduled || [])[0];
             if (!slot?.start_time || !slot?.end_time || !slot?.taskId) return false;
+            // DRY-RUN: skip the write, keep all in-memory bookkeeping, collect the plan.
+            if (dryRun) {
+              scheduledTaskIds.add(slot.taskId);
+              scheduledTitles.add(task.title);
+              accumulatedBusySlots.push({ start_time: slot.start_time, end_time: slot.end_time });
+              dailyAssignmentCount[targetISO] = (dailyAssignmentCount[targetISO] || 0) + 1;
+              dryRunPlan.push({
+                taskId: slot.taskId,
+                title: task.title,
+                day: targetISO,
+                start_time: slot.start_time,
+                end_time: slot.end_time,
+                category: task.category ?? null,
+                score: null,
+                tier: assignmentTier[task.id] ?? 'A',
+                window: flexibleOverride ? 'flexible' : null,
+                pass: passLabel,
+              });
+              return true;
+            }
             const { error } = await supabase.from('tasks').update({
               start_time: slot.start_time,
               end_time: slot.end_time,
@@ -915,7 +978,7 @@ serve(async (req) => {
 
           const { data: dayScheduled } = await supabase
             .from('tasks')
-            .select('start_time, end_time, estimate_minutes')
+            .select('id, start_time, end_time, estimate_minutes')
             .eq('user_id', userId)
             .eq('is_scheduled', true)
             .gte('start_time', dayBounds.start)
@@ -934,8 +997,13 @@ serve(async (req) => {
           // Use dayBounds for proper timezone-aware filtering instead of UTC string prefix match
           const dayBusySlots = accumulatedBusySlots.filter(s => s.start_time >= dayBounds.start && s.start_time < dayBounds.end);
 
+          // DRY-RUN: drop tasks that WOULD be cleared so they don't count as busy.
+          const dayScheduledBusy = dryRun
+            ? (dayScheduled || []).filter((t: any) => !dryRunClearedIds.has(t.id))
+            : (dayScheduled || []);
+
           const allScheduledItems = [
-            ...(dayScheduled || []),
+            ...dayScheduledBusy,
             ...(dayEvents || []).map(e => ({ ...e, estimate_minutes: undefined })),
             ...dayBusySlots.map(s => ({ ...s, estimate_minutes: undefined })),
           ];
@@ -971,12 +1039,15 @@ serve(async (req) => {
 
           const mappedIds = (mappedTasks || []).map((t: any) => t.id);
 
-          const { data: readyUpNextTasks } = await supabase
+          // DRY-RUN: drop the is_scheduled=false filter so the candidate pool reproduces a real run
+          // (where rollover/future-clear/done-clear would have unscheduled these tasks first).
+          let readyUpNextQuery = supabase
             .from('tasks')
             .select('id')
             .eq('user_id', userId)
-            .in('status', ['READY', 'UP_NEXT', 'TODO', 'BACKLOG'])
-            .is('is_scheduled', false)
+            .in('status', ['READY', 'UP_NEXT', 'TODO', 'BACKLOG']);
+          if (!dryRun) readyUpNextQuery = readyUpNextQuery.is('is_scheduled', false);
+          const { data: readyUpNextTasks } = await readyUpNextQuery
             .is('completed_at', null)
             .not('title', 'ilike', '%Test Task%')
             .not('tags', 'cs', '{parking-lot}'); // parking-lot opts OUT of nightly scheduling (ACT-13)
@@ -991,13 +1062,15 @@ serve(async (req) => {
             continue;
           }
 
-          const { data: candidates } = await supabase
+          // DRY-RUN: drop the is_scheduled=false filter (see readyUpNextTasks note above).
+          let candidatesQuery = supabase
             .from('tasks')
             .select('id, title, category, priority, estimate_minutes, due_date, pushed_count, status, assignment_id, is_priority, priority_rank, created_at')
             .in('id', allCandidateIds)
             .not('status', 'in', '("DONE","BLOCKED")')
-            .not('title', 'ilike', '%Test Task%')
-            .is('is_scheduled', false)
+            .not('title', 'ilike', '%Test Task%');
+          if (!dryRun) candidatesQuery = candidatesQuery.is('is_scheduled', false);
+          const { data: candidates } = await candidatesQuery
             .is('completed_at', null)
             .not('tags', 'cs', '{parking-lot}') // parking-lot opts OUT of nightly scheduling (ACT-13)
             .order('created_at', { ascending: true });
@@ -1358,6 +1431,29 @@ serve(async (req) => {
             const candidate = selectedCandidates.find(c => c.id === slot.taskId);
             const preScheduleStatus = candidate?.status || 'TODO';
 
+            // DRY-RUN: skip the write, keep all in-memory bookkeeping, collect the plan.
+            if (dryRun) {
+              actuallyScheduled++;
+              committedIds.add(slot.taskId);
+              scheduledTaskIds.add(slot.taskId);
+              scheduledTitles.add(candidate?.title || '');
+              accumulatedBusySlots.push({ start_time: slot.start_time, end_time: slot.end_time });
+              const placementRec = dayPlacements.find(p => p.taskId === slot.taskId);
+              dryRunPlan.push({
+                taskId: slot.taskId,
+                title: candidate?.title ?? null,
+                day: targetISO,
+                start_time: slot.start_time,
+                end_time: slot.end_time,
+                category: (candidate as any)?.category ?? null,
+                score: (candidate as any)?.score ?? null,
+                tier: (candidate as any)?.assignment_id ? (assignmentTier[slot.taskId] || 'C') : null,
+                window: (placementRec as any)?.window ?? null,
+                pass: 'main',
+              });
+              continue;
+            }
+
             const { error: scheduleError } = await supabase
               .from('tasks')
               .update({
@@ -1468,6 +1564,29 @@ serve(async (req) => {
                     if (!slot.taskId || !slot.start_time || !slot.end_time) continue;
                     const candidate = retryEligible.find(c => c.id === slot.taskId);
                     const preScheduleStatus = candidate?.status || 'TODO';
+                    // DRY-RUN: skip the write, keep all in-memory bookkeeping, collect the plan.
+                    if (dryRun) {
+                      reshuffleCommitted++;
+                      actuallyScheduled++;
+                      committedIds.add(slot.taskId);
+                      scheduledTaskIds.add(slot.taskId);
+                      scheduledTitles.add(candidate?.title || '');
+                      accumulatedBusySlots.push({ start_time: slot.start_time, end_time: slot.end_time });
+                      dryRunPlan.push({
+                        taskId: slot.taskId,
+                        title: candidate?.title ?? null,
+                        day: targetISO,
+                        start_time: slot.start_time,
+                        end_time: slot.end_time,
+                        category: (candidate as any)?.category ?? null,
+                        score: (candidate as any)?.score ?? null,
+                        tier: (candidate as any)?.assignment_id ? (assignmentTier[slot.taskId] || 'C') : null,
+                        window: null,
+                        pass: 'reshuffle',
+                      });
+                      console.log(`      🔁 [Reshuffle] "${candidate?.title}" placed in retry window (dry-run)`);
+                      continue;
+                    }
                     const { error: retryErr } = await supabase
                       .from('tasks')
                       .update({
@@ -1525,7 +1644,7 @@ serve(async (req) => {
               Date.now(),
             );
 
-            if (reshuffleDeferred.length > 0) {
+            if (!dryRun && reshuffleDeferred.length > 0) {
               try {
                 await supabase.from('activity_log').insert({
                   user_id: userId,
@@ -1542,7 +1661,9 @@ serve(async (req) => {
           // The optimistic in-loop increments can drift from reality (AI drops, retries).
           // Reconcile by querying the actual count of assignment-linked tasks placed today.
           // ==========================================
-          try {
+          // DRY-RUN: skip DB reconciliation — nothing was written, so the DB count reflects the
+          // pre-run (uncleared) state and would clobber the optimistic in-memory plan count.
+          if (!dryRun) try {
             const dayBoundsForCount = _ldub(targetISO, timezone);
             const { count: realAssignmentCount } = await supabase
               .from('tasks')
@@ -1592,15 +1713,19 @@ serve(async (req) => {
 
             const bounds = _ldub(isoDay, timezone);
             const { data: dayScheduled2 } = await supabase
-              .from('tasks').select('start_time, end_time, estimate_minutes')
+              .from('tasks').select('id, start_time, end_time, estimate_minutes')
               .eq('user_id', userId).eq('is_scheduled', true)
               .gte('start_time', bounds.start).lt('start_time', bounds.end);
             const { data: dayEvents2 } = await supabase
               .from('external_calendar_events').select('start_time, end_time')
               .eq('user_id', userId).gte('start_time', bounds.start).lt('start_time', bounds.end)
               .eq('is_all_day', false);
+            // DRY-RUN: drop tasks that WOULD be cleared so they don't count as busy.
+            const dayScheduled2Busy = dryRun
+              ? (dayScheduled2 || []).filter((t: any) => !dryRunClearedIds.has(t.id))
+              : (dayScheduled2 || []);
             const items = [
-              ...(dayScheduled2 || []),
+              ...dayScheduled2Busy,
               ...(dayEvents2 || []).map(e => ({ ...e, estimate_minutes: undefined })),
             ];
             let caps = computeUsedMinutes(items, active, isoDay, timezone);
@@ -1612,7 +1737,7 @@ serve(async (req) => {
               const preferred = getPreferredWindows(task.category, categoryMappings, activeNames);
               const fits = preferred.some(w => (caps[w]?.remainingMinutes || 0) >= duration);
               if (!fits) continue;
-              const placed = await callTierAScheduler(task, isoDay, caps, active, false);
+              const placed = await callTierAScheduler(task, isoDay, caps, active, false, 'topup');
               if (placed) {
                 topUpPlaced++;
                 topUpQueue.splice(i, 1);
@@ -1694,7 +1819,7 @@ serve(async (req) => {
           calendarStatus = { state: 'query_failed', events_today: 0, connection_count: 0, sources: [], error: String(e?.message ?? e) };
         }
 
-        await supabase.from('activity_log').insert({
+        if (!dryRun) await supabase.from('activity_log').insert({
           user_id: userId,
           activity_type: 'nightly_schedule_built',
           status: 'completed',
@@ -1748,6 +1873,14 @@ serve(async (req) => {
             topUpPlaced,
             dailyAssignmentCount,
           },
+          // DRY-RUN: nothing was persisted; expose the computed plan + would-clear set.
+          ...(dryRun ? {
+            dryRun: true,
+            plan: dryRunPlan,
+            clearedCount: dryRunClearedIds.size,
+            cleared: [...dryRunClearedIds],
+            steps,
+          } : {}),
         };
 
       } catch (userError) {
@@ -1756,8 +1889,8 @@ serve(async (req) => {
         console.error(`❌ Error processing user ${userId}: ${errMsg}`);
         console.error(`  Stack trace: ${errStack}`);
         
-        // Log the failure so it's visible in activity_log
-        try {
+        // Log the failure so it's visible in activity_log (skipped in dryRun — no writes)
+        if (!dryRun) try {
           await supabase.from('activity_log').insert({
             user_id: userId,
             activity_type: 'nightly_schedule_built',
@@ -1776,6 +1909,7 @@ serve(async (req) => {
 
     return new Response(JSON.stringify({
       success: true,
+      ...(dryRun ? { dryRun: true } : {}),
       results,
       processingTimeMs: totalTime,
     }), {
