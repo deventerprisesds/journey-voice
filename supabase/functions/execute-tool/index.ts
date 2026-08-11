@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { normalizeDueDate, normalizeDateTime, getTodayInTimezone, formatInTimezone } from "../_shared/timezone.ts";
+import { normalizeDueDate, normalizeDateTime, getTodayInTimezone, formatInTimezone, zonedTimeToUtc } from "../_shared/timezone.ts";
 import { getToolDefinitions } from "../_shared/tool-definitions.ts";
 import { getTopicGroupsManual, WINDOW_RANGES, CATEGORY_WINDOW_MAPPING } from "../_shared/call-context-builder.ts";
 import { resolveConfig, validateTaskWindow } from "../_shared/scheduling-defaults.ts";
@@ -1220,10 +1220,50 @@ function getEndOfSundayISO(tz: string): string {
   return new Date(sundayMs).toISOString().slice(0, 10); // YYYY-MM-DD
 }
 
+// ── Conflict-aware placement engine (used only when parse_and_create_tasks is called with
+// conflictAware:true). Pure/deterministic given its inputs; performs NO I/O so it is trivially
+// dryRun-safe (the caller does the reads and the guarded writes). ────────────────────────────
+const PRIORITY_ORDER: Record<string, number> = { LOW: 0, MEDIUM: 1, HIGH: 2, URGENT: 3 };
+
+/** Higher number = more important. Tie-break on is_priority (a "priority-board" item outranks a
+ *  same-enum peer). Used for both placement order and displacement eligibility. */
+function priorityRank(priority: string | null | undefined, isPriority?: boolean): number {
+  const base = PRIORITY_ORDER[(priority || 'MEDIUM').toUpperCase()] ?? 1;
+  return base * 2 + (isPriority ? 1 : 0);
+}
+
+/** Half-open [start,end) overlap — touching intervals (a.end === b.start) do NOT overlap. */
+function intervalsOverlap(aStart: number, aEnd: number, bStart: number, bEnd: number): boolean {
+  return aStart < bEnd && bStart < aEnd;
+}
+
+interface Blocker { start: number; end: number; }
+interface WinRange { name: string; start: number; end: number; }
+
+/** Earliest [cursor, cursor+durMs) that fits inside one of `windows` (each already clamped to the
+ *  target day + floor), avoiding every blocker. Advances the cursor monotonically to a blocker's
+ *  end on each collision, so it always terminates (finite blockers, bounded by window end). */
+function findFreeSlot(windows: WinRange[], durMs: number, blockers: Blocker[]): { start: number; end: number; window: string } | null {
+  const sorted = [...windows].sort((a, b) => a.start - b.start);
+  for (const win of sorted) {
+    let cursor = win.start;
+    // guard against pathological input
+    let iterations = 0;
+    while (cursor + durMs <= win.end && iterations < 1000) {
+      iterations++;
+      const end = cursor + durMs;
+      const hit = blockers.find(b => intervalsOverlap(cursor, end, b.start, b.end));
+      if (!hit) return { start: cursor, end, window: win.name };
+      cursor = Math.max(hit.end, cursor + 1); // strictly advance → terminates
+    }
+  }
+  return null;
+}
+
 async function parseAndCreateTasks(
   supabase: any,
   userId: string,
-  args: { text: string; target_date?: string; auto_schedule?: boolean; source_topic_id?: string; default_status?: string; dryRun?: boolean },
+  args: { text: string; target_date?: string; auto_schedule?: boolean; source_topic_id?: string; default_status?: string; dryRun?: boolean; conflictAware?: boolean },
   timezone?: string
 ): Promise<ExecuteToolResponse> {
   const tz = timezone || 'America/New_York';
@@ -1233,6 +1273,13 @@ async function parseAndCreateTasks(
   // Outlook event, no topic mapping. Returns the computed PLAN so we can see exactly what the button
   // would produce. Only the literal `true` enables it.
   const dryRun = args.dryRun === true;
+  // CONFLICT-AWARE apply (opt-in). When true, the apply step guarantees a no-double-book invariant
+  // against the LIVE busy set (existing scheduled tasks + external calendar events), places the
+  // scheduler's overflow "flexibly" TODAY instead of pushing it to another day, and — when the day is
+  // full — displaces the lowest-priority ORIGINAL board task the incoming item strictly outranks
+  // (never an external event, never an equal/higher-priority task). Default false = byte-identical to
+  // the current apply loop. Fully computed with ZERO writes under dryRun.
+  const conflictAware = args.conflictAware === true;
   const hasThisWeek = /this\s+week/i.test(args.text);
   // Detect any explicit date phrase — used to avoid inventing a deadline for priority tasks
   const hasDatePhrase = /\b(today|tonight|tomorrow|this\s+week|next\s+week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(args.text);
@@ -1471,6 +1518,8 @@ async function parseAndCreateTasks(
     });
     const scheduledResults: Array<{ title: string; time: string; start_time?: string; end_time?: string; reasoning?: string | null }> = [];
     let rejectedSlots: any[] = []; // batch-scheduler overflow/rejects (surfaced in the dry-run plan)
+    // conflictAware-only: originals bumped off today so a higher-priority signaled item could take the slot
+    const displacedResults: Array<{ id: string; title: string; priority: string; freed_for: string }> = [];
 
     if (autoSchedule && unscheduledTasks.length > 0) {
       console.log(`[PARSE_AND_CREATE] Auto-scheduling ${unscheduledTasks.length} tasks...`);
@@ -1507,9 +1556,182 @@ async function parseAndCreateTasks(
           console.log('[PARSE_AND_CREATE] Batch scheduler result:', batchResult);
           rejectedSlots = batchResult.rejected || []; // capture overflow/rejects for the plan
           
-          // Apply scheduled times to tasks (already normalized by batch-calendar-scheduler)
           const todayInTz = new Date().toLocaleDateString('en-CA', { timeZone: tz });
-          
+
+          if (conflictAware) {
+            // ── CONFLICT-AWARE APPLY ─────────────────────────────────────────────────────────
+            // Guarantees a no-double-book invariant against the live busy set, places the AI
+            // scheduler's overflow "flexibly" TODAY (windows-first) instead of bumping it to another
+            // day, and — only when the day is genuinely full — displaces the lowest-priority ORIGINAL
+            // board task the incoming item strictly outranks. External events are never touched.
+            // The scheduler's own `rejected` set is an INPUT we re-place here, not final overflow —
+            // reset it so it reflects only what conflict-aware truly could not fit.
+            rejectedSlots = [];
+            const effTargetDate = targetDate || today;
+            const isToday = effTargetDate === todayInTz;
+            const pad = (n: number) => String(n).padStart(2, '0');
+            const msAt = (h: number, m = 0) => new Date(zonedTimeToUtc(effTargetDate, `${pad(h)}:${pad(m)}:00`, tz)).getTime();
+            const dayStartMs = msAt(6);          // no placement before 06:00 local
+            const dayEndMs = msAt(22);           // no placement after 22:00 local
+            const floorMs = isToday ? Math.max(dayStartMs, Date.now()) : dayStartMs;
+            const targetWeekday = new Date(`${effTargetDate}T12:00:00Z`).getUTCDay(); // 0=Sun
+
+            // Resolve the SAME window/category config the AI slotter used (data-driven, not hardcoded).
+            const { data: prefRow } = await supabase
+              .from('user_scheduling_prefs').select('config').eq('user_id', userId).single();
+            const { timeWindows, categoryMappings } = resolveConfig(prefRow?.config || null);
+
+            // Live busy set for the target day: existing scheduled tasks + non-all-day external events.
+            const dayLoStr = new Date(dayStartMs).toISOString();
+            const dayHiStr = new Date(dayEndMs).toISOString();
+            const createdIds = new Set(createdTasks.map((t: any) => t.id));
+            const [existingTasksRes, eventsRes] = await Promise.all([
+              supabase.from('tasks')
+                .select('id, title, start_time, end_time, priority, is_priority, category, status, tags')
+                .eq('user_id', userId).eq('is_scheduled', true)
+                .gte('end_time', dayLoStr).lte('start_time', dayHiStr),
+              supabase.from('external_calendar_events')
+                .select('id, title, start_time, end_time')
+                .eq('user_id', userId).eq('is_all_day', false)
+                .gte('end_time', dayLoStr).lte('start_time', dayHiStr),
+            ]);
+            const existingTasks = (existingTasksRes.data || []).filter((t: any) => !createdIds.has(t.id));
+            const externalEvents = eventsRes.data || [];
+
+            // Blockers: external events (INVIOLABLE) + existing tasks. Displaceable = existing tasks only.
+            const blockers: Blocker[] = [];
+            for (const e of externalEvents) blockers.push({ start: new Date(e.start_time).getTime(), end: new Date(e.end_time).getTime() });
+            const displaceable = existingTasks.map((t: any) => ({
+              id: t.id, title: t.title, priority: t.priority, tags: t.tags || [],
+              rank: priorityRank(t.priority, t.is_priority),
+              start: new Date(t.start_time).getTime(), end: new Date(t.end_time).getTime(),
+              displaced: false,
+            }));
+            for (const d of displaceable) blockers.push({ start: d.start, end: d.end });
+
+            // Candidate windows for a task's category on the target weekday (config-driven).
+            const windowsFor = (category: string): WinRange[] => {
+              const mapping = categoryMappings[category] || categoryMappings['LIFE'];
+              const names: string[] = mapping?.defaultTimeWindow
+                ? (Array.isArray(mapping.defaultTimeWindow) ? mapping.defaultTimeWindow : [mapping.defaultTimeWindow])
+                : ['flexible'];
+              const ranges: WinRange[] = [];
+              for (const name of names) {
+                const win = timeWindows[name];
+                if (!win) continue;
+                if (Array.isArray(win.days) && !win.days.includes(targetWeekday)) continue;
+                const s = Math.max(floorMs, msAt(win.start));
+                const e = Math.min(dayEndMs, msAt(win.end));
+                if (s < e) ranges.push({ name, start: s, end: e });
+              }
+              return ranges;
+            };
+            const flexibleDay: WinRange[] = [{ name: 'flexible-today', start: floorMs, end: dayEndMs }];
+
+            // AI's accepted placements keyed by taskIndex (preferred anchors when present).
+            const aiByIndex = new Map<number, { start: number }>();
+            for (const s of (batchResult.scheduled || [])) {
+              if (typeof s.taskIndex === 'number' && s.start_time) aiByIndex.set(s.taskIndex, { start: new Date(s.start_time).getTime() });
+            }
+
+            // Placement order: stated priority first (has bearing), then the task whose allowed window
+            // opens earliest (data-driven natural order — comms/finance windows open before study/prep),
+            // then original index for stability/determinism.
+            const order = unscheduledTasks
+              .map((t: any, idx: number) => {
+                const wins = windowsFor(t.category);
+                const earliest = wins.length ? Math.min(...wins.map(w => w.start)) : floorMs;
+                return { t, idx, rank: priorityRank(t.priority, t.is_priority), earliest };
+              })
+              .sort((a, b) => (b.rank - a.rank) || (a.earliest - b.earliest) || (a.idx - b.idx));
+
+            const placements: Array<{ idx: number; task: any; start: number; end: number; window: string; reasoning: string }> = [];
+            for (const { t: task, idx } of order) {
+              const durMs = (task.estimate_minutes || 60) * 60000;
+              const wins = windowsFor(task.category);
+              let placed: { start: number; end: number; window: string } | null = null;
+              let via = 'window';
+
+              // 1) Honor the AI's chosen time if it is free, in-day, and not in the past.
+              const ai = aiByIndex.get(idx);
+              if (ai && ai.start >= floorMs && ai.start + durMs <= dayEndMs &&
+                  !blockers.some(b => intervalsOverlap(ai.start, ai.start + durMs, b.start, b.end))) {
+                placed = { start: ai.start, end: ai.start + durMs, window: 'ai-slot' };
+                via = 'ai-slot';
+              }
+              // 2) Windows-first: earliest free slot in the category's allowed windows.
+              if (!placed) placed = findFreeSlot(wins, durMs, blockers);
+              // 3) Flexible round: anywhere free today (06:00–22:00 local).
+              if (!placed) { placed = findFreeSlot(flexibleDay, durMs, blockers); if (placed) via = 'flexible'; }
+              // 4) Displacement: bump the lowest-priority ORIGINAL the incoming strictly outranks.
+              if (!placed) {
+                const incomingRank = priorityRank(task.priority, task.is_priority);
+                const cands = displaceable
+                  .filter(d => !d.displaced && d.rank < incomingRank)
+                  .sort((a, b) => (a.rank - b.rank) || (a.start - b.start) || (a.id < b.id ? -1 : 1));
+                for (const cand of cands) {
+                  const without = blockers.filter(b => !(b.start === cand.start && b.end === cand.end));
+                  const slot = findFreeSlot(flexibleDay, durMs, without);
+                  if (slot) {
+                    cand.displaced = true;
+                    // permanently drop this original's interval from the blocker set
+                    const bi = blockers.findIndex(b => b.start === cand.start && b.end === cand.end);
+                    if (bi >= 0) blockers.splice(bi, 1);
+                    displacedResults.push({ id: cand.id, title: cand.title, priority: cand.priority, freed_for: task.title });
+                    placed = slot; via = 'displacement';
+                    // persist the bump (W7) — guarded; the original leaves today's schedule
+                    if (!dryRun) {
+                      const newTags = Array.from(new Set([...(cand.tags || []), `displaced-${effTargetDate}`]));
+                      await supabase.from('tasks').update({
+                        is_scheduled: false, start_time: null, end_time: null, status: 'UP_NEXT', tags: newTags,
+                      }).eq('id', cand.id);
+                    }
+                    break;
+                  }
+                }
+              }
+
+              if (placed) {
+                blockers.push({ start: placed.start, end: placed.end });
+                placements.push({ idx, task, start: placed.start, end: placed.end, window: placed.window, reasoning: via });
+              } else {
+                // 5) Overflow — surfaced (merged with the scheduler's own rejects), never stacked.
+                rejectedSlots.push({ taskIndex: idx, taskId: task.id, title: task.title,
+                  reason: 'conflict-aware: no free slot today and no lower-priority original to displace',
+                  reasoning: 'flexible-today placement exhausted' });
+              }
+            }
+
+            // Apply placements (guarded). end_time is ALWAYS start + estimate.
+            for (const p of placements) {
+              const startIso = new Date(p.start).toISOString();
+              const endIso = new Date(p.end).toISOString();
+              const scheduledDate = new Date(p.start).toLocaleDateString('en-CA', { timeZone: tz });
+              const syncedDueDate = normalizeDueDate(scheduledDate, tz);
+              const { error: updateError } = dryRun
+                ? { error: null }
+                : await supabase.from('tasks').update({
+                    start_time: startIso, end_time: endIso, due_date: syncedDueDate,
+                    is_scheduled: true, status: 'UP_NEXT',
+                  }).eq('id', p.task.id);
+              if (!updateError) {
+                scheduledResults.push({
+                  title: p.task.title,
+                  time: new Date(p.start).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: tz }),
+                  start_time: startIso, end_time: endIso,
+                  reasoning: `${p.window} (${p.reasoning})`,
+                });
+                console.log(`[PARSE_AND_CREATE]${dryRun ? ' (dry-run)' : ''} ${dryRun ? 'Planned' : 'Scheduled'} (conflict-aware) "${p.task.title}" ${startIso}–${endIso} [${p.window}/${p.reasoning}]`);
+                if (!dryRun) supabase.from('activity_log').insert({
+                  user_id: userId, activity_type: 'task_scheduled', session_id: p.task.id,
+                  status: 'completed', stage: 'auto_schedule_conflict_aware',
+                  metadata: { title: p.task.title, start_time: startIso, status: 'UP_NEXT', today: todayInTz },
+                }).then(() => {}).catch(() => {});
+              }
+            }
+            console.log(`[PARSE_AND_CREATE]${dryRun ? ' (dry-run)' : ''} conflict-aware summary: placed=${placements.length}, displaced=${displacedResults.length}, overflow=${rejectedSlots.length}`);
+          } else {
+          // Apply scheduled times to tasks (already normalized by batch-calendar-scheduler)
           for (const slot of batchResult.scheduled || []) {
             const task = unscheduledTasks[slot.taskIndex];
             if (task && slot.start_time && slot.end_time) {
@@ -1571,6 +1793,7 @@ async function parseAndCreateTasks(
               }
             }
           }
+          }
         } else {
           console.error('[PARSE_AND_CREATE] Batch scheduler error:', await batchResponse.text());
         }
@@ -1591,6 +1814,10 @@ async function parseAndCreateTasks(
     } else if (autoSchedule && unscheduledTasks.length > 0) {
       message += ` (scheduling was requested but no optimal slots found)`;
     }
+    if (conflictAware && displacedResults.length > 0) {
+      const disp = displacedResults.map(d => `${d.title} (bumped for ${d.freed_for})`).join(', ');
+      message += dryRun ? `. Would displace: ${disp}` : `. Displaced: ${disp}`;
+    }
     if (dryRun) message = `Dry run — no changes written. ${message}.`;
 
     console.log(`[PARSE_AND_CREATE]${dryRun ? ' (dry-run)' : ''} Complete. ${message}`);
@@ -1602,7 +1829,9 @@ async function parseAndCreateTasks(
         created: createdTasks.length,
         scheduled: scheduledResults,
         // DRY-RUN: expose the scheduler's overflow/rejected set (normally discarded) so the plan is complete.
-        ...(dryRun ? { rejected: rejectedSlots } : {}),
+        // conflictAware also surfaces overflow + the originals it bumped, so the effect is auditable live.
+        ...((dryRun || conflictAware) ? { rejected: rejectedSlots } : {}),
+        ...(conflictAware ? { displaced: displacedResults } : {}),
         tasks: createdTasks.map(t => ({
           id: t.id,
           title: t.title,
