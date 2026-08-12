@@ -19,3 +19,19 @@ task for today" button double-booking + un-blocked external events.
   explicit priority words, raise priority for button-signaled items (parser or QuickTaskInput).
 - [OPEN] Composite scoring switch in nightly-schedule-builder (commit 925d9df) for the recency-bubbling
   half — validated earlier; awaiting user sign-off to make default.
+
+## OPEN — to investigate next (2026-08-12)
+- [CHECK] **PROF_EDUCATION maxPerDay:2 not enforced.** Composite 7-day dryRun (rid 567100) placed 4
+  PROF_ED tasks on Mon 08-17 (09:00 Complete MIT, 10:00 Start AI cert, 11:00 Import MIT, 12:00 Find
+  sample AI consultants) despite config `PROF_EDUCATION.maxPerDay=2`. Cap appears ignored in the
+  builder/slotter. Confirm where maxPerDay should be enforced and why it isn't.
+- [CORE GAP] **Overdue + just-added "needed yesterday" items don't surface onto TODAY.** User added ~15
+  items yesterday (due 08-11, now overdue). Composite (which already demotes is_priority from +10→+2/3)
+  still landed only 3 on today (Amex, Reserve vehicle, Research Agentforce) and scattered the rest to
+  Thu–Mon. Root: scoring has no strong "overdue AND recently-flagged → do NOW/today" signal — recency is
+  only +2, due-soon(±48h incl overdue) +5, both easily outweighed; and even when scored up, day-assignment
+  spreads them instead of filling today first. Needs: (a) a real overdue/aging escalation term (grows with
+  days overdue, not just a flat +5 within 48h; today only assignment_id tasks get the +10 grace), and/or
+  (b) day-assignment that fills TODAY's remaining windows with overdue items before spreading to later days.
+  Do NOT hardcode — extend the composite score + the builder's per-day placement. User is firm this is the
+  real miss. (Separate from the 1h day-start delay, still traced via tonight's slotter_trace run.)
