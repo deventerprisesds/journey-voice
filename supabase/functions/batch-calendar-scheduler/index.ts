@@ -586,6 +586,21 @@ IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include tim
         console.log(`⚠️ Normalized start_time: ${result.start_time} → ${normalizedStart}`);
       }
 
+      // Guard: a null/empty/invalid AI time must NOT fall through — snapTo15(new Date(null)) coerces it
+      // to epoch-0 (1970-01-01), which then slips past window/overlap checks (19:00 local = an allowed
+      // window, and a 1970 slot overlaps nothing in the present) and gets "scheduled" at a bogus date.
+      // Reject the slot instead so the task stays unscheduled / eligible for the reshuffle retry.
+      if (!normalizedStart || !normalizedEnd) {
+        console.warn(`🚫 MISSING_TIME: "${originalTask.title}" — AI returned no valid start/end (start=${result.start_time}, end=${result.end_time}) — REJECTED`);
+        rejectedTasks.push({
+          taskId: originalTask.id,
+          taskIndex: result.taskIndex,
+          reason: 'ai_missing_or_invalid_time',
+          reasoning: result.reasoning,
+        });
+        continue;
+      }
+
       // Snap to 15-minute boundaries
       normalizedStart = snapTo15(normalizedStart);
       normalizedEnd = snapTo15(normalizedEnd);
