@@ -203,3 +203,12 @@ COMPOSITE SCORE (corrected understanding): NOT "recency". It's multi-factor (ind
 due-soon±48h +5, 3-7d +3, financial/comms keyword +5, topic +2, UP_NEXT +1, recency +1/2, assignment
 grace +10) and its POINT is DEMOTING the is_priority weight (+10-15 → +2-3, L1107) so deadline/finance/
 recency can compete instead of old flagged-priority items monopolizing the day. Recency is one minor term.
+
+## ✅ epoch-0 slot bug fixed (2026-08-11)
+Traced exactly: batch-calendar-scheduler, when the AI returns a result with a null/empty start_time,
+`normalizeDateTime(null)`→null, then `snapTo15(null)` does `new Date(null)`=epoch-0 → the slot becomes
+1970-01-01T00:00:00Z (+15min via the end<=start guard). It slips ALL validation: 19:00 local is an
+allowed window and a 1970 interval overlaps nothing present, so it gets "scheduled" at a bogus date
+(observed: "Work on consulting AI project"). FIX (commit fdf1180, deployed): null-guard before snapTo15
+rejects the slot (reason `ai_missing_or_invalid_time`) so the task stays unscheduled / reshuffle-eligible.
+PROVEN live: composite dryRun epoch0 1→0, overlapping_pairs still 0, the task now placed 2026-08-13 09:30.
