@@ -212,3 +212,21 @@ allowed window and a 1970 interval overlaps nothing present, so it gets "schedul
 (observed: "Work on consulting AI project"). FIX (commit fdf1180, deployed): null-guard before snapTo15
 rejects the slot (reason `ai_missing_or_invalid_time`) so the task stays unscheduled / reshuffle-eligible.
 PROVEN live: composite dryRun epoch0 1→0, overlapping_pairs still 0, the task now placed 2026-08-13 09:30.
+
+## ⏳ OPEN: production nightly builder delays the day's start by ~1h (2026-08-12)
+CONFIRMED (evidence): production Wed 08-12 first task=10:00 with 09:00 free (no event) and the nightly
+builder ran at 01:01 ET (runId 32bd4f13) with the whole day ahead → day starts ~1h late. Slotter is
+EXONERATED: called directly (1 task AND 5 tasks) it places business_hours at 09:00 correctly. NOT my
+deploys: nightly ran 05:01 UTC, my builder/slotter deploys landed 07:14 UTC (after). computeUsedMinutes/
+getActiveWindows use raw config hours; tzOffset=-04:00 EDT correct. So the +1h is in the BUILDER's real-run
+orchestration — the slotter only returns 10:00 if 09:00 looked BUSY at call time (transient occupant that's
+empty now), OR the AI anchors late. Could NOT pin from persisted data (get_logs edge-function = request-level
+only, no console output; run was 8h old).
+DIAGNOSTIC IN PLACE (commit efad832, deployed, TEMPORARY — MUST REMOVE after pinning): batch-calendar-scheduler
+now writes an `activity_log` row `activity_type='slotter_trace'` per call with metadata.input (nowET, targetDate,
+tasks, busy intervals) + metadata.output (rawAI raw slots, finalScheduled, rejected). Verified working
+(rawAI 09:00 on a clean test). 
+SCHEDULED CHECK-IN: send_later trig_01Sr3wCkcuQZ6Zg5ex8uAgto fires 2026-08-13T05:30:00Z (~01:30 ET, after the
+~01:00 nightly cron) to read the run's slotter_trace rows: if rawAI earliest=10:00 → AI anchors late (prompt);
+if input.busy has a phantom 09:00-10:00 → builder feeds bad busy set (orchestration). Then fix + REMOVE the
+slotter_trace diagnostic. USER ASKED to be reminded of this tomorrow when they mention it.
