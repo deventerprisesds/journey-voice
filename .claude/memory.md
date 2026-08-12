@@ -177,3 +177,29 @@ next day, and no double-booking / external events blocked.
   they won't displace existing MED originals — the "signaled for today = important" intent would need the
   parser/UI to raise their priority for displacement to fire on plain phrasing. Flag stays off until the
   user turns it on (QuickTaskInput would pass conflictAware:true).
+
+## ✅ Builder dryRun fidelity fix + EXACT double-book trace (2026-08-11)
+Complaint: composite builder dryRun appeared to double-book. TRACED EXACTLY (not assumed):
+- The builder makes 3 batch-calendar-scheduler calls per day (assignments L897, main L1428, reshuffle
+  L1578). The slotter avoids overlaps via intra-call acceptedSlots (validation 2, always) + DB-loaded
+  is_scheduled tasks/events (validation 3). It takes NO busy-slots input and IGNORES the windowCapacity
+  the builder sends (L43 never destructures it — dead param). Cross-call coordination is ONLY via DB
+  writes: each pass writes is_scheduled=true, next pass reloads it.
+- In dryRun those writes are gated off, so later passes can't see earlier ones → overlaps. PROVEN: all
+  10 overlaps in a composite dryRun were main×reshuffle cross-call (0 within a single call, 0 same-task).
+  A REAL run writes between passes so validation 3 prevents them — i.e. the double-book was a DRYRUN
+  FIDELITY ARTIFACT, not a production bug (matches user: "I never experienced conflicts").
+- ALSO: earlier "5 tasks stacked 08:30–10:00" was MY display error — I showed HH:MM and grouped by the
+  plan's `day` field, but `day`=iteration targetISO while allowOverflow lets reshuffle spill to +1/+2
+  days; real start_time dates were 08-11/12/13, no same-day overlap. Always read full start_time, never
+  the `day` field, and never drop the date.
+FIX (commit ce1cd3a, both fns deployed): batch-calendar-scheduler accepts `busySlots` (deduped vs DB,
+treated as scheduled tasks for overlap + prompt); nightly-schedule-builder passes accumulatedBusySlots
+on all 3 calls. Real run unchanged (injected slots already persisted → dedup no-op). PROVEN live:
+composite dryRun overlapping_pairs 10 → 0 (34 placements).
+OPEN (separate real bug, not fidelity): 1 plan row gets start_time=1970-01-01T00:00:00Z ("Research Slack
+AI Agents") — epoch-0 bad value in the real scheduling path. Not yet traced/fixed.
+COMPOSITE SCORE (corrected understanding): NOT "recency". It's multi-factor (index.ts:1102-1159:
+due-soon±48h +5, 3-7d +3, financial/comms keyword +5, topic +2, UP_NEXT +1, recency +1/2, assignment
+grace +10) and its POINT is DEMOTING the is_priority weight (+10-15 → +2-3, L1107) so deadline/finance/
+recency can compete instead of old flagged-priority items monopolizing the day. Recency is one minor term.
