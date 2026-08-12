@@ -40,7 +40,7 @@ serve(async (req) => {
   const startTime = Date.now();
 
   try {
-    const { tasks, userId, timezone = 'UTC', targetDate, allowOverflow = false } = await req.json();
+    const { tasks, userId, timezone = 'UTC', targetDate, allowOverflow = false, busySlots = [] } = await req.json();
     
     console.log(`📦 Batch scheduling ${tasks?.length || 0} tasks for user ${userId}${targetDate ? ` (target: ${targetDate})` : ''}${allowOverflow ? ' (overflow allowed)' : ''}`);
     
@@ -164,12 +164,27 @@ serve(async (req) => {
         .lte('start_time', busyEndIso)
     ]);
 
-    const existingTaskSlots = (tasksResult.data || []).map(t => ({
+    const dbTaskSlots = (tasksResult.data || []).map(t => ({
       ...t,
       _source: 'task' as const,
       _startMs: new Date(t.start_time).getTime(),
       _endMs: new Date(t.end_time).getTime(),
     }));
+    // Injected busy slots: intervals the CALLER has already placed this run but has not (yet) persisted
+    // — e.g. the nightly builder's earlier passes in a dry run, whose writes are skipped so a later pass
+    // cannot see them via the DB load above. Treated exactly like a scheduled task for overlap purposes.
+    // Deduped against DB slots so a real run (where the same slot is already persisted) gains no prompt noise.
+    const injectedBusySlots = (Array.isArray(busySlots) ? busySlots : [])
+      .filter((s: any) => s && s.start_time && s.end_time)
+      .map((s: any, i: number) => ({
+        id: `injected-${i}`, title: 'in-run placement',
+        start_time: s.start_time, end_time: s.end_time,
+        _source: 'task' as const,
+        _startMs: new Date(s.start_time).getTime(),
+        _endMs: new Date(s.end_time).getTime(),
+      }))
+      .filter((inj: any) => !dbTaskSlots.some(t => t._startMs === inj._startMs && t._endMs === inj._endMs));
+    const existingTaskSlots = [...dbTaskSlots, ...injectedBusySlots];
     const existingEventSlots = (eventsResult.data || []).map(e => ({
       ...e,
       _source: 'event' as const,
@@ -178,7 +193,7 @@ serve(async (req) => {
     }));
     const existingBusySlots = [...existingTaskSlots, ...existingEventSlots];
 
-    console.log(`📊 Found ${existingBusySlots.length} existing busy slots (${existingTaskSlots.length} tasks, ${existingEventSlots.length} events)`);
+    console.log(`📊 Found ${existingBusySlots.length} existing busy slots (${dbTaskSlots.length} db tasks, ${injectedBusySlots.length} injected, ${existingEventSlots.length} events)`);
 
     // Build category mappings from user config (authoritative), falling back to shared defaults
     const { timeWindows: resolvedTimeWindows, categoryMappings: resolvedCategoryMappings } = resolveConfig(userConfig);

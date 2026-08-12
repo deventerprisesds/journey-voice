@@ -887,6 +887,10 @@ serve(async (req) => {
             timezone,
             targetDate: targetISO,
             allowOverflow: false,
+            // Faithful conflict avoidance: hand the slotter every slot already placed THIS run so it
+            // rejects overlaps even before those placements are persisted (critical in dryRun, where the
+            // per-pass DB writes it would otherwise reload are skipped). No-op in a real run (deduped).
+            busySlots: accumulatedBusySlots,
             windowCapacity: Object.fromEntries(
               Object.entries(caps).map(([n, c]) => [
                 n, { totalMinutes: c.totalMinutes, remainingMinutes: c.remainingMinutes, start: active[n].start, end: active[n].end }
@@ -1414,6 +1418,7 @@ serve(async (req) => {
             timezone,
             targetDate: targetISO,
             allowOverflow: false,
+            busySlots: accumulatedBusySlots, // see note at assignment call — faithful cross-pass overlap avoidance
             windowCapacity: Object.fromEntries(
               Object.entries(windowCapacities).map(([name, cap]) => [
                 name,
@@ -1560,6 +1565,7 @@ serve(async (req) => {
                 timezone,
                 targetDate: targetISO,
                 allowOverflow: true, // expanded windows on retry
+                busySlots: accumulatedBusySlots, // faithful cross-pass overlap avoidance (esp. dryRun)
                 windowCapacity: Object.fromEntries(
                   Object.entries(retryCaps).map(([name, cap]) => [
                     name,
