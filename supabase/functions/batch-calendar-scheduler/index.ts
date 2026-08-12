@@ -195,6 +195,7 @@ serve(async (req) => {
 
     console.log(`📊 Found ${existingBusySlots.length} existing busy slots (${dbTaskSlots.length} db tasks, ${injectedBusySlots.length} injected, ${existingEventSlots.length} events)`);
 
+
     // Build category mappings from user config (authoritative), falling back to shared defaults
     const { timeWindows: resolvedTimeWindows, categoryMappings: resolvedCategoryMappings } = resolveConfig(userConfig);
 
@@ -775,7 +776,44 @@ IMPORTANT: Only flag truly nonsensical placements. Do NOT flag tasks just becaus
     const totalTime = Date.now() - startTime;
     console.log(`✅ Batch scheduling complete in ${totalTime}ms for ${tasks.length} tasks`);
 
-    return new Response(JSON.stringify({ 
+    // [SLOTTER-TRACE] Diagnostic (TEMPORARY — remove after the "day starts 1h late" bug is pinned).
+    // Console output is NOT retrievable via the logs API, so persist the exact input→output of every
+    // scheduling call to activity_log where it can be queried. Shows: current time, target day, tasks,
+    // the busy intervals the AI was told to avoid, the AI's RAW slots, the final placements, and rejects.
+    // Fire-and-forget + guarded so it can never affect scheduling.
+    try {
+      await supabase.from('activity_log').insert({
+        user_id: userId,
+        activity_type: 'slotter_trace',
+        status: 'completed',
+        stage: targetDateISO,
+        metadata: {
+          input: {
+            targetDate: targetDateISO,
+            nowET: now.toLocaleString('en-US', { timeZone: timezone }),
+            tzOffset,
+            allowOverflow,
+            taskCount: tasks.length,
+            tasks: tasks.map((t: any, i: number) => ({ i, title: t.title, cat: t.category, pri: t.priority, est: t.estimate_minutes })),
+            busy: existingBusySlots.map((s: any) => ({
+              src: s._source,
+              startET: new Date(s._startMs).toLocaleString('en-US', { timeZone: timezone }),
+              endET: new Date(s._endMs).toLocaleString('en-US', { timeZone: timezone }),
+            })),
+          },
+          output: {
+            rawAI: (scheduledResults || []).map((r: any) => ({ taskIndex: r.taskIndex, start: r.start_time, end: r.end_time })),
+            finalScheduled: scheduledTasks.map((s: any) => ({
+              taskIndex: s.taskIndex,
+              startET: new Date(s.start_time).toLocaleString('en-US', { timeZone: timezone }),
+            })),
+            rejected: rejectedTasks.map((r: any) => ({ taskIndex: r.taskIndex, reason: r.reason })),
+          },
+        },
+      });
+    } catch (_e) { /* diagnostic must never break scheduling */ }
+
+    return new Response(JSON.stringify({
       scheduled: scheduledTasks,
       rejected: rejectedTasks,
       tasksCount: tasks.length,
