@@ -230,3 +230,13 @@ SCHEDULED CHECK-IN: send_later trig_01Sr3wCkcuQZ6Zg5ex8uAgto fires 2026-08-13T05
 ~01:00 nightly cron) to read the run's slotter_trace rows: if rawAI earliest=10:00 → AI anchors late (prompt);
 if input.busy has a phantom 09:00-10:00 → builder feeds bad busy set (orchestration). Then fix + REMOVE the
 slotter_trace diagnostic. USER ASKED to be reminded of this tomorrow when they mention it.
+
+## UPDATE (2026-08-13 nightly): day-start delay did NOT reproduce on current code
+Tonight's real nightly run (01:00 ET, runs on my deployed busySlots-fidelity + epoch-0 code) shows NO
+1h delay: board first slots Thu 07:00, Fri 07:00, Sat/Sun 10:00 (weekend-correct). slotter_trace for
+today's MAIN pass: input.busy=[] and output.rawAI placed earliest at 06:00 (morning) + 09:00 (business)
+— AI correct, no phantom 09:00 busy. So the 08-12 10:00 start was on the OLD code (pre-deploy 07:14 UTC
+08-12); the busySlots fidelity fix appears to have also closed the real-run day-start gap. NOT declaring
+fixed off one night (user has seen it repeatedly; may be intermittent/data-dependent). Keeping slotter_trace
+diagnostic (commit efad832) IN for one more nightly run to confirm; remove after tomorrow's run if clean.
+Check-in re-armed for ~01:30 ET 08-14. Awaiting user confirm that today's board looks right.
