@@ -140,6 +140,12 @@ async function processUserNotifications(
     console.log(`User ${prefs.user_id} is in quiet hours, generating future reminders but skipping immediate digests`);
   }
 
+  // TIMEZONE FIX: all "fire at Nam" trigger checks below must use the USER's local clock, not the
+  // Deno server's UTC clock. Previously `now.getHours()===8/9` fired the digest at 4am and overdue
+  // reminders at 5am ET (8/9 UTC). `userNow` carries the user-timezone wall-clock for those checks.
+  const userTz = prefs.timezone || 'UTC';
+  const userNow = new Date(now.toLocaleString('en-US', { timeZone: userTz }));
+
   // Get user's tasks
   const { data: tasks, error: tasksError } = await supabaseClient
     .from('tasks')
@@ -155,20 +161,21 @@ async function processUserNotifications(
   // NOTE: Due date and start time reminders are now handled by the database trigger
   // on the tasks table (schedule_task_reminders function) to prevent duplicates
 
-  // Process overdue reminders
-  if (prefs.overdue_reminders_enabled) {
-    const overdueReminders = generateOverdueReminders(tasks || [], prefs.user_id, now);
+  // Process overdue reminders — gated by quiet hours (previously fired at 5am ET, un-gated) and
+  // triggered on the USER's 9am, not the server's 9am-UTC.
+  if (!inQuietHours && prefs.overdue_reminders_enabled) {
+    const overdueReminders = generateOverdueReminders(tasks || [], prefs.user_id, now, userNow);
     notifications.push(...overdueReminders);
   }
 
   // Process daily digest (check if it's the right time) - only if not in quiet hours
-  if (!inQuietHours && prefs.daily_digest_enabled && shouldSendDailyDigest(now)) {
+  if (!inQuietHours && prefs.daily_digest_enabled && shouldSendDailyDigest(userNow)) {
     const dailyDigest = generateDailyDigest(tasks || [], prefs.user_id, now);
     if (dailyDigest) notifications.push(dailyDigest);
   }
 
   // Process weekly digest (check if it's the right time) - only if not in quiet hours
-  if (!inQuietHours && prefs.weekly_digest_enabled && shouldSendWeeklyDigest(now)) {
+  if (!inQuietHours && prefs.weekly_digest_enabled && shouldSendWeeklyDigest(userNow)) {
     const weeklyDigest = generateWeeklyDigest(tasks || [], prefs.user_id, now);
     if (weeklyDigest) notifications.push(weeklyDigest);
   }
@@ -312,7 +319,7 @@ function generateStartTimeReminders(tasks: Task[], userId: string, now: Date): a
   return notifications;
 }
 
-function generateOverdueReminders(tasks: Task[], userId: string, now: Date): any[] {
+function generateOverdueReminders(tasks: Task[], userId: string, now: Date, userNow: Date = now): any[] {
   const notifications: any[] = [];
   const today = new Date(now);
   today.setHours(0, 0, 0, 0);
@@ -327,8 +334,9 @@ function generateOverdueReminders(tasks: Task[], userId: string, now: Date): any
     if (dueDate < today) {
       const daysOverdue = Math.floor((today.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24));
       
-      // Send reminder every 3 days for overdue tasks, but only once per day to prevent spam
-      if (daysOverdue % 3 === 0 && now.getHours() === 9 && now.getMinutes() < 15) {
+      // Send reminder every 3 days for overdue tasks, but only once per day to prevent spam.
+      // Trigger on the USER's 9am (userNow), not the server's 9am-UTC (which is 5am ET).
+      if (daysOverdue % 3 === 0 && userNow.getHours() === 9 && userNow.getMinutes() < 15) {
         notifications.push({
           user_id: userId,
           task_id: task.id,
@@ -384,14 +392,14 @@ function generateWeeklyDigest(tasks: Task[], userId: string, now: Date): any | n
   };
 }
 
-function shouldSendDailyDigest(now: Date): boolean {
-  // Send daily digest at 8 AM
-  return now.getHours() === 8 && now.getMinutes() < 15;
+function shouldSendDailyDigest(userNow: Date): boolean {
+  // Send daily digest at 8 AM in the USER's timezone (caller passes userNow)
+  return userNow.getHours() === 8 && userNow.getMinutes() < 15;
 }
 
-function shouldSendWeeklyDigest(now: Date): boolean {
-  // Send weekly digest on Sunday at 9 AM
-  return now.getDay() === 0 && now.getHours() === 9 && now.getMinutes() < 15;
+function shouldSendWeeklyDigest(userNow: Date): boolean {
+  // Send weekly digest on Sunday at 9 AM in the USER's timezone (caller passes userNow)
+  return userNow.getDay() === 0 && userNow.getHours() === 9 && userNow.getMinutes() < 15;
 }
 
 async function generateCalendarEventReminders(
