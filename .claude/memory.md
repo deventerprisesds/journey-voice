@@ -240,3 +240,24 @@ today's MAIN pass: input.busy=[] and output.rawAI placed earliest at 06:00 (morn
 fixed off one night (user has seen it repeatedly; may be intermittent/data-dependent). Keeping slotter_trace
 diagnostic (commit efad832) IN for one more nightly run to confirm; remove after tomorrow's run if clean.
 Check-in re-armed for ~01:30 ET 08-14. Awaiting user confirm that today's board looks right.
+
+## ✅ 5am notifications — root cause + fixes (2026-08-18)
+User got pushes at ~4-5am. Root cause was pervasive UTC-vs-user-timezone bugs across the notification stack:
+1. **notification_prefs.timezone was 'UTC'** (should be America/New_York) → isInQuietHours evaluated the
+   02:00-06:00 quiet window in UTC = 10pm-2am ET, so 4-5am ET wasn't "quiet". FIXED (data): set TZ=
+   America/New_York, quiet 22:00-06:00.
+2. **notification-scheduler timed everything off the Deno UTC clock** (now.getHours()===8/9) → daily digest
+   fired 4am ET, overdue reminders 5am ET; overdue was also un-gated by quiet. FIXED (commit 74ba671):
+   userNow from prefs.timezone drives shouldSendDailyDigest/WeeklyDigest + overdue trigger; overdue now
+   gated by !inQuietHours. (generateDueReminders is dead/uncalled — DB trigger owns due/start reminders.)
+3. **DB trigger schedule_task_reminders scheduled due_tomorrow at "09:00" in the UTC session = 05:00 ET.**
+   FIXED (migration 20260218000000_due_tomorrow_tz_aware): compute 9am on the day-before-due in the USER's
+   tz via `(((due_date AT TIME ZONE user_tz)::date - 1) + TIME '09:00') AT TIME ZONE user_tz`. Also
+   rescheduled the 13 already-queued due_tomorrow rows from 05:00→09:00 ET.
+OPEN (flagged, not yet fixed): due_soon (~23:44 ET) and due_now (~23:59 ET) from the same trigger fall
+inside quiet (22:00-06:00) — they're end-of-day due pings, not the 5am complaint. The SYSTEMATIC catch-all
+is a **delivery-time quiet gate** in notification-delivery (defer any notification whose fire time is in the
+user's quiet hours to quiet-end) — one place, covers every source (digest/overdue/due/calendar/future).
+notification-delivery currently only special-cases already-flagged queued_during_quiet; it has no general
+delivery-time quiet check. Recommend implementing that as the durable fix. VERIFY LIVE: user should confirm
+no 4-5am pushes tomorrow.
