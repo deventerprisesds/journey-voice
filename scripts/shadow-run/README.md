@@ -54,3 +54,42 @@ model is the only difference.
 
 Writes to `tasks` fire six triggers; `notify_task_topic_classification` also calls
 the classify edge fn per row (harmless, small cost).
+
+## Second engine: smart-calendar-scheduler (advisory)
+
+journey has **two** scheduling engines and they honor different config:
+
+| | nightly-schedule-builder + batch-calendar-scheduler | smart-calendar-scheduler |
+|---|---|---|
+| shape | multi-task, **writes** | single-task, **advisory (zero writes)** |
+| callers | pg_cron nightly, execute-tool parse | ai-task-parser, taskScheduling.ts, RealtimeVoiceAssistant |
+| isolation need | full clone + teardown | shadow rows only — nothing to undo |
+
+`scripts/shadow-run/smart-scheduler-probes.sql` fires probe tasks at the advisory
+engine with `userId = <shadow_user>` and archives request/response into
+`shadow_run_suggestions`.
+
+**`scoringModel` does not apply to the advisory engine.** Composite vs
+priority-rank is a MULTI-TASK RANKING model (which of N tasks gets a slot) and
+lives in the nightly builder. `smart-calendar-scheduler` places ONE task; its
+internal `score` is slot-fitness (proximity to a preferred time), not task
+priority. Probes may run against a composite-configured shadow user, but
+composite is inert there.
+
+### ⚠ Deployed-vs-repo drift (found 2026-08-20)
+
+The **deployed** `smart-calendar-scheduler` contains a `resolveWindowPlan` with a
+precedence chain — `explicit > trait (appointment/venue-dependent) > keyword table
+(FALLBACK) > category` — plus `nudgeToBusinessHours`, `keywordFallbackUsed` and
+`placementBasis` in its response. **None of that source is in this repo**, on this
+branch or `origin/main` (verified by grep against both, and by reading the
+deployed source via the Supabase MCP `get_edge_function`).
+
+Consequences:
+1. **A redeploy of this function from repo source would DESTROY that logic.** Do
+   not deploy `smart-calendar-scheduler` from the repo until the deployed source
+   is recovered into git.
+2. The trait/business-hours-nudge behaviour exists ONLY in the advisory engine.
+   The deployed nightly slotter has none of it (`resolveWindowPlan`: 0 hits,
+   `contextRules`: 0 hits) — it validates on category alone, which is why
+   finance/comms tasks get rejected as window violations in the nightly build.
