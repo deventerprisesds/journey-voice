@@ -363,6 +363,9 @@ async function executeToolCall(
       case 'parse_and_create_tasks':
         return await parseAndCreateTasks(supabase, userId, args, context?.timezone);
 
+      case 'undo_dedup':
+        return await undoDedup(supabase, userId, args);
+
       // ============ COMMUNICATION TOOLS ============
       case 'send_email':
       case 'Email':
@@ -1698,6 +1701,56 @@ async function parseAndCreateTasks(
     };
   } catch (error) {
     console.error('[PARSE_AND_CREATE] Error:', error);
+    return { success: false, error: extractErrorMessage(error) };
+  }
+}
+
+// Restore task(s) the dedup guard skipped, from the task_dedup_log payload (bypasses the guard).
+// Default: undo the most-recent batch (rows sharing a near-identical created_at). Pass {all:true} to
+// restore every un-undone skip, or {log_id} to restore one specific event.
+async function undoDedup(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
+  try {
+    let q = supabase
+      .from('task_dedup_log')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('action', 'skipped')
+      .is('undone_at', null)
+      .order('created_at', { ascending: false });
+    if (args?.log_id) q = q.eq('id', args.log_id);
+    const { data: rows, error } = await q.limit(50);
+    if (error) throw error;
+    if (!rows || rows.length === 0) {
+      return { success: true, result: { restored: [] }, message: "There's nothing to undo — I haven't skipped any duplicate tasks recently." };
+    }
+
+    let toRestore = rows;
+    if (!args?.log_id && !args?.all) {
+      const newest = new Date(rows[0].created_at).getTime();
+      toRestore = rows.filter((r: any) => Math.abs(new Date(r.created_at).getTime() - newest) <= 5000);
+    }
+
+    const restored: string[] = [];
+    for (const row of toRestore) {
+      const payload: any = { ...(row.candidate || {}) };
+      delete payload.id; // never reuse an id
+      const { data: created, error: insErr } = await supabase.from('tasks').insert([payload]).select().single();
+      if (insErr) { console.error('[UNDO_DEDUP] re-insert failed:', insErr); continue; }
+      await supabase.from('task_dedup_log').update({ undone_at: new Date().toISOString(), created_task_id: created.id }).eq('id', row.id);
+      restored.push(created.title);
+    }
+
+    if (restored.length === 0) {
+      return { success: false, error: "I found the skipped task(s) but couldn't restore them. Please try again." };
+    }
+    return {
+      success: true,
+      result: { restored },
+      message: restored.length === 1
+        ? `Done — I added "${restored[0]}" back to your board.`
+        : `Done — I added these back to your board: ${restored.map((t) => `"${t}"`).join(', ')}.`
+    };
+  } catch (error) {
     return { success: false, error: extractErrorMessage(error) };
   }
 }
