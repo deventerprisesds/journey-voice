@@ -273,12 +273,13 @@ serve(async (req) => {
     // SWITCHABLE SCORING MODEL. Resolution order (per user, in the loop below):
     //   1. explicit body override (dryRun / manual / test callers) — wins for everyone
     //   2. that user's own `config.scoringModel` (self-serve toggle in Settings → Scheduling)
-    //   3. 'priority-rank' default = today's behavior (byte-identical)
-    // Only the exact string 'composite' activates composite ordering; a typo can never silently enable it.
+    //   3. 'composite' default (recency/deadline/finance lead; explicit priority is a differentiator)
+    // Composite is the default; only the exact string 'priority-rank' opts a user OUT into legacy
+    // priority-first ordering. A typo can never silently downgrade to legacy.
     // `bodyScoringModel` is the override (or null = "let each user's config decide").
     const bodyScoringModel: 'composite' | 'priority-rank' | null =
-      body?.scoringModel === 'composite' ? 'composite'
-      : body?.scoringModel === 'priority-rank' ? 'priority-rank'
+      body?.scoringModel === 'priority-rank' ? 'priority-rank'
+      : body?.scoringModel === 'composite' ? 'composite'
       : null;
     const triggerSource: string = typeof body?.triggerSource === 'string'
       ? body.triggerSource
@@ -321,12 +322,12 @@ serve(async (req) => {
       const timezone = userPref.timezone || 'America/New_York';
       const config = userPref.config || {};
 
-      // Per-user scoring model: body override → this user's config.scoringModel → 'priority-rank' default.
-      // This is what makes the Settings → Scheduling toggle self-serve: writing config.scoringModel here
-      // flips composite ordering for THIS user only, on the next nightly build, with no code change.
+      // Per-user scoring model: body override → this user's config.scoringModel → 'composite' default.
+      // This is what makes the Settings → Scheduling toggle self-serve: only an explicit 'priority-rank'
+      // in config opts THIS user out into legacy ordering; absent/anything-else = composite default.
       const scoringModel: 'composite' | 'priority-rank' =
         bodyScoringModel
-        ?? (config?.scoringModel === 'composite' ? 'composite' : 'priority-rank');
+        ?? (config?.scoringModel === 'priority-rank' ? 'priority-rank' : 'composite');
 
       const { timeWindows, categoryMappings } = resolveConfig(config);
       // contextRules.keywords drives keyword-based window overrides
@@ -1118,8 +1119,8 @@ serve(async (req) => {
             .map(task => {
               let score = priorityWeight[task.priority] || 1;
               
-              // Explicit user priority. priority-rank (default): base +10, rank bonus up to +5 (dominant).
-              // composite: a SMALL differentiator (+2 base, up to +1 rank) so recency/deadline/finance lead.
+              // Explicit user priority. priority-rank (legacy): base +10, rank bonus up to +5 (dominant).
+              // composite (default): a SMALL differentiator (+2 base, up to +1 rank) so recency/deadline/finance lead.
               if ((task as any).is_priority) {
                 if (scoringModel === 'composite') {
                   score += 2 + Math.max(5 - ((task as any).priority_rank ?? 0), 0) * 0.2;
@@ -1939,7 +1940,7 @@ serve(async (req) => {
             topUpPlaced,
             dailyAssignmentCount,
           },
-          scoringModel, // auditable: which ordering ran ('priority-rank' default | 'composite')
+          scoringModel, // auditable: which ordering ran ('composite' default | 'priority-rank' legacy)
           // DRY-RUN: nothing was persisted; expose the computed plan + would-clear set.
           ...(dryRun ? {
             dryRun: true,

@@ -51,8 +51,8 @@ export interface SchedulingConfig {
   };
   customAIInstructions?: string; // Free-form text instructions for AI scheduler
   // Which scheduling ordering the nightly builder uses for THIS user.
-  // 'priority-rank' (default) = explicit is_priority dominates. 'composite' = recency/deadline/finance
-  // lead and explicit priority becomes a small differentiator. Read by nightly-schedule-builder as
+  // 'composite' (default) = recency/deadline/finance lead and explicit priority is a differentiator.
+  // 'priority-rank' = legacy, explicit is_priority dominates. Read by nightly-schedule-builder as
   // `config.scoringModel`; a body override still wins over this. Self-serve via Settings → Scheduling.
   scoringModel?: 'composite' | 'priority-rank';
 }
@@ -223,7 +223,7 @@ export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
 6. ALWAYS prioritize: (a) tasks with due dates within 48 hours, (b) tasks involving people or communications (meetings, calls, emails, follow-ups), and (c) tasks with financial impact (payments, invoices, contracts). Schedule these earlier in the day and give them preference over same-priority tasks.
 
 Return your suggestion with reasoning that explains why this time makes sense for this specific activity.`, // Default AI instructions
-  scoringModel: 'priority-rank', // Default preserves today's behavior; user opts into 'composite'.
+  scoringModel: 'composite', // Composite is the default; user can opt into legacy 'priority-rank'.
 };
 
 // Helper function to validate config
@@ -287,6 +287,7 @@ export function mergeSchedulingConfig(
       : DEFAULT_SCHEDULING_CONFIG.customAIInstructions,
     // Carry the user's scoring-model choice through the merge (built field-by-field, so it must be
     // named here or it would be silently dropped on load and the Settings toggle would never persist).
-    scoringModel: userConfig.scoringModel === 'composite' ? 'composite' : 'priority-rank',
+    // Composite is the default: only an explicit 'priority-rank' opts out; absent/anything-else = composite.
+    scoringModel: userConfig.scoringModel === 'priority-rank' ? 'priority-rank' : 'composite',
   };
 }

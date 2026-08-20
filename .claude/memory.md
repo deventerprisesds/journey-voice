@@ -286,3 +286,16 @@ The actual FLIP for user a3378f93 (set config.scoringModel='composite') is the U
 the UI, or a separate confirmed step — NOT done as part of building the mechanism. Revert per user =
 flip the toggle back (or unset config.scoringModel). Issues 1 (maxPerDay cap) + 2 (composite overdue
 escalation) already fixed+verified live in commit c5de8f4; Test task 47f6d33e cleaned up (0 remaining).
+
+## UPDATE (2026-08-20): composite is now the DEFAULT + user flipped live
+User: "the default should be composite not priority rank, also switch it to composite immediately."
+- Inverted the default everywhere (commit follows 5445bc2): builder per-user fallback now
+  `bodyScoringModel ?? (config.scoringModel === 'priority-rank' ? 'priority-rank' : 'composite')`;
+  bodyScoringModel checks 'priority-rank' first; DEFAULT_SCHEDULING_CONFIG.scoringModel='composite';
+  mergeSchedulingConfig `=== 'priority-rank' ? 'priority-rank' : 'composite'`; UI default `?? 'composite'`,
+  labels "Balanced (default)" / "Priority-first (legacy)". Only an explicit 'priority-rank' opts OUT now.
+- Flipped user a3378f93 live: set config.scoringModel='composite' (has_key=true) — effective on the
+  currently-deployed builder for tonight's nightly build immediately; new-default builder deployed too so
+  no-key would also = composite. Backward-compat note: this is a DELIBERATE behavior change (composite is
+  no longer opt-in), per explicit user request — the old "no config = byte-identical priority-rank" claim
+  no longer holds by design.

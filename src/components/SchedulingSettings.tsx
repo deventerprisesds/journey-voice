@@ -166,7 +166,7 @@ const SchedulingSettings: React.FC = () => {
           <div className="space-y-2">
             <Label>Ranking Model</Label>
             <Select
-              value={config.scoringModel ?? 'priority-rank'}
+              value={config.scoringModel ?? 'composite'}
               onValueChange={(value) =>
                 setConfig({ ...config, scoringModel: value as 'composite' | 'priority-rank' })
               }
@@ -175,14 +175,14 @@ const SchedulingSettings: React.FC = () => {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="priority-rank">Priority-first (default)</SelectItem>
-                <SelectItem value="composite">Balanced (composite)</SelectItem>
+                <SelectItem value="composite">Balanced (default)</SelectItem>
+                <SelectItem value="priority-rank">Priority-first (legacy)</SelectItem>
               </SelectContent>
             </Select>
             <p className="text-sm text-muted-foreground">
-              {(config.scoringModel ?? 'priority-rank') === 'composite'
-                ? 'Balanced: deadlines, recently-added items, and financial impact compete alongside priority — so a recent, overdue, or time-sensitive task can surface even if it isn’t flagged priority. Explicit priority still counts, just less dominantly.'
-                : 'Priority-first: tasks you flagged as priority dominate the ordering. This is the original behavior.'}
+              {(config.scoringModel ?? 'composite') === 'composite'
+                ? 'Balanced: deadlines, recently-added items, and financial impact compete alongside priority — so a recent, overdue, or time-sensitive task can surface even if it isn’t flagged priority. Explicit priority still counts, just less dominantly. This is the default.'
+                : 'Priority-first (legacy): tasks you flagged as priority dominate the ordering.'}
             </p>
           </div>
         </CardContent>
