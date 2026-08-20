@@ -1149,7 +1149,25 @@ serve(async (req) => {
               const daysSinceCreated = (Date.now() - createdAt.getTime()) / 86400000;
               if (daysSinceCreated <= 3) score += 2;
               else if (daysSinceCreated <= 7) score += 1;
-              
+
+              // OVERDUE ESCALATION (composite only): an item PAST its due date should rise toward "today",
+              // not sink. isDueSoon is a flat +5 within ±48h and nothing beyond, so a "needed yesterday"
+              // item the user just added has no force to land today. Escalate by how overdue it is —
+              // strongest for RECENTLY-added overdue items (the "I flagged this and it lapsed" case),
+              // mild for ancient overdue (don't resurrect stale backlog; the staleness penalty below still
+              // governs those). priority-rank is untouched.
+              if (scoringModel === 'composite' && task.due_date) {
+                const _dueMs = new Date(task.due_date).getTime();
+                if (_dueMs < targetDate.getTime()) {
+                  const _daysOverdue = Math.floor((targetDate.getTime() - _dueMs) / 86400000);
+                  if (daysSinceCreated <= 7) {
+                    score += Math.min(6 + _daysOverdue, 14); // recent + overdue → surface onto today
+                  } else {
+                    score += Math.min(_daysOverdue, 3);       // old overdue → mild nudge only
+                  }
+                }
+              }
+
               // Assignment grace period: 0-7 days overdue → boost to URGENT
               if ((task as any).assignment_id && task.due_date) {
                 const dueDate = new Date(task.due_date);

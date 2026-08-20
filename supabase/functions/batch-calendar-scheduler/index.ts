@@ -149,7 +149,7 @@ serve(async (req) => {
     const [tasksResult, eventsResult] = await Promise.all([
       supabase
         .from('tasks')
-        .select('id, title, start_time, end_time')
+        .select('id, title, start_time, end_time, category')
         .eq('user_id', userId)
         .eq('is_scheduled', true)
         // For tasks: must end after busy-window start AND start before busy-window end
@@ -194,6 +194,18 @@ serve(async (req) => {
     const existingBusySlots = [...existingTaskSlots, ...existingEventSlots];
 
     console.log(`📊 Found ${existingBusySlots.length} existing busy slots (${dbTaskSlots.length} db tasks, ${injectedBusySlots.length} injected, ${existingEventSlots.length} events)`);
+
+    // PER-CATEGORY DAILY CAP (maxPerDay): count already-scheduled tasks by category + local day so the
+    // validation loop can enforce categoryMappings[cat].maxPerDay (e.g. PROF_EDUCATION: 2/day). Injected
+    // in-run slots carry no category so they don't count here; in a real run prior-pass placements are
+    // persisted (is_scheduled=true) and DO count via dbTaskSlots.
+    const dayKeyOf = (iso: string) => new Date(iso).toLocaleDateString('en-CA', { timeZone: timezone });
+    const catDayCount: Record<string, number> = {};
+    for (const t of dbTaskSlots) {
+      if (!(t as any).category) continue;
+      const k = `${(t as any).category}|${dayKeyOf(t.start_time)}`;
+      catDayCount[k] = (catDayCount[k] || 0) + 1;
+    }
 
 
     // Build category mappings from user config (authoritative), falling back to shared defaults
@@ -674,8 +686,31 @@ IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include tim
         continue;
       }
 
+      // POST-AI VALIDATION 4: per-category daily cap (categoryMappings[cat].maxPerDay). Counts existing
+      // scheduled + accepted-this-batch of the same category on the placement's local day; rejects beyond
+      // the cap so the extra task overflows to another day instead of stacking (e.g. 4 PROF_EDUCATION on
+      // one day when the cap is 2). No cap configured → no limit.
+      const catCap = filteredCategoryMappings[originalTask.category]?.maxPerDay;
+      if (catCap && catCap > 0) {
+        const capKey = `${originalTask.category}|${dayKeyOf(normalizedStart)}`;
+        if ((catDayCount[capKey] || 0) >= catCap) {
+          console.warn(`🚫 CATEGORY_CAP: "${originalTask.title}" (${originalTask.category}) exceeds ${catCap}/day on ${dayKeyOf(normalizedStart)} — REJECTED`);
+          rejectedTasks.push({
+            taskId: originalTask.id,
+            taskIndex: result.taskIndex,
+            reason: `category_cap_${catCap}_per_day: ${originalTask.category}`,
+            reasoning: result.reasoning,
+          });
+          continue;
+        }
+      }
+
       acceptedSlots.push({ start: slotStartMs, end: slotEndMs });
-      
+      if (catCap && catCap > 0) {
+        const capKey = `${originalTask.category}|${dayKeyOf(normalizedStart)}`;
+        catDayCount[capKey] = (catDayCount[capKey] || 0) + 1;
+      }
+
       scheduledTasks.push({
         taskId: originalTask?.id,
         taskIndex: result.taskIndex,
