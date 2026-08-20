@@ -270,10 +270,16 @@ serve(async (req) => {
     // candidate pool (which is populated by the rollover/future-clear writes that we skip in dryRun), the
     // candidate + busy-slot queries drop the `is_scheduled` filter in dryRun (see usages of `dryRun`).
     const dryRun: boolean = body?.dryRun === true;
-    // SWITCHABLE SCORING MODEL. Default 'priority-rank' = today's behavior (byte-identical). Only the
-    // exact string 'composite' activates the new composite ordering (recency/deadline/finance lead;
-    // explicit priority becomes a small differentiator). A typo can never silently enable it.
-    const scoringModel: 'composite' | 'priority-rank' = body?.scoringModel === 'composite' ? 'composite' : 'priority-rank';
+    // SWITCHABLE SCORING MODEL. Resolution order (per user, in the loop below):
+    //   1. explicit body override (dryRun / manual / test callers) — wins for everyone
+    //   2. that user's own `config.scoringModel` (self-serve toggle in Settings → Scheduling)
+    //   3. 'priority-rank' default = today's behavior (byte-identical)
+    // Only the exact string 'composite' activates composite ordering; a typo can never silently enable it.
+    // `bodyScoringModel` is the override (or null = "let each user's config decide").
+    const bodyScoringModel: 'composite' | 'priority-rank' | null =
+      body?.scoringModel === 'composite' ? 'composite'
+      : body?.scoringModel === 'priority-rank' ? 'priority-rank'
+      : null;
     const triggerSource: string = typeof body?.triggerSource === 'string'
       ? body.triggerSource
       : (singleDay ? 'manual_reschedule' : 'cron');
@@ -314,6 +320,13 @@ serve(async (req) => {
       const userId = userPref.user_id;
       const timezone = userPref.timezone || 'America/New_York';
       const config = userPref.config || {};
+
+      // Per-user scoring model: body override → this user's config.scoringModel → 'priority-rank' default.
+      // This is what makes the Settings → Scheduling toggle self-serve: writing config.scoringModel here
+      // flips composite ordering for THIS user only, on the next nightly build, with no code change.
+      const scoringModel: 'composite' | 'priority-rank' =
+        bodyScoringModel
+        ?? (config?.scoringModel === 'composite' ? 'composite' : 'priority-rank');
 
       const { timeWindows, categoryMappings } = resolveConfig(config);
       // contextRules.keywords drives keyword-based window overrides
@@ -1964,7 +1977,9 @@ serve(async (req) => {
 
     return new Response(JSON.stringify({
       success: true,
-      scoringModel,
+      // Top-level (outside the per-user loop): report the override, or note it was per-user config-driven.
+      // Each user's actual model is on results[userId].scoringModel.
+      scoringModel: bodyScoringModel ?? 'per-user-config',
       ...(dryRun ? { dryRun: true } : {}),
       results,
       processingTimeMs: totalTime,

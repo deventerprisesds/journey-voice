@@ -13,7 +13,7 @@ import {
   saveUserSchedulingConfig,
 } from '@/services/schedulingService';
 import { DEFAULT_SCHEDULING_CONFIG, type SchedulingConfig } from '@/config/schedulingRules';
-import { Clock, Calendar, TrendingUp, Tag, Key, Target, Plus, X, FileText, Globe } from 'lucide-react';
+import { Clock, Calendar, TrendingUp, Tag, Key, Target, Plus, X, FileText, Globe, Scale } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
 import { TIMEZONE_OPTIONS, getBrowserTimezone, formatTimezoneWithOffset } from '@/lib/timezone';
 
@@ -146,6 +146,44 @@ const SchedulingSettings: React.FC = () => {
               <Globe className="h-4 w-4 mr-2" />
               Detect Automatically
             </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Scheduling Strategy */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Scale className="h-5 w-5" />
+            <CardTitle>Scheduling Strategy</CardTitle>
+          </div>
+          <CardDescription>
+            How the nightly builder decides which tasks land on your schedule first. You can switch this
+            yourself and change it back anytime — it takes effect on the next nightly build.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label>Ranking Model</Label>
+            <Select
+              value={config.scoringModel ?? 'priority-rank'}
+              onValueChange={(value) =>
+                setConfig({ ...config, scoringModel: value as 'composite' | 'priority-rank' })
+              }
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="priority-rank">Priority-first (default)</SelectItem>
+                <SelectItem value="composite">Balanced (composite)</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-sm text-muted-foreground">
+              {(config.scoringModel ?? 'priority-rank') === 'composite'
+                ? 'Balanced: deadlines, recently-added items, and financial impact compete alongside priority — so a recent, overdue, or time-sensitive task can surface even if it isn’t flagged priority. Explicit priority still counts, just less dominantly.'
+                : 'Priority-first: tasks you flagged as priority dominate the ordering. This is the original behavior.'}
+            </p>
           </div>
         </CardContent>
       </Card>

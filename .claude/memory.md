@@ -261,3 +261,28 @@ user's quiet hours to quiet-end) — one place, covers every source (digest/over
 notification-delivery currently only special-cases already-flagged queued_during_quiet; it has no general
 delivery-time quiet check. Recommend implementing that as the durable fix. VERIFY LIVE: user should confirm
 no 4-5am pushes tomorrow.
+
+## Self-serve scoring-model switch (composite ⇄ priority-rank) — 2026-08-20
+User asked to make the composite vs priority-rank choice self-serve so they can flip it, watch it in
+production for a week, and flip back — no code change per switch. Built two pieces (branch
+claude/huddle-journey-integration-xokgv1):
+1. **Builder reads per-user config** (`nightly-schedule-builder/index.ts`). Was: global `scoringModel`
+   from request body only. Now: `bodyScoringModel` (override, or null) resolved from body at top; INSIDE
+   the per-user loop `const scoringModel = bodyScoringModel ?? (config.scoringModel === 'composite' ?
+   'composite' : 'priority-rank')`. Resolution order = body override → user's config.scoringModel →
+   'priority-rank' default. Top-level response field became `bodyScoringModel ?? 'per-user-config'`
+   (per-user actual model is on `results[userId].scoringModel`, unchanged, inside the loop). Backward
+   compatible: no config + no body = byte-identical priority-rank.
+2. **UI toggle** in Settings → Scheduling. The core funnel is `user_scheduling_prefs.config` (JSONB).
+   Trace: `saveUserSchedulingConfig` destructures dedicated columns and dumps the rest (incl.
+   scoringModel) into `config` JSONB — so SAVE works automatically. But `mergeSchedulingConfig`
+   (schedulingRules.ts) rebuilds config FIELD-BY-FIELD (no top-level spread), so a new field is DROPPED
+   on reload unless named there — added `scoringModel: userConfig.scoringModel === 'composite' ?
+   'composite' : 'priority-rank'`. Also added the field to the `SchedulingConfig` interface + default
+   'priority-rank'. UI: a "Scheduling Strategy" card (Select: Priority-first default / Balanced
+   composite) writing `config.scoringModel`. This is the same JSONB field the builder reads — one
+   source, no parallel store.
+The actual FLIP for user a3378f93 (set config.scoringModel='composite') is the USER's switch to make in
+the UI, or a separate confirmed step — NOT done as part of building the mechanism. Revert per user =
+flip the toggle back (or unset config.scoringModel). Issues 1 (maxPerDay cap) + 2 (composite overdue
+escalation) already fixed+verified live in commit c5de8f4; Test task 47f6d33e cleaned up (0 remaining).
