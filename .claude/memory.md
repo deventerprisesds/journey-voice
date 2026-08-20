@@ -299,3 +299,28 @@ User: "the default should be composite not priority rank, also switch it to comp
   no-key would also = composite. Backward-compat note: this is a DELIBERATE behavior change (composite is
   no longer opt-in), per explicit user request — the old "no config = byte-identical priority-rank" claim
   no longer holds by design.
+
+## Task-creation dedup guard (Phase 1) — 2026-08-20
+Finding (ground-truthed): journey had NO dedup on task creation. `parse_and_create_tasks` fetches
+existingTasks but passes them only as SCHEDULING context to ai-task-parser; the insert loop had zero
+title check. ai-task-parser uses existingTasks only for slot-avoidance. So exact-title dupes landed
+(3 near-dup Klarna tasks created in one 3.5-min burst; 2 exact-title). Huddle side has
+`loadExistingOpenTitles()` normalized-exact dedup — journey's path never got it.
+Built (branch claude/huddle-journey-integration-xokgv1), flag-gated `config.dedup.enabled` (default OFF):
+- `_shared/task-dedup.ts`: shared module. titleSignature (lowercase, strip punct, drop SAFE stopwords,
+  dedupe+sort tokens) collapses "Make payments to Klarna" == "Make Klarna payments" == "klarna make
+  payments". buildDedupPlan: signature exact-match (vs open tasks + in-batch siblings) → duplicate;
+  else semantic cosine (OpenAI text-embedding-3-small, reuses OPENAI_API_KEY, batched) ≥highThreshold
+  (0.90) → duplicate(skip), [possibleThreshold 0.80, high) → possible(create+tag 'possible-duplicate',
+  NEVER merge distinct). Fail-open on embed error. Within-batch dedup. runDedup/finalizeDedup DB
+  orchestration (loadOpenTasks excludes DONE/completed; one scheduled_notifications 'dedup_notice' per
+  batch — reuses existing delivery, no new sender). Thresholds config-driven.
+- Migration `20260220000000_task_dedup_log` (APPLIED live): audit table capturing FULL candidate
+  payload (undo source) + matched/method/similarity/created_task_id. RLS own-row select/update.
+- Wired into execute-tool `create_task` (single) + `parse_and_create_tasks` (bulk, index-aligned;
+  all-skipped returns success not error; surfaces dedupedDuplicates preview incl. dryRun).
+- Offline unit tests 10/10 (supabase/functions/_shared/task-dedup.test.ts, mock embedder).
+User decisions (2026-08-20): keep the Aug-20 Klarna task, removed the other two (rows captured for undo
+in transcript). Approach = "Normalized + semantic, surface a note for genuinely-distinct (don't merge),
+notify me on every dedup so I can review/undo." Phase 2 TODO: wire mcp + twilio-voice paths; undo
+action/UI; then enable the flag for the user after live verification.
