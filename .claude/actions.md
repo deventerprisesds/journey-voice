@@ -35,3 +35,24 @@ task for today" button double-booking + un-blocked external events.
   (b) day-assignment that fills TODAY's remaining windows with overdue items before spreading to later days.
   Do NOT hardcode — extend the composite score + the builder's per-day placement. User is firm this is the
   real miss. (Separate from the 1h day-start delay, still traced via tonight's slotter_trace run.)
+
+## Self-serve scoring-model switch (2026-08-20) — DONE (mechanism), pending user live-watch
+Request: "build those two pieces (UI toggle + builder config-read) so the switch is genuinely self-serve."
+- [DONE] Issue 1 (PROF_ED maxPerDay:2) enforced in slotter (POST-AI VALIDATION 4) — commit c5de8f4,
+  deployed; verified live ≤2 PROF_ED/day.
+- [DONE] Issue 2 (composite overdue escalation: recent-overdue up to +14, stale +3) — commit c5de8f4,
+  deployed; verified live (recent-overdue test task surfaced onto earliest schedulable day). Test task
+  47f6d33e cleaned up (0 remaining).
+- [DONE] Builder reads per-user config.scoringModel (body override → config → priority-rank) — commit
+  5445bc2, deployed to live project (run 32384609426). Verified live via pg_net dryRuns:
+  A) config=composite,no override → per_user=composite ✓; B) config=composite,override=priority-rank →
+  (pending poll); C) key removed,no override → priority-rank ✓ (pending poll). Config restored to
+  original (no scoringModel key) after tests.
+- [DONE] UI toggle "Scheduling Strategy → Ranking Model" in SchedulingSettings.tsx; scoringModel added to
+  SchedulingConfig type + DEFAULT + mergeSchedulingConfig (so it survives reload) — commit 5445bc2.
+  Frontend local build blocked by broken rollup install in sandbox (env, not code); no tsc errors
+  referenced the 3 changed files; real UI verify path is GHA/live after merge.
+- [OPEN — user's call] Actually FLIP user a3378f93 to composite (toggle in Settings, or set
+  config.scoringModel='composite'). Mechanism is ready; the flip is the user's to make so they can
+  watch it a week and toggle back. Revert = flip toggle back / remove the key.
+- [OPEN/flagged] delivery-time quiet gate for late-night due_soon/due_now pings (notification-delivery).
