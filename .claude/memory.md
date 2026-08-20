@@ -324,3 +324,23 @@ User decisions (2026-08-20): keep the Aug-20 Klarna task, removed the other two 
 in transcript). Approach = "Normalized + semantic, surface a note for genuinely-distinct (don't merge),
 notify me on every dedup so I can review/undo." Phase 2 TODO: wire mcp + twilio-voice paths; undo
 action/UI; then enable the flag for the user after live verification.
+
+## Dedup notifications → Iris chat + undo (Phase 2) — 2026-08-20
+User feedback: tapped the dedup push, wasn't taken to Huddle/journey Iris chat, couldn't read the
+truncated body. Root cause (Explore-mapped): dedup push had no tap target — journey web SW routes on
+data.openCommsConsole/type (public/sw.js:165-217), not deepLink; the regular-batch push builder
+(notification-delivery:650) never forwards scheduled_notifications.metadata; no in-app surface showed
+full text. Fix (chosen destination = Iris chat, per user):
+- finalizeDedup now writes notification_type='scheduled_chat' with metadata.message = FULL untruncated
+  Iris text (+ metadata.dedup summary for undo). notification-delivery's existing scheduled_chat branch
+  (index.ts:388-405) invokes send-chat-message → inserts an assistant conversation_messages row (Iris
+  message in chat) AND sends a push with openCommsConsole → tapping OPENS the chat. Reuses existing
+  infra, zero new deep-link plumbing.
+- New `undo_dedup` tool (execute-tool + tool-definitions): restores skipped task(s) from task_dedup_log
+  (bypasses guard), default = most-recent batch (rows within 5s), or {all:true}/{log_id}. Iris calls it
+  on "undo"/"add it back". Marks undone_at + created_task_id.
+Verified LIVE end-to-end (execute-tool redeployed): skip → scheduled_chat row → notification-delivery →
+Iris conversation_messages row (role=assistant, source=chat, full text) + delivered; undo_dedup restored
+"Make Klarna payments" to the board. All test artifacts cleaned (task, chat msg, notif, log rows = 0).
+Board Klarna = 1 real task (Aug 20). Guard still enabled. chat store = public.conversation_messages
+(thread=ai_threads, one per user); send-chat-message is the system-initiated Iris-posts path.
