@@ -30,6 +30,15 @@
 --   :scoring      'composite' | 'priority-rank'
 -- ============================================================================
 
+-- 0. Register the run ---------------------------------------------------------
+--    Everything archived at teardown is keyed to this label, so the diagnostics
+--    outlive the shadow user. Use a distinct label per run (A/B needs two).
+INSERT INTO public.shadow_runs (label, shadow_user, source_user, scoring_model, code_ref, notes)
+VALUES (:'run_label', :'shadow_user'::uuid, :'source_user'::uuid, :'scoring', :'code_ref', :'notes')
+ON CONFLICT (label) DO UPDATE
+  SET shadow_user = EXCLUDED.shadow_user, source_user = EXCLUDED.source_user,
+      scoring_model = EXCLUDED.scoring_model, code_ref = EXCLUDED.code_ref, notes = EXCLUDED.notes;
+
 -- 1. Shadow board -------------------------------------------------------------
 INSERT INTO public.boards (id, name, user_id, position)
 VALUES (:'shadow_board'::uuid, 'SHADOW RUN — safe to delete', :'shadow_user'::uuid, 0)
