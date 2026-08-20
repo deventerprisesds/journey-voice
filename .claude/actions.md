@@ -56,3 +56,23 @@ Request: "build those two pieces (UI toggle + builder config-read) so the switch
   config.scoringModel='composite'). Mechanism is ready; the flip is the user's to make so they can
   watch it a week and toggle back. Revert = flip toggle back / remove the key.
 - [OPEN/flagged] delivery-time quiet gate for late-night due_soon/due_now pings (notification-delivery).
+
+## Task dedup guard Phase 1 (2026-08-20) — BUILT + DEPLOYED + VERIFIED LIVE + ENABLED
+Request: "are we missing a fuzzy dedup? build one — normalized + semantic, surface a note for genuinely
+distinct (don't merge), notify me on every dedup so I can review/undo." User decisions: Klarna dupes =
+keep Aug-20, removed other two (rows captured for undo). Approach = normalized+semantic.
+- [DONE] Ground-truth: journey had NO creation-time dedup (even exact-title). Confirmed in code.
+- [DONE] Cleanup: removed 2 duplicate Klarna tasks (kept "Make payments to Klarna" due Aug 20).
+- [DONE] `_shared/task-dedup.ts` (signature + semantic + within-batch + fail-open, config-driven),
+  `task_dedup_log` migration (applied), wired into execute-tool create_task + parse_and_create_tasks,
+  one notification/batch via existing pipeline. Commit 22f145b. Offline tests 10/10. execute-tool
+  deployed (run 32389544494).
+- [DONE] Verified LIVE: (a) dryRun parse "Make payments to Klarna. Buy a new umbrella." → Klarna
+  SKIPPED (signature vs existing), umbrella created; (b) real create_task "Make Klarna payments" →
+  skipped, task_dedup_log row w/ full payload, 1 dedup_notice notification delivered. Test artifacts
+  (log row + notif) cleaned.
+- [DONE] Enabled config.dedup.enabled=true for user a3378f93 (they want it active).
+- [OPEN] Phase 2: wire mcp + twilio-voice creation paths; explicit undo action + UI surface.
+- [OPEN/calibrate] Semantic thresholds (high 0.90 / possible 0.80) are seeded guesses; short task-title
+  embeddings may score differently — calibrate against real title pairs. Signature layer already
+  catches the reported case regardless. Config-driven so tunable without deploy.
