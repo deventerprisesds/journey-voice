@@ -76,20 +76,40 @@ internal `score` is slot-fitness (proximity to a preferred time), not task
 priority. Probes may run against a composite-configured shadow user, but
 composite is inert there.
 
-### ⚠ Deployed-vs-repo drift (found 2026-08-20)
+### ⚠ Unmerged scheduler branch — NOT deployed-vs-repo drift (corrected 2026-08-20)
 
 The **deployed** `smart-calendar-scheduler` contains a `resolveWindowPlan` with a
 precedence chain — `explicit > trait (appointment/venue-dependent) > keyword table
 (FALLBACK) > category` — plus `nudgeToBusinessHours`, `keywordFallbackUsed` and
-`placementBasis` in its response. **None of that source is in this repo**, on this
-branch or `origin/main` (verified by grep against both, and by reading the
-deployed source via the Supabase MCP `get_edge_function`).
+`placementBasis` in its response.
 
-Consequences:
-1. **A redeploy of this function from repo source would DESTROY that logic.** Do
-   not deploy `smart-calendar-scheduler` from the repo until the deployed source
-   is recovered into git.
-2. The trait/business-hours-nudge behaviour exists ONLY in the advisory engine.
-   The deployed nightly slotter has none of it (`resolveWindowPlan`: 0 hits,
-   `contextRules`: 0 hits) — it validates on category alone, which is why
-   finance/comms tasks get rejected as window violations in the nightly build.
+**CORRECTION.** An earlier version of this note claimed that source was in no git
+ref. That was WRONG: the grep had only covered the working branch and
+`origin/main` *before* all remote refs were fetched. The source is in git, on
+**`origin/claude/mobile-widget-web-bridge-debug-nsishi`** — commit `a1ffd16`
+"feat(scheduler): systematic trait layer; demote keyword table to FALLBACK (both
+paths)", plus `2813f5c`, `b229ec7` and ~17 more scheduler commits.
+Always `git fetch origin '+refs/heads/*:refs/remotes/origin/*'` and
+`git log --all -S<symbol>` before concluding code is missing.
+
+The real situation is an **unmerged branch**, not lost source:
+1. That branch is in neither `origin/main` nor this working branch, yet at least
+   `smart-calendar-scheduler` was DEPLOYED from it — so prod runs code main does
+   not have.
+2. The deployed **nightly** slotter genuinely lacks the trait layer: its bundle,
+   including its own bundled copy of `_shared/scheduling-defaults.ts`, has 0
+   occurrences of `resolveWindowPlan`/`trait`/`contextRules`. Each function
+   bundles its own `_shared` copy, so the two engines are running different
+   versions of the shared config module. That is why finance/comms tasks are
+   rejected as window violations by the nightly build but handled by the
+   advisory engine.
+3. That branch already contains fixes for most of the "ignored config" audit:
+   `6825684` (keyword rules on the voice path + priority multipliers),
+   `849f956` (customAIInstructions into the batch placer prompt),
+   `dc15925`/`32aaa71` (maxDailyHours capacity guard, made opt-in),
+   `8231f14` (de-fork smart-calendar-scheduler onto shared config),
+   `aa23eea` (after_work 17-19 non-overlapping; reconcile drifted copies).
+   **Merge that work rather than rebuilding it.** A dry-run merge into this
+   branch conflicts in only 3 files (`.claude/memory.md`,
+   `execute-tool/index.ts`, `nightly-schedule-builder/index.ts`);
+   `smart-calendar-scheduler` and `scheduling-defaults.ts` merge cleanly.
