@@ -640,3 +640,19 @@ Also fixed keyword drift: study/class/lecture/assignment/homework → EDUCATION 
 PROF_EDUCATION); added certification/course/training → PROF_EDUCATION; project/business → VENTURES.
 Open: (1) smart-calendar-scheduler array-vs-string bug still drops these arrays on voice/manual;
 (2) EDUCATION↔assignment link still conceptual (assignment_id-keyed, not category).
+
+## Session config sync — 2026-08-21 (sync-setup-script)
+`launcher-settings.json` was REWRITTEN at 15:26 UTC and lost the `eds-enforce` hooks that had been
+installed earlier in this session (verified `[6]` on all four events right after install, then empty).
+`/root/.claude/eds-git-guard.sh` survived on disk but nothing invoked it — so the PostToolUse autosave
+and UserPromptSubmit rewind-check were NOT firing between 15:26 and the re-sync. Lesson: an installed
+guard can be silently unwired by a config rewrite; re-verify the hook wiring, not just the script's
+presence, after any long gap.
+
+Re-ran `setup.sh` from eds-claude-skills main (1d68993). Result:
+- hook version **6 → 8** on SessionStart/Stop/PostToolUse/UserPromptSubmit (matches CURRENT_VERSION=8)
+- new `eds-agent-guard.sh` (orphaned-subagent reporter) alongside `eds-git-guard.sh`
+- platform hooks (`session-start-git-identity.sh`, `stop-hook-git-check.sh`) retained, not clobbered
+- v8 behavioural rule (not installable): EVERY agent brief must name a file and say "write to it as
+  you go" — a background subagent dies SILENTLY, usually because the user interrupted the parent, and
+  no notification fires. `ListAgents` is the only proof an agent is alive.

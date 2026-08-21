@@ -76,3 +76,8 @@ keep Aug-20, removed other two (rows captured for undo). Approach = normalized+s
 - [OPEN/calibrate] Semantic thresholds (high 0.90 / possible 0.80) are seeded guesses; short task-title
   embeddings may score differently — calibrate against real title pairs. Signature layer already
   catches the reported case regardless. Config-driven so tunable without deploy.
+
+- [x] ACT: run `sync-setup-script` skill (user request, 2026-08-21). Found `launcher-settings.json`
+  rewritten at 15:26 with the eds-enforce hooks missing; re-ran setup.sh from main (1d68993).
+  Verified live: all four hook events now `_eds_version: 8` (was 6, then absent), matching
+  CURRENT_VERSION=8; `eds-git-guard.sh` + new `eds-agent-guard.sh` both present; platform hooks intact.
