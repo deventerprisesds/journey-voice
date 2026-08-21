@@ -579,10 +579,60 @@ IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include tim
       return d.toISOString();
     }
 
+    // WINDOW REPAIR (measured 2026-08-21): the AI reliably proposes times OUTSIDE the task's allowed
+    // windows — 11 of 15 window violations in a real shadow run were at or before 09:00, several at
+    // 05:00–07:00, e.g. "2026-08-24T05:00:00-04:00". NOT a timezone bug: the offset is correct
+    // Eastern, the model genuinely picks pre-dawn hours (and, when overflowing to the next day,
+    // starts at 06:00 even though Saturday's first legal window opens at 10:00).
+    //
+    // Rejecting is terminal — the task silently vanishes from the day even when its own allowed
+    // window sits empty. So instead of dropping it, relocate it to the earliest free slot INSIDE an
+    // allowed window on the same local day.
+    //
+    // CONFIG-AUTHORITATIVE (hard rule): this only ever moves a task INTO a window the config already
+    // allows for its category, filtered to windows active on that weekday. It never widens a window,
+    // never borrows another category's window, and never overrides a pinned/appointed time. If no
+    // legal free slot exists, the task is rejected exactly as before and overflows to another day.
+    function findLegalSlot(
+      proposedStartISO: string,
+      durationMinutes: number,
+      allowedWindowNames: string[],
+    ): { start: string; end: string; window: string } | null {
+      const dayStr = new Date(proposedStartISO).toLocaleDateString('en-CA', { timeZone: timezone });
+      const dow = new Date(new Date(proposedStartISO).toLocaleString('en-US', { timeZone: timezone })).getDay();
+      const nowMs = Date.now();
+
+      // Only windows the category allows AND that are active on this weekday.
+      const candidates = allowedWindowNames
+        .map((name) => ({ name, win: (userTimeWindows as any)[name] }))
+        .filter(({ win }) => win && (!win.days || win.days.includes(dow)))
+        .sort((a, b) => a.win.start - b.win.start);
+
+      for (const { name, win } of candidates) {
+        // Step in 15-min increments from the window open to the last start that still fits.
+        for (let mins = win.start * 60; mins + durationMinutes <= win.end * 60; mins += 15) {
+          const hh = String(Math.floor(mins / 60)).padStart(2, '0');
+          const mm = String(mins % 60).padStart(2, '0');
+          const startISO = normalizeDateTime(`${dayStr}T${hh}:${mm}:00`, timezone);
+          if (!startISO) continue;
+          const startMs = new Date(startISO).getTime();
+          const endMs = startMs + durationMinutes * 60000;
+          if (startMs < nowMs) continue; // never place in the past
+          if (acceptedSlots.some((s) => startMs < s.end && endMs > s.start)) continue;
+          if (existingEventSlots.some((s: any) => startMs < s._endMs && endMs > s._startMs)) continue;
+          if (existingTaskSlots.some((s: any) => startMs < s._endMs && endMs > s._startMs)) continue;
+          return { start: startISO, end: new Date(endMs).toISOString(), window: name };
+        }
+      }
+      return null;
+    }
+
     // Map results back to task IDs, normalizing times as a safety net
     // Then validate each task against its allowed windows (HARD CONSTRAINT)
     const scheduledTasks = [];
     const rejectedTasks = [];
+    // Window-repair audit: slots the AI put outside an allowed window that we relocated INTO one.
+    const repairedTasks: Array<Record<string, unknown>> = [];
     const acceptedSlots: Array<{ start: number; end: number }> = [];
     
     for (const result of scheduledResults) {
@@ -642,14 +692,35 @@ IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include tim
       );
       
       if (!validation.valid) {
-        console.warn(`🚫 WINDOW VIOLATION: "${originalTask.title}" (${originalTask.category}) scheduled in "${validation.actualWindow}" but allowed: [${validation.allowedWindows.join(', ')}] — REJECTED`);
-        rejectedTasks.push({
-          taskId: originalTask.id,
-          taskIndex: result.taskIndex,
-          reason: `Window violation: placed in ${validation.actualWindow}, allowed: ${validation.allowedWindows.join(', ')}`,
-          reasoning: result.reasoning,
-        });
-        continue;
+        // Try to REPAIR into an allowed window before giving up (see findLegalSlot above).
+        const durMin = Math.max(
+          15,
+          Math.round((new Date(normalizedEnd).getTime() - new Date(normalizedStart).getTime()) / 60000),
+        );
+        const repaired = findLegalSlot(normalizedStart, durMin, validation.allowedWindows);
+
+        if (repaired) {
+          console.log(`🔧 WINDOW REPAIR: "${originalTask.title}" (${originalTask.category}) ${normalizedStart} → ${repaired.start} (${repaired.window}); AI had placed it in "${validation.actualWindow}"`);
+          repairedTasks.push({
+            taskId: originalTask.id,
+            taskIndex: result.taskIndex,
+            from: normalizedStart,
+            to: repaired.start,
+            window: repaired.window,
+            aiWindow: validation.actualWindow,
+          });
+          normalizedStart = repaired.start;
+          normalizedEnd = repaired.end;
+        } else {
+          console.warn(`🚫 WINDOW VIOLATION: "${originalTask.title}" (${originalTask.category}) scheduled in "${validation.actualWindow}" but allowed: [${validation.allowedWindows.join(', ')}] — no free slot in an allowed window today — REJECTED`);
+          rejectedTasks.push({
+            taskId: originalTask.id,
+            taskIndex: result.taskIndex,
+            reason: `Window violation: placed in ${validation.actualWindow}, allowed: ${validation.allowedWindows.join(', ')}`,
+            reasoning: result.reasoning,
+          });
+          continue;
+        }
       }
 
       // POST-AI VALIDATION 2: Check overlap with previously accepted slots in this batch
@@ -850,6 +921,7 @@ IMPORTANT: Only flag truly nonsensical placements. Do NOT flag tasks just becaus
               startET: new Date(s.start_time).toLocaleString('en-US', { timeZone: timezone }),
             })),
             rejected: rejectedTasks.map((r: any) => ({ taskIndex: r.taskIndex, reason: r.reason })),
+            repaired: repairedTasks,
           },
         },
       });
@@ -858,6 +930,7 @@ IMPORTANT: Only flag truly nonsensical placements. Do NOT flag tasks just becaus
     return new Response(JSON.stringify({
       scheduled: scheduledTasks,
       rejected: rejectedTasks,
+      repaired: repairedTasks,
       tasksCount: tasks.length,
       processingTimeMs: totalTime
     }), {

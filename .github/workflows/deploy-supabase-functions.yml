@@ -87,9 +87,40 @@ jobs:
       - name: Deploy all functions
         if: steps.changed.outputs.mode == 'all'
         run: |
-          echo "Deploying all functions to wwxgajrtmslzklnyplah..."
-          supabase functions deploy --project-ref wwxgajrtmslzklnyplah
-          echo "✅ All functions deployed"
+          # Deploy each function INDIVIDUALLY rather than one bulk `supabase functions deploy`.
+          #
+          # Why: the bulk call deploys alphabetically and aborts on the first failure, so a single
+          # bad function silently skips every function after it. Observed 2026-08-21: `mcp` bundles
+          # to 26 MB and the deploy API rejects it with
+          #   unexpected update function status 413: {"message":"request entity too large"}
+          # which aborted at "m" — nightly-schedule-builder, notification-*, and
+          # smart-calendar-scheduler were never deployed, while the log looked like a normal run.
+          # That is how a shadow test nearly ran against un-deployed code.
+          #
+          # This loop keeps going, then prints an explicit per-function summary. It still exits
+          # non-zero if anything failed — an oversized function is real signal and must stay visible,
+          # not be excluded to make the check green.
+          echo "Deploying all functions to wwxgajrtmslzklnyplah (individually)..."
+          ok=(); failed=()
+          for dir in supabase/functions/*/; do
+            fn="$(basename "$dir")"
+            case "$fn" in _*) continue;; esac   # _shared etc. are bundled, not deployed
+            if supabase functions deploy "$fn" --project-ref wwxgajrtmslzklnyplah; then
+              echo "✅ $fn"
+              ok+=("$fn")
+            else
+              echo "❌ $fn FAILED (continuing)"
+              failed+=("$fn")
+            fi
+          done
+          echo ""
+          echo "──────── deploy summary ────────"
+          echo "deployed (${#ok[@]}): ${ok[*]}"
+          echo "failed   (${#failed[@]}): ${failed[*]:-none}"
+          if [ ${#failed[@]} -gt 0 ]; then
+            echo "::error::${#failed[@]} function(s) failed to deploy: ${failed[*]}"
+            exit 1
+          fi
 
       - name: Deploy single function
         if: steps.changed.outputs.mode == 'single'
@@ -102,8 +133,24 @@ jobs:
       - name: Deploy changed functions
         if: steps.changed.outputs.mode == 'list'
         run: |
+          # Same continue-then-summarise pattern as the "all" path: without it, one failing
+          # function silently skips the remaining changed ones and the log still looks fine.
+          ok=(); failed=()
           for fn in ${{ steps.changed.outputs.fns }}; do
             echo "Deploying $fn..."
-            supabase functions deploy "$fn" --project-ref wwxgajrtmslzklnyplah
-            echo "✅ $fn deployed"
+            if supabase functions deploy "$fn" --project-ref wwxgajrtmslzklnyplah; then
+              echo "✅ $fn deployed"
+              ok+=("$fn")
+            else
+              echo "❌ $fn FAILED (continuing)"
+              failed+=("$fn")
+            fi
           done
+          echo ""
+          echo "──────── deploy summary ────────"
+          echo "deployed (${#ok[@]}): ${ok[*]:-none}"
+          echo "failed   (${#failed[@]}): ${failed[*]:-none}"
+          if [ ${#failed[@]} -gt 0 ]; then
+            echo "::error::${#failed[@]} function(s) failed to deploy: ${failed[*]}"
+            exit 1
+          fi
