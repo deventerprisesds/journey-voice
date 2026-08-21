@@ -73,8 +73,8 @@ export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
     },
     after_work: {
       start: 17,
-      end: 22,
-      days: [1, 2, 3, 4, 5, 6], // weekdays + Saturday
+      end: 19, // ends where evening begins — no overlap with evening (19–22)
+      days: [1, 2, 3, 4, 5], // weekdays only (Saturday is covered by weekends)
     },
     evening: {
       start: 19,
@@ -152,11 +152,12 @@ export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
       interview: ['business_hours', 'CAREER'],
       review: ['business_hours', 'CAREER'],
       
-      // Education keywords
-      study: ['business_hours', 'PROF_EDUCATION'],
-      class: ['business_hours', 'PROF_EDUCATION'],
-      lecture: ['business_hours', 'PROF_EDUCATION'],
-      assignment: ['business_hours', 'PROF_EDUCATION'],
+      // Education keywords — study/class/lecture/assignment go to evening (personal
+      // study time after the workday); homework stays after_work.
+      study: ['evening', 'PROF_EDUCATION'],
+      class: ['evening', 'PROF_EDUCATION'],
+      lecture: ['evening', 'PROF_EDUCATION'],
+      assignment: ['evening', 'PROF_EDUCATION'],
       homework: ['after_work', 'PROF_EDUCATION'],
       
       // After work keywords
@@ -184,19 +185,19 @@ export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
       store: ['after_work', 'LIFE'],
       grocery: ['after_work', 'LIFE'],
       groceries: ['after_work', 'LIFE'],
-      bank: ['business_hours', 'LIFE'],
-      post_office: ['business_hours', 'LIFE'],
-      doctor: ['business_hours', 'LIFE'],
-      dentist: ['business_hours', 'LIFE'],
+      // bank / post_office / doctor / dentist are handled by the TRAIT layer
+      // (venue-dependent → after-work + nudge; appointment → flexible), which
+      // overrides keywords — so they are intentionally NOT keyword entries here.
       appointment: ['flexible', 'LIFE'],
       
-      // Financial impact keywords
-      payment: ['business_hours', 'LIFE'],
-      invoice: ['business_hours', 'CAREER'],
-      bill: ['business_hours', 'LIFE'],
-      tax: ['business_hours', 'LIFE'],
-      budget: ['business_hours', 'CAREER'],
-      contract: ['business_hours', 'CAREER'],
+      // Financial impact keywords — flexible window (can be done any time 9am–10pm);
+      // their HIGH-IMPACT priority is handled separately by the scorer, not the window.
+      payment: ['flexible', 'LIFE'],
+      invoice: ['flexible', 'CAREER'],
+      bill: ['flexible', 'LIFE'],
+      tax: ['flexible', 'LIFE'],
+      budget: ['flexible', 'CAREER'],
+      contract: ['flexible', 'CAREER'],
       
       // Communications / people keywords
       email: ['business_hours', 'CAREER'],

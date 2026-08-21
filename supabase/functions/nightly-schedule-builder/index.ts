@@ -5,6 +5,15 @@ import {
   DEFAULT_CATEGORY_MAPPINGS,
   resolveConfig,
   validateTaskWindow,
+  resolveWindowPlan,
+  resolvePriorityWeight,
+  classifyTaskTraits,
+  classifyTaskTraitsLLM,
+  mergeTraits,
+  type TaskTraits,
+  resolveMaxDailyMinutes,
+  withinDailyCap,
+  classifyImpact,
   MAX_ASSIGNMENTS_PER_DAY,
   ASSIGNMENT_URGENT_HOURS,
   ASSIGNMENT_PRIORITY_DAYS,
@@ -225,31 +234,8 @@ function getPreferredWindows(
  * Returns { window, matchedKeyword } when a match is found AND the resulting
  * window is in the active window set for the day. Returns null otherwise.
  */
-function getKeywordWindowOverride(
-  title: string,
-  contextKeywords: Record<string, string[]> | undefined,
-  activeWindowNames: string[]
-): { window: string; matchedKeyword: string } | null {
-  if (!contextKeywords || !title) return null;
-  const lower = title.toLowerCase();
-
-  for (const [keyword, mapping] of Object.entries(contextKeywords)) {
-    // mapping is [timeWindow, status] per schedulingRules.ts
-    if (!Array.isArray(mapping) || mapping.length === 0) continue;
-    const targetWindow = mapping[0];
-    if (!targetWindow || targetWindow === 'flexible') continue;
-
-    // Match by word boundary (and underscore→space variant for keys like "follow_up")
-    const kw = keyword.toLowerCase().replace(/_/g, ' ');
-    if (kw.length < 3) continue;
-    if (lower.includes(kw)) {
-      if (activeWindowNames.includes(targetWindow)) {
-        return { window: targetWindow, matchedKeyword: keyword };
-      }
-    }
-  }
-  return null;
-}
+// getKeywordWindowOverride now lives in _shared/scheduling-defaults.ts so the
+// voice/manual smart scheduler honors the same keyword rules as this nightly builder.
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -974,6 +960,63 @@ serve(async (req) => {
         let totalScheduledAcrossWeek = 0;
         const weekResults: Record<string, any> = {};
 
+        // ── Value-aware overflow queue (per-user, this run) ──────────────────────
+        // High-impact tasks that overflow a full window/day are collected here and
+        // upserted after the week loop; ordinary overflows quietly roll (unchanged).
+        // We clear this user's OPEN rows first so the queue reflects the CURRENT run
+        // (a task placed this run should not linger in the queue).
+        const overflowRows: Array<{
+          user_id: string; task_id: string; overflow_date: string; reason: string;
+          score: number | null; impact_factors: string[]; duration_minutes: number | null;
+          suggested_bump_task_id: string | null; suggested_bump_title: string | null; message: string;
+        }> = [];
+        const overflowSeen = new Set<string>(); // task_id|date dedup across passes
+        try {
+          await supabase.from('task_overflow_queue').delete().eq('user_id', userId).eq('status', 'open');
+        } catch (e) {
+          console.warn('  ⚠️ Could not clear open overflow queue rows:', e);
+        }
+
+        // ── Warm the trait cache ONCE for the whole run ──────────────────────────
+        // Trait classification depends only on the title, so we compute it a single
+        // time per unique title (bounded concurrency) BEFORE the per-day loop rather
+        // than calling the LLM inside the nested day×task placement loops. The LLM
+        // pass GENERALIZES beyond the deterministic anchors (optometrist, DMV, vet…)
+        // so the keyword fallback is rarely reached; it returns null on any failure so
+        // the deterministic anchor floor is never lost. Keyed by normalized title.
+        const traitsByTitle = new Map<string, TaskTraits>();
+        try {
+          const { data: warmTasks } = await supabase
+            .from('tasks')
+            .select('title')
+            .eq('user_id', userId)
+            .in('status', ['READY', 'UP_NEXT', 'TODO', 'BACKLOG'])
+            .is('is_scheduled', false)
+            .is('completed_at', null)
+            .not('title', 'ilike', '%Test Task%');
+          const uniqueTitles = [...new Set((warmTasks || [])
+            .map((t: any) => (t.title || '').trim())
+            .filter((t: string) => t.length > 0))];
+          const lovableKey = Deno.env.get('LOVABLE_API_KEY');
+          let llmHits = 0, llmGeneralized = 0;
+          const CONCURRENCY = 5;
+          for (let i = 0; i < uniqueTitles.length; i += CONCURRENCY) {
+            const batch = uniqueTitles.slice(i, i + CONCURRENCY);
+            await Promise.all(batch.map(async (title) => {
+              const anchor = classifyTaskTraits(title);
+              const llm = lovableKey ? await classifyTaskTraitsLLM(title, lovableKey) : null;
+              if (llm) {
+                llmHits++;
+                if (llm.venueDependent !== anchor.venueDependent || llm.appointment !== anchor.appointment) llmGeneralized++;
+              }
+              traitsByTitle.set(title.toLowerCase(), mergeTraits(anchor, llm));
+            }));
+          }
+          console.log(`  🤖 Trait warm-up: ${uniqueTitles.length} titles, ${llmHits} LLM-classified, ${llmGeneralized} generalized beyond anchors${lovableKey ? '' : ' (no LOVABLE_API_KEY — deterministic anchors only)'}`);
+        } catch (warmErr) {
+          console.warn(`  ⚠️ Trait warm-up failed (falling back to per-task deterministic anchors):`, warmErr);
+        }
+
         for (let dayOffset = 0; dayOffset < totalDays; dayOffset++) {
           // Compute target date from todayISO (timezone-correct) to avoid UTC drift
           const [tY, tM, tD] = todayISO.split('-').map(Number);
@@ -1036,10 +1079,26 @@ serve(async (req) => {
           ];
 
           const windowCapacities = computeUsedMinutes(allScheduledItems, activeWindows, targetISO, timezone);
-          
+
           const totalRemainingMinutes = Object.values(windowCapacities).reduce(
             (sum, wc) => sum + wc.remainingMinutes, 0
           );
+
+          // ── Daily working-hours cap ──────────────────────────────────────────
+          // The per-window capacities don't bound the whole day (weekday windows sum
+          // to ~16h), so enforce config.workingHours.maxDailyHours (default 7h) on the
+          // total TASK minutes placed per day. Seed from tasks ALREADY scheduled today
+          // (prior runs + Tier A committed earlier this run) so we don't over-pack across
+          // passes. External calendar events are the user's own commitments and are NOT
+          // counted against the task budget.
+          const maxDailyMinutes = resolveMaxDailyMinutes(config);
+          let dayTaskMinutesUsed = (dayScheduled || []).reduce((sum: number, t: any) => {
+            if (!t.start_time || !t.end_time) return sum;
+            return sum + Math.max(0, (new Date(t.end_time).getTime() - new Date(t.start_time).getTime()) / 60000);
+          }, 0);
+          let dayCapDeferrals = 0;
+          const capLabel = Number.isFinite(maxDailyMinutes) ? `${maxDailyMinutes / 60}h` : 'uncapped';
+          console.log(`      ⏱️ Daily hours cap: ${Math.round(dayTaskMinutesUsed)} min already used (max ${capLabel})`);
 
           console.log(`    📊 Window capacities for ${targetISO}:`);
           for (const [name, cap] of Object.entries(windowCapacities)) {
@@ -1110,7 +1169,9 @@ serve(async (req) => {
           }
 
           // STEP 4: SCORE and FILL by window capacity (with dedup)
-          const priorityWeight: Record<string, number> = { URGENT: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
+          // Priority weights come from the user's GUI config (contextRules.priorityMappings)
+          // instead of a hardcoded map — falls back to 4/3/2/1 when unset.
+          const priorityWeight: Record<string, number> = resolvePriorityWeight(config);
           
           // Same-day title dedup: normalize and keep highest-scored only
           const seenTitlesThisDay = new Set<string>();
@@ -1310,7 +1371,43 @@ serve(async (req) => {
           const dayPlacements: Array<Record<string, unknown>> = [];
           const dayRejections: Array<Record<string, unknown>> = [];
           const dayKeywordOverrides: Array<Record<string, unknown>> = [];
+          // Venue-dependent tasks placed after-work carry a nudge to move them into
+          // business hours (when the venue is likely open). We persist that nudge on the
+          // task so the morning review / day context can DELIVER it to the user.
+          const venueNudgeByTaskId = new Map<string, { toWindow: string; message: string }>();
           const deferredAssignmentsToday: Array<{ id: string; tier: 'B' | 'C' }> = [];
+
+          // Value-aware overflow: when a task can't be placed, ORDINARY tasks quietly
+          // roll to the next day (nothing queued). A HIGH-IMPACT task instead lands in
+          // the overflow queue with a nudge + a suggested lower-value item to bump.
+          const nowMsForImpact = now.getTime();
+          const collectOverflow = (task: any, duration: number, reason: string) => {
+            const key = `${task.id}|${targetISO}`;
+            if (overflowSeen.has(key)) return;
+            const impact = classifyImpact({
+              title: task.title, score: task.score, isPriority: !!task.is_priority,
+              dueDate: task.due_date ?? null, nowMs: nowMsForImpact,
+            });
+            if (!impact.highImpact) return; // ordinary tasks quietly roll — not queued
+            overflowSeen.add(key);
+            // Suggested bump: the lowest-scored task ALREADY placed today whose score is
+            // below this task's — displacing it would free room for the higher-value item.
+            const bumpable = dayPlacements
+              .filter((p: any) => typeof p.score === 'number' && p.score < (task.score ?? 0))
+              .sort((a: any, b: any) => (a.score as number) - (b.score as number))[0] as any;
+            const factorText = impact.factors.length ? ` (${impact.factors.join(', ')})` : '';
+            const bumpText = bumpable
+              ? ` You could bump "${bumpable.title}" (lower value) to make room today.`
+              : '';
+            overflowRows.push({
+              user_id: userId, task_id: task.id, overflow_date: targetISO, reason,
+              score: typeof task.score === 'number' ? task.score : null,
+              impact_factors: impact.factors, duration_minutes: duration,
+              suggested_bump_task_id: bumpable?.taskId ?? null,
+              suggested_bump_title: bumpable?.title ?? null,
+              message: `"${task.title}" is high-impact${factorText} but couldn't fit ${targetISO} (${reason === 'daily_hours_cap' ? 'daily hours budget reached' : 'no window capacity'}).${bumpText}`,
+            });
+          };
 
           for (const task of dedupedCandidates) {
             const duration = task.estimate_minutes ||
@@ -1333,19 +1430,52 @@ serve(async (req) => {
               continue;
             }
 
-            // KEYWORD OVERRIDE: contextRules.keywords beats category default.
-            const keywordOverride = getKeywordWindowOverride(task.title, contextKeywords, activeWindowNames);
-            let preferredWindows: string[];
-            if (keywordOverride) {
-              preferredWindows = [keywordOverride.window];
+            // AGREED precedence: explicit > trait (appointment / venue-dependent) >
+            // keyword table (FALLBACK) > category default. Keywords no longer beat a
+            // trait — "bank" is venue-dependent → after-work (with a business-hours nudge)
+            // rather than the old "bank → business_hours" keyword mapping.
+            const cachedTraits = traitsByTitle.get((task.title || '').trim().toLowerCase());
+            const plan = resolveWindowPlan(task.title, task.category, config, timeWindows, categoryMappings, { traits: cachedTraits });
+            let preferredWindows = plan.allowedWindows.filter((w) => activeWindowNames.includes(w));
+            if (preferredWindows.length === 0) {
+              preferredWindows = getPreferredWindows(task.category, categoryMappings, activeWindowNames);
+            }
+            const windowConstrained = plan.source === 'trait' || plan.source === 'keyword' || plan.source === 'explicit';
+            if (plan.matchedKeyword) {
               dayKeywordOverrides.push({
                 taskId: task.id, title: task.title, category: task.category,
-                matchedKeyword: keywordOverride.matchedKeyword,
-                overrideWindow: keywordOverride.window,
+                matchedKeyword: plan.matchedKeyword,
+                overrideWindow: preferredWindows[0],
               });
-              console.log(`      🔑 Keyword override: "${task.title}" matched "${keywordOverride.matchedKeyword}" → ${keywordOverride.window}`);
-            } else {
-              preferredWindows = getPreferredWindows(task.category, categoryMappings, activeWindowNames);
+              // LOUD: placement fell to the low-confidence keyword fallback (no trait).
+              console.warn(`      ⚠️⚠️ KEYWORD FALLBACK: "${task.title}" matched "${plan.matchedKeyword}" → ${preferredWindows[0]} (no trait — low-confidence placement)`);
+            } else if (plan.trait) {
+              console.log(`      🧭 Trait ${plan.trait}: "${task.title}" → [${preferredWindows.join(', ')}]${plan.nudgeToBusinessHours ? ' (nudge → business hours)' : ''}`);
+            }
+            if (plan.nudgeToBusinessHours) {
+              venueNudgeByTaskId.set(task.id, {
+                toWindow: 'business_hours',
+                message: `"${task.title}" is scheduled after work, but this kind of errand usually needs a place that's open during business hours. Want to move it into a business-hours slot?`,
+              });
+            }
+
+            // Daily working-hours cap: don't schedule TASKS beyond maxDailyHours for the
+            // day, even if a window still has clock-time left. Overcommitment is flagged
+            // (deferred to a later day) instead of packed into an over-long day.
+            if (!withinDailyCap(dayTaskMinutesUsed, duration, maxDailyMinutes)) {
+              dayCapDeferrals++;
+              dayRejections.push({
+                taskId: task.id, title: task.title, category: task.category,
+                score: task.score, duration,
+                reason: 'daily_hours_cap',
+                dayMinutesUsed: Math.round(dayTaskMinutesUsed), maxDailyMinutes,
+                tier,
+              });
+              collectOverflow(task, duration, 'daily_hours_cap');
+              if (isAssignment && tier && tier !== 'A') {
+                deferredAssignmentsToday.push({ id: task.id, tier: tier as 'B' | 'C' });
+              }
+              continue;
             }
 
             let assigned = false;
@@ -1362,7 +1492,7 @@ serve(async (req) => {
 
             // Flexible capacity aggregation: ONLY for non-assignment tasks without keyword override.
             // Assignments must respect their category windows; aggregate-fit would bypass that.
-            if (!assigned && !isAssignment && !keywordOverride && preferredWindows.length === activeWindowNames.length) {
+            if (!assigned && !isAssignment && !windowConstrained && preferredWindows.length === activeWindowNames.length) {
               const totalRemaining = Object.values(windowRemaining).reduce((s, v) => s + v, 0);
               if (totalRemaining >= duration) {
                 const bestWindow = Object.entries(windowRemaining)
@@ -1378,13 +1508,15 @@ serve(async (req) => {
             }
 
             if (assigned) {
+              dayTaskMinutesUsed += duration; // count toward the daily working-hours cap
               if (isAssignment) {
                 dailyAssignmentCount[targetISO] = placedAssignmentsToday + 1;
               }
               dayPlacements.push({
                 taskId: task.id, title: task.title, category: task.category,
                 score: task.score, duration, window: assignedWindow,
-                keywordOverride: keywordOverride?.matchedKeyword ?? null,
+                keywordOverride: plan.matchedKeyword ?? null,
+                trait: plan.trait ?? null,
                 tier,
               });
             } else {
@@ -1395,14 +1527,25 @@ serve(async (req) => {
                 taskId: task.id, title: task.title, category: task.category,
                 score: task.score, duration, preferredWindows,
                 reason: 'no_window_capacity',
-                keywordOverride: keywordOverride?.matchedKeyword ?? null,
+                keywordOverride: plan.matchedKeyword ?? null,
+                trait: plan.trait ?? null,
                 tier,
               });
+              collectOverflow(task, duration, 'no_window_capacity');
               console.log(`    ⚠️ "${task.title}" doesn't fit any allowed window — skipping`);
             }
 
             const totalRemaining = Object.values(windowRemaining).reduce((s, v) => s + v, 0);
             if (totalRemaining <= 0) break;
+            // Day is at its working-hours budget — stop placing further tasks today.
+            if (dayTaskMinutesUsed >= maxDailyMinutes) {
+              console.log(`      ⏱️ Daily hours cap reached (${Math.round(dayTaskMinutesUsed)}/${maxDailyMinutes} min) — deferring remaining candidates to later days`);
+              break;
+            }
+          }
+
+          if (dayCapDeferrals > 0) {
+            console.warn(`      ⚠️ OVERCOMMIT: ${dayCapDeferrals} task(s) deferred from ${targetISO} — day already at the ${capLabel} working-hours budget (${Math.round(dayTaskMinutesUsed)} min used)`);
           }
 
           pushStep(
@@ -1416,6 +1559,9 @@ serve(async (req) => {
                 Object.entries(windowCapacities).map(([n, c]) => [n, { total: c.totalMinutes, remaining: c.remainingMinutes }])
               ),
               candidateCount: dedupedCandidates.length,
+              maxDailyMinutes,
+              dayTaskMinutesUsed: Math.round(dayTaskMinutesUsed),
+              capDeferrals: dayCapDeferrals,
             },
             {
               accepted: dayPlacements,
@@ -1496,6 +1642,7 @@ serve(async (req) => {
 
             const candidate = selectedCandidates.find(c => c.id === slot.taskId);
             const preScheduleStatus = candidate?.status || 'TODO';
+            const venueNudge = venueNudgeByTaskId.get(slot.taskId);
 
             // DRY-RUN: skip the write, keep all in-memory bookkeeping, collect the plan.
             if (dryRun) {
@@ -1526,7 +1673,13 @@ serve(async (req) => {
                 start_time: slot.start_time,
                 end_time: slot.end_time,
                 is_scheduled: true,
-                scheduling_context: { pre_schedule_status: preScheduleStatus },
+                // MERGE: keep the venue_nudge payload (trait layer) AND the
+                // status-preserving helper — the two sides changed this block
+                // independently and both behaviours are wanted.
+                scheduling_context: {
+                  pre_schedule_status: preScheduleStatus,
+                  ...(venueNudge ? { venue_nudge: venueNudge } : {}),
+                },
                 status: statusAfterSchedule(preScheduleStatus),
                 updated_at: now.toISOString(),
               })
@@ -1654,13 +1807,19 @@ serve(async (req) => {
                       console.log(`      🔁 [Reshuffle] "${candidate?.title}" placed in retry window (dry-run)`);
                       continue;
                     }
+                    const retryVenueNudge = venueNudgeByTaskId.get(slot.taskId);
                     const { error: retryErr } = await supabase
                       .from('tasks')
                       .update({
                         start_time: slot.start_time,
                         end_time: slot.end_time,
                         is_scheduled: true,
-                        scheduling_context: { pre_schedule_status: preScheduleStatus, reshuffle_retry: true },
+                        // MERGE: venue_nudge (trait layer) + status-preserving helper.
+                        scheduling_context: {
+                          pre_schedule_status: preScheduleStatus,
+                          reshuffle_retry: true,
+                          ...(retryVenueNudge ? { venue_nudge: retryVenueNudge } : {}),
+                        },
                         status: statusAfterSchedule(preScheduleStatus),
                         updated_at: now.toISOString(),
                       })
@@ -1840,6 +1999,29 @@ serve(async (req) => {
           },
           { attempted: 0, committed: 0, deferred: 0 },
         );
+
+        // ── Persist the value-aware overflow queue ───────────────────────────────
+        // Keep only tasks that NEVER got scheduled anywhere in this run (a task that
+        // overflowed an early day but was placed later must not linger), and collapse
+        // to one row per task (earliest overflow date).
+        try {
+          const perTask = new Map<string, typeof overflowRows[number]>();
+          for (const row of overflowRows) {
+            if (scheduledTaskIds.has(row.task_id)) continue; // ended up scheduled — skip
+            const existing = perTask.get(row.task_id);
+            if (!existing || row.overflow_date < existing.overflow_date) perTask.set(row.task_id, row);
+          }
+          const finalRows = [...perTask.values()];
+          if (finalRows.length > 0) {
+            const { error: ofErr } = await supabase
+              .from('task_overflow_queue')
+              .upsert(finalRows, { onConflict: 'task_id,overflow_date' });
+            if (ofErr) console.warn('  ⚠️ overflow queue upsert failed:', ofErr.message);
+            else console.log(`  📥 Overflow queue: ${finalRows.length} high-impact task(s) queued for review`);
+          }
+        } catch (e) {
+          console.warn('  ⚠️ overflow queue persist error:', e);
+        }
 
         // Calendar status snapshot for today (used by daily-review pipeline messaging)
         // Tri-state: connected_with_events | connected_no_events | not_connected | query_failed

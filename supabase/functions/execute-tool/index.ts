@@ -3,7 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { normalizeDueDate, normalizeDateTime, getTodayInTimezone, formatInTimezone } from "../_shared/timezone.ts";
 import { getToolDefinitions } from "../_shared/tool-definitions.ts";
 import { getTopicGroupsManual, WINDOW_RANGES, CATEGORY_WINDOW_MAPPING } from "../_shared/call-context-builder.ts";
-import { resolveConfig, validateTaskWindow } from "../_shared/scheduling-defaults.ts";
+import { resolveConfig, validateTaskWindow, DEFAULT_TIME_WINDOWS } from "../_shared/scheduling-defaults.ts";
 import { runDedup, finalizeDedup, type DedupLogEntry } from "../_shared/task-dedup.ts";
 
 // ── Rollback Flag for shared topic ranking ──────────────────────────
@@ -2570,14 +2570,11 @@ function itineraryDetectWindow(hour: number, isWeekend: boolean): string {
 }
 
 function itineraryWindowRange(window: string): { start: number; end: number } {
-  switch (window) {
-    case 'morning': return { start: 6, end: 9 };
-    case 'business_hours': return { start: 9, end: 17 };
-    case 'after_work': return { start: 17, end: 19 };
-    case 'evening': return { start: 19, end: 23 };
-    case 'weekends': return { start: 9, end: 21 };
-    default: return { start: 9, end: 17 };
-  }
+  // Source bounds from the canonical shared windows so find_open_slots offers only
+  // slots the placer/validator will actually accept (kills the drift where after_work
+  // was 17–19, evening 19–23, weekends 9–21 here vs 17–22 / 19–22 / 10–20 canonical).
+  const w = (DEFAULT_TIME_WINDOWS as Record<string, { start: number; end: number }>)[window];
+  return w ? { start: w.start, end: w.end } : { start: 9, end: 17 };
 }
 
 function explainSchedulingScoreServer(task: any): {
