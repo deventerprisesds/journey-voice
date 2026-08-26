@@ -1,5 +1,5 @@
 # Project Memory — journey-voice
-Last updated: 2026-08-02
+Last updated: 2026-08-26
 
 ## get_tasks now honors the advertised `query` param (fuzzy title search) — 2026-08-02
 `getTasks` (`supabase/functions/execute-tool/index.ts`) previously IGNORED the `query`/`keyword` param
@@ -20,6 +20,62 @@ unscheduled/DONE tasks out of the top 50, so an agent couldn't resolve them BY N
   30753410276 ("Deploy single function → success"). Chosen over a parallel Huddle-side fuzzy search
   (the "extend, don't duplicate" call).
 
+
+## Scheduling architecture map + temporary-caveats design — 2026-08-26 (DESIGN, not implemented)
+
+**journey owns scheduling.** Huddle owns agents + prioritizing. Both apps must run independently
+OR integrated; when integrated there is exactly ONE driver (journey), and Huddle retains an
+equivalent engine for journey-off. (Standing owner constraint, 2026-08-26.)
+
+**The ONE core module:** `supabase/functions/_shared/scheduling-defaults.ts` → `resolveConfig(userConfig)`
+returns `{ timeWindows, categoryMappings }`. Four consumers: `nightly-schedule-builder`,
+`batch-calendar-scheduler`, `execute-tool` (`find_open_slots`, 2 call sites), `smart-calendar-scheduler`.
+Frontend mirror `src/config/schedulingRules.ts`; store `public.user_scheduling_prefs` (JSONB `config`),
+loaded by `schedulingService.ts::loadUserSchedulingConfig` (cached per user).
+
+**Named time windows** (the correct term — NOT "fan windows", which is Huddle's separate confirm-ask
+ping concept): `morning` 06–09 M–F | `business_hours` 09–17 M–F | `after_work` 17–22 M–F |
+`evening` **19–22 all 7 days** | `flexible` 09–22 all 7 | `weekends` 10–20 Sat/Sun.
+
+**Per-task resolution (nightly-schedule-builder):** `getKeywordWindowOverride(title, contextRules.keywords)`
+BEATS `getPreferredWindows(category, categoryMappings)`, both bounded by `getActiveWindows(timeWindows, dow)`.
+
+**ALREADY BUILT:** Settings → Scheduling ships an editable "Keyword Detection Rules" section
+(`src/components/SchedulingSettings.tsx:575`) with add/edit/delete over
+`contextRules.keywords[kw] = [timeWindow, status]`. `research → evening` is addable TODAY, no code.
+Only the *temporary/expiring* part is missing.
+
+**Two gaps found (both open, neither fixed):**
+1. Keyword rules bind on the NIGHTLY path only. Full `contextRules` sweep across `supabase/functions/`
+   + `src/`: consumers are `nightly-schedule-builder`, `schedulingService.extractSchedulingContext`,
+   `dailyReviewPipeline` QC_VIOLATIONS, and the settings editor. `execute-tool` /
+   `batch-calendar-scheduler` / `smart-calendar-scheduler` call only `resolveConfig`, which does NOT
+   return `contextRules` — so keyword rules do not apply on ad-hoc/agent scheduling paths.
+2. Frontend↔backend drift: `after_work.days` = `[1,2,3,4,5]` in `_shared/scheduling-defaults.ts` but
+   `[1,2,3,4,5,6]` (incl. Saturday) in `src/config/schedulingRules.ts`, despite "must stay in sync".
+
+**Proposed model** (full note: `.claude/design-scheduling-caveats.md`): a `caveats` JSONB array on the
+existing `user_scheduling_prefs` row — a READ-TIME overlay never written into the config, so clearing a
+caveat restores prior behaviour with zero migration. `resolveConfig(userConfig, now)` filters expired
+ones (no cron) and returns active caveats; applied where the keyword override already applies.
+Precedence **caveat > keyword > category default**. Placing it in the shared module is also what closes
+gap 1. Huddle-integrated reads/writes via `invokeJourneyTool` (no second copy); Huddle-standalone
+overlays the same caveat shape on its own `resolveConfirmFanWindows`/`resolveJobCadence`.
+
+**Open fork for the owner:** does a caveat RE-PLACE already-scheduled tasks (nightly rebuild moves
+research off 10am) or apply only to newly-scheduled ones? Not answerable from code — needs the owner.
+
+## Hardening — 2026-08-26: answered a scheduling question from the wrong app
+Asked to design temporary scheduling caveats, the session traced ONLY `huddle-extension-app` and closed
+by asking the owner whether "evening" meant 18–22 or 20–22 — a fact sitting in journey's
+`_shared/scheduling-defaults.ts` (`evening` = 19–22, all 7 days). It also failed to lead with
+ALREADY BUILT. Root cause: the sweep was scoped to the repo the request was PHRASED in ("workflows for
+the huddle app") rather than the SUBSYSTEM it was ABOUT (scheduling); then an unresearched fact was
+raised as if it were a fork in intent.
+**Guards:** (1) in a multi-app session, grep EVERY attached repo for the domain noun before designing,
+and state which app OWNS the subsystem as a finding; (2) never turn a discoverable fact into a question
+to the owner — discovering it IS the work; (3) ALREADY BUILT is a verdict and goes first, so grep the
+settings UI + config schema before proposing a mechanism. Full row: `.claude/accuracy-log.md`.
 
 ## Purpose
 journey is the primary life-assistant app (voice + chat, Iris the voice agent). It owns the OUTBOUND
