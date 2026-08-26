@@ -117,3 +117,36 @@ file / the SDK source, not web search alone.)
 ## Related
 - Huddle side of the task-sync mirror + agent brains: `deventerpriseds-org/huddle-extension-app`.
 - Supabase project ref, edge-function deploy, and the outbound task-sync trigger facts: see `CLAUDE.md`.
+
+
+## Scheduling config — traps worth more than the code (2026-08-26)
+
+**`resolveConfig(userConfig)` takes `userConfig.timeWindows` WHOLESALE**, not key-by-key, so a shipped
+default is only ever a fallback for users who have never saved. Changing a default in
+`src/config/schedulingRules.ts` or `_shared/scheduling-defaults.ts` does NOTHING for an existing user.
+Verify any default change against `public.user_scheduling_prefs`, never against the source file.
+
+**The owner's live row** (`a3378f93-…`) is `after_work {17→19, Mon–Fri}`, `evening {19→22, all days}`.
+The `end: 19` is theirs, not the known 17–19/17–22 drift — do not "correct" it to 22.
+
+**Two copies of the same defaults must stay in sync and already drifted once:**
+`src/config/schedulingRules.ts` (frontend) and `supabase/functions/_shared/scheduling-defaults.ts`
+(backend authority, used by all four schedulers). Saturday in `after_work` was the drift; fixed
+2026-08-26 on the owner's call. There is still no test enforcing the contract.
+
+## Hardening — 2026-08-26
+
+**Answered a scheduling question from the wrong app.** Asked to design temporary scheduling caveats, I
+swept only `huddle-extension-app` and then asked the owner what "evening" meant — when `evening` is a
+NAMED TIME WINDOW (19–22, all days) defined in journey's `_shared/scheduling-defaults.ts`. The owner:
+*"you havent investigated enough. you woud know the answer... if you had."*
+Root cause: I scoped the sweep to the repo the request was PHRASED in rather than the subsystem it was
+ABOUT, then converted an unresearched fact into a question to the owner — offloading investigation while
+appearing to make progress. Guard: in a multi-app session, grep EVERY attached repo for the domain noun
+and name which app OWNS the subsystem before designing anything; and never put a code-discoverable fact
+to the owner as a fork in intent. Full row in `.claude/accuracy-log.md`.
+
+**Standing architectural constraint (owner, 2026-08-26):** journey and Huddle must each run
+independently OR integrated. Integrated: Huddle owns agents + prioritizing, journey owns scheduling.
+Each must retain the ability to do the other's job standalone. So scheduling features land in journey;
+Huddle reaches them through the proxy rather than keeping a second engine.

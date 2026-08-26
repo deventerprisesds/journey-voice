@@ -45,10 +45,22 @@ written until this is settled.
   `execute-tool` / `batch-calendar-scheduler` / `smart-calendar-scheduler` call `resolveConfig`, which
   does not return `contextRules`, so keyword window overrides do not apply on ad-hoc/agent scheduling.
   Closing this falls out naturally if caveats land in the shared module.
-- **[OPEN — drift] Frontend↔backend window parity.** `after_work.days` is `[1,2,3,4,5]` in
-  `_shared/scheduling-defaults.ts` vs `[1,2,3,4,5,6]` (incl. Saturday) in
-  `src/config/schedulingRules.ts`, despite the "must stay in sync" contract. A parity test would
-  prevent recurrence.
+- **[DONE 2026-08-26] Frontend↔backend window parity — `after_work` Saturday.** `after_work.days` was
+  `[1,2,3,4,5]` in `_shared/scheduling-defaults.ts` vs `[1,2,3,4,5,6]` (incl. Saturday) in
+  `src/config/schedulingRules.ts`, despite the "must stay in sync" contract. Owner settled which side
+  was right: *"afterwork should not include Saturday"*. Frontend default corrected to `[1,2,3,4,5]`.
+  Evidence: `tsc --noEmit` clean; both files now read `[1, 2, 3, 4, 5]`; `PROF_EDUCATION`/`VENTURES`
+  still pair `after_work` with `weekends` so no category lost Saturday coverage. Deliberately did NOT
+  touch `end: 22` — the owner's stored row has `end: 19`, which is their own setting.
+  **Scope:** affects new users, Settings "Reset to defaults", and pre-load renders only — the owner's
+  stored row already excluded Saturday (verified against `user_scheduling_prefs`).
+- **[OPEN — guard] A parity test between `src/config/schedulingRules.ts` and
+  `supabase/functions/_shared/scheduling-defaults.ts`.** The "must stay in sync" contract is a comment,
+  and it drifted. Per the org rule, this earns a deterministic check, not another prose line. Not built
+  — needs sign-off.
+- **[OPEN — trap, documented] `resolveConfig` prefers `userConfig.timeWindows` WHOLESALE.** A code-default
+  fix is invisible to any user who has ever saved their windows. Any future "fixed the default" claim
+  must be verified against the stored row, not the source file.
 - **[OPEN — design, mirrored from huddle `.claude/actions.md`]** Integration toggle: exactly one driver
   when integrated (journey = natural driver); Huddle consumes but retains the equivalent engine for
   journey-off. The caveat record is the portable contract between the two sides.

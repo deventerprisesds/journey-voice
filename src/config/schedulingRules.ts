@@ -69,7 +69,7 @@ export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
     after_work: {
       start: 17,
       end: 22,
-      days: [1, 2, 3, 4, 5, 6], // weekdays + Saturday
+      days: [1, 2, 3, 4, 5], // weekdays only -- Saturday is covered by `weekends`
     },
     evening: {
       start: 19,
