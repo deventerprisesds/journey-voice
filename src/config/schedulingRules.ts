@@ -55,6 +55,13 @@ export interface SchedulingConfig {
   // 'priority-rank' = legacy, explicit is_priority dominates. Read by nightly-schedule-builder as
   // `config.scoringModel`; a body override still wins over this. Self-serve via Settings → Scheduling.
   scoringModel?: 'composite' | 'priority-rank';
+  // Whether the is_priority lane grants SCORE privileges in the nightly builder.
+  // true (default) = existing behavior: flagged tasks get a score boost and are immune to the
+  // pushed-count and staleness penalties.
+  // false = the lane is ignored for scoring, so due date / recency / keywords decide ordering.
+  // Added 2026-08-25: the lane had spread to 89% of one board, so it no longer discriminated and
+  // long-overdue flagged items were outranking fresh due-today work. Reversible at any time.
+  priorityBoost?: boolean;
 }
 
 // Default configuration blending all existing rules
@@ -225,6 +232,7 @@ export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
 
 Return your suggestion with reasoning that explains why this time makes sense for this specific activity.`, // Default AI instructions
   scoringModel: 'composite', // Composite is the default; user can opt into legacy 'priority-rank'.
+  priorityBoost: true, // Default preserves existing behavior; set false to ignore the is_priority lane when scoring.
 };
 
 // Helper function to validate config

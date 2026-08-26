@@ -315,6 +315,25 @@ serve(async (req) => {
         bodyScoringModel
         ?? (config?.scoringModel === 'priority-rank' ? 'priority-rank' : 'composite');
 
+      // PRIORITY BOOST TOGGLE — `config.priorityBoost`, default true (existing behavior).
+      // Set false to stop the is_priority lane from granting SCORE privileges. Added because the
+      // lane stopped discriminating: measured 2026-08-25, 59 of 66 open tasks (89%) carried
+      // is_priority, so the flag no longer marked a curated few — it marked almost everything, and
+      // fresh due-today work lost to 7-week-overdue flagged items.
+      //
+      // Disables three privileges, all of which make a flagged task score better:
+      //   1. the direct score boost (+2..+2.6 composite / +10..+15 priority-rank)
+      //   2. immunity from the pushed-count penalty (a task pushed 15x stopped being penalised)
+      //   3. immunity from the staleness penalty (worth up to -10 — this is what kept ancient
+      //      flagged items competitive with today's work)
+      // HIGH/URGENT on the `priority` enum still protects against staleness, so genuinely important
+      // work keeps a floor. The sort tiebreaker on is_priority is left intact — it only breaks
+      // exact score ties and cannot override a better-scoring task.
+      const priorityBoostEnabled = config?.priorityBoost !== false;
+      if (!priorityBoostEnabled) {
+        console.log(`    🔕 Priority boost DISABLED for this user (config.priorityBoost=false) — is_priority grants no score privileges this run`);
+      }
+
       const { timeWindows, categoryMappings } = resolveConfig(config);
       // contextRules.keywords drives keyword-based window overrides
       // (e.g. "mall" → after_work, even if category LIFE allows flexible 9-22)
@@ -1182,7 +1201,8 @@ serve(async (req) => {
               
               // Explicit user priority. priority-rank (legacy): base +10, rank bonus up to +5 (dominant).
               // composite (default): a SMALL differentiator (+2 base, up to +1 rank) so recency/deadline/finance lead.
-              if ((task as any).is_priority) {
+              // Gated by config.priorityBoost (see priorityBoostEnabled above).
+              if (priorityBoostEnabled && (task as any).is_priority) {
                 if (scoringModel === 'composite') {
                   score += 2 + Math.max(5 - ((task as any).priority_rank ?? 0), 0) * 0.2;
                 } else {
@@ -1199,7 +1219,8 @@ serve(async (req) => {
                 const n = task.pushed_count;
                 if (n <= 3) score += 1;
                 else if (n <= 7) { /* neutral */ }
-                else if (!(task as any).is_priority) score -= 1;
+                // Immunity here is a priority-lane privilege → also gated by config.priorityBoost.
+                else if (!priorityBoostEnabled || !(task as any).is_priority) score -= 1;
               }
               
               // Urgency ladder: ±48h includes overdue (intentional)
@@ -1266,7 +1287,11 @@ serve(async (req) => {
                 // Don't bury important-but-old work with the staleness penalty — that penalty is
                 // what keeps it from ever winning a slot, so it rolls over until it trips the stale
                 // auto-archive. Keep priority-lane and HIGH/URGENT tasks competitive instead.
-                const isImportant = (task as any).is_priority === true || task.priority === 'HIGH' || task.priority === 'URGENT';
+                // Staleness immunity via the priority LANE is gated by config.priorityBoost; the
+                // HIGH/URGENT enum keeps protecting genuinely important work either way, so
+                // disabling the boost never buries something explicitly marked urgent.
+                const isImportant = (priorityBoostEnabled && (task as any).is_priority === true)
+                  || task.priority === 'HIGH' || task.priority === 'URGENT';
                 if (!isAssignmentInGrace && !isImportant) {
                   if (dueDate < thirtyDaysAgoDate) {
                     score -= 10;
