@@ -75,3 +75,50 @@ AC-2's guard (a caveat must never reduce the number of tasks placed).
 - **[OPEN — design, mirrored from huddle `.claude/actions.md`]** Integration toggle: exactly one driver
   when integrated (journey = natural driver); Huddle consumes but retains the equivalent engine for
   journey-off. The caveat record is the portable contract between the two sides.
+
+
+## ACT-jv-2 — temporary scheduling caveats: IMPLEMENTED (2026-08-27)
+
+Owner rulings applied: caveats RE-PLACE already-scheduled tasks; overflow **relaxes** to the regular
+rules "as if the caveat never existed"; `after_work` excludes Saturday (shipped earlier, `e389201`).
+
+**Extends the ONE core system** — `supabase/functions/_shared/scheduling-defaults.ts::resolveConfig`,
+which all four schedulers import. No parallel resolver was created.
+
+- `SchedulingCaveat` / `activeCaveats()` / `caveatMatches()` / `applyCaveats()` in the shared module.
+- Wired into `nightly-schedule-builder` placement: caveat windows PREPEND to the ordered preference
+  list, so the existing fall-through loop delivers "relax" with **no overflow code written**.
+- **AC-7 handled:** the aggregate-fit gate now keys on `baseWindowCount`, not the caveat-modified
+  length. Prepending changes `preferredWindows.length` and would otherwise silently disqualify a task
+  that qualified without a caveat.
+- **Zero migration.** `user_scheduling_prefs.config` is already JSONB, so `config.caveats` needs no DDL.
+- **Round-trip bug found and fixed:** `mergeSchedulingConfig` rebuilds the config object explicitly,
+  so it would have DROPPED caveats on every save — wiping the owner's active caveats the moment they
+  touched any other setting.
+
+**Guard: `src/utils/schedulingCaveats.test.ts`, 9 tests, MUTATION-PROVEN (5/5 classes).** The decisive
+one: flipping prepend→REPLACE (the keyword-override shape) fails 3 tests. That is the bug the naive
+implementation would have shipped — a task whose single caveat window is full gets dropped entirely
+instead of relaxing.
+
+### OPEN — owner decision, deliberately NOT asserted away
+
+**A caveat can change GLOBAL placement count by ±1 task.** Measured over 4000 fixtures: **1.4% place
+one fewer, 1.4% place one more, 97.2% identical; worst case one task either way.** Cause: greedy
+first-fit is order-sensitive, so reordering preferences changes what packs. This is inherent to ANY
+preference change — the existing `contextRules.keywords` overrides behave identically.
+
+The owner's stated rule is PER TASK ("any research that would not fit the slot should fall back to
+the regular placement rules") and that holds exhaustively — asserted and mutation-proven. The
+stronger global invariant I originally drafted into the ACs is NOT achievable with a pure prepend.
+It was corrected in the open rather than weakened quietly.
+
+**If the ±1 is unacceptable:** a day-level fallback (if the caveat pass places fewer, use the
+no-caveat placement for that day) eliminates it, at the cost of a second placement pass per day and
+the caveat occasionally doing nothing for a whole day. Not built — needs sign-off.
+
+### NOT BUILT (deliberately, needs sign-off)
+- Settings UI section to add/clear caveats (the type round-trips; nothing renders it yet).
+- An agent tool (`set_scheduling_caveat`) so a caveat can be set conversationally.
+- Applying caveats on the ad-hoc paths (`execute-tool` / `batch-` / `smart-calendar-scheduler`) —
+  they call `resolveConfig` but do not consume `contextRules` either; same pre-existing gap.

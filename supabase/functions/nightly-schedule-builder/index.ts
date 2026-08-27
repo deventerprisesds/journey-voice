@@ -4,6 +4,8 @@ import {
   DEFAULT_TIME_WINDOWS,
   DEFAULT_CATEGORY_MAPPINGS,
   resolveConfig,
+  activeCaveats,
+  applyCaveats,
   validateTaskWindow,
   MAX_ASSIGNMENTS_PER_DAY,
   ASSIGNMENT_URGENT_HOURS,
@@ -305,6 +307,12 @@ serve(async (req) => {
       const config = userPref.config || {};
 
       const { timeWindows, categoryMappings } = resolveConfig(config);
+      // Temporary caveat overlay — expired ones filtered here, so no cron is needed.
+      const caveats = activeCaveats(config);
+      if (caveats.length) {
+        console.log(`      \u{1F5D3}\uFE0F  ${caveats.length} active scheduling caveat(s): ` +
+          caveats.map((c) => `${c.text || c.id} -> ${c.preferWindows.join('/')}`).join('; '));
+      }
       // contextRules.keywords drives keyword-based window overrides
       // (e.g. "mall" → after_work, even if category LIFE allows flexible 9-22)
       const contextKeywords: Record<string, string[]> | undefined =
@@ -1198,6 +1206,16 @@ serve(async (req) => {
               preferredWindows = getPreferredWindows(task.category, categoryMappings, activeWindowNames);
             }
 
+            // AC-7: aggregate-fit eligibility is judged on the BASE list. Prepending a caveat window
+            // changes preferredWindows.length, which would otherwise silently disqualify a task that
+            // qualified with no caveat — a regression the naive edit introduces.
+            const baseWindowCount = preferredWindows.length;
+            // AC-6: caveat > keyword > category. Caveat windows LEAD; nothing is dropped, so anything
+            // that does not fit falls through to the rules it would have had with no caveat (AC-2).
+            const withCaveats = applyCaveats(preferredWindows, task, caveats, activeWindowNames);
+            const caveatApplied = withCaveats !== preferredWindows;
+            preferredWindows = withCaveats;
+
             let assigned = false;
             let assignedWindow: string | null = null;
             for (const winName of preferredWindows) {
@@ -1212,7 +1230,7 @@ serve(async (req) => {
 
             // Flexible capacity aggregation: ONLY for non-assignment tasks without keyword override.
             // Assignments must respect their category windows; aggregate-fit would bypass that.
-            if (!assigned && !isAssignment && !keywordOverride && preferredWindows.length === activeWindowNames.length) {
+            if (!assigned && !isAssignment && !keywordOverride && baseWindowCount === activeWindowNames.length) {
               const totalRemaining = Object.values(windowRemaining).reduce((s, v) => s + v, 0);
               if (totalRemaining >= duration) {
                 const bestWindow = Object.entries(windowRemaining)
@@ -1235,6 +1253,7 @@ serve(async (req) => {
                 taskId: task.id, title: task.title, category: task.category,
                 score: task.score, duration, window: assignedWindow,
                 keywordOverride: keywordOverride?.matchedKeyword ?? null,
+                caveatApplied,
                 tier,
               });
             } else {

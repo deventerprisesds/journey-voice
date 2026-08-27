@@ -45,6 +45,89 @@ export const DEFAULT_CATEGORY_MAPPINGS: Record<string, CategoryMapping> = {
 };
 
 /**
+ * A TEMPORARY scheduling caveat — the owner's "push research to the evening, for now" case.
+ *
+ * Deliberately an OVERLAY, resolved at read time and NEVER written into `config`. Clearing a caveat
+ * therefore restores prior behaviour exactly, with no migration and no risk of a temporary
+ * preference silently becoming permanent (AC-5).
+ *
+ * A caveat is a PREFERENCE, never a constraint. Its windows are PREPENDED to the task's ordered
+ * preferred-window list; the existing placement loop already falls through to the next window when
+ * one is out of capacity, so anything that does not fit relaxes to the rules it would have had with
+ * no caveat at all (AC-2, the owner's ruling). This is the crucial difference from a keyword
+ * override, which REPLACES the list (`preferredWindows = [win]`) and therefore drops a task entirely
+ * when its single window is full.
+ */
+export interface SchedulingCaveat {
+  id: string;
+  text: string;                    // the owner's own words — for the UI and for agent prompts
+  match: {
+    categories?: string[];         // task.category
+    tags?: string[];               // task.tags
+    keywords?: string[];           // substring match on the task title
+  };
+  preferWindows: string[];         // NAMED windows only — same vocabulary as timeWindows
+  expiresAt?: string | null;       // ISO; null/omitted = active until explicitly cleared
+  createdAt?: string;
+}
+
+/** Caveats still in force at `now` — expired ones are filtered here, so no cron is needed (AC-4). */
+export function activeCaveats(userConfig: any, now: Date = new Date()): SchedulingCaveat[] {
+  const raw = userConfig?.caveats;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((c: any) => {
+    if (!c || typeof c !== 'object') return false;
+    if (!Array.isArray(c.preferWindows) || c.preferWindows.length === 0) return false;
+    if (c.expiresAt === null || c.expiresAt === undefined) return true;
+    const t = Date.parse(c.expiresAt);
+    return Number.isNaN(t) ? false : t > now.getTime();
+  });
+}
+
+/** Does this caveat apply to this task? An empty `match` matches everything. */
+export function caveatMatches(
+  c: SchedulingCaveat,
+  task: { title?: string | null; category?: string | null; tags?: string[] | null },
+): boolean {
+  const m = c.match || {};
+  const hasRule = !!(m.categories?.length || m.tags?.length || m.keywords?.length);
+  if (!hasRule) return true;
+  const cat = (task.category ?? '').toUpperCase();
+  if (m.categories?.some((x) => x.toUpperCase() === cat)) return true;
+  const tags = (task.tags ?? []).map((t) => String(t).toLowerCase());
+  if (m.tags?.some((x) => tags.includes(x.toLowerCase()))) return true;
+  const title = (task.title ?? '').toLowerCase();
+  if (m.keywords?.some((k) => k && title.includes(k.toLowerCase()))) return true;
+  return false;
+}
+
+/**
+ * PREPEND every matching caveat's windows to the ordered preference list, keeping the base list
+ * intact behind them. Never removes an entry — that invariant is what makes overflow relax (AC-2)
+ * and guarantees a caveat can never reduce how many tasks get placed.
+ *
+ * A caveat window not active on the target day contributes nothing (AC-8), mirroring the existing
+ * `getKeywordWindowOverride` guard.
+ */
+export function applyCaveats(
+  basePreferred: string[],
+  task: { title?: string | null; category?: string | null; tags?: string[] | null },
+  caveats: SchedulingCaveat[],
+  activeWindowNames: string[],
+): string[] {
+  if (!caveats.length) return basePreferred;
+  const lead: string[] = [];
+  for (const c of caveats) {
+    if (!caveatMatches(c, task)) continue;
+    for (const w of c.preferWindows) {
+      if (w !== 'flexible' && activeWindowNames.includes(w) && !lead.includes(w)) lead.push(w);
+    }
+  }
+  if (!lead.length) return basePreferred;
+  return [...lead, ...basePreferred.filter((w) => !lead.includes(w))];
+}
+
+/**
  * Merge user config with defaults. User config takes precedence.
  */
 export function resolveConfig(userConfig: any): {
