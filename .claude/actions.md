@@ -32,10 +32,21 @@ Findings that change the shape of the work:
 - Core module is `supabase/functions/_shared/scheduling-defaults.ts::resolveConfig` — four consumers.
 - `evening` is an existing named window = 19–22, all 7 days.
 
-**[BLOCKED — needs owner] The one fork:** does a caveat RE-PLACE already-scheduled tasks (the nightly
-rebuild moves research off 10am), or apply only to newly-scheduled ones? Not answerable from the code.
-The first reading is materially more work (a re-placement pass) than the overlay itself. ACs cannot be
-written until this is settled.
+**[SETTLED 2026-08-26] Both forks answered by the owner.**
+1. Caveats **re-place** already-scheduled tasks (nightly rebuild moves them), not new-only.
+2. Overflow = **relax** — anything that will not fit the caveat's window falls back to the regular
+   placement rules *as if the caveat never existed*.
+
+ACs written: `.claude/ac-scheduling-caveats.md` (10 criteria + feasibility table). Status: awaiting
+go-ahead to implement.
+
+**Key finding that shrank the work:** `nightly-schedule-builder:1203` ALREADY walks `preferredWindows`
+in order and falls through on exhausted capacity, so "relax" needs no overflow code — a caveat just
+PREPENDS its windows to the ordered list. Note the trap: a keyword override does
+`preferredWindows = [win]` (replaces → hard constraint, task goes unplaced when full), which is the
+opposite of relax. A caveat must prepend, never replace. Two real regressions are covered by AC-7
+(aggregate-fit eligibility must be judged on the BASE list, since prepending changes its length) and
+AC-2's guard (a caveat must never reduce the number of tasks placed).
 
 ---
 
