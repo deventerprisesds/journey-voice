@@ -735,3 +735,39 @@ Real builder, no dryRun, composite, `priorityBoost=false`, user's own config ver
     spread the existing context in each builder update instead of replacing it, so scheduler keys layer
     on top of producer keys. Do NOT work around it by moving the marker into `tags` — tags render as
     board chips and that is UI clutter for an audit field.
+
+## `scheduling_context` provenance is now guarded BY A DB TRIGGER — 2026-08-28
+**The column serves two masters and always did.** PROVENANCE writers record immutable origin facts
+(`nightly-assignment-sync` → `source` 'MIT'/'EMBA', `origin`, `course_id`, `due_date_inferred`;
+`confirm-external-meeting` → `backfilled_from_meeting`). SCHEDULER writers use it as a per-run
+SCRATCHPAD and legitimately replace the whole object nightly (`pre_schedule_status`, `venue_nudge`,
+`reshuffle_retry`, `assignment_tier`, `archived_reason`, `original_due_date`, `pushed_count`).
+Every scheduler write REPLACED the jsonb, so provenance died the first time a task was scheduled.
+- **Proof it was real, not theoretical:** of 50 live tasks with an `assignment_id`, 11 had `source`,
+  36 had a scheduler key, **0 had both** — mutually exclusive sets, the exact signature of the wipe.
+  User-visible symptom: the 📚 MIT/EMBA badge (`FocusView.tsx:1307` reads `scheduling_context.source`),
+  which is why that line carries a `category === 'EDUCATION' ? 'MIT' : 'EMBA'` GUESS as a fallback.
+  `WeeklyAgendaView.tsx:500` has the same workaround (`t.assignment_id || t.scheduling_context?.source`).
+- **Fixed with ONE `BEFORE UPDATE OF scheduling_context` trigger**
+  (`preserve_task_provenance`, migration `20260828020000`), NOT by patching call sites. The wipe lives
+  in ≥3 places — 5 update sites in `nightly-schedule-builder` (~652/698/953/1704/1843), 1 in
+  `confirm-external-meeting`, and the CLIENT (`FocusView.tsx` sets `scheduling_context: null` on
+  unschedule). An edge-fn-side merge CANNOT cover client writers. One guard at the table covers every
+  writer today and every writer added later.
+- **Deliberately an ALLOWLIST, not a blind spread.** Only the 5 provenance keys carry forward, so stale
+  scheduler scratch is still cleared each run — a naive `{...old, ...new}` would leak a dead
+  `venue_nudge` and surface a phantom nudge in the morning review (`build-day-context.ts:256`,
+  `DailyReviewModal.tsx:275` both filter on it).
+- **The column legally holds THREE shapes** — object (240 rows), SQL NULL (58), and a `string[]` ARRAY
+  (7, written by `ai-task-parser`, read by `smart-calendar-scheduler` via `ctx.startsWith('timeWindow:')`).
+  Arrays are passed through untouched. Any future work on this column must handle all three.
+- **Escape hatch:** merge is `provenance || NEW`, so the writer wins on any key it sets. To drop a
+  provenance key deliberately, write it as explicit JSON null — omitting it will NOT drop it.
+- **Backfilled the damage:** 39 tasks that had already lost `source` were restored from Supabase
+  `public.assignments` (`program_id` → MIT/EMBA). Those rows PREDATE the Azure migration, so the frozen
+  snapshot is their correct historical record — the one legitimate use of that dead table.
+- **VERIFIED THROUGH A REAL PRODUCTION RUN** (not a shadow): 5 isolated cases asserted+rolled back
+  first (scheduler replace / unschedule-to-NULL / writer override wins / array untouched / no-provenance
+  untouched with scratch still cleared), then the real builder ran on the live board (req 639326, 53
+  scheduled, 7 days, `processingTimeMs 117197`). Result: `has_both` **0 → 44 of 44** scheduler-touched
+  tasks; `source` 50/50, `origin` 8/8, `due_date_inferred` 2/2 all survived.

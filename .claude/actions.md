@@ -127,3 +127,36 @@ unless tagged as required" → "I'm fine with you inferring date as described" �
 - [OPEN] Tonight's 01:00 ET cron had already passed when this ran, so the nightly BUILDER has not yet
   seen these 8. Their placement is unproven until the next nightly run (or a manual builder run).
 - [OPEN] Add the DBA program's active course to `ACTIVE_COURSE_IDS` when the user names it.
+
+## scheduling_context provenance wipe — FIXED + BACKFILLED + VERIFIED ON THE REAL BOARD (2026-08-28)
+Request: "you broke something correct? don't you have to fix it? how is leaving it broken rather than
+restoring or fixing it an option?" — correct challenge, and the honest split is: the scheduler's
+replace-not-merge is PRE-EXISTING and hurt every producer, but shipping provenance into a field I had
+not checked was durable is MINE. Fixed both, plus restored the pre-existing damage.
+- [DONE] Ground-truthed the blast radius before writing anything: 50 assignment tasks, 11 with `source`,
+  36 with a scheduler key, **0 with both**. Traced every reader (`FocusView` badge, `WeeklyAgendaView`
+  filter, `build-day-context`/`DailyReviewModal` venue_nudge, `smart-calendar-scheduler` array form).
+- [DONE] Structural guard, not a call-site patch — `preserve_task_provenance` BEFORE UPDATE trigger
+  (migration 20260828020000, applied). Covers the 5 builder sites + confirm-external-meeting + the
+  CLIENT unschedule path, which no edge-fn fix could reach.
+- [DONE] Allowlist not blind spread, so stale `venue_nudge` still clears. Handles object/NULL/array.
+- [DONE] Backfilled 39 lost `source` values from the (historically correct) Supabase snapshot.
+  All 50 assignment tasks now carry source.
+- [DONE] VERIFIED: 5 asserted+rolled-back cases, then a REAL builder run — `has_both` 0 → 44/44.
+- [DONE] Commit 2316dec, pushed. Migration applied to the live project.
+
+## Manual nightly-schedule-builder run on the REAL board (2026-08-28) — user asked "run the builder now"
+- [DONE] req 639326 → 53 scheduled over 7 days, composite, priorityBoost=false, 13 rolled over,
+  0 archived stale. Assignments placed 2/day Thu–Sun (tierB=2, tierC=6). Today Fri 8/28 got 7 items
+  09:00–20:00 (the shadow run had produced 0 for today, so the real run is denser).
+- [NOTE] All 8 MIT assignments now sit on the real schedule with their 📚 badge source intact.
+
+## OPEN — priority restore (#3), explained to the user, not started
+- 52 of 66 open tasks are flagged `is_priority` (**79%**) across only 44 distinct ranks.
+- 6 ranks are COLLIDED (14 tasks): rank 6 = "Layout Compass pages" + "Order gold chains" + "Take son
+  shoe shopping"; rank 13 = "Create AI presentation" + "Prepare investor pitch" + "Work on Nexus
+  application"; ranks 2/9/15/19 have 2 each. Cause: one-at-a-time conversational writes, no uniqueness.
+- Two halves per the user: (a) a preview+drag-reorder page shown hours before the nightly job — no edit
+  = that IS the schedule, edit = the user's order wins; a RESTORE of how the priority page once worked.
+  (b) `priority_rank` as a WEIGHT bumping baseline +2, replacing the flat binary lane.
+- Rank repair is a prerequisite for (a) — drag cannot be authoritative while ranks tie.
