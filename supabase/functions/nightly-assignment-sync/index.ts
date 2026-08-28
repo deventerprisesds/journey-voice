@@ -17,8 +17,14 @@ serve(async (req) => {
 
   try {
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
-    const { userId, timezone: tzInput } = await req.json();
+    const { userId, timezone: tzInput, dryRun: dryRunInput } = await req.json();
     const timezone = tzInput || 'America/New_York';
+    // DRY RUN. Runs the REAL pipeline — real Nexus fetch, real filters, real dedup
+    // against the user's real tasks — but performs NO writes, and returns the exact
+    // rows it WOULD have inserted/repaired. This is the only way to prove the Nexus
+    // repoint against live data without putting rows on the user's board first; a
+    // shadow user cannot substitute here because Nexus is keyed by the real user id.
+    const dryRun = dryRunInput === true;
 
     if (!userId) {
       return new Response(JSON.stringify({ error: 'userId required' }), {
@@ -102,6 +108,8 @@ serve(async (req) => {
     const repaired: string[] = [];
     const skippedOld: Array<{ id: string; title: string; due_date: string }> = [];
     const noBoardSkipped: string[] = [];
+    const plannedInserts: Array<Record<string, unknown>> = [];
+    const plannedRepairs: Array<Record<string, unknown>> = [];
 
     // ============================================================
     // PROCESS ASSIGNMENTS — single query covers both EMBA and MIT
@@ -110,17 +118,102 @@ serve(async (req) => {
     // ============================================================
     const MIT_PROGRAM_ID = '4793d933-86ca-4fd5-9b4d-e7a593a513a6';
 
-    async function syncAssignments() {
-      const { data: assignments, error } = await supabase
-        .from('assignments')
-        .select('id, title, due_date, description, category, priority, level_of_effort, status, assignment_url, program_id')
-        .eq('user_id', userId)
-        .not('status', 'in', '("completed","graded")');
+    // ── Nexus (Azure) assignment source ────────────────────────────────────
+    const NEXUS_API = Deno.env.get('NEXUS_API_URL') || 'https://nexus-hub-api.azurewebsites.net';
 
-      if (error) {
-        console.error(`[ASSIGNMENT_SYNC] Error fetching assignments:`, error);
-        return;
+    // SCOPED INTAKE. Deliberately narrow: only courses listed here sync. The Azure
+    // store holds 546 open assignments across MIT + EMBA, the vast majority an aged
+    // backlog (MOTR/CTO items due as far back as 2025). Syncing all of them would
+    // bury the board — exactly the flood this scoping exists to prevent. Add a course
+    // id here when it becomes active; remove it when the course ends.
+    const ACTIVE_COURSE_IDS: string[] = [
+      '8036ebab-d1bc-460b-92b0-c45fb312a12e', // MIT — Applied Generative AI for Digital Transformation
+    ];
+
+    // REQUIRED-ONLY FILTER. In this course the 8 "Required Assignment"/"Capstone"
+    // items all carry points=1 while the 8 "Module N: Captain's Log" entries carry
+    // points=0. `points` is a real structural field — every other candidate column
+    // (type/category/priority/submission_types/canvas_meta) is identical or null
+    // across both groups — so it discriminates without title pattern-matching, which
+    // would silently rot the first time a course labels things differently.
+    const isRequired = (a: any) => Number(a?.points ?? 0) > 0;
+
+    // DUE-DATE INFERENCE (user-approved 2026-08-26). The course runs on a strict
+    // weekly cadence — the 6 dated Required Assignments are exactly 7 days apart
+    // (7/14, 7/21, 7/28, 8/4, 8/11, 8/18) — but the two REMAINING items (7.1 and the
+    // 8.1 Capstone) carry no due_date in Nexus. Without a date they are invisible to
+    // the scheduler, so the genuinely upcoming work would never surface. Extrapolate
+    // the cadence from the latest dated assignment, ordered by the N.1 number in the
+    // title, so 7.1 -> 8/25 and Capstone 8.1 -> 9/1.
+    const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+    function inferMissingDueDates(list: any[]): any[] {
+      const seq = (t: string) => {
+        const m = /(\d+)\.\d+/.exec(t || '');
+        return m ? parseInt(m[1], 10) : Number.MAX_SAFE_INTEGER;
+      };
+      const dated = list.filter((a) => a.due_date).sort((a, b) => +new Date(a.due_date) - +new Date(b.due_date));
+      if (dated.length === 0) return list; // nothing to extrapolate from — leave as-is
+      const lastDated = dated[dated.length - 1];
+      const anchorMs = +new Date(lastDated.due_date);
+      const anchorSeq = seq(lastDated.title);
+
+      return list.map((a) => {
+        if (a.due_date) return a;
+        const s = seq(a.title);
+        if (s === Number.MAX_SAFE_INTEGER || s <= anchorSeq) return a; // can't place it in the sequence
+        const inferred = new Date(anchorMs + (s - anchorSeq) * WEEK_MS);
+        console.log(`[ASSIGNMENT_SYNC] Inferred due date for "${a.title}": ${inferred.toISOString().slice(0, 10)} (weekly cadence from ${lastDated.due_date?.slice(0, 10)})`);
+        return { ...a, due_date: inferred.toISOString(), _due_date_inferred: true };
+      });
+    }
+
+    async function fetchNexusAssignments(uid: string): Promise<any[]> {
+      const out: any[] = [];
+      for (const courseId of ACTIVE_COURSE_IDS) {
+        const url = `${NEXUS_API}/api/d1/assignments?owner=${encodeURIComponent(uid)}&course_id=${encodeURIComponent(courseId)}`;
+        try {
+          const res = await fetch(url, { headers: { 'Content-Type': 'application/json' } });
+          if (!res.ok) {
+            console.error(`[ASSIGNMENT_SYNC] Nexus fetch failed for course ${courseId}: ${res.status} ${(await res.text()).slice(0, 200)}`);
+            continue;
+          }
+          const body = await res.json();
+          const rows: any[] = Array.isArray(body) ? body : (body?.data ?? body?.rows ?? []);
+          const open = rows.filter((a) => !['completed', 'graded'].includes(String(a?.status ?? '')));
+          const required = open.filter(isRequired);
+          console.log(`[ASSIGNMENT_SYNC] Nexus course ${courseId}: ${rows.length} rows, ${open.length} open, ${required.length} required (points>0)`);
+          // Tag as scoped so the age cutoff below knows this row survived an explicit
+          // active-course + required-only filter and is therefore live work, not backlog.
+          out.push(...inferMissingDueDates(required).map((a) => ({ ...a, _scoped_active_course: true })));
+        } catch (e) {
+          // Never fail the whole nightly run because Nexus is unreachable.
+          console.error(`[ASSIGNMENT_SYNC] Nexus fetch threw for course ${courseId}:`, e instanceof Error ? e.message : e);
+        }
       }
+      return out;
+    }
+
+    async function syncAssignments() {
+      // ==========================================================
+      // SOURCE OF TRUTH IS NEXUS ON AZURE — NOT SUPABASE.
+      //
+      // nexus-hub migrated `assignments`/`programs`/`courses` to Azure
+      // (content.* schema, served by nexus-hub-api /api/d1/<table>; the app ships
+      // VITE_DATA_SOURCE_D1='azure' by default). The Supabase `public.assignments`
+      // table is a DEAD SNAPSHOT frozen at the 2026-04-06 migration — every row
+      // there was created that day.
+      //
+      // Measured 2026-08-26: Supabase's newest MIT assignment was due 2026-06-23,
+      // while Azure held the live "Applied Generative AI for Digital Transformation"
+      // course ingested 2026-08-19/20 with assignments due through 2026-08-18 and
+      // beyond. Reading Supabase meant journey could not see the active course AT
+      // ALL — which is why no program work ever reached the board.
+      //
+      // Reads use the `?owner=` fallback (unverified, reads only — see nexus-hub
+      // api/src/lib/auth.ts resolveOwner), so this needs NO session token and NO
+      // new secret, honouring the standing "don't mint new org secrets" rule.
+      // ==========================================================
+      const assignments = await fetchNexusAssignments(userId);
       if (!assignments || assignments.length === 0) {
         console.log(`[ASSIGNMENT_SYNC] No assignments to process`);
         return;
@@ -164,8 +257,17 @@ serve(async (req) => {
           continue;
         }
 
-        // Skip very old past-due assignments (>30 days, anchored to local today)
-        if (assignment.due_date && assignment.due_date < thirtyDaysAgo) {
+        // Skip very old past-due assignments (>30 days, anchored to local today).
+        //
+        // EXEMPT the scoped active-course set. The cutoff is a blunt anti-flood guard
+        // from when this function read EVERY assignment in the store; ACTIVE_COURSE_IDS
+        // + points>0 now does that job precisely, so age is no longer a proxy for
+        // "irrelevant". Concretely, on 2026-08-28 the cutoff (2026-07-29) would drop
+        // Required Assignments 1.1 / 2.1 / 3.1 (due 7/14, 7/21, 7/28) — three of the
+        // eight items in a course the user is actively taking and has NOT completed.
+        // Dropping outstanding coursework because it is late is precisely backwards.
+        // The guard stays in force for any unscoped source added later.
+        if (!assignment._scoped_active_course && assignment.due_date && assignment.due_date < thirtyDaysAgo) {
           skippedOld.push({
             id: assignment.id,
             title: assignment.title,
@@ -203,8 +305,26 @@ serve(async (req) => {
           board_id: board.id,
           user_id: userId,
           assignment_id: assignment.id,
-          scheduling_context: { source },
+          // Record WHERE the row came from and whether its due date was inferred rather
+          // than read, so a wrong inferred date is traceable to this function instead of
+          // looking like Nexus data.
+          scheduling_context: {
+            source,
+            origin: 'nexus-azure',
+            course_id: assignment.course_id ?? null,
+            ...(assignment._due_date_inferred ? { due_date_inferred: true } : {}),
+          },
         });
+      }
+
+      if (dryRun) {
+        console.log(`[ASSIGNMENT_SYNC] DRY RUN — no writes. would_insert=${inserts.length}, would_repair=${repairs.length}, skipped=${skipped.length}, skipped_old=${skippedOld.length}`);
+        for (const i of inserts) {
+          console.log(`[ASSIGNMENT_SYNC]   + ${String(i.due_date).slice(0, 10)}  ${String(i.title).slice(0, 70)}`);
+        }
+        plannedInserts.push(...inserts);
+        plannedRepairs.push(...repairs);
+        return;
       }
 
       // ----- BULK REPAIR (chunked updates) -----
@@ -258,8 +378,8 @@ serve(async (req) => {
       console.warn(`[ASSIGNMENT_SYNC] ⚠️ HIGH SKIP RATE: ${(skipRate * 100).toFixed(0)}% (${skipped.length}/${totalProcessed}).`);
     }
 
-    // Log activity
-    await supabase.from('activity_log').insert({
+    // Log activity (a dry run writes nothing at all, activity_log included)
+    if (!dryRun) await supabase.from('activity_log').insert({
       user_id: userId,
       activity_type: 'nightly_assignment_sync',
       status: 'completed',
@@ -276,6 +396,21 @@ serve(async (req) => {
 
     return new Response(JSON.stringify({
       success: true,
+      dry_run: dryRun,
+      ...(dryRun ? {
+        would_insert_count: plannedInserts.length,
+        would_repair_count: plannedRepairs.length,
+        would_insert: plannedInserts.map((i) => ({
+          title: i.title,
+          due_date: i.due_date,
+          category: i.category,
+          priority: i.priority,
+          estimate_minutes: i.estimate_minutes,
+          assignment_id: i.assignment_id,
+          scheduling_context: i.scheduling_context,
+        })),
+        would_repair: plannedRepairs,
+      } : {}),
       created_count: created.length,
       repaired_count: repaired.length,
       skipped_count: skipped.length,
