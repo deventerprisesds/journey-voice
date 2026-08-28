@@ -707,3 +707,31 @@ Do NOT "fix missing assignments" by querying Supabase; it will look empty-but-he
 - **NOT yet proven:** placement. The 01:00 ET nightly builder had already run when these landed, so
   whether the scheduler actually slots them (PROF_EDUCATION is configured `["business_hours","weekends"]`,
   `maxPerDay:2` → ≥4 days for 8 items) is unverified until the next nightly run.
+
+### Shadow run 2026-08-28 — the 8 assignments DO get placed, and it exposed a provenance bug
+Label `2026-08-28-nexus-assignments` (archived in `shadow_runs`/`shadow_run_traces`/`shadow_run_schedule`;
+66 tasks cloned, 12 slotter traces, teardown asserted all-zero incl. the critical `user_scheduling_prefs`).
+Real builder, no dryRun, composite, `priorityBoost=false`, user's own config verbatim.
+- **All 8 MIT assignments placed**, `maxPerDay:2` respected exactly: Fri 8/28 10:00+11:30, Sat 8/29
+  15:00+16:30, Sun 8/30 11:15+13:00, Mon 8/31 13:00, Tue 9/1 11:30. Every slot is inside the user's
+  configured `PROF_EDUCATION` windows (`business_hours` 9–17 weekdays / `weekends` 10–20). Run totals:
+  45 scheduled over 7 days, `assignmentTiers {tierB:2, tierC:6}`, `processingTimeMs 127700`.
+- **Graceful-degradation proved as a side effect:** the shadow user's own `nightly_assignment_sync`
+  logged `created_count:0` — Nexus has no rows for a synthetic uuid — and the builder carried on. The
+  try/catch around `fetchNexusAssignments` works.
+- **BUG FOUND (mine, not pre-existing to this feature): the scheduler WIPES `scheduling_context`.**
+  Every write site in `nightly-schedule-builder` (lines ~652, ~698, ~953, ~1704, ~1843) REPLACES the
+  whole jsonb rather than merging — e.g. `scheduling_context: { pre_schedule_status, reshuffle_retry }`.
+  So the moment a task is scheduled, the `origin:'nexus-azure'` / `course_id` / `due_date_inferred`
+  provenance written by `nightly-assignment-sync` is destroyed. Confirmed live: on the shadow user a
+  query on `scheduling_context->>'origin'='nexus-azure'` returned **0 rows after the run** where it
+  returned 8 before it; on the real board (not yet scheduled) all 8 still have it.
+  - `assignment_id IS NOT NULL` still identifies Nexus-sourced tasks durably, so nothing about
+    scheduling breaks. What is actually lost is **`due_date_inferred`** — the flag saying WHICH two due
+    dates journey invented rather than read. That is the bit worth preserving.
+  - This is not specific to assignments: `scheduling_context` is being used as a scheduler scratchpad
+    while other producers treat it as durable metadata, so ANY producer's keys get clobbered.
+  - Fix direction (NOT yet done, needs sign-off — it touches 5 write sites in the most sensitive file):
+    spread the existing context in each builder update instead of replacing it, so scheduler keys layer
+    on top of producer keys. Do NOT work around it by moving the marker into `tags` — tags render as
+    board chips and that is UI clutter for an audit field.
