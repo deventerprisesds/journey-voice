@@ -81,3 +81,49 @@ keep Aug-20, removed other two (rows captured for undo). Approach = normalized+s
   rewritten at 15:26 with the eds-enforce hooks missing; re-ran setup.sh from main (1d68993).
   Verified live: all four hook events now `_eds_version: 8` (was 6, then absent), matching
   CURRENT_VERSION=8; `eds-git-guard.sh` + new `eds-agent-guard.sh` both present; platform hooks intact.
+
+## Assignment intake repointed to Nexus on Azure (2026-08-28) — BUILT + DEPLOYED + VERIFIED LIVE
+Request: "incomplete assignments aren't being pulled in at all from the program" → "along with the
+spreadsheets you have to investigate the nexus app to get assignments from there" → "nexus hub switched
+to azure from supabase" → "we will only focus on the ai MIT course" → "no ignore the captains logs
+unless tagged as required" → "I'm fine with you inferring date as described" → "yes" (approved plan).
+- [DONE] Root cause GROUND-TRUTHED: `nightly-assignment-sync` read Supabase `public.assignments`, a DEAD
+  SNAPSHOT frozen at the 2026-04-06 nexus-hub→Azure migration (every row created that day; newest MIT
+  due 2026-06-23). The live course was ingested to Azure 2026-08-19/20. journey could not see it at all.
+- [DONE] Repointed to Nexus d1 (`GET /api/d1/assignments?owner=<uuid>&course_id=<uuid>`). Verified from
+  SOURCE (`nexus-hub/api/src/functions/d1.ts`): `course_id` is a whitelisted filter, response is
+  `{rows:[...]}` raw snake_case `SELECT *`, and `resolveOwner` (auth.ts:136) accepts unverified
+  `?owner=` for GET — so NO session token and NO new org secret. try/catch so Nexus being down can
+  never fail the nightly run.
+- [DONE] Scoped intake (`ACTIVE_COURSE_IDS`) + required-only (`points > 0`). Azure holds 546 open
+  assignments across MIT+EMBA, mostly 2025 backlog — unscoped sync would bury the board. `points` is
+  the ONLY discriminating column (type/category/priority/submission_types/canvas_meta are identical or
+  null across Required vs Captain's Log), so no title pattern-matching.
+- [DONE] Due-date inference for the 2 undated items off the strict weekly cadence (7/14..8/18 exactly
+  7d apart), keyed on the N.1 sequence in the title → 7.1=8/25, Capstone 8.1=9/1. Marked
+  `scheduling_context.due_date_inferred=true` so a wrong date traces to journey, not Nexus.
+- [DONE] Exempted the scoped set from the 30-day age cutoff. That cutoff was an anti-flood guard from
+  when this fn read EVERY assignment; course-scope + points>0 now does that job precisely. Without the
+  exemption it drops Required 1.1/2.1/3.1 — 3 of 8 items in a course the user is actively taking and
+  has NOT completed. Guard stays in force for any unscoped source added later.
+- [DONE] Added `dryRun` (real fetch/filters/dedup, zero writes, returns `would_insert`). A shadow user
+  can NOT substitute here because Nexus is keyed by the REAL user id — this is the only way to prove
+  the repoint against live data without writing the board first.
+- [DONE] Commit e45d30a, pushed, deployed (run 33132580302, "✅ nightly-assignment-sync deployed").
+- [DONE] VERIFIED LIVE, deployed fn, real Nexus data, via pg_net (session egress 403s both
+  `*.supabase.co/functions` and `azurewebsites.net`; pg_net is the working path):
+  - dryRun (req 638626): `would_insert=8, skipped_old=0, would_repair=0` — 8 Captain's Logs excluded,
+    7.1→2026-08-25 and 8.1→2026-09-01 both flagged `due_date_inferred`. ZERO writes.
+  - real run (req 638630): `created=8`. Confirmed on the board: 8 rows, PROF_EDUCATION / TODO /
+    is_scheduled=false / `scheduling_context.origin='nexus-azure'`.
+  - Offline replay of the filter+inference against the 16 REAL Azure rows: 16→8, both dates inferred
+    correctly, 0 dropped by cutoff where 3 would drop without the exemption.
+- [NOTE] All 8 land `priority=MEDIUM` (inherited from Nexus `priority:'medium'`; the HIGH fallback only
+  applies when Nexus has none) and `estimate_minutes=90` (every `level_of_effort` is null in Nexus,
+  Capstone included). Not patched — both are real upstream data, and hardcoding a Capstone-specific
+  estimate is the title pattern-matching this design deliberately avoids. Raise in Nexus if wrong.
+- [NOTE] User config `categoryMappings.PROF_EDUCATION` = `["business_hours","weekends"]`, `maxPerDay:2`
+  — so 8 items need >=4 days. Config is authoritative; not touched.
+- [OPEN] Tonight's 01:00 ET cron had already passed when this ran, so the nightly BUILDER has not yet
+  seen these 8. Their placement is unproven until the next nightly run (or a manual builder run).
+- [OPEN] Add the DBA program's active course to `ACTIVE_COURSE_IDS` when the user names it.

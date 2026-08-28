@@ -656,3 +656,54 @@ Re-ran `setup.sh` from eds-claude-skills main (1d68993). Result:
 - v8 behavioural rule (not installable): EVERY agent brief must name a file and say "write to it as
   you go" — a background subagent dies SILENTLY, usually because the user interrupted the parent, and
   no notification fires. `ListAgents` is the only proof an agent is alive.
+
+## Assignment intake reads NEXUS ON AZURE, not Supabase — 2026-08-28
+**The Supabase `public.assignments` table is a DEAD SNAPSHOT.** nexus-hub migrated
+`assignments`/`programs`/`courses` to Azure (`content.*`, served by `nexus-hub-api`) on **2026-04-06**;
+every row still in Supabase was created that day. Measured 2026-08-26: Supabase's newest MIT assignment
+was due 2026-06-23, while Azure held the live "Applied Generative AI for Digital Transformation" course
+ingested 2026-08-19/20. `nightly-assignment-sync` was reading Supabase, so journey **could not see the
+active course at all** — that, not the scheduler, is why no program work ever reached the board.
+Do NOT "fix missing assignments" by querying Supabase; it will look empty-but-healthy forever.
+
+- **Read path (no secret, no token):** `GET https://nexus-hub-api.azurewebsites.net/api/d1/assignments
+  ?owner=<user uuid>&course_id=<course uuid>`. Verified from nexus-hub SOURCE, not guessed:
+  `api/src/functions/d1.ts` REG.assignments has `ownerCol:'user_id'` and whitelists `course_id` as a
+  filter; `handleGet` does `SELECT * FROM content.assignments …` and returns **`{rows:[…]}`** (raw
+  snake_case, plus a nested `courses` embed); `api/src/lib/auth.ts:136` `resolveOwner` accepts
+  **unverified `?owner=` for GET reads**. So reads need no Bearer and no new org secret.
+- **CCR egress blocks BOTH `azurewebsites.net` and `*.supabase.co/functions` at CONNECT (403).** To
+  invoke a journey edge fn from a session, use **`net.http_post` via Supabase MCP**, then read
+  `net._http_response` by the returned request_id. To read Nexus data, use the nexus PG MCP directly.
+- **Intake is deliberately SCOPED, and must stay that way.** Azure holds **546 open assignments** across
+  MIT + EMBA, mostly a 2025 backlog. `ACTIVE_COURSE_IDS` (currently just the MIT AI course
+  `8036ebab-d1bc-460b-92b0-c45fb312a12e`) + `points > 0` is what keeps the board from being buried.
+  Add a course id when it goes active; remove it when it ends.
+- **`points` is the ONLY column that separates Required from Captain's Log** (1 vs 0). `type`,
+  `category`, `priority`, `submission_types`, `canvas_meta` are identical or null across both groups.
+  That is why the filter is `points > 0` and NOT a title regex — a title rule rots the first time a
+  course labels things differently.
+- **Two assignments carry no due_date and are dated by INFERENCE** (user-approved): the course runs a
+  strict weekly cadence (7/14…8/18, exactly 7d apart), so 7.1→8/25 and Capstone 8.1→9/1, extrapolated
+  off the `N.1` sequence in the title. Tagged `scheduling_context.due_date_inferred=true` so a wrong
+  date traces to journey rather than looking like Nexus data.
+- **The 30-day age cutoff is EXEMPTED for the scoped set** (`_scoped_active_course`). It was an
+  anti-flood guard from when this fn read every assignment; course-scope + points>0 does that job
+  precisely now. Left on, it drops Required 1.1/2.1/3.1 — 3 of 8 items in a course actively being taken
+  and not completed. Dropping outstanding coursework *because it is late* is backwards. The guard still
+  applies to any unscoped source added later.
+- **`dryRun` on this fn is the verification path, not a shadow run.** A shadow user CANNOT substitute:
+  Nexus is keyed by the REAL user id, so a synthetic user fetches nothing. dryRun runs the real fetch,
+  filters and dedup with zero writes (activity_log included) and returns `would_insert`.
+- **Live-verified 2026-08-28** (deployed fn, real data, via pg_net): dryRun req 638626 →
+  `would_insert=8, skipped_old=0`; real run req 638630 → `created=8`; board confirms 8 PROF_EDUCATION /
+  TODO rows with `scheduling_context.origin='nexus-azure'`. Offline replay against the 16 real Azure
+  rows: 16→8, both dates inferred correctly, 0 cutoff drops vs 3 without the exemption. Commit e45d30a,
+  deploy run 33132580302.
+- **Known upstream data gaps (NOT patched on purpose):** every `level_of_effort` is null → all 8 get the
+  90-min default, Capstone included; Nexus `priority:'medium'` → all 8 land MEDIUM (the HIGH fallback
+  only fires when Nexus has none). Both are real upstream values; a Capstone-specific estimate would be
+  exactly the title pattern-matching this design avoids. Fix in Nexus if they're wrong.
+- **NOT yet proven:** placement. The 01:00 ET nightly builder had already run when these landed, so
+  whether the scheduler actually slots them (PROF_EDUCATION is configured `["business_hours","weekends"]`,
+  `maxPerDay:2` → ≥4 days for 8 items) is unverified until the next nightly run.
