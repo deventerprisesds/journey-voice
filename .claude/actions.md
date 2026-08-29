@@ -193,3 +193,35 @@ Approved plan: "1 make the cap configurable and weekend-aware, 2 reconcile the t
   applies it, or a shadow run proves it without touching the real board.
 - [OPEN] Within-day ordering is by natural-timing convention, not score — LOW-priority errands take
   late-morning while assignments get mid-afternoon. Separate mechanism, deliberately not bundled.
+
+## Manual build after the cap/order change (2026-08-29) — cap PROVEN, order PARTIAL
+- [DONE] req 646615 → 52 scheduled, 7 days, `processingTimeMs 103136`.
+- [DONE] **Weekend cap works**: `dailyAssignmentCount {"2026-08-29": 4}` — Saturday took FOUR
+  assignments where the hardcoded flat cap allowed two. Sat 12:30/14:00/15:30/17:00.
+- [PARTIAL] Order came out 8.1, 7.1, 6.1, 4.1, 5.1, 1.1, 2.1, 3.1 — head exact (8.1→7.1→6.1),
+  tail wrong (expected 5.1 before 4.1; expected 3.1,2.1,1.1 not 1.1,2.1,3.1).
+  ROOT CAUSE, not a mystery: `deadlineTriageOrder` sorts the tier ARRAYS and the Tier A/B branch of
+  `scoredCandidates.sort`. SIX of the eight are **Tier C** (>7d from due), and Tier C falls to the
+  "everyone else" branch which sorts by SCORE — where the staleness penalty (−3 at 14d, −10 at 30d)
+  still differentiates. So only Tier B (8.1, 7.1) gets triage ordering at pick time.
+  NOT changed unilaterally: Tier C sharing the score branch is a deliberate prior decision
+  ("Tier C no longer auto-jumps priority-board work"); making it triage-ordered would let old
+  coursework jump the priority board again. Needs a user decision.
+- [NOTE] Sunday took only 1 assignment despite cap 4 — the cap raises the CEILING, it does not make
+  coursework win a slot. Sunday's candidates went to other work.
+
+## `mcp` deploy failure — I MISDIAGNOSED IT TWICE, corrected on PR #26
+- Real cause (from the CI log, run 33251640626): `Deploying Function: mcp (script size: 26 MB)` →
+  `unexpected update function status 413: {"message":"request entity too large"}`. It BUNDLES FINE.
+- I first said "unresolvable npm:@lovable.dev/mcp-js@0.20.0". WRONG — the package is published (77
+  versions). I quoted my LOCAL bun's `Maybe you need to "bun install"` and read it as the deploy's
+  reason. Classic proxy-instead-of-ground-truth: the CI log was one call away.
+- Worse: this 413 is documented in `deploy-supabase-functions.yml` in a comment **I wrote on
+  2026-08-21** — it is the exact failure that motivated the per-function deploy loop. I had already
+  diagnosed it, written it down, and then contradicted my own note.
+- GUARD: for ANY CI failure, read the job log FIRST; never infer a cause from a local build, and grep
+  the repo (incl. workflow comments) for the error string before diagnosing — it may already be known.
+- `mcp` is `taskos-mcp`: an MCP server exposing list_tasks / create_task / complete_task /
+  get_today_schedule to EXTERNAL AI clients. No in-app caller BY DESIGN. Live and healthy (ACTIVE
+  v92, deployed 2026-07-09) — only redeploy fails. I floated "retire" before reading it; WITHDRAWN.
+  Fix is to shrink the 26 MB bundle (it inlines the whole dep tree for four thin CRUD tools).
