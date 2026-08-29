@@ -2,7 +2,7 @@ import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { normalizeDateTime, getTodayInTimezone, getTzOffsetMinutesAt, localDateToUtcBounds } from "../_shared/timezone.ts";
-import { DEFAULT_TIME_WINDOWS, DEFAULT_CATEGORY_MAPPINGS, resolveConfig, validateTaskWindow } from "../_shared/scheduling-defaults.ts";
+import { DEFAULT_TIME_WINDOWS, DEFAULT_CATEGORY_MAPPINGS, resolveConfig, validateTaskWindow, resolveCategoryDailyCap, isWeekendInTimezone } from "../_shared/scheduling-defaults.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -768,8 +768,18 @@ IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include tim
       // scheduled + accepted-this-batch of the same category on the placement's local day; rejects beyond
       // the cap so the extra task overflows to another day instead of stacking (e.g. 4 PROF_EDUCATION on
       // one day when the cap is 2). No cap configured → no limit.
-      const catCap = filteredCategoryMappings[originalTask.category]?.maxPerDay;
-      if (catCap && catCap > 0) {
+      // Resolved through the SHARED resolver so this agrees with the nightly builder's cap
+      // exactly — weekday/weekend aware, same precedence. Previously this read maxPerDay
+      // directly while the builder used a hardcoded constant, so the two could disagree.
+      // Weekend must be judged in the USER'S timezone. `new Date(...).getDay()` would use the
+      // runtime zone (UTC on Deno), which makes Friday 20:00 ET read as Saturday.
+      const capDayIsWeekend = isWeekendInTimezone(new Date(normalizedStart), timezone);
+      const catCap = resolveCategoryDailyCap(
+        { categoryMappings: filteredCategoryMappings },
+        originalTask.category,
+        capDayIsWeekend,
+      );
+      if (Number.isFinite(catCap) && catCap > 0) {
         const capKey = `${originalTask.category}|${dayKeyOf(normalizedStart)}`;
         if ((catDayCount[capKey] || 0) >= catCap) {
           console.warn(`🚫 CATEGORY_CAP: "${originalTask.title}" (${originalTask.category}) exceeds ${catCap}/day on ${dayKeyOf(normalizedStart)} — REJECTED`);
@@ -784,7 +794,7 @@ IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include tim
       }
 
       acceptedSlots.push({ start: slotStartMs, end: slotEndMs });
-      if (catCap && catCap > 0) {
+      if (Number.isFinite(catCap) && catCap > 0) {
         const capKey = `${originalTask.category}|${dayKeyOf(normalizedStart)}`;
         catDayCount[capKey] = (catDayCount[capKey] || 0) + 1;
       }

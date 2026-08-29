@@ -15,6 +15,7 @@ import {
   withinDailyCap,
   classifyImpact,
   MAX_ASSIGNMENTS_PER_DAY,
+  resolveCategoryDailyCap,
   ASSIGNMENT_URGENT_HOURS,
   ASSIGNMENT_PRIORITY_DAYS,
 } from "../_shared/scheduling-defaults.ts";
@@ -764,9 +765,26 @@ serve(async (req) => {
             tierC.push(t); assignmentTier[t.id] = 'C';
           }
         }
-        tierA.sort((a, b) => new Date(a.due_date).getTime() - new Date(b.due_date).getTime());
-        tierB.sort((a, b) => new Date(a.due_date).getTime() - new Date(b.due_date).getTime());
-        tierC.sort((a, b) => new Date(b.due_date).getTime() - new Date(a.due_date).getTime()); // DESC: recent first
+        // DEADLINE TRIAGE ORDER (user-specified 2026-08-28). Protect live deadlines first,
+        // then catch up on what has already slipped, working BACKWARDS from the most recent:
+        //   1. UPCOMING (due >= now) — soonest first
+        //   2. OVERDUE  (due <  now) — most recently missed first, oldest last
+        // The intent is "stop falling further behind, then backfill"; the oldest item is
+        // deliberately last because the most recent miss is the one still connected to what
+        // the course is currently covering. Previously tierA/tierB sorted plain ASC, which
+        // ranked a 3-days-late item ABOVE one still due in the future.
+        const deadlineTriageOrder = (a: any, b: any) => {
+          const aDue = new Date(a.due_date).getTime();
+          const bDue = new Date(b.due_date).getTime();
+          const aOverdue = aDue < nowMs;
+          const bOverdue = bDue < nowMs;
+          if (aOverdue !== bOverdue) return aOverdue ? 1 : -1; // upcoming before overdue
+          return aOverdue ? bDue - aDue  // overdue: most recent first
+                          : aDue - bDue; // upcoming: soonest first
+        };
+        tierA.sort(deadlineTriageOrder);
+        tierB.sort(deadlineTriageOrder);
+        tierC.sort(deadlineTriageOrder);
 
         console.log(`  📊 Assignment tiers: A=${tierA.length} (≤48h), B=${tierB.length} (3-7d ±overdue), C=${tierC.length} (>7d ±ancient)`);
 
@@ -1320,12 +1338,15 @@ serve(async (req) => {
             if (aIsAB && !bIsAB) return -1;
             if (!aIsAB && bIsAB) return 1;
 
-            // Both are A/B — A before B, then due ASC within each tier
+            // Both are A/B — A before B, then DEADLINE TRIAGE within each tier (upcoming
+            // soonest-first, then overdue most-recent-first). Must match the tier-array sort
+            // above, or the queue order and the per-day pick order disagree.
             if (aIsAB && bIsAB) {
               if (aTier !== bTier) return aTier === 'A' ? -1 : 1;
-              const aDue = a.due_date ? new Date(a.due_date).getTime() : Infinity;
-              const bDue = b.due_date ? new Date(b.due_date).getTime() : Infinity;
-              return aDue - bDue;
+              if (!a.due_date && !b.due_date) return 0;
+              if (!a.due_date) return 1;   // undated sinks below anything dated
+              if (!b.due_date) return -1;
+              return deadlineTriageOrder(a, b);
             }
 
             // Everyone else (Tier C + non-assignment). Tier A/B above is UNCHANGED in both modes.
@@ -1442,14 +1463,25 @@ serve(async (req) => {
             const tier = isAssignment ? (assignmentTier[task.id] || 'C') : null;
             const placedAssignmentsToday = dailyAssignmentCount[targetISO] || 0;
 
-            // Pass 1B/1C cap: Tier B/C assignments are limited to MAX_ASSIGNMENTS_PER_DAY/day.
+            // Per-day cap now comes from the USER'S CONFIG, weekday/weekend aware, via the
+            // one shared resolver every scheduler reads. It used to be the hardcoded flat
+            // MAX_ASSIGNMENTS_PER_DAY, which applied a weekday-sized allowance to Saturday
+            // and Sunday and could not be changed in Settings.
+            const assignmentCapToday = resolveCategoryDailyCap(
+              config,
+              task.category,
+              targetDayOfWeek === 0 || targetDayOfWeek === 6,
+              { fallback: MAX_ASSIGNMENTS_PER_DAY },
+            );
+
+            // Pass 1B/1C cap: Tier B/C assignments are limited to the resolved cap/day.
             // Tier A bypasses the cap (deadline-critical, pre-placed in Pass 1A).
-            if (isAssignment && tier !== 'A' && placedAssignmentsToday >= MAX_ASSIGNMENTS_PER_DAY) {
+            if (isAssignment && tier !== 'A' && placedAssignmentsToday >= assignmentCapToday) {
               deferredAssignmentsToday.push({ id: task.id, tier: tier as 'B' | 'C' });
               dayRejections.push({
                 taskId: task.id, title: task.title, category: task.category,
                 score: task.score, duration,
-                reason: `assignment_cap_${MAX_ASSIGNMENTS_PER_DAY}_per_day`,
+                reason: `assignment_cap_${assignmentCapToday}_per_day`,
                 tier,
               });
               continue;
@@ -1955,9 +1987,18 @@ serve(async (req) => {
             const [tY, tM, tD] = todayISO.split('-').map(Number);
             const dt = new Date(tY, tM - 1, tD + dOff);
             const isoDay = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
-            if ((dailyAssignmentCount[isoDay] || 0) >= MAX_ASSIGNMENTS_PER_DAY) continue;
-
             const dow = dt.getDay();
+            // Same config-driven, weekend-aware cap as the main pass. Resolved per
+            // CATEGORY off the queue head, so a non-assignment category with its own
+            // maxPerDay is honoured here too rather than assuming PROF_EDUCATION.
+            const topUpCap = resolveCategoryDailyCap(
+              config,
+              topUpQueue[0]?.category,
+              dow === 0 || dow === 6,
+              { fallback: MAX_ASSIGNMENTS_PER_DAY },
+            );
+            if ((dailyAssignmentCount[isoDay] || 0) >= topUpCap) continue;
+
             const active = getActiveWindows(timeWindows, dow);
             const activeNames = Object.keys(active);
             if (activeNames.length === 0) continue;
@@ -1982,8 +2023,11 @@ serve(async (req) => {
             let caps = computeUsedMinutes(items, active, isoDay, timezone);
 
             for (let i = 0; i < topUpQueue.length; i++) {
-              if ((dailyAssignmentCount[isoDay] || 0) >= MAX_ASSIGNMENTS_PER_DAY) break;
               const task = topUpQueue[i];
+              // Re-resolve per task: the queue mixes categories, and the cap is per-category.
+              if ((dailyAssignmentCount[isoDay] || 0) >= resolveCategoryDailyCap(
+                    config, task.category, dow === 0 || dow === 6,
+                    { fallback: MAX_ASSIGNMENTS_PER_DAY })) break;
               const duration = task.estimate_minutes || categoryMappings[task.category]?.estimatedDuration || 60;
               const preferred = getPreferredWindows(task.category, categoryMappings, activeNames);
               const fits = preferred.some(w => (caps[w]?.remainingMinutes || 0) >= duration);

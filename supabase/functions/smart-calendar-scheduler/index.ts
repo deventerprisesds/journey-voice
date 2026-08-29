@@ -12,6 +12,7 @@ import {
   mergeTraits,
   DEFAULT_TIME_WINDOWS,
   DEFAULT_CATEGORY_MAPPINGS,
+  resolveCategoryDailyCap,
 } from "../_shared/scheduling-defaults.ts";
 
 const corsHeaders = {
@@ -686,17 +687,25 @@ for (let dayOffset = 0; dayOffset < maxSearchDays; dayOffset++) {
   const checkDay = baseParts.day + dayOffset;
   const dayKey = `${checkYear}-${checkMonth}-${checkDay}`;
   
-  // Check maxPerDay limit for this category
+  // Check the per-day cap for this category. Resolved through the SHARED resolver so this
+  // divergent engine agrees with the nightly builder and the batch scheduler instead of
+  // reading maxPerDay on its own — weekday/weekend aware, same precedence everywhere.
   const categoryConfig = config.categoryMappings[taskCategory];
-  if (categoryConfig?.maxPerDay) {
+  const checkDate = new Date(checkYear, checkMonth - 1, checkDay);
+  const dayCap = resolveCategoryDailyCap(
+    config,
+    taskCategory,
+    [0, 6].includes(checkDate.getDay()),
+  );
+  if (Number.isFinite(dayCap)) {
     if (!tasksPerDayPerCategory.has(dayKey)) {
       tasksPerDayPerCategory.set(dayKey, new Map());
     }
     const dayMap = tasksPerDayPerCategory.get(dayKey)!;
     const currentCount = dayMap.get(taskCategory) || 0;
-    
-    if (currentCount >= categoryConfig.maxPerDay) {
-      console.log(`⏭️ Day ${dayKey} already has ${currentCount} ${taskCategory} tasks (max: ${categoryConfig.maxPerDay}), trying next day`);
+
+    if (currentCount >= dayCap) {
+      console.log(`⏭️ Day ${dayKey} already has ${currentCount} ${taskCategory} tasks (max: ${dayCap}), trying next day`);
       continue;
     }
   }
@@ -773,9 +782,12 @@ for (let dayOffset = 0; dayOffset < maxSearchDays; dayOffset++) {
         } else {
           console.log(`✅ FOUND SLOT on Day ${dayOffset} at ${localTimeStr} (${timezone}) - selecting immediately (earliest-day-first)`);
           
-          // Update counter for maxPerDay enforcement
-          const categoryConfig = config.categoryMappings[taskCategory];
-          if (categoryConfig?.maxPerDay) {
+          // Update counter for per-day cap enforcement. Must mirror the gate above: count
+          // whenever ANY cap applies (weekday or weekend), not only when maxPerDay is set,
+          // or a weekend-only cap would never see its own placements.
+          if (Number.isFinite(resolveCategoryDailyCap(
+                config, taskCategory,
+                [0, 6].includes(new Date(checkYear, checkMonth - 1, checkDay).getDay())))) {
             if (!tasksPerDayPerCategory.has(dayKey)) {
               tasksPerDayPerCategory.set(dayKey, new Map());
             }

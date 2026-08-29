@@ -578,13 +578,13 @@ const SchedulingSettings: React.FC = () => {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label className="text-sm">Max Per Day</Label>
+                  <Label className="text-sm">Max Per Day (weekdays)</Label>
                   <Input
                     type="number"
                     min="0"
                     max="10"
                     placeholder="No limit"
-                    value={mapping.maxPerDay || ''}
+                    value={mapping.maxPerDay ?? ''}
                     onChange={(e) =>
                       setConfig({
                         ...config,
@@ -592,12 +592,37 @@ const SchedulingSettings: React.FC = () => {
                           ...config.categoryMappings,
                           [category]: {
                             ...mapping,
-                            maxPerDay: e.target.value ? parseInt(e.target.value) : undefined,
+                            maxPerDay: e.target.value !== '' ? parseInt(e.target.value) : undefined,
                           },
                         },
                       })
                     }
                   />
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-sm">Max Per Day (weekends)</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    max="10"
+                    placeholder={mapping.maxPerDay != null ? `Same as weekdays (${mapping.maxPerDay})` : 'No limit'}
+                    value={mapping.maxPerDayWeekend ?? ''}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        categoryMappings: {
+                          ...config.categoryMappings,
+                          [category]: {
+                            ...mapping,
+                            maxPerDayWeekend: e.target.value !== '' ? parseInt(e.target.value) : undefined,
+                          },
+                        },
+                      })
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Weekend windows are longer than a weekday evening. Leave blank to reuse the weekday number.
+                  </p>
                 </div>
               </div>
             </div>
