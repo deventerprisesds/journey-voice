@@ -160,3 +160,36 @@ not checked was durable is MINE. Fixed both, plus restored the pre-existing dama
   = that IS the schedule, edit = the user's order wins; a RESTORE of how the priority page once worked.
   (b) `priority_rank` as a WEIGHT bumping baseline +2, replacing the flat binary lane.
 - Rank repair is a prerequisite for (a) — drag cannot be authoritative while ranks tie.
+
+## Per-day cap made config-driven + weekend-aware; assignment order = deadline triage (2026-08-29)
+Approved plan: "1 make the cap configurable and weekend-aware, 2 reconcile the two caps into one,
+3 apply the confirmed order 8.1..1.1" → user: "the plan looks good. go until deployed".
+- [DONE] Ground-truth first: the cap existed in THREE enforcement points that could not agree —
+  `MAX_ASSIGNMENTS_PER_DAY = 2` HARDCODED in nightly-schedule-builder, and
+  `categoryMappings[cat].maxPerDay` read independently by batch-calendar-scheduler and
+  smart-calendar-scheduler. Both numbers were 2 so it LOOKED like one setting; editing Settings did
+  nothing to the builder, the engine that actually places the nightly schedule.
+- [DONE] One shared `resolveCategoryDailyCap()` in `_shared/scheduling-defaults.ts`; all three call it.
+  `MAX_ASSIGNMENTS_PER_DAY` demoted to a last-resort fallback with a comment saying never read direct.
+- [DONE] `CategoryMapping.maxPerDayWeekend` (optional; absent → falls back to maxPerDay, so every
+  existing config is unchanged). Weekday field relabelled + weekend field added in SchedulingSettings.
+- [DONE] `isWeekendInTimezone()` — batch-calendar-scheduler runs on Deno where the runtime zone is UTC,
+  so `new Date(iso).getDay()` read Friday 20:00 ET as Saturday. Caught before deploy, not after.
+- [DONE] Deadline-triage comparator applied to tierA/tierB/tierC AND the candidate sort (which had
+  re-implemented ASC separately, so queue order and pick order could diverge): upcoming soonest-first,
+  then overdue most-recent-first.
+- [DONE] Offline 12/12 vs real data — precedence (explicit 0 vs unset vs negative), weekend override,
+  DEFAULT_CATEGORY_MAPPINGS fallback, unknown category, uncapped→Infinity, the Fri-20:00-ET tz case,
+  and the order over the real eight → 8.1,7.1,6.1,5.1,4.1,3.1,2.1,1.1.
+- [DONE] Commit dce9f92, pushed. Deploy run 33251640626: **50 functions deployed** incl. all three
+  touched. Run shows red ONLY because `mcp` failed — untouched by this branch (0 commits), last
+  modified 2026-07-08, fails on an unresolvable `npm:@lovable.dev/mcp-js@0.20.0` dep. Pre-existing.
+- [DONE] Seeded `maxPerDayWeekend: 4` onto the user's config. REQUIRED: their saved config overrides
+  `categoryMappings`, so the code default never reaches them and the feature would be inert. Purely
+  additive (new key). Undo: `config #- '{categoryMappings,PROF_EDUCATION,maxPerDayWeekend}'`.
+- [NOTE] User has themselves added `evening` to PROF_EDUCATION `defaultTimeWindow` since the earlier
+  read (now `["business_hours","weekends","evening"]`). Left as they set it.
+- [OPEN] NOT verified in a run yet — deploy was the agreed stopping point. Next nightly cron (01:00 ET)
+  applies it, or a shadow run proves it without touching the real board.
+- [OPEN] Within-day ordering is by natural-timing convention, not score — LOW-priority errands take
+  late-morning while assignments get mid-afternoon. Separate mechanism, deliberately not bundled.
