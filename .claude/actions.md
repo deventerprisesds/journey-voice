@@ -117,8 +117,25 @@ It was corrected in the open rather than weakened quietly.
 no-caveat placement for that day) eliminates it, at the cost of a second placement pass per day and
 the caveat occasionally doing nothing for a whole day. Not built — needs sign-off.
 
-### NOT BUILT (deliberately, needs sign-off)
-- Settings UI section to add/clear caveats (the type round-trips; nothing renders it yet).
-- An agent tool (`set_scheduling_caveat`) so a caveat can be set conversationally.
+### Surfacing — BUILT 2026-08-27 (owner said yes)
+- **Settings → Scheduling → Temporary Caveats** (`SchedulingSettings.tsx`). Placed ABOVE Keyword
+  Detection Rules, because a caveat overrides what those rules would otherwise do. Shows each
+  caveat's plain-English text, what it matches, which windows it prefers, and whether it expires or
+  runs until cleared; expired ones render as "expired — no longer applied" rather than vanishing.
+- **Three agent tools** (`_shared/tool-definitions.ts` + `execute-tool`): `set_scheduling_caveat`,
+  `list_scheduling_caveats`, `clear_scheduling_caveat`. The set tool REJECTS an invented window name
+  rather than storing a caveat that can never match — a caveat that silently does nothing is the
+  worst failure here, because the user believes it works. Tool descriptions steer temporary language
+  ("for now", "this week") to a caveat and permanent changes to Settings.
+- **Duplication removed:** the handlers' expiry check delegates to the shared `activeCaveats()`
+  instead of re-implementing it. Two copies would drift, and the scheduler and the tool disagreeing
+  about which caveats are live is the hardest version of this bug to see.
+- **New guard, mutation-proven (3/3):** tool vocabulary vs the real `DEFAULT_TIME_WINDOWS`. Proven by
+  dropping a real window, inventing a fake one, and renaming a window without updating the tool.
+  Suite now 10 tests. `tsc --noEmit` clean.
+- Visualization of the ±1 jitter for the owner's decision:
+  https://claude.ai/code/artifact/2656015e-c032-4d5f-bbb4-1f57b809b307
+
+### STILL NOT BUILT (needs sign-off)
 - Applying caveats on the ad-hoc paths (`execute-tool` / `batch-` / `smart-calendar-scheduler`) —
   they call `resolveConfig` but do not consume `contextRules` either; same pre-existing gap.

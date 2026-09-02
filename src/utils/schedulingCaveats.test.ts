@@ -136,3 +136,30 @@ test('malformed caveats are ignored, never thrown on', () => {
   assert.equal(activeCaveats({ caveats: [null, {}, { preferWindows: [] }] }).length, 0);
   assert.equal(activeCaveats({ caveats: [{ ...EVENING_ONLY, expiresAt: 'not-a-date' }] }).length, 0);
 });
+
+/**
+ * The agent tool validates `prefer_windows` against its own CAVEAT_WINDOWS list. If that list ever
+ * drifts from the real DEFAULT_TIME_WINDOWS, the tool either rejects a valid window or stores a
+ * caveat naming a window that can never match anything — a caveat that silently does nothing is the
+ * worst failure mode here, because the user believes it is working.
+ */
+test('agent tool vocabulary matches the real window names', async () => {
+  const fs = await import('node:fs');
+  const shared = fs.readFileSync(
+    new URL('../../supabase/functions/_shared/scheduling-defaults.ts', import.meta.url), 'utf8');
+  const real = [...shared.matchAll(/^\s{2}(\w+):\s*\{ start:/gm)].map((m) => m[1]);
+  assert.ok(real.length >= 5, `could not parse DEFAULT_TIME_WINDOWS (found ${real.length})`);
+
+  const tool = fs.readFileSync(
+    new URL('../../supabase/functions/execute-tool/index.ts', import.meta.url), 'utf8');
+  const m = tool.match(/const CAVEAT_WINDOWS = \[([^\]]+)\]/);
+  assert.ok(m, 'CAVEAT_WINDOWS not found in execute-tool');
+  const declared = m[1].split(',').map((x) => x.trim().replace(/['"]/g, '')).filter(Boolean);
+
+  for (const w of real) {
+    assert.ok(declared.includes(w), `window "${w}" exists but the tool would REJECT it`);
+  }
+  for (const w of declared) {
+    assert.ok(real.includes(w), `tool accepts "${w}" but no such window exists — the caveat would never match`);
+  }
+});

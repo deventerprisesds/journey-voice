@@ -12,8 +12,8 @@ import {
   loadUserSchedulingConfig,
   saveUserSchedulingConfig,
 } from '@/services/schedulingService';
-import { DEFAULT_SCHEDULING_CONFIG, type SchedulingConfig } from '@/config/schedulingRules';
-import { Clock, Calendar, TrendingUp, Tag, Key, Target, Plus, X, FileText, Globe } from 'lucide-react';
+import { DEFAULT_SCHEDULING_CONFIG, type SchedulingConfig, type SchedulingCaveat } from '@/config/schedulingRules';
+import { Clock, Calendar, TrendingUp, Tag, Key, Target, Plus, X, FileText, Globe, Timer } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
 import { TIMEZONE_OPTIONS, getBrowserTimezone, formatTimezoneWithOffset } from '@/lib/timezone';
 
@@ -564,6 +564,92 @@ const SchedulingSettings: React.FC = () => {
               </div>
             </div>
           ))}
+        </CardContent>
+      </Card>
+
+      {/* Temporary caveats — a read-time overlay, never merged into the rules below */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Timer className="h-5 w-5" />
+            <CardTitle>Temporary Caveats</CardTitle>
+          </div>
+          <CardDescription>
+            Short-term preferences the scheduler follows until you clear them — e.g. "push research to
+            the evening for now". These override the rules below without changing them, so clearing a
+            caveat restores your normal scheduling exactly.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {(config.caveats ?? []).length === 0 && (
+            <p className="text-sm text-muted-foreground">
+              No caveats in force — scheduling is following your normal rules.
+            </p>
+          )}
+
+          <div className="space-y-3">
+            {(config.caveats ?? []).map((cv, i) => {
+              const expired = !!cv.expiresAt && Date.parse(cv.expiresAt) <= Date.now();
+              return (
+                <div key={cv.id || i} className="flex items-start gap-3 p-3 border rounded-lg">
+                  <div className="flex-1 min-w-0 space-y-1">
+                    <Input
+                      value={cv.text}
+                      onChange={(e) => {
+                        const next = [...(config.caveats ?? [])];
+                        next[i] = { ...cv, text: e.target.value };
+                        setConfig({ ...config, caveats: next });
+                      }}
+                      placeholder="What this caveat does, in your words"
+                      className="font-medium"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Prefers <span className="font-mono">{cv.preferWindows.join(' → ')}</span>
+                      {cv.match?.keywords?.length ? <> for titles containing <span className="font-mono">{cv.match.keywords.join(', ')}</span></> : null}
+                      {cv.match?.categories?.length ? <> in <span className="font-mono">{cv.match.categories.join(', ')}</span></> : null}
+                      {cv.match?.tags?.length ? <> tagged <span className="font-mono">{cv.match.tags.join(', ')}</span></> : null}
+                      {!cv.match?.keywords?.length && !cv.match?.categories?.length && !cv.match?.tags?.length ? <> for every task</> : null}
+                      {' · '}
+                      {expired ? <span className="text-destructive">expired — no longer applied</span>
+                               : cv.expiresAt ? <>until {new Date(cv.expiresAt).toLocaleString()}</>
+                               : <>until you clear it</>}
+                    </p>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={`Clear caveat: ${cv.text || cv.preferWindows.join('/')}`}
+                    onClick={() => setConfig({ ...config, caveats: (config.caveats ?? []).filter((_, j) => j !== i) })}
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+
+          <Button
+            variant="outline"
+            onClick={() => {
+              const cv: SchedulingCaveat = {
+                id: `cv_${Date.now().toString(36)}`,
+                text: '',
+                match: {},
+                preferWindows: ['evening'],
+                expiresAt: null,
+                createdAt: new Date().toISOString(),
+              };
+              setConfig({ ...config, caveats: [...(config.caveats ?? []), cv] });
+            }}
+          >
+            <Plus className="h-4 w-4 mr-2" />
+            Add caveat
+          </Button>
+
+          <p className="text-xs text-muted-foreground">
+            A caveat is a preference, not a rule. Anything that will not fit the preferred window is
+            still scheduled by your normal rules, so nothing is dropped for lack of room.
+          </p>
         </CardContent>
       </Card>
 

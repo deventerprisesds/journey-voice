@@ -134,6 +134,48 @@ export function getToolDefinitions(): ToolDefinition[] {
         required: ["task_id"]
       }
     },
+    // ── TEMPORARY SCHEDULING CAVEATS ─────────────────────────────
+    // A caveat is a TEMPORARY preference layered over the scheduling config at read time. It is never
+    // merged into the config, so clearing one restores prior behaviour exactly.
+    {
+      type: "function",
+      name: "set_scheduling_caveat",
+      description: "Add a TEMPORARY scheduling preference the nightly scheduler follows until it expires or is cleared — e.g. 'push research to the evening for now', 'keep errands out of business hours this week'. Use this when the user wants a temporary change, NOT a permanent one: phrases like 'for now', 'this week', 'until I say otherwise', 'temporarily'. A caveat is a PREFERENCE, not a rule — anything that will not fit the preferred window still gets scheduled normally. For a PERMANENT change to when a category is scheduled, do not use this; that is a Settings change to category mappings or keyword rules.",
+      parameters: {
+        type: "object",
+        properties: {
+          text: { type: "string", description: "The user's own words, kept verbatim so they recognize the caveat in Settings later. E.g. 'push research to the evening for now'" },
+          prefer_windows: {
+            type: "array", items: { type: "string" },
+            description: "Named time windows to prefer, in order. MUST be existing window names: morning, business_hours, after_work, evening, weekends. Never invent a name."
+          },
+          keywords: { type: "array", items: { type: "string" }, description: "Match tasks whose TITLE contains any of these, e.g. ['research','explore']. Omit to match on category/tags instead." },
+          categories: { type: "array", items: { type: "string" }, description: "Match tasks in any of these categories: CAREER, PROF_EDUCATION, EDUCATION, VENTURES, LIFE, PERSONAL" },
+          tags: { type: "array", items: { type: "string" }, description: "Match tasks carrying any of these tags" },
+          expires_at: { type: "string", description: "ISO timestamp when this stops applying. OMIT for 'until I clear it' — do not guess an expiry the user did not state." }
+        },
+        required: ["text", "prefer_windows"]
+      }
+    },
+    {
+      type: "function",
+      name: "list_scheduling_caveats",
+      description: "List the temporary scheduling caveats currently in force, with their ids, so the user can see what is affecting their schedule or choose one to clear. Expired caveats are not returned.",
+      parameters: { type: "object", properties: {}, required: [] }
+    },
+    {
+      type: "function",
+      name: "clear_scheduling_caveat",
+      description: "Remove a temporary scheduling caveat. Clearing restores the previous scheduling behaviour exactly. Call list_scheduling_caveats first to get the id unless the user named it unambiguously.",
+      parameters: {
+        type: "object",
+        properties: {
+          caveat_id: { type: "string", description: "The caveat id from list_scheduling_caveats" },
+          all: { type: "boolean", description: "Set true to clear every caveat at once — only when the user asks for exactly that" }
+        },
+        required: []
+      }
+    },
     // ── ITINERARY TOOLS (used by Daily Review chat) ──────────────
     {
       type: "function",
