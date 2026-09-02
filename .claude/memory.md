@@ -150,3 +150,62 @@ to the owner as a fork in intent. Full row in `.claude/accuracy-log.md`.
 independently OR integrated. Integrated: Huddle owns agents + prioritizing, journey owns scheduling.
 Each must retain the ability to do the other's job standalone. So scheduling features land in journey;
 Huddle reaches them through the proxy rather than keeping a second engine.
+
+
+## DECISION (owner, 2026-08-27) — the caveat placement jitter is ACCEPTED, not a bug
+
+**Read this before "fixing" a task that didn't get scheduled while a caveat was active.**
+
+### What was found
+A temporary scheduling caveat ("push research to the evening for now") moves matching work into a
+preferred window. That work then CONSUMES capacity something else was using. Greedy first-fit
+placement is order-sensitive, so changing preference order changes what packs.
+
+**Measured over 4,000 simulated days** by running the real `applyCaveats()` from
+`_shared/scheduling-defaults.ts`:
+
+| outcome | days | share |
+|---|---|---|
+| identical placement | 3,887 | 97.2% |
+| **one FEWER** task placed | 56 | 1.4% |
+| **one MORE** task placed | 57 | 1.4% |
+
+Worst case is **one task either way**. Losses and gains are near-exactly balanced (56 vs 57) — this
+is arithmetic, not a bias in the caveat.
+
+### The part that matters
+**The cost never lands on the work the caveat is about.** Worked example, seed 269 (verbatim
+algorithm output): both research tasks placed fine — one in the evening, one relaxed to the morning,
+exactly per the owner's rule. The task that fell out was `Draft 3`, which is not research at all. It
+had been using the evening slot the research task moved into.
+
+So the per-task rule the owner stated — *"anything that would not fit the slot falls back to the
+regular placement rules as if the caveat never existed"* — **holds exactly**, and is asserted and
+mutation-proven in `src/utils/schedulingCaveats.test.ts`. The ±1 is about BYSTANDERS.
+
+**This is not specific to caveats.** The existing `contextRules.keywords` overrides have had the
+identical property all along.
+
+### The agreement
+The owner reviewed the measurement and both worked examples
+(https://claude.ai/code/artifact/2656015e-c032-4d5f-bbb4-1f57b809b307) and **ACCEPTED the jitter**,
+declining the day-level fallback.
+
+**The rejected alternative, and why:** place the day twice and keep the no-caveat result whenever the
+caveat version seats fewer tasks. It removes the ±1 entirely, but costs a second placement pass per
+day, forfeits the 57 days where the caveat currently HELPS, and on those days the caveat silently
+does nothing with no visible reason. That trade was considered and declined — do not re-open it as
+though it were an oversight.
+
+### How this will resurface, and what to do
+Expect roughly **one day a month** where something unrelated is not scheduled. The complaint will
+sound like a bug. It is not.
+
+`nightly-schedule-builder` now says so at the moment it happens: a rejection while caveats are in
+force is recorded as `reason: 'no_window_capacity_caveats_active'` with `caveatsActive` and
+`caveatMatchedThisTask`, and the run log spells out the tradeoff and the remedy. **Check the run log
+before treating it as a defect.** Clearing the caveat in Settings restores the previous placement
+exactly — that is the whole point of the overlay design.
+
+Only re-open this if the owner says the ±1 is costing more than it is worth. Then build the
+day-level fallback; the analysis above is the starting point, not something to redo.

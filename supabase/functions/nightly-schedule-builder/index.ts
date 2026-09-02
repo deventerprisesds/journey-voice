@@ -1260,14 +1260,35 @@ serve(async (req) => {
               if (isAssignment && tier && tier !== 'A') {
                 deferredAssignmentsToday.push({ id: task.id, tier: tier as 'B' | 'C' });
               }
+              // ACCEPTED TRADEOFF, recorded here so it is never mistaken for a bug (owner decision
+              // 2026-08-27). A caveat moves matching work into a preferred window, which consumes
+              // capacity something ELSE was using — so on ~1.4% of days a BYSTANDER (a task the
+              // caveat does not even match) loses its slot. Measured over 4,000 simulated days:
+              // 1.4% place one fewer, 1.4% place one MORE, 97.2% identical; worst case one task.
+              // It is inherent to first-fit packing, not specific to caveats — contextRules.keywords
+              // behaves the same way. The per-task rule still holds exactly: matched work that does
+              // not fit relaxes to the windows it would have had with no caveat.
+              const displacedByCaveat = caveats.length > 0 && !caveatApplied;
               dayRejections.push({
                 taskId: task.id, title: task.title, category: task.category,
                 score: task.score, duration, preferredWindows,
-                reason: 'no_window_capacity',
+                reason: displacedByCaveat ? 'no_window_capacity_caveats_active' : 'no_window_capacity',
                 keywordOverride: keywordOverride?.matchedKeyword ?? null,
+                caveatsActive: caveats.length,
+                caveatMatchedThisTask: caveatApplied,
                 tier,
               });
-              console.log(`    ⚠️ "${task.title}" doesn't fit any allowed window — skipping`);
+              if (displacedByCaveat) {
+                console.log(
+                  `    \u26A0\uFE0F "${task.title}" (${duration}m) doesn't fit any allowed window — ` +
+                  `and ${caveats.length} scheduling caveat(s) were in force today, which this task does ` +
+                  `NOT match. It may have been displaced by caveat-preferred work taking its window. ` +
+                  `This is a KNOWN, ACCEPTED tradeoff (~1.4% of days, +/-1 task, symmetric with gains) ` +
+                  `— clearing the caveat in Settings restores the previous placement exactly.`,
+                );
+              } else {
+                console.log(`    \u26A0\uFE0F "${task.title}" doesn't fit any allowed window — skipping`);
+              }
             }
 
             const totalRemaining = Object.values(windowRemaining).reduce((s, v) => s + v, 0);

@@ -101,7 +101,7 @@ one: flipping prepend→REPLACE (the keyword-override shape) fails 3 tests. That
 implementation would have shipped — a task whose single caveat window is full gets dropped entirely
 instead of relaxing.
 
-### OPEN — owner decision, deliberately NOT asserted away
+### DECIDED 2026-08-27 — owner ACCEPTED the jitter (was: open decision)
 
 **A caveat can change GLOBAL placement count by ±1 task.** Measured over 4000 fixtures: **1.4% place
 one fewer, 1.4% place one more, 97.2% identical; worst case one task either way.** Cause: greedy
@@ -139,3 +139,12 @@ the caveat occasionally doing nothing for a whole day. Not built — needs sign-
 ### STILL NOT BUILT (needs sign-off)
 - Applying caveats on the ad-hoc paths (`execute-tool` / `batch-` / `smart-calendar-scheduler`) —
   they call `resolveConfig` but do not consume `contextRules` either; same pre-existing gap.
+
+
+**Resolution of the ±1 jitter (2026-08-27).** Owner reviewed the measurement + both worked examples
+(artifact 2656015e) and **accepted it**; the day-level fallback was explicitly declined. Full finding,
+the numbers, the rejected alternative and the reason are in `.claude/memory.md` under
+"DECISION (owner, 2026-08-27)". Made self-explaining at runtime: a rejection while caveats are active
+is now `reason: 'no_window_capacity_caveats_active'` and the run log states the tradeoff and the
+remedy, so the eventual "why wasn't this scheduled?" answers itself without anyone remembering this
+conversation.
