@@ -12,6 +12,16 @@ export interface TimeWindow {
   days: number[]; // 0=Sunday, 6=Saturday
 }
 
+/** Mirrors SchedulingCaveat in supabase/functions/_shared/scheduling-defaults.ts — keep in sync. */
+export interface SchedulingCaveat {
+  id: string;
+  text: string;
+  match: { categories?: string[]; tags?: string[]; keywords?: string[] };
+  preferWindows: string[];
+  expiresAt?: string | null;   // null/omitted = until explicitly cleared
+  createdAt?: string;
+}
+
 export interface SchedulingConfig {
   timezone: string; // IANA timezone identifier (e.g., 'America/New_York')
   timeWindows: {
@@ -50,6 +60,13 @@ export interface SchedulingConfig {
     };
   };
   customAIInstructions?: string; // Free-form text instructions for AI scheduler
+  /**
+   * TEMPORARY caveats the scheduler follows until they expire or are cleared — e.g. "push research
+   * to the evening for now". A read-time OVERLAY: never merged into timeWindows/categoryMappings, so
+   * clearing one restores prior behaviour exactly, with no migration. Backend contract lives in
+   * supabase/functions/_shared/scheduling-defaults.ts (SchedulingCaveat / activeCaveats / applyCaveats).
+   */
+  caveats?: SchedulingCaveat[];
 }
 
 // Default configuration blending all existing rules
@@ -69,7 +86,7 @@ export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
     after_work: {
       start: 17,
       end: 22,
-      days: [1, 2, 3, 4, 5, 6], // weekdays + Saturday
+      days: [1, 2, 3, 4, 5], // weekdays only -- Saturday is covered by `weekends`
     },
     evening: {
       start: 19,
@@ -279,5 +296,9 @@ export function mergeSchedulingConfig(
     customAIInstructions: (userConfig.customAIInstructions && userConfig.customAIInstructions.trim() !== '') 
       ? userConfig.customAIInstructions 
       : DEFAULT_SCHEDULING_CONFIG.customAIInstructions,
+    // Caveats are a pass-through overlay. They MUST be carried here: this function rebuilds the
+    // config object explicitly, so any key it forgets is silently dropped on the next save — which
+    // would wipe the owner's active caveats the moment they touched any other setting.
+    caveats: Array.isArray(userConfig.caveats) ? userConfig.caveats : [],
   };
 }

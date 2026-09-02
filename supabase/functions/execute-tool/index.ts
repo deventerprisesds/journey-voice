@@ -3,7 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { normalizeDueDate, normalizeDateTime, getTodayInTimezone, formatInTimezone } from "../_shared/timezone.ts";
 import { getToolDefinitions } from "../_shared/tool-definitions.ts";
 import { getTopicGroupsManual, WINDOW_RANGES, CATEGORY_WINDOW_MAPPING } from "../_shared/call-context-builder.ts";
-import { resolveConfig, validateTaskWindow } from "../_shared/scheduling-defaults.ts";
+import { resolveConfig, validateTaskWindow, activeCaveats } from "../_shared/scheduling-defaults.ts";
 
 // ── Rollback Flag for shared topic ranking ──────────────────────────
 const USE_SHARED_TOPICS = true;
@@ -358,6 +358,13 @@ async function executeToolCall(
       
       case 'unschedule_task':
         return await unscheduleTask(supabase, args);
+
+      case 'set_scheduling_caveat':
+        return await setSchedulingCaveat(supabase, userId, args);
+      case 'list_scheduling_caveats':
+        return await listSchedulingCaveats(supabase, userId);
+      case 'clear_scheduling_caveat':
+        return await clearSchedulingCaveat(supabase, userId, args);
       
       case 'parse_and_create_tasks':
         return await parseAndCreateTasks(supabase, userId, args, context?.timezone);
@@ -1191,6 +1198,108 @@ async function scheduleTask(supabase: any, args: any, timezone?: string): Promis
     };
   } catch (error) {
     return { success: false, error: extractErrorMessage(error) };
+  }
+}
+
+/**
+ * Temporary scheduling caveats — read-time overlay on user_scheduling_prefs.config.caveats.
+ *
+ * Deliberately NEVER merged into timeWindows/categoryMappings: clearing a caveat restores prior
+ * behaviour exactly, with no migration and no risk of a temporary preference quietly becoming
+ * permanent. The scheduler reads them via activeCaveats()/applyCaveats() in _shared/scheduling-defaults.ts.
+ */
+const CAVEAT_WINDOWS = ['morning', 'business_hours', 'after_work', 'evening', 'flexible', 'weekends'];
+
+async function readCaveats(supabase: any, userId: string): Promise<{ config: any; caveats: any[] }> {
+  const { data } = await supabase
+    .from('user_scheduling_prefs').select('config').eq('user_id', userId).maybeSingle();
+  const config = data?.config ?? {};
+  return { config, caveats: Array.isArray(config.caveats) ? config.caveats : [] };
+}
+
+async function writeCaveats(supabase: any, userId: string, config: any, caveats: any[]) {
+  const next = { ...config, caveats };
+  const { error } = await supabase
+    .from('user_scheduling_prefs')
+    .upsert({ user_id: userId, config: next }, { onConflict: 'user_id' });
+  if (error) throw error;
+}
+
+/**
+ * Only caveats still in force. Delegates to the SHARED activeCaveats() rather than re-implementing
+ * expiry here — a second copy would drift, and the scheduler and this tool disagreeing about which
+ * caveats are live is exactly the bug that would be hardest to see.
+ */
+function liveOnly(caveats: any[]): any[] {
+  return activeCaveats({ caveats });
+}
+
+async function setSchedulingCaveat(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
+  const windows: string[] = Array.isArray(args?.prefer_windows) ? args.prefer_windows : [];
+  if (!windows.length) return { success: false, error: 'prefer_windows is required' };
+  // Reject invented window names rather than storing a caveat that can never match anything.
+  const bad = windows.filter((w) => !CAVEAT_WINDOWS.includes(w));
+  if (bad.length) {
+    return { success: false, error: `Unknown time window(s): ${bad.join(', ')}. Valid windows are ${CAVEAT_WINDOWS.join(', ')}.` };
+  }
+  const match: any = {};
+  if (Array.isArray(args?.keywords) && args.keywords.length) match.keywords = args.keywords;
+  if (Array.isArray(args?.categories) && args.categories.length) match.categories = args.categories;
+  if (Array.isArray(args?.tags) && args.tags.length) match.tags = args.tags;
+
+  try {
+    const { config, caveats } = await readCaveats(supabase, userId);
+    const caveat = {
+      id: `cv_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+      text: String(args?.text ?? '').slice(0, 300),
+      match,
+      preferWindows: windows,
+      expiresAt: args?.expires_at ?? null,
+      createdAt: new Date().toISOString(),
+      source: 'chat',
+    };
+    await writeCaveats(supabase, userId, config, [...liveOnly(caveats), caveat]);
+    return {
+      success: true,
+      data: { caveat, active_count: liveOnly(caveats).length + 1 },
+      message: `Caveat set: ${caveat.text || windows.join('/')}. It is a preference — anything that will not fit ${windows[0]} is still scheduled normally. ${caveat.expiresAt ? `Expires ${caveat.expiresAt}.` : 'It stays until you clear it.'} Takes effect on the next nightly build.`,
+    };
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+async function listSchedulingCaveats(supabase: any, userId: string): Promise<ExecuteToolResponse> {
+  try {
+    const { caveats } = await readCaveats(supabase, userId);
+    const live = liveOnly(caveats);
+    return {
+      success: true,
+      data: { caveats: live },
+      message: live.length
+        ? `${live.length} active caveat(s).`
+        : 'No temporary scheduling caveats are in force.',
+    };
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+async function clearSchedulingCaveat(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
+  try {
+    const { config, caveats } = await readCaveats(supabase, userId);
+    const live = liveOnly(caveats);
+    if (args?.all) {
+      await writeCaveats(supabase, userId, config, []);
+      return { success: true, data: { cleared: live.length }, message: `Cleared ${live.length} caveat(s). Scheduling returns to your normal rules on the next build.` };
+    }
+    if (!args?.caveat_id) return { success: false, error: 'caveat_id is required (or pass all: true)' };
+    const kept = live.filter((c: any) => c.id !== args.caveat_id);
+    if (kept.length === live.length) return { success: false, error: `No active caveat with id ${args.caveat_id}` };
+    await writeCaveats(supabase, userId, config, kept);
+    return { success: true, data: { cleared: 1, remaining: kept.length }, message: 'Caveat cleared. Scheduling returns to your normal rules on the next build.' };
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : String(e) };
   }
 }
 
