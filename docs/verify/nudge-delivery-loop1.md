@@ -477,3 +477,240 @@ comparator is what breaks it. (This is a latent defect of the design decision, n
 misstatement of the claim.)
 
 ---
+
+## Unprompted findings
+
+### F1. CRITICAL — the new config namespaces are silently DELETED by the Settings screen
+
+Both commits assert their knobs are user-changeable:
+- `nightly-schedule-builder/index.ts:315` — *"Nudge delivery knobs — user-changeable, code only seeds the default."*
+- `git log 0969b9d` — *"Everything is config-driven under `config.assignments` (…), per the standing no-code-only-config rule."*
+
+Neither survives a trip through the only UI that writes that column.
+
+`src/config/schedulingRules.ts:287-309` — `mergeSchedulingConfig` builds its return value as an
+**explicit field-by-field object literal**. It never spreads `userConfig`. `nudges` and
+`assignments` are not among the named fields (`grep -n "nudges\|assignments"
+src/config/schedulingRules.ts` → **no matches**), so both are dropped the moment config is loaded.
+
+`src/services/schedulingService.ts:193-197` then writes the loaded-and-merged object back as a
+**whole-object replace**:
+```ts
+const updateData: any = { user_id: userId, config: restConfig as any, updated_at: ... };
+```
+
+So: user opens Settings → Scheduling → changes anything → hits Save → `config.nudges` and
+`config.assignments` are **permanently removed from the database**. The digest silently reverts
+to 08:00 and every assignment knob reverts to its inferred default, with no error and nothing in
+the UI to indicate it happened.
+
+The file already documents this exact trap two lines above, for a previous field:
+```ts
+// Carry the user's scoring-model choice through the merge (built field-by-field, so it must be
+// named here or it would be silently dropped on load and the Settings toggle would never persist).
+scoringModel: userConfig.scoringModel === 'priority-rank' ? 'priority-rank' : 'composite',
+```
+The warning was in the file and the new work did not follow it.
+
+Currently latent, not yet firing: `select config->'nudges', config->'assignments' from
+user_scheduling_prefs where user_id='a3378f93-…'` returns **`null, null`** — no user has set
+either, so nothing has been lost yet. It becomes destructive the first time anyone sets one.
+
+### F2. There is no UI for any of the new knobs at all
+
+```
+$ grep -rn "deliverAtLocalHour" --include=*.tsx --include=*.ts src        -> no matches
+$ grep -rn "activeCourseEraDays\|activeCourseIds\|soonDays\|recentOverdueDays\|includeUncoursed" src  -> no matches
+```
+
+Seven config knobs were introduced across the two commits and not one is reachable from the app.
+The repo's own standing rule is explicit that reading a value from a config store is not
+sufficient — *"Baking the same value as a literal in code with no UI path is NOT [fine]"* and
+*"can the user change this in the UI? If not, either wire it to a setting first, or get EXPLICIT
+owner approval"*. A JSONB key only an agent or a SQL client can write is not a UI path. Both
+commits cite compliance with this rule; neither achieves it.
+
+### F3. Commit-message claims the code does not support
+
+| Claim | Status |
+|---|---|
+| `826d310`: *"Verified offline 14/14 against the four real venue nudges"* | **No test file exists.** `git show --name-status 826d310` adds exactly two paths: `_shared/nudges.ts` (A) and `nightly-schedule-builder/index.ts` (M). No test was committed, so the cited evidence cannot be re-run by anyone. The repo has the convention (`supabase/functions/_shared/task-dedup.test.ts` is committed right next to its module) — it was not followed. |
+| `0969b9d`: *"Verified offline 14/14 … the unit test caught that, not review"* | **Same.** `git show --name-status 0969b9d` adds only `scripts/undef-check.mjs`. The unit test credited with catching the `eraDays=21` cliff is not in the repo. |
+| `826d310`: *"stop the message lying about placement"* / *"MESSAGE-ACCURACY BUG FIXED"* | **Overstated.** The lying message is still generated verbatim at `nightly-schedule-builder/index.ts:1531` and still rendered by `DailyReviewModal.tsx` and `buildDayContext.ts`. Fixed on the new path only. See C1c. |
+| `826d310`: *"Two of the four live nudges were weekend placements, so 'Go to church' at Sunday 10:00 … was told to move into business hours"* | **Not reproducible; no evidence found.** Live now: the task carrying the venue_nudge marker is `f6cb9caf` "Go to church" with `start_time = NULL, is_scheduled = false` — it has no placement at all, so nothing could describe it as Sunday 10:00. A *different* task, `2299d55f` "Set reminder for church", is at Sun 2026-09-06 10:00 ET but has **no** `venue_nudge` key and therefore never produced a nudge. Of the five current venue_nudge rows, exactly **one** is a weekend placement (Sat 16:00), not two of four. The claim is dated 2026-08-28 and today is 2026-09-03, so I cannot disprove the historical state — but I found no supporting evidence in the current data and the named example does not hold. |
+| `826d310`: *"Business hours come from the user's own configured window, not a hardcoded 9-5"* | **Half true.** The *hours* are read from config (`index.ts:320-323`). The *days* are hardcoded: `isWeekendLocal` (`nudges.ts:67-71`) tests `wd === 'Sat' \|\| wd === 'Sun'` and ignores the user's configured `business_hours.days`, which is live and populated: `{"end":17,"days":[1,2,3,4,5],"start":9}`. A user on a Tue–Sat week gets the wrong branch. |
+| `06b0eba`: *"Added scripts/undef-check.mjs, which verifies every symbol this work introduces"* | **True for that commit, and it does not cover the next one.** See F5. |
+
+### F4. Can `deliverNudgeDigest` send an empty or duplicate digest?
+
+**Empty: no.** `nudges.ts:182` `if (!nudges.length) return 0;` returns before the insert, and the
+caller only logs when `delivered > 0` (`index.ts:2155`). Silence on a quiet day is correct and is
+what happens.
+
+**Duplicate: YES — three independent vectors, none guarded.**
+
+1. **Any UI reschedule queues another digest.** `deliverNudgeDigest` does a bare `.insert()`
+   (`nudges.ts:184`) — no `upsert`, no `onConflict`, no "already queued today" pre-check, and the
+   `key` field it carefully computes (`venue:<taskId>:<localDate>`) is written into the payload
+   but **never used to suppress anything**. The delivery block at `index.ts:2118` is *not* gated
+   on `singleDay`, and two UI paths invoke the builder with `singleDay: true`:
+   - `src/components/FocusView.tsx:642` — the "Reschedule today" button
+   - `src/components/DailyReviewModal.tsx:366` — "Confirm schedule" (`triggerSource: 'daily_review_confirm'`)
+
+   Each tap therefore queues a **complete additional digest**, all pointing at the same
+   `nextLocalHour` instant. Three reschedules before 08:00 ⇒ three identical Iris messages and
+   three pushes at 08:00. The commit's own stated design goal — *"ONE digest, not one push per
+   nudge … seven pushes would train the user to ignore them"* — is defeated by the user pressing
+   a button the app puts in front of them.
+
+2. **The purge that would have cleaned them up is broken (pre-existing).**
+   `index.ts:576-579` deletes today's pending notifications with
+   `.eq('status','pending').gte('send_at', todayStartIso).lt('send_at', todayEndIso)`.
+   The live table has **neither** column — its columns are
+   `id, user_id, task_id, notification_type, title, body, scheduled_for, delivered_at, failed_at,
+   failure_reason, created_at, processing_at, processing_instance, queued_during_quiet,
+   original_scheduled_for, metadata` (verified via `information_schema.columns`). PostgREST rejects
+   the filter, the surrounding `try` swallows it as *"Failed to purge notifications (non-fatal)"*,
+   and nothing is ever purged. Not introduced by this commit, but it is the only mechanism that
+   would have absorbed vector 1, so the new code inherits a safety net that does not work.
+
+3. **Nothing dedupes against yesterday's undelivered digest.** There is no
+   `delivered_at is null` check before inserting, so a digest that failed or was never processed
+   simply accumulates alongside the new one.
+
+The precedent the commit cites, `_shared/task-dedup.ts:373`, has the same bare-insert shape — so
+this is a copied pattern, not a fresh oversight. It is still a duplicate risk here because the
+dedup notice fires on a user action while the digest fires on a repeatable batch job.
+
+### F5. Things that would break at runtime in Deno but pass `bun build`
+
+**a) The `undef-check` guard does not cover the newest commit — and gives a false green.**
+`scripts/undef-check.mjs` was added by `06b0eba` precisely because "bun/esbuild bundle cleanly
+with UNDEFINED identifiers". Two problems:
+
+- **It exits 0 when given no arguments.** `files = process.argv.slice(2)`; with no args the loop
+  body never runs and `process.exit(bad ? 1 : 0)` exits 0. `bun scripts/undef-check.mjs` → silent,
+  `EXIT=0`. Anyone running it bare gets a pass that checked nothing.
+- **Its `required` list is a hardcoded snapshot of `06b0eba`'s symbols** (`getNexusRowsOnce`,
+  `failures`, `createNexusAssignment`, `updateNexusAssignment`, `nexusWritesConfigured`,
+  `fetchNexusAssignments`, `courseworkOrder`, `scopeToActiveCourses`). It contains **zero** of the
+  head commit's new symbols — `grep -c "deliverNudgeDigest\|nextLocalHour\|venueNudge"
+  scripts/undef-check.mjs` → **0**. Run against `_shared/nudges.ts` it reports `uses=0
+  missing=none`: a clean pass on a file it did not examine.
+- **It matches inside comments and strings**, so it is unreliable in the other direction too. Run
+  explicitly it currently **fails**:
+  ```
+  $ bun scripts/undef-check.mjs supabase/functions/{nightly-schedule-builder,execute-tool}/index.ts \
+      supabase/functions/_shared/{nexus,nudges}.ts supabase/functions/sync-{mit,google}-sheets/index.ts
+  nightly-schedule-builder   uses=1 missing=none
+  execute-tool               uses=3 missing=failures
+  _shared(nexus)             uses=6 missing=none
+  _shared(nudges)            uses=0 missing=none
+  sync-mit-sheets            uses=6 missing=none
+  sync-google-sheets         uses=6 missing=none
+  EXIT=1
+  ```
+  `missing=failures` is a **false positive** — the only occurrences in `execute-tool/index.ts` are
+  the English word inside two comments (`:1514`, `:1644`). So the guard is red on a clean tree,
+  which trains people to ignore it.
+
+**b) The shadowing hazard the guard cannot see.** `index.ts:1718` binds
+`const venueNudge = venueNudgeByTaskId.get(slot.taskId)` over the imported function name.
+Verified safe today (§C3b) because the delivery block is outside that block's scope — but a
+regex symbol-checker will never catch it, and it fails only at runtime, in Deno, inside a
+`try/catch` that downgrades it to a `console.warn`. If the delivery block were ever moved inside
+the day loop, the nudge feature would silently stop working with no error surfaced anywhere.
+
+**c) `nextLocalHour` degrades to an immediate 01:00 push on a bad config value.**
+`index.ts:317` is `Number(config?.nudges?.deliverAtLocalHour ?? 8)` with no validation or clamp.
+`nudges.ts:205-217` loops `d = 0..1` and, if no candidate lands at-or-after `from`, falls through
+to `return from.toISOString()` — i.e. **send now**. Measured:
+
+```
+hour=25  from=2026-09-04T05:00:00Z -> 2026-09-04T05:00:00.000Z   local Fri 01:00
+hour=-1  from=2026-09-04T05:00:00Z -> 2026-09-04T05:00:00.000Z   local Fri 01:00
+NaN      from=2026-09-04T05:00:00Z -> 2026-09-04T05:00:00.000Z   local Fri 01:00
+```
+A user typing `"8am"` (→ `NaN`) or `25` gets exactly the 1am push the design exists to prevent.
+Fails silently, in the safe direction of the `try/catch`, so nothing reports it.
+
+**d) `nextLocalHour` is otherwise correct — DST included.** Tested across both 2026 US
+transitions; every result is in the future and lands on 08:00 local:
+```
+cron 01:00, night DST ends  2026-11-01T05:00Z -> 2026-11-01T13:00Z  Sun Nov 1 08:00
+cron 01:00, spring forward  2026-03-08T06:00Z -> 2026-03-08T12:00Z  Sun Mar 8 08:00
+after the hold hour (14:00) 2026-09-04T18:00Z -> 2026-09-05T12:00Z  Sat Sep 5 08:00
+exactly 08:00               2026-09-04T12:00Z -> 2026-09-04T12:00Z  Fri Sep 4 08:00
+hold hour 2 on spring-fwd   2026-03-08T06:00Z -> 2026-03-08T07:00Z  Sun Mar 8 03:00 (nonexistent 02:00 → 03:00, correct)
+```
+
+**e) Residual, low confidence — `hour12:false` midnight.** `localHourOf` (`nudges.ts:60-65`) uses
+`{hour:'numeric', hour12:false}`, which on some older ICU builds formats midnight as `"24"`,
+making `parseInt` return 24 and pushing every midnight task into the "after most places close"
+branch with a nonsense `24:00`. Both engines I can reach here return `"00"`
+(bun and node both print `"00"` for 2026-09-06T04:00Z in `America/New_York`). **I could not test
+Deno — no `deno` binary in this sandbox** — but Deno is V8/ICU like both, so this is unlikely.
+`hourCycle: 'h23'` would remove the ambiguity entirely.
+
+**f) Confirmed NOT broken: the module loads in Deno.** Invoked the deployed function live with
+`{"dryRun":true,"singleDay":true}` (documented zero-write mode) via `pg_net` request 670460 →
+`status_code 200`, body `{"success":true,...,"totalScheduled":6,"daysProcessed":1,...}`. So
+`import ... from "../_shared/nudges.ts"` resolves and the function runs end to end under Deno.
+**But `dryRun` skips the delivery block** (`index.ts:2119`), so the nudge code path itself has
+**never executed in Deno** — not in this verification, and not in production (no `source='nudges'`
+row has ever been written). Its first real execution will be the 05:00Z cron.
+
+---
+
+## Verdict summary
+
+| Claim | Verdict |
+|---|---|
+| **C1** `buildVenueNudgeMessage` weekend/business-hours nulls, no "after work" | **CONFIRMED** for the function (168/168 combinations, 0 containing "after work"). **REFUTED** for "fixes the bug" — the old placement-blind "after work" template still runs at `index.ts:1531` and still feeds the Daily Review modal and day-context briefing. |
+| **C2** no delivery path existed before | **CONFIRMED** against the parent tree. Two evidence corrections: one cited "consumer" is dead code with no importer; a `daily_digest` channel already existed (just not nudge-aware). |
+| **C3** digest via `scheduled_chat`, held to hour 8, dryRun-skipped, non-fatal, all symbols declared | **CONFIRMED** on every part, including the symbol audit and the `venueNudge` shadowing check. Two defects found: `placedToday` has no date filter (live rows span 5 days); the message floors the time to the hour (17:45 → "17:00"). |
+| **C4** deployed, active-course scoped, not led by old backlog | **CONFIRMED** deployed + not led by backlog (top 2 are `recently overdue` from the live course). **PARTIALLY REFUTED** on scoping: 13/29 rows are from a course whose newest deadline is 2026-01-23. "due soon before recently overdue" **UNVERIFIABLE-HERE** — zero band-1/band-3 rows exist live. |
+| **C5** dynamic resolution, no hardcoded ids, config overrides | **CONFIRMED** for `list_pending_assignments`. **REFUTED** repo-wide: `nightly-assignment-sync/index.ts:128-130` pins one course id, and it is **not disclosed** in any commit on this branch. The two scopes disagree — the tool reports 13 pending items the scheduler will never place. |
+| **C6** sheet syncs → Nexus, 503 without token, counters only on success | **CONFIRMED**, all three parts, both functions, zero `public.assignments` writers left. One narrow silent-drop gap when Nexus returns ok with an unreadable body. |
+| **C7** one shared ordering fn; non-assignment left on score | **CONFIRMED** as stated. Latent defect: the composed comparator is **intransitive** — six permutations of three tasks produce three different orderings, so per-day pick order depends on query row order. |
+
+**Highest-priority items, in order:**
+1. **F1** — a Settings save permanently deletes `config.nudges` and `config.assignments`. Latent
+   only because nobody has set them yet. Fix: name both in `mergeSchedulingConfig`.
+2. **C1c** — move the message derivation to the real producer at `index.ts:1531` (after placement),
+   or have the three readers call `buildVenueNudgeMessage` instead of reading the stored string.
+   Until then the digest and the review modal contradict each other about the same task.
+3. **F4.1** — add a dedup/upsert on the digest key, or gate the delivery block on
+   `!singleDay`, before the UI reschedule buttons multiply the 08:00 push.
+4. **C3c** — bound the `placedToday` query to the day(s) being built.
+5. **F5.a** — `undef-check.mjs` exits 0 with no args, omits every new symbol, and is red on a
+   clean tree from a comment false-positive.
+6. **F3** — commit its "verified 14/14" tests, twice claimed and never committed.
+
+## Reproduction commands
+
+```bash
+# C1 sweep (168 combinations)
+bun run <scratch>/c1.ts      # imports supabase/functions/_shared/nudges.ts directly
+
+# C3e digest simulation against the 5 live venue rows
+bun run <scratch>/digest.ts
+
+# C7 intransitivity proof
+bun run <scratch>/trans.ts
+
+# F5.a guard
+bun scripts/undef-check.mjs                       # EXIT=0, checked nothing
+bun scripts/undef-check.mjs supabase/functions/_shared/nudges.ts   # uses=0 missing=none
+```
+```sql
+-- C4 live invocation
+select net.http_post(url:='.../functions/v1/execute-tool',
+  body:='{"toolName":"list_pending_assignments","userId":"a3378f93-d655-4913-b2fa-ca5b1d8020f1","args":{}}'::jsonb, ...);
+select * from net._http_response where id = 670450;   -- 200, 29 rows
+
+-- F5.f Deno boot proof (dryRun = zero writes)
+select net.http_post(url:='.../functions/v1/nightly-schedule-builder',
+  body:='{"userId":"a3378f93-...","dryRun":true,"singleDay":true}'::jsonb, ...);
+select status_code from net._http_response where id = 670460;   -- 200
+```
