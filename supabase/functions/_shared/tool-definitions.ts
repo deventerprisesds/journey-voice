@@ -11,6 +11,43 @@
  * edge function to update the OpenAI Assistant's static tool list.
  */
 
+/**
+ * TOOL SURFACE CLASSIFICATION — machine-readable, because comments are not.
+ *
+ * `getToolDefinitions()` below is the LLM-facing catalogue: every name in it is offered to a model
+ * (execute-tool `GET /definitions`, re-served verbatim by huddle-proxy `GET /tools`). Some tools are
+ * dispatched by execute-tool but deliberately NOT offered to models, and one advertised tool is
+ * deliberately handled in the client. That intent used to live only in English comments, so no
+ * generated tool surface — and no drift check — could read it. These three exports fix that.
+ */
+
+/** Dispatched, but NEVER advertised to an LLM: called programmatically by app code only. */
+export const INTERNAL_TOOL_NAMES: readonly string[] = [
+  "send_push",           // Huddle away-notifications (reminders, durable-turn replies) — fixed call sites
+  "register_push_token", // Huddle bridge device registration — plumbing, never model-selected
+  "batch_update_tasks",  // Huddle grooming / auto-work bulk writes — bulk mutation, not model-selected
+];
+
+/** Dispatched compatibility labels that resolve to an advertised tool. Never advertised twice. */
+export const TOOL_ALIASES: Readonly<Record<string, string>> = {
+  create_task: "parse_and_create_tasks", // legacy; also advertised by the MCP + twilio catalogues
+  Email: "send_email",
+  Slack_Message: "send_slack_message",
+  Outlook_Event: "create_outlook_event",
+  Google_Event: "create_google_event",
+  Phone_Call: "initiate_phone_call",
+};
+
+/**
+ * Advertised AND handled in the voice client before execute-tool is ever reached
+ * (see src/utils/UnifiedVoiceToolHandler.ts `isLocalOnlyFunction`). Any consumer that cannot handle
+ * these locally — e.g. Huddle, which builds its surface straight from GET /tools — must filter them.
+ */
+export const CLIENT_LOCAL_TOOL_NAMES: readonly string[] = [
+  "disconnect",
+  "hang_up",
+];
+
 export interface ToolDefinition {
   type: "function";
   name: string;

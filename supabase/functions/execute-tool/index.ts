@@ -437,6 +437,13 @@ async function executeToolCall(
         return await getMyConfig(supabase, userId, args);
 
       // ============ PHONE-ONLY TOOLS ============
+      // Advertised AND handled client-side (UnifiedVoiceToolHandler.isLocalOnlyFunction), so a voice
+      // client never reaches here. This case exists for consumers that route the whole catalogue to
+      // execute-tool (e.g. Huddle via huddle-proxy): without it `disconnect` hit `default:` and came
+      // back "Unknown tool", i.e. an advertised tool that could only fail. Mirrors hang_up's no-op.
+      case 'disconnect':
+        return { success: true, message: args.farewell_message || "Session ended" };
+
       case 'hang_up':
         // For chat interface, this is a no-op
         if (context.interface === 'chat') {
