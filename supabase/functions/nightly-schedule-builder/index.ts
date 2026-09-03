@@ -23,6 +23,7 @@ import { getTodayInTimezone, localDateToUtcBounds } from "../_shared/timezone.ts
 // ONE coursework order, shared with execute-tool's list_pending_assignments, so the
 // schedule the builder produces and what Iris says about it cannot disagree.
 import { courseworkOrder } from "../_shared/nexus.ts";
+import { venueNudge, overflowNudge, deliverNudgeDigest, nextLocalHour, type Nudge } from "../_shared/nudges.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -311,6 +312,15 @@ serve(async (req) => {
       const userId = userPref.user_id;
       const timezone = userPref.timezone || 'America/New_York';
       const config = userPref.config || {};
+      // Nudge delivery knobs — user-changeable, code only seeds the default.
+      // 8 because the build runs at 01:00 and a 1am push is worse than useless.
+      const nudgeHourLocal: number = Number(config?.nudges?.deliverAtLocalHour ?? 8);
+      // Business hours drive the venue-nudge wording; read the user's own window so the
+      // message matches their configured day, not a hardcoded 9-5.
+      const businessHoursForNudges = {
+        start: Number(config?.timeWindows?.business_hours?.start ?? 9),
+        end: Number(config?.timeWindows?.business_hours?.end ?? 17),
+      };
 
       // Per-user scoring model: body override → this user's config.scoringModel → 'composite' default.
       // This is what makes the Settings → Scheduling toggle self-serve: only an explicit 'priority-rank'
@@ -2096,6 +2106,58 @@ serve(async (req) => {
           }
         } catch (e) {
           console.warn('  ⚠️ overflow queue persist error:', e);
+        }
+
+        // ── DELIVER the nudges (the half that never existed) ─────────────────────
+        // Both nudge kinds were computed correctly and shown to NOBODY: every consumer
+        // of venue_nudge and task_overflow_queue was a passive reader, so a nudge only
+        // appeared if the user happened to open the briefing or review modal on the
+        // exact day. One digest, on the existing scheduled_chat channel (no new sender,
+        // no new secret), HELD TO MORNING — this runs at 01:00 and a 1am push about
+        // shoe shopping is worse than useless. Never fails the build.
+        try {
+          if (!dryRun) {
+            const nudges: Nudge[] = [];
+
+            // Venue nudges, re-derived from the ACTUAL placement. The stored message was
+            // a fixed template asserting "scheduled after work" regardless of where the
+            // task landed, so weekend placements got told to move into business hours.
+            const { data: placedToday } = await supabase
+              .from('tasks')
+              .select('id, title, start_time, scheduling_context')
+              .eq('user_id', userId)
+              .eq('is_scheduled', true)
+              .not('start_time', 'is', null);
+            for (const t of placedToday || []) {
+              if (!(t as any).scheduling_context?.venue_nudge) continue;
+              const n = venueNudge(t as any, timezone, businessHoursForNudges);
+              if (n) nudges.push(n);   // null => placement is actually fine, say nothing
+            }
+
+            // Overflow nudges for work that never fit.
+            const { data: ofRows } = await supabase
+              .from('task_overflow_queue')
+              .select('task_id, overflow_date, message, suggested_bump_task_id, suggested_bump_title')
+              .eq('user_id', userId)
+              .eq('status', 'open');
+            if (ofRows?.length) {
+              const titles = new Map<string, string>();
+              const { data: ofTasks } = await supabase
+                .from('tasks').select('id, title')
+                .in('id', ofRows.map((r: any) => r.task_id));
+              for (const t of ofTasks || []) titles.set(t.id, t.title);
+              for (const r of ofRows) nudges.push(overflowNudge(r as any, titles.get((r as any).task_id) || 'A task'));
+            }
+
+            const delivered = await deliverNudgeDigest(supabase, userId, nudges, {
+              scheduledFor: nextLocalHour(now, nudgeHourLocal, timezone),
+            });
+            if (delivered > 0) {
+              console.log(`  🔔 Nudge digest queued: ${delivered} item(s) for ${nudgeHourLocal}:00 ${timezone}`);
+            }
+          }
+        } catch (e) {
+          console.warn('  ⚠️ nudge delivery error (non-fatal):', e);
         }
 
         // Calendar status snapshot for today (used by daily-review pipeline messaging)
