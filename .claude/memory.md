@@ -771,3 +771,51 @@ Every scheduler write REPLACED the jsonb, so provenance died the first time a ta
   untouched with scratch still cleared), then the real builder ran on the live board (req 639326, 53
   scheduled, 7 days, `processingTimeMs 117197`). Result: `has_both` **0 → 44 of 44** scheduler-touched
   tasks; `source` 50/50, `origin` 8/8, `due_date_inferred` 2/2 all survived.
+
+## Nudges: computed for months, delivered to NOBODY — fixed 2026-09-03
+**The whole nudge path was read-only.** journey computes two kinds of nudge correctly —
+`scheduling_context.venue_nudge` (trait layer, in the builder) and `task_overflow_queue`
+(value-aware overflow) — and measured 2026-08-28 there were 4 and 3 of them live on the board.
+EVERY consumer was a passive `.filter(...)`: `_shared/build-day-context.ts:256`,
+`src/utils/buildDayContext.ts:255`, `DailyReviewModal.tsx:275`. **Zero notification/push/chat
+writers existed anywhere in the nudge path.** So a nudge only surfaced if the user happened to
+open the briefing or review modal, ON the exact day the task was scheduled — and
+build-day-context filters to TODAY, so on a day with no nudge-bearing task they were invisible
+even though several existed. That is an annotation, not a nudge, and it contradicts this repo's
+own rule ("Empty windows → Iris NUDGES the user … so Iris ASKS whether to fill it").
+- **Delivery = the EXISTING `scheduled_chat` channel**, not a new sender.
+  `notification-delivery/index.ts:387` already posts `metadata.message` as an Iris chat message
+  AND sends a push that opens that chat on tap; `_shared/task-dedup.ts:375` proved it end-to-end.
+  No new secret, no new deep-link plumbing. New code is `_shared/nudges.ts` +　a delivery block
+  in `nightly-schedule-builder` after the overflow-queue persist.
+- **ONE digest, held to a local hour (default 08:00, `config.nudges.deliverAtLocalHour`).** The
+  build runs at 01:00 ET — a 1am push about shoe shopping is worse than useless. Seven nudges
+  existed on the measured day; seven separate pushes would train the user to ignore them.
+- **journey owns this, NOT Huddle** (owner requirement 2026-09-03): a journey-only user must get
+  the same benefit without installing Huddle. Huddle reads the same rows through the existing
+  proxy, the way chat history is shared rather than Huddle-owned.
+- **THE MESSAGE WAS LYING.** The old venue-nudge text was a fixed template asserting the task
+  "is scheduled after work" REGARDLESS of actual placement. 2 of the 4 live nudges were WEEKEND
+  placements, so "Go to church" at Sunday 10:00 ET — a correct slot — was told to move into
+  business hours. Wording is now derived from the real placement, business hours come from the
+  user's own configured window (not a hardcoded 9-5), and **a placement that is already fine
+  raises NO nudge at all**. Offline 14/14 against the four real cases: both weekend ones now
+  correctly return null.
+- Nudges carry machine-readable `actions` (move/keep/snooze/bump) with full payloads so a client
+  can render actionable rows rather than parse prose.
+- **NOT BUILT YET:** the in-thread interactive card that consumes `metadata.nudges`. Backend and
+  payload are live; the React component is the remaining half.
+
+## bun/esbuild bundle cleanly with UNDEFINED IDENTIFIERS — a green build is not evidence
+Bit twice in one session. `courseworkOrder` was used in `nightly-schedule-builder` with **no
+import**, and `getNexusRowsOnce` was referenced in both sheet syncs while **undefined** — both
+produced a perfectly clean `bun build`. Bundlers resolve MODULE SPECIFIERS, not symbols; an
+undefined identifier is a TypeScript/runtime error, and bun does not typecheck.
+- `scripts/undef-check.mjs` (added) verifies every symbol a change introduces is declared or
+  imported. It is what caught both. Run it on any edge-function edit.
+- Related and equally important: **`npx tsc --noEmit -p tsconfig.json` in this repo proves
+  NOTHING** — the root tsconfig is a solution file with `references` and no `include`, so it
+  compiles ZERO files and exits silent. I reported that silence as "typecheck clean"; it was
+  meaningless. `npm ci`/`bun install` also fail here (lockfile points at Lovable's private
+  registry, 403), and there is no frontend build in CI — so frontend edits are PARSE-verified
+  only and the Lovable build is the first real type gate. Say that plainly rather than implying more.
