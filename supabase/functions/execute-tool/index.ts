@@ -5,6 +5,7 @@ import { getToolDefinitions } from "../_shared/tool-definitions.ts";
 import { getTopicGroupsManual, WINDOW_RANGES, CATEGORY_WINDOW_MAPPING } from "../_shared/call-context-builder.ts";
 import { resolveConfig, validateTaskWindow, DEFAULT_TIME_WINDOWS } from "../_shared/scheduling-defaults.ts";
 import { runDedup, finalizeDedup, type DedupLogEntry } from "../_shared/task-dedup.ts";
+import { fetchNexusAssignmentsResult } from "../_shared/nexus.ts";
 
 // ── Rollback Flag for shared topic ranking ──────────────────────────
 const USE_SHARED_TOPICS = true;
@@ -2646,15 +2647,22 @@ async function explainTaskScore(supabase: any, userId: string, args: any): Promi
 async function listPendingAssignments(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
   try {
     const includeOverdue = args.include_overdue !== false;
-    let q = supabase
-      .from('assignments')
-      .select('id, title, due_date, priority, status, program_id, assignment_url, course_id')
-      .eq('user_id', userId)
-      .neq('status', 'completed')
-      .neq('status', 'graded');
-    if (args.program_id) q = q.eq('program_id', args.program_id);
-    const { data, error } = await q;
-    if (error) throw error;
+    // SOURCE OF TRUTH IS NEXUS ON AZURE. This used to read Supabase `public.assignments`,
+    // which has been a dead snapshot since the 2026-04-06 migration (469 rows, newest due
+    // 2026-06-23, no cron feeding it) — so this tool answered "what's pending?" from data
+    // months out of date, with the user's current course missing entirely.
+    const { assignments: data, ok, error } = await fetchNexusAssignmentsResult(userId, {
+      programId: args.program_id,
+      openOnly: true,
+    });
+    // A Nexus outage must not look like "you have no assignments due" — that is a
+    // materially misleading answer for an agent to give. Say so instead.
+    if (!ok && data.length === 0) {
+      return {
+        success: false,
+        error: `Could not reach the assignments service (Nexus)${error ? `: ${error}` : ''}. Not reporting an empty list, because that would be indistinguishable from having nothing due.`,
+      };
+    }
     const now = Date.now();
     const filtered = (data || []).filter((a: any) => {
       if (!a.due_date) return true;

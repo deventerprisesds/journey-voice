@@ -8,6 +8,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { GraduationCap, RefreshCw, CheckCircle2, AlertTriangle, Clock, BookOpen, ChevronRight, Settings, ExternalLink } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
+import { fetchNexusAssignments } from '@/utils/nexusAssignments';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from 'sonner';
 import TaskDetailModal from '@/components/TaskDetailModal';
@@ -82,12 +83,12 @@ const Assignments: React.FC = () => {
     if (!user) return;
     setLoading(true);
     try {
-      // Single query — assignments now unified (program_id discriminates MIT vs EMBA)
-      const [assignmentRes, tasksRes] = await Promise.all([
-        supabase
-          .from('assignments')
-          .select('id, title, description, due_date, priority, status, course_id, assignment_url, program_id')
-          .eq('user_id', user.id),
+      // Assignments come from NEXUS (Azure) — live, no mirror. Supabase
+      // `public.assignments` is a dead snapshot frozen at the 2026-04-06 migration, so
+      // reading it here showed a months-stale list with the current course missing.
+      // Tasks stay in Supabase: journey owns tasks, Nexus owns assignments.
+      const [nexusAssignments, tasksRes] = await Promise.all([
+        fetchNexusAssignments(user.id),
         supabase
           .from('tasks')
           .select('*')
@@ -100,7 +101,7 @@ const Assignments: React.FC = () => {
         if (t.assignment_id) taskByAssignmentId.set(t.assignment_id, t as Task);
       });
 
-      const rows: AssignmentRow[] = (assignmentRes.data || []).map((a) => ({
+      const rows: AssignmentRow[] = nexusAssignments.map((a) => ({
         ...a,
         source: isMitRow(a.program_id) ? ('MIT' as const) : ('EMBA' as const),
         task: taskByAssignmentId.get(a.id) || null,
@@ -114,8 +115,9 @@ const Assignments: React.FC = () => {
 
       setAssignments(rows);
     } catch (err) {
+      // An outage must not render as "no assignments" — those are different facts.
       console.error('Error fetching assignments:', err);
-      toast.error('Failed to load assignments');
+      toast.error("Couldn't reach the assignments service (Nexus). This is not an empty list.");
     } finally {
       setLoading(false);
     }
@@ -186,7 +188,11 @@ const Assignments: React.FC = () => {
   const groupByCourse = useCallback((items: AssignmentRow[], descending: boolean) => {
     const map = new Map<string, AssignmentRow[]>();
     items.forEach(a => {
-      const courseName = a.course_id ? (courses.get(a.course_id) || 'Unknown Course') : (a.source === 'MIT' ? 'MIT' : 'EMBA');
+      // Prefer the course name Nexus attaches to the row (`courses` embed). The Supabase
+      // `courses` table is part of the same frozen 2026-04-06 snapshot and does NOT contain
+      // the current course, so it alone would render "Unknown Course" for live work.
+      const courseName = (a as any).courses?.name
+        || (a.course_id ? (courses.get(a.course_id) || 'Unknown Course') : (a.source === 'MIT' ? 'MIT' : 'EMBA'));
       if (!map.has(courseName)) map.set(courseName, []);
       map.get(courseName)!.push(a);
     });

@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { getTodayInTimezone } from "../_shared/timezone.ts";
+import { fetchNexusAssignments as fetchNexusAssignments_shared } from "../_shared/nexus.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -119,8 +120,6 @@ serve(async (req) => {
     const MIT_PROGRAM_ID = '4793d933-86ca-4fd5-9b4d-e7a593a513a6';
 
     // ── Nexus (Azure) assignment source ────────────────────────────────────
-    const NEXUS_API = Deno.env.get('NEXUS_API_URL') || 'https://nexus-hub-api.azurewebsites.net';
-
     // SCOPED INTAKE. Deliberately narrow: only courses listed here sync. The Azure
     // store holds 546 open assignments across MIT + EMBA, the vast majority an aged
     // backlog (MOTR/CTO items due as far back as 2025). Syncing all of them would
@@ -130,13 +129,8 @@ serve(async (req) => {
       '8036ebab-d1bc-460b-92b0-c45fb312a12e', // MIT — Applied Generative AI for Digital Transformation
     ];
 
-    // REQUIRED-ONLY FILTER. In this course the 8 "Required Assignment"/"Capstone"
-    // items all carry points=1 while the 8 "Module N: Captain's Log" entries carry
-    // points=0. `points` is a real structural field — every other candidate column
-    // (type/category/priority/submission_types/canvas_meta) is identical or null
-    // across both groups — so it discriminates without title pattern-matching, which
-    // would silently rot the first time a course labels things differently.
-    const isRequired = (a: any) => Number(a?.points ?? 0) > 0;
+    // REQUIRED-ONLY: requested via `requiredOnly` below. The points>0 discriminator and
+    // the reasoning behind it now live in _shared/nexus.ts (isRequiredAssignment).
 
     // DUE-DATE INFERENCE (user-approved 2026-08-26). The course runs on a strict
     // weekly cadence — the 6 dated Required Assignments are exactly 7 days apart
@@ -167,30 +161,21 @@ serve(async (req) => {
       });
     }
 
+    // Fetch + open/required filtering now come from _shared/nexus.ts, which every other
+    // consumer (the agent tool, the Assignments page) also uses — this function used to
+    // own a private copy and was the only thing in journey reading Nexus at all.
+    // The due-date inference and the _scoped_active_course tag stay HERE: they are
+    // nightly-sync policy, not part of reading Nexus.
     async function fetchNexusAssignments(uid: string): Promise<any[]> {
-      const out: any[] = [];
-      for (const courseId of ACTIVE_COURSE_IDS) {
-        const url = `${NEXUS_API}/api/d1/assignments?owner=${encodeURIComponent(uid)}&course_id=${encodeURIComponent(courseId)}`;
-        try {
-          const res = await fetch(url, { headers: { 'Content-Type': 'application/json' } });
-          if (!res.ok) {
-            console.error(`[ASSIGNMENT_SYNC] Nexus fetch failed for course ${courseId}: ${res.status} ${(await res.text()).slice(0, 200)}`);
-            continue;
-          }
-          const body = await res.json();
-          const rows: any[] = Array.isArray(body) ? body : (body?.data ?? body?.rows ?? []);
-          const open = rows.filter((a) => !['completed', 'graded'].includes(String(a?.status ?? '')));
-          const required = open.filter(isRequired);
-          console.log(`[ASSIGNMENT_SYNC] Nexus course ${courseId}: ${rows.length} rows, ${open.length} open, ${required.length} required (points>0)`);
-          // Tag as scoped so the age cutoff below knows this row survived an explicit
-          // active-course + required-only filter and is therefore live work, not backlog.
-          out.push(...inferMissingDueDates(required).map((a) => ({ ...a, _scoped_active_course: true })));
-        } catch (e) {
-          // Never fail the whole nightly run because Nexus is unreachable.
-          console.error(`[ASSIGNMENT_SYNC] Nexus fetch threw for course ${courseId}:`, e instanceof Error ? e.message : e);
-        }
-      }
-      return out;
+      const required = await fetchNexusAssignments_shared(uid, {
+        courseIds: ACTIVE_COURSE_IDS,
+        openOnly: true,
+        requiredOnly: true,
+      });
+      console.log(`[ASSIGNMENT_SYNC] Nexus returned ${required.length} open required assignment(s) across ${ACTIVE_COURSE_IDS.length} active course(s)`);
+      // Tag as scoped so the age cutoff below knows these rows survived an explicit
+      // active-course + required-only filter and are live work, not backlog.
+      return inferMissingDueDates(required).map((a) => ({ ...a, _scoped_active_course: true }));
     }
 
     async function syncAssignments() {
