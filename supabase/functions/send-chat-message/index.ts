@@ -493,13 +493,21 @@ serve(async (req) => {
           preferredGreeting
         );
       } else {
-        // Legacy local path (preserved for rollback)
-        console.log('[SEND-CHAT-MESSAGE] Using legacy local buildCallContext');
-        contextualInstructions = await buildCallContext(
-          callType,
-          generateFromContext.context,
-          userId,
-          supabase
+        // THE ROLLBACK LEVER WAS BROKEN, AND THIS IS THE HONEST VERSION OF IT.
+        // This branch used to call a local `buildCallContext`. That function is declared
+        // ONLY inside the block comment spanning :69-328 ("BEGIN/END LEGACY CODE"), so it
+        // does not exist at runtime — flipping USE_SHARED_CONTEXT to false threw
+        // ReferenceError instead of rolling back. The flag advertised a safety net that
+        // would have failed at the moment it was needed. Found by the undefined-symbol
+        // guard (scripts/undef-check.mjs), not by anything exercising this path.
+        //
+        // Restoring a real rollback means UNCOMMENTING those ~260 lines, which is a
+        // deliberate act, not a flag flip. Until someone does that, say so loudly rather
+        // than pretending: an explicit error naming the cause beats a ReferenceError.
+        throw new Error(
+          '[SEND-CHAT-MESSAGE] USE_SHARED_CONTEXT=false is not a working rollback: the legacy ' +
+          'buildCallContext is commented out (index.ts:69-328) and does not exist at runtime. ' +
+          'Uncomment that block to restore the legacy path.',
         );
       }
 
