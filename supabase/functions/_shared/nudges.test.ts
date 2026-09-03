@@ -354,7 +354,7 @@ test('AC-4a a single-day rebuild queues no digest, and the purge uses columns th
   const purge = BUILDER_SRC.slice(
     BUILDER_SRC.indexOf('purge undelivered notifications'),
     BUILDER_SRC.indexOf('STEP 1.25'),
-  ).split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
+  ).split('\n').filter((l: string) => !/^\s*\/\//.test(l)).join('\n');
   assert.ok(purge.length > 0, 'purge block found');
   assert.doesNotMatch(purge, /\.eq\('status', 'pending'\)/);
   assert.doesNotMatch(purge, /send_at/);

@@ -505,7 +505,9 @@ Collected now: `src/config/schedulingRules.test.ts`, `src/utils/alarmDeepLink.te
 
 **Four of those seven are under `supabase/functions/` — the root that collected nothing before.**
 
-### Two tests are RED — both in another lane's in-flight file
+### Test status — RESOLVED during this session (recorded so the transition is not lost)
+
+An earlier run in this session showed two failures, both in another lane's in-flight file:
 
 ```
 not ok 44 - AC-7a a task with no start_time can raise no venue nudge at all
@@ -514,13 +516,20 @@ not ok 53 - AC-4a a single-day rebuild queues no digest, and the purge uses colu
             supabase/functions/_shared/nudges.test.ts:342
 ```
 
-Both are in `_shared/nudges.test.ts`, which a sibling lane was actively editing (204 uncommitted
-insertions in `nudges.ts` at the time of measurement). **Not Lane D's files; not fixed here, and
-deliberately not worked around.** They are reported because the collector is what makes them
-visible at all — before this change `npm test` would have exited 0 with both defects present.
+Neither was Lane D's file; neither was fixed or worked around here. That lane has since resolved
+both. **Final measured state:**
 
-`npm test` therefore currently exits **1**, and CI will be red until that lane's work settles.
-That is the collector working, not a collector defect.
+```
+$ npm run check
+[run-tests] collected 7 test file(s):
+# tests 73   # pass 73   # fail 0
+undef-check: 72 file(s) checked, 0 NEW undefined symbol(s), 1 known, 0 not analysable
+exit=0
+```
+
+The point worth keeping: **before this change `npm test` would have exited 0 with both of those
+defects present and unseen.** They were visible, and then fixed, only because the collector now
+opens the file.
 
 ### Files Lane D changed
 
@@ -534,8 +543,14 @@ That is the collector working, not a collector defect.
 | `docs/impl/laneD-test-infra.md` | this file |
 
 Nothing under `src/` or `supabase/functions/` was modified. No `*.test.ts` was written or moved
-(the canary was created and deleted inside one verification step). Nothing deployed, nothing
-pushed — all changes are in the working tree.
+(the canary was created and deleted inside one verification step). Nothing was deployed.
+
+**Note on commit state, since it changed under this lane mid-session:** Lane D made no commit and
+no push. A coordinating/sibling agent committed the whole four-lane working tree as `8fe3dc4`
+*"wip: four-lane implementation snapshot — NOT verified, NOT deployed"* and pushed it to
+`origin/claude/huddle-journey-integration-xokgv1`, which is why `git status` is clean. Verified by
+`git fetch` + `git branch -r --contains 8fe3dc4`. Edge functions deploy on push to `main` only, so
+nothing reached production.
 
 ### Open items for others
 
