@@ -368,3 +368,18 @@ if there's a gap between due dates the throughput isn't so slow."
 3 mutations all FIRED (floor removed -> AC-9.2; min->max -> AC-9.4; Set->array -> AC-9.3).
 **OPEN — needs the owner:** (1) deploy the floor (proven no-op today, so no rush);
 (2) decide whether the per-day cap moves — that is the only real throughput lever.
+
+## ACT: I reverted a live fix by deploying a stale branch — found, repaired, 2026-09-03
+**What happened:** `main` was 4 commits ahead; my branch lacked `2fb90ac` (explicit-time reschedule).
+Deploying `execute-tool` from my branch at 18:27 put that bug back in production for ~2.5 hours.
+**Found by:** the `GIT DRIFT DETECTED` hook, which I had dismissed once as a feature-branch false
+positive. It was right about the ancestry.
+**Repair:** merge `origin/main` -> `9f9429a` (clean), suite 80/80, undef-check 72 files clean,
+redeployed `execute-tool` — run 33805411160, log reads `Deploying Function: execute-tool
+(script size: 201 kB)` at sha `9f9429a`, conclusion success, 20:59 UTC.
+**Status:** repaired and mechanism-confirmed from the deploy log. **NOT owner-confirmed live** —
+the check is: try to move a LIFE task to 08:00 and confirm it is no longer refused with
+"falls in a blocked window".
+**OPEN:** (1) make the deploy workflow fail closed when the dispatched ref does not contain
+`origin/main`; (2) owner decision on the per-day cap (throughput); (3) the recent-miss floor is
+now live but is a proven no-op today — it starts mattering once 8.1 and 7.1 are done.

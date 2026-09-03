@@ -128,3 +128,16 @@ setting whose history I did not have. Alarming-and-wrong is worse than narrow-an
 observable ("key absent; merge cannot preserve it") and mark the cause as unknown until
 confirmed. Never attach a user-visible consequence to an inferred cause. The owner's stated
 recollection outranks my inference from current state.
+
+## 6. I deployed a feature branch that was 4 commits behind `main`, and reverted a live fix
+
+| | |
+|---|---|
+| **Claim I acted on** | "My branch is current enough to deploy `execute-tool` from." |
+| **Ground truth** | `main` carried `2fb90ac` (2026-08-18, *honor an explicit user-chosen time on reschedule/schedule*). `git merge-base --is-ancestor 2fb90ac HEAD` -> **NO**. My branch never had it. |
+| **The single source that would have settled it up front** | `git fetch origin && git log --oneline <branch>..origin/main` — **before** dispatching a deploy, not after. One command. |
+| **What it cost** | Deploy log, primary source: `2026-09-03T18:27:58 Deploying Function: execute-tool` at sha `0969b9d`. From 18:27 to 20:59 production could not reschedule a task to an explicit clock time outside its category window — it returned *"falls in a blocked window"*. The exact bug `2fb90ac` fixed, reinstated by me. |
+| **Root-cause pattern** | Deployed from a ref whose relationship to `main` I never checked. Identical in shape to the huddle-extension-app race documented in ITS CLAUDE.md ("prod was whatever branch was last dispatched") — I had read that rule and did not apply it to journey. |
+| **Why the existing guard did not catch it** | `eds-git-guard.sh` DID fire `GIT DRIFT DETECTED: local HEAD is BEHIND origin/main` — and I dismissed it as a false positive because I was on a feature branch. It was RIGHT about the ancestry and wrong only about the danger being a rewind. **A drift warning on a branch you are about to DEPLOY is not noise.** |
+| **Structural guard implied** | Before ANY `deploy-supabase-functions.yml` dispatch: assert `git merge-base --is-ancestor origin/main HEAD`. If false, merge main first. This is mechanical and belongs in the workflow itself, not in a person's memory — the workflow can check the dispatched ref contains `origin/main` and fail closed. |
+| **Repaired** | Merged `origin/main` (commit `9f9429a`, no conflicts — the window check ~:1042 and the recent-miss floor ~:2690 are far apart), suite 80/80, redeployed `execute-tool` 20:59 UTC, confirmed from the deploy log naming the function and sha. **NOT yet confirmed by the owner in the live app.** |
