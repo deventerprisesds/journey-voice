@@ -78,6 +78,79 @@ export const isRequiredAssignment = (a: Pick<NexusAssignment, 'points'>) =>
   Number(a?.points ?? 0) > 0;
 
 // ---------------------------------------------------------------------------
+// WRITES — server-to-server, authorised by the UAT bypass token
+// ---------------------------------------------------------------------------
+/**
+ * nexus-hub's `requireWrite` needs a VERIFIED owner, and a service-role edge function
+ * has no user session. Of the three paths resolveOwner accepts (nexus HMAC session, a
+ * real Supabase user token, the UAT bypass), only the bypass works machine-to-machine.
+ *
+ * Owner-approved 2026-09-03 ("go ahead and use UAT_BYPASS_TOKEN"). It reuses the
+ * EXISTING org secret rather than minting a new one, per the standing rule.
+ *
+ * BE HONEST ABOUT WHAT THIS IS: a token named for UAT, now load-bearing in a production
+ * write path. It grants write access to ANY owner passed in `?owner=`, so anything
+ * holding it can write as anyone. It lives only in edge-function secrets and must never
+ * reach the browser — which is why writes are here, server-side, and deliberately absent
+ * from src/utils/nexusAssignments.ts. The durable fix is a real service credential in
+ * nexus-hub with a per-service owner scope; until then this is the accepted trade-off.
+ */
+function uatToken(): string | null {
+  const t = typeof Deno !== 'undefined' ? Deno.env.get('UAT_BYPASS_TOKEN') : undefined;
+  return t && t.length > 0 ? t : null;
+}
+
+export function nexusWritesConfigured(): boolean {
+  return uatToken() !== null;
+}
+
+export interface NexusWriteResult<T = any> {
+  ok: boolean;
+  status: number;
+  data?: T;
+  error?: string;
+}
+
+async function nexusRequest<T = any>(
+  method: 'POST' | 'PATCH' | 'DELETE',
+  table: string,
+  qs: Record<string, string>,
+  body?: unknown,
+): Promise<NexusWriteResult<T>> {
+  const token = uatToken();
+  if (!token) {
+    // Fail LOUDLY rather than silently no-op: a sync that reports success while writing
+    // nothing is worse than one that stops.
+    return { ok: false, status: 0, error: 'UAT_BYPASS_TOKEN is not set — Nexus writes are disabled' };
+  }
+  const url = `${NEXUS_API}/api/d1/${table}?${new URLSearchParams(qs).toString()}`;
+  try {
+    const res = await fetch(url, {
+      method,
+      headers: { 'Content-Type': 'application/json', 'X-UAT-Token': token },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const text = await res.text();
+    let parsed: any = undefined;
+    try { parsed = text ? JSON.parse(text) : undefined; } catch { /* non-JSON */ }
+    if (!res.ok) return { ok: false, status: res.status, error: text.slice(0, 300) };
+    return { ok: true, status: res.status, data: parsed };
+  } catch (e) {
+    return { ok: false, status: 0, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** Insert one assignment. `owner` is the Nexus user uuid the row belongs to. */
+export function createNexusAssignment(owner: string, row: Record<string, unknown>) {
+  return nexusRequest('POST', 'assignments', { owner }, row);
+}
+
+/** Update one assignment by id. Only whitelisted writable columns are accepted upstream. */
+export function updateNexusAssignment(owner: string, id: string, patch: Record<string, unknown>) {
+  return nexusRequest('PATCH', 'assignments', { owner, id }, patch);
+}
+
+// ---------------------------------------------------------------------------
 // ACTIVE-COURSE RESOLUTION — dynamic, no hardcoded ids
 // ---------------------------------------------------------------------------
 /**

@@ -20,6 +20,9 @@ import {
   ASSIGNMENT_PRIORITY_DAYS,
 } from "../_shared/scheduling-defaults.ts";
 import { getTodayInTimezone, localDateToUtcBounds } from "../_shared/timezone.ts";
+// ONE coursework order, shared with execute-tool's list_pending_assignments, so the
+// schedule the builder produces and what Iris says about it cannot disagree.
+import { courseworkOrder } from "../_shared/nexus.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -765,23 +768,18 @@ serve(async (req) => {
             tierC.push(t); assignmentTier[t.id] = 'C';
           }
         }
-        // DEADLINE TRIAGE ORDER (user-specified 2026-08-28). Protect live deadlines first,
-        // then catch up on what has already slipped, working BACKWARDS from the most recent:
-        //   1. UPCOMING (due >= now) — soonest first
-        //   2. OVERDUE  (due <  now) — most recently missed first, oldest last
-        // The intent is "stop falling further behind, then backfill"; the oldest item is
-        // deliberately last because the most recent miss is the one still connected to what
-        // the course is currently covering. Previously tierA/tierB sorted plain ASC, which
-        // ranked a 3-days-late item ABOVE one still due in the future.
-        const deadlineTriageOrder = (a: any, b: any) => {
-          const aDue = new Date(a.due_date).getTime();
-          const bDue = new Date(b.due_date).getTime();
-          const aOverdue = aDue < nowMs;
-          const bOverdue = bDue < nowMs;
-          if (aOverdue !== bOverdue) return aOverdue ? 1 : -1; // upcoming before overdue
-          return aOverdue ? bDue - aDue  // overdue: most recent first
-                          : aDue - bDue; // upcoming: soonest first
-        };
+        // COURSEWORK ORDER — ONE definition, shared with the `list_pending_assignments`
+        // agent tool via _shared/nexus.ts so the schedule and what Iris says about it can
+        // never disagree. Four bands (owner-specified 2026-09-03):
+        //   1 due soon -> 2 recently overdue -> 3 upcoming beyond -> 4 old backlog -> 5 undated
+        // Supersedes the two-band version added 2026-08-28: that ranked ALL upcoming above
+        // ALL overdue, so a far-future item outranked a miss from three days ago. Old work
+        // still never leads — the oldest item is the least likely to still matter.
+        const deadlineTriageOrder = courseworkOrder({
+          now: nowMs,
+          soonDays: (config as any)?.assignments?.soonDays,
+          recentDays: (config as any)?.assignments?.recentOverdueDays,
+        });
         tierA.sort(deadlineTriageOrder);
         tierB.sort(deadlineTriageOrder);
         tierC.sort(deadlineTriageOrder);
@@ -1338,14 +1336,22 @@ serve(async (req) => {
             if (aIsAB && !bIsAB) return -1;
             if (!aIsAB && bIsAB) return 1;
 
-            // Both are A/B — A before B, then DEADLINE TRIAGE within each tier (upcoming
-            // soonest-first, then overdue most-recent-first). Must match the tier-array sort
-            // above, or the queue order and the per-day pick order disagree.
+            // Both are A/B — A before B, then COURSEWORK ORDER within each tier. Must match
+            // the tier-array sort above, or the queue order and the per-day pick order
+            // disagree. (courseworkOrder handles undated itself — band 5, always last.)
             if (aIsAB && bIsAB) {
               if (aTier !== bTier) return aTier === 'A' ? -1 : 1;
-              if (!a.due_date && !b.due_date) return 0;
-              if (!a.due_date) return 1;   // undated sinks below anything dated
-              if (!b.due_date) return -1;
+              return deadlineTriageOrder(a, b);
+            }
+
+            // TIER C vs TIER C. Previously these fell straight through to the score branch,
+            // where the staleness penalty (-3 at 14d, -10 at 30d) decided order — so the
+            // per-day pick order contradicted the tier queue and the oldest coursework
+            // surfaced in an arbitrary position. Assignment-vs-assignment now uses the same
+            // coursework order everywhere. Assignment-vs-NON-assignment is deliberately
+            // untouched and still competes on score, preserving the prior decision that
+            // Tier C must not auto-jump priority-board work.
+            if (aTier === 'C' && bTier === 'C') {
               return deadlineTriageOrder(a, b);
             }
 

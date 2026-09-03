@@ -56,6 +56,23 @@ jobs:
           supabase secrets set JOURNEY_PROXY_TOKEN="$JOURNEY_PROXY_TOKEN" --project-ref wwxgajrtmslzklnyplah
           echo "Synced JOURNEY_PROXY_TOKEN to Supabase edge secrets"
 
+      - name: Sync UAT_BYPASS_TOKEN to Supabase edge secrets
+        # The sheet syncs write assignments into NEXUS (Azure), and nexus-hub's
+        # requireWrite needs a VERIFIED owner. A service-role edge function has no user
+        # session, so the UAT bypass is the only machine-to-machine path nexus-hub
+        # accepts. Reuses the EXISTING org secret (UAT_TOKEN) rather than minting a new
+        # one. Absent -> the syncs refuse to write and say so, rather than silently
+        # reporting success while writing nothing.
+        env:
+          UAT_BYPASS_TOKEN: ${{ secrets.UAT_TOKEN }}
+        run: |
+          if [ -z "$UAT_BYPASS_TOKEN" ]; then
+            echo "UAT_TOKEN not set as a GitHub secret — skipping sync (Nexus writes will be disabled)."
+            exit 0
+          fi
+          supabase secrets set UAT_BYPASS_TOKEN="$UAT_BYPASS_TOKEN" --project-ref wwxgajrtmslzklnyplah
+          echo "Synced UAT_BYPASS_TOKEN to Supabase edge secrets"
+
       - name: Determine functions to deploy
         id: changed
         run: |
