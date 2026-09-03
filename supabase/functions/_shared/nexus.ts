@@ -28,8 +28,12 @@
  * decision, not a plumbing one — see the sheet-sync discussion before implementing it.
  */
 
+// Guarded rather than a bare `Deno.env.get(...)`: a top-level Deno reference makes this
+// module unimportable by any non-Deno runtime, which blocks offline unit-testing of the
+// pure ordering/scoping logic below (all of which needs no environment at all).
 export const NEXUS_API =
-  Deno.env.get('NEXUS_API_URL') || 'https://nexus-hub-api.azurewebsites.net';
+  (typeof Deno !== 'undefined' ? Deno.env.get('NEXUS_API_URL') : undefined)
+  || 'https://nexus-hub-api.azurewebsites.net';
 
 /** Shape returned by `SELECT *` on `content.assignments`, plus the nested course embed. */
 export interface NexusAssignment {
@@ -72,6 +76,162 @@ const OPEN_EXCLUDED = ['completed', 'graded'];
  *  so this avoids title pattern-matching, which rots the first time a course renames. */
 export const isRequiredAssignment = (a: Pick<NexusAssignment, 'points'>) =>
   Number(a?.points ?? 0) > 0;
+
+// ---------------------------------------------------------------------------
+// ACTIVE-COURSE RESOLUTION — dynamic, no hardcoded ids
+// ---------------------------------------------------------------------------
+/**
+ * Which courses is the user actually taking right now?
+ *
+ * NOTHING IN NEXUS ANSWERS THIS DIRECTLY, and the two fields that look like they
+ * should were both measured useless on 2026-09-03:
+ *   - `programs.is_active` is TRUE on every program.
+ *   - `status` is never advanced, so open_assignments == assignments for EVERY course
+ *     (all 27 of them), including courses finished in 2025.
+ * The only signal that tracks reality is INGESTION RECENCY: a course being imported is
+ * a course being taken. Measured that day — AI and Business Strategy 5 days ago,
+ * Applied Generative AI 14 days ago, then a cliff to 26+ days for everything else.
+ *
+ * RELATIVE, not a fixed window. An absolute "last N days" rule silently empties the
+ * moment the user stops importing for N days, and 14 sat exactly on the MIT course's
+ * boundary. Instead: anchor on the NEWEST ingestion the user has, and take every course
+ * imported within `eraDays` of that anchor. That scales with the user's own cadence and
+ * cannot go empty while any assignment exists.
+ *
+ * Config always wins — `activeCourseIds` pins the set explicitly, `excludeCourseIds`
+ * removes noise, so the user is never stuck with what this infers (the standing
+ * "no behaviour-affecting value may be code-only" rule).
+ */
+export interface ActiveCourseOptions {
+  /** Explicit pin. When non-empty this IS the answer; nothing is inferred. */
+  activeCourseIds?: string[];
+  /** Always drop these, even if inferred or pinned. */
+  excludeCourseIds?: string[];
+  /** How far back from the newest ingestion still counts as the same era. */
+  eraDays?: number;
+  /** Treat assignments with no course_id as active. Default false — 32 such orphans
+   *  existed on 2026-09-03 and they cannot be scoped or attributed to a course. */
+  includeUncoursed?: boolean;
+}
+
+/**
+ * 14, chosen from the measured gap rather than picked round. On 2026-09-03 the ingestion
+ * ages behind the anchor were 0d (AI and Business Strategy), 9d (Applied Generative AI),
+ * then a cliff to 21d for the whole stale cluster. 21 sits exactly ON that cliff and
+ * re-admits all of it (caught by the unit test, not in review); 14 clears the live pair
+ * by 5 days and the stale cluster by 7. Overridable per user via
+ * `config.assignments.activeCourseEraDays`.
+ */
+export const DEFAULT_ACTIVE_COURSE_ERA_DAYS = 14;
+
+export function resolveActiveCourseIds(
+  assignments: NexusAssignment[],
+  opts: ActiveCourseOptions = {},
+): Set<string> {
+  const exclude = new Set(opts.excludeCourseIds ?? []);
+
+  if (opts.activeCourseIds?.length) {
+    return new Set(opts.activeCourseIds.filter((id) => !exclude.has(id)));
+  }
+
+  const eraDays = opts.eraDays ?? DEFAULT_ACTIVE_COURSE_ERA_DAYS;
+  const lastSeen = new Map<string, number>();
+  for (const a of assignments) {
+    const cid = a.course_id;
+    if (!cid) continue;
+    const t = Date.parse(String(a.created_at ?? ''));
+    if (!Number.isFinite(t)) continue;
+    lastSeen.set(cid, Math.max(lastSeen.get(cid) ?? 0, t));
+  }
+  if (lastSeen.size === 0) return new Set();
+
+  const anchor = Math.max(...lastSeen.values());
+  const cutoff = anchor - eraDays * 86400000;
+  const active = new Set<string>();
+  for (const [cid, t] of lastSeen) {
+    if (t >= cutoff && !exclude.has(cid)) active.add(cid);
+  }
+  return active;
+}
+
+/** Keep only assignments belonging to an active course. */
+export function scopeToActiveCourses(
+  assignments: NexusAssignment[],
+  opts: ActiveCourseOptions = {},
+): NexusAssignment[] {
+  const active = resolveActiveCourseIds(assignments, opts);
+  return assignments.filter((a) =>
+    a.course_id ? active.has(a.course_id) : !!opts.includeUncoursed,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// COURSEWORK ORDER — four bands, deliberately does NOT lead with the oldest
+// ---------------------------------------------------------------------------
+/**
+ * The order coursework should be worked in (owner-specified 2026-09-03):
+ *
+ *   1. UPCOMING SOON      due within `soonDays`      -> soonest first
+ *   2. RECENTLY OVERDUE   missed within `recentDays` -> most recent miss first
+ *   3. FUTURE BEYOND      due after `soonDays`       -> soonest first
+ *   4. OLD                missed before `recentDays` -> most recent first, oldest last
+ *
+ * WHY NOT PLAIN DUE-DATE ASC (what this replaced): with the full Nexus history visible,
+ * ascending order is dominated by a multi-year backlog. Measured 2026-09-03 the agent
+ * tool returned 30 rows ALL dated 21-27 January 2025 and the user's live course did not
+ * appear at all. Sorting by "most overdue" is the same trap: the oldest item is the
+ * least likely to still matter, so it must not lead.
+ *
+ * Undated assignments sort after every dated one — they carry no deadline signal, and
+ * defaulting them to "urgent" would let untracked items crowd out real deadlines.
+ */
+export interface CourseworkOrderOptions {
+  now?: number;
+  /** Horizon for band 1. */
+  soonDays?: number;
+  /** How far back a miss still counts as "recent" (band 2 vs band 4). */
+  recentDays?: number;
+}
+
+export const DEFAULT_SOON_DAYS = 14;
+export const DEFAULT_RECENT_OVERDUE_DAYS = 30;
+
+export function courseworkBand(
+  a: Pick<NexusAssignment, 'due_date'>,
+  opts: CourseworkOrderOptions = {},
+): 1 | 2 | 3 | 4 | 5 {
+  const now = opts.now ?? Date.now();
+  const soon = (opts.soonDays ?? DEFAULT_SOON_DAYS) * 86400000;
+  const recent = (opts.recentDays ?? DEFAULT_RECENT_OVERDUE_DAYS) * 86400000;
+  const due = a.due_date ? Date.parse(String(a.due_date)) : NaN;
+  if (!Number.isFinite(due)) return 5; // undated — always last
+  const delta = due - now;
+  if (delta >= 0) return delta <= soon ? 1 : 3;
+  return -delta <= recent ? 2 : 4;
+}
+
+/** Comparator implementing the four bands above. */
+export function courseworkOrder(opts: CourseworkOrderOptions = {}) {
+  const now = opts.now ?? Date.now();
+  return (a: NexusAssignment, b: NexusAssignment): number => {
+    const ba = courseworkBand(a, { ...opts, now });
+    const bb = courseworkBand(b, { ...opts, now });
+    if (ba !== bb) return ba - bb;
+    if (ba === 5) return String(a.title ?? '').localeCompare(String(b.title ?? ''));
+    const da = Date.parse(String(a.due_date));
+    const db = Date.parse(String(b.due_date));
+    // Bands 1 and 3 look forward (soonest first); 2 and 4 look back (most recent first).
+    return ba === 1 || ba === 3 ? da - db : db - da;
+  };
+}
+
+export const COURSEWORK_BAND_LABEL: Record<number, string> = {
+  1: 'due soon',
+  2: 'recently overdue',
+  3: 'upcoming',
+  4: 'old backlog',
+  5: 'no due date',
+};
 
 /**
  * Fetch a user's assignments from Nexus.

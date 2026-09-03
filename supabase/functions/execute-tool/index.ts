@@ -5,7 +5,7 @@ import { getToolDefinitions } from "../_shared/tool-definitions.ts";
 import { getTopicGroupsManual, WINDOW_RANGES, CATEGORY_WINDOW_MAPPING } from "../_shared/call-context-builder.ts";
 import { resolveConfig, validateTaskWindow, DEFAULT_TIME_WINDOWS } from "../_shared/scheduling-defaults.ts";
 import { runDedup, finalizeDedup, type DedupLogEntry } from "../_shared/task-dedup.ts";
-import { fetchNexusAssignmentsResult } from "../_shared/nexus.ts";
+import { fetchNexusAssignmentsResult, scopeToActiveCourses, courseworkOrder, courseworkBand, COURSEWORK_BAND_LABEL } from "../_shared/nexus.ts";
 
 // ── Rollback Flag for shared topic ranking ──────────────────────────
 const USE_SHARED_TOPICS = true;
@@ -2664,7 +2664,40 @@ async function listPendingAssignments(supabase: any, userId: string, args: any):
       };
     }
     const now = Date.now();
-    const filtered = (data || []).filter((a: any) => {
+
+    // SCOPE to the courses the user is actually taking. Without this the full Nexus
+    // history (534 rows on 2026-09-03) is dominated by a multi-year backlog: the tool
+    // returned 30 rows ALL dated 21-27 Jan 2025 and the live course never appeared.
+    // Course set is INFERRED from ingestion recency and overridable in config —
+    // no course ids in code. `include_all_courses:true` opts out per call.
+    // User-owned knobs live alongside the scheduling config so there is one settings
+    // home. Absent/unreadable -> {} and the inferred defaults apply; a config read must
+    // never break the tool.
+    let asgCfg: any = {};
+    try {
+      const { data: prefRow } = await supabase
+        .from('user_scheduling_prefs')
+        .select('config')
+        .eq('user_id', userId)
+        .maybeSingle();
+      asgCfg = (prefRow?.config as any)?.assignments ?? {};
+    } catch (_) { /* defaults */ }
+    const scoped = args.include_all_courses === true
+      ? data
+      : scopeToActiveCourses(data, {
+          activeCourseIds: asgCfg.activeCourseIds,
+          excludeCourseIds: asgCfg.excludeCourseIds,
+          eraDays: asgCfg.activeCourseEraDays,
+          includeUncoursed: asgCfg.includeUncoursed === true,
+        });
+
+    const orderOpts = {
+      now,
+      soonDays: asgCfg.soonDays,
+      recentDays: asgCfg.recentOverdueDays,
+    };
+
+    const filtered = (scoped || []).filter((a: any) => {
       if (!a.due_date) return true;
       const due = new Date(a.due_date).getTime();
       if (!includeOverdue && due < now) return false;
@@ -2673,11 +2706,7 @@ async function listPendingAssignments(supabase: any, userId: string, args: any):
         return due <= cutoff;
       }
       return true;
-    }).sort((a: any, b: any) => {
-      if (!a.due_date) return 1;
-      if (!b.due_date) return -1;
-      return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
-    });
+    }).sort(courseworkOrder(orderOpts));
     // Check which have linked tasks
     const aIds = filtered.map((a: any) => a.id.toString());
     const { data: linkedTasks } = await supabase.from('tasks').select('id, assignment_id, status, start_time').in('assignment_id', aIds).eq('user_id', userId);
@@ -2685,6 +2714,10 @@ async function listPendingAssignments(supabase: any, userId: string, args: any):
     const enriched = filtered.slice(0, 30).map((a: any) => ({
       id: a.id, title: a.title, due_date: a.due_date, priority: a.priority,
       program_id: a.program_id, url: a.assignment_url,
+      course: a.courses?.name ?? null,
+      // Why this row is where it is — lets the agent say "due soon" vs "old backlog"
+      // instead of reciting dates, and makes a mis-ordering visible in the response.
+      band: COURSEWORK_BAND_LABEL[courseworkBand(a, orderOpts)],
       task: linkMap.get(String(a.id)) || null
     }));
     return {
