@@ -332,3 +332,22 @@ Request: "describe the nudge widget for any final tweaks" → described → "you
   reconcile the 2-course tool scope vs 1-course sync scope.
 - [OPEN] 7.1/8.1 NULL due dates in Nexus — share the inference at read time, or write back.
 - [OPEN] `recentOverdueDays` 30-day cliff — owner decision.
+
+## ACT: Lane D — test collector, symbols guard, CI (2026-09-03) — COMPLETE
+- [DONE] `scripts/run-tests.mjs` replaces the `src/utils`-only glob. **11 → 73 tests.** Per-root
+  floors + explicit file listing; canary proved exit 1 then exit 0; floor mutation proved exit 2
+  where the rejected widened-glob design exits 0. Evidence: `docs/impl/laneD-test-infra.md`.
+- [DONE] `scripts/undef-check.mjs` rewritten; 3 mutations FIRED, none INERT/NOT-APPLIED. No-args
+  exits 2 (was 0); `nudges.ts` examined=56 (was a green `uses=0` on a file it never read);
+  execute-tool's comment false-positive gone.
+- [DONE] `.github/workflows/checks.yml` — first CI in this repo that runs anything. No
+  `continue-on-error`; proven to work without `npm ci`.
+- [DONE] Commits 8fe3dc4 (snapshot) + bf38ea7 (evidence). Pushed. **Nothing deployed.**
+- [OPEN — owner action] `send-chat-message/index.ts:496-503`: delete the dead `else` (or move
+  `buildCallContext` out of the block comment), then remove the `undef-check.baseline.json` entry.
+  The guard fails until it goes. Latent today; breaks the documented rollback path if used.
+- [OPEN — blocks AC-1.4] The nightly builder's composed comparator cannot be unit-tested where it
+  lives (edge-function `index.ts` files use `https://` imports and cannot be node-imported). Lane A
+  must extract it into `_shared/` or transitivity stays unproven. Lane D deliberately did NOT ship
+  an unexercisable workaround.
+- [IN FLIGHT] Lanes A (ordering/nudges) and B (assignment intake) still running on the shared tree.

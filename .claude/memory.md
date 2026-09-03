@@ -877,3 +877,45 @@ single shared ordering comparator. REFUTED / corrected:
   clean tree from a comment false-positive. Fix the guard before trusting it.
 - **The tests I cited were never committed.** `826d310` adds exactly 2 files, neither a test,
   despite the repo convention (`task-dedup.test.ts` sits beside its module).
+
+## Test infrastructure was NOT running — fixed 2026-09-03 (Lane D)
+**`npm test` collected only `src/utils/*.test.ts`.** Consequence, measured:
+`supabase/functions/_shared/task-dedup.test.ts` had been committed since **2026-08-20 and had
+never executed once**. So "commit tests beside the module" was necessary and INSUFFICIENT — and
+every mutation proof written before this had no vehicle. Before: `# tests 11 / # suites 2`.
+After: **73 passing**.
+- **The obvious fix was REJECTED on a measurement.** `node --test "nosuchdir/**/*.test.ts"`
+  **exits 0** — a glob matching zero files is indistinguishable from a passing suite. That is the
+  SAME false-green as the `tsc`-silence entry in `.claude/accuracy-log.md`. So
+  `scripts/run-tests.mjs` discovers files itself, prints every path, and asserts a **PER-ROOT
+  floor**. Separate floors are load-bearing: one combined floor stays satisfied by `src/` alone,
+  which is exactly how `task-dedup.test.ts` hid for two weeks.
+- Proved in BOTH directions: a canary in the never-collected root → `not ok`, exit 1; removed →
+  exit 0. Typo a root to `supabase/functionz` → exit 2; the rejected glob design exits 0 on the
+  same mutation.
+- **`scripts/undef-check.mjs` rewritten and mutation-proved (3 FIRED).** Its three defects had ONE
+  root cause — a hardcoded symbol list matched against RAW source — so appending symbols was never
+  the fix. Symbols are now derived from the file; comments/strings are blanked by a stack scanner
+  first. No-args now exits **2**, not 0.
+- **CI now exists**: `.github/workflows/checks.yml`, push + PR + dispatch, **no
+  `continue-on-error` on any step**, and verified to need no `npm ci` (every test imports only
+  `node:*` built-ins and repo-relative `.ts` — proven by running with `node_modules` removed).
+- **HARD CONSTRAINT for anyone testing edge functions:** all **52** edge-function `index.ts` files
+  import over `https://` and **cannot be node-imported at all**. Logic that must be unit-tested has
+  to live in `_shared/`. This makes the nightly builder's COMPOSED comparator untestable in place —
+  transitivity can only be proven once it is extracted.
+- `_shared` import probe: 14 modules load under node, 2 do not (`call-context-builder.ts`,
+  `persona.ts` — `https://esm.sh/...`). An esm.sh resolve hook works mechanically but dead-ends
+  because `node_modules/@supabase/supabase-js/` is EMPTY here.
+
+## LATENT ReferenceError in `send-chat-message` — found unprompted, CONFIRMED, not yet fixed
+`supabase/functions/send-chat-message/index.ts` declares `buildCallContext` at **line 252 INSIDE a
+block comment** (the `LEGACY CODE: Preserved for rollback` span) and **calls it at line 498** in
+live code outside that comment. The declaration does not exist at runtime.
+- Gated behind `USE_SHARED_CONTEXT = true` (line 7), so it is LATENT, not live.
+- But the branch it guards is **the documented emergency-rollback path** — flipping that flag to
+  roll back would throw `ReferenceError` instead of rolling back. The rollback lever is broken.
+- Recorded in `scripts/undef-check.baseline.json` as a **ratchet**: it prints on every run and the
+  guard FAILS if the entry stops reproducing, so the exemption cannot outlive the defect.
+- FIX (owner action, not applied): delete the dead `else` at `:496-503`, or move the function out
+  of the comment; then delete the baseline entry.
