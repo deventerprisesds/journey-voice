@@ -536,3 +536,102 @@ Re-run AC-3d's round-trip check after AC-6 merges.
    owner's go-ahead.
 5. **The Nexus MCP write connector needs re-authorizing** — §0/B6. Not blocking; the
    `db-query.yml` route carried this lane end to end.
+
+---
+
+## 6. Mutation proofs — the guards are real, not decorative
+
+Each mutation reinstates the exact defect the guard exists to prevent, and the run records WHICH
+named test went red. Four distinct mutations, four distinct failures — so no single test is
+carrying all four claims, and flipping one behaviour cannot silently satisfy another.
+
+| # | defect reinstated | outcome | test that went red |
+|---|---|---|---|
+| M1 | remove `if (a?.due_date != null) return a;` (the never-overwrite guard) | **FIRED** | `AC-2d: a present-but-unparseable value is left alone, never replaced` |
+| M2 | drop the anchor tie-break, leaving a stable-sort-only anchor | **FIRED** | `AC-2c: a tied latest date cannot let input order pick the anchor` |
+| M3 | parse an offset-less timestamp as LOCAL time (run under `TZ=America/New_York`) | **FIRED** | `AC-2c: an offset-less timestamp is read as UTC, so TZ cannot move the inferred day` |
+| M4 | infer flat instead of per course (cross-course anchor) | **FIRED** | `AC-3: a second course cannot supply the anchor for the first` |
+
+No mutation reported `NOT-APPLIED` — each was applied and confirmed applied by a `diff` against a
+pre-mutation backup **before** the suite was run, so none of these is the "nothing ran, reported
+as INERT" failure recorded in the org rules. Every file was restored and the restore was
+**asserted**, not assumed:
+
+```
+$ grep -rn "MUTANT" supabase/functions/          -> (no MUTANT markers)
+$ diff /tmp/cad.bak .../assignment-cadence.ts    -> identical
+$ TZ=UTC / America/New_York / Pacific/Kiritimati -> # pass 17 # fail 0  (each)
+$ npm test                                       -> # tests 73  # pass 73  # fail 0
+```
+
+M4's restore needed a manual correction: the mutation touched `index.ts` as well as the test, and
+`git checkout` could not revert it. Caught by re-grepping rather than by assuming, and
+`index.ts:227` is confirmed back to `inferMissingDueDatesByCourse`.
+
+`npm test` now reports **73 tests** (was 11 when the ACs were written) — Lane D's collector fix
+has landed and is collecting `supabase/functions/**/*.test.ts`, so these 17 are picked up by the
+repo's own command with no change needed here. That satisfies the brief's "write tests to be
+collected by `node --experimental-strip-types --test`".
+
+---
+
+## 7. ⚠ Git state — NOT what the brief asked for, and NOT my doing
+
+The brief said: *"Do NOT deploy. Do NOT git push. Leave changes in the working tree."*
+**I ran no `git commit`, no `git push`, and no deploy.** But at the end of this lane:
+
+```
+$ git status --short          -> (empty — working tree clean)
+$ git log --oneline -1        -> bf38ea7 docs: lane D evidence — test collector, symbols guard, CI…
+$ git log --oneline -- .../assignment-cadence.ts
+                              -> 8fe3dc4 wip: four-lane implementation snapshot — NOT verified, NOT deployed
+$ git log --oneline -1 origin/claude/huddle-journey-integration-xokgv1
+                              -> bf38ea7      (local HEAD == origin HEAD)
+```
+
+**OBSERVATION:** a sibling lane committed a four-lane snapshot (`8fe3dc4`) that swept my files in,
+and the branch has since been pushed — `origin` and local are both at `bf38ea7`. **INTERPRETATION
+(confidence: high):** this was a sibling agent's commit, not mine; the commit subject names all
+four lanes and I issued no git write command in this session.
+
+**This is not a correctness problem and nothing is lost.** Verified against `HEAD`, not the
+working tree:
+
+```
+$ git show HEAD:.../nightly-assignment-sync/index.ts | grep -n "inferMissingDueDatesByCourse"
+10:import { inferMissingDueDatesByCourse, isDueDateInferred } from "../_shared/assignment-cadence.ts";
+227:      return inferMissingDueDatesByCourse(required, {
+$ git show HEAD:.../assignment-cadence.ts      | diff - <disk>   -> identical
+$ git show HEAD:.../assignment-cadence.test.ts | diff - <disk>   -> identical
+```
+
+So the committed state is the final, mutation-proved, 17/17-green state — including the M4
+restore — and no course uuid or leftover mutation reached `origin`. **It is still NOT deployed:**
+journey's edge functions auto-deploy only on a push to `main`, and this is a feature branch.
+Flagging it because a pushed branch is a state the owner should know about rather than discover.
+
+---
+
+## 8. Re-verified against Lane A's current `_shared/nexus.ts`
+
+Lane A has edited `_shared/nexus.ts` since this lane's proofs were first run, so the scope proof
+was re-run against the version now on disk rather than left resting on a stale import:
+
+```
+SETS EQUAL: true
+tool reports 29 open rows; sync ingests 8 (points>0)
+BEFORE (pinned):   1 course,  8 ingested
+AFTER  (inferred): 2 courses, 8 ingested
+  intake cap 40: sync inserts=8 -> allowed
+  intake cap  5: sync inserts=8 -> BLOCKED
+```
+
+Unchanged. `resolveActiveCourseIds` (`:200`), `scopeToActiveCourses` (`:231`),
+`isRequiredAssignment` (`:77`) and `DEFAULT_ACTIVE_COURSE_ERA_DAYS = 14` (`:198`) are all still
+present with the same names, so nothing this lane imports has been renamed or removed.
+
+**Handoff #1 (§5.1) is still OPEN:** `grep -n "assignment-cadence\|inferMissingDueDates"
+supabase/functions/_shared/nexus.ts` returns nothing — the tool does not yet apply the cadence
+rule. That is expected (it is Lane A's to wire) and is currently harmless because the §1 data fix
+means neither 7.1 nor 8.1 is undated any more. It matters again the moment Nexus publishes an
+undated assignment.

@@ -1767,7 +1767,12 @@ serve(async (req) => {
             // so the modal and the briefing stay silent about it exactly as the digest
             // does. That silence is the fix for the two layers contradicting each other.
             const venueNudgeMarker = venueNudgeByTaskId.get(slot.taskId);
-            const venueNudge = buildVenueNudgePayload(
+            // Named `venueNudgePayload`, NOT `venueNudge`: the old local shadowed the
+            // IMPORTED venueNudge() function inside this block. It was safe only because
+            // the digest code sits outside this scope — one refactor away from a
+            // `TypeError: venueNudge is not a function` that bundles perfectly and fails
+            // only at runtime in Deno, inside a catch that downgrades it to a warning.
+            const venueNudgePayload = buildVenueNudgePayload(
               venueNudgeMarker, candidate?.title ?? '', slot.start_time,
             );
 
@@ -1805,7 +1810,7 @@ serve(async (req) => {
                 // independently and both behaviours are wanted.
                 scheduling_context: {
                   pre_schedule_status: preScheduleStatus,
-                  ...(venueNudge ? { venue_nudge: venueNudge } : {}),
+                  ...(venueNudgePayload ? { venue_nudge: venueNudgePayload } : {}),
                 },
                 status: statusAfterSchedule(preScheduleStatus),
                 updated_at: now.toISOString(),
