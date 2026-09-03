@@ -265,3 +265,16 @@ eventually be migrating away from supabase. the sheets syncs need to write into 
   as "typecheck clean" — it was meaningless. Verify the tool actually had files before trusting it.
 - There is NO frontend build in CI either. So frontend edits here are PARSE-verified only (bun
   transpile); the Lovable build is the first real type gate. Say so rather than implying more.
+
+## ACT: run `sync-setup-script` skill (user request, 2026-09-03) — DONE
+- Installed eds hook set **v38**, matching `CURRENT_VERSION=38` in the freshly cloned setup.sh.
+- **The gate was NOT installed before this run** — `launcher-settings.json` had SessionStart/Stop
+  hooks but **0** carrying `_eds`. Same wipe as the 2026-08-21 incident.
+- ROOT CAUSE now addressed upstream: setup.sh has MOVED the hooks out of `launcher-settings.json`
+  into `/home/user/.claude/settings.json`, logging "hooks deliberately NOT here -- it is regenerated
+  every launch". That regeneration is almost certainly what kept erasing them.
+- **The skill's own step-4 verification snippet is now STALE** — it reads launcher-settings.json,
+  which no longer holds the hooks, so it would report "not installed" on a healthy session. Verified
+  against settings.json instead. Worth fixing in eds-claude-skills.
+- Installed alongside: eds-git-guard, eds-agent-guard, eds-availability-guard, eds-phase-tag,
+  eds-verify-loop, eds-session-memory. 17 skills, 1 agent, 4 scripts on PATH.
