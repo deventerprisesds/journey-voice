@@ -1,5 +1,5 @@
 # Project Memory — journey-voice
-Last updated: 2026-08-02
+Last updated: 2026-09-03  (see also `.claude/accuracy-log.md` — wrong-first-answers + their structural guards)
 
 ## get_tasks now honors the advertised `query` param (fuzzy title search) — 2026-08-02
 `getTasks` (`supabase/functions/execute-tool/index.ts`) previously IGNORED the `query`/`keyword` param
@@ -819,3 +819,55 @@ undefined identifier is a TypeScript/runtime error, and bun does not typecheck.
   meaningless. `npm ci`/`bun install` also fail here (lockfile points at Lovable's private
   registry, 403), and there is no frontend build in CI — so frontend edits are PARSE-verified
   only and the Lovable build is the first real type gate. Say that plainly rather than implying more.
+
+## LIVE REGRESSION — `mergeSchedulingConfig` DELETES config keys on every Settings save (2026-09-03)
+**This has already fired on the primary user and silently reverted a setting they asked for.**
+`src/config/schedulingRules.ts:287` `mergeSchedulingConfig` rebuilds the config **field by
+field** and never spreads `userConfig`; `saveUserSchedulingConfig` then writes the result as a
+**whole-object replace**. Any key the merge does not explicitly NAME is destroyed on save.
+- Named (survive): `timezone`, `timeWindows`, `workingHours`, `workloadBalance`,
+  `categoryMappings`, `contextRules`, `customAIInstructions`, `scoringModel`.
+- NOT named (destroyed): **`priorityBoost`**, **`dedup`**, and the new **`nudges`** /
+  **`assignments`** namespaces.
+- **Measured:** the user's save at **2026-08-29 08:09 ET** (adding `evening` to
+  PROF_EDUCATION) wiped `priorityBoost:false`, `scoringModel`, and `dedup`. `config` now holds
+  only 6 keys. **`priorityBoost` therefore defaults back to TRUE** — the boost the user
+  explicitly asked to disable is ON again, and the nightly build will use it.
+  `maxPerDayWeekend:4` survived ONLY because it lives inside `categoryMappings`, which IS spread.
+- The file already carries a comment warning about this exact trap, added when `scoringModel`
+  hit it. I then added `priorityBoost`/`nudges`/`assignments` without naming any of them AND
+  told the user to go edit Settings — walking into a documented landmine.
+- **STRUCTURAL FIX (not yet applied — awaiting owner):** spread `userConfig` FIRST, then
+  override known fields, so every future key is protected by default instead of requiring
+  each one to be remembered. Naming keys one-by-one is the anti-pattern; it has now failed twice.
+
+## Independent verifier findings on the nudge work (2026-09-03) — full report in `docs/verify/`
+Loop 1, `journey-nudge-delivery-and-assignment-scoping`. CONFIRMED: the delivery mechanism,
+symbol resolution, sheet-sync guards (Nexus write + 503 refusal + honest counters), and the
+single shared ordering comparator. REFUTED / corrected:
+- **The venue-message fix was added ALONGSIDE the bug, not AT it.** `buildVenueNudgeMessage` is
+  consulted ONLY by the new digest path. The string PERSISTED into
+  `scheduling_context.venue_nudge` is still the old fixed template at
+  `nightly-schedule-builder:1531`, still contains "after work", and is written at window-plan
+  resolution time BEFORE `start_time` exists — placement-blind by construction. All 5 live
+  nudge rows carry it right now. So the digest correctly omits a task while DailyReviewModal
+  and buildDayContext still nag about the same task the same day. **The layers contradict.**
+- **My "Go to church Sunday 10:00" example was unverified and wrong** — the task carrying that
+  nudge has `start_time = NULL`; the Sunday-10:00 task is a different row with no nudge.
+- **"No hardcoded course ids" is false repo-wide** — `nightly-assignment-sync:128` pins one
+  course, undisclosed in the commit message. Consequence: the tool admits 2 active courses, the
+  sync ingests 1, so `list_pending_assignments` reports 13 items the scheduler will never place.
+- **Duplicate digests, 3 vectors:** the delivery block is not gated on `singleDay`, and both
+  `FocusView.tsx:642` and `DailyReviewModal.tsx:366` invoke the builder with `singleDay:true`,
+  so every "Reschedule today" tap queues another full digest; the `key` field is computed and
+  never used to suppress; and the purge at `index.ts:576` filters on `status`/`send_at`,
+  **columns that do not exist** on the live table.
+- **`placedToday` has no date bound** — returns every scheduled task. The 5 live rows span
+  2026-09-03..09-07, so a Friday digest nags about a Monday placement and a past Thursday one.
+- **The message floors time to the hour** (17:45 → "17:00") in a feature justified by accuracy,
+  and in 24-hour form where the rest of the app uses am/pm.
+- **`scripts/undef-check.mjs` — the guard I added because two undefined symbols shipped — is
+  itself broken:** exits 0 with no args, contains none of the new symbols, and exits 1 on a
+  clean tree from a comment false-positive. Fix the guard before trusting it.
+- **The tests I cited were never committed.** `826d310` adds exactly 2 files, neither a test,
+  despite the repo convention (`task-dedup.test.ts` sits beside its module).

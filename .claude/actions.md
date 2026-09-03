@@ -308,3 +308,27 @@ Request: "describe the nudge widget for any final tweaks" → described → "you
 - Claimed work complete on SELF-gathered evidence (my own unit tests) with no independent verifier.
 - Skipped memory.md/actions.md until the Stop gate blocked.
 - Missed the phase-tag convention on 15 of 23 text blocks after the v38 sync installed it.
+
+## ACT: verifier loop 1 on the nudge work — COMPLETE, multiple claims REFUTED (2026-09-03)
+- [DONE] `verifier` subagent (no shared context) checked C1–C7 against the live system; report
+  committed at `docs/verify/nudge-delivery-loop1.md` (ade7cc5).
+- [DONE] `.claude/accuracy-log.md` CREATED with 4 entries, each carrying claim / ground truth /
+  the single source that would have settled it / root-cause pattern / structural guard.
+- [DONE] memory.md updated (header date + regression + verifier findings).
+- [OPEN — URGENT, owner asked] **Restore `priorityBoost:false`** on the user's config. It was
+  wiped by their 2026-08-29 08:09 ET Settings save and now defaults to TRUE, so the nightly
+  build runs with the boost the user disabled. One key, reversible. NOT applied without consent.
+- [OPEN] **Fix `mergeSchedulingConfig` to spread `userConfig`** so Settings stops deleting keys.
+  This is the structural fix for a pattern that has now failed twice (scoringModel, then
+  priorityBoost/dedup). Naming keys individually is the anti-pattern.
+- [OPEN] Move the venue-message fix to the PERSISTENCE site (`nightly-schedule-builder:1531`)
+  so all three surfaces agree; bound the `placedToday` query to the digest day; report real
+  times in am/pm not hour-floored 24h.
+- [OPEN] Dedupe the digest (gate on singleDay, actually use `key`, fix the purge's non-existent
+  column filter).
+- [OPEN] Fix `scripts/undef-check.mjs` — it does not do what it was added to do.
+- [OPEN] Commit the unit tests beside their modules per repo convention.
+- [OPEN] Disclose or remove the hardcoded course id in `nightly-assignment-sync:128`, and
+  reconcile the 2-course tool scope vs 1-course sync scope.
+- [OPEN] 7.1/8.1 NULL due dates in Nexus — share the inference at read time, or write back.
+- [OPEN] `recentOverdueDays` 30-day cliff — owner decision.
