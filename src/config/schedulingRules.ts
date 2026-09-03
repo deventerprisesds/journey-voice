@@ -58,6 +58,13 @@ export interface AssignmentsConfig {
   soonDays?: number;
   /** Days back that still counts as a "recent miss" rather than old backlog. */
   recentOverdueDays?: number;
+  /**
+   * Minimum number of distinct overdue due-DATES always treated as recent misses, even
+   * when they fall outside `recentOverdueDays`. Stops a course whose cadence is slower
+   * than the window from having its newest miss buried in the oldest-first backlog.
+   * Server default: 2. Set 0 to disable the floor and use the window alone.
+   */
+  recentFloorCount?: number;
   /** Pin the active course set explicitly. Absent = infer from ingestion recency. */
   activeCourseIds?: string[];
   /** Always drop these course ids, even if inferred or pinned. */
@@ -382,6 +389,11 @@ function normalizeAssignmentsConfig(value: unknown): AssignmentsConfig | undefin
   if (soonDays !== undefined) out.soonDays = soonDays;
   const recentOverdueDays = normalizeIntInRange(src.recentOverdueDays, 0, 365);
   if (recentOverdueDays !== undefined) out.recentOverdueDays = recentOverdueDays;
+  // Upper bound 50, not 365: this counts DATES, not days. A floor larger than a term's
+  // worth of assignments would put the whole backlog in the "most recent miss" band and
+  // make the banding meaningless.
+  const recentFloorCount = normalizeIntInRange(src.recentFloorCount, 0, 50);
+  if (recentFloorCount !== undefined) out.recentFloorCount = recentFloorCount;
   const eraDays = normalizeIntInRange(src.activeCourseEraDays, 0, 365);
   if (eraDays !== undefined) out.activeCourseEraDays = eraDays;
   const activeCourseIds = normalizeStringList(src.activeCourseIds);

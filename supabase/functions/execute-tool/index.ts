@@ -5,7 +5,7 @@ import { getToolDefinitions } from "../_shared/tool-definitions.ts";
 import { getTopicGroupsManual, WINDOW_RANGES, CATEGORY_WINDOW_MAPPING } from "../_shared/call-context-builder.ts";
 import { resolveConfig, validateTaskWindow, DEFAULT_TIME_WINDOWS } from "../_shared/scheduling-defaults.ts";
 import { runDedup, finalizeDedup, type DedupLogEntry } from "../_shared/task-dedup.ts";
-import { fetchNexusAssignmentsResult, scopeToActiveCourses, courseworkOrder, courseworkBand, COURSEWORK_BAND_LABEL } from "../_shared/nexus.ts";
+import { fetchNexusAssignmentsResult, scopeToActiveCourses, courseworkOrder, courseworkBand, resolveRecentCutoff, COURSEWORK_BAND_LABEL } from "../_shared/nexus.ts";
 
 // ── Rollback Flag for shared topic ranking ──────────────────────────
 const USE_SHARED_TOPICS = true;
@@ -2691,10 +2691,11 @@ async function listPendingAssignments(supabase: any, userId: string, args: any):
           includeUncoursed: asgCfg.includeUncoursed === true,
         });
 
-    const orderOpts = {
+    const baseOrderOpts = {
       now,
       soonDays: asgCfg.soonDays,
       recentDays: asgCfg.recentOverdueDays,
+      recentFloorCount: asgCfg.recentFloorCount,
     };
 
     const filtered = (scoped || []).filter((a: any) => {
@@ -2706,7 +2707,17 @@ async function listPendingAssignments(supabase: any, userId: string, args: any):
         return due <= cutoff;
       }
       return true;
-    }).sort(courseworkOrder(orderOpts));
+    });
+
+    // The recent-miss floor is SET-RELATIVE (the Nth most recent distinct overdue date),
+    // so it is resolved AFTER filtering — from exactly the rows about to be ranked, not
+    // from the unfiltered Nexus pull. Resolving it from a wider set would let a row the
+    // user cannot see move the band boundary for the rows they can.
+    const orderOpts = {
+      ...baseOrderOpts,
+      recentCutoff: resolveRecentCutoff(filtered as any, baseOrderOpts),
+    };
+    filtered.sort(courseworkOrder(orderOpts));
     // Check which have linked tasks
     const aIds = filtered.map((a: any) => a.id.toString());
     const { data: linkedTasks } = await supabase.from('tasks').select('id, assignment_id, status, start_time').in('assignment_id', aIds).eq('user_id', userId);

@@ -22,7 +22,7 @@ import {
 import { getTodayInTimezone, localDateToUtcBounds } from "../_shared/timezone.ts";
 // ONE coursework order, shared with execute-tool's list_pending_assignments, so the
 // schedule the builder produces and what Iris says about it cannot disagree.
-import { courseworkOrder, orderBuilderCandidates } from "../_shared/nexus.ts";
+import { courseworkOrder, orderBuilderCandidates, resolveRecentCutoff } from "../_shared/nexus.ts";
 import {
   venueNudge, overflowNudge, deliverNudgeDigest, nextLocalHour,
   buildVenueNudgeMessage, buildOverflowNudgeMessage, resolveDeliverHour, localDayOf,
@@ -856,10 +856,23 @@ serve(async (req) => {
         // first", not only "show it first"). See the block comment on courseworkOrder in
         // _shared/nexus.ts — it carries the reasoning and the owner-accepted consequence
         // (assignment 6.1, 16 days late, sorts last today).
-        const courseworkOrderOpts = {
+        const baseCourseworkOpts = {
           now: nowMs,
           soonDays: (config as any)?.assignments?.soonDays,
           recentDays: (config as any)?.assignments?.recentOverdueDays,
+          recentFloorCount: (config as any)?.assignments?.recentFloorCount,
+        };
+        // Resolved across ALL THREE TIERS, not per tier. The floor asks "what are the two
+        // most recent misses in this user's coursework" — a question about the whole
+        // queue. Resolving it per tier would give each tier its own band boundary and
+        // reintroduce exactly the kind of set-dependent ordering the total-order rewrite
+        // removed.
+        const courseworkOrderOpts = {
+          ...baseCourseworkOpts,
+          recentCutoff: resolveRecentCutoff(
+            [...tierA, ...tierB, ...tierC] as any,
+            baseCourseworkOpts,
+          ),
         };
         const deadlineTriageOrder = courseworkOrder(courseworkOrderOpts);
         tierA.sort(deadlineTriageOrder);
