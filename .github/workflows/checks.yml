@@ -1,0 +1,71 @@
+# WHAT:       Runs the unit-test suite and the undefined-symbol guard on every push to a working
+#             branch and on every pull request. Fails the run when either is red.
+# WHY:        Measured 2026-09-03: `grep -rln "npm test|undef-check|node --test" .github/workflows/`
+#             returned NOTHING across all 9 workflows, so every "REGRESSION: caught in CI" line in
+#             docs/ac/nudge-and-ordering-ACs.md was aspirational — the guards existed only as
+#             commands someone had to remember to type, which is the failure mode
+#             .claude/accuracy-log.md says must graduate into a structural check. Recorded there as
+#             RISK-9.
+# SUPERSEDES: nothing — this is the first CI that runs any check in this repo.
+# SUPERSEDED-BY: nothing — current.
+# EVIDENCE:   docs/impl/laneD-test-infra.md; docs/ac/nudge-and-ordering-ACs.md RISK-9, AC-5c,
+#             AC-9b.
+#
+# NO DEPENDENCY INSTALL, deliberately. `npm ci` fails in this repo (the lockfile points at
+# Lovable's private registry and 403s). It is not needed: every test file imports only `node:test`,
+# `node:assert/strict` and repo-relative `.ts` files, and both scripts use node built-ins only —
+# verified by grepping the imports of every collected test. So the job checks out and runs. If a
+# future test adds a third-party import, THIS job is where it will surface, loudly.
+#
+# NO continue-on-error ANYWHERE. A check that cannot fail the run is decoration.
+
+name: Checks
+
+on:
+  push:
+    branches:
+      - main
+      - 'claude/**'
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same branch cancels the older run — keeps this cheap.
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Tests + symbols guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # `--experimental-strip-types` (used by scripts/run-tests.mjs to run .ts directly with no
+      # build step) needs Node >= 22.6. Pinned to 22 to match the local toolchain (v22.22.2).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Report node version
+        run: node --version
+
+      # Runs scripts/run-tests.mjs, which discovers every *.test.ts under src/ and
+      # supabase/functions/, ASSERTS a per-root minimum was found, then runs them. It exits 2 if
+      # collection comes up short — a plain glob that matches zero files exits 0, so without that
+      # floor a path typo would show here as a green run that executed nothing.
+      - name: Unit tests
+        run: npm test
+
+      # Every call site in supabase/functions/** must resolve to a local binding, an import, or a
+      # known runtime global. Deno/esbuild bundle undefined identifiers cleanly, so this is the
+      # only thing standing between a missing import and a runtime ReferenceError in production.
+      # Known pre-existing findings live in scripts/undef-check.baseline.json and are printed on
+      # every run; anything NEW fails here.
+      - name: Undefined-symbol guard
+        run: npm run check:symbols

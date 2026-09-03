@@ -12,7 +12,12 @@ import {
   loadUserSchedulingConfig,
   saveUserSchedulingConfig,
 } from '@/services/schedulingService';
-import { DEFAULT_SCHEDULING_CONFIG, type SchedulingConfig } from '@/config/schedulingRules';
+import {
+  DEFAULT_SCHEDULING_CONFIG,
+  type SchedulingConfig,
+  type AssignmentsConfig,
+  type NudgeConfig,
+} from '@/config/schedulingRules';
 import { Clock, Calendar, TrendingUp, Tag, Key, Target, Plus, X, FileText, Globe, Scale } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
 import { TIMEZONE_OPTIONS, getBrowserTimezone, formatTimezoneWithOffset } from '@/lib/timezone';
@@ -72,6 +77,23 @@ const SchedulingSettings: React.FC = () => {
       setSaving(false);
     }
   };
+
+  // Blank input means "use the system default", which must be stored as the key being ABSENT —
+  // never as 0/[]/false. The server distinguishes "unset" from "set to nothing" (see
+  // AssignmentsConfig in schedulingRules.ts), so writing a zero here would change behaviour.
+  const numberOrUnset = (raw: string): number | undefined =>
+    raw.trim() === '' ? undefined : Number.parseInt(raw, 10);
+
+  const idsOrUnset = (raw: string): string[] | undefined => {
+    const ids = raw.split(',').map((s) => s.trim()).filter(Boolean);
+    return ids.length ? ids : undefined;
+  };
+
+  const patchAssignments = (patch: Partial<AssignmentsConfig>) =>
+    setConfig({ ...config, assignments: { ...(config.assignments ?? {}), ...patch } });
+
+  const patchNudges = (patch: Partial<NudgeConfig>) =>
+    setConfig({ ...config, nudges: { ...(config.nudges ?? {}), ...patch } });
 
   const handleReset = () => {
     setConfig(DEFAULT_SCHEDULING_CONFIG);
@@ -183,6 +205,25 @@ const SchedulingSettings: React.FC = () => {
               {(config.scoringModel ?? 'composite') === 'composite'
                 ? 'Balanced: deadlines, recently-added items, and financial impact compete alongside priority — so a recent, overdue, or time-sensitive task can surface even if it isn’t flagged priority. Explicit priority still counts, just less dominantly. This is the default.'
                 : 'Priority-first (legacy): tasks you flagged as priority dominate the ordering.'}
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="priority-boost"
+                checked={config.priorityBoost !== false}
+                onCheckedChange={(checked) =>
+                  setConfig({ ...config, priorityBoost: checked === true })
+                }
+              />
+              <Label htmlFor="priority-boost">Priority flag gives a scoring boost</Label>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              On (default): a task you flagged as priority scores higher and is shielded from the
+              pushed-count and staleness penalties. Off: the flag is ignored when scoring, so due
+              date, recency and keywords decide the order — useful once most of the board is
+              flagged and the flag no longer tells anything apart. Reversible at any time.
             </p>
           </div>
         </CardContent>
@@ -627,6 +668,140 @@ const SchedulingSettings: React.FC = () => {
               </div>
             </div>
           ))}
+        </CardContent>
+      </Card>
+
+      {/* Coursework & Nudges — every control here was previously config-only with no UI path
+          (docs/verify/nudge-delivery-loop1.md §F2). Leaving a field blank stores it as ABSENT,
+          which is what makes the system default apply; it is not the same as storing 0. */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Target className="h-5 w-5" />
+            <CardTitle>Coursework &amp; Nudges</CardTitle>
+          </div>
+          <CardDescription>
+            How coursework is ordered, which courses count as active, and when the daily nudge
+            digest reaches you. Leave any field blank to use the system default.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="space-y-2">
+            <Label>Nudge delivery hour (your local time)</Label>
+            <Input
+              type="number"
+              min="0"
+              max="23"
+              placeholder="Default (8am)"
+              value={config.nudges?.deliverAtLocalHour ?? ''}
+              onChange={(e) => patchNudges({ deliverAtLocalHour: numberOrUnset(e.target.value) })}
+            />
+            <p className="text-xs text-muted-foreground">
+              0–23. The digest is queued overnight and held until this hour, so it never arrives in
+              the middle of the night.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>“Due soon” horizon (days)</Label>
+              <Input
+                type="number"
+                min="0"
+                max="365"
+                placeholder="Default (14)"
+                value={config.assignments?.soonDays ?? ''}
+                onChange={(e) => patchAssignments({ soonDays: numberOrUnset(e.target.value) })}
+              />
+              <p className="text-xs text-muted-foreground">
+                Assignments due within this many days are treated as urgent rather than upcoming.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label>“Recently missed” horizon (days)</Label>
+              <Input
+                type="number"
+                min="0"
+                max="365"
+                placeholder="System default"
+                value={config.assignments?.recentOverdueDays ?? ''}
+                onChange={(e) =>
+                  patchAssignments({ recentOverdueDays: numberOrUnset(e.target.value) })
+                }
+              />
+              <p className="text-xs text-muted-foreground">
+                An overdue assignment newer than this counts as a recent miss and is surfaced ahead
+                of the older backlog; anything older is treated as backlog.
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label>Active-course window (days)</Label>
+            <Input
+              type="number"
+              min="0"
+              max="365"
+              placeholder="Default (14)"
+              value={config.assignments?.activeCourseEraDays ?? ''}
+              onChange={(e) =>
+                patchAssignments({ activeCourseEraDays: numberOrUnset(e.target.value) })
+              }
+            />
+            <p className="text-xs text-muted-foreground">
+              A course counts as active if new material arrived within this many days of the most
+              recent material from any course. Widening this re-admits older courses and their
+              backlog.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label>Only these courses</Label>
+            <Input
+              placeholder="Leave blank to detect active courses automatically"
+              value={(config.assignments?.activeCourseIds ?? []).join(', ')}
+              onChange={(e) =>
+                patchAssignments({ activeCourseIds: idsOrUnset(e.target.value) })
+              }
+            />
+            <p className="text-xs text-muted-foreground">
+              Comma-separated course ids. Setting this pins the active set exactly and turns the
+              automatic detection above off. Blank is not the same as empty — blank means detect.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label>Never these courses</Label>
+            <Input
+              placeholder="No exclusions"
+              value={(config.assignments?.excludeCourseIds ?? []).join(', ')}
+              onChange={(e) =>
+                patchAssignments({ excludeCourseIds: idsOrUnset(e.target.value) })
+              }
+            />
+            <p className="text-xs text-muted-foreground">
+              Comma-separated course ids that are always dropped, even when detected as active or
+              pinned above.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="include-uncoursed"
+                checked={config.assignments?.includeUncoursed === true}
+                onCheckedChange={(checked) =>
+                  patchAssignments({ includeUncoursed: checked === true ? true : undefined })
+                }
+              />
+              <Label htmlFor="include-uncoursed">Include assignments with no course</Label>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Off by default. These cannot be attributed to a course or scoped by the settings
+              above, so turning this on admits all of them at once.
+            </p>
+          </div>
         </CardContent>
       </Card>
 

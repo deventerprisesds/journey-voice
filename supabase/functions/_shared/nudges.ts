@@ -52,62 +52,143 @@ export interface Nudge {
 
 const DAY_MS = 86400000;
 
+/**
+ * The user's configured working week + business hours. `days` is `Date.getDay()`
+ * numbering (0 = Sunday), matching the live `config.timeWindows.business_hours.days`
+ * value (`{"end":17,"days":[1,2,3,4,5],"start":9}` for the primary user on 2026-09-03).
+ */
+export interface BusinessHours {
+  start: number;
+  end: number;
+  /** Working days. Absent => fall back to Mon–Fri. */
+  days?: number[];
+}
+
+const DEFAULT_BUSINESS_HOURS: BusinessHours = { start: 9, end: 17, days: [1, 2, 3, 4, 5] };
+
 /** Local Y-M-D in the user's timezone (not the runtime's). */
 export function localDayOf(iso: string, timezone: string): string {
   return new Date(iso).toLocaleDateString('en-CA', { timeZone: timezone });
 }
 
+// `hourCycle: 'h23'` rather than bare `hour12:false`: on some ICU builds the latter
+// formats midnight as "24", which would parse to 24 and push every midnight placement
+// into the "after most places close" branch with a nonsense hour.
 function localHourOf(iso: string, timezone: string): number {
   const h = new Intl.DateTimeFormat('en-US', {
-    timeZone: timezone, hour: 'numeric', hour12: false,
+    timeZone: timezone, hour: 'numeric', hourCycle: 'h23',
   }).format(new Date(iso));
-  return parseInt(h, 10);
-}
-
-function isWeekendLocal(iso: string, timezone: string): boolean {
-  const wd = new Intl.DateTimeFormat('en-US', { timeZone: timezone, weekday: 'short' })
-    .format(new Date(iso));
-  return wd === 'Sat' || wd === 'Sun';
+  return parseInt(h, 10) % 24;
 }
 
 /**
- * BUG FIX (measured 2026-08-28). The old venue-nudge text was a fixed template asserting
- * the task "is scheduled after work" REGARDLESS of where it actually landed. Two of the
- * four live nudges were weekend placements, so "Go to church" at Sunday 10:00 — a
- * perfectly sensible slot — was told it needed moving into business hours. Nonsense advice
- * trains the user to dismiss every nudge.
+ * The placement time as the user reads it: to the MINUTE, am/pm, lowercase.
  *
- * Now the wording is derived from the ACTUAL placement, and a placement that is already
- * fine returns null so no nudge is raised at all.
+ * The old wording floored to the hour and rendered 24-hour — measured by the verifier as
+ * `17:45 -> "17:00"`, `20:15 -> "20:00"`. A message whose entire justification is
+ * accuracy must not misstate the time by 45 minutes, and every other surface in this
+ * repo (e.g. DailyReviewModal) already uses `hour:'numeric', minute:'2-digit',
+ * hour12:true`. This is the single renderer for a placement time in a nudge.
+ */
+export function localTimeLabel(iso: string, timezone: string): string {
+  const formatted = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true,
+  }).format(new Date(iso));
+  // Modern ICU emits U+202F (narrow no-break space) before AM/PM, which `\s` matches —
+  // so this one replace normalises the separator AND lowercases the marker.
+  return formatted.replace(/\s*(AM|PM)$/i, (_m, p) => ` ${String(p).toLowerCase()}`);
+}
+
+function localWeekdayNumber(iso: string, timezone: string): number {
+  const wd = new Intl.DateTimeFormat('en-US', { timeZone: timezone, weekday: 'short' })
+    .format(new Date(iso));
+  return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(wd);
+}
+
+/**
+ * A day OUTSIDE the user's configured working week — not a hardcoded Sat/Sun.
+ * The hours were already config-driven while the days were not, so a user on a Tue–Sat
+ * week got the weekday branch on their Saturday and the weekend branch on their Monday.
+ */
+export function isNonWorkingDayLocal(
+  iso: string,
+  timezone: string,
+  businessHours: BusinessHours = DEFAULT_BUSINESS_HOURS,
+): boolean {
+  const days = businessHours.days?.length ? businessHours.days : DEFAULT_BUSINESS_HOURS.days!;
+  return !days.includes(localWeekdayNumber(iso, timezone));
+}
+
+/**
+ * BUG FIX (measured 2026-08-28, corrected again 2026-09-03). The old venue-nudge text was
+ * a fixed template asserting the task "is scheduled after work" REGARDLESS of where it
+ * actually landed — and it was composed BEFORE placement, so it could not have been
+ * right. Nonsense advice trains the user to dismiss every nudge.
+ *
+ * Now the wording is derived from the ACTUAL placement, stated to the minute in the
+ * user's timezone, and a placement that is already fine returns null so no nudge is
+ * raised at all. THIS FUNCTION IS THE ONLY PLACE VENUE-NUDGE TEXT IS CONSTRUCTED — the
+ * builder calls it at the persistence site, and every reader (DailyReviewModal,
+ * buildDayContext, the morning digest) renders the string it produced, so all surfaces
+ * necessarily agree.
  */
 export function buildVenueNudgeMessage(
   title: string,
   startISO: string,
   timezone: string,
-  businessHours: { start: number; end: number } = { start: 9, end: 17 },
+  businessHours: BusinessHours = DEFAULT_BUSINESS_HOURS,
 ): string | null {
+  // An unparseable start_time makes every Intl call below THROW ("Invalid time value").
+  // The only caller in the digest path sits inside a try/catch that downgrades a throw to
+  // a console.warn, so this would have silently switched the whole nudge feature off for
+  // that user. No placement we can describe => no nudge. (Caught by this file's own test,
+  // not by review.)
+  const startMs = Date.parse(String(startISO ?? ''));
+  if (!Number.isFinite(startMs)) return null;
+
   const hour = localHourOf(startISO, timezone);
-  const weekend = isWeekendLocal(startISO, timezone);
+  const nonWorkingDay = isNonWorkingDayLocal(startISO, timezone, businessHours);
+  const at = localTimeLabel(startISO, timezone);
 
-  // Already inside weekday business hours — the venue is open, nothing to say.
-  if (!weekend && hour >= businessHours.start && hour < businessHours.end) return null;
+  // Already inside a working day's business hours — the venue is open, nothing to say.
+  if (!nonWorkingDay && hour >= businessHours.start && hour < businessHours.end) return null;
 
-  // Weekend DAYTIME is fine for most errands; only flag genuinely awkward weekend hours.
-  if (weekend) {
+  // A non-working DAYTIME is fine for most errands; only flag genuinely awkward hours.
+  if (nonWorkingDay) {
     if (hour >= 10 && hour < 17) return null;
-    return `"${title}" is on the weekend at ${hour}:00. Most places that need a counter are shut then — want it moved into the day?`;
+    return `"${title}" is on a day off at ${at}. Most places that need a counter are shut then — want it moved into the day?`;
   }
 
   if (hour < businessHours.start) {
-    return `"${title}" is scheduled at ${hour}:00, before most places open. Move it into business hours?`;
+    return `"${title}" is scheduled at ${at}, before most places open. Move it into business hours?`;
   }
-  return `"${title}" is scheduled at ${hour}:00, after most places close. Move it into business hours?`;
+  return `"${title}" is scheduled at ${at}, after most places close. Move it into business hours?`;
+}
+
+/**
+ * The overflow message. Moved here from nightly-schedule-builder/index.ts so that no
+ * user-facing nudge sentence is constructed outside this module — the builder was
+ * composing this one inline while the venue one lived here, which is how the two drifted.
+ */
+export function buildOverflowNudgeMessage(args: {
+  title: string;
+  overflowDate: string;
+  reason: string;
+  impactFactors?: string[];
+  bumpTitle?: string | null;
+}): string {
+  const factorText = args.impactFactors?.length ? ` (${args.impactFactors.join(', ')})` : '';
+  const why = args.reason === 'daily_hours_cap' ? 'daily hours budget reached' : 'no window capacity';
+  const bumpText = args.bumpTitle
+    ? ` You could bump "${args.bumpTitle}" (lower value) to make room today.`
+    : '';
+  return `"${args.title}" is high-impact${factorText} but couldn't fit ${args.overflowDate} (${why}).${bumpText}`;
 }
 
 export function venueNudge(
   task: { id: string; title: string; start_time: string; scheduling_context?: any },
   timezone: string,
-  businessHours?: { start: number; end: number },
+  businessHours?: BusinessHours,
 ): Nudge | null {
   const message = buildVenueNudgeMessage(task.title, task.start_time, timezone, businessHours);
   if (!message) return null;
@@ -165,13 +246,65 @@ export function composeDigest(nudges: Nudge[]): { title: string; message: string
   };
 }
 
+/** The `metadata->>'source'` marker every digest row carries. Also the query key. */
+export const NUDGE_DIGEST_SOURCE = 'nudges';
+
+/** Sorted, joined nudge keys — the identity of a digest, used to decide re-delivery. */
+export function digestFingerprint(nudges: Array<{ key: string }>): string {
+  return nudges.map((n) => n.key).sort().join('|');
+}
+
+/**
+ * Given the digests already queued and undelivered, decide what to do with a freshly
+ * computed nudge set. Pure, so the decision is testable without a database.
+ *
+ * THE RULE, stated once: **a queued undelivered digest must EXACTLY match the current
+ * nudge set; otherwise it is replaced.** That single rule closes two separate defects
+ * the verifier found (§F4):
+ *
+ *  - Re-running the builder with nothing changed re-queued a COMPLETE second digest,
+ *    because the `key` each nudge carefully computes (`venue:<taskId>:<localDate>`) was
+ *    written into the payload and never read. Identical set => `skip`, so three taps of
+ *    "Reschedule today" can no longer produce three 08:00 pushes.
+ *  - Nothing checked `delivered_at is null`, so a digest that was queued and never
+ *    delivered simply accumulated alongside the new one. A changed set => `supersede`:
+ *    the stale rows are deleted and exactly one row is inserted, so the count of
+ *    undelivered digests is never 2.
+ *
+ * Superseding carries the CURRENT set rather than a union with the old one: the caller
+ * has just recomputed it from live rows, so an item missing from it is an item that is
+ * no longer nudge-worthy and must not be resurrected.
+ */
+export function planDigestDelivery(
+  nudges: Nudge[],
+  queued: Array<{ id: string; metadata?: any }>,
+): { action: 'skip' | 'insert' | 'supersede'; supersedeIds: string[] } {
+  if (!nudges.length) return { action: 'skip', supersedeIds: [] };
+  const mine = queued.filter((r) => r?.metadata?.source === NUDGE_DIGEST_SOURCE);
+  if (!mine.length) return { action: 'insert', supersedeIds: [] };
+  const want = digestFingerprint(nudges);
+  const have = digestFingerprint(
+    mine.flatMap((r) => (Array.isArray(r?.metadata?.nudges) ? r.metadata.nudges : []))
+      .filter((n: any) => typeof n?.key === 'string'),
+  );
+  if (mine.length === 1 && want === have) return { action: 'skip', supersedeIds: [] };
+  return { action: 'supersede', supersedeIds: mine.map((r) => r.id) };
+}
+
 /**
  * Queue the digest as a `scheduled_chat` notification.
  *
  * `scheduledFor` is honoured rather than "now" so the caller can hold it to morning — the
  * nightly build runs at 01:00 and a 1am push about shoe shopping is worse than useless.
- * Returns the number of nudges delivered (0 when there is nothing to say — silence is the
- * correct behaviour, not an empty "no nudges today" message).
+ * Returns the number of nudges delivered (0 when there is nothing to say, or when an
+ * identical digest is already queued — silence is the correct behaviour, not an empty
+ * "no nudges today" message and not a duplicate).
+ *
+ * COLUMN NAMES ARE LOAD-BEARING HERE. `scheduled_notifications` has NO `status` and NO
+ * `send_at` column (verified 2026-09-03 against information_schema on project
+ * wwxgajrtmslzklnyplah); undelivered means `delivered_at is null`. A filter on a column
+ * that does not exist is rejected by PostgREST and, inside a `try`, looks exactly like
+ * success — which is how the builder's purge silently did nothing for months.
  */
 export async function deliverNudgeDigest(
   supabase: any,
@@ -180,8 +313,39 @@ export async function deliverNudgeDigest(
   opts: { scheduledFor?: string } = {},
 ): Promise<number> {
   if (!nudges.length) return 0;
+
+  // What is already queued and not yet delivered for this user?
+  let queued: Array<{ id: string; metadata?: any }> = [];
+  const { data: queuedRows, error: queryErr } = await supabase
+    .from('scheduled_notifications')
+    .select('id, scheduled_for, metadata')
+    .eq('user_id', userId)
+    .eq('notification_type', 'scheduled_chat')
+    .is('delivered_at', null);
+  if (queryErr) {
+    // LOUD: a failed read here means suppression is not running, and the visible symptom
+    // would be duplicate morning pushes with no other trace.
+    console.error('[nudges] could not read queued digests — suppression skipped:', queryErr.message ?? queryErr);
+  } else {
+    queued = queuedRows ?? [];
+  }
+
+  const plan = planDigestDelivery(nudges, queued);
+  if (plan.action === 'skip') {
+    console.log(`[nudges] identical digest already queued (${nudges.length} item(s)) — not re-sending`);
+    return 0;
+  }
+  if (plan.action === 'supersede' && plan.supersedeIds.length) {
+    const { error: delErr } = await supabase
+      .from('scheduled_notifications')
+      .delete()
+      .in('id', plan.supersedeIds);
+    if (delErr) console.error('[nudges] superseding stale digest failed:', delErr.message ?? delErr);
+    else console.log(`[nudges] superseded ${plan.supersedeIds.length} stale undelivered digest(s)`);
+  }
+
   const { title, message } = composeDigest(nudges);
-  await supabase.from('scheduled_notifications').insert({
+  const { error: insErr } = await supabase.from('scheduled_notifications').insert({
     user_id: userId,
     notification_type: 'scheduled_chat',
     scheduled_for: opts.scheduledFor ?? new Date().toISOString(),
@@ -189,7 +353,7 @@ export async function deliverNudgeDigest(
     body: message,
     metadata: {
       message,
-      source: 'nudges',
+      source: NUDGE_DIGEST_SOURCE,
       // Machine-readable so the client renders actionable rows instead of parsing prose.
       nudges: nudges.map((x) => ({
         kind: x.kind, key: x.key, taskId: x.taskId, title: x.title,
@@ -197,7 +361,30 @@ export async function deliverNudgeDigest(
       })),
     },
   });
+  if (insErr) {
+    console.error('[nudges] digest insert failed:', insErr.message ?? insErr);
+    return 0;
+  }
   return nudges.length;
+}
+
+/**
+ * Validate the user's configured delivery hour.
+ *
+ * Measured by the verifier: `25`, `-1` and `NaN` all fell through `nextLocalHour` to its
+ * `return from.toISOString()` escape — i.e. SEND NOW, which at the 01:00 cron is exactly
+ * the 1am push the hold-to-morning design exists to prevent. A user typing "8am" (=> NaN)
+ * got it. Anything not an integer in 0..23 falls back to the default and says so.
+ */
+export function resolveDeliverHour(raw: unknown, fallback = 8): number {
+  const n = typeof raw === 'number' ? raw : Number(raw);
+  if (raw === null || raw === undefined || raw === '' || !Number.isInteger(n) || n < 0 || n > 23) {
+    if (raw !== null && raw !== undefined && raw !== '') {
+      console.warn(`[nudges] invalid nudges.deliverAtLocalHour ${JSON.stringify(raw)} — using ${fallback}`);
+    }
+    return fallback;
+  }
+  return n;
 }
 
 /** Next occurrence of `hour` local time, at or after `from`. Used to hold the 01:00

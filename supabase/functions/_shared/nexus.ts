@@ -239,35 +239,63 @@ export function scopeToActiveCourses(
 }
 
 // ---------------------------------------------------------------------------
-// COURSEWORK ORDER — four bands, deliberately does NOT lead with the oldest
+// COURSEWORK ORDER — five bands, OWNER-FINAL 2026-09-03
 // ---------------------------------------------------------------------------
 /**
- * The order coursework should be worked in (owner-specified 2026-09-03):
+ * The order coursework is both SHOWN in and WORKED in (owner-final 2026-09-03):
  *
- *   1. UPCOMING SOON      due within `soonDays`      -> soonest first
- *   2. RECENTLY OVERDUE   missed within `recentDays` -> most recent miss first
- *   3. FUTURE BEYOND      due after `soonDays`       -> soonest first
- *   4. OLD                missed before `recentDays` -> most recent first, oldest last
+ *   1. UPCOMING SOON   due within `soonDays`         -> soonest first
+ *   2. FUTURE BEYOND   due after `soonDays`          -> soonest first
+ *   3. RECENTLY MISSED missed within `recentDays`    -> most recent miss first
+ *   4. OLD BACKLOG     missed before `recentDays`    -> OLDEST FIRST
+ *   5. UNDATED         no parseable due date         -> always last
  *
- * WHY NOT PLAIN DUE-DATE ASC (what this replaced): with the full Nexus history visible,
- * ascending order is dominated by a multi-year backlog. Measured 2026-09-03 the agent
- * tool returned 30 rows ALL dated 21-27 January 2025 and the user's live course did not
- * appear at all. Sorting by "most overdue" is the same trap: the oldest item is the
- * least likely to still matter, so it must not lead.
+ * TWO THINGS CHANGED HERE, and both are deliberate — do not "restore" either.
+ *
+ * (a) BAND 4 NOW LEADS WITH THE OLDEST. The comment this replaces argued the exact
+ *     opposite: *"the oldest item is the least likely to still matter, so it must not
+ *     lead."* The owner overruled that on 2026-09-03: old backlog is cleared
+ *     front-to-back, so within band 4 the OLDEST item is worked first. The owner
+ *     accepted the consequence on the live MIT set — assignment 6.1 (16 days late on
+ *     2026-09-03, so band 4 under `recentDays = 14`) sorts LAST, not third:
+ *     expected order today = 8.1, 7.1, 1.1, 2.1, 3.1, 4.1, 5.1, 6.1.
+ *
+ * (b) THIS GOVERNS PLACEMENT, NOT ONLY DISPLAY. `courseworkOrder` has exactly two
+ *     importers — the `list_pending_assignments` agent tool and this repo's nightly
+ *     schedule builder — and the owner chose "work it first" as well as "show it
+ *     first", so BOTH move together. A future change that reverses one and not the
+ *     other reintroduces the divergence that made the queue order and the per-day pick
+ *     order disagree.
+ *
+ * WHY NOT PLAIN DUE-DATE ASC (what this originally replaced): with the full Nexus
+ * history visible, ascending order is dominated by a multi-year backlog. Measured
+ * 2026-09-03 the agent tool returned 30 rows ALL dated 21-27 January 2025 and the
+ * user's live course did not appear at all. The BAND is what keeps that backlog off the
+ * top; the direction WITHIN the backlog band is the owner's front-to-back choice.
  *
  * Undated assignments sort after every dated one — they carry no deadline signal, and
  * defaulting them to "urgent" would let untracked items crowd out real deadlines.
  */
 export interface CourseworkOrderOptions {
   now?: number;
-  /** Horizon for band 1. */
+  /** Horizon for band 1 (band 2 is everything further out). */
   soonDays?: number;
-  /** How far back a miss still counts as "recent" (band 2 vs band 4). */
+  /** How far back a miss still counts as "recent" (band 3 vs band 4). */
   recentDays?: number;
 }
 
 export const DEFAULT_SOON_DAYS = 14;
-export const DEFAULT_RECENT_OVERDUE_DAYS = 30;
+/**
+ * 30 -> 14, owner-final 2026-09-03. A miss older than a fortnight is backlog, not a
+ * recent slip. Overridable per user via `config.assignments.recentOverdueDays`.
+ *
+ * NOT THE SAME CONSTANT AS `DEFAULT_ACTIVE_COURSE_ERA_DAYS` (also 14, ~70 lines above).
+ * That one measures how recently a COURSE WAS INGESTED; this one measures how recently
+ * an ASSIGNMENT WAS MISSED. They are unrelated and now hold the same value, so editing
+ * the wrong one produces a plausible-looking change with a completely different effect.
+ * `nexus.test.ts` asserts each one's effect independently so a swap fails loudly.
+ */
+export const DEFAULT_RECENT_OVERDUE_DAYS = 14;
 
 export function courseworkBand(
   a: Pick<NexusAssignment, 'due_date'>,
@@ -279,32 +307,259 @@ export function courseworkBand(
   const due = a.due_date ? Date.parse(String(a.due_date)) : NaN;
   if (!Number.isFinite(due)) return 5; // undated — always last
   const delta = due - now;
-  if (delta >= 0) return delta <= soon ? 1 : 3;
-  return -delta <= recent ? 2 : 4;
+  if (delta >= 0) return delta <= soon ? 1 : 2;
+  // BOUNDARY, decided explicitly rather than by accident: a miss of EXACTLY
+  // `recentDays` is still RECENT (band 3). One millisecond older is band 4.
+  return -delta <= recent ? 3 : 4;
 }
 
-/** Comparator implementing the four bands above. */
+/**
+ * Comparator implementing the five bands above.
+ *
+ * The within-band direction is written as an explicit per-band switch, NOT as one
+ * shared `da - db` / `db - da` expression. The previous single expression served two
+ * bands at once, so flipping it to reverse the backlog silently reversed the other band
+ * too — the exact trap called out in docs/ac/nudge-and-ordering-ACs.md AC-1.2.
+ *
+ * A deterministic `id` tiebreak closes the comparator: without it, two items sharing a
+ * band and a due date compare equal, and the sorted result then depends on the order
+ * Postgres happened to return rows in.
+ */
 export function courseworkOrder(opts: CourseworkOrderOptions = {}) {
   const now = opts.now ?? Date.now();
   return (a: NexusAssignment, b: NexusAssignment): number => {
     const ba = courseworkBand(a, { ...opts, now });
     const bb = courseworkBand(b, { ...opts, now });
     if (ba !== bb) return ba - bb;
-    if (ba === 5) return String(a.title ?? '').localeCompare(String(b.title ?? ''));
+    if (ba === 5) {
+      const byTitle = String(a.title ?? '').localeCompare(String(b.title ?? ''));
+      return byTitle !== 0 ? byTitle : String(a.id ?? '').localeCompare(String(b.id ?? ''));
+    }
     const da = Date.parse(String(a.due_date));
     const db = Date.parse(String(b.due_date));
-    // Bands 1 and 3 look forward (soonest first); 2 and 4 look back (most recent first).
-    return ba === 1 || ba === 3 ? da - db : db - da;
+    let byDate: number;
+    switch (ba) {
+      case 1: byDate = da - db; break; // due soon      -> soonest first
+      case 2: byDate = da - db; break; // future beyond -> soonest first
+      case 3: byDate = db - da; break; // recently missed -> MOST RECENT miss first
+      default: byDate = da - db; break; // band 4 old backlog -> OLDEST FIRST
+    }
+    if (byDate !== 0) return byDate;
+    return String(a.id ?? '').localeCompare(String(b.id ?? ''));
   };
 }
 
 export const COURSEWORK_BAND_LABEL: Record<number, string> = {
   1: 'due soon',
-  2: 'recently overdue',
-  3: 'upcoming',
+  2: 'upcoming',
+  3: 'recently overdue',
   4: 'old backlog',
   5: 'no due date',
 };
+
+// ---------------------------------------------------------------------------
+// SCHEDULING CANDIDATE ORDER — the builder's composed ordering, made a TOTAL order
+// ---------------------------------------------------------------------------
+/**
+ * THE DEFECT THIS FIXES (independent verifier, docs/verify/nudge-delivery-loop1.md §C7).
+ * The nightly builder sorted its candidates with a comparator that switched ordering
+ * RULE depending on which pair it was handed: coursework order for assignment-vs-
+ * assignment, score order for everything else. That is intransitive, and it was proven
+ * with real values —
+ *
+ *   C1 assignment band 1 score 10 | C2 assignment band 4 score 90 | N non-assignment score 50
+ *   C1 < C2 (coursework) , C2 < N (score) , N < C1 (score)  => a cycle
+ *
+ * — so six permutations of the same three tasks produced THREE different sorted orders.
+ * The per-day pick order was therefore a function of the candidate query's row order,
+ * not of the tasks. `Array.prototype.sort` gives no guarantees at all on a comparator
+ * that is not a valid ordering, so this could not be fixed by tuning the branches.
+ *
+ * THE FIX: stop composing two orderings inside one comparator. Instead compute ONE
+ * total order over the whole candidate set up front, then compare precomputed integer
+ * ranks. Both original intents survive intact:
+ *
+ *   1. Tier A/B lead, A before B, coursework order within each tier (unchanged).
+ *   2. Among everyone else, the SCORE branch decides where an ordinary assignment sits
+ *      relative to non-assignment work — so Tier C still never auto-jumps priority-board
+ *      work, which was the whole point of that carve-out.
+ *   3. Assignments in that group are then permuted AMONG THE SLOTS SCORE ALREADY GAVE
+ *      THEM so that, read top to bottom, they appear in coursework order. They take no
+ *      slot from a non-assignment, and they no longer appear in an arbitrary order.
+ *
+ * The returned comparator compares integer ranks only, so it is antisymmetric and
+ * transitive by construction, and sorting is permutation-invariant. `nexus.test.ts`
+ * asserts both axioms over every ordered triple of a mixed fixture, and asserts 200
+ * random permutations of a 40-item set sort identically.
+ */
+export interface SchedulingCandidateOrderOptions<T> {
+  /** Stable unique id — also the final tiebreak, so the order never depends on row order. */
+  idOf: (t: T) => string;
+  /** 'A' | 'B' = deadline tier that leads the queue; 'C' = ordinary assignment; null = not an assignment. */
+  tierOf: (t: T) => 'A' | 'B' | 'C' | null;
+  /** Coursework comparator — normally `courseworkOrder({...})`. */
+  courseworkCompare: (a: T, b: T) => number;
+  /** Score/priority comparator deciding assignment-vs-non-assignment and non-vs-non. */
+  scoreCompare: (a: T, b: T) => number;
+}
+
+/** Returns a NEW array in the builder's candidate order. Does not mutate the input. */
+export function orderSchedulingCandidates<T>(
+  tasks: T[],
+  opts: SchedulingCandidateOrderOptions<T>,
+): T[] {
+  const { idOf, tierOf, courseworkCompare, scoreCompare } = opts;
+  // Every leaf comparison ends in an id tiebreak, so each of these is a strict total
+  // order and none of them can depend on the incoming array order.
+  const byId = (a: T, b: T) => String(idOf(a)).localeCompare(String(idOf(b)));
+  const tie = (cmp: (a: T, b: T) => number) => (a: T, b: T) => {
+    const r = cmp(a, b);
+    return r !== 0 ? r : byId(a, b);
+  };
+
+  const lead: T[] = [];
+  const rest: T[] = [];
+  for (const t of tasks) {
+    const tier = tierOf(t);
+    (tier === 'A' || tier === 'B' ? lead : rest).push(t);
+  }
+
+  const leadOrdered = lead.slice().sort(tie((a, b) => {
+    const ta = tierOf(a), tb = tierOf(b);
+    if (ta !== tb) return ta === 'A' ? -1 : 1;
+    return courseworkCompare(a, b);
+  }));
+
+  // Baseline: score decides the whole of the rest, so an assignment can never take a
+  // slot from higher-scoring non-assignment work.
+  const restOrdered = rest.slice().sort(tie(scoreCompare));
+
+  // Then permute the assignments WITHIN the slots score already gave them, so they read
+  // in coursework order without displacing anything.
+  const slots: number[] = [];
+  const assignmentsInRest: T[] = [];
+  restOrdered.forEach((t, i) => {
+    if (tierOf(t) !== null) { slots.push(i); assignmentsInRest.push(t); }
+  });
+  assignmentsInRest.sort(tie(courseworkCompare));
+  slots.forEach((slot, k) => { restOrdered[slot] = assignmentsInRest[k]; });
+
+  return [...leadOrdered, ...restOrdered];
+}
+
+/**
+ * The same ordering, exposed as a comparator over THIS candidate set — the shape
+ * `Array.prototype.sort` wants, and the shape the transitivity/antisymmetry axiom tests
+ * need. It compares precomputed ranks, so it cannot be intransitive. A task absent from
+ * the set the ranks were built from falls back to the id order rather than to 0, so an
+ * unknown pair still yields a total order instead of a silent cycle.
+ */
+export function schedulingCandidateOrder<T>(
+  tasks: T[],
+  opts: SchedulingCandidateOrderOptions<T>,
+): (a: T, b: T) => number {
+  const rank = new Map<string, number>();
+  orderSchedulingCandidates(tasks, opts).forEach((t, i) => rank.set(String(opts.idOf(t)), i));
+  return (a: T, b: T): number => {
+    const ra = rank.get(String(opts.idOf(a)));
+    const rb = rank.get(String(opts.idOf(b)));
+    if (ra === undefined || rb === undefined) {
+      return String(opts.idOf(a)).localeCompare(String(opts.idOf(b)));
+    }
+    return ra - rb;
+  };
+}
+
+/** The candidate row shape the nightly builder sorts (a `public.tasks` row + `score`). */
+export interface SchedulingTask {
+  id: string;
+  title?: string | null;
+  due_date?: string | null;
+  score?: number;
+  is_priority?: boolean | null;
+  priority_rank?: number | null;
+  assignment_id?: string | null;
+  [k: string]: unknown;
+}
+
+export interface BuilderCandidateOrderOptions extends CourseworkOrderOptions {
+  /** Per-user Settings toggle. 'composite' is the default; 'priority-rank' is legacy. */
+  scoringModel: 'composite' | 'priority-rank';
+  /** taskId -> deadline tier, as computed by the builder. A row missing from this map
+   *  that still carries an `assignment_id` is treated as tier C, matching the builder. */
+  assignmentTier: Record<string, 'A' | 'B' | 'C'>;
+}
+
+/**
+ * THE ORDER THE NIGHTLY BUILDER PLACES WORK IN — one exported entry point, so the
+ * builder and its tests run the SAME code rather than two reconstructions of it.
+ *
+ * This exists as a named export specifically because of the failure recorded in
+ * `.claude/accuracy-log.md`: a previous round proved its ordering with a unit test on
+ * `courseworkOrder` in isolation while the real defect lived in the builder's COMPOSED
+ * comparator, which the test never touched. Anything asserting placement order must
+ * call this, not `courseworkOrder`.
+ */
+export function orderBuilderCandidates<T extends SchedulingTask>(
+  tasks: T[],
+  opts: BuilderCandidateOrderOptions,
+): T[] {
+  return orderSchedulingCandidates(tasks, builderOrderParts<T>(opts));
+}
+
+/** The same ordering as a comparator, for axiom (antisymmetry / transitivity) tests. */
+export function builderCandidateComparator<T extends SchedulingTask>(
+  tasks: T[],
+  opts: BuilderCandidateOrderOptions,
+): (a: T, b: T) => number {
+  return schedulingCandidateOrder(tasks, builderOrderParts<T>(opts));
+}
+
+function builderOrderParts<T extends SchedulingTask>(
+  opts: BuilderCandidateOrderOptions,
+): SchedulingCandidateOrderOptions<T> {
+  const { scoringModel, assignmentTier, ...courseworkOpts } = opts;
+  const coursework = courseworkOrder(courseworkOpts);
+  return {
+    idOf: (t) => String(t.id),
+    tierOf: (t) => (t.assignment_id ? (assignmentTier[String(t.id)] || 'C') : null),
+    courseworkCompare: (a, b) => coursework(a as unknown as NexusAssignment, b as unknown as NexusAssignment),
+    // The score branch, moved here VERBATIM from nightly-schedule-builder/index.ts so
+    // there is one copy. Tier A/B are handled by the tier partition above and never
+    // reach this; it decides ordinary-assignment-vs-non-assignment and non-vs-non.
+    scoreCompare: (a, b) => {
+      const aPri = a.is_priority ? 1 : 0;
+      const bPri = b.is_priority ? 1 : 0;
+      const aScore = a.score ?? 0;
+      const bScore = b.score ?? 0;
+      if (scoringModel === 'composite') {
+        // COMPOSITE: composite score leads (recency/deadline/finance already baked in);
+        // is_priority / priority_rank are only lower tiebreakers.
+        if (bScore !== aScore) return bScore - aScore;
+        if (aPri !== bPri) return bPri - aPri;
+        const aRankC = a.priority_rank ?? 9999;
+        const bRankC = b.priority_rank ?? 9999;
+        if (aRankC !== bRankC) return aRankC - bRankC;
+      } else {
+        // PRIORITY-RANK (legacy): is_priority -> priority_rank -> score -> due ASC.
+        if (aPri !== bPri) return bPri - aPri;
+        if (aPri && bPri) {
+          const aRank = a.priority_rank ?? 9999;
+          const bRank = b.priority_rank ?? 9999;
+          if (aRank !== bRank) return aRank - bRank;
+        }
+        if (bScore !== aScore) return bScore - aScore;
+      }
+      // due_date ASC NULLS LAST
+      if (a.due_date && b.due_date) {
+        return new Date(String(a.due_date)).getTime() - new Date(String(b.due_date)).getTime();
+      }
+      if (a.due_date) return -1;
+      if (b.due_date) return 1;
+      return 0;
+    },
+  };
+}
 
 /**
  * Fetch a user's assignments from Nexus.

@@ -4,12 +4,68 @@
  * - smart-calendar-scheduler businessRules
  * - ItineraryEngine workingHours and workloadBalance
  * - useAutoScheduling and ItineraryEngine extractSchedulingContext
+ *
+ * ── READ-TIME NORMALISER — THIS FILE IS NOT A SERIALISER ────────────────────────────────────
+ * `mergeSchedulingConfig` below is the READ-TIME NORMALISER/MIGRATOR. Its job: take a
+ * possibly-partial, possibly-legacy stored config and produce a complete, valid, current-shape
+ * config for the app to USE. It is field-by-field on purpose — each field has defaulting
+ * semantics a spread cannot express (a two-level `contextRules` merge, a string→array migration
+ * in `categoryMappings`, "blank means use the default" for `customAIInstructions`, validation of
+ * `scoringModel`/`priorityBoost`). Do NOT "simplify" it to `{...DEFAULT, ...userConfig}`.
+ *
+ * Because it is a normaliser, it legitimately EMITS ONLY THE SHAPE IT KNOWS. Keys it has never
+ * heard of (e.g. the server-only `dedup` namespace) are absent from its output BY DESIGN.
+ *
+ * That is safe only as long as its output is never used as a SAVE PAYLOAD. The write-time
+ * persister is `saveUserSchedulingConfig` in `src/services/schedulingService.ts`; it applies a
+ * PATCH to the stored JSONB and must never whole-object-replace `config` with what this function
+ * returned. Historically it did, which silently deleted every key this normaliser does not emit
+ * (docs/verify/nudge-delivery-loop1.md §F1). If you are about to persist the result of this
+ * function, read the header of `schedulingService.ts` first.
+ * ───────────────────────────────────────────────────────────────────────────────────────────
  */
 
 export interface TimeWindow {
   start: number; // hour (0-23)
   end: number; // hour (0-23)
   days: number[]; // 0=Sunday, 6=Saturday
+}
+
+/**
+ * Nudge delivery knobs. Read server-side by `nightly-schedule-builder` as
+ * `config.nudges.deliverAtLocalHour` (index.ts:317). Every field is OPTIONAL and is omitted from
+ * the stored config when the user has not set it, so the server's own default applies — the
+ * client deliberately does not materialise a default here (see AssignmentsConfig's note).
+ */
+export interface NudgeConfig {
+  /** Local hour, 0–23, at which the daily nudge digest is delivered. Server default: 8. */
+  deliverAtLocalHour?: number;
+}
+
+/**
+ * Coursework/assignment scoping + ordering knobs. Read server-side by
+ * `nightly-schedule-builder` (`config.assignments.soonDays` / `.recentOverdueDays`, index.ts:790-791)
+ * and by `_shared/nexus.ts`'s active-course resolution.
+ *
+ * EVERY FIELD IS OPTIONAL AND IS OMITTED WHEN UNSET — never materialised as `0`, `[]` or `false`.
+ * That distinction is load-bearing, not stylistic: `resolveActiveCourseIds` treats an ABSENT
+ * `activeCourseIds` as "infer the active set from ingestion recency" and a PRESENT one as "use
+ * exactly these". Writing an empty array from the UI would therefore silently change which
+ * courses are ingested. "Unset" must stay expressible.
+ */
+export interface AssignmentsConfig {
+  /** Days ahead that still counts as "due soon". Server default: 14. */
+  soonDays?: number;
+  /** Days back that still counts as a "recent miss" rather than old backlog. */
+  recentOverdueDays?: number;
+  /** Pin the active course set explicitly. Absent = infer from ingestion recency. */
+  activeCourseIds?: string[];
+  /** Always drop these course ids, even if inferred or pinned. */
+  excludeCourseIds?: string[];
+  /** How far back from the newest ingestion still counts as the same era. Server default: 14. */
+  activeCourseEraDays?: number;
+  /** Treat assignments with no course_id as active. Server default: false. */
+  includeUncoursed?: boolean;
 }
 
 export interface SchedulingConfig {
@@ -66,7 +122,23 @@ export interface SchedulingConfig {
   // Added 2026-08-25: the lane had spread to 89% of one board, so it no longer discriminated and
   // long-overdue flagged items were outranking fresh due-today work. Reversible at any time.
   priorityBoost?: boolean;
+  // Nudge delivery + coursework scoping. Both are OPTIONAL and are omitted when unset so the
+  // server keeps its own defaults — see the interfaces above.
+  nudges?: NudgeConfig;
+  assignments?: AssignmentsConfig;
 }
+
+/**
+ * A config key that NO source file branches on, kept permanently so a round-trip test can prove
+ * the SAVE PATH preserves keys it has never heard of — not merely the handful of namespaces that
+ * happen to be known today (AC-6c).
+ *
+ * Exported only so the regression script does not hardcode the string. It is deliberately NOT a
+ * member of `SchedulingConfig`, NOT referenced by `mergeSchedulingConfig`, and NOT referenced by
+ * `saveUserSchedulingConfig`. If either function ever grows a branch on it, the probe stops
+ * testing what it claims to test.
+ */
+export const CONFIG_ROUNDTRIP_PROBE_KEY = '__ac6_probe';
 
 // Default configuration blending all existing rules
 export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
@@ -267,7 +339,87 @@ export function validateSchedulingConfig(config: Partial<SchedulingConfig>): boo
   return true;
 }
 
-// Helper to merge user config with defaults
+/** An integer within [min,max], or undefined. Anything else (NaN, '8am', 25, 1.5) is DROPPED,
+ *  never substituted with a client-side guess — an absent key lets the server default apply. */
+function normalizeIntInRange(value: unknown, min: number, max: number): number | undefined {
+  if (value === null || value === undefined || value === '') return undefined;
+  const n = typeof value === 'number' ? value : Number(value);
+  if (!Number.isInteger(n) || n < min || n > max) return undefined;
+  return n;
+}
+
+/** A list of non-empty, de-duplicated strings, or undefined when the key was absent.
+ *  An EMPTY array is preserved as an empty array — it is a value the user can mean. */
+function normalizeStringList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out: string[] = [];
+  for (const v of value) {
+    const s = typeof v === 'string' ? v.trim() : '';
+    if (s && !out.includes(s)) out.push(s);
+  }
+  return out;
+}
+
+/**
+ * Pass-through-with-validation. Returns undefined ONLY when the user config had no such object,
+ * so "the user has never set this" stays distinguishable from "the user set it to nothing" — the
+ * server treats those two differently (see AssignmentsConfig).
+ */
+function normalizeNudgeConfig(value: unknown): NudgeConfig | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const src = value as Record<string, unknown>;
+  const out: NudgeConfig = {};
+  const hour = normalizeIntInRange(src.deliverAtLocalHour, 0, 23);
+  if (hour !== undefined) out.deliverAtLocalHour = hour;
+  return out;
+}
+
+function normalizeAssignmentsConfig(value: unknown): AssignmentsConfig | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const src = value as Record<string, unknown>;
+  const out: AssignmentsConfig = {};
+  const soonDays = normalizeIntInRange(src.soonDays, 0, 365);
+  if (soonDays !== undefined) out.soonDays = soonDays;
+  const recentOverdueDays = normalizeIntInRange(src.recentOverdueDays, 0, 365);
+  if (recentOverdueDays !== undefined) out.recentOverdueDays = recentOverdueDays;
+  const eraDays = normalizeIntInRange(src.activeCourseEraDays, 0, 365);
+  if (eraDays !== undefined) out.activeCourseEraDays = eraDays;
+  const activeCourseIds = normalizeStringList(src.activeCourseIds);
+  if (activeCourseIds !== undefined) out.activeCourseIds = activeCourseIds;
+  const excludeCourseIds = normalizeStringList(src.excludeCourseIds);
+  if (excludeCourseIds !== undefined) out.excludeCourseIds = excludeCourseIds;
+  if (typeof src.includeUncoursed === 'boolean') out.includeUncoursed = src.includeUncoursed;
+  return out;
+}
+
+/**
+ * STRUCTURAL GUARD — the reason `priorityBoost` was unpersistable for as long as it was.
+ *
+ * `priorityBoost` was declared in `SchedulingConfig` and in `DEFAULT_SCHEDULING_CONFIG` but was
+ * missing from the return literal below, so nothing ever emitted it and the Settings toggle could
+ * not round-trip. That is a CLASS of defect — "a declared, defaulted field is silently omitted by
+ * the normaliser" — and adding one line for `priorityBoost` alone would leave the class open for
+ * whatever field is added next.
+ *
+ * This asserts keys(DEFAULT_SCHEDULING_CONFIG) ⊆ keys(normaliser output), so the NEXT omission is
+ * caught where it is introduced. Subset, not equality: namespaces that must not carry invented
+ * client defaults (`nudges`, `assignments`) are legitimately absent from the defaults object while
+ * still being emitted when the user has set them. Dev-only; never throws in production.
+ */
+function assertNormaliserCoversDefaults(result: SchedulingConfig): void {
+  const missing = Object.keys(DEFAULT_SCHEDULING_CONFIG).filter((k) => !(k in result));
+  if (missing.length) {
+    console.error(
+      `[schedulingRules] mergeSchedulingConfig omits declared field(s): ${missing.join(', ')}. ` +
+        'A field in DEFAULT_SCHEDULING_CONFIG that the normaliser never emits can never be saved ' +
+        '— add it to the return literal with its own defaulting rule.',
+    );
+  }
+}
+
+// Helper to merge user config with defaults.
+// READ-TIME NORMALISER. See the file header: its output is a normalised VIEW for the app to use
+// and must never be written back as a whole-object save payload.
 export function mergeSchedulingConfig(
   userConfig: Partial<SchedulingConfig>
 ): SchedulingConfig {
@@ -284,7 +436,10 @@ export function mergeSchedulingConfig(
       }, {} as SchedulingConfig['categoryMappings'])
     : undefined;
 
-  return {
+  const normalizedNudges = normalizeNudgeConfig(userConfig.nudges);
+  const normalizedAssignments = normalizeAssignmentsConfig(userConfig.assignments);
+
+  const merged: SchedulingConfig = {
     timezone: userConfig.timezone ?? DEFAULT_SCHEDULING_CONFIG.timezone,
     timeWindows: { ...DEFAULT_SCHEDULING_CONFIG.timeWindows, ...userConfig.timeWindows },
     workingHours: { ...DEFAULT_SCHEDULING_CONFIG.workingHours, ...userConfig.workingHours },
@@ -305,5 +460,17 @@ export function mergeSchedulingConfig(
     // named here or it would be silently dropped on load and the Settings toggle would never persist).
     // Composite is the default: only an explicit 'priority-rank' opts out; absent/anything-else = composite.
     scoringModel: userConfig.scoringModel === 'priority-rank' ? 'priority-rank' : 'composite',
+    // Same reason as scoringModel: declared, defaulted, and previously ABSENT from this literal,
+    // so the Settings toggle could never round-trip. Only an explicit `false` opts out; absent or
+    // anything else keeps the existing behaviour (true). Guarded structurally by
+    // assertNormaliserCoversDefaults so the next omitted field is caught, not just this one.
+    priorityBoost: userConfig.priorityBoost === false ? false : true,
+    // Emitted ONLY when the user has actually set them, so "unset" stays distinguishable from
+    // "set to nothing" and the server's own defaults still apply. Never given a client default.
+    ...(normalizedNudges !== undefined ? { nudges: normalizedNudges } : {}),
+    ...(normalizedAssignments !== undefined ? { assignments: normalizedAssignments } : {}),
   };
+
+  assertNormaliserCoversDefaults(merged);
+  return merged;
 }

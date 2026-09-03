@@ -1,7 +1,13 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { getTodayInTimezone } from "../_shared/timezone.ts";
-import { fetchNexusAssignments as fetchNexusAssignments_shared } from "../_shared/nexus.ts";
+import {
+  fetchNexusAssignments as fetchNexusAssignments_shared,
+  resolveActiveCourseIds,
+  scopeToActiveCourses,
+  isRequiredAssignment,
+} from "../_shared/nexus.ts";
+import { inferMissingDueDatesByCourse, isDueDateInferred } from "../_shared/assignment-cadence.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -111,71 +117,116 @@ serve(async (req) => {
     const noBoardSkipped: string[] = [];
     const plannedInserts: Array<Record<string, unknown>> = [];
     const plannedRepairs: Array<Record<string, unknown>> = [];
+    let capExceeded = false;
 
     // ============================================================
     // PROCESS ASSIGNMENTS — single query covers both EMBA and MIT
     // (program_id discriminates; `assignments_mit` was merged into
     //  `assignments` in April 2026)
     // ============================================================
+    // RETAINED DELIBERATELY, and it is a PROGRAM id, not a course id (AC-3a). It selects
+    // NOTHING — it is only the 'MIT' vs 'EMBA' label written into the task description and
+    // `scheduling_context.source`. Removing the course pin removed the only literal that
+    // decided what gets ingested; this one decides how an already-ingested row is labelled.
+    // If it is ever wrong the effect is a mislabelled task, never a missing or extra one.
     const MIT_PROGRAM_ID = '4793d933-86ca-4fd5-9b4d-e7a593a513a6';
 
     // ── Nexus (Azure) assignment source ────────────────────────────────────
-    // SCOPED INTAKE. Deliberately narrow: only courses listed here sync. The Azure
-    // store holds 546 open assignments across MIT + EMBA, the vast majority an aged
-    // backlog (MOTR/CTO items due as far back as 2025). Syncing all of them would
-    // bury the board — exactly the flood this scoping exists to prevent. Add a course
-    // id here when it becomes active; remove it when the course ends.
-    const ACTIVE_COURSE_IDS: string[] = [
-      '8036ebab-d1bc-460b-92b0-c45fb312a12e', // MIT — Applied Generative AI for Digital Transformation
-    ];
+    // SCOPE IS INFERRED, NEVER PINNED. This function used to hardcode a single course
+    // uuid in an ACTIVE_COURSE_IDS array. That was production data ingestion behaving
+    // like a test fixture, and the independent verifier measured the cost: the
+    // `list_pending_assignments` agent tool resolves its course set DYNAMICALLY
+    // (execute-tool/index.ts:2685-2692 -> scopeToActiveCourses) and admitted TWO
+    // courses while this sync ingested ONE, so the tool named 13 pending items the
+    // scheduler could never place. One pipeline, two disagreeing scopes.
+    //
+    // Both sides now resolve the same way, from the same shared function, over the
+    // same universe of rows — see `resolveScope` below. There is no course uuid in
+    // this file.
+    const DEFAULT_MAX_INTAKE_PER_RUN = 40;
 
-    // REQUIRED-ONLY: requested via `requiredOnly` below. The points>0 discriminator and
-    // the reasoning behind it now live in _shared/nexus.ts (isRequiredAssignment).
+    // Per-user knobs, read from the same place the agent tool reads them so the two
+    // cannot drift. Absent/unreadable -> {} and the inferred defaults apply; a config
+    // read must never break the sync.
+    let asgCfg: Record<string, any> = {};
+    try {
+      const { data: prefRow } = await supabase
+        .from('user_scheduling_prefs')
+        .select('config')
+        .eq('user_id', userId)
+        .maybeSingle();
+      asgCfg = ((prefRow?.config as any)?.assignments ?? {}) as Record<string, any>;
+    } catch (_) { /* defaults */ }
 
-    // DUE-DATE INFERENCE (user-approved 2026-08-26). The course runs on a strict
-    // weekly cadence — the 6 dated Required Assignments are exactly 7 days apart
-    // (7/14, 7/21, 7/28, 8/4, 8/11, 8/18) — but the two REMAINING items (7.1 and the
-    // 8.1 Capstone) carry no due_date in Nexus. Without a date they are invisible to
-    // the scheduler, so the genuinely upcoming work would never surface. Extrapolate
-    // the cadence from the latest dated assignment, ordered by the N.1 number in the
-    // title, so 7.1 -> 8/25 and Capstone 8.1 -> 9/1.
-    const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-    function inferMissingDueDates(list: any[]): any[] {
-      const seq = (t: string) => {
-        const m = /(\d+)\.\d+/.exec(t || '');
-        return m ? parseInt(m[1], 10) : Number.MAX_SAFE_INTEGER;
-      };
-      const dated = list.filter((a) => a.due_date).sort((a, b) => +new Date(a.due_date) - +new Date(b.due_date));
-      if (dated.length === 0) return list; // nothing to extrapolate from — leave as-is
-      const lastDated = dated[dated.length - 1];
-      const anchorMs = +new Date(lastDated.due_date);
-      const anchorSeq = seq(lastDated.title);
+    // EXACTLY the option object `listPendingAssignments` builds. Kept as one value so a
+    // change to either consumer is visibly a change to both.
+    const scopeOpts = {
+      activeCourseIds: asgCfg.activeCourseIds,
+      excludeCourseIds: asgCfg.excludeCourseIds,
+      eraDays: asgCfg.activeCourseEraDays,
+      includeUncoursed: asgCfg.includeUncoursed === true,
+    };
+    // points>0 ("Required Assignment"/"Capstone") is what keeps ungraded Captain's-Log
+    // entries off the board. It is the ONE deliberate difference from the tool's scope
+    // — the tool REPORTS everything open, the sync INGESTS only graded work — so it is
+    // exposed as a setting rather than left as a code-only constant.
+    const requiredOnly = asgCfg.requiredOnly !== false;
+    const maxIntakeRaw = Number(asgCfg.maxIntakePerRun);
+    const maxIntakePerRun = Number.isFinite(maxIntakeRaw) && maxIntakeRaw > 0
+      ? Math.floor(maxIntakeRaw)
+      : DEFAULT_MAX_INTAKE_PER_RUN;
 
-      return list.map((a) => {
-        if (a.due_date) return a;
-        const s = seq(a.title);
-        if (s === Number.MAX_SAFE_INTEGER || s <= anchorSeq) return a; // can't place it in the sequence
-        const inferred = new Date(anchorMs + (s - anchorSeq) * WEEK_MS);
-        console.log(`[ASSIGNMENT_SYNC] Inferred due date for "${a.title}": ${inferred.toISOString().slice(0, 10)} (weekly cadence from ${lastDated.due_date?.slice(0, 10)})`);
-        return { ...a, due_date: inferred.toISOString(), _due_date_inferred: true };
-      });
-    }
+    let resolvedCourseIds: string[] = [];
+    let nexusOpenCount = 0;
+    let scopedCount = 0;
 
-    // Fetch + open/required filtering now come from _shared/nexus.ts, which every other
-    // consumer (the agent tool, the Assignments page) also uses — this function used to
-    // own a private copy and was the only thing in journey reading Nexus at all.
-    // The due-date inference and the _scoped_active_course tag stay HERE: they are
-    // nightly-sync policy, not part of reading Nexus.
+    // DUE-DATE INFERENCE now lives in _shared/assignment-cadence.ts so the agent tool can
+    // apply the identical rule (AC-2b). It used to be a private copy in this file, which
+    // meant the sync and the tool could report different due dates for the same
+    // assignment. Grouping is BY COURSE: with the scope unpinned this function now sees
+    // several courses at once, and extrapolating course A's missing date from course B's
+    // cadence would be nonsense. The single-course pin used to hide that.
+
     async function fetchNexusAssignments(uid: string): Promise<any[]> {
-      const required = await fetchNexusAssignments_shared(uid, {
-        courseIds: ACTIVE_COURSE_IDS,
-        openOnly: true,
-        requiredOnly: true,
-      });
-      console.log(`[ASSIGNMENT_SYNC] Nexus returned ${required.length} open required assignment(s) across ${ACTIVE_COURSE_IDS.length} active course(s)`);
-      // Tag as scoped so the age cutoff below knows these rows survived an explicit
-      // active-course + required-only filter and are live work, not backlog.
-      return inferMissingDueDates(required).map((a) => ({ ...a, _scoped_active_course: true }));
+      // Fetch EVERY open assignment, DELIBERATELY UNSCOPED BY COURSE.
+      //
+      // DO NOT "optimise" this by passing `courseIds: asgCfg.activeCourseIds`.
+      // `_shared/nexus.ts:330-332` issues one request per course id, or ONE UNFILTERED
+      // REQUEST FOR EVERYTHING when the list is empty or absent — and
+      // `config.assignments.activeCourseIds` is genuinely null on the live config. So
+      // that edit reads as "scope it" and behaves as "fetch all 546 rows and scope
+      // nothing". The active set has to be INFERRED FROM the rows, which means the rows
+      // must be fetched first. This is the fetch-wide-then-scope shape on purpose.
+      const allOpen = await fetchNexusAssignments_shared(uid, { openOnly: true });
+      nexusOpenCount = allOpen.length;
+
+      const activeIds = resolveActiveCourseIds(allOpen, scopeOpts);
+      resolvedCourseIds = [...activeIds].sort();
+      const scoped = scopeToActiveCourses(allOpen, scopeOpts);
+      scopedCount = scoped.length;
+
+      console.log(
+        `[ASSIGNMENT_SYNC] Nexus open=${allOpen.length}; active courses=${activeIds.size} `
+        + `[${resolvedCourseIds.join(', ') || 'none'}]; in scope=${scoped.length}`,
+      );
+
+      // FAIL CLOSED. An empty active set means "we could not tell what is current", and
+      // the safe answer is to ingest nothing — never to fall back to everything.
+      if (activeIds.size === 0 && !scopeOpts.includeUncoursed) {
+        console.warn('[ASSIGNMENT_SYNC] ⚠️ No active course resolved — ingesting nothing this run.');
+        return [];
+      }
+
+      const required = requiredOnly ? scoped.filter(isRequiredAssignment) : scoped;
+      console.log(
+        `[ASSIGNMENT_SYNC] required_only=${requiredOnly} -> ${required.length} candidate assignment(s)`,
+      );
+
+      // Tag as scoped so the age cutoff below knows these rows survived the active-course
+      // (+ required) filter and are live work, not backlog.
+      return inferMissingDueDatesByCourse(required, {
+        log: (m) => console.log(m.replace('[CADENCE]', '[ASSIGNMENT_SYNC]')),
+      }).map((a) => ({ ...a, _scoped_active_course: true }));
     }
 
     async function syncAssignments() {
@@ -245,13 +296,19 @@ serve(async (req) => {
         // Skip very old past-due assignments (>30 days, anchored to local today).
         //
         // EXEMPT the scoped active-course set. The cutoff is a blunt anti-flood guard
-        // from when this function read EVERY assignment in the store; ACTIVE_COURSE_IDS
-        // + points>0 now does that job precisely, so age is no longer a proxy for
-        // "irrelevant". Concretely, on 2026-08-28 the cutoff (2026-07-29) would drop
-        // Required Assignments 1.1 / 2.1 / 3.1 (due 7/14, 7/21, 7/28) — three of the
-        // eight items in a course the user is actively taking and has NOT completed.
-        // Dropping outstanding coursework because it is late is precisely backwards.
-        // The guard stays in force for any unscoped source added later.
+        // from when this function read EVERY assignment in the store; the resolved
+        // active-course set + points>0 now does that job precisely, so age is no longer
+        // a proxy for "irrelevant". Concretely, on 2026-08-28 the cutoff (2026-07-29)
+        // would drop Required Assignments 1.1 / 2.1 / 3.1 (due 7/14, 7/21, 7/28) — three
+        // of the eight items in a course the user is actively taking and has NOT
+        // completed. Dropping outstanding coursework because it is late is precisely
+        // backwards. The guard stays in force for any unscoped source added later.
+        //
+        // NOTE now that the scope is INFERRED rather than pinned: this exemption follows
+        // whatever `resolveActiveCourseIds` admits, so a newly-ingested-but-long-finished
+        // course would have its aged items exempted too. Measured 2026-09-03 that is a
+        // no-op — the second admitted course ("AI and Business Strategy") has ZERO rows
+        // with points>0 — and the intake cap below bounds the damage if it ever is not.
         if (!assignment._scoped_active_course && assignment.due_date && assignment.due_date < thirtyDaysAgo) {
           skippedOld.push({
             id: assignment.id,
@@ -297,9 +354,37 @@ serve(async (req) => {
             source,
             origin: 'nexus-azure',
             course_id: assignment.course_id ?? null,
-            ...(assignment._due_date_inferred ? { due_date_inferred: true } : {}),
+            // AC-2e: an extrapolated deadline must never reach the user as a published one.
+            // `isDueDateInferred` is the single reader of the marker key, so renaming the key
+            // in _shared/assignment-cadence.ts cannot silently orphan this branch.
+            ...(isDueDateInferred(assignment) ? { due_date_inferred: true } : {}),
           },
         });
+      }
+
+      // ── INTAKE CAP ────────────────────────────────────────────────────────
+      // The hardcoded course pin this function used to carry was, in the author's own
+      // words, flood prevention. Removing it removes that protection, so the protection
+      // is replaced with something that does not need to know any course id: a bound on
+      // how many NEW tasks one run may create. A run that wants more than this has
+      // almost certainly resolved a scope nobody intended (a config typo, an
+      // `includeUncoursed` flip, a bulk re-import), and the right response is to stop
+      // and say so — a flooded board is not cheaply reversible.
+      //
+      // Measured 2026-09-03 for the live user: the inferred scope yields 8 candidate
+      // assignments, so the default of 40 is ~5x headroom and cannot fire in normal use.
+      // Overridable per user via `config.assignments.maxIntakePerRun`.
+      if (inserts.length > maxIntakePerRun) {
+        console.error(
+          `[ASSIGNMENT_SYNC] ⛔ INTAKE CAP EXCEEDED — ${inserts.length} new tasks requested, `
+          + `cap is ${maxIntakePerRun}. Writing NOTHING. Resolved courses: `
+          + `[${resolvedCourseIds.join(', ') || 'none'}]. Raise config.assignments.maxIntakePerRun `
+          + `if this is genuinely intended.`,
+        );
+        capExceeded = true;
+        plannedInserts.push(...inserts);
+        plannedRepairs.push(...repairs);
+        return;
       }
 
       if (dryRun) {
@@ -382,6 +467,22 @@ serve(async (req) => {
     return new Response(JSON.stringify({
       success: true,
       dry_run: dryRun,
+      // AC-3b: the resolved course set is part of the RESULT, not only a log line, so
+      // "does the sync's scope equal the tool's scope?" is answerable by comparing two
+      // responses instead of by reading two log streams.
+      scope: {
+        active_course_ids: resolvedCourseIds,
+        nexus_open_count: nexusOpenCount,
+        in_scope_count: scopedCount,
+        required_only: requiredOnly,
+        include_uncoursed: scopeOpts.includeUncoursed,
+        era_days: scopeOpts.eraDays ?? null,
+        pinned_course_ids: scopeOpts.activeCourseIds ?? null,
+        excluded_course_ids: scopeOpts.excludeCourseIds ?? null,
+        max_intake_per_run: maxIntakePerRun,
+        intake_cap_exceeded: capExceeded,
+      },
+      ...(capExceeded ? { would_insert_count: plannedInserts.length } : {}),
       ...(dryRun ? {
         would_insert_count: plannedInserts.length,
         would_repair_count: plannedRepairs.length,

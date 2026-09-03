@@ -13,6 +13,31 @@ export type { SchedulingConfig, TimeWindow };
 /**
  * Unified Scheduling Service
  * Provides centralized access to scheduling configuration and logic
+ *
+ * ── WRITE-TIME PERSISTER — READ THIS BEFORE TOUCHING THE SAVE PATH ──────────────────────────
+ * `saveUserSchedulingConfig` below is the WRITE-TIME PERSISTER. `mergeSchedulingConfig`
+ * (src/config/schedulingRules.ts) is the READ-TIME NORMALISER. They are not interchangeable:
+ *
+ *   normaliser  : partial/legacy stored config -> complete, valid, current-shape config to USE.
+ *                 It emits only the shape it knows, which is CORRECT in that role.
+ *   persister   : an EDIT -> the stored config. It receives a change, never a whole world.
+ *
+ * The historical defect (docs/verify/nudge-delivery-loop1.md §F1) was the composition, not
+ * either function: the persister did `config: restConfig` — a WHOLE-OBJECT REPLACE — using the
+ * normaliser's lossy output as the payload. Every key the normaliser does not emit (the
+ * server-only `dedup` namespace, anything added later) was deleted on the next save. Worse, three
+ * of the four callers pass a PARTIAL: `CeremonySettings` passes `{ceremony_schedule}` and
+ * `loadUserSchedulingConfig` passes `{timezone}`, both of which reduced to `restConfig = {}` and
+ * replaced the entire scheduling config with `{}`.
+ *
+ * THE SAVE MUST NEVER WHOLE-OBJECT-REPLACE `config`. It applies a PATCH: keys present in the
+ * payload are written, keys absent are PRESERVED. Absence is not an instruction.
+ *
+ * Deliberate removal is still expressible — by NAMING the key in
+ * `options.removeConfigKeys`, which is a different mechanism from "the key was absent". That
+ * distinction is the whole point: accidental omission and intentional deletion must not look
+ * identical to this function.
+ * ───────────────────────────────────────────────────────────────────────────────────────────
  */
 
 // Cache for user config to avoid repeated DB calls
@@ -164,12 +189,63 @@ export async function loadUserSchedulingConfig(userId?: string): Promise<Schedul
   }
 }
 
+export interface SaveSchedulingConfigOptions {
+  /**
+   * Top-level `config` JSONB keys to REMOVE.
+   *
+   * This is the ONLY way to delete a key. A key merely absent from the `config` argument is
+   * PRESERVED — that is an omission, not an instruction. Naming a key here is the deliberate,
+   * auditable act of removing it, which is what keeps intentional deletion expressible without
+   * making accidental deletion possible.
+   */
+  removeConfigKeys?: string[];
+}
+
 /**
- * Save user's scheduling preferences to database
+ * Read the RAW stored `config` JSONB — deliberately NOT normalised.
+ *
+ * The patch must be applied to what is actually stored, not to a normalised copy of it, or the
+ * normaliser's (legitimate) key-dropping would leak back into the write and delete the very keys
+ * this design exists to preserve.
+ *
+ * Returns `null` on a read FAILURE, which the caller must treat as fatal. `{}` means "no row / no
+ * config yet" and is a legitimate empty base.
+ */
+async function loadStoredSchedulingConfigRaw(
+  userId: string,
+): Promise<Record<string, unknown> | null> {
+  const { data, error } = await supabase
+    .from('user_scheduling_prefs')
+    .select('config')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (error) {
+    console.error('Error reading stored scheduling config before save:', error);
+    return null;
+  }
+
+  const stored = data?.config;
+  if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return {};
+  return { ...(stored as Record<string, unknown>) };
+}
+
+/**
+ * Save user's scheduling preferences to database.
+ *
+ * WRITE-TIME PERSISTER — see the file header. `config` is a PATCH, not a replacement:
+ *  - a key PRESENT in `config`            -> written (top-level replace of that key)
+ *  - a key ABSENT from `config`           -> preserved untouched
+ *  - a key whose value is `undefined`     -> treated as absent, NOT as a deletion (otherwise
+ *                                            JSON dropping `undefined` would reintroduce
+ *                                            deletion-by-absence through a side door)
+ *  - a key named in `options.removeConfigKeys` -> deleted
+ * `null` is a real value and is stored as `null`.
  */
 export async function saveUserSchedulingConfig(
   userId: string,
-  config: Partial<SchedulingConfigWithInstructions>
+  config: Partial<SchedulingConfigWithInstructions>,
+  options: SaveSchedulingConfigOptions = {}
 ): Promise<boolean> {
   try {
     // Extract fields to save in dedicated columns
@@ -192,10 +268,38 @@ export async function saveUserSchedulingConfig(
     
     const updateData: any = {
       user_id: userId,
-      config: restConfig as any,
       updated_at: new Date().toISOString(),
     };
-    
+
+    // ── PATCH the stored config; never replace it ────────────────────────────────────────────
+    // A value of `undefined` means "the caller did not mention this key", not "delete it".
+    const patchEntries = Object.entries(restConfig as Record<string, unknown>)
+      .filter(([, value]) => value !== undefined);
+    const removeConfigKeys = options.removeConfigKeys ?? [];
+
+    if (patchEntries.length > 0 || removeConfigKeys.length > 0) {
+      const stored = await loadStoredSchedulingConfigRaw(userId);
+
+      if (stored === null) {
+        // FAIL CLOSED. Falling back to writing the patch alone would be the original
+        // whole-object replace, reinstated as an error path — i.e. it would silently delete the
+        // user's configuration precisely when the database is already misbehaving.
+        console.error(
+          'Refusing to save scheduling config: could not read the existing config to patch it. ' +
+            'Writing the patch alone would delete every key not in this payload.',
+        );
+        return false;
+      }
+
+      const nextConfig: Record<string, unknown> = stored;
+      for (const [key, value] of patchEntries) nextConfig[key] = value;
+      for (const key of removeConfigKeys) delete nextConfig[key];
+
+      updateData.config = nextConfig as any;
+    }
+    // Callers that touch only dedicated columns (e.g. `{ceremony_schedule}`, `{timezone}`) now
+    // omit `config` from the write entirely, instead of blanking it.
+
     // Add timezone to dedicated column if provided
     if (timezone) {
       updateData.timezone = timezone;

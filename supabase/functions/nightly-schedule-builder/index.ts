@@ -22,8 +22,12 @@ import {
 import { getTodayInTimezone, localDateToUtcBounds } from "../_shared/timezone.ts";
 // ONE coursework order, shared with execute-tool's list_pending_assignments, so the
 // schedule the builder produces and what Iris says about it cannot disagree.
-import { courseworkOrder } from "../_shared/nexus.ts";
-import { venueNudge, overflowNudge, deliverNudgeDigest, nextLocalHour, type Nudge } from "../_shared/nudges.ts";
+import { courseworkOrder, orderBuilderCandidates } from "../_shared/nexus.ts";
+import {
+  venueNudge, overflowNudge, deliverNudgeDigest, nextLocalHour,
+  buildVenueNudgeMessage, buildOverflowNudgeMessage, resolveDeliverHour, localDayOf,
+  type Nudge,
+} from "../_shared/nudges.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -314,12 +318,40 @@ serve(async (req) => {
       const config = userPref.config || {};
       // Nudge delivery knobs — user-changeable, code only seeds the default.
       // 8 because the build runs at 01:00 and a 1am push is worse than useless.
-      const nudgeHourLocal: number = Number(config?.nudges?.deliverAtLocalHour ?? 8);
+      // VALIDATED, not just defaulted: an out-of-range or non-integer value used to fall
+      // through nextLocalHour to "send now" — the 1am push this design exists to prevent.
+      const nudgeHourLocal: number = resolveDeliverHour(config?.nudges?.deliverAtLocalHour, 8);
       // Business hours drive the venue-nudge wording; read the user's own window so the
-      // message matches their configured day, not a hardcoded 9-5.
+      // message matches their configured day, not a hardcoded 9-5. `days` is read too —
+      // the hours were config-driven while the working DAYS were hardcoded Sat/Sun, so a
+      // user on a Tue–Sat week got the wrong branch on two days out of seven.
+      const configuredWorkDays = (config?.timeWindows?.business_hours?.days as unknown);
       const businessHoursForNudges = {
         start: Number(config?.timeWindows?.business_hours?.start ?? 9),
         end: Number(config?.timeWindows?.business_hours?.end ?? 17),
+        days: Array.isArray(configuredWorkDays) && configuredWorkDays.length
+          ? (configuredWorkDays as number[]).map(Number).filter((d) => Number.isInteger(d) && d >= 0 && d <= 6)
+          : undefined,
+      };
+
+      /**
+       * Compose the stored venue nudge FROM THE REAL PLACEMENT.
+       *
+       * Called only at the two sites that write `scheduling_context` with a slot in hand.
+       * Returns null — meaning "store no venue_nudge at all" — when the placement needs
+       * no comment, so a task the morning digest stays silent about cannot still nag the
+       * user from the Daily Review modal. The message itself comes from
+       * `_shared/nudges.ts`; nothing composes nudge text in this file any more.
+       */
+      const buildVenueNudgePayload = (
+        marker: { toWindow: string } | undefined,
+        title: string,
+        startISO: string | null | undefined,
+      ): { toWindow: string; message: string; start_time: string } | null => {
+        if (!marker || !startISO || !title) return null;
+        const message = buildVenueNudgeMessage(title, startISO, timezone, businessHoursForNudges);
+        if (!message) return null;
+        return { toWindow: marker.toWindow, message, start_time: startISO };
       };
 
       // Per-user scoring model: body override → this user's config.scoringModel → 'composite' default.
@@ -568,18 +600,55 @@ serve(async (req) => {
             console.log(`  🔄 [single-day] Cleared ${clearedTodayCount} today-scheduled tasks for rebuild`);
           }
 
-          // Also purge pending notifications for today (timezone-safe bounds) — skipped in dryRun
-          if (!dryRun) try {
-            await supabase
+          // Also purge undelivered notifications for today (timezone-safe bounds) —
+          // skipped in dryRun.
+          //
+          // THIS DELETED NOTHING, EVER. It filtered `.eq('status','pending')` and
+          // `.gte('send_at', …)` and the live table has NEITHER column — verified
+          // 2026-09-03 against information_schema on project wwxgajrtmslzklnyplah, whose
+          // columns are: id, user_id, task_id, notification_type, title, body,
+          // scheduled_for, delivered_at, failed_at, failure_reason, created_at,
+          // processing_at, processing_instance, queued_during_quiet,
+          // original_scheduled_for, metadata. PostgREST rejected the filter and the
+          // surrounding try/catch logged it as "non-fatal", so the rebuild's only safety
+          // net against stale queued notifications was silently inert. "Undelivered" is
+          // `delivered_at is null`; the day column is `scheduled_for`.
+          //
+          // The failure is now LOUD (console.error with the PostgREST message). Note that
+          // a rejected filter comes back as `{ error }` rather than a throw, so the old
+          // `try` could never have caught it in the first place.
+          // SELECT-then-DELETE-BY-ID rather than a filtered delete, for two reasons: it
+          // yields a real count to log (so "purged 0" is distinguishable from "the filter
+          // was rejected"), and it lets the morning nudge digest be EXCLUDED in JS. That
+          // exclusion matters: this branch only runs on a single-day rebuild, which is
+          // gated OUT of queueing a replacement digest, so a blanket delete would mean
+          // tapping "Reschedule today" at 07:00 silently destroyed the 08:00 digest the
+          // nightly run had already queued. (A PostgREST `not(metadata->>source,eq,…)`
+          // filter cannot be used for this: it evaluates to NULL for the reminder rows
+          // that have no metadata, so they would stop being purged.)
+          if (!dryRun) {
+            const { data: purgeRows, error: purgeReadErr } = await supabase
               .from('scheduled_notifications')
-              .delete()
+              .select('id, metadata')
               .eq('user_id', userId)
-              .eq('status', 'pending')
-              .gte('send_at', todayStartIso)
-              .lt('send_at', todayEndIso);
-            console.log(`  🔔 Purged pending notifications for today`);
-          } catch (notifErr) {
-            console.warn(`  ⚠️ Failed to purge notifications (non-fatal):`, notifErr);
+              .is('delivered_at', null)
+              .gte('scheduled_for', todayStartIso)
+              .lt('scheduled_for', todayEndIso);
+            if (purgeReadErr) {
+              console.error(`  ❌ Failed to read undelivered notifications for purge:`, purgeReadErr.message ?? purgeReadErr);
+            } else {
+              const purgeIds = (purgeRows ?? [])
+                .filter((r: any) => r?.metadata?.source !== 'nudges')
+                .map((r: any) => r.id);
+              if (purgeIds.length) {
+                const { error: purgeErr } = await supabase
+                  .from('scheduled_notifications').delete().in('id', purgeIds);
+                if (purgeErr) console.error(`  ❌ Failed to purge undelivered notifications:`, purgeErr.message ?? purgeErr);
+                else console.log(`  🔔 Purged ${purgeIds.length} undelivered notification(s) scheduled for today`);
+              } else {
+                console.log(`  🔔 Purge: no undelivered notifications for today`);
+              }
+            }
           }
         }
 
@@ -780,16 +849,19 @@ serve(async (req) => {
         }
         // COURSEWORK ORDER — ONE definition, shared with the `list_pending_assignments`
         // agent tool via _shared/nexus.ts so the schedule and what Iris says about it can
-        // never disagree. Four bands (owner-specified 2026-09-03):
-        //   1 due soon -> 2 recently overdue -> 3 upcoming beyond -> 4 old backlog -> 5 undated
-        // Supersedes the two-band version added 2026-08-28: that ranked ALL upcoming above
-        // ALL overdue, so a far-future item outranked a miss from three days ago. Old work
-        // still never leads — the oldest item is the least likely to still matter.
-        const deadlineTriageOrder = courseworkOrder({
+        // never disagree. Five bands (owner-final 2026-09-03):
+        //   1 due soon -> 2 upcoming beyond -> 3 recently missed -> 4 old backlog -> 5 undated
+        // Within band 4 the OLDEST item now leads: the owner chose to clear the backlog
+        // front-to-back, and chose it for PLACEMENT as well as for display ("work it
+        // first", not only "show it first"). See the block comment on courseworkOrder in
+        // _shared/nexus.ts — it carries the reasoning and the owner-accepted consequence
+        // (assignment 6.1, 16 days late, sorts last today).
+        const courseworkOrderOpts = {
           now: nowMs,
           soonDays: (config as any)?.assignments?.soonDays,
           recentDays: (config as any)?.assignments?.recentOverdueDays,
-        });
+        };
+        const deadlineTriageOrder = courseworkOrder(courseworkOrderOpts);
         tierA.sort(deadlineTriageOrder);
         tierB.sort(deadlineTriageOrder);
         tierC.sort(deadlineTriageOrder);
@@ -1220,7 +1292,9 @@ serve(async (req) => {
           
           // Same-day title dedup: normalize and keep highest-scored only
           const seenTitlesThisDay = new Set<string>();
-          const scoredCandidates = candidates
+          // `let`, not `const`: the ordering below returns a NEW array rather than
+          // mutating in place (see orderBuilderCandidates in _shared/nexus.ts).
+          let scoredCandidates = candidates
             .filter(t => !scheduledTitles.has(t.title)) // Cross-day dedup by title
             .map(task => {
               let score = priorityWeight[task.priority] || 1;
@@ -1332,69 +1406,27 @@ serve(async (req) => {
               return { ...task, score: Math.max(score, 0), isPriorityBoard: mappedIds.includes(task.id) };
             });
 
-          // Sort: Tier A → Tier B → everything else (Tier C + non-assignment) competes on
-          // is_priority → priority_rank → score → due_date NULLS LAST.
-          // Per approved plan: Tier A/B keep deadline-jump behavior (immovable external dates);
-          // Tier C no longer auto-jumps priority-board work.
-          scoredCandidates.sort((a, b) => {
-            const aTier = (a as any).assignment_id ? (assignmentTier[a.id] || 'C') : null;
-            const bTier = (b as any).assignment_id ? (assignmentTier[b.id] || 'C') : null;
-
-            // Tier A always first
-            const aIsAB = aTier === 'A' || aTier === 'B';
-            const bIsAB = bTier === 'A' || bTier === 'B';
-            if (aIsAB && !bIsAB) return -1;
-            if (!aIsAB && bIsAB) return 1;
-
-            // Both are A/B — A before B, then COURSEWORK ORDER within each tier. Must match
-            // the tier-array sort above, or the queue order and the per-day pick order
-            // disagree. (courseworkOrder handles undated itself — band 5, always last.)
-            if (aIsAB && bIsAB) {
-              if (aTier !== bTier) return aTier === 'A' ? -1 : 1;
-              return deadlineTriageOrder(a, b);
-            }
-
-            // TIER C vs TIER C. Previously these fell straight through to the score branch,
-            // where the staleness penalty (-3 at 14d, -10 at 30d) decided order — so the
-            // per-day pick order contradicted the tier queue and the oldest coursework
-            // surfaced in an arbitrary position. Assignment-vs-assignment now uses the same
-            // coursework order everywhere. Assignment-vs-NON-assignment is deliberately
-            // untouched and still competes on score, preserving the prior decision that
-            // Tier C must not auto-jump priority-board work.
-            if (aTier === 'C' && bTier === 'C') {
-              return deadlineTriageOrder(a, b);
-            }
-
-            // Everyone else (Tier C + non-assignment). Tier A/B above is UNCHANGED in both modes.
-            const aPri = (a as any).is_priority ? 1 : 0;
-            const bPri = (b as any).is_priority ? 1 : 0;
-            if (scoringModel === 'composite') {
-              // COMPOSITE: composite score leads (recency/deadline/finance already baked into it);
-              // is_priority / priority_rank are only lower tiebreakers.
-              if (b.score !== a.score) return b.score - a.score;
-              if (aPri !== bPri) return bPri - aPri;
-              const aRankC = (a as any).priority_rank ?? 9999;
-              const bRankC = (b as any).priority_rank ?? 9999;
-              if (aRankC !== bRankC) return aRankC - bRankC;
-              if (a.due_date && b.due_date) return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
-              if (a.due_date) return -1;
-              if (b.due_date) return 1;
-              return 0;
-            }
-            // PRIORITY-RANK (default) — unchanged: is_priority → priority_rank → score → due ASC NULLS LAST
-            if (aPri !== bPri) return bPri - aPri;
-            if (aPri && bPri) {
-              const aRank = (a as any).priority_rank ?? 9999;
-              const bRank = (b as any).priority_rank ?? 9999;
-              if (aRank !== bRank) return aRank - bRank;
-            }
-            if (b.score !== a.score) return b.score - a.score;
-            // due_date ASC NULLS LAST
-            if (a.due_date && b.due_date) return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
-            if (a.due_date) return -1;
-            if (b.due_date) return 1;
-            return 0;
-          });
+          // CANDIDATE ORDER. Tier A → Tier B (coursework order within each) → everyone
+          // else, where the score branch decides assignment-vs-non-assignment and
+          // ordinary assignments are then read back in coursework order without taking a
+          // slot from anything.
+          //
+          // WHY THIS IS NO LONGER AN INLINE COMPARATOR. The inline version switched
+          // ordering RULE depending on the pair it was handed — coursework for
+          // assignment-vs-assignment, score for everything else — which is intransitive.
+          // An independent verifier proved it with real values (docs/verify/
+          // nudge-delivery-loop1.md §C7): C1 < C2 < N < C1, and six permutations of the
+          // same three tasks produced THREE different sorted orders, so the per-day pick
+          // order depended on the candidate query's row order rather than on the tasks.
+          // `orderSchedulingCandidates` computes one total order over the whole set
+          // instead, and both original intents survive — see _shared/nexus.ts. It is a
+          // shared export precisely so the tests exercise THIS ordering and not a
+          // reconstruction of it.
+          scoredCandidates = orderBuilderCandidates(scoredCandidates as any, {
+            ...courseworkOrderOpts,
+            scoringModel,
+            assignmentTier,
+          }) as typeof scoredCandidates;
 
           // SCORING_AUDIT: emit top-20 score breakdown for diagnostic queries.
           // Lets us answer "why did X outscore Y" without re-running the builder.
@@ -1433,10 +1465,19 @@ serve(async (req) => {
           const dayPlacements: Array<Record<string, unknown>> = [];
           const dayRejections: Array<Record<string, unknown>> = [];
           const dayKeywordOverrides: Array<Record<string, unknown>> = [];
-          // Venue-dependent tasks placed after-work carry a nudge to move them into
-          // business hours (when the venue is likely open). We persist that nudge on the
-          // task so the morning review / day context can DELIVER it to the user.
-          const venueNudgeByTaskId = new Map<string, { toWindow: string; message: string }>();
+          // Venue-dependent tasks carry a MARKER here — deliberately no message.
+          //
+          // This map is built during window-plan resolution, which happens BEFORE the
+          // placement loop below and therefore before any `start_time` exists. The old
+          // code composed the user-facing sentence right here, asserting the task was
+          // scheduled outside business hours whatever its real slot turned out to be —
+          // structurally
+          // incapable of being right, not merely worded badly. The sentence is now
+          // composed at the PERSISTENCE sites (search `buildVenueNudgeMessage`), from the
+          // slot the scheduler actually returned — which is also what makes the Daily
+          // Review modal, the day-context briefing and the morning digest agree, since
+          // all three render this one stored string.
+          const venueNudgeByTaskId = new Map<string, { toWindow: string }>();
           const deferredAssignmentsToday: Array<{ id: string; tier: 'B' | 'C' }> = [];
 
           // Value-aware overflow: when a task can't be placed, ORDINARY tasks quietly
@@ -1457,17 +1498,22 @@ serve(async (req) => {
             const bumpable = dayPlacements
               .filter((p: any) => typeof p.score === 'number' && p.score < (task.score ?? 0))
               .sort((a: any, b: any) => (a.score as number) - (b.score as number))[0] as any;
-            const factorText = impact.factors.length ? ` (${impact.factors.join(', ')})` : '';
-            const bumpText = bumpable
-              ? ` You could bump "${bumpable.title}" (lower value) to make room today.`
-              : '';
             overflowRows.push({
               user_id: userId, task_id: task.id, overflow_date: targetISO, reason,
               score: typeof task.score === 'number' ? task.score : null,
               impact_factors: impact.factors, duration_minutes: duration,
               suggested_bump_task_id: bumpable?.taskId ?? null,
               suggested_bump_title: bumpable?.title ?? null,
-              message: `"${task.title}" is high-impact${factorText} but couldn't fit ${targetISO} (${reason === 'daily_hours_cap' ? 'daily hours budget reached' : 'no window capacity'}).${bumpText}`,
+              // Composed in _shared/nudges.ts, like every other user-facing nudge
+              // sentence — this one used to be built inline here, which is how the two
+              // kinds of nudge drifted apart in tone and in accuracy.
+              message: buildOverflowNudgeMessage({
+                title: task.title,
+                overflowDate: targetISO,
+                reason,
+                impactFactors: impact.factors,
+                bumpTitle: bumpable?.title ?? null,
+              }),
             });
           };
 
@@ -1526,10 +1572,9 @@ serve(async (req) => {
               console.log(`      🧭 Trait ${plan.trait}: "${task.title}" → [${preferredWindows.join(', ')}]${plan.nudgeToBusinessHours ? ' (nudge → business hours)' : ''}`);
             }
             if (plan.nudgeToBusinessHours) {
-              venueNudgeByTaskId.set(task.id, {
-                toWindow: 'business_hours',
-                message: `"${task.title}" is scheduled after work, but this kind of errand usually needs a place that's open during business hours. Want to move it into a business-hours slot?`,
-              });
+              // Marker only — the sentence needs a start_time and is composed at the
+              // persistence site. See the comment on venueNudgeByTaskId.
+              venueNudgeByTaskId.set(task.id, { toWindow: 'business_hours' });
             }
 
             // Daily working-hours cap: don't schedule TASKS beyond maxDailyHours for the
@@ -1715,7 +1760,16 @@ serve(async (req) => {
 
             const candidate = selectedCandidates.find(c => c.id === slot.taskId);
             const preScheduleStatus = candidate?.status || 'TODO';
-            const venueNudge = venueNudgeByTaskId.get(slot.taskId);
+            // THE PERSISTENCE SITE. `slot.start_time` exists here and nowhere earlier, so
+            // this is the first point at which a truthful sentence CAN be written. A null
+            // message means the placement is actually fine (weekday business hours, or a
+            // sensible daytime slot on a day off) — then no venue_nudge is stored at all,
+            // so the modal and the briefing stay silent about it exactly as the digest
+            // does. That silence is the fix for the two layers contradicting each other.
+            const venueNudgeMarker = venueNudgeByTaskId.get(slot.taskId);
+            const venueNudge = buildVenueNudgePayload(
+              venueNudgeMarker, candidate?.title ?? '', slot.start_time,
+            );
 
             // DRY-RUN: skip the write, keep all in-memory bookkeeping, collect the plan.
             if (dryRun) {
@@ -1880,7 +1934,13 @@ serve(async (req) => {
                       console.log(`      🔁 [Reshuffle] "${candidate?.title}" placed in retry window (dry-run)`);
                       continue;
                     }
-                    const retryVenueNudge = venueNudgeByTaskId.get(slot.taskId);
+                    // Second persistence site (reshuffle retry). Same rule as the main
+                    // one: the sentence is composed HERE, from the retry slot, because
+                    // the retry can land the task in a completely different window than
+                    // the first attempt would have.
+                    const retryVenueNudge = buildVenueNudgePayload(
+                      venueNudgeByTaskId.get(slot.taskId), candidate?.title ?? '', slot.start_time,
+                    );
                     const { error: retryErr } = await supabase
                       .from('tasks')
                       .update({
@@ -2116,18 +2176,41 @@ serve(async (req) => {
         // no new secret), HELD TO MORNING — this runs at 01:00 and a 1am push about
         // shoe shopping is worse than useless. Never fails the build.
         try {
-          if (!dryRun) {
+          // GATED ON `!singleDay`. "Reschedule today" (FocusView) and "Confirm schedule"
+          // (DailyReviewModal) both call this function with singleDay:true, and each tap
+          // used to queue a COMPLETE additional digest aimed at the same 08:00 instant —
+          // three taps before breakfast, three identical pushes. A digest is a summary of
+          // the nightly build, so only the nightly build sends one. (Belt and braces: an
+          // identical digest is also suppressed by key inside deliverNudgeDigest, so a
+          // future caller that forgets this gate still cannot duplicate.)
+          if (!dryRun && !singleDay) {
             const nudges: Nudge[] = [];
 
-            // Venue nudges, re-derived from the ACTUAL placement. The stored message was
-            // a fixed template asserting "scheduled after work" regardless of where the
-            // task landed, so weekend placements got told to move into business hours.
+            // The instant the user will actually read this digest, and therefore the day
+            // it must describe.
+            const digestAtIso = nextLocalHour(now, nudgeHourLocal, timezone);
+            const digestLocalDate = localDayOf(digestAtIso, timezone);
+            const digestDayBounds = localDateToUtcBounds(digestLocalDate, timezone);
+
+            // Venue nudges, re-derived from the ACTUAL placement (same function that
+            // wrote the stored sentence, so the digest and the modal cannot disagree).
+            //
+            // BOUNDED TO THE DIGEST'S LOCAL DAY. This query used to have no date filter
+            // at all despite being named `placedToday`, so it returned EVERY scheduled
+            // task the user had: the verifier measured 5 venue rows spanning 2026-09-03
+            // to 2026-09-07, meaning a Friday 08:00 digest nagged about a Monday
+            // placement and about a Thursday one already in the past. The bounds come
+            // from localDateToUtcBounds in the USER'S timezone — a UTC day boundary
+            // would misfile every evening placement for an America/New_York user (the
+            // live "Buy new cord for Ghost" row at 20:15 local is exactly that case).
             const { data: placedToday } = await supabase
               .from('tasks')
               .select('id, title, start_time, scheduling_context')
               .eq('user_id', userId)
               .eq('is_scheduled', true)
-              .not('start_time', 'is', null);
+              .not('start_time', 'is', null)
+              .gte('start_time', digestDayBounds.start)
+              .lt('start_time', digestDayBounds.end);
             for (const t of placedToday || []) {
               if (!(t as any).scheduling_context?.venue_nudge) continue;
               const n = venueNudge(t as any, timezone, businessHoursForNudges);
@@ -2150,11 +2233,13 @@ serve(async (req) => {
             }
 
             const delivered = await deliverNudgeDigest(supabase, userId, nudges, {
-              scheduledFor: nextLocalHour(now, nudgeHourLocal, timezone),
+              scheduledFor: digestAtIso,
             });
             if (delivered > 0) {
-              console.log(`  🔔 Nudge digest queued: ${delivered} item(s) for ${nudgeHourLocal}:00 ${timezone}`);
+              console.log(`  🔔 Nudge digest queued: ${delivered} item(s) for ${digestLocalDate} ${nudgeHourLocal}:00 ${timezone}`);
             }
+          } else if (!dryRun && singleDay) {
+            console.log('  🔕 Nudge digest skipped: single-day rebuild (the nightly run owns the digest)');
           }
         } catch (e) {
           console.warn('  ⚠️ nudge delivery error (non-fatal):', e);
