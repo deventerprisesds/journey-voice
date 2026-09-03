@@ -21,6 +21,8 @@ import assert from 'node:assert/strict';
 import {
   courseworkBand,
   courseworkOrder,
+  resolveRecentCutoff,
+  COURSEWORK_BAND_LABEL,
   orderBuilderCandidates,
   builderCandidateComparator,
   resolveActiveCourseIds,
@@ -287,4 +289,105 @@ test('AC-1.6 Tier A/B lead the queue, in coursework order within each tier', () 
   }).map(shortOf);
   assert.deepEqual(out.slice(0, 2), ['6.1', '1.1'], 'tier A then tier B lead');
   assert.deepEqual(out.slice(2), ['8.1', '7.1', '2.1', '3.1', '4.1', '5.1']);
+});
+
+// ---------------------------------------------------------------------------
+// AC-9 — the RECENT-MISS FLOOR (owner-specified 2026-09-03)
+//
+// WHY: `recentOverdueDays` is an ABSOLUTE window, so what it catches depends on the
+// course's cadence rather than on the work. The floor guarantees the N most recent
+// distinct overdue DATES always lead, however big the gap between due dates.
+// ---------------------------------------------------------------------------
+const WINDOW_CUTOFF_AT_NOW = NOW - DEFAULT_RECENT_OVERDUE_DAYS * 86400000;
+
+test('AC-9.1 the floor is a NO-OP when the window already holds enough dates', () => {
+  // Today the 14-day window already catches two misses (8.1 @ 2d, 7.1 @ 9d), so the
+  // floor must not move the boundary at all — the owner's pinned order is unchanged.
+  assert.equal(resolveRecentCutoff(MIT as any, { now: NOW }), WINDOW_CUTOFF_AT_NOW);
+  const opts = { now: NOW, recentCutoff: resolveRecentCutoff(MIT as any, { now: NOW }) };
+  const sorted = seededShuffle(MIT, 7).slice().sort(courseworkOrder(opts) as any);
+  assert.deepEqual(sorted.map(shortOf), OWNER_EXPECTED);
+});
+
+test('AC-9.2 THE MOTIVATING CASE: once 8.1 and 7.1 are done, 6.1 is no longer buried', () => {
+  // Live MIT data, 2026-09-03. With 8.1 and 7.1 complete, the newest remaining miss is
+  // 6.1 at 16.5 days — outside the 14-day window, so band 4, and band 4 runs OLDEST
+  // first. WITHOUT the floor that sorts the most recently missed assignment DEAD LAST.
+  const remaining = MIT.filter((t) => t.short !== '8.1' && t.short !== '7.1');
+
+  const noFloor = remaining.slice().sort(courseworkOrder({ now: NOW, recentFloorCount: 0 }) as any);
+  assert.deepEqual(noFloor.map(shortOf), ['1.1', '2.1', '3.1', '4.1', '5.1', '6.1'],
+    'without the floor the newest miss (6.1) sorts last — the defect this closes');
+
+  // WITH the default floor of 2, the two most recent overdue dates (6.1 @ 08-18 and
+  // 5.1 @ 08-11) lead, most-recent-miss first; the rest stay oldest-first backlog.
+  const cutoff = resolveRecentCutoff(remaining as any, { now: NOW });
+  const withFloor = remaining.slice().sort(courseworkOrder({ now: NOW, recentCutoff: cutoff }) as any);
+  assert.deepEqual(withFloor.map(shortOf), ['6.1', '5.1', '1.1', '2.1', '3.1', '4.1']);
+  assert.equal(courseworkBand(remaining.find((t) => t.short === '6.1') as any,
+    { now: NOW, recentCutoff: cutoff }), 2);
+});
+
+test('AC-9.3 the floor counts DATES, so a same-day cohort is never split across bands', () => {
+  // Three assignments across different courses sharing ONE due date. A row-based
+  // "last 2" would take two of them and leave the third in the backlog — identical
+  // work scored differently purely by row order. Counting distinct DATES keeps all
+  // three together, which is the whole reason it is date-based.
+  const sameDay = [
+    { id: 'c1', due_date: '2026-08-01 23:59:59+00' },
+    { id: 'c2', due_date: '2026-08-01 23:59:59+00' },
+    { id: 'c3', due_date: '2026-08-01 23:59:59+00' },
+    { id: 'older', due_date: '2026-07-01 23:59:59+00' },
+  ];
+  const cutoff = resolveRecentCutoff(sameDay as any, { now: NOW });
+  const bands = sameDay.map((a) => courseworkBand(a as any, { now: NOW, recentCutoff: cutoff }));
+  assert.deepEqual(bands, [2, 2, 2, 2],
+    'floor=2 reaches the 2nd distinct date (07-01), so all four qualify');
+
+  // With floorCount 1 the cutoff stops at the newest date: the cohort of three is still
+  // whole, and only the genuinely older row drops to backlog.
+  const c1 = resolveRecentCutoff(sameDay as any, { now: NOW, recentFloorCount: 1 });
+  assert.deepEqual(sameDay.map((a) => courseworkBand(a as any, { now: NOW, recentCutoff: c1 })),
+    [2, 2, 2, 4]);
+});
+
+test('AC-9.4 the floor can only WIDEN band 2, never narrow it', () => {
+  // A generous window must survive the floor. recentDays=60 reaches back to 07-05, which
+  // is further than the 2nd distinct date (08-25) — the window must win.
+  const wide = resolveRecentCutoff(MIT as any, { now: NOW, recentDays: 60 });
+  assert.equal(wide, NOW - 60 * 86400000);
+  // Every MIT row except 1.1 (51 days, just outside 60? no — inside) is band 2 here.
+  assert.equal(courseworkBand(MIT.find((t) => t.short === '1.1') as any,
+    { now: NOW, recentCutoff: wide }), 2);
+});
+
+test('AC-9.5 future and undated rows never consume a floor slot', () => {
+  // Only MISSES can define "the most recent miss". A set with one overdue row plus
+  // future/undated noise must resolve the floor to that single overdue date.
+  const mixed = [
+    { id: 'future', due_date: '2027-03-01 23:59:59+00' },
+    { id: 'undated', due_date: null },
+    { id: 'miss', due_date: '2026-06-01 23:59:59+00' },
+  ];
+  const cutoff = resolveRecentCutoff(mixed as any, { now: NOW });
+  assert.equal(cutoff, Date.parse('2026-06-01 23:59:59+00'));
+  assert.equal(courseworkBand(mixed[2] as any, { now: NOW, recentCutoff: cutoff }), 2);
+  assert.equal(courseworkBand(mixed[0] as any, { now: NOW, recentCutoff: cutoff }), 3);
+  assert.equal(courseworkBand(mixed[1] as any, { now: NOW, recentCutoff: cutoff }), 5);
+  // No overdue rows at all -> plain window, no crash.
+  assert.equal(resolveRecentCutoff([{ id: 'f', due_date: '2027-01-01 00:00:00+00' }] as any,
+    { now: NOW }), WINDOW_CUTOFF_AT_NOW);
+  assert.equal(resolveRecentCutoff([] as any, { now: NOW }), WINDOW_CUTOFF_AT_NOW);
+});
+
+test('AC-9.6 floorCount 0 disables the floor entirely', () => {
+  const remaining = MIT.filter((t) => t.short !== '8.1' && t.short !== '7.1');
+  assert.equal(resolveRecentCutoff(remaining as any, { now: NOW, recentFloorCount: 0 }),
+    WINDOW_CUTOFF_AT_NOW);
+});
+
+test('AC-9.7 band 2 is labelled by RANKING, not by absolute age', () => {
+  // With the floor active band 2 can hold an item months late, so the label the user
+  // reads must not assert recency. Guards against reverting it to "recently overdue".
+  assert.equal(COURSEWORK_BAND_LABEL[2], 'most recent miss');
 });

@@ -735,6 +735,27 @@ const SchedulingSettings: React.FC = () => {
                 of the older backlog; anything older is treated as backlog.
               </p>
             </div>
+
+            <div className="space-y-2">
+              <Label>Always keep this many recent misses</Label>
+              <Input
+                type="number"
+                min="0"
+                max="50"
+                placeholder="System default (2)"
+                value={config.assignments?.recentFloorCount ?? ''}
+                onChange={(e) =>
+                  patchAssignments({ recentFloorCount: numberOrUnset(e.target.value) })
+                }
+              />
+              <p className="text-xs text-muted-foreground">
+                A safety net for the horizon above. If a course only sets work every few weeks,
+                the horizon can catch nothing and your newest miss falls into the oldest-first
+                backlog. This guarantees the most recent overdue due dates always lead, however
+                big the gap. Counts dates, so several assignments sharing one due date stay
+                together. Set 0 to use the horizon alone.
+              </p>
+            </div>
           </div>
 
           <div className="space-y-2">

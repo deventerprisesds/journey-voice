@@ -282,6 +282,20 @@ export interface CourseworkOrderOptions {
   soonDays?: number;
   /** How far back a miss still counts as "recent" (band 2 vs band 4). */
   recentDays?: number;
+  /**
+   * How many of the most recent DISTINCT overdue due-DATES are always treated as
+   * recent, even when they fall outside the `recentDays` window. See
+   * `resolveRecentCutoff`. Owner-specified 2026-09-03, default 2.
+   */
+  recentFloorCount?: number;
+  /**
+   * Resolved oldest due-date timestamp still counted as a RECENT miss (band 2).
+   * Set-relative, so it cannot be computed from a single row — callers derive it
+   * once with `resolveRecentCutoff(rows, opts)` and pass it back in here. When
+   * present it REPLACES the `recentDays` window; when absent `courseworkBand`
+   * falls back to the plain window so single-row callers keep working.
+   */
+  recentCutoff?: number;
 }
 
 export const DEFAULT_SOON_DAYS = 14;
@@ -296,6 +310,72 @@ export const DEFAULT_SOON_DAYS = 14;
  * `nexus.test.ts` asserts each one's effect independently so a swap fails loudly.
  */
 export const DEFAULT_RECENT_OVERDUE_DAYS = 14;
+
+/**
+ * Owner-specified 2026-09-03: the recent-miss band is never allowed to hold fewer than
+ * this many distinct overdue due-DATES.
+ *
+ * WHY A FLOOR AT ALL. `recentDays` is an ABSOLUTE window, so how much it catches depends
+ * on the course's cadence rather than on the work. Proven on the live MIT set: once 8.1
+ * (2 days late) and 7.1 (9 days late) are done, the newest remaining miss is 6.1 at 16
+ * days — one fortnight-plus-two-days, so band 4 — and band 4 runs OLDEST first, which
+ * sorts the most recently missed assignment DEAD LAST behind five older ones. A weekly
+ * cadence with any gap in it reproduces that indefinitely.
+ *
+ * WHY DATES AND NOT ROWS. Several assignments across different courses can share one due
+ * date. A row-based "last 2" would take two of a three-row same-day cohort and leave the
+ * third in band 4 — identical work scored differently purely by row order. Counting
+ * DISTINCT DATES keeps a same-day cohort together in one band, which is the whole point.
+ *
+ * WHAT THIS IS NOT. This changes WHICH assignments lead the queue. It does NOT change how
+ * many are placed per day — that is `maxPerDay`/`maxPerDayWeekend` in
+ * `_shared/scheduling-defaults.ts` and is a separate knob. Raising the floor cannot speed
+ * the queue up; it only decides who gets the slots that already exist.
+ */
+export const DEFAULT_RECENT_FLOOR_COUNT = 2;
+
+/**
+ * Resolve the oldest due-date still counted as a RECENT miss, from the whole candidate
+ * set. Returns the BROADER (further-back) of two cutoffs:
+ *
+ *   - the absolute window   `now - recentDays`
+ *   - the floor             the `recentFloorCount`-th most recent DISTINCT overdue date
+ *
+ * so the band is whichever of the two reaches further back. With fewer than
+ * `recentFloorCount` overdue dates in the set the floor reaches to the oldest of them,
+ * which is a no-op — it can only ever widen band 2, never narrow it below the window.
+ *
+ * Set-relative by necessity: the Nth-most-recent date is not a property of any one row.
+ * Callers resolve it ONCE per sort and pass the result through `CourseworkOrderOptions`,
+ * so `courseworkBand` stays a pure function of (row, options) and both importers keep
+ * using the single ordering funnel rather than growing a second one.
+ */
+export function resolveRecentCutoff(
+  rows: ReadonlyArray<Pick<NexusAssignment, 'due_date'>>,
+  opts: CourseworkOrderOptions = {},
+): number {
+  const now = opts.now ?? Date.now();
+  const recentDays = opts.recentDays ?? DEFAULT_RECENT_OVERDUE_DAYS;
+  const windowCutoff = now - recentDays * 86400000;
+
+  const floorCount = opts.recentFloorCount ?? DEFAULT_RECENT_FLOOR_COUNT;
+  if (floorCount <= 0) return windowCutoff;
+
+  // Distinct OVERDUE due-dates, most recent first. Undated and future rows carry no
+  // "miss" and must not consume a floor slot.
+  const overdue = new Set<number>();
+  for (const r of rows) {
+    const due = r?.due_date ? Date.parse(String(r.due_date)) : NaN;
+    if (Number.isFinite(due) && due < now) overdue.add(due);
+  }
+  if (overdue.size === 0) return windowCutoff;
+
+  const descending = [...overdue].sort((a, b) => b - a);
+  const floorCutoff = descending[Math.min(floorCount, descending.length) - 1];
+
+  // min() = reach further back. The floor can widen band 2, never shrink it.
+  return Math.min(windowCutoff, floorCutoff);
+}
 
 export function courseworkBand(
   a: Pick<NexusAssignment, 'due_date'>,
@@ -318,7 +398,14 @@ export function courseworkBand(
   if (delta >= 0) return delta <= soon ? 1 : 3;
   // BOUNDARY, decided explicitly rather than by accident: a miss of EXACTLY
   // `recentDays` is still RECENT (band 2). One millisecond older is band 4.
-  return -delta <= recent ? 2 : 4;
+  //
+  // `due >= cutoff` is algebraically the old `-delta <= recent` when the cutoff is the
+  // plain window, so the boundary above is unchanged for every existing caller. A
+  // set-derived `recentCutoff` (see `resolveRecentCutoff`) simply moves that same
+  // boundary further back when the window alone would hold fewer than
+  // `recentFloorCount` distinct overdue dates.
+  const cutoff = opts.recentCutoff ?? now - recent;
+  return due >= cutoff ? 2 : 4;
 }
 
 /**
@@ -357,9 +444,16 @@ export function courseworkOrder(opts: CourseworkOrderOptions = {}) {
   };
 }
 
+/**
+ * Band 2 is deliberately NOT labelled "recently overdue" any more. With
+ * `resolveRecentCutoff`'s floor active, band 2 can legitimately contain an item months
+ * late — it is the most recent MISS, which is not the same claim as "recent". The label
+ * the user reads in `list_pending_assignments` has to stay true under BOTH mechanisms
+ * (window and floor), so it names the ranking, not an absolute age.
+ */
 export const COURSEWORK_BAND_LABEL: Record<number, string> = {
   1: 'due soon',
-  2: 'recently overdue',
+  2: 'most recent miss',
   3: 'upcoming',
   4: 'old backlog',
   5: 'no due date',
