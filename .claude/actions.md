@@ -225,3 +225,43 @@ Approved plan: "1 make the cap configurable and weekend-aware, 2 reconcile the t
   get_today_schedule to EXTERNAL AI clients. No in-app caller BY DESIGN. Live and healthy (ACTIVE
   v92, deployed 2026-07-09) — only redeploy fails. I floated "retire" before reading it; WITHDRAWN.
   Fix is to shrink the 26 MB bundle (it inlines the whole dep tree for four thin CRUD tools).
+
+## Nexus repoint extended to EVERY assignment consumer (2026-08-29)
+Request: "didn't we switch the assignments query tasks etc to point to azure?" → No: only
+`nightly-assignment-sync` had been repointed. → "do both... nexus live no mirror needed we will
+eventually be migrating away from supabase. the sheets syncs need to write into azure".
+- [DONE] Ground truth: Supabase `public.assignments` = 469 rows for the user, ALL "open", newest due
+  2026-06-23, EVERY row created 2026-04-06, and `cron.job` shows nothing feeds it. Genuinely frozen.
+  Also verified the current MIT course (8036ebab) is absent from Supabase `courses` (0 rows), so
+  course names would render "Unknown Course".
+- [DONE] Two clients, one per runtime (cannot be shared — Deno vs Vite; mirrors the existing
+  scheduling-defaults.ts / schedulingRules.ts split): `_shared/nexus.ts`, `src/utils/nexusAssignments.ts`.
+- [DONE] Repointed 13 sites: execute-tool `listPendingAssignments`, Assignments.tsx,
+  assignmentFetching.ts (3), assignmentSync.ts (4), TaskCreationModal.tsx (4).
+  `nightly-assignment-sync` now uses the shared client instead of its private copy.
+- [DONE] Outage ≠ empty: the tool returns an explicit error when Nexus is unreachable instead of an
+  empty list, and the page says it couldn't reach the service. An agent reporting "nothing due"
+  during an outage is materially misleading.
+- [DONE] Commit 225a3a7. execute-tool deployed (run 33788269370). LIVE-VERIFIED: the tool returns
+  **534** assignments from Nexus vs the dead table's 469.
+- [!!] **NEW PROBLEM SURFACED BY THE FIX — needs a decision.** `listPendingAssignments` sorts due-date
+  ASC and caps at 30. Now that it sees all 534, the returned 30 are ALL dated 2025-01-21..2025-01-27 —
+  the ancient EMBA backlog — so the CURRENT course is not in the response at all (verified false).
+  Not a regression (before, current work wasn't in the source table either), but the tool still can't
+  tell Iris about live coursework. Fix is a semantics decision — scope to active courses like the
+  nightly sync does, or sort by relevance rather than oldest-first, or both. NOT changed unilaterally.
+- [OPEN] **Sheet syncs still write Supabase** (`sync-mit-sheets`, `sync-google-sheets`, 6 sites).
+  BLOCKER: nexus-hub `requireWrite` demands a VERIFIED owner (nexus HMAC session / real Supabase user
+  token / UAT bypass). A service-role edge function has none. Options: (a) reuse the existing
+  `UAT_BYPASS_TOKEN` org secret — works today, no new secret, but it is semantically a UAT bypass in a
+  production write path; (b) add a proper service credential in nexus-hub. Security decision, not
+  plumbing — deliberately not wired without a call.
+
+## VERIFICATION LIMITS in this sandbox (learned 2026-08-29 — do not repeat the false claim)
+- `npm ci` / `bun install` FAIL: the lockfile points at Lovable's private registry
+  (`europe-west4-npm.pkg.dev/lovable-core-prod`) which 403s here. No node_modules, so no vite build.
+- **`npx tsc --noEmit -p tsconfig.json` PROVES NOTHING.** The root tsconfig is a solution file with
+  `references` and NO `include`, so it compiles ZERO files and exits silently. I reported that silence
+  as "typecheck clean" — it was meaningless. Verify the tool actually had files before trusting it.
+- There is NO frontend build in CI either. So frontend edits here are PARSE-verified only (bun
+  transpile); the Lovable build is the first real type gate. Say so rather than implying more.
