@@ -1039,32 +1039,42 @@ async function rescheduleTask(supabase: any, args: any, timezone?: string): Prom
     const normalizedStartTime = normalizeDateTime(startTimeRaw, tz);
     console.log(`[RESCHEDULE] Raw: ${startTimeRaw} → Normalized: ${normalizedStartTime} (tz: ${tz})`);
 
-    // Validate time window constraints
-    try {
-      const { data: taskData } = await supabase
-        .from('tasks')
-        .select('category')
-        .eq('id', args.task_id)
-        .single();
-      const taskCategory = taskData?.category || 'LIFE';
-      
-      const supabaseForConfig = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
-      const { data: userPrefs } = await supabaseForConfig
-        .from('user_scheduling_prefs')
-        .select('config, timezone')
-        .eq('user_id', (await supabase.auth.getUser()).data.user?.id || '')
-        .single();
-      const { timeWindows, categoryMappings } = resolveConfig(userPrefs?.config);
-      const windowCheck = validateTaskWindow(normalizedStartTime, taskCategory, timeWindows, categoryMappings, tz);
-      if (!windowCheck.valid) {
-        console.error(`[RESCHEDULE] ⛔ WINDOW VIOLATION: category=${taskCategory}, actual="${windowCheck.actualWindow}", allowed=${windowCheck.allowedWindows.join(',')}`);
-        return {
-          success: false,
-          error: `Cannot reschedule this ${taskCategory} task to the requested time — it falls in the "${windowCheck.actualWindow || 'outside any'}" window, but ${taskCategory} tasks are only allowed in: ${windowCheck.allowedWindows.join(', ')}. Please pick a valid time.`
-        };
+    // Validate time window constraints — ONLY when the user did NOT give an explicit clock time.
+    // A reschedule that carries an explicit new_start_time is a direct user request ("move it to 8am"),
+    // and it must be honored: the category time-windows exist to steer the AUTO-planner's placement, not
+    // to override an explicit user choice. (Huddle feedback 2026-08-18: rescheduling a LIFE errand to
+    // 8:00 was hard-blocked with "falls in a blocked window", so the user couldn't edit their task.)
+    // When only a date is given (no clock time), the system is choosing the time, so the window still
+    // applies.
+    if (!args.new_start_time) {
+      try {
+        const { data: taskData } = await supabase
+          .from('tasks')
+          .select('category')
+          .eq('id', args.task_id)
+          .single();
+        const taskCategory = taskData?.category || 'LIFE';
+
+        const supabaseForConfig = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+        const { data: userPrefs } = await supabaseForConfig
+          .from('user_scheduling_prefs')
+          .select('config, timezone')
+          .eq('user_id', (await supabase.auth.getUser()).data.user?.id || '')
+          .single();
+        const { timeWindows, categoryMappings } = resolveConfig(userPrefs?.config);
+        const windowCheck = validateTaskWindow(normalizedStartTime, taskCategory, timeWindows, categoryMappings, tz);
+        if (!windowCheck.valid) {
+          console.error(`[RESCHEDULE] ⛔ WINDOW VIOLATION: category=${taskCategory}, actual="${windowCheck.actualWindow}", allowed=${windowCheck.allowedWindows.join(',')}`);
+          return {
+            success: false,
+            error: `Cannot reschedule this ${taskCategory} task to the requested time — it falls in the "${windowCheck.actualWindow || 'outside any'}" window, but ${taskCategory} tasks are only allowed in: ${windowCheck.allowedWindows.join(', ')}. Please pick a valid time.`
+          };
+        }
+      } catch (configErr) {
+        console.warn(`[RESCHEDULE] Could not validate window (non-blocking):`, configErr);
       }
-    } catch (configErr) {
-      console.warn(`[RESCHEDULE] Could not validate window (non-blocking):`, configErr);
+    } else {
+      console.log(`[RESCHEDULE] Explicit new_start_time="${args.new_start_time}" — honoring user's chosen time, window guard skipped.`);
     }
 
     const updateData: any = {
@@ -1153,24 +1163,30 @@ async function scheduleTask(supabase: any, args: any, timezone?: string): Promis
     // =====================================================
     const taskForCategory = existingTask;
     const taskCategory = taskForCategory?.category || 'LIFE';
-    try {
-      const supabaseForConfig = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
-      const { data: userPrefs } = await supabaseForConfig
-        .from('user_scheduling_prefs')
-        .select('config, timezone')
-        .eq('user_id', (await supabase.auth.getUser()).data.user?.id || '')
-        .single();
-      const { timeWindows, categoryMappings } = resolveConfig(userPrefs?.config);
-      const windowCheck = validateTaskWindow(normalizedStartTime, taskCategory, timeWindows, categoryMappings, tz);
-      if (!windowCheck.valid) {
-        console.error(`[SCHEDULE_TASK] ⛔ WINDOW VIOLATION: category=${taskCategory}, time falls in "${windowCheck.actualWindow}", allowed=${windowCheck.allowedWindows.join(',')}`);
-        return {
-          success: false,
-          error: `Cannot schedule a ${taskCategory} task at this time — it falls in the "${windowCheck.actualWindow || 'outside any'}" window, but ${taskCategory} tasks are only allowed in: ${windowCheck.allowedWindows.join(', ')}. Please choose a time within those windows.`
-        };
+    // Only enforce the category window when the user did NOT give an explicit clock time. An explicit
+    // start_time is a direct user request — honor it (the windows steer the auto-planner, not the user).
+    if (!args.start_time) {
+      try {
+        const supabaseForConfig = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+        const { data: userPrefs } = await supabaseForConfig
+          .from('user_scheduling_prefs')
+          .select('config, timezone')
+          .eq('user_id', (await supabase.auth.getUser()).data.user?.id || '')
+          .single();
+        const { timeWindows, categoryMappings } = resolveConfig(userPrefs?.config);
+        const windowCheck = validateTaskWindow(normalizedStartTime, taskCategory, timeWindows, categoryMappings, tz);
+        if (!windowCheck.valid) {
+          console.error(`[SCHEDULE_TASK] ⛔ WINDOW VIOLATION: category=${taskCategory}, time falls in "${windowCheck.actualWindow}", allowed=${windowCheck.allowedWindows.join(',')}`);
+          return {
+            success: false,
+            error: `Cannot schedule a ${taskCategory} task at this time — it falls in the "${windowCheck.actualWindow || 'outside any'}" window, but ${taskCategory} tasks are only allowed in: ${windowCheck.allowedWindows.join(', ')}. Please choose a time within those windows.`
+          };
+        }
+      } catch (configErr) {
+        console.warn(`[SCHEDULE_TASK] Could not validate window (non-blocking):`, configErr);
       }
-    } catch (configErr) {
-      console.warn(`[SCHEDULE_TASK] Could not validate window (non-blocking):`, configErr);
+    } else {
+      console.log(`[SCHEDULE_TASK] Explicit start_time="${args.start_time}" — honoring user's chosen time, window guard skipped.`);
     }
 
     const normalizedDueDate = normalizeDueDate(dateStr, tz);
