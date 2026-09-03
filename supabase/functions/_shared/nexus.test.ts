@@ -75,7 +75,8 @@ test('AC-1.1 recentDays default is 14, and an explicit recentDays still override
   // Default (14): a 16.5-day miss is OLD BACKLOG.
   assert.equal(courseworkBand(a61 as any, { now: NOW }), 4);
   // The old default (30) still reachable per user via config.assignments.recentOverdueDays.
-  assert.equal(courseworkBand(a61 as any, { now: NOW, recentDays: 30 }), 3);
+  // Band 2 = RECENTLY MISSED after the owner-approved 2026-09-03 swap (was band 3).
+  assert.equal(courseworkBand(a61 as any, { now: NOW, recentDays: 30 }), 2);
 });
 
 test('AC-1.1 / RISK-8 the two 14-day constants are NOT the same knob', () => {
@@ -134,13 +135,16 @@ test('AC-1.3 a miss of exactly recentDays is RECENT; one millisecond older is no
   const band = (deltaMs: number) =>
     courseworkBand({ due_date: new Date(NOW - deltaMs).toISOString() } as any, { now: NOW });
   const fourteenDays = 14 * 86400000;
-  assert.equal(band(fourteenDays), 3, 'exactly 14 days late is still a RECENT miss');
-  assert.equal(band(fourteenDays - 1), 3, '14 days minus 1ms is recent');
+  // Band 2 = RECENTLY MISSED, band 3 = FUTURE (owner-approved swap 2026-09-03): a recent
+  // miss must outrank far-future work, which is the defect the two-band predecessor was
+  // replaced for. The boundary behaviour below is unchanged; only the numbering moved.
+  assert.equal(band(fourteenDays), 2, 'exactly 14 days late is still a RECENT miss');
+  assert.equal(band(fourteenDays - 1), 2, '14 days minus 1ms is recent');
   assert.equal(band(fourteenDays + 1), 4, '14 days plus 1ms is old backlog');
   // ...and the same inclusive rule on the soon/future boundary.
   assert.equal(DEFAULT_SOON_DAYS, 14);
   assert.equal(courseworkBand({ due_date: new Date(NOW + fourteenDays).toISOString() } as any, { now: NOW }), 1);
-  assert.equal(courseworkBand({ due_date: new Date(NOW + fourteenDays + 1).toISOString() } as any, { now: NOW }), 2);
+  assert.equal(courseworkBand({ due_date: new Date(NOW + fourteenDays + 1).toISOString() } as any, { now: NOW }), 3);
 });
 
 // ---------------------------------------------------------------------------

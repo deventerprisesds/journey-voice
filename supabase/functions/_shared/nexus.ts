@@ -278,9 +278,9 @@ export function scopeToActiveCourses(
  */
 export interface CourseworkOrderOptions {
   now?: number;
-  /** Horizon for band 1 (band 2 is everything further out). */
+  /** Horizon for band 1 (band 3 is everything further out). */
   soonDays?: number;
-  /** How far back a miss still counts as "recent" (band 3 vs band 4). */
+  /** How far back a miss still counts as "recent" (band 2 vs band 4). */
   recentDays?: number;
 }
 
@@ -307,10 +307,18 @@ export function courseworkBand(
   const due = a.due_date ? Date.parse(String(a.due_date)) : NaN;
   if (!Number.isFinite(due)) return 5; // undated — always last
   const delta = due - now;
-  if (delta >= 0) return delta <= soon ? 1 : 2;
+  // BAND 2 IS THE RECENT MISS, NOT THE FAR FUTURE — owner-approved swap 2026-09-03.
+  // The owner's literal spec was "upcoming soon, future, overdue<=14d, old backlog",
+  // which ranks work due next March ABOVE an assignment missed three days ago. That is
+  // the precise defect the two-band predecessor of this function was replaced for (see
+  // the superseded comment in git history: "ranked ALL upcoming above ALL overdue, so a
+  // far-future item outranked a miss from three days ago"). Implementing it literally
+  // would have reinstated a bug that had already been fixed once, so it was raised
+  // rather than shipped, and the owner approved the swap.
+  if (delta >= 0) return delta <= soon ? 1 : 3;
   // BOUNDARY, decided explicitly rather than by accident: a miss of EXACTLY
-  // `recentDays` is still RECENT (band 3). One millisecond older is band 4.
-  return -delta <= recent ? 3 : 4;
+  // `recentDays` is still RECENT (band 2). One millisecond older is band 4.
+  return -delta <= recent ? 2 : 4;
 }
 
 /**
@@ -339,9 +347,9 @@ export function courseworkOrder(opts: CourseworkOrderOptions = {}) {
     const db = Date.parse(String(b.due_date));
     let byDate: number;
     switch (ba) {
-      case 1: byDate = da - db; break; // due soon      -> soonest first
-      case 2: byDate = da - db; break; // future beyond -> soonest first
-      case 3: byDate = db - da; break; // recently missed -> MOST RECENT miss first
+      case 1: byDate = da - db; break; // due soon        -> soonest first
+      case 2: byDate = db - da; break; // recently missed -> MOST RECENT miss first
+      case 3: byDate = da - db; break; // future beyond   -> soonest first
       default: byDate = da - db; break; // band 4 old backlog -> OLDEST FIRST
     }
     if (byDate !== 0) return byDate;
@@ -351,8 +359,8 @@ export function courseworkOrder(opts: CourseworkOrderOptions = {}) {
 
 export const COURSEWORK_BAND_LABEL: Record<number, string> = {
   1: 'due soon',
-  2: 'upcoming',
-  3: 'recently overdue',
+  2: 'recently overdue',
+  3: 'upcoming',
   4: 'old backlog',
   5: 'no due date',
 };
