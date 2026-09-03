@@ -821,7 +821,13 @@ undefined identifier is a TypeScript/runtime error, and bun does not typecheck.
   only and the Lovable build is the first real type gate. Say that plainly rather than implying more.
 
 ## LIVE REGRESSION — `mergeSchedulingConfig` DELETES config keys on every Settings save (2026-09-03)
-**This has already fired on the primary user and silently reverted a setting they asked for.**
+**CORRECTED 2026-09-03 (owner):** I originally wrote that this "silently reverted a setting they
+asked for", citing `priorityBoost`. That causal claim was WRONG and I had no evidence for it — I
+observed the key ABSENT and inferred deletion. The owner states they re-enabled the boost
+deliberately: *"priority boost is back on because I asked for it to be back on and you are missing
+history."* Their statement is ground truth. What remains demonstrable is only that the merge DROPS
+unnamed keys (`dedup` is absent; `nudges`/`assignments` would go the same way). Do not repeat the
+stronger claim.
 `src/config/schedulingRules.ts:287` `mergeSchedulingConfig` rebuilds the config **field by
 field** and never spreads `userConfig`; `saveUserSchedulingConfig` then writes the result as a
 **whole-object replace**. Any key the merge does not explicitly NAME is destroyed on save.

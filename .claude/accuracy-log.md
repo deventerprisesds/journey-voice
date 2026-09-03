@@ -103,3 +103,28 @@ syncs — all three produced clean builds and would have thrown at runtime in De
 **ROOT-CAUSE PATTERN:** mistook "the bundler didn't complain" for "the code is correct".
 **GUARD:** `scripts/undef-check.mjs` (added) — verifies every symbol a change introduces is
 declared or imported. It is what caught both.
+
+---
+
+## 2026-09-03 — "your Settings save silently deleted priorityBoost"
+
+**CLAIM:** that the user's 2026-08-29 08:09 ET Settings save wiped `priorityBoost:false`, and
+that "the boost you asked me to disable is back on" against their wishes. Reported as a live
+regression with urgency.
+
+**GROUND TRUTH (owner):** *"priority boost is back on because I asked for it to be back on and
+you are missing history."* They re-enabled it deliberately. The key being ABSENT is consistent
+with either cause; I observed absence and asserted a cause.
+
+**THE SINGLE SOURCE THAT WOULD HAVE SETTLED IT:** the conversation history, or simply asking.
+Absence of a key does not identify who removed it or why.
+
+**ROOT-CAUSE PATTERN — inferred a CAUSE from a STATE and reported it as fact.** Same shape as
+the `mcp` misdiagnosis (local bundler output → asserted deploy cause). I had a real bug (the
+merge drops unnamed keys) and over-claimed its blast radius by attaching it to a specific
+setting whose history I did not have. Alarming-and-wrong is worse than narrow-and-right.
+
+**GUARD:** when a finding depends on WHO changed something or WHY, state only what is
+observable ("key absent; merge cannot preserve it") and mark the cause as unknown until
+confirmed. Never attach a user-visible consequence to an inferred cause. The owner's stated
+recollection outranks my inference from current state.
