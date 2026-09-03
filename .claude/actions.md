@@ -351,3 +351,20 @@ Request: "describe the nudge widget for any final tweaks" → described → "you
   must extract it into `_shared/` or transitivity stays unproven. Lane D deliberately did NOT ship
   an unexercisable workaround.
 - [IN FLIGHT] Lanes A (ordering/nudges) and B (assignment intake) still running on the shared tree.
+
+## ACT: recent-miss floor — owner-proposed 2026-09-03, BUILT + PUSHED, deploy HELD
+**Ask:** "double check within the last 14 days or the last two ... active assignment dates ...
+so if a day has three or four assignments across courses they all get scored the same way, and
+if there's a gap between due dates the throughput isn't so slow."
+
+| Part of the ask | Outcome |
+|---|---|
+| min-2 floor on the recent-miss band | BUILT — `resolveRecentCutoff`, default 2, config + Settings |
+| count DATES not rows (same-day cohort) | BUILT + mutation-proved (AC-9.3) |
+| "throughput isn't so slow" | **CORRECTED — the floor changes order, not slot count. Throughput = `maxPerDay`/`maxPerDayWeekend`, a separate change, NOT made.** |
+| why 7.1 sat on Saturday | ANSWERED from `updated_at`: board was placed by the 01:00 build, before the band swap deployed. Not an ordering defect. |
+
+**Evidence:** commit `dce1fbb`; 80/80 tests; `undef-check --all` 72 files / 0 undefined;
+3 mutations all FIRED (floor removed -> AC-9.2; min->max -> AC-9.4; Set->array -> AC-9.3).
+**OPEN — needs the owner:** (1) deploy the floor (proven no-op today, so no rush);
+(2) decide whether the per-day cap moves — that is the only real throughput lever.

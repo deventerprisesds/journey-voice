@@ -919,3 +919,57 @@ live code outside that comment. The declaration does not exist at runtime.
   guard FAILS if the entry stops reproducing, so the exemption cannot outlive the defect.
 - FIX (owner action, not applied): delete the dead `else` at `:496-503`, or move the function out
   of the comment; then delete the baseline entry.
+
+## Recent-miss FLOOR: the band boundary is now set-relative, not just a window (2026-09-03)
+
+**The defect, proven on live data.** `recentOverdueDays` is an ABSOLUTE window (14 days), so
+what it catches depends on the COURSE'S CADENCE, not on the work. On the live MIT set: once
+8.1 (2 days late) and 7.1 (9 days late) are done, the newest remaining miss is 6.1 at 16 days
+— outside the window, so band 4 — and band 4 runs OLDEST FIRST, which sorts the most recently
+missed assignment **dead last** behind five older ones. Any cadence with a gap wider than the
+window reproduces this indefinitely. Test AC-9.2 pins the no-floor order
+`1.1, 2.1, 3.1, 4.1, 5.1, 6.1` as the defect, and `6.1, 5.1, 1.1, 2.1, 3.1, 4.1` as the fix.
+
+**The fix.** `resolveRecentCutoff(rows, opts)` returns the BROADER of (a) the `recentDays`
+window and (b) the `recentFloorCount`-th most recent DISTINCT overdue due-DATE. Default floor
+= 2, config key `assignments.recentFloorCount`, Settings control shipped, 0 disables.
+
+**DATES, NOT ROWS — and this is the whole reason it is date-based.** Several assignments across
+courses can share one due date. A row-based "last 2" takes two of a three-row same-day cohort
+and leaves the third in the backlog: identical work scored differently purely by row order.
+Mutation B (Set -> array) FIRED on AC-9.3, so this is guarded, not just intended.
+
+**Why it did not become a second ordering function (extend, don't duplicate).** The Nth-most-
+recent date is NOT a property of any single row, so the naive move is a new set-aware ordering
+path beside `courseworkBand`. Instead the cutoff is resolved ONCE per sort by the caller and
+passed through the existing `CourseworkOrderOptions`; `courseworkBand` stays pure over
+(row, options) and BOTH importers (`list_pending_assignments`, nightly builder) keep using
+`courseworkOrder`. `due >= cutoff` is algebraically the old `-delta <= recent` when the cutoff
+is the plain window, so no existing caller's boundary moved.
+
+**Resolved from the RANKED set, per caller.** execute-tool resolves it AFTER its due-window
+filter (a row the user cannot see must not move the boundary for rows they can). The builder
+resolves it across tierA+B+C UNION, not per tier — per-tier cutoffs would give each tier its
+own boundary and reintroduce set-dependent ordering.
+
+**Label changed `recently overdue` -> `most recent miss`.** With the floor active band 2 can
+hold an item months late; the old label asserted a recency the ranking no longer guarantees.
+AC-9.7 guards the wording.
+
+**ORDERING IS NOT THROUGHPUT — do not conflate these again.** The floor changes WHICH
+assignments get the day's slots. It does NOT create slots. Throughput is
+`maxPerDay`/`maxPerDayWeekend` in `_shared/scheduling-defaults.ts` and is untouched. The owner
+proposed the floor partly as a throughput fix; that half of the rationale does not hold and was
+corrected rather than accepted.
+
+**Status: implemented, 80/80 tests, 3/3 mutations FIRED, pushed — NOT DEPLOYED, NOT live-confirmed.**
+Deploy is deliberately held: today the floor is a proven NO-OP (AC-9.1 — the window already
+holds two dates), so waiting costs nothing tonight.
+
+### Why 7.1 was on Saturday — the answer was a TIMESTAMP, not the ordering logic
+Asked "why is 7.1 later in the week if it's overdue within 14 days", the ground truth was
+`tasks.updated_at`: every `start_time` on the board was written by the **01:00 ET build on
+09-03**, and the band swap deployed AFTER it. No placement on the board had ever run the new
+ordering. Reading the ordering code would have produced a confident wrong answer; the row
+timestamps settled it in one query. When a placement looks wrong, check WHEN it was placed
+before checking HOW.
