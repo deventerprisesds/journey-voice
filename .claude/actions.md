@@ -383,3 +383,36 @@ the check is: try to move a LIFE task to 08:00 and confirm it is no longer refus
 **OPEN:** (1) make the deploy workflow fail closed when the dispatched ref does not contain
 `origin/main`; (2) owner decision on the per-day cap (throughput); (3) the recent-miss floor is
 now live but is a proven no-op today — it starts mattering once 8.1 and 7.1 are done.
+
+## ACT: deploy workflow now REFUSES a stale ref (owner request, 2026-09-08) — DONE
+`scripts/assert-ref-contains-main.sh` + a step in `deploy-supabase-functions.yml` that runs
+BEFORE the secret syncs, so a refused deploy touches nothing. Checkout moved to `fetch-depth: 0`
+(`merge-base --is-ancestor` answers from a shallow clone's truncated history WITHOUT erroring —
+that would pass a branch whose history it cannot see, so the script refuses a shallow clone with
+exit 2 rather than guessing). Missing ref also exits 2, so "cannot tell" is never read as
+"contains". The refusal prints the exact commits that would be reverted plus the merge command.
+7 cases in `assert-ref-contains-main.test.sh`, wired into `checks.yml`.
+
+**Mutation-proved, manually and visibly** (mutate.sh could not match the `FAILED:AC-D1` token —
+the colon defeats its matcher — so each mutation was applied with sed, the diff confirmed applied,
+the failing output shown, and the restore checked with `git diff --quiet`):
+- swap `--is-ancestor` argument order -> `FAILED:AC-D1 ... (expected exit 1, got 0)`, suite exit 1
+- remove the shallow-clone refusal -> `FAILED:AC-D6 ... (expected exit 2, got 0)`, suite exit 1
+
+## ACT: "none of my emails are working" (owner, 2026-09-08) — DIAGNOSED, journey side is CLEAN
+Traced end to end. journey's half works; the break is inside the n8n workflow, which this repo
+cannot see. Two REAL journey-side defects found and NOT yet fixed (no owner approval to change
+delivery code):
+1. **Success is asserted, never observed.** n8n replies `{"message":"Workflow was started"}` — an
+   async ack — and journey logs `✅ email notification delivered` and marks the row delivered. A
+   completely dead mail step looks green everywhere. THIS is why the owner had no signal for days.
+2. **The email body is the raw VOICE PROMPT**, not a briefing. Logged verbatim 18:06:
+   `"Time for your morning kickstart. [WINDOW:morning]\nMorning kickstart call.\n\nBRANCH 1 (morning
+   tasks exist):\n- Greet: \"Hello Sir.\"..."` — assistant stage directions, shipped as email copy.
+   Nothing renders a message FROM it. Correct for a phone call; nonsense in an inbox.
+3. Minor/fragile: the webhook is a **GET with the whole body in the query string**. Fine at ~600
+   chars; a 23-item digest would exceed URL limits.
+Also observed and self-healed: earlier today Business Hours Start ran as `phone` and Morning
+Kickstart as `app_message` because the pending `scheduled_notifications` rows were STALE (created
+before the toggles were switched to Email). Each delivery rewrites the next occurrence, so the
+queue is now correct — all five pending rows carry `comms_mode: email`.
