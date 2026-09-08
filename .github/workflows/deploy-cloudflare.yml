@@ -40,6 +40,37 @@ jobs:
           echo "${{ secrets.CF_OPENAI_API_KEY }}" | npx wrangler secret put OPENAI_API_KEY
           echo "${{ secrets.CF_SUPABASE_SERVICE_KEY }}" | npx wrangler secret put SUPABASE_SERVICE_KEY
 
+      # Secrets for the /notify endpoint. All FOUR already exist as org secrets — the Graph app
+      # is the same service principal boost and huddle use, and JOURNEY_PROXY_TOKEN is the shared
+      # journey<->huddle token. No new org secret is minted, per the standing rule.
+      #
+      # Each is skipped rather than blanked when absent: `wrangler secret put` with empty stdin
+      # would STORE an empty string, and graphConfigured() would then read as configured and the
+      # endpoint would fail at Graph instead of reporting not_configured. A skipped secret leaves
+      # the honest "not_configured" answer intact.
+      - name: Set notification secrets
+        working-directory: ./cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          JOURNEY_PROXY_TOKEN: ${{ secrets.JOURNEY_PROXY_TOKEN }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        run: |
+          put() {
+            if [ -z "$2" ]; then
+              echo "::warning::$1 is empty — skipping. /notify will report not_configured for that capability."
+            else
+              printf '%s' "$2" | npx wrangler secret put "$1"
+              echo "set $1"
+            fi
+          }
+          put JOURNEY_PROXY_TOKEN "$JOURNEY_PROXY_TOKEN"
+          put AZURE_CLIENT_ID     "$AZURE_CLIENT_ID"
+          put AZURE_CLIENT_SECRET "$AZURE_CLIENT_SECRET"
+          put AZURE_TENANT_ID     "$AZURE_TENANT_ID"
+
       - name: Wait for deployment propagation
         run: sleep 15
 

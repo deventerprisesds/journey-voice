@@ -37,6 +37,10 @@ const REPO = fileURLToPath(new URL('..', import.meta.url));
 const ROOTS = [
   { dir: 'src', min: 2 },
   { dir: 'supabase/functions', min: 1 },
+  // journey's Cloudflare Worker — the non-Supabase runtime that hosts /notify. Its own root
+  // with its own floor for the same reason as supabase/functions: a shared floor would stay
+  // satisfied by the other roots, and the worker's tests would silently stop being collected.
+  { dir: 'cloudflare/src', min: 1 },
 ];
 
 const IGNORED_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'coverage', '.vite']);
