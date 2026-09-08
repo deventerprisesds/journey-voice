@@ -24,10 +24,15 @@
 //             codes); docs/verify/nudge-delivery-loop1.md §F5.a;
 //             docs/ac/nudge-and-ordering-ACs.md AC-5a..AC-5d.
 //
-// SCOPE. `--all` checks supabase/functions/**/*.ts. That is deliberate and not laziness: the
-// bug class exists because Deno bundles without resolving. `src/` is compiled by vite/tsc,
-// which resolves identifiers and already rejects an undefined one, so running this there would
-// duplicate a stronger existing check.
+// SCOPE. `--all` checks supabase/functions/**/*.ts AND cloudflare/src/**/*.ts. That is
+// deliberate and not laziness: the bug class exists because Deno bundles without resolving, and
+// wrangler/esbuild does exactly the same for the Worker — it resolves IMPORTS, not SYMBOLS. So
+// journey's two non-vite runtimes share one hazard and belong in one scope. `src/` stays out
+// because vite/tsc compiles it and already rejects an undefined identifier, which is a stronger
+// check than this one; running here would duplicate it.
+//
+// Added cloudflare/src 2026-09-08 after `/notify` shipped: CI reported "72 file(s) checked"
+// both before and after the new Worker code landed, so the guard was silently not covering it.
 //
 // LIMIT, stated plainly so it is not over-trusted: this is a lexical checker, not a scope
 // analyser. It flags a CALL to a name bound nowhere in the file. It cannot see the shadowing
@@ -40,7 +45,9 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const REPO = fileURLToPath(new URL('..', import.meta.url));
-const DEFAULT_ROOT = 'supabase/functions';
+// Both of journey's bundle-without-resolving runtimes. A MISSING root is fatal below, not
+// skipped: a silently-absent root is how a guard reports a confident green over nothing.
+const DEFAULT_ROOTS = ['supabase/functions', 'cloudflare/src'];
 
 // ---------------------------------------------------------------------------------------
 // 1. Blank out comments and string/template literals.
@@ -308,6 +315,12 @@ const GLOBALS = new Set([
   'ReadableStream', 'WritableStream', 'TransformStream', 'TextEncoder', 'TextDecoder',
   'TextEncoderStream', 'TextDecoderStream', 'CompressionStream', 'DecompressionStream',
   'WebSocket', 'Worker', 'crypto', 'Crypto', 'CryptoKey', 'SubtleCrypto', 'performance',
+  // Cloudflare Workers runtime globals. Added 2026-09-08 when cloudflare/src came into scope:
+  // `WebSocketPair` is a real Workers global (TwilioCallSession.ts:184), so it belongs HERE and
+  // NOT in the baseline — the baseline is for genuine defects awaiting a fix, and parking a
+  // legitimate global there would be filing a lie to make a run go green. Only the one symbol
+  // that actually fired is listed; adding speculative names would blunt the guard.
+  'WebSocketPair',
   'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'queueMicrotask', 'atob', 'btoa',
   'addEventListener', 'removeEventListener', 'dispatchEvent', 'reportError', 'alert', 'confirm',
   'prompt', 'localStorage', 'sessionStorage', 'navigator', 'location', 'self', 'window',
@@ -367,12 +380,21 @@ const positional = argv.filter((a) => !a.startsWith('-'));
 
 let targets;
 if (useAll) {
-  const root = join(REPO, DEFAULT_ROOT);
-  if (!existsSync(root)) {
-    console.error(`undef-check: --all root "${DEFAULT_ROOT}" does not exist. Nothing checked.`);
-    process.exit(2);
+  targets = [];
+  for (const r of DEFAULT_ROOTS) {
+    const root = join(REPO, r);
+    if (!existsSync(root)) {
+      console.error(`undef-check: --all root "${r}" does not exist. Refusing to report a partial run.`);
+      process.exit(2);
+    }
+    const found = walkTs(root);
+    if (found.length === 0) {
+      console.error(`undef-check: --all root "${r}" contained no .ts files. That is a path bug, not a clean run.`);
+      process.exit(2);
+    }
+    targets.push(...found);
   }
-  targets = walkTs(root).sort();
+  targets = targets.sort();
 } else if (positional.length) {
   targets = positional.map((p) => (p.startsWith('/') ? p : join(REPO, p)));
 } else {
@@ -383,7 +405,7 @@ if (useAll) {
   console.error('  exited 0 here (verified 2026-09-03), so "I ran the guard" meant nothing.');
   console.error('');
   console.error('  Usage:');
-  console.error('    node scripts/undef-check.mjs --all            # every .ts under ' + DEFAULT_ROOT);
+  console.error('    node scripts/undef-check.mjs --all            # every .ts under ' + DEFAULT_ROOTS.join(', '));
   console.error('    node scripts/undef-check.mjs <file> [file...] # specific files');
   process.exit(2);
 }
