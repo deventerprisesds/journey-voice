@@ -1,6 +1,7 @@
 import { TwilioCallSession } from './TwilioCallSession';
+import { handleNotify, type NotifyEnv } from './notify';
 
-interface Env {
+interface Env extends NotifyEnv {
   CALL_SESSIONS: DurableObjectNamespace;
   SUPABASE_URL: string;
   SUPABASE_SERVICE_KEY: string;
@@ -25,6 +26,13 @@ export default {
           headers: { 'Content-Type': 'application/json' }
         }
       );
+    }
+
+    // Notification delivery — journey's OWN endpoint, replacing the n8n webhook hop.
+    // Purely additive: no existing route's behaviour changes, and nothing points here until
+    // journey's UNIFIED_WEBHOOK_URL is repointed, which is a separate deliberate step.
+    if (url.pathname === '/notify') {
+      return handleNotify(request, env);
     }
 
     // WebSocket endpoint for Twilio

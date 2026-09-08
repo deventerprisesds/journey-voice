@@ -255,6 +255,19 @@ export function getToolDefinitions(): ToolDefinition[] {
         required: ["text"]
       }
     },
+    {
+      type: "function",
+      name: "undo_dedup",
+      description: "Restore a task that the duplicate-detection guard recently SKIPPED as a likely duplicate. Use this when the user replies 'undo', 'undo that', 'add it back', 'no it's not a duplicate', or otherwise says a skipped/deduped task should be restored — typically right after you told them you skipped a duplicate. With no arguments it restores the most recent batch of skipped tasks. Do NOT use this for normal task creation or for un-completing a done task.",
+      parameters: {
+        type: "object",
+        properties: {
+          all: { type: "boolean", description: "If true, restore every skipped duplicate that hasn't been undone yet, not just the most recent batch. Default: false." },
+          log_id: { type: "string", description: "Optional id of a specific dedup-log entry to restore, when the user names a particular task." }
+        },
+        required: []
+      }
+    },
 
     // ── COMMUNICATION TOOLS ────────────────────────────────────
     {

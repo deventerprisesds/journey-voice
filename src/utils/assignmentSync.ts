@@ -1,6 +1,7 @@
 import { supabase } from "@/integrations/supabase/client";
 import { scheduleNewTask } from "@/utils/taskScheduling";
 import { MIT_PROGRAM_ID } from "@/utils/programIds";
+import { fetchNexusAssignmentsSafe, byIds, inProgram } from '@/utils/nexusAssignments';
 
 // Helper to map assignment priority to task priority enum
 function mapPriority(priority: string | null | undefined): 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT' {
@@ -22,15 +23,10 @@ export async function createTasksFromAssignments(
   importMode: 'upcoming' | 'full' = 'upcoming'
 ): Promise<void> {
   try {
-    const { data: assignments, error: fetchError } = await supabase
-      .from('assignments')
-      .select('*')
-      .in('id', assignmentIds);
-
-    if (fetchError) {
-      console.error('Error fetching assignments:', fetchError);
-      return;
-    }
+    // NEXUS (Azure) is the source of truth — Supabase `assignments` is a dead
+    // 2026-04-06 snapshot. d1's filter grammar has no IN, so fetch the owner's rows
+    // and select the requested ids in memory (see nexusAssignments.ts).
+    const assignments = byIds(await fetchNexusAssignmentsSafe(userId), assignmentIds);
 
     if (!assignments || assignments.length === 0) {
       console.log('No assignments to convert');
@@ -146,16 +142,8 @@ export async function createTasksFromMitAssignments(
   importMode: 'upcoming' | 'full' = 'upcoming'
 ): Promise<void> {
   try {
-    const { data: assignments, error: fetchError } = await supabase
-      .from('assignments')
-      .select('*')
-      .in('id', assignmentIds)
-      .eq('program_id', MIT_PROGRAM_ID);
-
-    if (fetchError) {
-      console.error('Error fetching MIT assignments:', fetchError);
-      return;
-    }
+    const assignments = byIds(await fetchNexusAssignmentsSafe(userId), assignmentIds)
+      .filter((a) => inProgram(a, MIT_PROGRAM_ID));
 
     if (!assignments || assignments.length === 0) {
       console.log('No MIT assignments to convert');
@@ -315,26 +303,17 @@ export async function repairAssignmentLinkage(userId: string): Promise<{ repaire
       const cleanTitle = task.title?.replace(/^📚\s*/, '') || '';
       
       if (cleanTitle) {
-        // Try EMBA
-        const { data: embaMatch } = await supabase
-          .from('assignments')
-          .select('id')
-          .eq('user_id', userId)
-          .eq('title', cleanTitle)
-          .maybeSingle();
+        // One Nexus fetch serves both the EMBA and the MIT title lookup.
+        const owned = await fetchNexusAssignmentsSafe(userId);
+        const embaMatch = owned.find((a) => a.title === cleanTitle);
 
         if (embaMatch) {
           assignmentId = embaMatch.id;
           source = 'EMBA';
         } else {
-          // Try MIT
-          const { data: mitMatch } = await supabase
-            .from('assignments')
-            .select('id')
-            .eq('user_id', userId)
-            .eq('program_id', MIT_PROGRAM_ID)
-            .eq('title', cleanTitle)
-            .maybeSingle();
+          const mitMatch = owned.find(
+            (a) => a.title === cleanTitle && inProgram(a, MIT_PROGRAM_ID),
+          );
 
           if (mitMatch) {
             assignmentId = mitMatch.id;

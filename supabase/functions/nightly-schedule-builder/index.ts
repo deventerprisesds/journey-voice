@@ -5,11 +5,29 @@ import {
   DEFAULT_CATEGORY_MAPPINGS,
   resolveConfig,
   validateTaskWindow,
+  resolveWindowPlan,
+  resolvePriorityWeight,
+  classifyTaskTraits,
+  classifyTaskTraitsLLM,
+  mergeTraits,
+  type TaskTraits,
+  resolveMaxDailyMinutes,
+  withinDailyCap,
+  classifyImpact,
   MAX_ASSIGNMENTS_PER_DAY,
+  resolveCategoryDailyCap,
   ASSIGNMENT_URGENT_HOURS,
   ASSIGNMENT_PRIORITY_DAYS,
 } from "../_shared/scheduling-defaults.ts";
 import { getTodayInTimezone, localDateToUtcBounds } from "../_shared/timezone.ts";
+// ONE coursework order, shared with execute-tool's list_pending_assignments, so the
+// schedule the builder produces and what Iris says about it cannot disagree.
+import { courseworkOrder, orderBuilderCandidates, resolveRecentCutoff } from "../_shared/nexus.ts";
+import {
+  venueNudge, overflowNudge, deliverNudgeDigest, nextLocalHour,
+  buildVenueNudgeMessage, buildOverflowNudgeMessage, resolveDeliverHour, localDayOf,
+  type Nudge,
+} from "../_shared/nudges.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -225,31 +243,8 @@ function getPreferredWindows(
  * Returns { window, matchedKeyword } when a match is found AND the resulting
  * window is in the active window set for the day. Returns null otherwise.
  */
-function getKeywordWindowOverride(
-  title: string,
-  contextKeywords: Record<string, string[]> | undefined,
-  activeWindowNames: string[]
-): { window: string; matchedKeyword: string } | null {
-  if (!contextKeywords || !title) return null;
-  const lower = title.toLowerCase();
-
-  for (const [keyword, mapping] of Object.entries(contextKeywords)) {
-    // mapping is [timeWindow, status] per schedulingRules.ts
-    if (!Array.isArray(mapping) || mapping.length === 0) continue;
-    const targetWindow = mapping[0];
-    if (!targetWindow || targetWindow === 'flexible') continue;
-
-    // Match by word boundary (and underscore→space variant for keys like "follow_up")
-    const kw = keyword.toLowerCase().replace(/_/g, ' ');
-    if (kw.length < 3) continue;
-    if (lower.includes(kw)) {
-      if (activeWindowNames.includes(targetWindow)) {
-        return { window: targetWindow, matchedKeyword: keyword };
-      }
-    }
-  }
-  return null;
-}
+// getKeywordWindowOverride now lives in _shared/scheduling-defaults.ts so the
+// voice/manual smart scheduler honors the same keyword rules as this nightly builder.
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -264,11 +259,29 @@ serve(async (req) => {
     try { body = await req.json(); } catch { /* no body = full run */ }
     const requestedUserId: string | undefined = body?.userId;
     const singleDay: boolean = body?.singleDay === true;
+    // DRY-RUN: run the FULL real pipeline (incl. the read-only batch-calendar-scheduler AI slotter)
+    // but perform ZERO writes — every mutation site is guarded by `!dryRun`. Instead of persisting the
+    // slots the AI returns, they are collected into `dryRunPlan` and returned. To reproduce a REAL run's
+    // candidate pool (which is populated by the rollover/future-clear writes that we skip in dryRun), the
+    // candidate + busy-slot queries drop the `is_scheduled` filter in dryRun (see usages of `dryRun`).
+    const dryRun: boolean = body?.dryRun === true;
+    // SWITCHABLE SCORING MODEL. Resolution order (per user, in the loop below):
+    //   1. explicit body override (dryRun / manual / test callers) — wins for everyone
+    //   2. that user's own `config.scoringModel` (self-serve toggle in Settings → Scheduling)
+    //   3. 'composite' default (recency/deadline/finance lead; explicit priority is a differentiator)
+    // Composite is the default; only the exact string 'priority-rank' opts a user OUT into legacy
+    // priority-first ordering. A typo can never silently downgrade to legacy.
+    // `bodyScoringModel` is the override (or null = "let each user's config decide").
+    const bodyScoringModel: 'composite' | 'priority-rank' | null =
+      body?.scoringModel === 'priority-rank' ? 'priority-rank'
+      : body?.scoringModel === 'composite' ? 'composite'
+      : null;
     const triggerSource: string = typeof body?.triggerSource === 'string'
       ? body.triggerSource
       : (singleDay ? 'manual_reschedule' : 'cron');
 
     if (singleDay) console.log(`⚡ Single-day mode requested${requestedUserId ? ` for user ${requestedUserId}` : ''} (trigger: ${triggerSource})`);
+    if (dryRun) console.log(`🧪 DRY-RUN mode — full pipeline, AI slotter included, ZERO writes; returns the computed plan.`);
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
     
@@ -303,6 +316,69 @@ serve(async (req) => {
       const userId = userPref.user_id;
       const timezone = userPref.timezone || 'America/New_York';
       const config = userPref.config || {};
+      // Nudge delivery knobs — user-changeable, code only seeds the default.
+      // 8 because the build runs at 01:00 and a 1am push is worse than useless.
+      // VALIDATED, not just defaulted: an out-of-range or non-integer value used to fall
+      // through nextLocalHour to "send now" — the 1am push this design exists to prevent.
+      const nudgeHourLocal: number = resolveDeliverHour(config?.nudges?.deliverAtLocalHour, 8);
+      // Business hours drive the venue-nudge wording; read the user's own window so the
+      // message matches their configured day, not a hardcoded 9-5. `days` is read too —
+      // the hours were config-driven while the working DAYS were hardcoded Sat/Sun, so a
+      // user on a Tue–Sat week got the wrong branch on two days out of seven.
+      const configuredWorkDays = (config?.timeWindows?.business_hours?.days as unknown);
+      const businessHoursForNudges = {
+        start: Number(config?.timeWindows?.business_hours?.start ?? 9),
+        end: Number(config?.timeWindows?.business_hours?.end ?? 17),
+        days: Array.isArray(configuredWorkDays) && configuredWorkDays.length
+          ? (configuredWorkDays as number[]).map(Number).filter((d) => Number.isInteger(d) && d >= 0 && d <= 6)
+          : undefined,
+      };
+
+      /**
+       * Compose the stored venue nudge FROM THE REAL PLACEMENT.
+       *
+       * Called only at the two sites that write `scheduling_context` with a slot in hand.
+       * Returns null — meaning "store no venue_nudge at all" — when the placement needs
+       * no comment, so a task the morning digest stays silent about cannot still nag the
+       * user from the Daily Review modal. The message itself comes from
+       * `_shared/nudges.ts`; nothing composes nudge text in this file any more.
+       */
+      const buildVenueNudgePayload = (
+        marker: { toWindow: string } | undefined,
+        title: string,
+        startISO: string | null | undefined,
+      ): { toWindow: string; message: string; start_time: string } | null => {
+        if (!marker || !startISO || !title) return null;
+        const message = buildVenueNudgeMessage(title, startISO, timezone, businessHoursForNudges);
+        if (!message) return null;
+        return { toWindow: marker.toWindow, message, start_time: startISO };
+      };
+
+      // Per-user scoring model: body override → this user's config.scoringModel → 'composite' default.
+      // This is what makes the Settings → Scheduling toggle self-serve: only an explicit 'priority-rank'
+      // in config opts THIS user out into legacy ordering; absent/anything-else = composite default.
+      const scoringModel: 'composite' | 'priority-rank' =
+        bodyScoringModel
+        ?? (config?.scoringModel === 'priority-rank' ? 'priority-rank' : 'composite');
+
+      // PRIORITY BOOST TOGGLE — `config.priorityBoost`, default true (existing behavior).
+      // Set false to stop the is_priority lane from granting SCORE privileges. Added because the
+      // lane stopped discriminating: measured 2026-08-25, 59 of 66 open tasks (89%) carried
+      // is_priority, so the flag no longer marked a curated few — it marked almost everything, and
+      // fresh due-today work lost to 7-week-overdue flagged items.
+      //
+      // Disables three privileges, all of which make a flagged task score better:
+      //   1. the direct score boost (+2..+2.6 composite / +10..+15 priority-rank)
+      //   2. immunity from the pushed-count penalty (a task pushed 15x stopped being penalised)
+      //   3. immunity from the staleness penalty (worth up to -10 — this is what kept ancient
+      //      flagged items competitive with today's work)
+      // HIGH/URGENT on the `priority` enum still protects against staleness, so genuinely important
+      // work keeps a floor. The sort tiebreaker on is_priority is left intact — it only breaks
+      // exact score ties and cannot override a better-scoring task.
+      const priorityBoostEnabled = config?.priorityBoost !== false;
+      if (!priorityBoostEnabled) {
+        console.log(`    🔕 Priority boost DISABLED for this user (config.priorityBoost=false) — is_priority grants no score privileges this run`);
+      }
 
       const { timeWindows, categoryMappings } = resolveConfig(config);
       // contextRules.keywords drives keyword-based window overrides
@@ -316,6 +392,14 @@ serve(async (req) => {
       const pushStep = (step: string, inputs: Record<string, unknown>, outputs: Record<string, unknown>, t0: number) => {
         steps.push({ step, inputs, outputs, durationMs: Date.now() - t0 });
       };
+      // DRY-RUN plan collector (per user). Populated at each would-be write site instead of persisting.
+      const dryRunPlan: Array<Record<string, unknown>> = [];
+      // IDs the rollover/future-clear/done-clear steps WOULD clear; in dryRun they are treated as
+      // unscheduled (eligible candidates) and removed from busy-slot capacity, reproducing a real run.
+      const dryRunClearedIds = new Set<string>();
+      // Ids the run's OWN stale-archive steps (1.5/1.6) would archive → excluded from the dryRun
+      // candidate pool so it matches a real run (which excludes them via the status='DONE' write).
+      const dryRunArchivedIds = new Set<string>();
 
       console.log(`\n🌙 Processing nightly schedule for user ${userId} (${timezone}) — runId=${runId} trigger=${triggerSource}`);
 
@@ -323,6 +407,8 @@ serve(async (req) => {
         // ==========================================
         // STEP 0: SYNC ASSIGNMENTS (EMBA + MIT)
         // ==========================================
+        // DRY-RUN: assignment sync CREATES/ARCHIVES tasks — skip it (no writes).
+        if (!dryRun) {
         try {
           console.log(`  📚 Running assignment sync for ${userId}...`);
           const syncResponse = await fetch(
@@ -344,6 +430,7 @@ serve(async (req) => {
           }
         } catch (syncErr) {
           console.warn(`  ⚠️ Assignment sync error (non-fatal):`, syncErr);
+        }
         }
 
         // ==========================================
@@ -381,7 +468,7 @@ serve(async (req) => {
               action: 'rollover',
               pushed_count: (task.pushed_count || 0) + 1,
             }));
-          if (historyRows.length > 0) {
+          if (!dryRun && historyRows.length > 0) {
             const { error: histError } = await supabase
               .from('task_schedule_history')
               .insert(historyRows);
@@ -393,6 +480,12 @@ serve(async (req) => {
           }
 
           for (const task of expiredTasks) {
+            // In dryRun these tasks WOULD be cleared → treat as unscheduled candidates.
+            dryRunClearedIds.add(task.id);
+            if (dryRun) {
+              rolledOverCount++;
+              continue;
+            }
             // Clear scheduling but preserve status so they flow into candidate pool
             const { error: updateError } = await supabase
               .from('tasks')
@@ -434,10 +527,16 @@ serve(async (req) => {
 
           let clearedFutureCount = 0;
           if (!futureError && futureTasks && futureTasks.length > 0) {
-            // Delete app-originated calendar events before clearing
-            await deleteAppOriginatedEvents(supabase, userId, futureTasks);
+            // Delete app-originated calendar events before clearing (skipped in dryRun — it mutates)
+            if (!dryRun) await deleteAppOriginatedEvents(supabase, userId, futureTasks);
 
             for (const ft of futureTasks) {
+              // In dryRun these WOULD be cleared → treat as unscheduled candidates.
+              dryRunClearedIds.add(ft.id);
+              if (dryRun) {
+                clearedFutureCount++;
+                continue;
+              }
               const { error: clearError } = await supabase
                 .from('tasks')
                 .update({
@@ -473,10 +572,16 @@ serve(async (req) => {
 
           let clearedTodayCount = 0;
           if (!todayError && todayTasks && todayTasks.length > 0) {
-            // Delete app-originated calendar events before clearing
-            await deleteAppOriginatedEvents(supabase, userId, todayTasks);
+            // Delete app-originated calendar events before clearing (skipped in dryRun — it mutates)
+            if (!dryRun) await deleteAppOriginatedEvents(supabase, userId, todayTasks);
 
             for (const ft of todayTasks) {
+              // In dryRun these WOULD be cleared → treat as unscheduled candidates.
+              dryRunClearedIds.add(ft.id);
+              if (dryRun) {
+                clearedTodayCount++;
+                continue;
+              }
               const { error: clearError } = await supabase
                 .from('tasks')
                 .update({
@@ -495,18 +600,55 @@ serve(async (req) => {
             console.log(`  🔄 [single-day] Cleared ${clearedTodayCount} today-scheduled tasks for rebuild`);
           }
 
-          // Also purge pending notifications for today (timezone-safe bounds)
-          try {
-            await supabase
+          // Also purge undelivered notifications for today (timezone-safe bounds) —
+          // skipped in dryRun.
+          //
+          // THIS DELETED NOTHING, EVER. It filtered `.eq('status','pending')` and
+          // `.gte('send_at', …)` and the live table has NEITHER column — verified
+          // 2026-09-03 against information_schema on project wwxgajrtmslzklnyplah, whose
+          // columns are: id, user_id, task_id, notification_type, title, body,
+          // scheduled_for, delivered_at, failed_at, failure_reason, created_at,
+          // processing_at, processing_instance, queued_during_quiet,
+          // original_scheduled_for, metadata. PostgREST rejected the filter and the
+          // surrounding try/catch logged it as "non-fatal", so the rebuild's only safety
+          // net against stale queued notifications was silently inert. "Undelivered" is
+          // `delivered_at is null`; the day column is `scheduled_for`.
+          //
+          // The failure is now LOUD (console.error with the PostgREST message). Note that
+          // a rejected filter comes back as `{ error }` rather than a throw, so the old
+          // `try` could never have caught it in the first place.
+          // SELECT-then-DELETE-BY-ID rather than a filtered delete, for two reasons: it
+          // yields a real count to log (so "purged 0" is distinguishable from "the filter
+          // was rejected"), and it lets the morning nudge digest be EXCLUDED in JS. That
+          // exclusion matters: this branch only runs on a single-day rebuild, which is
+          // gated OUT of queueing a replacement digest, so a blanket delete would mean
+          // tapping "Reschedule today" at 07:00 silently destroyed the 08:00 digest the
+          // nightly run had already queued. (A PostgREST `not(metadata->>source,eq,…)`
+          // filter cannot be used for this: it evaluates to NULL for the reminder rows
+          // that have no metadata, so they would stop being purged.)
+          if (!dryRun) {
+            const { data: purgeRows, error: purgeReadErr } = await supabase
               .from('scheduled_notifications')
-              .delete()
+              .select('id, metadata')
               .eq('user_id', userId)
-              .eq('status', 'pending')
-              .gte('send_at', todayStartIso)
-              .lt('send_at', todayEndIso);
-            console.log(`  🔔 Purged pending notifications for today`);
-          } catch (notifErr) {
-            console.warn(`  ⚠️ Failed to purge notifications (non-fatal):`, notifErr);
+              .is('delivered_at', null)
+              .gte('scheduled_for', todayStartIso)
+              .lt('scheduled_for', todayEndIso);
+            if (purgeReadErr) {
+              console.error(`  ❌ Failed to read undelivered notifications for purge:`, purgeReadErr.message ?? purgeReadErr);
+            } else {
+              const purgeIds = (purgeRows ?? [])
+                .filter((r: any) => r?.metadata?.source !== 'nudges')
+                .map((r: any) => r.id);
+              if (purgeIds.length) {
+                const { error: purgeErr } = await supabase
+                  .from('scheduled_notifications').delete().in('id', purgeIds);
+                if (purgeErr) console.error(`  ❌ Failed to purge undelivered notifications:`, purgeErr.message ?? purgeErr);
+                else console.log(`  🔔 Purged ${purgeIds.length} undelivered notification(s) scheduled for today`);
+              } else {
+                console.log(`  🔔 Purge: no undelivered notifications for today`);
+              }
+            }
           }
         }
 
@@ -534,15 +676,19 @@ serve(async (req) => {
               action: 'completed',
               pushed_count: 0,
             }));
-          if (doneHistory.length > 0) {
+          if (!dryRun && doneHistory.length > 0) {
             await supabase.from('task_schedule_history').insert(doneHistory);
           }
 
           for (const dt of doneTasks) {
-            await supabase.from('tasks').update({
-              start_time: null, end_time: null, is_scheduled: false,
-              updated_at: now.toISOString(),
-            }).eq('id', dt.id);
+            // In dryRun these WOULD be cleared → remove from busy-slot capacity.
+            dryRunClearedIds.add(dt.id);
+            if (!dryRun) {
+              await supabase.from('tasks').update({
+                start_time: null, end_time: null, is_scheduled: false,
+                updated_at: now.toISOString(),
+              }).eq('id', dt.id);
+            }
           }
           console.log(`  🧹 Cleared scheduling from ${doneTasks.length} completed tasks`);
         }
@@ -573,6 +719,11 @@ serve(async (req) => {
             // instead of being silently archived to DONE and lost.
             if ((stale as any).is_priority === true || stale.priority === 'HIGH' || stale.priority === 'URGENT') {
               console.log(`  🛡️ Kept important stale task (not archived): "${stale.title}" (pushed ×${stale.pushed_count}, due ${stale.due_date}, priority ${stale.priority}${(stale as any).is_priority ? ', on priority lane' : ''})`);
+              continue;
+            }
+            if (dryRun) {
+              dryRunArchivedIds.add(stale.id); // a real run would archive→DONE; exclude from dryRun candidates
+              archivedStaleCount++;
               continue;
             }
             const { error: archError } = await supabase
@@ -616,6 +767,11 @@ serve(async (req) => {
         let archivedEduCount = 0;
         if (!staleEduError && staleEduTasks && staleEduTasks.length > 0) {
           for (const stale of staleEduTasks) {
+            if (dryRun) {
+              dryRunArchivedIds.add(stale.id); // exclude would-be-archived edu tasks from dryRun candidates
+              archivedEduCount++;
+              continue;
+            }
             const { error: archError } = await supabase
               .from('tasks')
               .update({
@@ -641,7 +797,8 @@ serve(async (req) => {
 
         // PULL EXTERNAL CALENDAR EVENTS BEFORE SCHEDULING
         // ==========================================
-        try {
+        // DRY-RUN: calendar-delta-sync writes external_calendar_events — skip it (no writes).
+        if (!dryRun) try {
           console.log(`[nightly-builder] Invoking calendar-delta-sync for user ${userId}...`);
           const { error: syncError } = await supabase.functions.invoke('calendar-delta-sync', {
             body: { user_id: userId }
@@ -690,9 +847,37 @@ serve(async (req) => {
             tierC.push(t); assignmentTier[t.id] = 'C';
           }
         }
-        tierA.sort((a, b) => new Date(a.due_date).getTime() - new Date(b.due_date).getTime());
-        tierB.sort((a, b) => new Date(a.due_date).getTime() - new Date(b.due_date).getTime());
-        tierC.sort((a, b) => new Date(b.due_date).getTime() - new Date(a.due_date).getTime()); // DESC: recent first
+        // COURSEWORK ORDER — ONE definition, shared with the `list_pending_assignments`
+        // agent tool via _shared/nexus.ts so the schedule and what Iris says about it can
+        // never disagree. Five bands (owner-final 2026-09-03):
+        //   1 due soon -> 2 upcoming beyond -> 3 recently missed -> 4 old backlog -> 5 undated
+        // Within band 4 the OLDEST item now leads: the owner chose to clear the backlog
+        // front-to-back, and chose it for PLACEMENT as well as for display ("work it
+        // first", not only "show it first"). See the block comment on courseworkOrder in
+        // _shared/nexus.ts — it carries the reasoning and the owner-accepted consequence
+        // (assignment 6.1, 16 days late, sorts last today).
+        const baseCourseworkOpts = {
+          now: nowMs,
+          soonDays: (config as any)?.assignments?.soonDays,
+          recentDays: (config as any)?.assignments?.recentOverdueDays,
+          recentFloorCount: (config as any)?.assignments?.recentFloorCount,
+        };
+        // Resolved across ALL THREE TIERS, not per tier. The floor asks "what are the two
+        // most recent misses in this user's coursework" — a question about the whole
+        // queue. Resolving it per tier would give each tier its own band boundary and
+        // reintroduce exactly the kind of set-dependent ordering the total-order rewrite
+        // removed.
+        const courseworkOrderOpts = {
+          ...baseCourseworkOpts,
+          recentCutoff: resolveRecentCutoff(
+            [...tierA, ...tierB, ...tierC] as any,
+            baseCourseworkOpts,
+          ),
+        };
+        const deadlineTriageOrder = courseworkOrder(courseworkOrderOpts);
+        tierA.sort(deadlineTriageOrder);
+        tierB.sort(deadlineTriageOrder);
+        tierC.sort(deadlineTriageOrder);
 
         console.log(`  📊 Assignment tiers: A=${tierA.length} (≤48h), B=${tierB.length} (3-7d ±overdue), C=${tierC.length} (>7d ±ancient)`);
 
@@ -732,7 +917,7 @@ serve(async (req) => {
 
             const bounds = _ldub(isoDay, timezone);
             const { data: dayScheduled } = await supabase
-              .from('tasks').select('start_time, end_time, estimate_minutes')
+              .from('tasks').select('id, start_time, end_time, estimate_minutes')
               .eq('user_id', userId).eq('is_scheduled', true)
               .gte('start_time', bounds.start).lt('start_time', bounds.end);
             const { data: dayEvents } = await supabase
@@ -740,8 +925,12 @@ serve(async (req) => {
               .eq('user_id', userId).gte('start_time', bounds.start).lt('start_time', bounds.end)
               .eq('is_all_day', false);
             const accumulated = accumulatedBusySlots.filter(s => s.start_time >= bounds.start && s.start_time < bounds.end);
+            // DRY-RUN: drop tasks that WOULD be cleared so they don't count as busy.
+            const dayScheduledBusy = dryRun
+              ? (dayScheduled || []).filter((t: any) => !dryRunClearedIds.has(t.id))
+              : (dayScheduled || []);
             const items = [
-              ...(dayScheduled || []),
+              ...dayScheduledBusy,
               ...(dayEvents || []).map(e => ({ ...e, estimate_minutes: undefined })),
               ...accumulated.map(s => ({ ...s, estimate_minutes: undefined })),
             ];
@@ -771,7 +960,7 @@ serve(async (req) => {
 
               const bounds = _ldub(isoDay, timezone);
               const { data: dayScheduled } = await supabase
-                .from('tasks').select('start_time, end_time, estimate_minutes')
+                .from('tasks').select('id, start_time, end_time, estimate_minutes')
                 .eq('user_id', userId).eq('is_scheduled', true)
                 .gte('start_time', bounds.start).lt('start_time', bounds.end);
               const { data: dayEvents } = await supabase
@@ -779,11 +968,15 @@ serve(async (req) => {
                 .eq('user_id', userId).gte('start_time', bounds.start).lt('start_time', bounds.end)
                 .eq('is_all_day', false);
               const accumulated = accumulatedBusySlots.filter(s => s.start_time >= bounds.start && s.start_time < bounds.end);
+              // DRY-RUN: drop tasks that WOULD be cleared so they don't count as busy.
+              const dayScheduledBusy = dryRun
+                ? (dayScheduled || []).filter((t: any) => !dryRunClearedIds.has(t.id))
+                : (dayScheduled || []);
               const flexActive = {
                 flexible: { start: flexWindow.start, end: flexWindow.end, totalMinutes: (flexWindow.end - flexWindow.start) * 60 }
               };
               const items = [
-                ...(dayScheduled || []),
+                ...dayScheduledBusy,
                 ...(dayEvents || []).map(e => ({ ...e, estimate_minutes: undefined })),
                 ...accumulated.map(s => ({ ...s, estimate_minutes: undefined })),
               ];
@@ -807,7 +1000,8 @@ serve(async (req) => {
           targetISO: string,
           caps: Record<string, WindowCapacity>,
           active: Record<string, { start: number; end: number; totalMinutes: number }>,
-          flexibleOverride: boolean
+          flexibleOverride: boolean,
+          passLabel: 'tierA' | 'topup' = 'tierA'
         ): Promise<boolean> {
           const payload = {
             tasks: [{
@@ -823,6 +1017,10 @@ serve(async (req) => {
             timezone,
             targetDate: targetISO,
             allowOverflow: false,
+            // Faithful conflict avoidance: hand the slotter every slot already placed THIS run so it
+            // rejects overlaps even before those placements are persisted (critical in dryRun, where the
+            // per-pass DB writes it would otherwise reload are skipped). No-op in a real run (deduped).
+            busySlots: accumulatedBusySlots,
             windowCapacity: Object.fromEntries(
               Object.entries(caps).map(([n, c]) => [
                 n, { totalMinutes: c.totalMinutes, remainingMinutes: c.remainingMinutes, start: active[n].start, end: active[n].end }
@@ -839,6 +1037,26 @@ serve(async (req) => {
             const result = await resp.json();
             const slot = (result.scheduled || [])[0];
             if (!slot?.start_time || !slot?.end_time || !slot?.taskId) return false;
+            // DRY-RUN: skip the write, keep all in-memory bookkeeping, collect the plan.
+            if (dryRun) {
+              scheduledTaskIds.add(slot.taskId);
+              scheduledTitles.add(task.title);
+              accumulatedBusySlots.push({ start_time: slot.start_time, end_time: slot.end_time });
+              dailyAssignmentCount[targetISO] = (dailyAssignmentCount[targetISO] || 0) + 1;
+              dryRunPlan.push({
+                taskId: slot.taskId,
+                title: task.title,
+                day: targetISO,
+                start_time: slot.start_time,
+                end_time: slot.end_time,
+                category: task.category ?? null,
+                score: null,
+                tier: assignmentTier[task.id] ?? 'A',
+                window: flexibleOverride ? 'flexible' : null,
+                pass: passLabel,
+              });
+              return true;
+            }
             const { error } = await supabase.from('tasks').update({
               start_time: slot.start_time,
               end_time: slot.end_time,
@@ -872,6 +1090,63 @@ serve(async (req) => {
         let totalScheduledAcrossWeek = 0;
         const weekResults: Record<string, any> = {};
 
+        // ── Value-aware overflow queue (per-user, this run) ──────────────────────
+        // High-impact tasks that overflow a full window/day are collected here and
+        // upserted after the week loop; ordinary overflows quietly roll (unchanged).
+        // We clear this user's OPEN rows first so the queue reflects the CURRENT run
+        // (a task placed this run should not linger in the queue).
+        const overflowRows: Array<{
+          user_id: string; task_id: string; overflow_date: string; reason: string;
+          score: number | null; impact_factors: string[]; duration_minutes: number | null;
+          suggested_bump_task_id: string | null; suggested_bump_title: string | null; message: string;
+        }> = [];
+        const overflowSeen = new Set<string>(); // task_id|date dedup across passes
+        try {
+          await supabase.from('task_overflow_queue').delete().eq('user_id', userId).eq('status', 'open');
+        } catch (e) {
+          console.warn('  ⚠️ Could not clear open overflow queue rows:', e);
+        }
+
+        // ── Warm the trait cache ONCE for the whole run ──────────────────────────
+        // Trait classification depends only on the title, so we compute it a single
+        // time per unique title (bounded concurrency) BEFORE the per-day loop rather
+        // than calling the LLM inside the nested day×task placement loops. The LLM
+        // pass GENERALIZES beyond the deterministic anchors (optometrist, DMV, vet…)
+        // so the keyword fallback is rarely reached; it returns null on any failure so
+        // the deterministic anchor floor is never lost. Keyed by normalized title.
+        const traitsByTitle = new Map<string, TaskTraits>();
+        try {
+          const { data: warmTasks } = await supabase
+            .from('tasks')
+            .select('title')
+            .eq('user_id', userId)
+            .in('status', ['READY', 'UP_NEXT', 'TODO', 'BACKLOG'])
+            .is('is_scheduled', false)
+            .is('completed_at', null)
+            .not('title', 'ilike', '%Test Task%');
+          const uniqueTitles = [...new Set((warmTasks || [])
+            .map((t: any) => (t.title || '').trim())
+            .filter((t: string) => t.length > 0))];
+          const lovableKey = Deno.env.get('LOVABLE_API_KEY');
+          let llmHits = 0, llmGeneralized = 0;
+          const CONCURRENCY = 5;
+          for (let i = 0; i < uniqueTitles.length; i += CONCURRENCY) {
+            const batch = uniqueTitles.slice(i, i + CONCURRENCY);
+            await Promise.all(batch.map(async (title) => {
+              const anchor = classifyTaskTraits(title);
+              const llm = lovableKey ? await classifyTaskTraitsLLM(title, lovableKey) : null;
+              if (llm) {
+                llmHits++;
+                if (llm.venueDependent !== anchor.venueDependent || llm.appointment !== anchor.appointment) llmGeneralized++;
+              }
+              traitsByTitle.set(title.toLowerCase(), mergeTraits(anchor, llm));
+            }));
+          }
+          console.log(`  🤖 Trait warm-up: ${uniqueTitles.length} titles, ${llmHits} LLM-classified, ${llmGeneralized} generalized beyond anchors${lovableKey ? '' : ' (no LOVABLE_API_KEY — deterministic anchors only)'}`);
+        } catch (warmErr) {
+          console.warn(`  ⚠️ Trait warm-up failed (falling back to per-task deterministic anchors):`, warmErr);
+        }
+
         for (let dayOffset = 0; dayOffset < totalDays; dayOffset++) {
           // Compute target date from todayISO (timezone-correct) to avoid UTC drift
           const [tY, tM, tD] = todayISO.split('-').map(Number);
@@ -903,7 +1178,7 @@ serve(async (req) => {
 
           const { data: dayScheduled } = await supabase
             .from('tasks')
-            .select('start_time, end_time, estimate_minutes')
+            .select('id, start_time, end_time, estimate_minutes')
             .eq('user_id', userId)
             .eq('is_scheduled', true)
             .gte('start_time', dayBounds.start)
@@ -922,17 +1197,38 @@ serve(async (req) => {
           // Use dayBounds for proper timezone-aware filtering instead of UTC string prefix match
           const dayBusySlots = accumulatedBusySlots.filter(s => s.start_time >= dayBounds.start && s.start_time < dayBounds.end);
 
+          // DRY-RUN: drop tasks that WOULD be cleared so they don't count as busy.
+          const dayScheduledBusy = dryRun
+            ? (dayScheduled || []).filter((t: any) => !dryRunClearedIds.has(t.id))
+            : (dayScheduled || []);
+
           const allScheduledItems = [
-            ...(dayScheduled || []),
+            ...dayScheduledBusy,
             ...(dayEvents || []).map(e => ({ ...e, estimate_minutes: undefined })),
             ...dayBusySlots.map(s => ({ ...s, estimate_minutes: undefined })),
           ];
 
           const windowCapacities = computeUsedMinutes(allScheduledItems, activeWindows, targetISO, timezone);
-          
+
           const totalRemainingMinutes = Object.values(windowCapacities).reduce(
             (sum, wc) => sum + wc.remainingMinutes, 0
           );
+
+          // ── Daily working-hours cap ──────────────────────────────────────────
+          // The per-window capacities don't bound the whole day (weekday windows sum
+          // to ~16h), so enforce config.workingHours.maxDailyHours (default 7h) on the
+          // total TASK minutes placed per day. Seed from tasks ALREADY scheduled today
+          // (prior runs + Tier A committed earlier this run) so we don't over-pack across
+          // passes. External calendar events are the user's own commitments and are NOT
+          // counted against the task budget.
+          const maxDailyMinutes = resolveMaxDailyMinutes(config);
+          let dayTaskMinutesUsed = (dayScheduled || []).reduce((sum: number, t: any) => {
+            if (!t.start_time || !t.end_time) return sum;
+            return sum + Math.max(0, (new Date(t.end_time).getTime() - new Date(t.start_time).getTime()) / 60000);
+          }, 0);
+          let dayCapDeferrals = 0;
+          const capLabel = Number.isFinite(maxDailyMinutes) ? `${maxDailyMinutes / 60}h` : 'uncapped';
+          console.log(`      ⏱️ Daily hours cap: ${Math.round(dayTaskMinutesUsed)} min already used (max ${capLabel})`);
 
           console.log(`    📊 Window capacities for ${targetISO}:`);
           for (const [name, cap] of Object.entries(windowCapacities)) {
@@ -959,19 +1255,23 @@ serve(async (req) => {
 
           const mappedIds = (mappedTasks || []).map((t: any) => t.id);
 
-          const { data: readyUpNextTasks } = await supabase
+          // DRY-RUN: drop the is_scheduled=false filter so the candidate pool reproduces a real run
+          // (where rollover/future-clear/done-clear would have unscheduled these tasks first).
+          let readyUpNextQuery = supabase
             .from('tasks')
             .select('id')
             .eq('user_id', userId)
-            .in('status', ['READY', 'UP_NEXT', 'TODO', 'BACKLOG'])
-            .is('is_scheduled', false)
+            .in('status', ['READY', 'UP_NEXT', 'TODO', 'BACKLOG']);
+          if (!dryRun) readyUpNextQuery = readyUpNextQuery.is('is_scheduled', false);
+          const { data: readyUpNextTasks } = await readyUpNextQuery
             .is('completed_at', null)
             .not('title', 'ilike', '%Test Task%')
             .not('tags', 'cs', '{parking-lot}'); // parking-lot opts OUT of nightly scheduling (ACT-13)
 
           const readyIds = (readyUpNextTasks || []).map((t: any) => t.id);
           const allCandidateIds = [...new Set([...mappedIds, ...readyIds])]
-            .filter(id => !scheduledTaskIds.has(id)); // Exclude already-scheduled
+            .filter(id => !scheduledTaskIds.has(id))   // Exclude already-scheduled
+            .filter(id => !dryRunArchivedIds.has(id)); // dryRun: exclude tasks a real run would archive (empty in real mode)
 
           if (allCandidateIds.length === 0) {
             console.log(`    ℹ️ No candidates remaining for ${targetISO}`);
@@ -979,13 +1279,15 @@ serve(async (req) => {
             continue;
           }
 
-          const { data: candidates } = await supabase
+          // DRY-RUN: drop the is_scheduled=false filter (see readyUpNextTasks note above).
+          let candidatesQuery = supabase
             .from('tasks')
             .select('id, title, category, priority, estimate_minutes, due_date, pushed_count, status, assignment_id, is_priority, priority_rank, created_at')
             .in('id', allCandidateIds)
             .not('status', 'in', '("DONE","BLOCKED")')
-            .not('title', 'ilike', '%Test Task%')
-            .is('is_scheduled', false)
+            .not('title', 'ilike', '%Test Task%');
+          if (!dryRun) candidatesQuery = candidatesQuery.is('is_scheduled', false);
+          const { data: candidates } = await candidatesQuery
             .is('completed_at', null)
             .not('tags', 'cs', '{parking-lot}') // parking-lot opts OUT of nightly scheduling (ACT-13)
             .order('created_at', { ascending: true });
@@ -997,18 +1299,28 @@ serve(async (req) => {
           }
 
           // STEP 4: SCORE and FILL by window capacity (with dedup)
-          const priorityWeight: Record<string, number> = { URGENT: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
+          // Priority weights come from the user's GUI config (contextRules.priorityMappings)
+          // instead of a hardcoded map — falls back to 4/3/2/1 when unset.
+          const priorityWeight: Record<string, number> = resolvePriorityWeight(config);
           
           // Same-day title dedup: normalize and keep highest-scored only
           const seenTitlesThisDay = new Set<string>();
-          const scoredCandidates = candidates
+          // `let`, not `const`: the ordering below returns a NEW array rather than
+          // mutating in place (see orderBuilderCandidates in _shared/nexus.ts).
+          let scoredCandidates = candidates
             .filter(t => !scheduledTitles.has(t.title)) // Cross-day dedup by title
             .map(task => {
               let score = priorityWeight[task.priority] || 1;
               
-              // Explicit user priority — base +10, rank bonus up to +5
-              if ((task as any).is_priority) {
-                score += 10 + Math.max(5 - ((task as any).priority_rank ?? 0), 0);
+              // Explicit user priority. priority-rank (legacy): base +10, rank bonus up to +5 (dominant).
+              // composite (default): a SMALL differentiator (+2 base, up to +1 rank) so recency/deadline/finance lead.
+              // Gated by config.priorityBoost (see priorityBoostEnabled above).
+              if (priorityBoostEnabled && (task as any).is_priority) {
+                if (scoringModel === 'composite') {
+                  score += 2 + Math.max(5 - ((task as any).priority_rank ?? 0), 0) * 0.2;
+                } else {
+                  score += 10 + Math.max(5 - ((task as any).priority_rank ?? 0), 0);
+                }
               }
               
               // Topic-mapped — organizational nudge only (not the same as user priority)
@@ -1020,7 +1332,8 @@ serve(async (req) => {
                 const n = task.pushed_count;
                 if (n <= 3) score += 1;
                 else if (n <= 7) { /* neutral */ }
-                else if (!(task as any).is_priority) score -= 1;
+                // Immunity here is a priority-lane privilege → also gated by config.priorityBoost.
+                else if (!priorityBoostEnabled || !(task as any).is_priority) score -= 1;
               }
               
               // Urgency ladder: ±48h includes overdue (intentional)
@@ -1045,7 +1358,25 @@ serve(async (req) => {
               const daysSinceCreated = (Date.now() - createdAt.getTime()) / 86400000;
               if (daysSinceCreated <= 3) score += 2;
               else if (daysSinceCreated <= 7) score += 1;
-              
+
+              // OVERDUE ESCALATION (composite only): an item PAST its due date should rise toward "today",
+              // not sink. isDueSoon is a flat +5 within ±48h and nothing beyond, so a "needed yesterday"
+              // item the user just added has no force to land today. Escalate by how overdue it is —
+              // strongest for RECENTLY-added overdue items (the "I flagged this and it lapsed" case),
+              // mild for ancient overdue (don't resurrect stale backlog; the staleness penalty below still
+              // governs those). priority-rank is untouched.
+              if (scoringModel === 'composite' && task.due_date) {
+                const _dueMs = new Date(task.due_date).getTime();
+                if (_dueMs < targetDate.getTime()) {
+                  const _daysOverdue = Math.floor((targetDate.getTime() - _dueMs) / 86400000);
+                  if (daysSinceCreated <= 7) {
+                    score += Math.min(6 + _daysOverdue, 14); // recent + overdue → surface onto today
+                  } else {
+                    score += Math.min(_daysOverdue, 3);       // old overdue → mild nudge only
+                  }
+                }
+              }
+
               // Assignment grace period: 0-7 days overdue → boost to URGENT
               if ((task as any).assignment_id && task.due_date) {
                 const dueDate = new Date(task.due_date);
@@ -1069,7 +1400,11 @@ serve(async (req) => {
                 // Don't bury important-but-old work with the staleness penalty — that penalty is
                 // what keeps it from ever winning a slot, so it rolls over until it trips the stale
                 // auto-archive. Keep priority-lane and HIGH/URGENT tasks competitive instead.
-                const isImportant = (task as any).is_priority === true || task.priority === 'HIGH' || task.priority === 'URGENT';
+                // Staleness immunity via the priority LANE is gated by config.priorityBoost; the
+                // HIGH/URGENT enum keeps protecting genuinely important work either way, so
+                // disabling the boost never buries something explicitly marked urgent.
+                const isImportant = (priorityBoostEnabled && (task as any).is_priority === true)
+                  || task.priority === 'HIGH' || task.priority === 'URGENT';
                 if (!isAssignmentInGrace && !isImportant) {
                   if (dueDate < thirtyDaysAgoDate) {
                     score -= 10;
@@ -1084,44 +1419,27 @@ serve(async (req) => {
               return { ...task, score: Math.max(score, 0), isPriorityBoard: mappedIds.includes(task.id) };
             });
 
-          // Sort: Tier A → Tier B → everything else (Tier C + non-assignment) competes on
-          // is_priority → priority_rank → score → due_date NULLS LAST.
-          // Per approved plan: Tier A/B keep deadline-jump behavior (immovable external dates);
-          // Tier C no longer auto-jumps priority-board work.
-          scoredCandidates.sort((a, b) => {
-            const aTier = (a as any).assignment_id ? (assignmentTier[a.id] || 'C') : null;
-            const bTier = (b as any).assignment_id ? (assignmentTier[b.id] || 'C') : null;
-
-            // Tier A always first
-            const aIsAB = aTier === 'A' || aTier === 'B';
-            const bIsAB = bTier === 'A' || bTier === 'B';
-            if (aIsAB && !bIsAB) return -1;
-            if (!aIsAB && bIsAB) return 1;
-
-            // Both are A/B — A before B, then due ASC within each tier
-            if (aIsAB && bIsAB) {
-              if (aTier !== bTier) return aTier === 'A' ? -1 : 1;
-              const aDue = a.due_date ? new Date(a.due_date).getTime() : Infinity;
-              const bDue = b.due_date ? new Date(b.due_date).getTime() : Infinity;
-              return aDue - bDue;
-            }
-
-            // Everyone else (Tier C + non-assignment) competes on the same comparator
-            const aPri = (a as any).is_priority ? 1 : 0;
-            const bPri = (b as any).is_priority ? 1 : 0;
-            if (aPri !== bPri) return bPri - aPri;
-            if (aPri && bPri) {
-              const aRank = (a as any).priority_rank ?? 9999;
-              const bRank = (b as any).priority_rank ?? 9999;
-              if (aRank !== bRank) return aRank - bRank;
-            }
-            if (b.score !== a.score) return b.score - a.score;
-            // due_date ASC NULLS LAST
-            if (a.due_date && b.due_date) return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
-            if (a.due_date) return -1;
-            if (b.due_date) return 1;
-            return 0;
-          });
+          // CANDIDATE ORDER. Tier A → Tier B (coursework order within each) → everyone
+          // else, where the score branch decides assignment-vs-non-assignment and
+          // ordinary assignments are then read back in coursework order without taking a
+          // slot from anything.
+          //
+          // WHY THIS IS NO LONGER AN INLINE COMPARATOR. The inline version switched
+          // ordering RULE depending on the pair it was handed — coursework for
+          // assignment-vs-assignment, score for everything else — which is intransitive.
+          // An independent verifier proved it with real values (docs/verify/
+          // nudge-delivery-loop1.md §C7): C1 < C2 < N < C1, and six permutations of the
+          // same three tasks produced THREE different sorted orders, so the per-day pick
+          // order depended on the candidate query's row order rather than on the tasks.
+          // `orderSchedulingCandidates` computes one total order over the whole set
+          // instead, and both original intents survive — see _shared/nexus.ts. It is a
+          // shared export precisely so the tests exercise THIS ordering and not a
+          // reconstruction of it.
+          scoredCandidates = orderBuilderCandidates(scoredCandidates as any, {
+            ...courseworkOrderOpts,
+            scoringModel,
+            assignmentTier,
+          }) as typeof scoredCandidates;
 
           // SCORING_AUDIT: emit top-20 score breakdown for diagnostic queries.
           // Lets us answer "why did X outscore Y" without re-running the builder.
@@ -1160,7 +1478,57 @@ serve(async (req) => {
           const dayPlacements: Array<Record<string, unknown>> = [];
           const dayRejections: Array<Record<string, unknown>> = [];
           const dayKeywordOverrides: Array<Record<string, unknown>> = [];
+          // Venue-dependent tasks carry a MARKER here — deliberately no message.
+          //
+          // This map is built during window-plan resolution, which happens BEFORE the
+          // placement loop below and therefore before any `start_time` exists. The old
+          // code composed the user-facing sentence right here, asserting the task was
+          // scheduled outside business hours whatever its real slot turned out to be —
+          // structurally
+          // incapable of being right, not merely worded badly. The sentence is now
+          // composed at the PERSISTENCE sites (search `buildVenueNudgeMessage`), from the
+          // slot the scheduler actually returned — which is also what makes the Daily
+          // Review modal, the day-context briefing and the morning digest agree, since
+          // all three render this one stored string.
+          const venueNudgeByTaskId = new Map<string, { toWindow: string }>();
           const deferredAssignmentsToday: Array<{ id: string; tier: 'B' | 'C' }> = [];
+
+          // Value-aware overflow: when a task can't be placed, ORDINARY tasks quietly
+          // roll to the next day (nothing queued). A HIGH-IMPACT task instead lands in
+          // the overflow queue with a nudge + a suggested lower-value item to bump.
+          const nowMsForImpact = now.getTime();
+          const collectOverflow = (task: any, duration: number, reason: string) => {
+            const key = `${task.id}|${targetISO}`;
+            if (overflowSeen.has(key)) return;
+            const impact = classifyImpact({
+              title: task.title, score: task.score, isPriority: !!task.is_priority,
+              dueDate: task.due_date ?? null, nowMs: nowMsForImpact,
+            });
+            if (!impact.highImpact) return; // ordinary tasks quietly roll — not queued
+            overflowSeen.add(key);
+            // Suggested bump: the lowest-scored task ALREADY placed today whose score is
+            // below this task's — displacing it would free room for the higher-value item.
+            const bumpable = dayPlacements
+              .filter((p: any) => typeof p.score === 'number' && p.score < (task.score ?? 0))
+              .sort((a: any, b: any) => (a.score as number) - (b.score as number))[0] as any;
+            overflowRows.push({
+              user_id: userId, task_id: task.id, overflow_date: targetISO, reason,
+              score: typeof task.score === 'number' ? task.score : null,
+              impact_factors: impact.factors, duration_minutes: duration,
+              suggested_bump_task_id: bumpable?.taskId ?? null,
+              suggested_bump_title: bumpable?.title ?? null,
+              // Composed in _shared/nudges.ts, like every other user-facing nudge
+              // sentence — this one used to be built inline here, which is how the two
+              // kinds of nudge drifted apart in tone and in accuracy.
+              message: buildOverflowNudgeMessage({
+                title: task.title,
+                overflowDate: targetISO,
+                reason,
+                impactFactors: impact.factors,
+                bumpTitle: bumpable?.title ?? null,
+              }),
+            });
+          };
 
           for (const task of dedupedCandidates) {
             const duration = task.estimate_minutes ||
@@ -1170,32 +1538,75 @@ serve(async (req) => {
             const tier = isAssignment ? (assignmentTier[task.id] || 'C') : null;
             const placedAssignmentsToday = dailyAssignmentCount[targetISO] || 0;
 
-            // Pass 1B/1C cap: Tier B/C assignments are limited to MAX_ASSIGNMENTS_PER_DAY/day.
+            // Per-day cap now comes from the USER'S CONFIG, weekday/weekend aware, via the
+            // one shared resolver every scheduler reads. It used to be the hardcoded flat
+            // MAX_ASSIGNMENTS_PER_DAY, which applied a weekday-sized allowance to Saturday
+            // and Sunday and could not be changed in Settings.
+            const assignmentCapToday = resolveCategoryDailyCap(
+              config,
+              task.category,
+              targetDayOfWeek === 0 || targetDayOfWeek === 6,
+              { fallback: MAX_ASSIGNMENTS_PER_DAY },
+            );
+
+            // Pass 1B/1C cap: Tier B/C assignments are limited to the resolved cap/day.
             // Tier A bypasses the cap (deadline-critical, pre-placed in Pass 1A).
-            if (isAssignment && tier !== 'A' && placedAssignmentsToday >= MAX_ASSIGNMENTS_PER_DAY) {
+            if (isAssignment && tier !== 'A' && placedAssignmentsToday >= assignmentCapToday) {
               deferredAssignmentsToday.push({ id: task.id, tier: tier as 'B' | 'C' });
               dayRejections.push({
                 taskId: task.id, title: task.title, category: task.category,
                 score: task.score, duration,
-                reason: `assignment_cap_${MAX_ASSIGNMENTS_PER_DAY}_per_day`,
+                reason: `assignment_cap_${assignmentCapToday}_per_day`,
                 tier,
               });
               continue;
             }
 
-            // KEYWORD OVERRIDE: contextRules.keywords beats category default.
-            const keywordOverride = getKeywordWindowOverride(task.title, contextKeywords, activeWindowNames);
-            let preferredWindows: string[];
-            if (keywordOverride) {
-              preferredWindows = [keywordOverride.window];
+            // AGREED precedence: explicit > trait (appointment / venue-dependent) >
+            // keyword table (FALLBACK) > category default. Keywords no longer beat a
+            // trait — "bank" is venue-dependent → after-work (with a business-hours nudge)
+            // rather than the old "bank → business_hours" keyword mapping.
+            const cachedTraits = traitsByTitle.get((task.title || '').trim().toLowerCase());
+            const plan = resolveWindowPlan(task.title, task.category, config, timeWindows, categoryMappings, { traits: cachedTraits });
+            let preferredWindows = plan.allowedWindows.filter((w) => activeWindowNames.includes(w));
+            if (preferredWindows.length === 0) {
+              preferredWindows = getPreferredWindows(task.category, categoryMappings, activeWindowNames);
+            }
+            const windowConstrained = plan.source === 'trait' || plan.source === 'keyword' || plan.source === 'explicit';
+            if (plan.matchedKeyword) {
               dayKeywordOverrides.push({
                 taskId: task.id, title: task.title, category: task.category,
-                matchedKeyword: keywordOverride.matchedKeyword,
-                overrideWindow: keywordOverride.window,
+                matchedKeyword: plan.matchedKeyword,
+                overrideWindow: preferredWindows[0],
               });
-              console.log(`      🔑 Keyword override: "${task.title}" matched "${keywordOverride.matchedKeyword}" → ${keywordOverride.window}`);
-            } else {
-              preferredWindows = getPreferredWindows(task.category, categoryMappings, activeWindowNames);
+              // LOUD: placement fell to the low-confidence keyword fallback (no trait).
+              console.warn(`      ⚠️⚠️ KEYWORD FALLBACK: "${task.title}" matched "${plan.matchedKeyword}" → ${preferredWindows[0]} (no trait — low-confidence placement)`);
+            } else if (plan.trait) {
+              console.log(`      🧭 Trait ${plan.trait}: "${task.title}" → [${preferredWindows.join(', ')}]${plan.nudgeToBusinessHours ? ' (nudge → business hours)' : ''}`);
+            }
+            if (plan.nudgeToBusinessHours) {
+              // Marker only — the sentence needs a start_time and is composed at the
+              // persistence site. See the comment on venueNudgeByTaskId.
+              venueNudgeByTaskId.set(task.id, { toWindow: 'business_hours' });
+            }
+
+            // Daily working-hours cap: don't schedule TASKS beyond maxDailyHours for the
+            // day, even if a window still has clock-time left. Overcommitment is flagged
+            // (deferred to a later day) instead of packed into an over-long day.
+            if (!withinDailyCap(dayTaskMinutesUsed, duration, maxDailyMinutes)) {
+              dayCapDeferrals++;
+              dayRejections.push({
+                taskId: task.id, title: task.title, category: task.category,
+                score: task.score, duration,
+                reason: 'daily_hours_cap',
+                dayMinutesUsed: Math.round(dayTaskMinutesUsed), maxDailyMinutes,
+                tier,
+              });
+              collectOverflow(task, duration, 'daily_hours_cap');
+              if (isAssignment && tier && tier !== 'A') {
+                deferredAssignmentsToday.push({ id: task.id, tier: tier as 'B' | 'C' });
+              }
+              continue;
             }
 
             let assigned = false;
@@ -1212,7 +1623,7 @@ serve(async (req) => {
 
             // Flexible capacity aggregation: ONLY for non-assignment tasks without keyword override.
             // Assignments must respect their category windows; aggregate-fit would bypass that.
-            if (!assigned && !isAssignment && !keywordOverride && preferredWindows.length === activeWindowNames.length) {
+            if (!assigned && !isAssignment && !windowConstrained && preferredWindows.length === activeWindowNames.length) {
               const totalRemaining = Object.values(windowRemaining).reduce((s, v) => s + v, 0);
               if (totalRemaining >= duration) {
                 const bestWindow = Object.entries(windowRemaining)
@@ -1228,13 +1639,15 @@ serve(async (req) => {
             }
 
             if (assigned) {
+              dayTaskMinutesUsed += duration; // count toward the daily working-hours cap
               if (isAssignment) {
                 dailyAssignmentCount[targetISO] = placedAssignmentsToday + 1;
               }
               dayPlacements.push({
                 taskId: task.id, title: task.title, category: task.category,
                 score: task.score, duration, window: assignedWindow,
-                keywordOverride: keywordOverride?.matchedKeyword ?? null,
+                keywordOverride: plan.matchedKeyword ?? null,
+                trait: plan.trait ?? null,
                 tier,
               });
             } else {
@@ -1245,14 +1658,25 @@ serve(async (req) => {
                 taskId: task.id, title: task.title, category: task.category,
                 score: task.score, duration, preferredWindows,
                 reason: 'no_window_capacity',
-                keywordOverride: keywordOverride?.matchedKeyword ?? null,
+                keywordOverride: plan.matchedKeyword ?? null,
+                trait: plan.trait ?? null,
                 tier,
               });
+              collectOverflow(task, duration, 'no_window_capacity');
               console.log(`    ⚠️ "${task.title}" doesn't fit any allowed window — skipping`);
             }
 
             const totalRemaining = Object.values(windowRemaining).reduce((s, v) => s + v, 0);
             if (totalRemaining <= 0) break;
+            // Day is at its working-hours budget — stop placing further tasks today.
+            if (dayTaskMinutesUsed >= maxDailyMinutes) {
+              console.log(`      ⏱️ Daily hours cap reached (${Math.round(dayTaskMinutesUsed)}/${maxDailyMinutes} min) — deferring remaining candidates to later days`);
+              break;
+            }
+          }
+
+          if (dayCapDeferrals > 0) {
+            console.warn(`      ⚠️ OVERCOMMIT: ${dayCapDeferrals} task(s) deferred from ${targetISO} — day already at the ${capLabel} working-hours budget (${Math.round(dayTaskMinutesUsed)} min used)`);
           }
 
           pushStep(
@@ -1266,6 +1690,9 @@ serve(async (req) => {
                 Object.entries(windowCapacities).map(([n, c]) => [n, { total: c.totalMinutes, remaining: c.remainingMinutes }])
               ),
               candidateCount: dedupedCandidates.length,
+              maxDailyMinutes,
+              dayTaskMinutesUsed: Math.round(dayTaskMinutesUsed),
+              capDeferrals: dayCapDeferrals,
             },
             {
               accepted: dayPlacements,
@@ -1300,6 +1727,7 @@ serve(async (req) => {
             timezone,
             targetDate: targetISO,
             allowOverflow: false,
+            busySlots: accumulatedBusySlots, // see note at assignment call — faithful cross-pass overlap avoidance
             windowCapacity: Object.fromEntries(
               Object.entries(windowCapacities).map(([name, cap]) => [
                 name,
@@ -1345,6 +1773,44 @@ serve(async (req) => {
 
             const candidate = selectedCandidates.find(c => c.id === slot.taskId);
             const preScheduleStatus = candidate?.status || 'TODO';
+            // THE PERSISTENCE SITE. `slot.start_time` exists here and nowhere earlier, so
+            // this is the first point at which a truthful sentence CAN be written. A null
+            // message means the placement is actually fine (weekday business hours, or a
+            // sensible daytime slot on a day off) — then no venue_nudge is stored at all,
+            // so the modal and the briefing stay silent about it exactly as the digest
+            // does. That silence is the fix for the two layers contradicting each other.
+            const venueNudgeMarker = venueNudgeByTaskId.get(slot.taskId);
+            // Named `venueNudgePayload`, NOT `venueNudge`: the old local shadowed the
+            // IMPORTED venueNudge() function inside this block. It was safe only because
+            // the digest code sits outside this scope — one refactor away from a
+            // `TypeError: venueNudge is not a function` that bundles perfectly and fails
+            // only at runtime in Deno, inside a catch that downgrades it to a warning.
+            const venueNudgePayload = buildVenueNudgePayload(
+              venueNudgeMarker, candidate?.title ?? '', slot.start_time,
+            );
+
+            // DRY-RUN: skip the write, keep all in-memory bookkeeping, collect the plan.
+            if (dryRun) {
+              actuallyScheduled++;
+              committedIds.add(slot.taskId);
+              scheduledTaskIds.add(slot.taskId);
+              scheduledTitles.add(candidate?.title || '');
+              accumulatedBusySlots.push({ start_time: slot.start_time, end_time: slot.end_time });
+              const placementRec = dayPlacements.find(p => p.taskId === slot.taskId);
+              dryRunPlan.push({
+                taskId: slot.taskId,
+                title: candidate?.title ?? null,
+                day: targetISO,
+                start_time: slot.start_time,
+                end_time: slot.end_time,
+                category: (candidate as any)?.category ?? null,
+                score: (candidate as any)?.score ?? null,
+                tier: (candidate as any)?.assignment_id ? (assignmentTier[slot.taskId] || 'C') : null,
+                window: (placementRec as any)?.window ?? null,
+                pass: 'main',
+              });
+              continue;
+            }
 
             const { error: scheduleError } = await supabase
               .from('tasks')
@@ -1352,7 +1818,13 @@ serve(async (req) => {
                 start_time: slot.start_time,
                 end_time: slot.end_time,
                 is_scheduled: true,
-                scheduling_context: { pre_schedule_status: preScheduleStatus },
+                // MERGE: keep the venue_nudge payload (trait layer) AND the
+                // status-preserving helper — the two sides changed this block
+                // independently and both behaviours are wanted.
+                scheduling_context: {
+                  pre_schedule_status: preScheduleStatus,
+                  ...(venueNudgePayload ? { venue_nudge: venueNudgePayload } : {}),
+                },
                 status: statusAfterSchedule(preScheduleStatus),
                 updated_at: now.toISOString(),
               })
@@ -1423,6 +1895,7 @@ serve(async (req) => {
                 timezone,
                 targetDate: targetISO,
                 allowOverflow: true, // expanded windows on retry
+                busySlots: accumulatedBusySlots, // faithful cross-pass overlap avoidance (esp. dryRun)
                 windowCapacity: Object.fromEntries(
                   Object.entries(retryCaps).map(([name, cap]) => [
                     name,
@@ -1456,13 +1929,48 @@ serve(async (req) => {
                     if (!slot.taskId || !slot.start_time || !slot.end_time) continue;
                     const candidate = retryEligible.find(c => c.id === slot.taskId);
                     const preScheduleStatus = candidate?.status || 'TODO';
+                    // DRY-RUN: skip the write, keep all in-memory bookkeeping, collect the plan.
+                    if (dryRun) {
+                      reshuffleCommitted++;
+                      actuallyScheduled++;
+                      committedIds.add(slot.taskId);
+                      scheduledTaskIds.add(slot.taskId);
+                      scheduledTitles.add(candidate?.title || '');
+                      accumulatedBusySlots.push({ start_time: slot.start_time, end_time: slot.end_time });
+                      dryRunPlan.push({
+                        taskId: slot.taskId,
+                        title: candidate?.title ?? null,
+                        day: targetISO,
+                        start_time: slot.start_time,
+                        end_time: slot.end_time,
+                        category: (candidate as any)?.category ?? null,
+                        score: (candidate as any)?.score ?? null,
+                        tier: (candidate as any)?.assignment_id ? (assignmentTier[slot.taskId] || 'C') : null,
+                        window: null,
+                        pass: 'reshuffle',
+                      });
+                      console.log(`      🔁 [Reshuffle] "${candidate?.title}" placed in retry window (dry-run)`);
+                      continue;
+                    }
+                    // Second persistence site (reshuffle retry). Same rule as the main
+                    // one: the sentence is composed HERE, from the retry slot, because
+                    // the retry can land the task in a completely different window than
+                    // the first attempt would have.
+                    const retryVenueNudge = buildVenueNudgePayload(
+                      venueNudgeByTaskId.get(slot.taskId), candidate?.title ?? '', slot.start_time,
+                    );
                     const { error: retryErr } = await supabase
                       .from('tasks')
                       .update({
                         start_time: slot.start_time,
                         end_time: slot.end_time,
                         is_scheduled: true,
-                        scheduling_context: { pre_schedule_status: preScheduleStatus, reshuffle_retry: true },
+                        // MERGE: venue_nudge (trait layer) + status-preserving helper.
+                        scheduling_context: {
+                          pre_schedule_status: preScheduleStatus,
+                          reshuffle_retry: true,
+                          ...(retryVenueNudge ? { venue_nudge: retryVenueNudge } : {}),
+                        },
                         status: statusAfterSchedule(preScheduleStatus),
                         updated_at: now.toISOString(),
                       })
@@ -1513,7 +2021,7 @@ serve(async (req) => {
               Date.now(),
             );
 
-            if (reshuffleDeferred.length > 0) {
+            if (!dryRun && reshuffleDeferred.length > 0) {
               try {
                 await supabase.from('activity_log').insert({
                   user_id: userId,
@@ -1530,7 +2038,9 @@ serve(async (req) => {
           // The optimistic in-loop increments can drift from reality (AI drops, retries).
           // Reconcile by querying the actual count of assignment-linked tasks placed today.
           // ==========================================
-          try {
+          // DRY-RUN: skip DB reconciliation — nothing was written, so the DB count reflects the
+          // pre-run (uncleared) state and would clobber the optimistic in-memory plan count.
+          if (!dryRun) try {
             const dayBoundsForCount = _ldub(targetISO, timezone);
             const { count: realAssignmentCount } = await supabase
               .from('tasks')
@@ -1571,36 +2081,52 @@ serve(async (req) => {
             const [tY, tM, tD] = todayISO.split('-').map(Number);
             const dt = new Date(tY, tM - 1, tD + dOff);
             const isoDay = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
-            if ((dailyAssignmentCount[isoDay] || 0) >= MAX_ASSIGNMENTS_PER_DAY) continue;
-
             const dow = dt.getDay();
+            // Same config-driven, weekend-aware cap as the main pass. Resolved per
+            // CATEGORY off the queue head, so a non-assignment category with its own
+            // maxPerDay is honoured here too rather than assuming PROF_EDUCATION.
+            const topUpCap = resolveCategoryDailyCap(
+              config,
+              topUpQueue[0]?.category,
+              dow === 0 || dow === 6,
+              { fallback: MAX_ASSIGNMENTS_PER_DAY },
+            );
+            if ((dailyAssignmentCount[isoDay] || 0) >= topUpCap) continue;
+
             const active = getActiveWindows(timeWindows, dow);
             const activeNames = Object.keys(active);
             if (activeNames.length === 0) continue;
 
             const bounds = _ldub(isoDay, timezone);
             const { data: dayScheduled2 } = await supabase
-              .from('tasks').select('start_time, end_time, estimate_minutes')
+              .from('tasks').select('id, start_time, end_time, estimate_minutes')
               .eq('user_id', userId).eq('is_scheduled', true)
               .gte('start_time', bounds.start).lt('start_time', bounds.end);
             const { data: dayEvents2 } = await supabase
               .from('external_calendar_events').select('start_time, end_time')
               .eq('user_id', userId).gte('start_time', bounds.start).lt('start_time', bounds.end)
               .eq('is_all_day', false);
+            // DRY-RUN: drop tasks that WOULD be cleared so they don't count as busy.
+            const dayScheduled2Busy = dryRun
+              ? (dayScheduled2 || []).filter((t: any) => !dryRunClearedIds.has(t.id))
+              : (dayScheduled2 || []);
             const items = [
-              ...(dayScheduled2 || []),
+              ...dayScheduled2Busy,
               ...(dayEvents2 || []).map(e => ({ ...e, estimate_minutes: undefined })),
             ];
             let caps = computeUsedMinutes(items, active, isoDay, timezone);
 
             for (let i = 0; i < topUpQueue.length; i++) {
-              if ((dailyAssignmentCount[isoDay] || 0) >= MAX_ASSIGNMENTS_PER_DAY) break;
               const task = topUpQueue[i];
+              // Re-resolve per task: the queue mixes categories, and the cap is per-category.
+              if ((dailyAssignmentCount[isoDay] || 0) >= resolveCategoryDailyCap(
+                    config, task.category, dow === 0 || dow === 6,
+                    { fallback: MAX_ASSIGNMENTS_PER_DAY })) break;
               const duration = task.estimate_minutes || categoryMappings[task.category]?.estimatedDuration || 60;
               const preferred = getPreferredWindows(task.category, categoryMappings, activeNames);
               const fits = preferred.some(w => (caps[w]?.remainingMinutes || 0) >= duration);
               if (!fits) continue;
-              const placed = await callTierAScheduler(task, isoDay, caps, active, false);
+              const placed = await callTierAScheduler(task, isoDay, caps, active, false, 'topup');
               if (placed) {
                 topUpPlaced++;
                 topUpQueue.splice(i, 1);
@@ -1636,6 +2162,106 @@ serve(async (req) => {
           },
           { attempted: 0, committed: 0, deferred: 0 },
         );
+
+        // ── Persist the value-aware overflow queue ───────────────────────────────
+        // Keep only tasks that NEVER got scheduled anywhere in this run (a task that
+        // overflowed an early day but was placed later must not linger), and collapse
+        // to one row per task (earliest overflow date).
+        try {
+          const perTask = new Map<string, typeof overflowRows[number]>();
+          for (const row of overflowRows) {
+            if (scheduledTaskIds.has(row.task_id)) continue; // ended up scheduled — skip
+            const existing = perTask.get(row.task_id);
+            if (!existing || row.overflow_date < existing.overflow_date) perTask.set(row.task_id, row);
+          }
+          const finalRows = [...perTask.values()];
+          if (finalRows.length > 0) {
+            const { error: ofErr } = await supabase
+              .from('task_overflow_queue')
+              .upsert(finalRows, { onConflict: 'task_id,overflow_date' });
+            if (ofErr) console.warn('  ⚠️ overflow queue upsert failed:', ofErr.message);
+            else console.log(`  📥 Overflow queue: ${finalRows.length} high-impact task(s) queued for review`);
+          }
+        } catch (e) {
+          console.warn('  ⚠️ overflow queue persist error:', e);
+        }
+
+        // ── DELIVER the nudges (the half that never existed) ─────────────────────
+        // Both nudge kinds were computed correctly and shown to NOBODY: every consumer
+        // of venue_nudge and task_overflow_queue was a passive reader, so a nudge only
+        // appeared if the user happened to open the briefing or review modal on the
+        // exact day. One digest, on the existing scheduled_chat channel (no new sender,
+        // no new secret), HELD TO MORNING — this runs at 01:00 and a 1am push about
+        // shoe shopping is worse than useless. Never fails the build.
+        try {
+          // GATED ON `!singleDay`. "Reschedule today" (FocusView) and "Confirm schedule"
+          // (DailyReviewModal) both call this function with singleDay:true, and each tap
+          // used to queue a COMPLETE additional digest aimed at the same 08:00 instant —
+          // three taps before breakfast, three identical pushes. A digest is a summary of
+          // the nightly build, so only the nightly build sends one. (Belt and braces: an
+          // identical digest is also suppressed by key inside deliverNudgeDigest, so a
+          // future caller that forgets this gate still cannot duplicate.)
+          if (!dryRun && !singleDay) {
+            const nudges: Nudge[] = [];
+
+            // The instant the user will actually read this digest, and therefore the day
+            // it must describe.
+            const digestAtIso = nextLocalHour(now, nudgeHourLocal, timezone);
+            const digestLocalDate = localDayOf(digestAtIso, timezone);
+            const digestDayBounds = localDateToUtcBounds(digestLocalDate, timezone);
+
+            // Venue nudges, re-derived from the ACTUAL placement (same function that
+            // wrote the stored sentence, so the digest and the modal cannot disagree).
+            //
+            // BOUNDED TO THE DIGEST'S LOCAL DAY. This query used to have no date filter
+            // at all despite being named `placedToday`, so it returned EVERY scheduled
+            // task the user had: the verifier measured 5 venue rows spanning 2026-09-03
+            // to 2026-09-07, meaning a Friday 08:00 digest nagged about a Monday
+            // placement and about a Thursday one already in the past. The bounds come
+            // from localDateToUtcBounds in the USER'S timezone — a UTC day boundary
+            // would misfile every evening placement for an America/New_York user (the
+            // live "Buy new cord for Ghost" row at 20:15 local is exactly that case).
+            const { data: placedToday } = await supabase
+              .from('tasks')
+              .select('id, title, start_time, scheduling_context')
+              .eq('user_id', userId)
+              .eq('is_scheduled', true)
+              .not('start_time', 'is', null)
+              .gte('start_time', digestDayBounds.start)
+              .lt('start_time', digestDayBounds.end);
+            for (const t of placedToday || []) {
+              if (!(t as any).scheduling_context?.venue_nudge) continue;
+              const n = venueNudge(t as any, timezone, businessHoursForNudges);
+              if (n) nudges.push(n);   // null => placement is actually fine, say nothing
+            }
+
+            // Overflow nudges for work that never fit.
+            const { data: ofRows } = await supabase
+              .from('task_overflow_queue')
+              .select('task_id, overflow_date, message, suggested_bump_task_id, suggested_bump_title')
+              .eq('user_id', userId)
+              .eq('status', 'open');
+            if (ofRows?.length) {
+              const titles = new Map<string, string>();
+              const { data: ofTasks } = await supabase
+                .from('tasks').select('id, title')
+                .in('id', ofRows.map((r: any) => r.task_id));
+              for (const t of ofTasks || []) titles.set(t.id, t.title);
+              for (const r of ofRows) nudges.push(overflowNudge(r as any, titles.get((r as any).task_id) || 'A task'));
+            }
+
+            const delivered = await deliverNudgeDigest(supabase, userId, nudges, {
+              scheduledFor: digestAtIso,
+            });
+            if (delivered > 0) {
+              console.log(`  🔔 Nudge digest queued: ${delivered} item(s) for ${digestLocalDate} ${nudgeHourLocal}:00 ${timezone}`);
+            }
+          } else if (!dryRun && singleDay) {
+            console.log('  🔕 Nudge digest skipped: single-day rebuild (the nightly run owns the digest)');
+          }
+        } catch (e) {
+          console.warn('  ⚠️ nudge delivery error (non-fatal):', e);
+        }
 
         // Calendar status snapshot for today (used by daily-review pipeline messaging)
         // Tri-state: connected_with_events | connected_no_events | not_connected | query_failed
@@ -1682,7 +2308,7 @@ serve(async (req) => {
           calendarStatus = { state: 'query_failed', events_today: 0, connection_count: 0, sources: [], error: String(e?.message ?? e) };
         }
 
-        await supabase.from('activity_log').insert({
+        if (!dryRun) await supabase.from('activity_log').insert({
           user_id: userId,
           activity_type: 'nightly_schedule_built',
           status: 'completed',
@@ -1736,6 +2362,16 @@ serve(async (req) => {
             topUpPlaced,
             dailyAssignmentCount,
           },
+          scoringModel, // auditable: which ordering ran ('composite' default | 'priority-rank' legacy)
+          // DRY-RUN: nothing was persisted; expose the computed plan + would-clear set.
+          ...(dryRun ? {
+            dryRun: true,
+            plan: dryRunPlan,
+            clearedCount: dryRunClearedIds.size,
+            archivedCount: dryRunArchivedIds.size,
+            cleared: [...dryRunClearedIds],
+            steps,
+          } : {}),
         };
 
       } catch (userError) {
@@ -1744,8 +2380,8 @@ serve(async (req) => {
         console.error(`❌ Error processing user ${userId}: ${errMsg}`);
         console.error(`  Stack trace: ${errStack}`);
         
-        // Log the failure so it's visible in activity_log
-        try {
+        // Log the failure so it's visible in activity_log (skipped in dryRun — no writes)
+        if (!dryRun) try {
           await supabase.from('activity_log').insert({
             user_id: userId,
             activity_type: 'nightly_schedule_built',
@@ -1764,6 +2400,10 @@ serve(async (req) => {
 
     return new Response(JSON.stringify({
       success: true,
+      // Top-level (outside the per-user loop): report the override, or note it was per-user config-driven.
+      // Each user's actual model is on results[userId].scoringModel.
+      scoringModel: bodyScoringModel ?? 'per-user-config',
+      ...(dryRun ? { dryRun: true } : {}),
       results,
       processingTimeMs: totalTime,
     }), {

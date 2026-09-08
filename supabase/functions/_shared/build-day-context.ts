@@ -66,6 +66,14 @@ export interface DayContextCalendarHold {
   endLocal: string;
 }
 
+export interface DayContextVenueNudge {
+  id: string;
+  title: string;
+  startLocal: string | null;
+  toWindow: string;
+  message: string;
+}
+
 export interface DayContext {
   date: string;
   timezone: string;
@@ -78,6 +86,7 @@ export interface DayContext {
   overdue: Array<{ id: string; title: string; dueDate: string | null }>;
   pendingAssignments: DayContextPendingAssignment[];
   calendarHolds: DayContextCalendarHold[];
+  venueNudges: DayContextVenueNudge[];
   builderRanAt?: string | null;
 }
 
@@ -85,7 +94,7 @@ const WINDOW_RANGES: Record<string, { start: number; end: number }> = {
   morning: { start: 6, end: 9 },
   business_hours: { start: 9, end: 17 },
   after_work: { start: 17, end: 19 },
-  evening: { start: 19, end: 23 },
+  evening: { start: 19, end: 22 },
 };
 
 function detectWindow(hour: number, isWeekend: boolean): string {
@@ -240,6 +249,19 @@ export function buildDayContextServer(params: {
       scheduledToday: todayIds.has(t.id),
     }));
 
+  // Venue-dependent nudges: venue-dependent tasks the builder placed after-work carry a
+  // scheduling_context.venue_nudge marker. Surface them for TODAY so the morning review
+  // can prompt the user to move them into business hours (when the venue is likely open).
+  const venueNudges: DayContextVenueNudge[] = todayTasks
+    .filter(t => t.scheduling_context?.venue_nudge?.message)
+    .map(t => ({
+      id: t.id,
+      title: t.title,
+      startLocal: t.start_time ? localTimeStr(t.start_time, tz) : null,
+      toWindow: t.scheduling_context.venue_nudge.toWindow || 'business_hours',
+      message: t.scheduling_context.venue_nudge.message,
+    }));
+
   const calendarHolds: DayContextCalendarHold[] = externalEvents.map(e => ({
     id: e.id,
     title: e.title,
@@ -267,6 +289,7 @@ export function buildDayContextServer(params: {
     overdue,
     pendingAssignments,
     calendarHolds,
+    venueNudges,
     builderRanAt: builderLog?.ranAt ?? builderLog?.builtAt ?? null,
   };
 }
@@ -299,5 +322,9 @@ export function summarizeDayContext(ctx: DayContext): string {
   }
   if (ctx.rolledOver.length) lines.push(`Rolled over: ${ctx.rolledOver.map(t => t.title).join(', ')}`);
   if (ctx.overdue.length) lines.push(`Overdue today: ${ctx.overdue.map(t => t.title).join(', ')}`);
+  if (ctx.venueNudges.length) {
+    lines.push(`Venue nudges (${ctx.venueNudges.length}) — after-work errands you may want to move to business hours:`);
+    for (const n of ctx.venueNudges) lines.push(`  - [${n.id}] ${n.startLocal ?? '—'} ${n.title} → ${n.toWindow}`);
+  }
   return lines.join('\n');
 }

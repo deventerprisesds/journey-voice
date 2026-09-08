@@ -3,7 +3,9 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { normalizeDueDate, normalizeDateTime, getTodayInTimezone, formatInTimezone } from "../_shared/timezone.ts";
 import { getToolDefinitions } from "../_shared/tool-definitions.ts";
 import { getTopicGroupsManual, WINDOW_RANGES, CATEGORY_WINDOW_MAPPING } from "../_shared/call-context-builder.ts";
-import { resolveConfig, validateTaskWindow } from "../_shared/scheduling-defaults.ts";
+import { resolveConfig, validateTaskWindow, DEFAULT_TIME_WINDOWS } from "../_shared/scheduling-defaults.ts";
+import { runDedup, finalizeDedup, type DedupLogEntry } from "../_shared/task-dedup.ts";
+import { fetchNexusAssignmentsResult, scopeToActiveCourses, courseworkOrder, courseworkBand, resolveRecentCutoff, COURSEWORK_BAND_LABEL } from "../_shared/nexus.ts";
 
 // ── Rollback Flag for shared topic ranking ──────────────────────────
 const USE_SHARED_TOPICS = true;
@@ -361,6 +363,9 @@ async function executeToolCall(
       
       case 'parse_and_create_tasks':
         return await parseAndCreateTasks(supabase, userId, args, context?.timezone);
+
+      case 'undo_dedup':
+        return await undoDedup(supabase, userId, args);
 
       // ============ COMMUNICATION TOOLS ============
       case 'send_email':
@@ -864,7 +869,7 @@ async function createTask(supabase: any, userId: string, args: any): Promise<Exe
 
     if (!board) return { success: false, error: "No board found for user" };
 
-    const taskData = {
+    const taskData: any = {
       title: args.title,
       description: args.description || null,
       priority: args.priority?.toUpperCase() || 'MEDIUM',
@@ -874,6 +879,25 @@ async function createTask(supabase: any, userId: string, args: any): Promise<Exe
       user_id: userId
     };
 
+    // Creation-time dedup guard (no-op unless config.dedup.enabled). Single-candidate batch.
+    const dedup = await runDedup({ supabase, userId, candidates: [taskData.title] });
+    const outcome = dedup.outcomes[0];
+    if (dedup.enabled && outcome && !outcome.create) {
+      const d = outcome.decision;
+      await finalizeDedup(supabase, { userId, boardId: board.id, source: 'create_task', entries: [{
+        action: 'skipped', candidate: taskData, matched_task_id: d.matchedTaskId,
+        matched_title: d.matchedTitle, method: d.method, similarity: d.similarity,
+      }] });
+      return {
+        success: true,
+        result: { task: null, skipped: true, duplicateOf: d.matchedTitle },
+        message: `Skipped creating "${taskData.title}" — it looks like a duplicate of "${d.matchedTitle}". Undo from your task history if that's wrong.`
+      };
+    }
+    if (dedup.enabled && outcome && outcome.extraTags.length) {
+      taskData.tags = Array.from(new Set([...(taskData.tags || []), ...outcome.extraTags]));
+    }
+
     const { data, error } = await supabase
       .from('tasks')
       .insert([taskData])
@@ -882,8 +906,17 @@ async function createTask(supabase: any, userId: string, args: any): Promise<Exe
 
     if (error) throw error;
 
-    return { 
-      success: true, 
+    if (dedup.enabled && outcome && outcome.extraTags.length) {
+      const d = outcome.decision;
+      await finalizeDedup(supabase, { userId, boardId: board.id, source: 'create_task', entries: [{
+        action: 'flagged', candidate: taskData, matched_task_id: d.matchedTaskId,
+        matched_title: d.matchedTitle, method: d.method, similarity: d.similarity,
+        created_task_id: data.id,
+      }] });
+    }
+
+    return {
+      success: true,
       result: { task: data },
       message: `Created task "${data.title}" with ${data.priority} priority`
     };
@@ -1239,11 +1272,16 @@ function getEndOfSundayISO(tz: string): string {
 async function parseAndCreateTasks(
   supabase: any,
   userId: string,
-  args: { text: string; target_date?: string; auto_schedule?: boolean; source_topic_id?: string },
+  args: { text: string; target_date?: string; auto_schedule?: boolean; source_topic_id?: string; default_status?: string; dryRun?: boolean },
   timezone?: string
 ): Promise<ExecuteToolResponse> {
   const tz = timezone || 'America/New_York';
   const autoSchedule = args.auto_schedule !== false; // Default true
+  // DRY-RUN: run the SAME real flow (real ai-task-parser + real batch-calendar-scheduler, both
+  // read-only) but perform ZERO writes — no task INSERT, no schedule UPDATE, no activity_log, no
+  // Outlook event, no topic mapping. Returns the computed PLAN so we can see exactly what the button
+  // would produce. Only the literal `true` enables it.
+  const dryRun = args.dryRun === true;
   const hasThisWeek = /this\s+week/i.test(args.text);
   // Detect any explicit date phrase — used to avoid inventing a deadline for priority tasks
   const hasDatePhrase = /\b(today|tonight|tomorrow|this\s+week|next\s+week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(args.text);
@@ -1329,9 +1367,17 @@ async function parseAndCreateTasks(
       return { success: false, error: "No tasks could be parsed from the input. Please try rephrasing." };
     }
 
+    // Creation-time dedup guard (no-op unless config.dedup.enabled). Runs over the WHOLE parsed batch
+    // at once, so it catches duplicates against existing open tasks AND within this same batch.
+    const dedupRun = await runDedup({ supabase, userId, candidates: tasks.map((t: any) => t.title || '') });
+    const dedupEntries: DedupLogEntry[] = [];               // written (non-dryRun) via finalizeDedup
+    const dedupPreview: any[] = [];                          // always surfaced in the response
+    let dedupSkippedCount = 0;
+
     // 5. Create tasks in database with normalized dates
     const createdTasks: any[] = [];
-    for (const task of tasks) {
+    for (let ti = 0; ti < tasks.length; ti++) {
+      const task = tasks[ti];
       const isPriority = task.intent === 'priority';
 
       // Normalize due_date to end-of-day in user's timezone.
@@ -1381,15 +1427,40 @@ async function parseAndCreateTasks(
         user_id: userId
       };
 
-      const { data, error } = await supabase
-        .from('tasks')
-        .insert([taskData])
-        .select()
-        .single();
+      // Dedup decision for this candidate (index-aligned with the parsed batch).
+      const dedupOutcome = dedupRun.enabled ? dedupRun.outcomes[ti] : null;
+      if (dedupOutcome && !dedupOutcome.create) {
+        const d = dedupOutcome.decision;
+        dedupSkippedCount++;
+        dedupPreview.push({ title: task.title, action: 'skipped', matched: d.matchedTitle, method: d.method, similarity: d.similarity });
+        console.log(`[PARSE_AND_CREATE] Skipped duplicate "${task.title}" (~ "${d.matchedTitle}", ${d.method})`);
+        if (!dryRun) dedupEntries.push({ action: 'skipped', candidate: taskData, matched_task_id: d.matchedTaskId, matched_title: d.matchedTitle, method: d.method, similarity: d.similarity });
+        continue; // do NOT insert
+      }
+      if (dedupOutcome && dedupOutcome.extraTags.length) {
+        (taskData as any).tags = Array.from(new Set([...((taskData as any).tags || []), ...dedupOutcome.extraTags]));
+        dedupPreview.push({ title: task.title, action: 'flagged', matched: dedupOutcome.decision.matchedTitle, method: dedupOutcome.decision.method, similarity: dedupOutcome.decision.similarity });
+      }
+
+      // DRY-RUN: skip the INSERT (W1); build an in-memory task carrying the same normalized fields
+      // + a synthetic id, so the rest of the flow (scheduler call by index, plan collection) runs.
+      const { data, error } = dryRun
+        ? { data: { ...taskData, id: `dryrun-${createdTasks.length}` }, error: null }
+        : await supabase
+            .from('tasks')
+            .insert([taskData])
+            .select()
+            .single();
 
       if (data) {
         createdTasks.push(data);
-        console.log(`[PARSE_AND_CREATE] Created task: ${data.title} (${data.id}) is_priority=${isPriority} at ${new Date().toISOString()}`);
+        console.log(`[PARSE_AND_CREATE]${dryRun ? ' (dry-run)' : ''} ${dryRun ? 'Planned' : 'Created'} task: ${data.title} (${data.id}) is_priority=${isPriority} at ${new Date().toISOString()}`);
+
+        // Flagged (ambiguous) task WAS created — record it so the user can review/undo the flag.
+        if (dedupOutcome && dedupOutcome.extraTags.length && !dryRun) {
+          const d = dedupOutcome.decision;
+          dedupEntries.push({ action: 'flagged', candidate: taskData, matched_task_id: d.matchedTaskId, matched_title: d.matchedTitle, method: d.method, similarity: d.similarity, created_task_id: data.id });
+        }
 
         // Wire priority board mapping when intent === "priority"
         if (isPriority) {
@@ -1407,7 +1478,7 @@ async function parseAndCreateTasks(
                 topicId = (exact || partial)?.id || null;
               }
             }
-            if (topicId) {
+            if (topicId && !dryRun) { // W2: skip topic-mapping insert in dryRun
               await supabase.from('task_topic_mappings').insert({ task_id: data.id, topic_id: topicId });
               console.log(`[PARSE_AND_CREATE] Priority task "${data.title}" mapped to topic ${topicId}`);
             } else {
@@ -1418,10 +1489,11 @@ async function parseAndCreateTasks(
           }
         }
 
-        // Create Outlook calendar event IMMEDIATELY if task has scheduled time
-        if (data.start_time) {
+        // Create Outlook calendar event IMMEDIATELY if task has scheduled time (W3: skip in dryRun —
+        // gate the CALL, not its result, since it's fire-and-forget)
+        if (data.start_time && !dryRun) {
           console.log(`[PARSE_AND_CREATE] Creating immediate Outlook event for "${data.title}" at ${data.start_time}`);
-          
+
           supabase.functions.invoke('send-unified-notification', {
             body: {
               userId: userId,
@@ -1444,8 +1516,8 @@ async function parseAndCreateTasks(
           });
         }
         
-        // Best-effort activity logging (fire and forget)
-        supabase.from('activity_log').insert({
+        // Best-effort activity logging (fire and forget) — W4: skip in dryRun
+        if (!dryRun) supabase.from('activity_log').insert({
           user_id: userId,
           activity_type: 'task_created',
           session_id: data.id,
@@ -1462,7 +1534,20 @@ async function parseAndCreateTasks(
       }
     }
 
+    // Persist dedup audit rows + queue the single batch notification (non-dryRun only).
+    if (!dryRun && dedupEntries.length) {
+      await finalizeDedup(supabase, { userId, boardId: board.id, source: 'parse_and_create_tasks', entries: dedupEntries });
+    }
+
     if (createdTasks.length === 0) {
+      // All parsed tasks were skipped as duplicates — that's a success, not a failure.
+      if (dedupSkippedCount > 0) {
+        return {
+          success: true,
+          result: { tasks: [], skippedDuplicates: dedupPreview },
+          message: `All ${dedupSkippedCount} task${dedupSkippedCount > 1 ? 's' : ''} already exist — skipped as duplicates. Undo from your task history if that's wrong.`
+        };
+      }
       return { success: false, error: "Failed to create any tasks" };
     }
 
@@ -1475,7 +1560,8 @@ async function parseAndCreateTasks(
       }
       return !t.is_scheduled;
     });
-    const scheduledResults: Array<{ title: string; time: string }> = [];
+    const scheduledResults: Array<{ title: string; time: string; start_time?: string; end_time?: string; reasoning?: string | null }> = [];
+    let rejectedSlots: any[] = []; // batch-scheduler overflow/rejects (surfaced in the dry-run plan)
 
     if (autoSchedule && unscheduledTasks.length > 0) {
       console.log(`[PARSE_AND_CREATE] Auto-scheduling ${unscheduledTasks.length} tasks...`);
@@ -1510,6 +1596,7 @@ async function parseAndCreateTasks(
         if (batchResponse.ok) {
           const batchResult = await batchResponse.json();
           console.log('[PARSE_AND_CREATE] Batch scheduler result:', batchResult);
+          rejectedSlots = batchResult.rejected || []; // capture overflow/rejects for the plan
           
           // Apply scheduled times to tasks (already normalized by batch-calendar-scheduler)
           const todayInTz = new Date().toLocaleDateString('en-CA', { timeZone: tz });
@@ -1531,16 +1618,19 @@ async function parseAndCreateTasks(
               
               console.log(`[PARSE_AND_CREATE] Applying schedule: task="${task.title}", start=${slot.start_time}, synced_due=${syncedDueDate}, status=UP_NEXT, today=${todayInTz}`);
               
-              const { error: updateError } = await supabase
-                .from('tasks')
-                .update({
-                  start_time: slot.start_time,
-                  end_time: slot.end_time,
-                  due_date: syncedDueDate, // Sync due_date with scheduled date
-                  is_scheduled: true,
-                  status: 'UP_NEXT'  // Has start_time now, so UP_NEXT
-                })
-                .eq('id', task.id);
+              // W5: skip the schedule UPDATE in dryRun; collect the slot into the plan instead.
+              const { error: updateError } = dryRun
+                ? { error: null }
+                : await supabase
+                    .from('tasks')
+                    .update({
+                      start_time: slot.start_time,
+                      end_time: slot.end_time,
+                      due_date: syncedDueDate, // Sync due_date with scheduled date
+                      is_scheduled: true,
+                      status: 'UP_NEXT'  // Has start_time now, so UP_NEXT
+                    })
+                    .eq('id', task.id);
 
               if (!updateError) {
                 scheduledResults.push({
@@ -1550,12 +1640,14 @@ async function parseAndCreateTasks(
                     minute: '2-digit',
                     timeZone: tz
                   }),
-                  start_time: slot.start_time
+                  start_time: slot.start_time,
+                  end_time: slot.end_time,        // included so the dry-run plan shows the full slot
+                  reasoning: slot.reasoning ?? null
                 });
-                console.log(`[PARSE_AND_CREATE] Scheduled "${task.title}" at ${slot.start_time} with status UP_NEXT`);
-                
-                // Best-effort activity logging (fire and forget)
-                supabase.from('activity_log').insert({
+                console.log(`[PARSE_AND_CREATE]${dryRun ? ' (dry-run)' : ''} ${dryRun ? 'Planned' : 'Scheduled'} "${task.title}" at ${slot.start_time} with status UP_NEXT`);
+
+                // Best-effort activity logging (fire and forget) — W6: skip in dryRun
+                if (!dryRun) supabase.from('activity_log').insert({
                   user_id: userId,
                   activity_type: 'task_scheduled',
                   session_id: task.id,
@@ -1581,41 +1673,101 @@ async function parseAndCreateTasks(
 
     // 7. Build response message
     const taskCount = createdTasks.length;
-    let message = `Created ${taskCount} task${taskCount > 1 ? 's' : ''}`;
-    
+    const verb = dryRun ? 'Would create' : 'Created';
+    let message = `${verb} ${taskCount} task${taskCount > 1 ? 's' : ''}`;
+
     if (scheduledResults.length > 0) {
       const scheduleDetails = scheduledResults.map(s => `${s.title} at ${s.time}`).join(', ');
-      message += `. Scheduled: ${scheduleDetails}`;
+      message += dryRun ? `. Would schedule: ${scheduleDetails}` : `. Scheduled: ${scheduleDetails}`;
     } else if (autoSchedule && unscheduledTasks.length > 0) {
       message += ` (scheduling was requested but no optimal slots found)`;
     }
+    if (dryRun) message = `Dry run — no changes written. ${message}.`;
 
-    console.log(`[PARSE_AND_CREATE] Complete. ${message}`);
+    console.log(`[PARSE_AND_CREATE]${dryRun ? ' (dry-run)' : ''} Complete. ${message}`);
 
     return {
       success: true,
       result: {
+        ...(dryRun ? { dryRun: true } : {}),
         created: createdTasks.length,
         scheduled: scheduledResults,
+        // DRY-RUN: expose the scheduler's overflow/rejected set (normally discarded) so the plan is complete.
+        ...(dryRun ? { rejected: rejectedSlots } : {}),
         tasks: createdTasks.map(t => ({
           id: t.id,
           title: t.title,
           priority: t.priority,
           category: t.category,
+          status: t.status,
           due_date: t.due_date,
           start_time: t.start_time,
+          end_time: t.end_time,
           is_scheduled: t.is_scheduled
-        }))
+        })),
+        // Dedup summary (empty unless the guard is enabled and acted). Always surfaced so callers/UI
+        // can show what was skipped/flagged; in dryRun it's a preview with no writes.
+        ...(dedupPreview.length ? { dedupedDuplicates: dedupPreview } : {})
       },
       message,
-      extractedFacts: { 
-        type: 'task_created', 
+      extractedFacts: {
+        type: dryRun ? 'task_plan_preview' : 'task_created',
         count: createdTasks.length,
         scheduled: scheduledResults.length
       }
     };
   } catch (error) {
     console.error('[PARSE_AND_CREATE] Error:', error);
+    return { success: false, error: extractErrorMessage(error) };
+  }
+}
+
+// Restore task(s) the dedup guard skipped, from the task_dedup_log payload (bypasses the guard).
+// Default: undo the most-recent batch (rows sharing a near-identical created_at). Pass {all:true} to
+// restore every un-undone skip, or {log_id} to restore one specific event.
+async function undoDedup(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
+  try {
+    let q = supabase
+      .from('task_dedup_log')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('action', 'skipped')
+      .is('undone_at', null)
+      .order('created_at', { ascending: false });
+    if (args?.log_id) q = q.eq('id', args.log_id);
+    const { data: rows, error } = await q.limit(50);
+    if (error) throw error;
+    if (!rows || rows.length === 0) {
+      return { success: true, result: { restored: [] }, message: "There's nothing to undo — I haven't skipped any duplicate tasks recently." };
+    }
+
+    let toRestore = rows;
+    if (!args?.log_id && !args?.all) {
+      const newest = new Date(rows[0].created_at).getTime();
+      toRestore = rows.filter((r: any) => Math.abs(new Date(r.created_at).getTime() - newest) <= 5000);
+    }
+
+    const restored: string[] = [];
+    for (const row of toRestore) {
+      const payload: any = { ...(row.candidate || {}) };
+      delete payload.id; // never reuse an id
+      const { data: created, error: insErr } = await supabase.from('tasks').insert([payload]).select().single();
+      if (insErr) { console.error('[UNDO_DEDUP] re-insert failed:', insErr); continue; }
+      await supabase.from('task_dedup_log').update({ undone_at: new Date().toISOString(), created_task_id: created.id }).eq('id', row.id);
+      restored.push(created.title);
+    }
+
+    if (restored.length === 0) {
+      return { success: false, error: "I found the skipped task(s) but couldn't restore them. Please try again." };
+    }
+    return {
+      success: true,
+      result: { restored },
+      message: restored.length === 1
+        ? `Done — I added "${restored[0]}" back to your board.`
+        : `Done — I added these back to your board: ${restored.map((t) => `"${t}"`).join(', ')}.`
+    };
+  } catch (error) {
     return { success: false, error: extractErrorMessage(error) };
   }
 }
@@ -2435,14 +2587,11 @@ function itineraryDetectWindow(hour: number, isWeekend: boolean): string {
 }
 
 function itineraryWindowRange(window: string): { start: number; end: number } {
-  switch (window) {
-    case 'morning': return { start: 6, end: 9 };
-    case 'business_hours': return { start: 9, end: 17 };
-    case 'after_work': return { start: 17, end: 19 };
-    case 'evening': return { start: 19, end: 23 };
-    case 'weekends': return { start: 9, end: 21 };
-    default: return { start: 9, end: 17 };
-  }
+  // Source bounds from the canonical shared windows so find_open_slots offers only
+  // slots the placer/validator will actually accept (kills the drift where after_work
+  // was 17–19, evening 19–23, weekends 9–21 here vs 17–22 / 19–22 / 10–20 canonical).
+  const w = (DEFAULT_TIME_WINDOWS as Record<string, { start: number; end: number }>)[window];
+  return w ? { start: w.start, end: w.end } : { start: 9, end: 17 };
 }
 
 function explainSchedulingScoreServer(task: any): {
@@ -2514,17 +2663,58 @@ async function explainTaskScore(supabase: any, userId: string, args: any): Promi
 async function listPendingAssignments(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
   try {
     const includeOverdue = args.include_overdue !== false;
-    let q = supabase
-      .from('assignments')
-      .select('id, title, due_date, priority, status, program_id, assignment_url, course_id')
-      .eq('user_id', userId)
-      .neq('status', 'completed')
-      .neq('status', 'graded');
-    if (args.program_id) q = q.eq('program_id', args.program_id);
-    const { data, error } = await q;
-    if (error) throw error;
+    // SOURCE OF TRUTH IS NEXUS ON AZURE. This used to read Supabase `public.assignments`,
+    // which has been a dead snapshot since the 2026-04-06 migration (469 rows, newest due
+    // 2026-06-23, no cron feeding it) — so this tool answered "what's pending?" from data
+    // months out of date, with the user's current course missing entirely.
+    const { assignments: data, ok, error } = await fetchNexusAssignmentsResult(userId, {
+      programId: args.program_id,
+      openOnly: true,
+    });
+    // A Nexus outage must not look like "you have no assignments due" — that is a
+    // materially misleading answer for an agent to give. Say so instead.
+    if (!ok && data.length === 0) {
+      return {
+        success: false,
+        error: `Could not reach the assignments service (Nexus)${error ? `: ${error}` : ''}. Not reporting an empty list, because that would be indistinguishable from having nothing due.`,
+      };
+    }
     const now = Date.now();
-    const filtered = (data || []).filter((a: any) => {
+
+    // SCOPE to the courses the user is actually taking. Without this the full Nexus
+    // history (534 rows on 2026-09-03) is dominated by a multi-year backlog: the tool
+    // returned 30 rows ALL dated 21-27 Jan 2025 and the live course never appeared.
+    // Course set is INFERRED from ingestion recency and overridable in config —
+    // no course ids in code. `include_all_courses:true` opts out per call.
+    // User-owned knobs live alongside the scheduling config so there is one settings
+    // home. Absent/unreadable -> {} and the inferred defaults apply; a config read must
+    // never break the tool.
+    let asgCfg: any = {};
+    try {
+      const { data: prefRow } = await supabase
+        .from('user_scheduling_prefs')
+        .select('config')
+        .eq('user_id', userId)
+        .maybeSingle();
+      asgCfg = (prefRow?.config as any)?.assignments ?? {};
+    } catch (_) { /* defaults */ }
+    const scoped = args.include_all_courses === true
+      ? data
+      : scopeToActiveCourses(data, {
+          activeCourseIds: asgCfg.activeCourseIds,
+          excludeCourseIds: asgCfg.excludeCourseIds,
+          eraDays: asgCfg.activeCourseEraDays,
+          includeUncoursed: asgCfg.includeUncoursed === true,
+        });
+
+    const baseOrderOpts = {
+      now,
+      soonDays: asgCfg.soonDays,
+      recentDays: asgCfg.recentOverdueDays,
+      recentFloorCount: asgCfg.recentFloorCount,
+    };
+
+    const filtered = (scoped || []).filter((a: any) => {
       if (!a.due_date) return true;
       const due = new Date(a.due_date).getTime();
       if (!includeOverdue && due < now) return false;
@@ -2533,11 +2723,17 @@ async function listPendingAssignments(supabase: any, userId: string, args: any):
         return due <= cutoff;
       }
       return true;
-    }).sort((a: any, b: any) => {
-      if (!a.due_date) return 1;
-      if (!b.due_date) return -1;
-      return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
     });
+
+    // The recent-miss floor is SET-RELATIVE (the Nth most recent distinct overdue date),
+    // so it is resolved AFTER filtering — from exactly the rows about to be ranked, not
+    // from the unfiltered Nexus pull. Resolving it from a wider set would let a row the
+    // user cannot see move the band boundary for the rows they can.
+    const orderOpts = {
+      ...baseOrderOpts,
+      recentCutoff: resolveRecentCutoff(filtered as any, baseOrderOpts),
+    };
+    filtered.sort(courseworkOrder(orderOpts));
     // Check which have linked tasks
     const aIds = filtered.map((a: any) => a.id.toString());
     const { data: linkedTasks } = await supabase.from('tasks').select('id, assignment_id, status, start_time').in('assignment_id', aIds).eq('user_id', userId);
@@ -2545,6 +2741,10 @@ async function listPendingAssignments(supabase: any, userId: string, args: any):
     const enriched = filtered.slice(0, 30).map((a: any) => ({
       id: a.id, title: a.title, due_date: a.due_date, priority: a.priority,
       program_id: a.program_id, url: a.assignment_url,
+      course: a.courses?.name ?? null,
+      // Why this row is where it is — lets the agent say "due soon" vs "old backlog"
+      // instead of reciting dates, and makes a mis-ordering visible in the response.
+      band: COURSEWORK_BAND_LABEL[courseworkBand(a, orderOpts)],
       task: linkMap.get(String(a.id)) || null
     }));
     return {

@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.4";
+import { fetchNexusAssignments, createNexusAssignment, updateNexusAssignment, nexusWritesConfigured } from "../_shared/nexus.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -177,7 +178,26 @@ serve(async (req) => {
       let processed = 0;
       let added = 0;
       let updated = 0;
+      // Refuse to run without the write credential. Previously these wrote Supabase, so
+      // "no token" would otherwise mean a clean-looking sync that persists nothing.
+      if (!nexusWritesConfigured()) {
+        console.error('[MIT_SHEETS] UAT_BYPASS_TOKEN missing — refusing to sync.');
+        return new Response(JSON.stringify({
+          success: false,
+          error: 'Nexus writes are not configured (UAT_BYPASS_TOKEN missing on this function). Nothing was written.',
+        }), { status: 503, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
       let unchanged = 0;
+      // Per-sync failure log. A sheet sync that reports success while silently writing
+      // nothing is the failure mode this replaces, so every write error is captured and
+      // surfaced in the response.
+      const failures: Array<{ row: number; title: string; op: string; error?: string }> = [];
+      // ONE Nexus read per sync, cached — the old code issued a SELECT per row.
+      let _nexusRowsCache: any[] | null = null;
+      const getNexusRowsOnce = async (owner: string): Promise<any[]> => {
+        if (_nexusRowsCache === null) _nexusRowsCache = await fetchNexusAssignments(owner, { openOnly: false });
+        return _nexusRowsCache;
+      };
       const assignmentIds: string[] = [];
 
       for (let i = 1; i < lines.length; i++) {
@@ -231,15 +251,14 @@ serve(async (req) => {
         // program_id discriminates the source sheet.
         const MIT_PROGRAM_ID = '4793d933-86ca-4fd5-9b4d-e7a593a513a6';
 
-        const { data: existingRows } = await adminClient
-          .from('assignments')
-          .select('id, title, due_date, description, priority, points')
-          .eq('user_id', userId)
-          .eq('program_id', MIT_PROGRAM_ID)
-          .eq('sheet_row_number', i)
-          .limit(1);
+        // Assignments now live in NEXUS (Azure). Read the owner's rows once per sync and
+        // match on sheet_row_number the way the Supabase query did. Supabase
+        // public.assignments is a dead snapshot and writing there produced a second,
+        // divergent source of truth that nothing reads any more.
+        const nexusRows = await getNexusRowsOnce(userId);
+        const existing = nexusRows.find((r: any) =>
+          String(r.program_id) === MIT_PROGRAM_ID && Number(r.sheet_row_number) === i) || null;
 
-        const existing = existingRows?.[0] || null;
 
         if (existing) {
           const existingDue = existing.due_date ? new Date(existing.due_date).toISOString() : null;
@@ -249,9 +268,7 @@ serve(async (req) => {
             (existing.priority || 'medium') !== (priority || 'medium');
 
           if (hasChanges) {
-            await adminClient
-              .from('assignments')
-              .update({
+            const upd = await updateNexusAssignment(userId, existing.id, {
                 title,
                 description,
                 due_date: dueDate,
@@ -260,18 +277,20 @@ serve(async (req) => {
                 points,
                 assignment_url: assignmentUrl || null,
                 updated_at: new Date().toISOString()
-              })
-              .eq('id', existing.id);
-            updated++;
+            });
+            if (!upd.ok) {
+              console.error(`[MIT_SHEETS] Nexus update failed for row ${i}: ${upd.error}`);
+              failures.push({ row: i, title, op: 'update', error: upd.error });
+            } else {
+              updated++;
+            }
             console.log(`Updated row ${i}: "${title}" due=${dueDate}`);
           } else {
             unchanged++;
           }
           assignmentIds.push(existing.id);
         } else {
-          const { data: newAssignment } = await adminClient
-            .from('assignments')
-            .insert({
+          const ins = await createNexusAssignment(userId, {
               user_id: userId,
               title,
               description,
@@ -284,9 +303,12 @@ serve(async (req) => {
               sheet_row_number: i,
               type: 'assignment',
               status: 'active'
-            })
-            .select('id')
-            .single();
+          });
+          if (!ins.ok) {
+            console.error(`[MIT_SHEETS] Nexus insert failed for row ${i}: ${ins.error}`);
+            failures.push({ row: i, title, op: 'insert', error: ins.error });
+          }
+          const newAssignment = ins.ok ? (ins.data?.rows?.[0] ?? ins.data?.[0] ?? ins.data) : null;
 
           if (newAssignment) {
             added++;
@@ -335,7 +357,7 @@ serve(async (req) => {
       }
 
       return new Response(
-        JSON.stringify({ success: true, processed, added, updated, unchanged, assignmentIds, promotion }),
+        JSON.stringify({ success: failures.length === 0, processed, added, updated, unchanged, failed: failures.length, failures, assignmentIds, promotion }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
 

@@ -9,7 +9,9 @@
     "build:dev": "vite build --mode development",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "node --experimental-strip-types --test src/utils/*.test.ts"
+    "test": "node scripts/run-tests.mjs",
+    "check:symbols": "node scripts/undef-check.mjs --all",
+    "check": "npm run test && npm run check:symbols"
   },
   "dependencies": {
     "@hello-pangea/dnd": "^18.0.1",

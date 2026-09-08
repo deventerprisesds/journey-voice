@@ -25,7 +25,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          # 0, not 2. `merge-base --is-ancestor` answers from a shallow clone's TRUNCATED
+          # history without erroring, so the staleness guard below needs the real graph.
+          # The "Determine functions to deploy" step's `git diff HEAD~1 HEAD` still works.
+          fetch-depth: 0
+
+      - name: Refuse a ref that does not contain the base branch
+        # A deploy OVERWRITES the live function with whatever this ref holds, so deploying a
+        # branch that is behind `main` REVERTS every fix that landed on main since it forked.
+        # That is not hypothetical: on 2026-09-03 execute-tool was deployed from a branch
+        # missing 2fb90ac and re-broke explicit-time reschedules in production for ~2.5 hours.
+        # The prose rule already existed in two CLAUDE.md files and was still broken, so the
+        # check is mechanical now. Runs BEFORE the secret syncs so a refused deploy touches
+        # nothing at all.
+        run: |
+          git fetch --no-tags origin main
+          bash scripts/assert-ref-contains-main.sh origin/main HEAD
 
       - uses: supabase/setup-cli@v1
         with:
@@ -55,6 +70,23 @@ jobs:
           fi
           supabase secrets set JOURNEY_PROXY_TOKEN="$JOURNEY_PROXY_TOKEN" --project-ref wwxgajrtmslzklnyplah
           echo "Synced JOURNEY_PROXY_TOKEN to Supabase edge secrets"
+
+      - name: Sync UAT_BYPASS_TOKEN to Supabase edge secrets
+        # The sheet syncs write assignments into NEXUS (Azure), and nexus-hub's
+        # requireWrite needs a VERIFIED owner. A service-role edge function has no user
+        # session, so the UAT bypass is the only machine-to-machine path nexus-hub
+        # accepts. Reuses the EXISTING org secret (UAT_TOKEN) rather than minting a new
+        # one. Absent -> the syncs refuse to write and say so, rather than silently
+        # reporting success while writing nothing.
+        env:
+          UAT_BYPASS_TOKEN: ${{ secrets.UAT_TOKEN }}
+        run: |
+          if [ -z "$UAT_BYPASS_TOKEN" ]; then
+            echo "UAT_TOKEN not set as a GitHub secret — skipping sync (Nexus writes will be disabled)."
+            exit 0
+          fi
+          supabase secrets set UAT_BYPASS_TOKEN="$UAT_BYPASS_TOKEN" --project-ref wwxgajrtmslzklnyplah
+          echo "Synced UAT_BYPASS_TOKEN to Supabase edge secrets"
 
       - name: Determine functions to deploy
         id: changed
@@ -87,9 +119,40 @@ jobs:
       - name: Deploy all functions
         if: steps.changed.outputs.mode == 'all'
         run: |
-          echo "Deploying all functions to wwxgajrtmslzklnyplah..."
-          supabase functions deploy --project-ref wwxgajrtmslzklnyplah
-          echo "✅ All functions deployed"
+          # Deploy each function INDIVIDUALLY rather than one bulk `supabase functions deploy`.
+          #
+          # Why: the bulk call deploys alphabetically and aborts on the first failure, so a single
+          # bad function silently skips every function after it. Observed 2026-08-21: `mcp` bundles
+          # to 26 MB and the deploy API rejects it with
+          #   unexpected update function status 413: {"message":"request entity too large"}
+          # which aborted at "m" — nightly-schedule-builder, notification-*, and
+          # smart-calendar-scheduler were never deployed, while the log looked like a normal run.
+          # That is how a shadow test nearly ran against un-deployed code.
+          #
+          # This loop keeps going, then prints an explicit per-function summary. It still exits
+          # non-zero if anything failed — an oversized function is real signal and must stay visible,
+          # not be excluded to make the check green.
+          echo "Deploying all functions to wwxgajrtmslzklnyplah (individually)..."
+          ok=(); failed=()
+          for dir in supabase/functions/*/; do
+            fn="$(basename "$dir")"
+            case "$fn" in _*) continue;; esac   # _shared etc. are bundled, not deployed
+            if supabase functions deploy "$fn" --project-ref wwxgajrtmslzklnyplah; then
+              echo "✅ $fn"
+              ok+=("$fn")
+            else
+              echo "❌ $fn FAILED (continuing)"
+              failed+=("$fn")
+            fi
+          done
+          echo ""
+          echo "──────── deploy summary ────────"
+          echo "deployed (${#ok[@]}): ${ok[*]}"
+          echo "failed   (${#failed[@]}): ${failed[*]:-none}"
+          if [ ${#failed[@]} -gt 0 ]; then
+            echo "::error::${#failed[@]} function(s) failed to deploy: ${failed[*]}"
+            exit 1
+          fi
 
       - name: Deploy single function
         if: steps.changed.outputs.mode == 'single'
@@ -102,8 +165,24 @@ jobs:
       - name: Deploy changed functions
         if: steps.changed.outputs.mode == 'list'
         run: |
+          # Same continue-then-summarise pattern as the "all" path: without it, one failing
+          # function silently skips the remaining changed ones and the log still looks fine.
+          ok=(); failed=()
           for fn in ${{ steps.changed.outputs.fns }}; do
             echo "Deploying $fn..."
-            supabase functions deploy "$fn" --project-ref wwxgajrtmslzklnyplah
-            echo "✅ $fn deployed"
+            if supabase functions deploy "$fn" --project-ref wwxgajrtmslzklnyplah; then
+              echo "✅ $fn deployed"
+              ok+=("$fn")
+            else
+              echo "❌ $fn FAILED (continuing)"
+              failed+=("$fn")
+            fi
           done
+          echo ""
+          echo "──────── deploy summary ────────"
+          echo "deployed (${#ok[@]}): ${ok[*]:-none}"
+          echo "failed   (${#failed[@]}): ${failed[*]:-none}"
+          if [ ${#failed[@]} -gt 0 ]; then
+            echo "::error::${#failed[@]} function(s) failed to deploy: ${failed[*]}"
+            exit 1
+          fi
