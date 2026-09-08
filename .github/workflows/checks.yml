@@ -69,3 +69,10 @@ jobs:
       # every run; anything NEW fails here.
       - name: Undefined-symbol guard
         run: npm run check:symbols
+
+      # The deploy-staleness guard is a shell script, so scripts/run-tests.mjs (which collects
+      # *.test.ts and runs them under node --test) cannot see it. Run it explicitly rather than
+      # widening the collector — a bash predicate driven against throwaway git repos has nothing
+      # in common with the node suite beyond both needing to be red when broken.
+      - name: Deploy-staleness guard
+        run: bash scripts/assert-ref-contains-main.test.sh
