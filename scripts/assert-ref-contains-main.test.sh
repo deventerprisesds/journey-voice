@@ -10,9 +10,12 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GUARD="$HERE/assert-ref-contains-main.sh"
 pass=0; fail=0
 
-check() { # check <name> <expected-exit> <actual-exit>
-  if [ "$2" = "$3" ]; then echo "  ok   - $1"; pass=$((pass+1))
-  else echo "  FAIL - $1 (expected exit $2, got $3)"; fail=$((fail+1)); fi
+# Prints "FAILED:<ac>" ONLY on failure. The AC id also appears in the section headings and in
+# the ok lines, so a bare "AC-D1" cannot distinguish a pass from a fail -- mutate.sh rightly
+# reported NOTHING IS PROVEN until this token existed.
+check() { # check <ac-id> <name> <expected-exit> <actual-exit>
+  if [ "$3" = "$4" ]; then echo "  ok   - $1 $2"; pass=$((pass+1))
+  else echo "  FAILED:$1 - $2 (expected exit $3, got $4)"; fail=$((fail+1)); fi
 }
 
 # Build a repo with `main`, plus a branch cut before main's last commit.
@@ -31,27 +34,27 @@ scaffold() {
 
 echo "AC-D1 a branch MISSING a main commit is REFUSED (the 2026-09-03 defect)"
 ( scaffold; git checkout -q stale; "$GUARD" origin/main HEAD >/dev/null 2>&1 )
-check "stale branch -> exit 1" 1 $?
+check AC-D1 "stale branch -> exit 1" 1 $?
 
 echo "AC-D2 the same branch is ACCEPTED once main is merged in (the documented fix)"
 ( scaffold; git checkout -q stale
   git merge -q --no-edit -X theirs main >/dev/null 2>&1
   "$GUARD" origin/main HEAD >/dev/null 2>&1 )
-check "after merging main -> exit 0" 0 $?
+check AC-D2 "after merging main -> exit 0" 0 $?
 
 echo "AC-D3 main itself is accepted (a ref trivially contains itself)"
 ( scaffold; git checkout -q main; "$GUARD" origin/main HEAD >/dev/null 2>&1 )
-check "main -> exit 0" 0 $?
+check AC-D3 "main -> exit 0" 0 $?
 
 echo "AC-D4 a branch AHEAD of main is accepted (the normal, healthy case)"
 ( scaffold; git checkout -q -b ahead main
   echo more > g; git add g; git commit -qm "new work"
   "$GUARD" origin/main HEAD >/dev/null 2>&1 )
-check "ahead of main -> exit 0" 0 $?
+check AC-D4 "ahead of main -> exit 0" 0 $?
 
 echo "AC-D5 a MISSING base ref errors (exit 2), and is not mistaken for 'contains'"
 ( scaffold; git checkout -q stale; "$GUARD" origin/nonexistent HEAD >/dev/null 2>&1 )
-check "absent base ref -> exit 2" 2 $?
+check AC-D5 "absent base ref -> exit 2" 2 $?
 
 echo "AC-D6 a SHALLOW clone is refused rather than answered from truncated history"
 ( scaffold
@@ -60,13 +63,13 @@ echo "AC-D6 a SHALLOW clone is refused rather than answered from truncated histo
   cd "$d2/c"
   git update-ref refs/remotes/origin/main HEAD
   "$GUARD" origin/main HEAD >/dev/null 2>&1 )
-check "shallow clone -> exit 2" 2 $?
+check AC-D6 "shallow clone -> exit 2" 2 $?
 
 echo "AC-D7 the refusal names the commits that would be reverted (operator can act on it)"
 out="$( scaffold; git checkout -q stale; "$GUARD" origin/main HEAD 2>&1 )"
 case "$out" in
-  *"the fix that must not be reverted"*) echo "  ok   - refusal lists the missing commit"; pass=$((pass+1));;
-  *) echo "  FAIL - refusal did not name the missing commit"; fail=$((fail+1));;
+  *"the fix that must not be reverted"*) echo "  ok   - AC-D7 refusal lists the missing commit"; pass=$((pass+1));;
+  *) echo "  FAILED:AC-D7 - refusal did not name the missing commit"; fail=$((fail+1));;
 esac
 
 echo ""
