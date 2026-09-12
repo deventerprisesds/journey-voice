@@ -71,6 +71,18 @@ export function getToolDefinitions(): ToolDefinition[] {
     },
     {
       type: "function",
+      name: "get_task_topics",
+      description: "READ-ONLY. Returns the user's full priorities TOPIC TREE — categories (Career, Ventures, Education, Life, ...) with their nested topic groups and sub-topics, each with an open-task count. Use this to show or discuss how the user's priorities are ORGANIZED, or to look up the exact topic_name to pass to get_tasks_by_topic. It returns topic structure and counts only, never the task rows themselves — use get_tasks or get_tasks_by_topic for actual tasks.",
+      parameters: {
+        type: "object",
+        properties: {
+          limit: { type: "number", description: "Maximum number of topic rows to return (default and hard maximum 300, ordered by position). Anything larger is clamped." },
+          include_empty: { type: "boolean", description: "Include topics that currently have no open tasks anywhere in their subtree. Default true — the real tree contains structural topics with no open tasks and the UI still renders them." }
+        }
+      }
+    },
+    {
+      type: "function",
       name: "update_task",
       description: "Update an existing task's properties, including scrum-master grooming: assign it to a specific agent and apply labels.",
       parameters: {

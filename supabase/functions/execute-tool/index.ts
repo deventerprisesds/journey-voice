@@ -410,6 +410,11 @@ async function executeToolCall(
       case 'get_tasks_by_topic':
         return await getTasksByTopic(supabase, userId, args);
 
+      // READ-ONLY topic tree (categories -> topics -> sub-topics + open counts).
+      // Backs Huddle's priorities widget via the huddle-proxy; no writes, no side effects.
+      case 'get_task_topics':
+        return await getTaskTopics(supabase, userId, args);
+
       // ============ ITINERARY TOOLS ============
       case 'explain_task_score':
         return await explainTaskScore(supabase, userId, args);
@@ -2117,6 +2122,322 @@ async function getTasksByTopic(supabase: any, userId: string, args: any): Promis
       success: false,
       error: error instanceof Error ? error.message : String(error),
       message: "Failed to retrieve tasks for that topic."
+    };
+  }
+}
+
+// ============================================================================
+// GET TASK TOPICS — READ-ONLY priorities topic tree (Huddle priorities widget)
+//
+// WHAT:  categories -> top-level topics -> sub-topics, each with an open-task count.
+// WHY:   Huddle had no route to journey's topic tree (not in its Azure task mirror,
+//        not on any existing proxy tool), so its priorities widget could not render.
+// SHAPE: mirrors the queries in .github/workflows/test-priorities-widget-query.yml and
+//        the tree/category logic in src/pages/Priorities.tsx `loadData()`.
+// READ-ONLY: three SELECTs, zero writes. Never accepts a user id from `args`.
+// ============================================================================
+
+// Bounds — a pathological account can never return unbounded rows.
+const TASK_TOPICS_MAX = 300;            // max task_topic_index rows returned
+const TASK_TOPICS_TASK_SCAN_MAX = 2000; // max open tasks scanned to derive counts
+const TASK_TOPICS_IN_CHUNK = 100;       // topic ids per `in.()` mappings query (URL length)
+
+// Mirrors CATEGORY_LABELS in src/pages/Priorities.tsx. `categoryMappings` is
+// user-editable, so an unknown key falls back to title-case (FAMILY -> "Family")
+// rather than being dropped.
+const TASK_TOPIC_CATEGORY_LABELS: Record<string, string> = {
+  CAREER: 'Career',
+  PROF_EDUCATION: 'Prof. Education',
+  EDUCATION: 'Education',
+  VENTURES: 'Ventures',
+  LIFE: 'Life',
+  PERSONAL: 'Personal',
+};
+
+function taskTopicCategoryLabel(key: string): string {
+  if (TASK_TOPIC_CATEGORY_LABELS[key]) return TASK_TOPIC_CATEGORY_LABELS[key];
+  return key
+    .split('_')
+    .map(w => (w ? w.charAt(0).toUpperCase() + w.slice(1).toLowerCase() : w))
+    .join(' ');
+}
+
+interface TaskTopicNode {
+  id: string;
+  topic_name: string;
+  topic_summary: string | null;
+  parent_topic_id: string | null;
+  position: number;
+  // Raw DB column (may be null, and may name a category the user's config no longer has).
+  category_affinity: string | null;
+  window_affinity: string[] | null;
+  // RESOLVED category. `category` duplicates `category_key` on purpose: it is the key a
+  // generic consumer normalizer looks for, so the resolved value wins over the raw column.
+  category_key: string | null;
+  category: string | null;
+  open_task_count: number;          // tasks mapped directly to THIS topic
+  subtree_open_task_count: number;  // this topic + all descendants — the badge to render
+  // `count` and `open_count` both == subtree_open_task_count. They exist so a generic
+  // consumer that picks a badge number by key-name precedence lands on a DERIVED count
+  // whichever conventional name its list happens to try first.
+  count: number;
+  open_count: number;
+  // The DENORMALIZED task_topic_index.task_count column, passed through for reference only.
+  // Deliberately NOT named `task_count`: a consumer picking a count by key-name precedence
+  // would otherwise prefer this stale column over the derived open counts above.
+  stored_task_count: number | null;
+  children: TaskTopicNode[];
+}
+
+async function getTaskTopics(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
+  const requestedLimit = Number(args?.limit);
+  const limit = Number.isFinite(requestedLimit) && requestedLimit > 0
+    ? Math.min(Math.floor(requestedLimit), TASK_TOPICS_MAX)
+    : TASK_TOPICS_MAX;
+  const includeEmpty = args?.include_empty !== false;
+
+  try {
+    // ── 1) Topics. User-scoped, position-ordered (same select as the workflow). ──
+    const { data: topicRows, error: topicErr } = await supabase
+      .from('task_topic_index')
+      .select('id, topic_name, topic_summary, position, category_affinity, parent_topic_id, window_affinity, task_count')
+      .eq('user_id', userId)
+      .order('position', { ascending: true })
+      .limit(limit);
+    if (topicErr) throw topicErr;
+
+    const topics = topicRows || [];
+    if (topics.length === 0) {
+      return {
+        success: true,
+        result: { categories: [], topics: [], topic_count: 0, open_task_count: 0, truncated: false, limit },
+        message: 'No topic groups found for this user.',
+        // 'other' is the honest member of the ExtractedFacts union for a structure
+        // read; validateAiResponse only branches on task_list/today_tasks.
+        extractedFacts: { type: 'other', count: 0 }
+      };
+    }
+
+    // ── 2) Open tasks. The ONLY tasks that count toward a badge. User-scoped, so a
+    //      mapping that points at anyone else's task can never be counted. ──
+    const { data: openTaskRows, error: tasksErr } = await supabase
+      .from('tasks')
+      .select('id, category')
+      .eq('user_id', userId)
+      .not('status', 'in', '("DONE","BLOCKED")')
+      .limit(TASK_TOPICS_TASK_SCAN_MAX);
+    if (tasksErr) throw tasksErr;
+
+    const openTasks = openTaskRows || [];
+    const taskCategory = new Map<string, string>();
+    for (const t of openTasks) taskCategory.set(t.id, t.category || 'LIFE');
+
+    // ── 3) Mappings, filtered by the user's OWN topic ids, chunked so the `in.()`
+    //      query string stays short (the workflow logs that param length for a reason). ──
+    const topicIds: string[] = topics.map((t: any) => t.id);
+    const mappings: Array<{ task_id: string; topic_id: string }> = [];
+    for (let i = 0; i < topicIds.length; i += TASK_TOPICS_IN_CHUNK) {
+      const slice = topicIds.slice(i, i + TASK_TOPICS_IN_CHUNK);
+      const { data: chunk, error: mapErr } = await supabase
+        .from('task_topic_mappings')
+        .select('task_id, topic_id')
+        .in('topic_id', slice);
+      if (mapErr) throw mapErr;
+      if (chunk) mappings.push(...chunk);
+    }
+
+    // Own open count per topic + category histogram from its open tasks.
+    const ownOpenCount = new Map<string, number>();
+    const catHistogram = new Map<string, Record<string, number>>();
+    const mappedTaskIds = new Set<string>();
+    for (const m of mappings) {
+      const cat = taskCategory.get(m.task_id);
+      mappedTaskIds.add(m.task_id);
+      if (cat === undefined) continue; // DONE/BLOCKED, another user's, or past the scan cap
+      ownOpenCount.set(m.topic_id, (ownOpenCount.get(m.topic_id) || 0) + 1);
+      const bucket = catHistogram.get(m.topic_id) || {};
+      bucket[cat] = (bucket[cat] || 0) + 1;
+      catHistogram.set(m.topic_id, bucket);
+    }
+
+    // ── Category resolution — same precedence as src/pages/Priorities.tsx:215-338 ──
+    const { data: prefs } = await supabase
+      .from('user_scheduling_prefs')
+      .select('config')
+      .eq('user_id', userId)
+      .maybeSingle();
+    const { categoryMappings } = resolveConfig(prefs?.config);
+    const categoryKeys = Object.keys(categoryMappings);
+
+    const categoryOf = new Map<string, string>();
+    for (const t of topics) {
+      const bucket = catHistogram.get(t.id);
+      if (bucket && Object.keys(bucket).length > 0) {
+        categoryOf.set(t.id, Object.entries(bucket).sort((a, b) => b[1] - a[1])[0][0]);
+      } else if (t.category_affinity && categoryKeys.includes(t.category_affinity)) {
+        categoryOf.set(t.id, t.category_affinity);
+      } else if (Array.isArray(t.window_affinity) && t.window_affinity.length > 0 && categoryKeys.includes(t.window_affinity[0])) {
+        categoryOf.set(t.id, t.window_affinity[0]);
+      }
+    }
+    // Children inherit their parent's category when they resolve to none of their own.
+    for (const t of topics) {
+      if (t.parent_topic_id && !categoryOf.has(t.id) && categoryOf.has(t.parent_topic_id)) {
+        categoryOf.set(t.id, categoryOf.get(t.parent_topic_id)!);
+      }
+    }
+
+    // ── Flat nodes, ordered by position then name (mirrors the UI's sort) ──
+    const nodes: TaskTopicNode[] = topics.map((t: any) => ({
+      id: t.id,
+      topic_name: t.topic_name,
+      topic_summary: t.topic_summary ?? null,
+      parent_topic_id: t.parent_topic_id ?? null,
+      position: t.position ?? 0,
+      category_affinity: t.category_affinity ?? null,
+      window_affinity: Array.isArray(t.window_affinity) ? t.window_affinity : null,
+      category_key: categoryOf.get(t.id) ?? null,
+      category: categoryOf.get(t.id) ?? null,
+      open_task_count: ownOpenCount.get(t.id) ?? 0,
+      subtree_open_task_count: 0, // filled by rollup below
+      count: 0,                   // filled by rollup below
+      open_count: 0,              // filled by rollup below
+      stored_task_count: t.task_count ?? null,
+      children: [],
+    }));
+    nodes.sort((a, b) => (a.position - b.position) || a.topic_name.localeCompare(b.topic_name));
+
+    // ── Build the tree. A child whose parent is outside this page (or is itself) is
+    //    promoted to a root so it is never silently dropped. ──
+    const byId = new Map(nodes.map(n => [n.id, n]));
+
+    // Would attaching `n` under its declared parent close a loop? Walk the ancestor
+    // chain by parent id looking for `n` itself, or any repeat.
+    //
+    // This guard is STRUCTURAL on purpose, and it is not paranoia. A cyclic pair
+    // (A's parent is B, B's parent is A) attached blindly puts A in B.children AND B
+    // in A.children — a cyclic OBJECT GRAPH. `execute-tool` serves every result with
+    // JSON.stringify, which THROWS on a cyclic structure, so two malformed rows would
+    // 500 the entire tool rather than costing themselves their nesting. Counting
+    // defensively (a visited set during roll-up) does not help: the cycle is in the
+    // data structure, not only in the traversal. Measured — JSON.stringify threw
+    // "cannot serialize cyclic structures" on exactly this input before this guard.
+    const wouldCycle = (n: TaskTopicNode): boolean => {
+      const seen = new Set<string>([n.id]);
+      let cur = n.parent_topic_id ? byId.get(n.parent_topic_id) : undefined;
+      while (cur) {
+        if (seen.has(cur.id)) return true;
+        seen.add(cur.id);
+        cur = cur.parent_topic_id ? byId.get(cur.parent_topic_id) : undefined;
+      }
+      return false;
+    };
+
+    const roots: TaskTopicNode[] = [];
+    for (const n of nodes) {
+      const parent = n.parent_topic_id ? byId.get(n.parent_topic_id) : undefined;
+      if (parent && parent.id !== n.id && !wouldCycle(n)) parent.children.push(n);
+      else roots.push(n);
+    }
+    // Belt and braces: anything still unreachable from a root is promoted too, so a
+    // malformed row can never cost a topic its EXISTENCE — only its nesting.
+    const reachable = new Set<string>();
+    const markReachable = (n: TaskTopicNode) => {
+      if (reachable.has(n.id)) return;
+      reachable.add(n.id);
+      for (const c of n.children) markReachable(c);
+    };
+    for (const r of roots) markReachable(r);
+    for (const n of nodes) {
+      if (!reachable.has(n.id)) {
+        roots.push(n);
+        markReachable(n);
+      }
+    }
+    const rollup = (n: TaskTopicNode, seen: Set<string>): number => {
+      if (seen.has(n.id)) return 0;
+      seen.add(n.id);
+      let total = n.open_task_count;
+      for (const c of n.children) total += rollup(c, seen);
+      n.subtree_open_task_count = total;
+      n.count = total;
+      n.open_count = total;
+      return total;
+    };
+    for (const r of roots) rollup(r, new Set<string>());
+
+    // ── include_empty=false prunes anything with no open task in its whole subtree ──
+    const prune = (list: TaskTopicNode[]): TaskTopicNode[] =>
+      list
+        .filter(n => n.subtree_open_task_count > 0)
+        .map(n => ({ ...n, children: prune(n.children) }));
+    const treeRoots = includeEmpty ? roots : prune(roots);
+
+    // ── Category rollup. A category's count is the SUM of its top-level topics'
+    //    subtree counts — verified against docs/widgets/spec-priorities-widget.jpg,
+    //    where Career 25 == 2+1+1+15+1+4+1. ──
+    const unmappedByCategory = new Map<string, number>();
+    for (const t of openTasks) {
+      if (mappedTaskIds.has(t.id)) continue;
+      const key = t.category || 'LIFE';
+      unmappedByCategory.set(key, (unmappedByCategory.get(key) || 0) + 1);
+    }
+
+    const presentKeys = new Set<string>(categoryKeys);
+    for (const key of categoryOf.values()) presentKeys.add(key);
+    for (const key of unmappedByCategory.keys()) presentKeys.add(key);
+
+    const categories = [...presentKeys].map(key => {
+      const rootsInCat = treeRoots.filter(r => r.category_key === key);
+      return {
+        key,
+        label: taskTopicCategoryLabel(key),
+        open_task_count: rootsInCat.reduce((s, r) => s + r.subtree_open_task_count, 0),
+        unclassified_open_task_count: unmappedByCategory.get(key) || 0,
+        topics: rootsInCat,
+      };
+    });
+    // Categories with no topics AND no unclassified open tasks are noise — drop them.
+    const categoriesOut = categories.filter(c => c.topics.length > 0 || c.unclassified_open_task_count > 0);
+
+    // Roots whose category could not be resolved at all still have to render somewhere.
+    const uncategorizedTopics = treeRoots.filter(r => r.category_key === null);
+
+    // `topics` is the GENUINELY FLAT view: parent/child is expressed ONLY by
+    // `parent_topic_id`, and every row is stripped of `children`. This matters — a
+    // consumer that auto-detects "is this already nested?" by looking for a non-empty
+    // `children` on any row would see the tree nodes here (same objects) and treat the
+    // flat list as pre-nested, rendering every sub-topic twice: once nested under its
+    // parent and again as a top-level row. The nested view lives under `categories`.
+    const flatSource = includeEmpty ? nodes : nodes.filter(n => n.subtree_open_task_count > 0);
+    const flatOut = flatSource.map(({ children: _children, ...row }) => row);
+    const totalOpenMapped = [...ownOpenCount.values()].reduce((s, n) => s + n, 0);
+
+    console.log(`[GET-TASK-TOPICS] user=${userId.slice(0, 8)} topics=${topics.length} mappings=${mappings.length} openTasks=${openTasks.length} categories=${categoriesOut.length}`);
+
+    return {
+      success: true,
+      result: {
+        categories: categoriesOut,
+        uncategorized_topics: uncategorizedTopics,
+        topics: flatOut,
+        topic_count: flatOut.length,
+        open_task_count: totalOpenMapped,
+        unclassified_open_task_count: openTasks.filter((t: any) => !mappedTaskIds.has(t.id)).length,
+        limit,
+        truncated: topics.length >= limit,
+        tasks_scanned: openTasks.length,
+        tasks_scan_truncated: openTasks.length >= TASK_TOPICS_TASK_SCAN_MAX,
+      },
+      message: `Topic tree: ${categoriesOut.length} categor${categoriesOut.length === 1 ? 'y' : 'ies'}, ${flatOut.length} topic groups, ${totalOpenMapped} open tasks classified.`,
+      extractedFacts: { type: 'other', count: flatOut.length, topicGroups: categoriesOut.map(c => c.label) }
+    };
+  } catch (error) {
+    console.error('[GET-TASK-TOPICS] Error:', error);
+    return {
+      success: false,
+      error: extractErrorMessage(error),
+      message: 'Failed to retrieve the priorities topic tree.'
     };
   }
 }
