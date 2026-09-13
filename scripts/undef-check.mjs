@@ -148,6 +148,48 @@ function blankNonCode(src) {
   return out.join('');
 }
 
+// Blank the BODIES of `interface X { … }` and `type X = { … }`, preserving every newline so
+// reported line numbers stay correct.
+//
+// WHY (measured 2026-09-13, 12 false positives in one merge): a TypeScript method SIGNATURE is
+// spelled exactly like a call —
+//     interface DigestRunDeps { loadDailyBrief(userId: string): Promise<X | null>; }
+//     interface DigestQuery   { select(columns: string): DigestQuery; }
+// — so `loadDailyBrief(` and `select(` match the call regex and are reported as undefined. The
+// same blind spot fired earlier the same day on a single `waitUntil(p): void` member and was
+// worked around by rewriting the SOURCE to use `Pick<ExecutionContext,'waitUntil'>`. That is not
+// available here: these interfaces arrived from `origin/main` and are correct as written, and
+// contorting correct code to satisfy a checker is the tail wagging the dog.
+//
+// Blanking is SAFE because a type body contains no executable code, so nothing real can hide in
+// one. Only the BODY is blanked — the `interface X` / `type X` head survives, so `collectDeclared`
+// still registers the type's own name.
+function blankTypeBodies(code) {
+  const out = code.split('');
+  const headRe = /\b(?:interface|type)\s+[A-Za-z_$][\w$]*/g;
+  for (const m of code.matchAll(headRe)) {
+    // Walk to the first `{` that opens the body. Stop at `;` (a `type X = A | B;` alias has no
+    // body) or at a newline followed by a non-continuation, so an unrelated later brace is never
+    // swallowed.
+    let i = m.index + m[0].length;
+    while (i < code.length && code[i] !== '{' && code[i] !== ';') i++;
+    if (code[i] !== '{') continue;
+
+    let depth = 0;
+    const start = i;
+    for (; i < code.length; i++) {
+      if (code[i] === '{') depth++;
+      else if (code[i] === '}') {
+        depth--;
+        if (depth === 0) break;
+      }
+    }
+    if (depth !== 0) continue; // unbalanced — leave it alone rather than blank to EOF
+    for (let j = start + 1; j < i; j++) if (out[j] !== '\n') out[j] = ' ';
+  }
+  return out.join('');
+}
+
 // Function/method heads, found by matching parentheses rather than by regex. A regex using
 // `\([^()]*\)` cannot see a parameter list containing a function-type annotation
 // (`(cmp: (a: T, b: T) => number) => ...`), and cannot skip a return-type annotation between
@@ -335,24 +377,27 @@ function checkFile(absPath) {
   const src = readFileSync(absPath, 'utf8');
   const code = blankNonCode(src);
   const declared = collectDeclared(code);
+  // Declarations are collected from the FULL code above (so a type's own name still registers);
+  // only CALL DETECTION runs on the type-body-blanked copy.
+  const callCode = blankTypeBodies(code);
 
   // `foo(` and `new Foo(`, but never `.foo(` / `?.foo(` (member calls resolve at runtime on
   // the object, not lexically) and never a numeric/keyword lead-in.
   const callRe = new RegExp(`(?:^|[^.\\w$?])(${ID})\\s*(?:<[^<>()]*>\\s*)?\\(`, 'g');
 
   const calls = new Map(); // name -> first line number
-  for (const m of code.matchAll(callRe)) {
+  for (const m of callCode.matchAll(callRe)) {
     const name = m[1];
     if (GLOBALS.has(name) || declared.has(name)) continue;
     if (!calls.has(name)) {
-      calls.set(name, code.slice(0, m.index).split('\n').length);
+      calls.set(name, callCode.slice(0, m.index).split('\n').length);
     }
   }
 
   // Count of call sites the analyser actually understood. AC-5b: a file whose analysis yields
   // nothing at all must be reported as NOT CHECKED rather than as a pass — that is precisely
   // the "uses=0 missing=none" false green this rewrite exists to kill.
-  const examined = (code.match(callRe) || []).length;
+  const examined = (callCode.match(callRe) || []).length;
   return { examined, declared: declared.size, missing: [...calls.entries()] };
 }
 

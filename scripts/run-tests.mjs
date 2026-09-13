@@ -41,10 +41,17 @@ const ROOTS = [
   // with its own floor for the same reason as supabase/functions: a shared floor would stay
   // satisfied by the other roots, and the worker's tests would silently stop being collected.
   { dir: 'cloudflare/src', min: 1 },
+  // The repo's own GUARDS (undef-check, the edge-deploy drift check). They live in scripts/ and
+  // are written as .mjs, so BOTH the old root list and the old `.test.tsx?` pattern missed them:
+  // scripts/undef-check.test.mjs and scripts/check-edge-deploy-drift.test.mjs were collected by
+  // nothing and run by nothing. A guard whose own test never runs is the same false-green this
+  // collector exists to prevent, one level up. (Shell-based guards still need their own CI step —
+  // `node --test` cannot run assert-ref-contains-main.test.sh.)
+  { dir: 'scripts', min: 2 },
 ];
 
 const IGNORED_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'coverage', '.vite']);
-const TEST_RE = /\.test\.tsx?$/;
+const TEST_RE = /\.test\.(?:tsx?|mjs)$/;
 
 function walk(abs, out) {
   let entries;
