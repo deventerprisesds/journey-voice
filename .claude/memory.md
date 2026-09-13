@@ -1166,3 +1166,36 @@ not, and skipping it merely trades a parse failure for a missing-file failure. A
 out of a double-quoted `python3 -c "..."` carries `\"` shell escapes that are invalid in a real file
 and a hard SyntaxError inside an f-string expression — unescape them and re-compile, don't assume the
 move was purely mechanical.
+
+## Slack — the two directions are DIFFERENT MECHANISMS (settled 2026-09-13 from the n8n exports)
+Kept because "the Slack integration" is one phrase covering two unrelated transports, and treating
+them as one produced a wrong answer in this very session.
+
+| | Mechanism | Can it be swapped by changing a URL? |
+|---|---|---|
+| **Inbound** Slack -> agents | Events API POSTing to a Request URL (`slackTrigger`, creds `slackApi`) | **Yes** — subject to the challenge handshake, a 3-second ACK, and signature verification |
+| **Outbound** agents -> Slack | `chat.postMessage` with a bot token (`slackOAuth2Api`), per-message `channelId` + `thread_ts` | **No** — it is an authenticated API call, there is no URL to swap |
+
+- **An Incoming Webhook is welded to ONE channel at creation and cannot thread.** So it can carry
+  neither per-agent channels nor threaded replies. In `/notify` the bot token therefore WINS over
+  any webhook, and the webhook path states when it dropped a `channel`/`thread_ts` — a silently
+  downgraded send is indistinguishable from a correct one.
+- **`chat.postMessage` returns HTTP 200 when it FAILS.** `invalid_auth`, `channel_not_found` and
+  `not_in_channel` all come back 200 with `ok:false` in the body. **Read the body, never `res.ok`** —
+  otherwise every one of those is reported as a successful send, which is the identical silent-success
+  defect that let the n8n outage run for days. Guard AC-N9b, mutation-proved.
+- **ONE app, ONE bot, MANY channels — forced, not chosen.** Slack's free plan caps a workspace at 10
+  apps/integrations and **each bot user counts as one**. 16 agents cannot be 16 bots, which is exactly
+  why n8n derived agent identity from the CHANNEL NAME (`flex-grimes___fitness_trainer` -> `flex`).
+  Any replacement must keep that shape.
+- Exports preserved at `docs/n8n-exports/` (credentials redacted; see the README there).
+
+### Hardening — 2026-09-13: two ways a green suite lied
+1. **`tsx` does not typecheck.** `ChannelResult.status` lacked `'not_implemented'` for several
+   commits while the suite was green AND `wrangler deploy` shipped it. A passing suite here is not a
+   type check; nothing in this Worker's pipeline is.
+2. **A test NAME containing "FAIL" breaks `mutate.sh`.** Its `names_failure()` matches any line
+   holding both the test name and the substring `FAIL`, so the PASSING TAP line for
+   `AC-N9b ... is a FAILURE, not a send` read as red and the harness refused to certify the guard.
+   It errs safe (PRE-DIRTY, never a false FIRED) but the guard stays unproven. **Do not put FAIL in a
+   test name.**

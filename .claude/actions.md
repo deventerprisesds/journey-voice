@@ -705,3 +705,39 @@ Why the repo had no such rule already: before 60e7565 it contained **no committe
 all**. The extraction created that category, and the verification step that accompanies it is what
 dirties the tree — so the ignore rule is part of the same change, not housekeeping after it.
 Tree confirmed clean, `behind=0 ahead=0` against origin.
+
+## ACT: Slack OUTBOUND — DONE 2026-09-13 (2350420)
+`/notify` now posts via `chat.postMessage` with a bot token: per-message `channel` + `thread_ts`,
+which is what n8n did (`slackOAuth2Api`) and what an Incoming Webhook structurally cannot do.
+Precedence bot > caller's webhook > env webhook; webhook path SAYS when it dropped a channel/thread.
+Guards AC-N9..N9f, 21/21, **AC-N9b and AC-N9e both mutation-proved FIRED**.
+**Not yet live-tested against a real workspace** — needs `SLACK_BOT_TOKEN` on the Worker.
+
+## ACT: Slack INBOUND — TODO, NOT STARTED
+**Goal (owner, 2026-09-13):** the native Slack app becomes a front door to the **Huddle OpenAI
+agents**. A query typed in a Slack channel reaches the SAME agent pipeline the chat module uses —
+same router, same assistant snapshots, same tools, same memory — and the reply returns **to the
+Slack thread** instead of to a chat thread. Slack is a different SURFACE on the existing brain, not
+a second brain.
+
+What that requires, from reading `docs/n8n-exports/slack-comms-tool-inbound.json`:
+1. **An endpoint Slack can call.** Event Subscriptions Request URL. Three hard requirements:
+   echo the `url_verification` challenge (or Slack refuses to save the URL); **ACK within 3
+   seconds** or Slack retries up to 3× and the user gets duplicate replies; verify the signing
+   secret, or anyone with the URL can drive the agents. The 3s rule forces async work — `/notify`
+   today is synchronous.
+2. **Agent identity from the CHANNEL**, not the message: `flex-grimes___fitness_trainer` -> `flex`,
+   over the 16-handle roster Huddle already has in `agents.ts`. **Forced by the free plan** (10
+   apps/integrations, each bot user counts as one) — 16 agents cannot be 16 bots.
+3. **Reply target = Slack, not the chat thread.** Outbound (above) already does this: pass the
+   inbound `channel` + `thread_ts` straight back to `chat.postMessage`.
+4. **One Request URL per app** — so test and production means two Slack apps, consuming 2 of the 10.
+   *(Inferred from the settings screen's shape; `api.slack.com` is egress-blocked from CCR, so
+   unconfirmed against the docs.)*
+**Open, and it decides where this is built:** does the channel→agent map live in journey (comms
+lane) or Huddle (which already owns the roster)? Not decided.
+
+## ACT: 🔴 REVOKE the leaked Slack token — owner action, OPEN
+A live `xoxp-` USER token was hardcoded in the outbound n8n export's `HTTP Request` node. Redacted
+before committing (`ab3ee16`), but it existed in plaintext in an uploaded, copied file and must be
+treated as compromised. api.slack.com/apps → OAuth & Permissions → revoke/rotate.
