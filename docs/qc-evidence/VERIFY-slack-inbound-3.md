@@ -190,3 +190,27 @@ Read both functions in full as an attacker and as a reviewer. Findings:
 
 No new exploitable defect found. Two observations recorded above (3: pre-existing unbounded text,
 4: mpim gap) are informational, not blocking.
+
+## Summary table
+
+| # | Claim | Verdict | Evidence | How re-confirmed this loop |
+|---|---|---|---|---|
+| C1 | undef-check.mjs untouched by this work | CONFIRMED | `git log 2479926..HEAD -- scripts/undef-check.mjs` empty | checked against the file's own git log, not a diff vs origin/main (loop-1-correct method) |
+| C2 | symbols guard still catches genuinely undefined symbols | CONFIRMED | inserted real undefined call, undef-check reported it + exit 1; restored, exit 0 | full re-derivation, mutation at full depth as instructed |
+| C3 | `undef-check.mjs --all` exits 0 | CONFIRMED | "0 NEW undefined symbol(s)" | re-run fresh this loop |
+| C4 | worker suite passes, 31 tests | CONFIRMED | `# pass 31 / # fail 0` | re-run fresh this loop |
+| C5 | bot-loop guard mutation-proof | CONFIRMED | `mutate.sh` FIRED on bot_id check, tree restored clean | full-depth mutate.sh run, anchor from file |
+| C6 | signature fails closed, no secret | CONFIRMED | direct `verifySlackSignature` calls with `undefined`/`''` secret both refuse | called the function directly, bypassing the test file |
+| C7 | 0 typecheck errors in slack-events.ts/index.ts | CONFIRMED | `tsc --noEmit` errors filtered to those 2 files: none | re-run fresh, filtered to claimed scope |
+| C8 | no unauthenticated path reaches a Huddle turn | CONFIRMED | call-graph grep: 1 caller each; signature gate precedes all parsing/dispatch | re-traced given the new DM branch, as instructed |
+| N1 | 3-way split is not a catch-all | CONFIRMED | `mutate.sh` FIRED against AC-S11c when guard made permissive | new |
+| N2 | DM sends no members/scope | CONFIRMED | actual JSON wire body has neither key | new |
+| N3 | no fabricated agentId reaches Huddle from a DM | CONFIRMED | direct `fetchSlackContext` run: bot line → `kind:'system'`, never `'agent'` | new |
+| N4 | failed context fetch never costs the reply | CONFIRMED | direct run with a THROWN exception (stronger than the shipped ok:false test): `handled:true`, reply posted | new |
+| N5 | adversarial/reviewer read | NO NEW DEFECT FOUND | see findings 1-6 above; 2 informational observations, neither blocking | new |
+
+**0 REFUTED. 13/13 claims CONFIRMED.** Two informational observations recorded (pre-existing
+unbounded `text` field predates this loop's diff; multi-person-DM channels are not yet routed,
+fail-closed/ignored rather than mis-routed) — neither is a defect in the work reviewed this loop.
+
+Loop complete at 2026-09-13T16:54Z, well inside the 18-minute budget (started 16:49:39Z).
