@@ -758,3 +758,24 @@ old `cr?.success ?? true` flattening this would have read as a successful Slack 
 **Consequence:** the Worker's `SLACK_WEBHOOK_URL` (and/or the edge fn's) must be replaced — with a
 real `hooks.slack.com` URL, or better, superseded by `SLACK_BOT_TOKEN`, which the bot transport
 prefers automatically with no other change.
+
+## ACT: digest emails — BLOCKED BY TWO THINGS, NEITHER IS THE TRANSPORT — 2026-09-13
+Owner asked whether email is live enough to test digest emails. Email IS live (pg_net 715255,
+`graph 202`, `delivered:true`). **Digests still cannot email, for two independent reasons:**
+1. **`notification_prefs.channels` for the owner is `{GOOGLE_EVENT,OUTLOOK_EVENT,PUSH}`** — EMAIL is
+   not in the set. `daily_digest_enabled` is true, `weekly_digest_enabled` is true.
+2. **`notification-delivery/index.ts:651` short-circuits digests before any channel dispatch**:
+   `daily_digest`/`weekly_digest` invoke `send-chat-message` and `continue`. So adding EMAIL to the
+   prefs would change NOTHING — the digest never reaches the channel path. Fixing only #1 and
+   declaring it done would be the "fixed one consumer, missed the funnel" failure.
+**Content finding, separate from delivery.** `generateDailyDigest` (notification-scheduler:355)
+counts total / urgent / due-today ONLY. Measured on the owner's live board today:
+`active=121, urgent=3, due_today=0, overdue=99`. The production digest would therefore have read
+"You have 121 active tasks, 3 urgent" and said **nothing about 99 overdue items** — due-today is 0,
+so the one time-pressure signal it does carry was silent on the day the board was 82% overdue.
+A digest that omits the dominant fact is worse than no digest.
+**Also note the asymmetry:** scheduled calls already render a real schedule via
+`_shared/notification-body.ts` (`renderBriefingBody`, times + titles + DONE excluded). The digest
+emits a bare counts line. If digests become emails they should use that renderer, not a new one.
+**NOT STARTED** — this is a design change (which channels a digest may use, and what it says),
+not a transport fix. Owner decision.
