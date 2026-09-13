@@ -1277,3 +1277,30 @@ call into a workflow so future event/scope changes are code-managed.
 **Request URL:** `https://twilio-openai-bridge.purple-bush-495e.workers.dev/slack/events`
 (hostname ground-truthed from 5 in-repo references incl. the deploy workflow's own health check).
 Subscribe to `message.channels` + `message.groups` (+ `message.im` for DMs).
+
+## ACT:google-calendar-reconnect — the exact control, and try REFRESH before re-consent — 2026-09-13
+Re-grounded from the live DB rather than restated from earlier in the session
+(`select provider, is_active, expires_at, refresh_token is not null … from public.calendar_connections`):
+
+| provider | is_active | expires_at | has refresh_token |
+|---|---|---|---|
+| google | **false** | 2026-06-24 | **yes** |
+| google | **false** | 2026-03-28 | **yes** |
+| office365 | true | 2026-09-13 13:25 | yes |
+| outlook | true | 2026-09-13 15:13 | yes |
+
+**Two things this changes.**
+1. **Both dead Google rows STILL HOLD A REFRESH TOKEN.** So the fix may be a token refresh rather than
+   a full OAuth re-consent — `CalendarOAuthManager.tsx:29` has a distinct refresh path
+   ("Calendar refreshed successfully") separate from the connect/redirect path at :44. Try refresh
+   first; it is the cheaper action and it may be sufficient. If Google has revoked the grant the
+   refresh returns `invalid_grant` and only then is re-consent required. **`is_active:false` records
+   that something failed, not that the credential is definitely unrecoverable** — those are different
+   claims and only the refresh attempt separates them.
+2. **The active Outlook/office365 rows show `expires_at` in the PAST and that is NORMAL** — they
+   auto-refresh on use, which is why email and calendar reads worked at 15:0x with a 13:25 expiry.
+   Do not read a past `expires_at` on an ACTIVE row as a fault.
+
+**Where the control is:** `CalendarOAuthManager` is mounted in **`NotificationSettings.tsx`** (:235 and
+:758) — the same Settings ▸ Notifications screen that holds the notification email field
+(`<Input id="email">` at :922). So both remaining owner actions for notifications live on one screen.
