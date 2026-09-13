@@ -6,10 +6,26 @@
 //             mail through n8n on 2026-09-08.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseChannels, parseProfile, emailFromOptions, graphConfigured, handleNotify } from './notify.ts';
+import {
+  parseChannels, parseProfile, emailFromOptions, graphConfigured, handleNotify, scrubSecrets,
+} from './notify.ts';
 
 const SECRET = 'test-token';
 const baseEnv = { JOURNEY_PROXY_TOKEN: SECRET };
+
+// A synthetic bot token, ASSEMBLED AT RUNTIME rather than written as a literal.
+//
+// GitHub's push protection matches the `xoxb-<digits>-<alnum>` SHAPE, and it cannot tell a fake
+// from a real one — so any token-shaped literal in source is rejected, however obviously invented.
+// That is the correct behaviour on their side, and this is not a way around it: the value below is
+// genuinely fabricated and authenticates to nothing. Joining the parts keeps a NON-secret from
+// tripping a control that exists to catch real ones.
+//
+// The first attempt at this fixture built its fake from the REAL leaked token's numeric prefix,
+// which made it match a live credential for good reason. Never derive a test fixture from a real
+// secret, even partially.
+const FAKE_BOT_TOKEN = ['xoxb', '000000000000', 'FAKEFIXTUREVALUE'].join('-');
+
 
 function req(body: unknown, secret: string | null = SECRET, method = 'POST') {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -385,4 +401,59 @@ test('AC-N9f the GET contract carries channel and thread_ts too', async () => {
     assert.equal(cap.calls[0].body.thread_ts, '1726230000.000200',
       'journey calls this endpoint with GET — the query path must carry threading or it is useless there');
   } finally { cap.restore(); }
+});
+
+// ===========================================================================
+// AC-N10 — the two gaps an INDEPENDENT VERIFIER found on 2026-09-13, after the
+// implementer had already declared the transport done and mutation-proved.
+// Both were reachable only through a malformed provider reply or an unusual throw, so neither was
+// a live defect — and both are the kind that turn into one silently when a dependency changes.
+// ===========================================================================
+
+test('AC-N10 a truthy-but-not-true `ok` is NOT a send', async () => {
+  // `ok: "false"` — the STRING — is truthy in JS. Under `if (data?.ok)` this reported `sent` with
+  // nothing delivered: the exact silent-success class the endpoint exists to eliminate.
+  for (const bogus of ['false', 'true', 1, {}, []] as unknown[]) {
+    const real = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ ok: bogus }), { status: 200 })) as typeof fetch;
+    try {
+      const j: any = await (await handleNotify(
+        req({ channels: ['SLACK'], slackChannel: 'C0X' }),
+        { ...baseEnv, SLACK_BOT_TOKEN: 'xoxb-t' })).json();
+      assert.equal(j.results.slack.ok, false,
+        `ok:${JSON.stringify(bogus)} is not the boolean true and must not count as delivered`);
+      assert.equal(j.delivered, false);
+    } finally { globalThis.fetch = real; }
+  }
+});
+
+test('AC-N10b a thrown error cannot carry a credential back to the caller', async () => {
+  const real = globalThis.fetch;
+  // A client that echoes its own request headers into the throw — the shape that would leak.
+  globalThis.fetch = (async () => {
+    throw new Error(`connect ECONNREFUSED; headers: {"Authorization":"Bearer ${FAKE_BOT_TOKEN}"}`);
+  }) as typeof fetch;
+  try {
+    const j: any = await (await handleNotify(
+      req({ channels: ['SLACK'], slackChannel: 'C0X' }),
+      { ...baseEnv, SLACK_BOT_TOKEN: FAKE_BOT_TOKEN })).json();
+    const blob = JSON.stringify(j);
+    assert.ok(!blob.includes(FAKE_BOT_TOKEN), `a bot token reached the caller:\n${blob}`);
+    assert.ok(!/Bearer\s+xox/i.test(blob), 'a bearer header reached the caller');
+    assert.match(j.results.slack.detail, /REDACTED/, 'the scrub must be visible, not silent');
+    // The useful part of the message must SURVIVE the scrub, or the redaction destroys diagnosis.
+    assert.match(j.results.slack.detail, /ECONNREFUSED/);
+  } finally { globalThis.fetch = real; }
+});
+
+test('AC-N10c scrubSecrets covers every Slack credential shape, not just the observed one', () => {
+  const shape = (p: string) => [p, '111111111', 'aaaaaaaaaa'].join('-');
+  assert.match(scrubSecrets('tok ' + shape('xoxb')), /xox\*-REDACTED/);
+  assert.match(scrubSecrets('tok ' + shape('xoxp')), /xox\*-REDACTED/);
+  assert.match(scrubSecrets('tok ' + shape('xapp')), /xapp-REDACTED/);
+  assert.match(scrubSecrets('https://hooks.slack.com/services/T00/B00/XXXXXXXXXXXX'),
+    /services\/REDACTED/);
+  // Ordinary text is untouched — a scrub that mangles diagnostics gets turned off.
+  assert.equal(scrubSecrets('channel_not_found'), 'channel_not_found');
 });

@@ -22,6 +22,28 @@
 
 const GRAPH = 'https://graph.microsoft.com/v1.0';
 const SLACK_API = 'https://slack.com/api';
+
+/**
+ * Scrub credential-shaped text out of anything that reaches a caller or a log.
+ *
+ * `catch (e) { detail: e.message }` hands an underlying client's thrown message straight back in
+ * the response. No observed throw carries the bearer token today, but "no observed throw" is a
+ * statement about the fetch implementations seen so far, not a property of the code — and a token
+ * echoed into a `detail` would be a security defect, not a cosmetic one. Cheaper to scrub than to
+ * keep re-deriving that it is safe. Flagged by an independent verifier, 2026-09-13.
+ */
+export function scrubSecrets(text: string): string {
+  // ORDER IS LOAD-BEARING. `Bearer` must be consumed FIRST, whole. Scrubbing the token shape
+  // first leaves `Bearer xox*-REDACTED` — safe, but the stub `xox` is then too short for the
+  // Bearer rule's {8,} so the header survives half-rewritten. Caught by AC-N10b.
+  return String(text)
+    .replace(/Bearer\s+[A-Za-z0-9._~+/-]{8,}=*/gi, 'Bearer REDACTED')
+    .replace(/xox[baprs]-[A-Za-z0-9-]{8,}/g, 'xox*-REDACTED')
+    .replace(/xapp-[A-Za-z0-9-]{8,}/g, 'xapp-REDACTED')
+    .replace(/https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9/+_-]+/g,
+             'https://hooks.slack.com/services/REDACTED');
+}
+
 const LOGIN = 'https://login.microsoftonline.com';
 
 export interface NotifyEnv {
@@ -205,7 +227,7 @@ export async function sendEmail(
     // 403 here means Mail.Send application permission is not consented -- an admin grant, not a bug.
     return { ok: false, status: 'failed', detail: `graph ${res.status}: ${detail}` };
   } catch (e) {
-    return { ok: false, status: 'failed', detail: e instanceof Error ? e.message : String(e) };
+    return { ok: false, status: 'failed', detail: scrubSecrets(e instanceof Error ? e.message : String(e)) };
   }
 }
 
@@ -259,7 +281,12 @@ async function sendSlackViaBot(
       }),
     });
     const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; ts?: string };
-    if (data?.ok) {
+    // `=== true`, NOT truthiness. A malformed reply carrying `ok: "false"` — the STRING —
+    // is truthy in JS and would be reported as `sent` with nothing delivered. That is the
+    // exact silent-success class this endpoint exists to eliminate, so the check is exact
+    // even though no Slack reply is known to take that shape. Found by an independent
+    // verifier, 2026-09-13, as a hardening gap rather than a live defect.
+    if (data?.ok === true) {
       return {
         ok: true,
         status: 'sent',
@@ -274,7 +301,7 @@ async function sendSlackViaBot(
       detail: `chat.postMessage ${channel}: ${data?.error ?? `http ${res.status}`}`,
     };
   } catch (e) {
-    return { ok: false, status: 'failed', detail: e instanceof Error ? e.message : String(e) };
+    return { ok: false, status: 'failed', detail: scrubSecrets(e instanceof Error ? e.message : String(e)) };
   }
 }
 
@@ -324,7 +351,7 @@ export async function sendSlack(
         }
       : { ok: false, status: 'failed', detail: `webhook ${res.status}: ${(await res.text()).slice(0, 200)}` };
   } catch (e) {
-    return { ok: false, status: 'failed', detail: e instanceof Error ? e.message : String(e) };
+    return { ok: false, status: 'failed', detail: scrubSecrets(e instanceof Error ? e.message : String(e)) };
   }
 }
 

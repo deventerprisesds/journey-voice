@@ -779,3 +779,23 @@ A digest that omits the dominant fact is worse than no digest.
 emits a bare counts line. If digests become emails they should use that renderer, not a new one.
 **NOT STARTED** — this is a design change (which channels a digest may use, and what it says),
 not a transport fix. Owner decision.
+
+### Independent verifier result — slack-outbound loop 1 — 9/9 CONFIRMED, 2 gaps fixed
+Evidence: `docs/qc-evidence/VERIFY-slack-outbound-1.md`, pushed across FOUR per-claim commits
+(7636889, 5559085, b14d8ff and the C1 seed) rather than one at the end — the contract that earned
+itself when an earlier run of this same verification confirmed C2/C3, wrote neither to disk, and
+lost both verdicts on stop.
+The verifier re-derived BOTH mutations itself instead of trusting the implementer: AC-N9b and
+AC-N9e each **FIRED**, anchors grepped from the file rather than recalled.
+**Two hardening gaps it found and the implementer had missed** (82a3943):
+1. `if (data?.ok)` was truthiness, not `=== true`. `ok: "false"` — the STRING — is truthy in JS and
+   reported `sent` with nothing delivered. **The silent-success class this endpoint exists to
+   eliminate, reappearing one level below where it was fixed.** Guard AC-N10, mutation FIRED.
+2. A thrown error's `.message` reached the caller unscrubbed, so a client echoing its own request
+   headers into a throw would return the bot token in a response `detail`. `scrubSecrets()` now
+   covers every Slack credential shape + Bearer + hooks URLs on all three catch paths.
+**AC-N10b then caught a flaw in the scrub itself** — order is load-bearing. Scrubbing the token
+shape before the Bearer shape left `Bearer xox*-REDACTED`, safe but half-rewritten, because the
+remaining stub is too short for the Bearer rule's `{8,}`. Bearer is consumed first now. Mutation FIRED.
+24/24. **The lesson worth keeping: the implementer declared this done, mutation-proved, and shipped
+it — and an independent read still found two real things. Self-verification did not substitute.**
