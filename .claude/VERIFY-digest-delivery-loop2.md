@@ -279,3 +279,78 @@ loaders and `deliver` as injected functions would be directly testable by the ex
 node-test harness — the same shape `digest-delivery.ts` already uses and
 `digestDelivery.test.ts` already exercises. `serve()` would keep only wiring.
 **Recommended, not merge-blocking** — the behaviour is correct today; it is simply not defended.
+
+---
+
+## FINDINGS NOBODY CLAIMED — most severe first
+
+**1. The commit record states a fix that was never made. (MERGE-BLOCKING as a record defect.)**
+`f5556e4`'s message asserts the misleading prose in `digest-source.ts` "is corrected". The diff to
+that file is one hunk at line 9, two lines, the EVIDENCE header only. The prose at line 53 is
+untouched and now directly contradicts the code it documents. Evidence in the C1a section above.
+Fix is one sentence; the reason it is blocking is that the commit message is the org's audit trail
+and it currently certifies work that was not done.
+
+**2. `meetings.test.ts` is the one test file `npm test` never runs. (NOT blocking.)**
+`package.json:12` -> `"test": "node --experimental-strip-types --test src/utils/*.test.ts"`.
+`find . -name "*.test.ts"` returns 11 files; ten are under `src/utils/`, and
+`supabase/functions/_shared/meetings.test.ts` (43 assertions) is outside the glob. No workflow
+references it either (`grep -rn "meetings.test" .github/workflows/` -> nothing). Those 43
+assertions are green only when someone runs them by hand. Mitigating: M3 proved the classifier IS
+covered from inside the glob by `digestSourceMeetings.test.ts`, so this is unmonitored duplicate
+coverage, not an uncovered path.
+
+**3. `VoiceAssistantSettings`'s channel handler has no test.** `handleToggleCallCommsMode`
+carries the "never zero channels" invariant — a real user-facing safety rule — and no test file
+references it. C7 is confirmed by reading the source only; unlike every other claim in this loop it
+could not be mutation-proved. Not blocking; the logic is three lines and correct as written.
+
+**4. `mutate.sh`'s matcher is still armed for the next caller. (NOT blocking for this merge.)**
+See the CHALLENGE (1) section. `affcb24` worked around it by renaming a test rather than fixing
+`names_failure()`. The tool lives outside these repos, so it is out of this work's scope, but a
+verifier that trusts a PRE-DIRTY verdict from it can be told a guard is untestable when it is fine.
+
+**5. The `app_message` script leak is still open.** Carried from loop 1, still unclaimed and still
+present: `notification-delivery/index.ts:245-258` forwards `context: callConfig.context || ''`
+(the raw phone script) to `send-chat-message` without passing it through `renderScheduledCall`.
+`renderScheduledCall` now throws `CallScriptLeakError` rather than let a script through on a read
+channel — but only on the branch that calls it, and this branch does not. The email/Slack half of
+AC-REND-1 is met; the in-app-chat half is not. Whether that is in scope for this work is a scoping
+question, not a verification one, so it is reported rather than ruled on.
+
+**6. `tsc` still typechecks none of the edge functions.** Unchanged from loop 1 and restated
+because a green `npx tsc --noEmit` reads as coverage it does not have: `tsconfig.app.json` includes
+`src` only, `deno` is not installed, so `send-digests`, `digest-source`, `digest-content`,
+`digest-source-meetings` and `digest-source-daily` are typechecked by nothing. The node tests
+execute the `_shared/*` modules, which is real but partial; `send-digests/index.ts` is neither
+typechecked nor executed by anything (finding matches CHALLENGE (2)).
+
+---
+
+## VERDICT
+
+| Claim | Verdict |
+|---|---|
+| C1a behaviour — one loop, one outcome row per digest, `standup_requires_huddle` | **CONFIRMED** |
+| C1a prose — digest-source.ts corrected | **REFUTED** — never edited |
+| C1b — cron migration + `verify_jwt = false`, interval == TICK_WINDOW_MINUTES | **CONFIRMED** |
+| C2 — `userChannels` read, never used | **CONFIRMED** |
+| C3 — no call script in slack/email bodies | **CONFIRMED** (app_message caveat stands) |
+| C4 — `resolveDigestSource` is the owner's ruling | **CONFIRMED** |
+| C4-adjacent — EVIDENCE header corrected | **CONFIRMED** |
+| Control bytes — none under src/ or supabase/ | **CONFIRMED** |
+| sourceHygiene guard mutation-proven 2/2 | **CONFIRMED** (re-run independently) |
+| C5 — `deliver:false` posts nothing, moves no watermark | **CONFIRMED** |
+| C6 — classifier ignores organizer; null excluded | **CONFIRMED** |
+| C7 — `commsModes` written; last channel unremovable | **CONFIRMED** (source only, no test) |
+| C8 — mutations fire | **CONFIRMED** — 6/6 across 5 lanes |
+| C9 — 154/154, 0 skipped | **CONFIRMED** |
+| C10 — tsc clean | **CONFIRMED** (scope caveat) |
+
+**CONFIRMED 14 / REFUTED 1 / NOT REACHED 0.**
+
+**Merge-blocking: one item — finding 1** (the commit message certifies a prose fix that was not
+made, and the stale prose contradicts its own consumer). Everything else is either confirmed,
+recommended (extract the loop so the fix is defended), or carried scope questions.
+
+STATUS: COMPLETE — delivered 16:43 UTC, inside the 25-minute budget opened at 16:36.
