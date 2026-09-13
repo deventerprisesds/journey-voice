@@ -1097,3 +1097,29 @@ deploy workflow — not a rewrite. That is WHY deferring is cheap.
   still shows that old unconditional wording. The recovery taken here measured the direction first
   (`101 behind / 0 ahead`) and was therefore safe — but the measurement is what made it safe, not the
   banner's advice.
+
+## Active work — 2026-09-13
+
+**/notify is LIVE on journey's Cloudflare Worker and journey no longer calls n8n.** Deployed,
+health-checked, voice path verified intact (`/call` still 426, version unchanged), auth proven
+(401 on absent AND wrong secret), `UNIFIED_WEBHOOK_URL` repointed by a new deploy step.
+
+**Blocked on ONE thing, and it is not code:** the `AZURE_*` Graph credentials never reach the
+Worker. journey-voice is in org `deventerprisesds`; those are org secrets of `deventerpriseds-org`.
+GitHub hands a repo an EMPTY STRING for an org secret it cannot read and never errors — deploy log
+34757357880 shows all three empty while `JOURNEY_PROXY_TOKEN` uploaded in the same step. Fix is a
+repo-secret copy on journey-voice; an org migration is the expensive option and risks the six
+secrets journey already resolves.
+
+**Consent for `Mail.Send` is still UNPROVEN, but is no longer untestable** — that was my wrong call.
+A client-credentials token enumerates its granted permissions in the `roles` claim, so it is a read.
+Probe lives in eds-claude-skills.
+
+**Two defects only the LIVE path exposed**, neither caught by 93 passing unit tests:
+1. `405 POST only` — /notify shipped POST-only; journey's caller uses GET.
+2. journey flattened a truthful `{ok:false}` into `success:true` with an empty errors[].
+**And a third of the same family:** the fix for (2) was committed but not deployed, so the
+all-channel test still saw the old behaviour. *A fix that is committed is not a fix that is running.*
+
+**Still true and unfixed:** the email body is the voice assistant's script, not a briefing.
+Transport and content are separate bugs; fixing transport alone delivers stage directions faster.

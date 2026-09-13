@@ -531,3 +531,52 @@ scheduled call sends real mail.
 **STILL UNKNOWN until then:** whether Graph `Mail.Send` is admin-consented. Cannot be tested while
 the credentials are absent. **NOT a regression:** n8n delivered nothing either, and /notify now says
 so out loud instead of answering "Workflow was started".
+
+## ACT: all-channel feasibility test through /notify — owner-requested 2026-09-13 — DONE
+**Owner:** *"you should run feasibility test on being able to send a test message to all channels
+using cloudflare."* One call, every channel, through journey's real production path.
+
+| Channel | What /notify reported |
+|---|---|
+| `email` | `not_configured` — Graph app credentials are not set on the Worker |
+| `slack` | `not_configured` — `SLACK_WEBHOOK_URL` is not set |
+| `sms` | `unsupported` — unknown channel |
+| `carrier-pigeon` | `unsupported` — unknown channel |
+
+Every channel names its OWN reason; no channel reports a success it did not earn. Wrong-secret
+probe on the same endpoint returned 401, so the auth boundary holds under the multi-channel shape
+too. Evidence: pg_net requests 715037 (401) and 715041 (200 with the table above).
+
+**The test caught a real gap:** `channelResults.*.success` still read `true` while the Worker's own
+`errors[]` correctly listed all four failures — because the flattening fix was COMMITTED (`c4fbaa2`)
+but NOT DEPLOYED. Deploy dispatched. **A fix that is committed is not a fix that is running**, and
+only driving the live path exposes the difference.
+
+**Slack is a real gap, not a bug:** no sender exists in either repo; n8n held that OAuth token.
+Nothing currently routes to Slack — all five scheduled calls are email — so it is scope, not
+breakage.
+
+## ACT: Mail.Send consent — owner challenge 2026-09-13 — probe BUILT, not yet run
+**Owner:** *"did you test the mail.send question you had to determine admin on your own."* I had
+not, and had wrongly declared it untestable. A Graph app token enumerates its granted permissions
+in its `roles` claim, so consent is a read. Probe built in eds-claude-skills (`c7c149d`) because
+journey-voice cannot read the `AZURE_*` org secrets — that IS the blocker. Not yet run:
+`workflow_dispatch` needs the workflow on the default branch.
+
+## ACT: Lovable sync error — owner reported 2026-09-13 — DIAGNOSED, owner action
+Screenshot: *"Lovable can access the account, but this repository is not selected in the app
+installation."* This is **Lovable's GitHub App installation scope**, a different system from the
+Azure org-secret problem — not the same failure wearing a different hat. Fix: GitHub → Settings →
+Applications → Installed GitHub Apps → Lovable → Configure → Repository access → add
+`journey-voice`. If the repo changes org, Lovable must be installed on the NEW org and granted there.
+
+**RECOMMENDATION AGAINST the org migration as a fix for the secrets.** journey-voice currently reads
+`JOURNEY_PROXY_TOKEN`, `UAT_TOKEN`, `CLOUDFLARE_API_TOKEN`, `CF_OPENAI_API_KEY`,
+`CF_SUPABASE_SERVICE_KEY`, `SUPERBASE_ACCESS_TOKEN` — all resolving today. If any are
+`deventerprisesds` ORG secrets, moving the repo breaks every one of them, plus Lovable, plus this
+session's repo scope. I could not confirm which are repo-level vs org-level: the CCR proxy blocks
+`/actions/secrets` and `/actions/organization-secrets` ("Access to this GitHub Actions path is not
+permitted through this proxy"), so this is an UNVERIFIED risk, not a measured one.
+**Cheaper and safer:** add `AZURE_CLIENT_ID`/`AZURE_CLIENT_SECRET`/`AZURE_TENANT_ID` as REPO
+secrets on journey-voice. Org secrets cannot be granted across orgs, so that is the only option
+short of migrating.
