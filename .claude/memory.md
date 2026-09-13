@@ -263,3 +263,52 @@ missed-call fallback. Sweep every producer AND consumer of a vocabulary before c
 session: once `NOT-APPLIED` (dirty file, a correct refusal), once `UNDETERMINED` because the
 must-fail marker was a count (`fail 1`) while `mutate.sh:114` matches `not ok .*<name>`. The fix was
 to READ the matcher, not to guess a second literal.
+
+## Session continuation — 2026-09-13 (delivery wired, digests still PARTIAL)
+
+Branch `claude/huddle-workflows-setup-cucecs`, pushed. **Nothing merged to `main`, nothing deployed,
+nothing live-confirmed.** The one live change is a DATA edit, below.
+
+| Lane | What landed | Mutations | State |
+|---|---|---|---|
+| Multi-select control | `VoiceAssistantSettings.tsx` checkbox popover → `commsModes` | n/a (UI) | done |
+| Scheduled-call body | `notification-delivery` calls `renderScheduledCall` | 1/1 FIRED | done |
+| Source switch | `_shared/digest-source.ts` — the owner's integrated/standalone ruling | 1/1 FIRED | done |
+| Stand-up pull | `_shared/digest-source-standup.ts` + Huddle `deliver:false` | 3/3 FIRED (2 Huddle-side) | done |
+| Delivery planner | `_shared/digest-delivery.ts` — channels, quiet hours, local 8am | pending | done |
+| `send-digests` fn | orchestrator; **stand-up only so far** | pending | **PARTIAL** |
+| Daily-brief source | `_shared/digest-source-daily.ts` | — | in flight (subagent) |
+| Meetings source | `_shared/digest-source-meetings.ts` | — | in flight (subagent) |
+
+### Facts worth not re-deriving
+- **THE REASON NO DIGEST EVER ARRIVED, root-caused from source.** `notification-scheduler`'s
+  `generateDailyDigest` reads the user's channel preference into `userChannels` at `index.ts:523`
+  and **never uses it** — it invokes `send-push-notification` unconditionally. So "I changed it to
+  email" could not have worked on any run, for anyone. The variable is read and discarded in the
+  same function, which is why the symptom read as a delivery failure rather than a missing branch.
+  `send-digests` is the replacement path; notification-scheduler's count-only push is left alone.
+- **The Morning Kickstart row was at `15:21`, not 6am or 8am** (`user_scheduling_prefs`, user
+  `a3378f93-…`, `scheduled_calls[7]`, commsMode `email`). Set back to `08:00` on 2026-09-13. The
+  `06:00` in `VoiceAssistantSettings.tsx:118` is the code DEFAULT for the window-transition call and
+  was never the user's live value — do not "fix" the default when the live row is the thing that drifted.
+- **Huddle's stand-up now has a content mode.** `runScheduledStandup(caller, {deliver:false})`
+  assembles and RETURNS `result.digest` without posting in Terry's DM and without advancing
+  `setLastStandupAt`. That watermark is the trap: a content pull that advanced it would make the
+  real stand-up an hour later report "nothing to report" about work it never told anyone.
+- **Huddle priorities arrive ALREADY ranked** by `rankTasks`. Position IS the rank; journey records
+  `rank: i+1` and never re-sorts. A second ordering brain could disagree with what the user sees.
+- **`phone` is deliberately NOT a digest channel.** A digest is a document — a schedule, a ranked
+  list, a drag-to-rank link. Read down a phone line it reproduces the scheduled call that already
+  exists. Phone stays the CALL channel; `selectDigestChannels` drops it.
+
+## Hardening — 2026-09-13 (continuation)
+
+**Never run `mutate.sh` while background subagents are writing the same tree.** A mutation returned
+`PRE-DIRTY` — the suite already failing before the mutation — because a lane was mid-write on a test
+file the `src/utils/*.test.ts` glob picks up. `mutate.sh` refused correctly and proved nothing; the
+suite was green seconds later at 112/112. Batch mutations AFTER the fan-out lands, or the harness
+reports damage it did not cause.
+
+**A partial implementation must SAY it is partial, in the file.** `send-digests` delivers the
+stand-up only until the two source lanes land, and the comment at the empty slot says exactly that.
+A file that looks finished is how a session strands itself on a dead path (the provenance rule).
