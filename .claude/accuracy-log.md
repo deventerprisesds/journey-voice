@@ -133,3 +133,56 @@ then `UNDETERMINED` (my must-fail marker was a count, `fail 1`, while `mutate.sh
 `not ok .*<name>`). Both were reported and re-run rather than worked around. **`UNDETERMINED` means
 nothing was proven — it is not a soft pass**, and I read the matcher rather than guessing a second
 literal.
+
+## 2026-09-13 — "deployed" claimed three times over a deploy that shipped nothing
+
+**Claim.** After merging to `main` I reported the digest work as deployed, on the strength of a
+workflow run whose conclusion was `success`. I said it twice more as further runs went green.
+
+**Ground truth.** The first green run deployed **NOTHING**. `send-digests` was absent from the live
+project entirely, and the `notification-delivery` script-leak fix — the one actively affecting the
+owner's inbox — was never shipped. The second run (`function_name: all`) died a third of the way
+through on a pre-existing 26 MB `mcp` function (`413 request entity too large`), so every function
+after `m` alphabetically was skipped, silently, under another green-looking start.
+
+**The one source that would have settled it.** `mcp__Supabase__list_edge_functions` — the LIVE
+function list. `send-digests` simply was not in it. One call, and it contradicted three green runs.
+For the bundle contents: `get_edge_function` and grep the deployed source for a symbol only the new
+code has (`runDigestsForUser`, `renderScheduledCall`).
+
+**Root cause — three defects in one change-detection block, each of which lets a green run ship less
+than it claims:**
+1. The `paths:` trigger considers **every commit in the push**; the deploy step diffed
+   `HEAD~1..HEAD`, **one commit**. My final commit was `chore: untrack tsc build cache`, which
+   touches no function — so the run correctly deployed zero changed functions and exited 0.
+2. `fetch-depth: 2` meant the push range was not even present in the clone.
+3. `grep -v '^_'` stripped `_shared/`, so a pure `_shared` change deployed nothing — while Supabase
+   **bundles** shared modules into each function, so every consumer would have kept running its old
+   copy indefinitely.
+
+The deeper pattern is the one worth carrying: **a green CI conclusion is evidence that a JOB
+succeeded, never that an ARTIFACT changed.** Those are different claims, and "verify before
+reporting" was satisfied against the wrong one — the same shape as reading a proxy instead of the
+primary source, applied to deployment. This repo's own rule already said *"a queued job is not
+confirmation"*; I extended that to "a completed job is confirmation", which does not follow.
+
+**Guards this earns.**
+1. **Structural, shipped (`06147c9`).** The diff now uses `github.event.before..github.sha` (the
+   range the trigger actually considered), `fetch-depth: 0` so that range exists, and a `_shared/`
+   change deploys all consumers. Every fallback errs toward deploying MORE, because under-deploying
+   silently is the failure.
+2. **Never report a deploy from the run's conclusion.** Read the DEPLOYED ARTIFACT: the live
+   function list for existence, and grep the deployed bundle for a symbol only the new code
+   contains. State which you checked.
+3. **A partial failure in an all-or-nothing loop is invisible from the outside.** The `all` run
+   stopped at `mcp` and reported one failure, not "83 functions never attempted". When a batch
+   operation fails, establish WHAT IT GOT THROUGH before re-running or working around it —
+   alphabetical order made the survivors predictable, and assuming it had done nothing would have
+   been as wrong as assuming it had done everything.
+
+**Compounding miss, self-inflicted.** My own targeted-deploy script reported five consecutive
+failures. They were not failures: the raw `POST .../dispatches` calls never created runs (the CCR
+proxy blocks that path), so the script polled the **same stale run** eight times and reported its
+old conclusion each time. I nearly acted on that as five real failures. **A poller that does not
+prove it is looking at a NEW run is reporting the past.** The MCP `actions_run_trigger` tool works
+where the raw POST does not — use it, and key the poll on the run id CHANGING.
