@@ -1304,3 +1304,34 @@ Re-grounded from the live DB rather than restated from earlier in the session
 **Where the control is:** `CalendarOAuthManager` is mounted in **`NotificationSettings.tsx`** (:235 and
 :758) — the same Settings ▸ Notifications screen that holds the notification email field
 (`<Input id="email">` at :922). So both remaining owner actions for notifications live on one screen.
+
+## ACT:slack-inbound — the n8n export says Event Subscriptions is ALREADY ON — 2026-09-13
+I had been describing the owner's step as "enable Event Subscriptions and subscribe to scopes". Read
+the primary source I had put in this repo and never opened — `docs/n8n-exports/slack-comms-tool-inbound.json`
+— and it is smaller than that.
+
+**The inbound trigger is `n8n-nodes-base.slackTrigger` with `trigger: ['any_event']`, and it carries a
+`webhookId`: `838957ef-b9c8-43ca-9d4e-f390e366b8c0`** (identical on both trigger nodes, so both listen
+on one webhook). n8n's Slack Trigger is WEBHOOK-based — it mints a URL you paste into Slack's Event
+Subscriptions. **So the Slack app already has Event Subscriptions ENABLED, already holds the message
+scopes, and already has a Request URL — n8n's.** The remaining action is a one-field REPLACEMENT, not
+a setup: swap that URL for the Worker's. Nothing to enable, no scopes to add, no reinstall.
+
+*Inferred, not proven:* the literal current URL is almost certainly
+`https://edsdevn8n.app.n8n.cloud/webhook/838957ef-b9c8-43ca-9d4e-f390e366b8c0` — host from
+`cloudflare/src/notify.ts:9`, path from n8n's webhook convention. I have not READ that string
+anywhere, so it is an inference; it does not need to be right for the replacement to work.
+
+**A trap I nearly walked into.** The export also contains `app_id: A016X0AT6QL`. It is **n8n's own
+Slack app**, not ours — it appears inside a captured message whose `bot_profile` carries the "n8n
+workflow" powered-by link. Building a deep link from it would have sent the owner to the wrong app's
+settings page. `T0934TLA8F2` IS the owner's workspace id. *Shape is not identity: an `A0…` token
+looks like "the app id" regardless of WHOSE app it is — check the surrounding context.*
+
+**Getting OUR app id needs a Slack API call, and the sandbox cannot reach slack.com.** Built
+`eds-claude-skills/.github/workflows/slack-api-probe.yml` for it (auth.test → bot_id → bots.info →
+app_id, which yields the exact `https://api.slack.com/apps/<APP_ID>/event-subscriptions` deep link).
+**Dispatching it returns 404 until it is on the DEFAULT branch** — measured, this is the rule that a
+brand-new workflow cannot be dispatched from a feature branch, whereas an EXISTING one can be
+dispatched AT a ref (which is how cloudflare-secret-sync.yml ran from the branch earlier). It rides on
+PR #84.
