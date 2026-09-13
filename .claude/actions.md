@@ -826,3 +826,33 @@ now says so in a way the owner can act on.
 or a real `hooks.slack.com` URL.
 **Scope note:** digests were investigated earlier and are OUT of scope — the owner already has them
 and said so. Nothing was changed there.
+
+## ACT: Slack credential — programmatic path WIRED, credential ABSENT — 2026-09-13
+Owner: *"we update them together using workflows all the time programmatically so use that approach
+to set it."* Done, in both places, reusing the existing sync rather than a new mechanism:
+- **journey `deploy-cloudflare.yml`** (c4491d6) — `SLACK_BOT_TOKEN` / `SLACK_DEFAULT_CHANNEL` /
+  `SLACK_WEBHOOK_URL` now ride the same `put` helper as the Graph credentials. Safe to add before
+  the secret exists: `put` skips an empty value with a warning instead of writing a blank.
+- **eds `cloudflare-secret-sync.yml`** (cb08d0b, d0a3167) — same names, cross-org.
+**Measured (eds run 34761950566): NO `SLACK_*` secret exists in deventerpriseds-org.**
+`SLACK_BOT_TOKEN NO 0`, `SLACK_DEFAULT_CHANNEL NO 0`, `SLACK_WEBHOOK_URL NO 0`. So the pipe is
+built and waiting; nothing to sync until the owner creates a Slack app and adds the token as an org
+secret. Then either workflow carries it with NO further code change.
+Also added `clear_stale_slack_webhook` to the eds workflow: journey's Worker holds a
+SLACK_WEBHOOK_URL that is an n8n URL, and while it is set Slack reports `failed: webhook 404`
+instead of an honest `not_configured`. Reversible.
+**Own bug, worth keeping:** the first probe run (34761919980) died with `!v: unbound variable` — the
+SLACK_* names went into the probe LOOP but not the step's `env:` block, so `${!v}` was unbound under
+`set -u` and the script aborted on the very names it was added to probe. **A probe that crashes on
+the thing it probes for answers nothing, and looks like infrastructure failure rather than a
+finding.** Fixed twice over: env names declared AND every lookup is now `${!v-}`, so a future name
+added to the loop without the env block degrades to `NO` rather than to a crash.
+**Revocation of the leaked xoxp- token is the OWNER'S CALL** (stated 2026-09-13). Not a blocker,
+not to be re-raised.
+
+## ACT: inbound agent routing — journey by DEFAULT, Huddle once integrated — 2026-09-13
+Owner's decision, recorded. Does NOT affect the notification migration: inbound (Slack -> agents)
+and outbound (agents -> Slack) are separate directions that share exactly ONE thing, the Slack app
+credential. Notifications only ever use outbound. The channel->agent map is an inbound-only
+concern, so choosing journey now and Huddle later changes nothing about EMAIL / OUTLOOK_EVENT /
+GOOGLE_EVENT / PUSH / SLACK delivery.
