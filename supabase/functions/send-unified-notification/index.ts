@@ -13,6 +13,20 @@ interface NotificationPayload {
   channels: string[];
   data?: any;
   slackWebhook?: string;
+  /**
+   * Slack channel for this message -- id (`C0123…`) or `#name`. This is how a PER-AGENT
+   * notification reaches that agent's own lane (`terry-locke___team_lead`, `finn-reid___finance`,
+   * …) instead of everything piling into the default channel.
+   *
+   * It was accepted by /notify and its unit tests passed, but this function never FORWARDED it:
+   * `callUnifiedWebhook` builds a fixed query string and `slackChannel` was not in it. Measured
+   * live 2026-09-13 -- a request naming C0939A7CYEB (terry-locke) posted to C093J5EQVDL (the Iris
+   * default) and reported `sent`, so the failure was invisible from the response. Only driving the
+   * real chain exposed it; no unit test on either side could have.
+   */
+  slackChannel?: string;
+  /** Slack `ts` of a parent message, to reply IN-THREAD rather than as a new top-level post. */
+  slackThreadTs?: string;
   notificationId?: string;
   userProfile?: {
     email?: string;
@@ -547,6 +561,8 @@ serve(async (req) => {
       channels, 
       data = {}, 
       slackWebhook,
+      slackChannel,
+      slackThreadTs,
       notificationId,
       userProfile,
       outlookEvent,
@@ -845,6 +861,8 @@ serve(async (req) => {
         userProfile: userProfile || profile,
         taskData: data,
         slackWebhook: slackWebhook || Deno.env.get('SLACK_WEBHOOK_URL') || '',
+        slackChannel,
+        slackThreadTs,
         outlookEvent,
         googleEvent
       }, supabaseClient, notificationId);
@@ -925,6 +943,8 @@ interface UnifiedWebhookPayload {
   userProfile: any;
   taskData: any;
   slackWebhook?: string;
+  slackChannel?: string;
+  slackThreadTs?: string;
   outlookEvent?: {
     title: string;
     startTime: string;
@@ -1049,6 +1069,14 @@ async function callUnifiedWebhook(
 
   if (payload.slackWebhook) {
     queryParams.append('slackWebhook', payload.slackWebhook);
+  }
+  // THE LINE WHOSE ABSENCE WAS THE BUG. Without these, /notify falls back to
+  // SLACK_DEFAULT_CHANNEL for every message and every agent posts into the same lane.
+  if (payload.slackChannel) {
+    queryParams.append('slackChannel', payload.slackChannel);
+  }
+  if (payload.slackThreadTs) {
+    queryParams.append('slackThreadTs', payload.slackThreadTs);
   }
 
   const fullUrl = `${webhookUrl}?${queryParams.toString()}`;
