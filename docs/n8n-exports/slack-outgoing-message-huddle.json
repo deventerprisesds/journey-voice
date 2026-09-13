@@ -1,0 +1,4097 @@
+{
+  "name": "Slack Outgoing Message Huddle",
+  "nodes": [
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "={{ $('When Executed by Another Workflow').first().json.channel }}",
+          "mode": "id"
+        },
+        "text": "={{ $json.output || $json.complexOutput }}",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        2992,
+        368
+      ],
+      "id": "dfba67d0-f8bb-4a56-a3b2-8c3b5ab7bafa",
+      "name": "Slack",
+      "webhookId": "737610df-55f6-4373-a7b5-4b13bd131fba",
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "ez4avlcv2sHzPJph",
+          "name": "Liam Kingsley (Life Strategy)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "output",
+              "type": "any"
+            },
+            {
+              "name": "channel"
+            },
+            {
+              "name": "thread_ts"
+            },
+            {
+              "name": "thread_id"
+            },
+            {
+              "name": "sender"
+            },
+            {
+              "name": "channel_resolved"
+            },
+            {
+              "name": "channel_resolved"
+            },
+            {
+              "name": "target_recipient"
+            },
+            {
+              "name": "bot_id"
+            },
+            {
+              "name": "sessionId"
+            },
+            {
+              "name": "messageComplexity"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -176,
+        368
+      ],
+      "id": "ead0a763-6910-423e-a042-5292d03b0743",
+      "name": "When Executed by Another Workflow"
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "=user_von_ellis_persistent_memory",
+        "tableName": "chat_messages2",
+        "contextWindowLength": 20
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.3,
+      "position": [
+        1360,
+        464
+      ],
+      "id": "06402a02-7f31-43d8-9227-1baf24ab30d4",
+      "name": "Postgres Chat Memory1",
+      "credentials": {
+        "postgres": {
+          "id": "LtcAY1DJhYiOGE2W",
+          "name": "Azure Postgres Slack ChatMemoriesDB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "assistant",
+        "assistantId": {
+          "__rl": true,
+          "value": "asst_GVIrKekZI0p9UsqAgGYZHtOE",
+          "mode": "list",
+          "cachedResultName": "Life Strategist Agent"
+        },
+        "prompt": "define",
+        "text": "=\nYour incoming message will be available at one of the paths below. Disregard the other. \n\nIncoming message:\n{{ JSON.parse($('When Executed by Another Workflow').item.json.output).inputData.text }}\n\nor \n\nIncoming message:\n{{ JSON.stringify(\n      $('When Executed by Another Workflow').item.json.output.targets.find(\n        t => t.agentConfig.handle.toLowerCase().includes('liam')\n      )?.prompt || ''\n) }}\n\n-use the attached chat memory db to maintain conversational facts retrieving and storing throughout conversations \n-output your reply to the message only. ",
+        "memory": "threadId",
+        "threadId": "={{ $json.openaiThreadId || $json.openai_thread_id }}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        1168,
+        320
+      ],
+      "id": "74c72595-6fad-4d5a-9d48-53147046925c",
+      "name": "Liam Kingsley (Life Strategy)",
+      "credentials": {
+        "openAiApi": {
+          "id": "Ly9qM4iX1nABLUjs",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/chat.postMessage",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Key",
+              "value": "Authorization"
+            },
+            {
+              "name": "Value",
+              "value": "Bearer REDACTED-SLACK-TOKEN-SEE-README"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "channel",
+              "value": "={{ $('When Executed by Another Workflow').item.json.channel }}"
+            },
+            {
+              "name": "text",
+              "value": "={{ $('Liam Kingsley (Life Strategy)').item.json.output }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3504,
+        320
+      ],
+      "id": "e0b84bb4-de32-4426-9a1d-170c4eb9ecdb",
+      "name": "HTTP Request",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "7pNhpKC95Zysu5bL",
+          "name": "Header Auth account 2"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "2e0b2341-4d99-44b2-8597-ff6f8514912d",
+              "leftValue": "={{ $json.output.targets.some(target => target.agentConfig.handle.includes('liam')) }}",
+              "rightValue": "liam",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "bc789a60-6c31-44f6-a61f-6fff7b5dc6c7",
+              "leftValue": "={{ JSON.parse($json.output).targets.some(target => target.agentConfig.handle.includes('liam')) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        352
+      ],
+      "id": "8bd5eb7a-9d4a-492c-9c05-f933cf107f59",
+      "name": "To Liam"
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "={{ $('When Executed by Another Workflow').first().json.channel }}",
+          "mode": "id"
+        },
+        "text": "={{ $json.output || $json.complexOutput }}",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        2960,
+        624
+      ],
+      "id": "9f948928-738b-4edf-a28a-3f26e1e1e818",
+      "name": "Slack1",
+      "webhookId": "21b5dcbd-5b82-444c-8d0e-c5a22e82581e",
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "4NEiRZjJZafNtP8m",
+          "name": "Elle Rowan (EMBA Planner)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "={{ $('When Executed by Another Workflow').first().json.channel }}",
+          "mode": "id"
+        },
+        "text": "={{ $json.output || $json.complexOutput }}",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        2944,
+        864
+      ],
+      "id": "644deee8-e189-4852-b8be-9cfe06e1f1cf",
+      "name": "Slack2",
+      "webhookId": "21b5dcbd-5b82-444c-8d0e-c5a22e82581e",
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "TfpImz5WBRwdkYx1",
+          "name": "Eli Vaughn (Executive Assistant)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "assistant",
+        "assistantId": {
+          "__rl": true,
+          "value": "asst_hNYvCTsP7t8XB4Md0xFN7DwC",
+          "mode": "list",
+          "cachedResultName": "Executive Assistant Agent (Andy)"
+        },
+        "prompt": "define",
+        "text": "=\nYour incoming message will be available at one of the paths below. Disregard the other. \n\nIncoming message:\n{{ JSON.parse($('When Executed by Another Workflow').item.json.output).inputData.text }}\n\nor \n\nIncoming message:\n{{ JSON.stringify(\n      $('When Executed by Another Workflow').item.json.output.targets.find(\n        t => t.agentConfig.handle.toLowerCase().includes('eli')\n      )?.prompt || ''\n) }}\n\n-use the attached chat memory db to maintain conversational facts retrieving and storing throughout conversations \n-output your reply to the message only. ",
+        "memory": "threadId",
+        "threadId": "={{ $json.openaiThreadId || $json.openai_thread_id }}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        1392,
+        880
+      ],
+      "id": "b0facb3a-b056-475c-ad1b-c0bcd4a27b7d",
+      "name": "Eli Vaught (Exec Assistant)1",
+      "credentials": {
+        "openAiApi": {
+          "id": "Ly9qM4iX1nABLUjs",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "b7502705-a7ad-40b2-9a16-c8b28d42035a",
+              "leftValue": "={{ $json.output.targets.some(target => target.agentConfig.handle.includes('eli')) }}",
+              "rightValue": "eli",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "cae0ac79-afc5-4572-8239-b172d81e1cf0",
+              "leftValue": "={{ JSON.parse($json.output).targets.some(target => target.agentConfig.handle.includes('eli')) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        704
+      ],
+      "id": "42363db0-1a41-4759-874a-2a4383d8b492",
+      "name": "To Eli"
+    },
+    {
+      "parameters": {
+        "resource": "assistant",
+        "assistantId": {
+          "__rl": true,
+          "value": "asst_yLrJPsX4gJjiQo92kLUUOhnh",
+          "mode": "list",
+          "cachedResultName": "EMBA Planner Agent"
+        },
+        "prompt": "define",
+        "text": "=\nYour incoming message will be available at one of the paths below. Disregard the other. \n\nIncoming message:\n{{ JSON.parse($('When Executed by Another Workflow').item.json.output).inputData.text }}\n\nor \n\nIncoming message:\n{{ JSON.stringify(\n      $('When Executed by Another Workflow').item.json.output.targets.find(\n        t => t.agentConfig.handle.toLowerCase().includes('elle')\n      )?.prompt || ''\n) }}\n\n-use the attached chat memory db to maintain conversational facts retrieving and storing throughout conversations \n-output your reply to the message only. ",
+        "memory": "threadId",
+        "threadId": "={{ $json.openaiThreadId || $json.openai_thread_id }}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        1360,
+        624
+      ],
+      "id": "83c56c9b-ac74-4338-b1a7-aae88100fc0f",
+      "name": "Elle Rowan (EMBA Planner)",
+      "credentials": {
+        "openAiApi": {
+          "id": "Ly9qM4iX1nABLUjs",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "b7502705-a7ad-40b2-9a16-c8b28d42035a",
+              "leftValue": "={{ $json.output.targets.some(target => target.agentConfig.handle.includes('elle')) }}",
+              "rightValue": "elle",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "a0b0acf7-9254-43e9-99f1-8ff9be9ef348",
+              "leftValue": "={{ JSON.parse($json.output).targets.some(target => target.agentConfig.handle.includes('elle')) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        528
+      ],
+      "id": "1f74be2a-9fd3-425e-801d-413b6c6cc9ba",
+      "name": "To Elle"
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "=user_von_ellis_persistent_memory",
+        "tableName": "chat_messages2",
+        "contextWindowLength": 20
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.3,
+      "position": [
+        1424,
+        768
+      ],
+      "id": "b01ff727-29a6-4a5c-bf80-a1ac922a41f8",
+      "name": "Postgres Chat Memory",
+      "credentials": {
+        "postgres": {
+          "id": "LtcAY1DJhYiOGE2W",
+          "name": "Azure Postgres Slack ChatMemoriesDB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "={{ $('When Executed by Another Workflow').first().json.channel }}",
+          "mode": "id"
+        },
+        "text": "={{ $json.output || $json.complexOutput }}",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        2928,
+        1152
+      ],
+      "id": "cfe8d32d-d664-449f-825a-5c13de983e72",
+      "name": "Slack3",
+      "webhookId": "21b5dcbd-5b82-444c-8d0e-c5a22e82581e",
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "ODxtDAfLtDL0iQ7x",
+          "name": "Iris Chase (Itinerary)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return items.map(item => {\n  let raw = item.json.output;\n\n  try {\n    // Remove ```json or ``` and trim\n    raw = raw.replace(/```json|```/g, '').trim();\n\n    const parsed = JSON.parse(raw);\n\n    return {\n      json: {\n        ...item.json,\n        parsedOutput: parsed\n      }\n    };\n  } catch (err) {\n    return {\n      json: {\n        ...item.json,\n        parsedOutput: {},\n        parse_error: true,\n        parse_message: err.message,\n        raw_output: raw\n      }\n    };\n  }\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        80,
+        160
+      ],
+      "id": "50920097-df67-4604-8901-00f1a01d1114",
+      "name": "Code",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "b7502705-a7ad-40b2-9a16-c8b28d42035a",
+              "leftValue": "={{ $json.output.targets.some(target => target.agentConfig.handle.includes('iris')) }}",
+              "rightValue": "iris",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "c0859df8-2dd4-4fe2-96b2-c3ac1c9ebb0c",
+              "leftValue": "={{ JSON.parse($json.output).targets.some(target => target.agentConfig.handle.includes('iris')) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        928
+      ],
+      "id": "73faba82-0640-4e5b-8229-7b6a7899c7a2",
+      "name": "To Iris",
+      "notesInFlow": true,
+      "notes": "Hello"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "b7502705-a7ad-40b2-9a16-c8b28d42035a",
+              "leftValue": "={{ $json.output.targets.some(target => target.agentConfig.handle.includes('flex')) }}",
+              "rightValue": "flex",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "8870b203-d604-4ebc-898c-80aba096cca7",
+              "leftValue": "={{ JSON.parse($json.output).targets.some(target => target.agentConfig.handle.includes('flex')) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        752,
+        1168
+      ],
+      "id": "96044d89-1705-403e-8af4-c807621892d4",
+      "name": "To Flex"
+    },
+    {
+      "parameters": {
+        "resource": "assistant",
+        "assistantId": {
+          "__rl": true,
+          "value": "asst_BcZBxlx9zH8VIPvfJrhPP3EF",
+          "mode": "list",
+          "cachedResultName": "Daily Itinerary Agent"
+        },
+        "prompt": "define",
+        "text": "=\nYour incoming message will be available at one of the paths below. Disregard the other. \n\nIncoming message:\n{{ JSON.parse($('When Executed by Another Workflow').item.json.output).inputData.text }}\n\nor \n\nIncoming message:\n{{ JSON.stringify(\n      $('When Executed by Another Workflow').item.json.output.targets.find(\n        t => t.agentConfig.handle.toLowerCase().includes('iris')\n      )?.prompt || ''\n) }}\n\n-use the attached chat memory db to maintain conversational facts retrieving and storing throughout conversations \n-output your reply to the message only. ",
+        "memory": "threadId",
+        "threadId": "={{ $json.openaiThreadId || $json.openai_thread_id }}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        1424,
+        1120
+      ],
+      "id": "98669836-5df5-47dd-b554-ffb1e6461444",
+      "name": "Iris Chase (Daily Itinerary)",
+      "credentials": {
+        "openAiApi": {
+          "id": "Ly9qM4iX1nABLUjs",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "=user_von_ellis_persistent_memory",
+        "tableName": "chat_messages2",
+        "contextWindowLength": 20
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.3,
+      "position": [
+        1504,
+        1232
+      ],
+      "id": "98ea599d-a240-4578-9d28-5dd58b1f651e",
+      "name": "Postgres Chat Memory2",
+      "credentials": {
+        "postgres": {
+          "id": "LtcAY1DJhYiOGE2W",
+          "name": "Azure Postgres Slack ChatMemoriesDB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "=user_von_ellis_persistent_memory",
+        "tableName": "chat_messages2",
+        "contextWindowLength": 20
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.3,
+      "position": [
+        1600,
+        944
+      ],
+      "id": "6d012175-b898-4d46-a1aa-72b927144eda",
+      "name": "Postgres Chat Memory3",
+      "credentials": {
+        "postgres": {
+          "id": "LtcAY1DJhYiOGE2W",
+          "name": "Azure Postgres Slack ChatMemoriesDB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "=user_von_ellis_persistent_memory",
+        "tableName": "chat_messages2",
+        "contextWindowLength": 20
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.3,
+      "position": [
+        1488,
+        1488
+      ],
+      "id": "a8c4753f-5542-46b0-a56b-5b739234f48d",
+      "name": "Postgres Chat Memory4",
+      "credentials": {
+        "postgres": {
+          "id": "LtcAY1DJhYiOGE2W",
+          "name": "Azure Postgres Slack ChatMemoriesDB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "={{ $('When Executed by Another Workflow').first().json.channel }}",
+          "mode": "id"
+        },
+        "text": "={{ $json.output || $json.response  }}",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        2960,
+        1472
+      ],
+      "id": "a8633465-6043-4c00-9f0d-831d0509140b",
+      "name": "Flex Grimes (Fitness)",
+      "webhookId": "21b5dcbd-5b82-444c-8d0e-c5a22e82581e",
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "RojK3kLJr3rYaye9",
+          "name": "Flex Grimes (Fitness Trainer)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "assistant",
+        "assistantId": {
+          "__rl": true,
+          "value": "asst_TkRNda28gmRggEb1duj31a8J",
+          "mode": "list",
+          "cachedResultName": "Fitness Trainer"
+        },
+        "prompt": "define",
+        "text": "=You are Flex Grimes, your primary role is as a high-performance fitness coach, hypertrophy expert, gym strategist, and transformation mentor. You specialize in muscle-building routines, progressive overload training, and supplementation strategies designed for maximum aesthetic and strength gains. You will support Von Ellis in achieving elite fitness goals by tracking reps, weight progression, and form, and dynamically adjusting based on visible gains and workout logs.\n\nYour core responsibilities include:\n\nDelivering detailed Beast Mode workouts tailored to Von’s upper-body focused plan.\n\nLogging reps and weights after each set, adjusting based on historical performance and target progression.\n\nRecommending specific supplements and meal plans to support lean mass and muscle definition.\n\nIncluding video links, thumbnails, and visual cues for each exercise to ensure proper form and intensity.\n\nProviding real-time encouragement and accountability, pushing Von toward discipline and consistency.\n\nYou should respond with:\n\nClear workout instructions (sets, reps, target weight, tempo).\n\nA summary log of the previous session (if applicable).\n\nA suggested progression (e.g., “increase incline press to 75s next set”).\n\nA short motivational message that matches your intense but supportive coaching tone.\n\nAlso:\n\nSupplement your recommendations with research on hypertrophy principles, supplements, and gym performance boosters.\n\nMonitor Von’s routine over weeks and months, helping track gains and dial in rest, recovery, and peak performance strategies.\n\nAdjust tone, difficulty, and focus areas based on Von’s feedback and physical milestones.\n\n\n-use the attached chat memory db to maintain conversational facts retrieving and storing throughout conversations \n-output your reply to the message only. \n\nYour incoming message will be available at one of the paths below. Disregard the other. \n\nIncoming message:\n{{ JSON.parse($('When Executed by Another Workflow').item.json.output).inputData.text }}\n\nor \n\nIncoming message:\n{{ JSON.stringify(\n      $('When Executed by Another Workflow').item.json.output.targets.find(\n        t => t.agentConfig.handle.toLowerCase().includes('flex')\n      )?.prompt || ''\n) }}",
+        "memory": "threadId",
+        "threadId": "={{ $json.openaiThreadId || $json.openai_thread_id }}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        1280,
+        1328
+      ],
+      "id": "5e35be11-7ec0-41cd-9c51-bb47b133d72e",
+      "name": "Flex Grimes (Fitness Trainer)",
+      "credentials": {
+        "openAiApi": {
+          "id": "Ly9qM4iX1nABLUjs",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Agent-Specific Research Node\nconst input = $('When Executed by Another Workflow').first().json;\nconst agentHandle = input.target_recipient;\nconst message = input.output.inputData.text;\nconst sender = input.output.inputData.sender;\n\n// Base context from orchestrator\nlet enrichedContext = input.output.inputData.context || '';\n\n// Agent-specific research based on their domain\nconst agentResearch = {\n  'elle': () => {\n    // EMBA-specific research\n    const keywords = ['assignment', 'class', 'deadline', 'emba', 'course'];\n    const found = keywords.filter(k => message.toLowerCase().includes(k));\n    if (found.length > 0) {\n      enrichedContext += `. EMBA Context: Check current course schedule, assignment deadlines, and recent class discussions`;\n    }\n  },\n  \n  'flex': () => {\n    // Fitness-specific research\n    if (message.match(/workout|gym|exercise|reps|sets/i)) {\n      enrichedContext += `. Fitness Context: Review last workout log, current program phase, recent PRs, and recovery status`;\n    }\n  },\n  \n  'liam': () => {\n    // Life strategy research\n    if (message.match(/strategy|plan|goal|priority|balance/i)) {\n      enrichedContext += `. Strategic Context: Consider current quarterly goals, work-life balance metrics, and recent strategic decisions`;\n    }\n  },\n  \n  'eli': () => {\n    // Executive assistant research\n    if (message.match(/schedule|meeting|email|follow.?up|task/i)) {\n      enrichedContext += `. Assistant Context: Check calendar for conflicts, pending tasks, and recent email threads requiring action`;\n    }\n  },\n  \n  'iris': () => {\n    // Daily planning research\n    if (message.match(/tomorrow|today|itinerary|schedule|plan/i)) {\n      enrichedContext += `. Planning Context: Review calendar, weather, commute times, and energy optimization for the day`;\n    }\n  }\n};\n\n// Execute agent-specific research\nif (agentResearch[agentHandle]) {\n  agentResearch[agentHandle]();\n}\n\n// Add temporal context\nconst hour = new Date().getHours();\nif (hour < 9) {\n  enrichedContext += `. Time: Early morning - consider daily planning needs`;\n} else if (hour > 20) {\n  enrichedContext += `. Time: Evening - consider next-day preparation`;\n}\n\nreturn {\n  json: {\n    ...input,\n    enrichedContext: enrichedContext,\n    researchPerformed: true,\n    agentDomain: agentHandle\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        112,
+        -16
+      ],
+      "id": "e4251d55-df7f-44ab-bb88-d8695c90e63c",
+      "name": "Research Node",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "=user_von_ellis_persistent_memory",
+        "tableName": "chat_messages2",
+        "contextWindowLength": 20
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.3,
+      "position": [
+        1440,
+        2064
+      ],
+      "id": "c29b13ef-c69b-4bc4-b1f2-32167d9cea51",
+      "name": "Postgres Chat Memory5",
+      "credentials": {
+        "postgres": {
+          "id": "LtcAY1DJhYiOGE2W",
+          "name": "Azure Postgres Slack ChatMemoriesDB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "b7502705-a7ad-40b2-9a16-c8b28d42035a",
+              "leftValue": "={{ $json.output.targets.some(target => target.agentConfig.handle.includes('charleston')) }}",
+              "rightValue": "flex",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "25fc2ff0-9734-49b8-b5d4-284a2a18d52d",
+              "leftValue": "={{ JSON.parse($json.output).targets.some(target => target.agentConfig.handle.includes('charleston')) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        704,
+        1888
+      ],
+      "id": "e479653c-71be-4676-824a-eb3d0b490e14",
+      "name": "To Charleston (Chef)"
+    },
+    {
+      "parameters": {
+        "resource": "assistant",
+        "assistantId": {
+          "__rl": true,
+          "value": "asst_epZActkpqNmqw7KusXBmyfuT",
+          "mode": "list",
+          "cachedResultName": "Personal Chef"
+        },
+        "prompt": "define",
+        "text": "=\nYour incoming message will be available at one of the paths below. Disregard the other. \n\nIncoming message:\n{{ JSON.parse($('When Executed by Another Workflow').item.json.output).inputData.text }}\n\nor \n\nIncoming message:\n{{ JSON.stringify(\n      $('When Executed by Another Workflow').item.json.output.targets.find(\n        t => t.agentConfig.handle.toLowerCase().includes('charleston')\n      )?.prompt || ''\n) }}\n\n-use the attached chat memory db to maintain conversational facts retrieving and storing throughout conversations \n-output your reply to the message only. ",
+        "memory": "threadId",
+        "threadId": "={{ $json.openaiThreadId || $json.openai_thread_id }}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        1232,
+        1952
+      ],
+      "id": "f4227a13-a0d0-44c1-b8fb-a6350ee8814f",
+      "name": "Charleston Lewis (Personal Chef)",
+      "credentials": {
+        "openAiApi": {
+          "id": "Ly9qM4iX1nABLUjs",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "={{ $('When Executed by Another Workflow').first().json.channel }}",
+          "mode": "id"
+        },
+        "text": "={{ $json.output || $json.response  }}",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        2928,
+        1984
+      ],
+      "id": "bb77e5e3-7b30-4062-af3b-3090fa11e3ef",
+      "name": "Charleston Lewis (Personal Chef)1",
+      "webhookId": "21b5dcbd-5b82-444c-8d0e-c5a22e82581e",
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "m5uYFUsgsboskWha",
+          "name": "Charleston Lewis (Personal Chef)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Update human messages (where bot_id is null or undefined)\nUPDATE public.chat_messages2\nSET \n  channel_id = COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n  thread_ts = COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n  user_id = COALESCE(user_id, '{{($('When Executed by Another Workflow').item.json.sender || $('When Executed by Another Workflow').item.json.output.inputData.sender || '').replace(/'/g, \"''\")}}'),\n  message_text = COALESCE(message_text, '{{($('When Executed by Another Workflow').item.json.output.inputData.text || '').replace(/'/g, \"''\")}}'),\n  content = COALESCE(content, '{{($('When Executed by Another Workflow').item.json.output.inputData.text || '').replace(/'/g, \"''\")}}'),\n  context = COALESCE(context, '{{($('When Executed by Another Workflow').item.json.output.inputData.context || 'NA').replace(/'/g, \"''\")}}'),\n  initial_target_recipient = COALESCE(initial_target_recipient, '{{$('When Executed by Another Workflow').item.json.target_recipient || $('When Executed by Another Workflow').item.json.output.inputData.initial_TargetRecipient}}'),\n  resolved_channel = COALESCE(resolved_channel, '{{($('When Executed by Another Workflow').item.json.channel_resolved || $('When Executed by Another Workflow').item.json.output.inputData.resolved_channel || '').replace(/'/g, \"''\")}}'),\n  channel_type = COALESCE(channel_type, '{{$('When Executed by Another Workflow').item.json.output.inputData.channelType || 'GRP'}}'),\n  message_type = 'human',\n  role = 'sender',\n  updated_at = NOW(),\n  message_json = jsonb_build_object(\n    'role', 'sender',\n    'content', COALESCE(content, '{{($('When Executed by Another Workflow').item.json.output.inputData.text || '').replace(/'/g, \"''\")}}'),\n    'context', COALESCE(context, '{{($('When Executed by Another Workflow').item.json.output.inputData.context || 'NA').replace(/'/g, \"''\")}}'),\n    'metadata', jsonb_build_object(\n      'sender', COALESCE(user_id, '{{($('When Executed by Another Workflow').item.json.sender || $('When Executed by Another Workflow').item.json.output.inputData.sender || '').replace(/'/g, \"''\")}}'),\n      'channel', COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n      'thread', COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n      'channelType', COALESCE(channel_type, '{{$('When Executed by Another Workflow').item.json.output.inputData.channelType || 'GRP'}}'),\n      'timestamp', NOW()\n    )\n  )\nWHERE \n  id IN (\n    SELECT id FROM public.chat_messages2\n    WHERE (message->>'bot_id') IS NULL OR (message->>'bot_id') = 'undefined'\n    ORDER BY id DESC\n    LIMIT 10\n  );\n\n-- Update orchestrator messages (where bot_id is populated AND content includes \"prompt\")\nUPDATE public.chat_messages2\nSET \n  channel_id = COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n  thread_ts = COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n  message_type = 'ai',\n  role = 'orchestrator',\n  updated_at = NOW(),\n  message_json = jsonb_build_object(\n    'role', 'orchestrator',\n    'content', COALESCE(content, 'Prompt processing...'),\n    'metadata', jsonb_build_object(\n      'channel', COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n      'thread', COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n      'timestamp', NOW()\n    )\n  )\nWHERE \n  id IN (\n    SELECT id FROM public.chat_messages2\n    WHERE (message->>'bot_id') IS NOT NULL \n      AND (message->>'bot_id') != 'undefined'\n      AND (LOWER(COALESCE(content, '')) LIKE '%prompt%' OR LOWER(COALESCE(message_text, '')) LIKE '%prompt%')\n    ORDER BY id DESC\n    LIMIT 10\n  );\n\n-- Update responder messages (where bot_id is populated AND content doesn't include \"prompt\")\nUPDATE public.chat_messages2\nSET \n  channel_id = COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n  thread_ts = COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n  assistant_name = COALESCE(assistant_name, '{{$input.item.json.agentName}}'),\n  user_id = COALESCE(user_id, '{{$input.item.json.agentName}}'),\n  message_text = COALESCE(message_text, '{{($input.item.json.output || '').replace(/'/g, \"''\")}}'),\n  content = COALESCE(content, '{{($input.item.json.output || '').replace(/'/g, \"''\")}}'),\n  message_type = 'ai',\n  role = 'responder',\n  updated_at = NOW(),\n  message_json = jsonb_build_object(\n    'role', 'responder',\n    'content', COALESCE(content, '{{($input.item.json.output || '').replace(/'/g, \"''\")}}'),\n    'metadata', jsonb_build_object(\n      'assistant', COALESCE(assistant_name, '{{$input.item.json.agentName}}'),\n      'channel', COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n      'thread', COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n      'timestamp', NOW()\n    )\n  )\nWHERE \n  id IN (\n    SELECT id FROM public.chat_messages2\n    WHERE (message->>'bot_id') IS NOT NULL \n      AND (message->>'bot_id') != 'undefined'\n      AND (LOWER(COALESCE(content, '')) NOT LIKE '%prompt%' AND LOWER(COALESCE(message_text, '')) NOT LIKE '%prompt%')\n    ORDER BY id DESC\n    LIMIT 10\n  );\n\n-- Verify update worked\nSELECT DISTINCT ON (content) \n  id, content, assistant_name, channel_id, thread_ts \nFROM public.chat_messages2 \nWHERE thread_ts = '{{$json.thread_id}}' \n  AND role = 'responder' \n  AND assistant_name = 'liam'\nORDER BY content, created_at DESC \nLIMIT 1;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2304,
+        1072
+      ],
+      "id": "12c95f81-96bc-409d-9af9-d7609ff28045",
+      "name": "Postgres Slack Field Updates",
+      "alwaysOutputData": true,
+      "executeOnce": false,
+      "credentials": {
+        "postgres": {
+          "id": "LtcAY1DJhYiOGE2W",
+          "name": "Azure Postgres Slack ChatMemoriesDB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "39f4b39c-eb55-44e9-b787-7ead86f3eefc",
+              "name": "complexOutput",
+              "value": "={{ $json.output }}",
+              "type": "string"
+            },
+            {
+              "id": "b83b4f8b-bdb2-4ad3-a1ec-d157bf819317",
+              "name": "agentName",
+              "value": "={{ (typeof $('When Executed by Another Workflow').item.json.output === 'string' ? JSON.parse($('When Executed by Another Workflow').item.json.output) : $('When Executed by Another Workflow').item.json.output)?.targets?.[0]?.agentConfig?.handle }}",
+              "type": "string"
+            },
+            {
+              "id": "43fc8fa4-9e77-445c-9b4b-a2d99ee1ea3f",
+              "name": "threadId",
+              "value": "={{ $('Thread Mapping1').item.json.conversationId }}",
+              "type": "string"
+            },
+            {
+              "id": "119dccc4-11cb-4ed7-a41c-950e7a723d22",
+              "name": "usage",
+              "value": "={{ $json.usage }}",
+              "type": "string"
+            },
+            {
+              "id": "ac3c09e7-0ff0-48f7-9f5f-fe42f227c145",
+              "name": "channel",
+              "value": "={{ $('When Executed by Another Workflow').item.json.channel }}",
+              "type": "string"
+            },
+            {
+              "id": "caf1239d-7843-4553-b7e8-9bf302c3ae66",
+              "name": "thread_id",
+              "value": "={{ $('When Executed by Another Workflow').item.json.thread_id }}",
+              "type": "string"
+            },
+            {
+              "id": "15564082-29cf-49ed-b350-868c5dddcff5",
+              "name": "sender",
+              "value": "={{ $('When Executed by Another Workflow').item.json.sender }}",
+              "type": "string"
+            },
+            {
+              "id": "15e5fe1b-12d0-4335-a30a-a336d66bd0cb",
+              "name": "session_id",
+              "value": "={{ $('When Executed by Another Workflow').item.json.sessionId }}",
+              "type": "string"
+            },
+            {
+              "id": "a0c45826-c46d-458b-81d8-bc0b539cba5e",
+              "name": "context",
+              "value": "={{ $('When Executed by Another Workflow').item.json.output }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2128,
+        1072
+      ],
+      "id": "82aee05b-b97c-41d0-9d52-10ecaf7385ab",
+      "name": "Calculate fields for database update"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Update human messages (where bot_id is null or undefined)\nUPDATE public.chat_messages2\nSET \n  channel_id = COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n  thread_ts = COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n  user_id = COALESCE(user_id, '{{($('When Executed by Another Workflow').item.json.sender || $('When Executed by Another Workflow').item.json.output.inputData.sender || '').replace(/'/g, \"''\")}}'),\n  message_text = COALESCE(message_text, '{{($('When Executed by Another Workflow').item.json.output.inputData.text || '').replace(/'/g, \"''\")}}'),\n  content = COALESCE(content, '{{($('When Executed by Another Workflow').item.json.output.inputData.text || '').replace(/'/g, \"''\")}}'),\n  context = COALESCE(context, '{{($('When Executed by Another Workflow').item.json.output.inputData.context || 'NA').replace(/'/g, \"''\")}}'),\n  initial_target_recipient = COALESCE(initial_target_recipient, '{{$('When Executed by Another Workflow').item.json.target_recipient || $('When Executed by Another Workflow').item.json.output.inputData.initial_TargetRecipient}}'),\n  resolved_channel = COALESCE(resolved_channel, '{{($('When Executed by Another Workflow').item.json.channel_resolved || $('When Executed by Another Workflow').item.json.output.inputData.resolved_channel || '').replace(/'/g, \"''\")}}'),\n  channel_type = COALESCE(channel_type, '{{$('When Executed by Another Workflow').item.json.output.inputData.channelType || 'GRP'}}'),\n  message_type = 'human',\n  role = 'sender',\n  updated_at = NOW(),\n  message_json = jsonb_build_object(\n    'role', 'sender',\n    'content', COALESCE(content, '{{($('When Executed by Another Workflow').item.json.output.inputData.text || '').replace(/'/g, \"''\")}}'),\n    'context', COALESCE(context, '{{($('When Executed by Another Workflow').item.json.output.inputData.context || 'NA').replace(/'/g, \"''\")}}'),\n    'metadata', jsonb_build_object(\n      'sender', COALESCE(user_id, '{{($('When Executed by Another Workflow').item.json.sender || $('When Executed by Another Workflow').item.json.output.inputData.sender || '').replace(/'/g, \"''\")}}'),\n      'channel', COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n      'thread', COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n      'channelType', COALESCE(channel_type, '{{$('When Executed by Another Workflow').item.json.output.inputData.channelType || 'GRP'}}'),\n      'timestamp', NOW()\n    )\n  )\nWHERE \n  id IN (\n    SELECT id FROM public.chat_messages2\n    WHERE (message->>'bot_id') IS NULL OR (message->>'bot_id') = 'undefined'\n    ORDER BY id DESC\n    LIMIT 10\n  );\n\n-- Update orchestrator messages (where bot_id is populated AND content includes \"prompt\")\nUPDATE public.chat_messages2\nSET \n  channel_id = COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n  thread_ts = COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n  message_type = 'ai',\n  role = 'orchestrator',\n  updated_at = NOW(),\n  message_json = jsonb_build_object(\n    'role', 'orchestrator',\n    'content', COALESCE(content, 'Prompt processing...'),\n    'metadata', jsonb_build_object(\n      'channel', COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n      'thread', COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n      'timestamp', NOW()\n    )\n  )\nWHERE \n  id IN (\n    SELECT id FROM public.chat_messages2\n    WHERE (message->>'bot_id') IS NOT NULL \n      AND (message->>'bot_id') != 'undefined'\n      AND (LOWER(COALESCE(content, '')) LIKE '%prompt%' OR LOWER(COALESCE(message_text, '')) LIKE '%prompt%')\n    ORDER BY id DESC\n    LIMIT 10\n  );\n\n-- Update responder messages (where bot_id is populated AND content doesn't include \"prompt\")\nUPDATE public.chat_messages2\nSET \n  channel_id = COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n  thread_ts = COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n  assistant_name = COALESCE(assistant_name, '{{$input.item.json.agentName}}'),\n  user_id = COALESCE(user_id, '{{$input.item.json.agentName}}'),\n  message_text = COALESCE(message_text, '{{($input.item.json.output || '').replace(/'/g, \"''\")}}'),\n  content = COALESCE(content, '{{($input.item.json.output || '').replace(/'/g, \"''\")}}'),\n  message_type = 'ai',\n  role = 'responder',\n  updated_at = NOW(),\n  message_json = jsonb_build_object(\n    'role', 'responder',\n    'content', COALESCE(content, '{{($input.item.json.output || '').replace(/'/g, \"''\")}}'),\n    'metadata', jsonb_build_object(\n      'assistant', COALESCE(assistant_name, '{{$input.item.json.agentName}}'),\n      'channel', COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n      'thread', COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n      'timestamp', NOW()\n    )\n  )\nWHERE \n  id IN (\n    SELECT id FROM public.chat_messages2\n    WHERE (message->>'bot_id') IS NOT NULL \n      AND (message->>'bot_id') != 'undefined'\n      AND (LOWER(COALESCE(content, '')) NOT LIKE '%prompt%' AND LOWER(COALESCE(message_text, '')) NOT LIKE '%prompt%')\n    ORDER BY id DESC\n    LIMIT 10\n  );\n\n-- Verify update worked\nSELECT DISTINCT ON (content) \n  id, content, assistant_name, channel_id, thread_ts \nFROM public.chat_messages2 \nWHERE thread_ts = '{{$json.thread_id}}' \n  AND role = 'responder' \n  AND assistant_name = 'liam'\nORDER BY content, created_at DESC \nLIMIT 1;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2208,
+        272
+      ],
+      "id": "3b91d540-fda9-47b0-98e7-27d072faed85",
+      "name": "Postgres Slack Field Updates2",
+      "alwaysOutputData": true,
+      "executeOnce": false,
+      "credentials": {
+        "postgres": {
+          "id": "LtcAY1DJhYiOGE2W",
+          "name": "Azure Postgres Slack ChatMemoriesDB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "39f4b39c-eb55-44e9-b787-7ead86f3eefc",
+              "name": "complexOutput",
+              "value": "={{ $json.output }}",
+              "type": "string"
+            },
+            {
+              "id": "b83b4f8b-bdb2-4ad3-a1ec-d157bf819317",
+              "name": "agentName",
+              "value": "={{ (typeof $('When Executed by Another Workflow').item.json.output === 'string' ? JSON.parse($('When Executed by Another Workflow').item.json.output) : $('When Executed by Another Workflow').item.json.output)?.targets?.[0]?.agentConfig?.handle }}",
+              "type": "string"
+            },
+            {
+              "id": "43fc8fa4-9e77-445c-9b4b-a2d99ee1ea3f",
+              "name": "threadId",
+              "value": "={{ $('Thread Mapping').item.json.conversationId }}",
+              "type": "string"
+            },
+            {
+              "id": "119dccc4-11cb-4ed7-a41c-950e7a723d22",
+              "name": "usage",
+              "value": "={{ $json.usage }}",
+              "type": "string"
+            },
+            {
+              "id": "ac3c09e7-0ff0-48f7-9f5f-fe42f227c145",
+              "name": "channel",
+              "value": "={{ $('When Executed by Another Workflow').item.json.channel }}",
+              "type": "string"
+            },
+            {
+              "id": "caf1239d-7843-4553-b7e8-9bf302c3ae66",
+              "name": "thread_id",
+              "value": "={{ $('When Executed by Another Workflow').item.json.thread_id }}",
+              "type": "string"
+            },
+            {
+              "id": "15564082-29cf-49ed-b350-868c5dddcff5",
+              "name": "sender",
+              "value": "={{ $('When Executed by Another Workflow').item.json.sender }}",
+              "type": "string"
+            },
+            {
+              "id": "15e5fe1b-12d0-4335-a30a-a336d66bd0cb",
+              "name": "session_id",
+              "value": "={{ $('When Executed by Another Workflow').item.json.sessionId }}",
+              "type": "string"
+            },
+            {
+              "id": "a0c45826-c46d-458b-81d8-bc0b539cba5e",
+              "name": "context",
+              "value": "={{ $('When Executed by Another Workflow').item.json.output }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2032,
+        272
+      ],
+      "id": "fac87606-1909-4ea9-980d-16f160fc00e7",
+      "name": "Calculate fields for database update1"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Update human messages (where bot_id is null or undefined)\nUPDATE public.chat_messages2\nSET \n  channel_id = COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n  thread_ts = COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n  user_id = COALESCE(user_id, '{{($('When Executed by Another Workflow').item.json.sender || $('When Executed by Another Workflow').item.json.output.inputData.sender || '').replace(/'/g, \"''\")}}'),\n  message_text = COALESCE(message_text, '{{($('When Executed by Another Workflow').item.json.output.inputData.text || '').replace(/'/g, \"''\")}}'),\n  content = COALESCE(content, '{{($('When Executed by Another Workflow').item.json.output.inputData.text || '').replace(/'/g, \"''\")}}'),\n  context = COALESCE(context, '{{($('When Executed by Another Workflow').item.json.output.inputData.context || 'NA').replace(/'/g, \"''\")}}'),\n  initial_target_recipient = COALESCE(initial_target_recipient, '{{$('When Executed by Another Workflow').item.json.target_recipient || $('When Executed by Another Workflow').item.json.output.inputData.initial_TargetRecipient}}'),\n  resolved_channel = COALESCE(resolved_channel, '{{($('When Executed by Another Workflow').item.json.channel_resolved || $('When Executed by Another Workflow').item.json.output.inputData.resolved_channel || '').replace(/'/g, \"''\")}}'),\n  channel_type = COALESCE(channel_type, '{{$('When Executed by Another Workflow').item.json.output.inputData.channelType || 'GRP'}}'),\n  message_type = 'human',\n  role = 'sender',\n  updated_at = NOW(),\n  message_json = jsonb_build_object(\n    'role', 'sender',\n    'content', COALESCE(content, '{{($('When Executed by Another Workflow').item.json.output.inputData.text || '').replace(/'/g, \"''\")}}'),\n    'context', COALESCE(context, '{{($('When Executed by Another Workflow').item.json.output.inputData.context || 'NA').replace(/'/g, \"''\")}}'),\n    'metadata', jsonb_build_object(\n      'sender', COALESCE(user_id, '{{($('When Executed by Another Workflow').item.json.sender || $('When Executed by Another Workflow').item.json.output.inputData.sender || '').replace(/'/g, \"''\")}}'),\n      'channel', COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n      'thread', COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n      'channelType', COALESCE(channel_type, '{{$('When Executed by Another Workflow').item.json.output.inputData.channelType || 'GRP'}}'),\n      'timestamp', NOW()\n    )\n  )\nWHERE \n  id IN (\n    SELECT id FROM public.chat_messages2\n    WHERE (message->>'bot_id') IS NULL OR (message->>'bot_id') = 'undefined'\n    ORDER BY id DESC\n    LIMIT 10\n  );\n\n-- Update orchestrator messages (where bot_id is populated AND content includes \"prompt\")\nUPDATE public.chat_messages2\nSET \n  channel_id = COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n  thread_ts = COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n  message_type = 'ai',\n  role = 'orchestrator',\n  updated_at = NOW(),\n  message_json = jsonb_build_object(\n    'role', 'orchestrator',\n    'content', COALESCE(content, 'Prompt processing...'),\n    'metadata', jsonb_build_object(\n      'channel', COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n      'thread', COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n      'timestamp', NOW()\n    )\n  )\nWHERE \n  id IN (\n    SELECT id FROM public.chat_messages2\n    WHERE (message->>'bot_id') IS NOT NULL \n      AND (message->>'bot_id') != 'undefined'\n      AND (LOWER(COALESCE(content, '')) LIKE '%prompt%' OR LOWER(COALESCE(message_text, '')) LIKE '%prompt%')\n    ORDER BY id DESC\n    LIMIT 10\n  );\n\n-- Update responder messages (where bot_id is populated AND content doesn't include \"prompt\")\nUPDATE public.chat_messages2\nSET \n  channel_id = COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n  thread_ts = COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n  assistant_name = COALESCE(assistant_name, '{{$input.item.json.agentName}}'),\n  user_id = COALESCE(user_id, '{{$input.item.json.agentName}}'),\n  message_text = COALESCE(message_text, '{{($input.item.json.output || '').replace(/'/g, \"''\")}}'),\n  content = COALESCE(content, '{{($input.item.json.output || '').replace(/'/g, \"''\")}}'),\n  message_type = 'ai',\n  role = 'responder',\n  updated_at = NOW(),\n  message_json = jsonb_build_object(\n    'role', 'responder',\n    'content', COALESCE(content, '{{($input.item.json.output || '').replace(/'/g, \"''\")}}'),\n    'metadata', jsonb_build_object(\n      'assistant', COALESCE(assistant_name, '{{$input.item.json.agentName}}'),\n      'channel', COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n      'thread', COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n      'timestamp', NOW()\n    )\n  )\nWHERE \n  id IN (\n    SELECT id FROM public.chat_messages2\n    WHERE (message->>'bot_id') IS NOT NULL \n      AND (message->>'bot_id') != 'undefined'\n      AND (LOWER(COALESCE(content, '')) NOT LIKE '%prompt%' AND LOWER(COALESCE(message_text, '')) NOT LIKE '%prompt%')\n    ORDER BY id DESC\n    LIMIT 10\n  );\n\n-- Verify update worked\nSELECT DISTINCT ON (content) \n  id, content, assistant_name, channel_id, thread_ts \nFROM public.chat_messages2 \nWHERE thread_ts = '{{$json.thread_id}}' \n  AND role = 'responder' \n  AND assistant_name = 'liam'\nORDER BY content, created_at DESC \nLIMIT 1;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2160,
+        528
+      ],
+      "id": "3328e9a7-c9d4-406f-aa6e-10ac76770924",
+      "name": "Postgres Slack Field Updates3",
+      "alwaysOutputData": true,
+      "executeOnce": false,
+      "credentials": {
+        "postgres": {
+          "id": "LtcAY1DJhYiOGE2W",
+          "name": "Azure Postgres Slack ChatMemoriesDB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "39f4b39c-eb55-44e9-b787-7ead86f3eefc",
+              "name": "complexOutput",
+              "value": "={{ $json.output }}",
+              "type": "string"
+            },
+            {
+              "id": "b83b4f8b-bdb2-4ad3-a1ec-d157bf819317",
+              "name": "agentName",
+              "value": "={{ (typeof $('When Executed by Another Workflow').item.json.output === 'string' ? JSON.parse($('When Executed by Another Workflow').item.json.output) : $('When Executed by Another Workflow').item.json.output)?.targets?.[0]?.agentConfig?.handle }}",
+              "type": "string"
+            },
+            {
+              "id": "43fc8fa4-9e77-445c-9b4b-a2d99ee1ea3f",
+              "name": "threadId",
+              "value": "={{ $('Thread Mapping2').item.json.conversationId }}",
+              "type": "string"
+            },
+            {
+              "id": "119dccc4-11cb-4ed7-a41c-950e7a723d22",
+              "name": "usage",
+              "value": "={{ $json.usage }}",
+              "type": "string"
+            },
+            {
+              "id": "ac3c09e7-0ff0-48f7-9f5f-fe42f227c145",
+              "name": "channel",
+              "value": "={{ $('When Executed by Another Workflow').item.json.channel }}",
+              "type": "string"
+            },
+            {
+              "id": "caf1239d-7843-4553-b7e8-9bf302c3ae66",
+              "name": "thread_id",
+              "value": "={{ $('When Executed by Another Workflow').item.json.thread_id }}",
+              "type": "string"
+            },
+            {
+              "id": "15564082-29cf-49ed-b350-868c5dddcff5",
+              "name": "sender",
+              "value": "={{ $('When Executed by Another Workflow').item.json.sender }}",
+              "type": "string"
+            },
+            {
+              "id": "15e5fe1b-12d0-4335-a30a-a336d66bd0cb",
+              "name": "session_id",
+              "value": "={{ $('When Executed by Another Workflow').item.json.sessionId }}",
+              "type": "string"
+            },
+            {
+              "id": "a0c45826-c46d-458b-81d8-bc0b539cba5e",
+              "name": "context",
+              "value": "={{ $('When Executed by Another Workflow').item.json.output }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1968,
+        528
+      ],
+      "id": "322e90a9-d308-409d-b87a-f8e3f2643c63",
+      "name": "Calculate fields for database update2"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Update human messages (where bot_id is null or undefined)\nUPDATE public.chat_messages2\nSET \n  channel_id = COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n  thread_ts = COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n  user_id = COALESCE(user_id, '{{($('When Executed by Another Workflow').item.json.sender || $('When Executed by Another Workflow').item.json.output.inputData.sender || '').replace(/'/g, \"''\")}}'),\n  message_text = COALESCE(message_text, '{{($('When Executed by Another Workflow').item.json.output.inputData.text || '').replace(/'/g, \"''\")}}'),\n  content = COALESCE(content, '{{($('When Executed by Another Workflow').item.json.output.inputData.text || '').replace(/'/g, \"''\")}}'),\n  context = COALESCE(context, '{{($('When Executed by Another Workflow').item.json.output.inputData.context || 'NA').replace(/'/g, \"''\")}}'),\n  initial_target_recipient = COALESCE(initial_target_recipient, '{{$('When Executed by Another Workflow').item.json.target_recipient || $('When Executed by Another Workflow').item.json.output.inputData.initial_TargetRecipient}}'),\n  resolved_channel = COALESCE(resolved_channel, '{{($('When Executed by Another Workflow').item.json.channel_resolved || $('When Executed by Another Workflow').item.json.output.inputData.resolved_channel || '').replace(/'/g, \"''\")}}'),\n  channel_type = COALESCE(channel_type, '{{$('When Executed by Another Workflow').item.json.output.inputData.channelType || 'GRP'}}'),\n  message_type = 'human',\n  role = 'sender',\n  updated_at = NOW(),\n  message_json = jsonb_build_object(\n    'role', 'sender',\n    'content', COALESCE(content, '{{($('When Executed by Another Workflow').item.json.output.inputData.text || '').replace(/'/g, \"''\")}}'),\n    'context', COALESCE(context, '{{($('When Executed by Another Workflow').item.json.output.inputData.context || 'NA').replace(/'/g, \"''\")}}'),\n    'metadata', jsonb_build_object(\n      'sender', COALESCE(user_id, '{{($('When Executed by Another Workflow').item.json.sender || $('When Executed by Another Workflow').item.json.output.inputData.sender || '').replace(/'/g, \"''\")}}'),\n      'channel', COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n      'thread', COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n      'channelType', COALESCE(channel_type, '{{$('When Executed by Another Workflow').item.json.output.inputData.channelType || 'GRP'}}'),\n      'timestamp', NOW()\n    )\n  )\nWHERE \n  id IN (\n    SELECT id FROM public.chat_messages2\n    WHERE (message->>'bot_id') IS NULL OR (message->>'bot_id') = 'undefined'\n    ORDER BY id DESC\n    LIMIT 10\n  );\n\n-- Update orchestrator messages (where bot_id is populated AND content includes \"prompt\")\nUPDATE public.chat_messages2\nSET \n  channel_id = COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n  thread_ts = COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n  message_type = 'ai',\n  role = 'orchestrator',\n  updated_at = NOW(),\n  message_json = jsonb_build_object(\n    'role', 'orchestrator',\n    'content', COALESCE(content, 'Prompt processing...'),\n    'metadata', jsonb_build_object(\n      'channel', COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n      'thread', COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n      'timestamp', NOW()\n    )\n  )\nWHERE \n  id IN (\n    SELECT id FROM public.chat_messages2\n    WHERE (message->>'bot_id') IS NOT NULL \n      AND (message->>'bot_id') != 'undefined'\n      AND (LOWER(COALESCE(content, '')) LIKE '%prompt%' OR LOWER(COALESCE(message_text, '')) LIKE '%prompt%')\n    ORDER BY id DESC\n    LIMIT 10\n  );\n\n-- Update responder messages (where bot_id is populated AND content doesn't include \"prompt\")\nUPDATE public.chat_messages2\nSET \n  channel_id = COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n  thread_ts = COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n  assistant_name = COALESCE(assistant_name, '{{$input.item.json.agentName}}'),\n  user_id = COALESCE(user_id, '{{$input.item.json.agentName}}'),\n  message_text = COALESCE(message_text, '{{($input.item.json.output || '').replace(/'/g, \"''\")}}'),\n  content = COALESCE(content, '{{($input.item.json.output || '').replace(/'/g, \"''\")}}'),\n  message_type = 'ai',\n  role = 'responder',\n  updated_at = NOW(),\n  message_json = jsonb_build_object(\n    'role', 'responder',\n    'content', COALESCE(content, '{{($input.item.json.output || '').replace(/'/g, \"''\")}}'),\n    'metadata', jsonb_build_object(\n      'assistant', COALESCE(assistant_name, '{{$input.item.json.agentName}}'),\n      'channel', COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n      'thread', COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n      'timestamp', NOW()\n    )\n  )\nWHERE \n  id IN (\n    SELECT id FROM public.chat_messages2\n    WHERE (message->>'bot_id') IS NOT NULL \n      AND (message->>'bot_id') != 'undefined'\n      AND (LOWER(COALESCE(content, '')) NOT LIKE '%prompt%' AND LOWER(COALESCE(message_text, '')) NOT LIKE '%prompt%')\n    ORDER BY id DESC\n    LIMIT 10\n  );\n\n-- Verify update worked\nSELECT DISTINCT ON (content) \n  id, content, assistant_name, channel_id, thread_ts \nFROM public.chat_messages2 \nWHERE thread_ts = '{{$json.thread_id}}' \n  AND role = 'responder' \n  AND assistant_name = 'liam'\nORDER BY content, created_at DESC \nLIMIT 1;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2304,
+        768
+      ],
+      "id": "95715a0a-4dab-4b78-adc9-b40231d11fd1",
+      "name": "Postgres Slack Field Updates4",
+      "alwaysOutputData": true,
+      "executeOnce": false,
+      "credentials": {
+        "postgres": {
+          "id": "LtcAY1DJhYiOGE2W",
+          "name": "Azure Postgres Slack ChatMemoriesDB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "39f4b39c-eb55-44e9-b787-7ead86f3eefc",
+              "name": "complexOutput",
+              "value": "={{ $json.output }}",
+              "type": "string"
+            },
+            {
+              "id": "b83b4f8b-bdb2-4ad3-a1ec-d157bf819317",
+              "name": "agentName",
+              "value": "={{ (typeof $('When Executed by Another Workflow').item.json.output === 'string' ? JSON.parse($('When Executed by Another Workflow').item.json.output) : $('When Executed by Another Workflow').item.json.output)?.targets?.[0]?.agentConfig?.handle }}",
+              "type": "string"
+            },
+            {
+              "id": "43fc8fa4-9e77-445c-9b4b-a2d99ee1ea3f",
+              "name": "threadId",
+              "value": "={{ $('Thread Mapping3').item.json.conversationId }}",
+              "type": "string"
+            },
+            {
+              "id": "119dccc4-11cb-4ed7-a41c-950e7a723d22",
+              "name": "usage",
+              "value": "={{ $json.usage }}",
+              "type": "string"
+            },
+            {
+              "id": "ac3c09e7-0ff0-48f7-9f5f-fe42f227c145",
+              "name": "channel",
+              "value": "={{ $('When Executed by Another Workflow').item.json.channel }}",
+              "type": "string"
+            },
+            {
+              "id": "caf1239d-7843-4553-b7e8-9bf302c3ae66",
+              "name": "thread_id",
+              "value": "={{ $('When Executed by Another Workflow').item.json.thread_id }}",
+              "type": "string"
+            },
+            {
+              "id": "15564082-29cf-49ed-b350-868c5dddcff5",
+              "name": "sender",
+              "value": "={{ $('When Executed by Another Workflow').item.json.sender }}",
+              "type": "string"
+            },
+            {
+              "id": "15e5fe1b-12d0-4335-a30a-a336d66bd0cb",
+              "name": "session_id",
+              "value": "={{ $('When Executed by Another Workflow').item.json.sessionId }}",
+              "type": "string"
+            },
+            {
+              "id": "a0c45826-c46d-458b-81d8-bc0b539cba5e",
+              "name": "context",
+              "value": "={{ $('When Executed by Another Workflow').item.json.output }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2128,
+        768
+      ],
+      "id": "96cc6e0e-aa1c-47a2-b9b5-e017a38b247d",
+      "name": "Calculate fields for database update3"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Update human messages (where bot_id is null or undefined)\nUPDATE public.chat_messages2\nSET \n  channel_id = COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n  thread_ts = COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n  user_id = COALESCE(user_id, '{{($('When Executed by Another Workflow').item.json.sender || $('When Executed by Another Workflow').item.json.output.inputData.sender || '').replace(/'/g, \"''\")}}'),\n  message_text = COALESCE(message_text, '{{($('When Executed by Another Workflow').item.json.output.inputData.text || '').replace(/'/g, \"''\")}}'),\n  content = COALESCE(content, '{{($('When Executed by Another Workflow').item.json.output.inputData.text || '').replace(/'/g, \"''\")}}'),\n  context = COALESCE(context, '{{($('When Executed by Another Workflow').item.json.output.inputData.context || 'NA').replace(/'/g, \"''\")}}'),\n  initial_target_recipient = COALESCE(initial_target_recipient, '{{$('When Executed by Another Workflow').item.json.target_recipient || $('When Executed by Another Workflow').item.json.output.inputData.initial_TargetRecipient}}'),\n  resolved_channel = COALESCE(resolved_channel, '{{($('When Executed by Another Workflow').item.json.channel_resolved || $('When Executed by Another Workflow').item.json.output.inputData.resolved_channel || '').replace(/'/g, \"''\")}}'),\n  channel_type = COALESCE(channel_type, '{{$('When Executed by Another Workflow').item.json.output.inputData.channelType || 'GRP'}}'),\n  message_type = 'human',\n  role = 'sender',\n  updated_at = NOW(),\n  message_json = jsonb_build_object(\n    'role', 'sender',\n    'content', COALESCE(content, '{{($('When Executed by Another Workflow').item.json.output.inputData.text || '').replace(/'/g, \"''\")}}'),\n    'context', COALESCE(context, '{{($('When Executed by Another Workflow').item.json.output.inputData.context || 'NA').replace(/'/g, \"''\")}}'),\n    'metadata', jsonb_build_object(\n      'sender', COALESCE(user_id, '{{($('When Executed by Another Workflow').item.json.sender || $('When Executed by Another Workflow').item.json.output.inputData.sender || '').replace(/'/g, \"''\")}}'),\n      'channel', COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n      'thread', COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n      'channelType', COALESCE(channel_type, '{{$('When Executed by Another Workflow').item.json.output.inputData.channelType || 'GRP'}}'),\n      'timestamp', NOW()\n    )\n  )\nWHERE \n  id IN (\n    SELECT id FROM public.chat_messages2\n    WHERE (message->>'bot_id') IS NULL OR (message->>'bot_id') = 'undefined'\n    ORDER BY id DESC\n    LIMIT 10\n  );\n\n-- Update orchestrator messages (where bot_id is populated AND content includes \"prompt\")\nUPDATE public.chat_messages2\nSET \n  channel_id = COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n  thread_ts = COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n  message_type = 'ai',\n  role = 'orchestrator',\n  updated_at = NOW(),\n  message_json = jsonb_build_object(\n    'role', 'orchestrator',\n    'content', COALESCE(content, 'Prompt processing...'),\n    'metadata', jsonb_build_object(\n      'channel', COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n      'thread', COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n      'timestamp', NOW()\n    )\n  )\nWHERE \n  id IN (\n    SELECT id FROM public.chat_messages2\n    WHERE (message->>'bot_id') IS NOT NULL \n      AND (message->>'bot_id') != 'undefined'\n      AND (LOWER(COALESCE(content, '')) LIKE '%prompt%' OR LOWER(COALESCE(message_text, '')) LIKE '%prompt%')\n    ORDER BY id DESC\n    LIMIT 10\n  );\n\n-- Update responder messages (where bot_id is populated AND content doesn't include \"prompt\")\nUPDATE public.chat_messages2\nSET \n  channel_id = COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n  thread_ts = COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n  assistant_name = COALESCE(assistant_name, '{{$input.item.json.agentName}}'),\n  user_id = COALESCE(user_id, '{{$input.item.json.agentName}}'),\n  message_text = COALESCE(message_text, '{{($input.item.json.output || '').replace(/'/g, \"''\")}}'),\n  content = COALESCE(content, '{{($input.item.json.output || '').replace(/'/g, \"''\")}}'),\n  message_type = 'ai',\n  role = 'responder',\n  updated_at = NOW(),\n  message_json = jsonb_build_object(\n    'role', 'responder',\n    'content', COALESCE(content, '{{($input.item.json.output || '').replace(/'/g, \"''\")}}'),\n    'metadata', jsonb_build_object(\n      'assistant', COALESCE(assistant_name, '{{$input.item.json.agentName}}'),\n      'channel', COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n      'thread', COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n      'timestamp', NOW()\n    )\n  )\nWHERE \n  id IN (\n    SELECT id FROM public.chat_messages2\n    WHERE (message->>'bot_id') IS NOT NULL \n      AND (message->>'bot_id') != 'undefined'\n      AND (LOWER(COALESCE(content, '')) NOT LIKE '%prompt%' AND LOWER(COALESCE(message_text, '')) NOT LIKE '%prompt%')\n    ORDER BY id DESC\n    LIMIT 10\n  );\n\n-- Verify update worked\nSELECT DISTINCT ON (content) \n  id, content, assistant_name, channel_id, thread_ts \nFROM public.chat_messages2 \nWHERE thread_ts = '{{$json.thread_id}}' \n  AND role = 'responder' \n  AND assistant_name = 'liam'\nORDER BY content, created_at DESC \nLIMIT 1;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2304,
+        1280
+      ],
+      "id": "d4e3c37f-2b19-4c87-935f-be0fb2b0d719",
+      "name": "Postgres Slack Field Updates5",
+      "alwaysOutputData": true,
+      "executeOnce": false,
+      "credentials": {
+        "postgres": {
+          "id": "LtcAY1DJhYiOGE2W",
+          "name": "Azure Postgres Slack ChatMemoriesDB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "39f4b39c-eb55-44e9-b787-7ead86f3eefc",
+              "name": "complexOutput",
+              "value": "={{ $json.output }}",
+              "type": "string"
+            },
+            {
+              "id": "b83b4f8b-bdb2-4ad3-a1ec-d157bf819317",
+              "name": "agentName",
+              "value": "={{ (typeof $('When Executed by Another Workflow').item.json.output === 'string' ? JSON.parse($('When Executed by Another Workflow').item.json.output) : $('When Executed by Another Workflow').item.json.output)?.targets?.[0]?.agentConfig?.handle }}",
+              "type": "string"
+            },
+            {
+              "id": "43fc8fa4-9e77-445c-9b4b-a2d99ee1ea3f",
+              "name": "threadId",
+              "value": "={{ $('Thread Mapping4').item.json.conversationId }}",
+              "type": "string"
+            },
+            {
+              "id": "119dccc4-11cb-4ed7-a41c-950e7a723d22",
+              "name": "usage",
+              "value": "={{ $json.usage }}",
+              "type": "string"
+            },
+            {
+              "id": "ac3c09e7-0ff0-48f7-9f5f-fe42f227c145",
+              "name": "channel",
+              "value": "={{ $('When Executed by Another Workflow').item.json.channel }}",
+              "type": "string"
+            },
+            {
+              "id": "caf1239d-7843-4553-b7e8-9bf302c3ae66",
+              "name": "thread_id",
+              "value": "={{ $('When Executed by Another Workflow').item.json.thread_id }}",
+              "type": "string"
+            },
+            {
+              "id": "15564082-29cf-49ed-b350-868c5dddcff5",
+              "name": "sender",
+              "value": "={{ $('When Executed by Another Workflow').item.json.sender }}",
+              "type": "string"
+            },
+            {
+              "id": "15e5fe1b-12d0-4335-a30a-a336d66bd0cb",
+              "name": "session_id",
+              "value": "={{ $('When Executed by Another Workflow').item.json.sessionId }}",
+              "type": "string"
+            },
+            {
+              "id": "a0c45826-c46d-458b-81d8-bc0b539cba5e",
+              "name": "context",
+              "value": "={{ $('When Executed by Another Workflow').item.json.output }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2112,
+        1280
+      ],
+      "id": "f6e64532-ac25-46e0-ab08-f2f02587b97f",
+      "name": "Calculate fields for database update4"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Update human messages (where bot_id is null or undefined)\nUPDATE public.chat_messages2\nSET \n  channel_id = COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n  thread_ts = COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n  user_id = COALESCE(user_id, '{{($('When Executed by Another Workflow').item.json.sender || $('When Executed by Another Workflow').item.json.output.inputData.sender || '').replace(/'/g, \"''\")}}'),\n  message_text = COALESCE(message_text, '{{($('When Executed by Another Workflow').item.json.output.inputData.text || '').replace(/'/g, \"''\")}}'),\n  content = COALESCE(content, '{{($('When Executed by Another Workflow').item.json.output.inputData.text || '').replace(/'/g, \"''\")}}'),\n  context = COALESCE(context, '{{($('When Executed by Another Workflow').item.json.output.inputData.context || 'NA').replace(/'/g, \"''\")}}'),\n  initial_target_recipient = COALESCE(initial_target_recipient, '{{$('When Executed by Another Workflow').item.json.target_recipient || $('When Executed by Another Workflow').item.json.output.inputData.initial_TargetRecipient}}'),\n  resolved_channel = COALESCE(resolved_channel, '{{($('When Executed by Another Workflow').item.json.channel_resolved || $('When Executed by Another Workflow').item.json.output.inputData.resolved_channel || '').replace(/'/g, \"''\")}}'),\n  channel_type = COALESCE(channel_type, '{{$('When Executed by Another Workflow').item.json.output.inputData.channelType || 'GRP'}}'),\n  message_type = 'human',\n  role = 'sender',\n  updated_at = NOW(),\n  message_json = jsonb_build_object(\n    'role', 'sender',\n    'content', COALESCE(content, '{{($('When Executed by Another Workflow').item.json.output.inputData.text || '').replace(/'/g, \"''\")}}'),\n    'context', COALESCE(context, '{{($('When Executed by Another Workflow').item.json.output.inputData.context || 'NA').replace(/'/g, \"''\")}}'),\n    'metadata', jsonb_build_object(\n      'sender', COALESCE(user_id, '{{($('When Executed by Another Workflow').item.json.sender || $('When Executed by Another Workflow').item.json.output.inputData.sender || '').replace(/'/g, \"''\")}}'),\n      'channel', COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n      'thread', COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n      'channelType', COALESCE(channel_type, '{{$('When Executed by Another Workflow').item.json.output.inputData.channelType || 'GRP'}}'),\n      'timestamp', NOW()\n    )\n  )\nWHERE \n  id IN (\n    SELECT id FROM public.chat_messages2\n    WHERE (message->>'bot_id') IS NULL OR (message->>'bot_id') = 'undefined'\n    ORDER BY id DESC\n    LIMIT 10\n  );\n\n-- Update orchestrator messages (where bot_id is populated AND content includes \"prompt\")\nUPDATE public.chat_messages2\nSET \n  channel_id = COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n  thread_ts = COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n  message_type = 'ai',\n  role = 'orchestrator',\n  updated_at = NOW(),\n  message_json = jsonb_build_object(\n    'role', 'orchestrator',\n    'content', COALESCE(content, 'Prompt processing...'),\n    'metadata', jsonb_build_object(\n      'channel', COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n      'thread', COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n      'timestamp', NOW()\n    )\n  )\nWHERE \n  id IN (\n    SELECT id FROM public.chat_messages2\n    WHERE (message->>'bot_id') IS NOT NULL \n      AND (message->>'bot_id') != 'undefined'\n      AND (LOWER(COALESCE(content, '')) LIKE '%prompt%' OR LOWER(COALESCE(message_text, '')) LIKE '%prompt%')\n    ORDER BY id DESC\n    LIMIT 10\n  );\n\n-- Update responder messages (where bot_id is populated AND content doesn't include \"prompt\")\nUPDATE public.chat_messages2\nSET \n  channel_id = COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n  thread_ts = COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n  assistant_name = COALESCE(assistant_name, '{{$input.item.json.agentName}}'),\n  user_id = COALESCE(user_id, '{{$input.item.json.agentName}}'),\n  message_text = COALESCE(message_text, '{{($input.item.json.output || '').replace(/'/g, \"''\")}}'),\n  content = COALESCE(content, '{{($input.item.json.output || '').replace(/'/g, \"''\")}}'),\n  message_type = 'ai',\n  role = 'responder',\n  updated_at = NOW(),\n  message_json = jsonb_build_object(\n    'role', 'responder',\n    'content', COALESCE(content, '{{($input.item.json.output || '').replace(/'/g, \"''\")}}'),\n    'metadata', jsonb_build_object(\n      'assistant', COALESCE(assistant_name, '{{$input.item.json.agentName}}'),\n      'channel', COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n      'thread', COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n      'timestamp', NOW()\n    )\n  )\nWHERE \n  id IN (\n    SELECT id FROM public.chat_messages2\n    WHERE (message->>'bot_id') IS NOT NULL \n      AND (message->>'bot_id') != 'undefined'\n      AND (LOWER(COALESCE(content, '')) NOT LIKE '%prompt%' AND LOWER(COALESCE(message_text, '')) NOT LIKE '%prompt%')\n    ORDER BY id DESC\n    LIMIT 10\n  );\n\n-- Verify update worked\nSELECT DISTINCT ON (content) \n  id, content, assistant_name, channel_id, thread_ts \nFROM public.chat_messages2 \nWHERE thread_ts = '{{$json.thread_id}}' \n  AND role = 'responder' \n  AND assistant_name = '{{$json.agentName}}'\nORDER BY content, created_at DESC \nLIMIT 1;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2288,
+        1808
+      ],
+      "id": "86db7855-7103-4503-ab3d-35c0e1683090",
+      "name": "Postgres Slack Field Updates6",
+      "alwaysOutputData": true,
+      "executeOnce": false,
+      "credentials": {
+        "postgres": {
+          "id": "LtcAY1DJhYiOGE2W",
+          "name": "Azure Postgres Slack ChatMemoriesDB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "39f4b39c-eb55-44e9-b787-7ead86f3eefc",
+              "name": "complexOutput",
+              "value": "={{ $json.output }}",
+              "type": "string"
+            },
+            {
+              "id": "b83b4f8b-bdb2-4ad3-a1ec-d157bf819317",
+              "name": "agentName",
+              "value": "={{ (typeof $('When Executed by Another Workflow').item.json.output === 'string' ? JSON.parse($('When Executed by Another Workflow').item.json.output) : $('When Executed by Another Workflow').item.json.output)?.targets?.[0]?.agentConfig?.handle }}",
+              "type": "string"
+            },
+            {
+              "id": "43fc8fa4-9e77-445c-9b4b-a2d99ee1ea3f",
+              "name": "threadId",
+              "value": "={{ $('Thread Mapping5').item.json.conversationId }}",
+              "type": "string"
+            },
+            {
+              "id": "119dccc4-11cb-4ed7-a41c-950e7a723d22",
+              "name": "usage",
+              "value": "={{ $json.usage }}",
+              "type": "string"
+            },
+            {
+              "id": "ac3c09e7-0ff0-48f7-9f5f-fe42f227c145",
+              "name": "channel",
+              "value": "={{ $('When Executed by Another Workflow').item.json.channel }}",
+              "type": "string"
+            },
+            {
+              "id": "caf1239d-7843-4553-b7e8-9bf302c3ae66",
+              "name": "thread_id",
+              "value": "={{ $('When Executed by Another Workflow').item.json.thread_id }}",
+              "type": "string"
+            },
+            {
+              "id": "15564082-29cf-49ed-b350-868c5dddcff5",
+              "name": "sender",
+              "value": "={{ $('When Executed by Another Workflow').item.json.sender }}",
+              "type": "string"
+            },
+            {
+              "id": "15e5fe1b-12d0-4335-a30a-a336d66bd0cb",
+              "name": "session_id",
+              "value": "={{ $('When Executed by Another Workflow').item.json.sessionId }}",
+              "type": "string"
+            },
+            {
+              "id": "a0c45826-c46d-458b-81d8-bc0b539cba5e",
+              "name": "=context",
+              "value": "={{ $('When Executed by Another Workflow').item.json.output }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2064,
+        1872
+      ],
+      "id": "0a52a918-2cad-412c-af80-89369ea287cd",
+      "name": "Calculate fields for database update5"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "b7502705-a7ad-40b2-9a16-c8b28d42035a",
+              "leftValue": "={{ \n  ($node[\"When Executed by Another Workflow\"].json.output.targets &&\n    $node[\"When Executed by Another Workflow\"].json.output.targets.some(target => target.agentConfig.handle.includes('charleston')))\n  ||\n  (typeof $node[\"When Executed by Another Workflow\"].json.output === 'string' &&\n    JSON.parse($node[\"When Executed by Another Workflow\"].json.output).targets.some(target => target.agentConfig.handle.includes('charleston')))\n}}\n",
+              "rightValue": "flex",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "25fc2ff0-9734-49b8-b5d4-284a2a18d52d",
+              "leftValue": "={{ $('When Executed by Another Workflow').item.json.messageComplexity }}",
+              "rightValue": "complex",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1680,
+        1952
+      ],
+      "id": "e1c5bae2-e4ba-4748-b775-04478d0e9766",
+      "name": "Is Complex or Simple?"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "b7502705-a7ad-40b2-9a16-c8b28d42035a",
+              "leftValue": "={{ \n  ($node[\"When Executed by Another Workflow\"].json.output.targets &&\n    $node[\"When Executed by Another Workflow\"].json.output.targets.some(target => target.agentConfig.handle.includes('flex')))\n  ||\n  (typeof $node[\"When Executed by Another Workflow\"].json.output === 'string' &&\n    JSON.parse($node[\"When Executed by Another Workflow\"].json.output).targets.some(target => target.agentConfig.handle.includes('flex')))\n}}\n",
+              "rightValue": "flex",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "6d0e651f-500f-4e81-af90-493e3791aa9c",
+              "leftValue": "={{ $('When Executed by Another Workflow').item.json.messageComplexity }}",
+              "rightValue": "complex",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1744,
+        1360
+      ],
+      "id": "c7c3f745-d1e0-49ad-aef7-f3fbbebe2ba6",
+      "name": "Is Complex or Simple?1"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "2e0b2341-4d99-44b2-8597-ff6f8514912d",
+              "leftValue": "={{ \n  ($node[\"When Executed by Another Workflow\"].json.output.targets &&\n    $node[\"When Executed by Another Workflow\"].json.output.targets.some(target => target.agentConfig.handle.includes('liam')))\n  ||\n  (typeof $node[\"When Executed by Another Workflow\"].json.output === 'string' &&\n    JSON.parse($node[\"When Executed by Another Workflow\"].json.output).targets.some(target => target.agentConfig.handle.includes('liam')))\n}}\n",
+              "rightValue": "liam",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "ee9ba92c-3192-455f-9007-c9e672ac23d7",
+              "leftValue": "={{ $('When Executed by Another Workflow').item.json.messageComplexity }}",
+              "rightValue": "complex",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1632,
+        320
+      ],
+      "id": "f42db7e6-d10f-419c-813c-410a545ba328",
+      "name": "Is Complex or Simple?2"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "b7502705-a7ad-40b2-9a16-c8b28d42035a",
+              "leftValue": "={{ \n  ($node[\"When Executed by Another Workflow\"].json.output.targets &&\n    $node[\"When Executed by Another Workflow\"].json.output.targets.some(target => target.agentConfig.handle.includes('elle')))\n  ||\n  (typeof $node[\"When Executed by Another Workflow\"].json.output === 'string' &&\n    JSON.parse($node[\"When Executed by Another Workflow\"].json.output).targets.some(target => target.agentConfig.handle.includes('elle')))\n}}\n",
+              "rightValue": "elle",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "421ab314-33dd-435d-b48a-352879b7a940",
+              "leftValue": "={{ $('When Executed by Another Workflow').item.json.messageComplexity }}",
+              "rightValue": "complex",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1680,
+        608
+      ],
+      "id": "8a684dbb-1dba-46a5-9213-4d424ae27d68",
+      "name": "Is Complex or Simple?3"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "b7502705-a7ad-40b2-9a16-c8b28d42035a",
+              "leftValue": "={{ \n  ($node[\"When Executed by Another Workflow\"].json.output.targets &&\n    $node[\"When Executed by Another Workflow\"].json.output.targets.some(target => target.agentConfig.handle.includes('eli')))\n  ||\n  (typeof $node[\"When Executed by Another Workflow\"].json.output === 'string' &&\n    JSON.parse($node[\"When Executed by Another Workflow\"].json.output).targets.some(target => target.agentConfig.handle.includes('eli')))\n}}\n",
+              "rightValue": "eli",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "d9d08515-a45a-4e22-b723-4c0f1b2a60a7",
+              "leftValue": "={{ $('When Executed by Another Workflow').item.json.messageComplexity }}",
+              "rightValue": "complex",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1808,
+        832
+      ],
+      "id": "95bc1d5e-44e9-4eb3-be61-995f4fc13d62",
+      "name": "Is Complex or Simple?4"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "b7502705-a7ad-40b2-9a16-c8b28d42035a",
+              "leftValue": "={{ \n  ($node[\"When Executed by Another Workflow\"].json.output.targets &&\n    $node[\"When Executed by Another Workflow\"].json.output.targets.some(target => target.agentConfig.handle.includes('iris')))\n  ||\n  (typeof $node[\"When Executed by Another Workflow\"].json.output === 'string' &&\n    JSON.parse($node[\"When Executed by Another Workflow\"].json.output).targets.some(target => target.agentConfig.handle.includes('iris')))\n}}\n",
+              "rightValue": "iris",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "47bea613-ba90-46a9-a567-9460ea0257c1",
+              "leftValue": "={{ $('When Executed by Another Workflow').item.json.messageComplexity }}",
+              "rightValue": "complex",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1808,
+        1120
+      ],
+      "id": "eb0f385c-baab-406f-a47e-0faceb9d1922",
+      "name": "Is Complex or Simple?5",
+      "notesInFlow": true,
+      "notes": "Hello"
+    },
+    {
+      "parameters": {
+        "resource": "assistant",
+        "operation": "update",
+        "assistantId": {
+          "__rl": true,
+          "value": "asst_TkRNda28gmRggEb1duj31a8J",
+          "mode": "list",
+          "cachedResultName": "Fitness Trainer"
+        },
+        "options": {
+          "description": "Your strength and aesthetics coach built on Body Beast. Tracks your progress, prioritizes pump and physique, and blends strength with hypertrophy for a balanced, visual transformation.",
+          "instructions": "You are Flex — a fitness tracking and planning assistant focused on huge pumps, mass, strength, hypertrophy, and aesthetics. The user trains for both pumps, mass, power and physique, with emphasis on building an impressive chest, arms, traps, and shoulders. Use Body Beast as the exercise foundation, and enhance it with community-backed movements that deliver a powerful pump and visual impact. Default to strength training, with hypertrophy used for warm-ups, achieving a pump if strength sets don’t deliver, or targeting large muscle groups. Start with larger muscles in sets, as an examaple workouts in this sequence: triceps, back, shoulders → upper chest → wide chest → biceps last. For each workout, log weight, reps, and highlight progression, PRs, or stagnation. Keep track for progression in next workout. Plan for 3 days minimum per week and adjust as completed. Prioritize exercise suggestions that support symmetry and visual gains. With your workout plans alwyas provide thumbnails and sample video links from reputable sources, preferably beast by bodi. Stay structured, motivational, and efficient in tone. Do not cover cardio, rest, or macros unless requested.",
+          "modelId": {
+            "__rl": true,
+            "value": "gpt-4o-mini",
+            "mode": "list",
+            "cachedResultName": "GPT-4O-MINI"
+          }
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        1280,
+        1504
+      ],
+      "id": "3d3d1f24-4e07-4774-8969-d3a6bd9b21da",
+      "name": "OpenAI",
+      "credentials": {
+        "openAiApi": {
+          "id": "Ly9qM4iX1nABLUjs",
+          "name": "OpenAi account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "4nNrekpWW9z47vQs",
+          "mode": "list",
+          "cachedResultName": "My first project — OpenAI Thread Manager"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "forceNew": false,
+            "channelId": "={{ $('When Executed by Another Workflow').item.json.channel }}",
+            "channelResolved": "={{ $('When Executed by Another Workflow').item.json.channel_resolved }}",
+            "sender": "={{ $('When Executed by Another Workflow').item.json.sender }}",
+            "userResolved": "={{ $('When Executed by Another Workflow').item.json.sender }}",
+            "assistantName": "={{ $('When Executed by Another Workflow').item.json.target_recipient }}",
+            "userId": "null"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "channelId",
+              "displayName": "channelId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "channelResolved",
+              "displayName": "channelResolved",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "userId",
+              "displayName": "userId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "userResolved",
+              "displayName": "userResolved",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "assistantName",
+              "displayName": "assistantName",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "sender",
+              "displayName": "sender",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "forceNew",
+              "displayName": "forceNew",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "boolean"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        960,
+        320
+      ],
+      "id": "18aee926-fcce-4625-802a-f81746780bac",
+      "name": "Thread Mapping"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "4nNrekpWW9z47vQs",
+          "mode": "list",
+          "cachedResultName": "My first project — OpenAI Thread Manager"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "forceNew": false,
+            "channelId": "={{ $('When Executed by Another Workflow').item.json.channel }}",
+            "channelResolved": "={{ $('When Executed by Another Workflow').item.json.channel_resolved }}",
+            "sender": "={{ $('When Executed by Another Workflow').item.json.sender }}",
+            "userResolved": "={{ $('When Executed by Another Workflow').item.json.sender }}",
+            "assistantName": "={{ $('When Executed by Another Workflow').item.json.target_recipient }}",
+            "userId": "null",
+            "displayname": "={{ $json.output.targets[0].agentConfig.displayName }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "channelId",
+              "displayName": "channelId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "channelResolved",
+              "displayName": "channelResolved",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "displayname",
+              "displayName": "displayname",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "userId",
+              "displayName": "userId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "userResolved",
+              "displayName": "userResolved",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "assistantName",
+              "displayName": "assistantName",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "sender",
+              "displayName": "sender",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "forceNew",
+              "displayName": "forceNew",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "boolean"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1120,
+        1040
+      ],
+      "id": "9c2ecb30-d76c-4eca-855c-c6cfea452a21",
+      "name": "Thread Mapping1"
+    },
+    {
+      "parameters": {
+        "resource": "assistant",
+        "assistantId": {
+          "__rl": true,
+          "value": "asst_GVIrKekZI0p9UsqAgGYZHtOE",
+          "mode": "list",
+          "cachedResultName": "Life Strategist Agent"
+        },
+        "prompt": "define",
+        "text": "=\nYour incoming message will be available at one of the paths below. Disregard the other. \n\nIncoming message:\n{{ JSON.parse($('When Executed by Another Workflow').item.json.output).inputData.text }}\n\nor \n\nIncoming message:\n{{ JSON.stringify(\n      $json.output.targets.find(\n        t => t.agentConfig.handle.toLowerCase().includes('iris')\n      )?.prompt || ''\n) }}\n\n-use the attached chat memory db to maintain conversational facts retrieving and storing throughout conversations \n-output your reply to the message only. ",
+        "memory": "threadId",
+        "threadId": "={{ ($('When Executed by Another Workflow').item.json.output.inputData.resolved_channel + '-' + $('When Executed by Another Workflow').item.json.output.inputData.sender).replace(/\\./g, '_') }}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        1328,
+        160
+      ],
+      "id": "491d85be-ae6d-4668-8ab7-4b91180bde01",
+      "name": "Liam Kingsley (Life Strategy)1",
+      "credentials": {
+        "openAiApi": {
+          "id": "Ly9qM4iX1nABLUjs",
+          "name": "OpenAi account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "4nNrekpWW9z47vQs",
+          "mode": "list",
+          "cachedResultName": "My first project — OpenAI Thread Manager"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "forceNew": false,
+            "channelId": "={{ $('When Executed by Another Workflow').item.json.channel }}",
+            "channelResolved": "={{ $('When Executed by Another Workflow').item.json.channel_resolved }}",
+            "sender": "={{ $('When Executed by Another Workflow').item.json.sender }}",
+            "userResolved": "={{ $('When Executed by Another Workflow').item.json.sender }}",
+            "assistantName": "={{ $('When Executed by Another Workflow').item.json.target_recipient }}",
+            "userId": "null"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "channelId",
+              "displayName": "channelId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "channelResolved",
+              "displayName": "channelResolved",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "userId",
+              "displayName": "userId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "userResolved",
+              "displayName": "userResolved",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "assistantName",
+              "displayName": "assistantName",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "sender",
+              "displayName": "sender",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "forceNew",
+              "displayName": "forceNew",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "boolean"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1088,
+        592
+      ],
+      "id": "3dcb99b6-2432-4fc0-83a0-76c918911838",
+      "name": "Thread Mapping2"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "4nNrekpWW9z47vQs",
+          "mode": "list",
+          "cachedResultName": "My first project — OpenAI Thread Manager"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "forceNew": false,
+            "channelId": "={{ $('When Executed by Another Workflow').item.json.channel }}",
+            "channelResolved": "={{ $('When Executed by Another Workflow').item.json.channel_resolved }}",
+            "sender": "={{ $('When Executed by Another Workflow').item.json.sender }}",
+            "userResolved": "={{ $('When Executed by Another Workflow').item.json.sender }}",
+            "assistantName": "={{ $('When Executed by Another Workflow').item.json.target_recipient }}",
+            "userId": "null"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "channelId",
+              "displayName": "channelId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "channelResolved",
+              "displayName": "channelResolved",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "userId",
+              "displayName": "userId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "userResolved",
+              "displayName": "userResolved",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "assistantName",
+              "displayName": "assistantName",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "sender",
+              "displayName": "sender",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "forceNew",
+              "displayName": "forceNew",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "boolean"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1120,
+        832
+      ],
+      "id": "58972364-5456-49d8-817b-b0f40180c7f3",
+      "name": "Thread Mapping3"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "4nNrekpWW9z47vQs",
+          "mode": "list",
+          "cachedResultName": "My first project — OpenAI Thread Manager"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "forceNew": false,
+            "channelId": "={{ $('When Executed by Another Workflow').item.json.channel }}",
+            "channelResolved": "={{ $('When Executed by Another Workflow').item.json.channel_resolved }}",
+            "sender": "={{ $('When Executed by Another Workflow').item.json.sender }}",
+            "userResolved": "={{ $('When Executed by Another Workflow').item.json.sender }}",
+            "assistantName": "={{ $('When Executed by Another Workflow').item.json.target_recipient }}",
+            "userId": "null"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "channelId",
+              "displayName": "channelId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "channelResolved",
+              "displayName": "channelResolved",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "userId",
+              "displayName": "userId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "userResolved",
+              "displayName": "userResolved",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "assistantName",
+              "displayName": "assistantName",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "sender",
+              "displayName": "sender",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "forceNew",
+              "displayName": "forceNew",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "boolean"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1088,
+        1264
+      ],
+      "id": "fe7002af-a3f6-48cc-90b8-22da359682d4",
+      "name": "Thread Mapping4"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "4nNrekpWW9z47vQs",
+          "mode": "list",
+          "cachedResultName": "My first project — OpenAI Thread Manager"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "forceNew": false,
+            "channelId": "={{ $('When Executed by Another Workflow').item.json.channel }}",
+            "channelResolved": "={{ $('When Executed by Another Workflow').item.json.channel_resolved }}",
+            "sender": "={{ $('When Executed by Another Workflow').item.json.sender }}",
+            "userResolved": "={{ $('When Executed by Another Workflow').item.json.sender }}",
+            "assistantName": "={{ $('When Executed by Another Workflow').item.json.target_recipient }}",
+            "userId": "null"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "channelId",
+              "displayName": "channelId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "channelResolved",
+              "displayName": "channelResolved",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "userId",
+              "displayName": "userId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "userResolved",
+              "displayName": "userResolved",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "assistantName",
+              "displayName": "assistantName",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "sender",
+              "displayName": "sender",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "forceNew",
+              "displayName": "forceNew",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "boolean"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1008,
+        1872
+      ],
+      "id": "080f89d5-32d0-4ec7-ab56-4ec2c01e56c7",
+      "name": "Thread Mapping5"
+    },
+    {
+      "parameters": {
+        "task": "R3F1NG92Y3lSeHJ2dC1RQw",
+        "title": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Title', ``, 'string') }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.googleTasksTool",
+      "typeVersion": 1,
+      "position": [
+        1632,
+        1568
+      ],
+      "id": "d9afbe26-58b6-43b2-8b9f-8d8cd9aef0ba",
+      "name": "Google Tasks",
+      "credentials": {
+        "googleTasksOAuth2Api": {
+          "id": "skSaMp0UcNNK67kq",
+          "name": "Google Tasks Von Ellis"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "toRecipients": "von.ellis@enterpriseds.io",
+        "subject": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Subject', ``, 'string') }}",
+        "bodyContent": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Message', ``, 'string') }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.microsoftOutlookTool",
+      "typeVersion": 2,
+      "position": [
+        1984,
+        1568
+      ],
+      "id": "3b6bffe6-439e-4533-b79e-da5b121147ff",
+      "name": "Microsoft Outlook",
+      "webhookId": "8caffd77-e38d-4bc8-b91e-37d17f542b48",
+      "credentials": {
+        "microsoftOutlookOAuth2Api": {
+          "id": "xgDjrwGroGIi92l3",
+          "name": "Microsoft Outlook account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "calendar": {
+          "__rl": true,
+          "value": "df2af6554c4a58cf73b0e57ca7525465ecafe7660ba4ede6a0f5b6e0f8b273df@group.calendar.google.com",
+          "mode": "list",
+          "cachedResultName": "AI_Daily_Itinerary_Calendar"
+        },
+        "eventId": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Event_ID', ``, 'string') }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleCalendarTool",
+      "typeVersion": 1.3,
+      "position": [
+        3392,
+        1488
+      ],
+      "id": "b3678067-23d6-474d-94bd-295e166dcb90",
+      "name": "Get Calendar Event",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "MOfMzV7ClNmqZfez",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "calendar": {
+          "__rl": true,
+          "value": "df2af6554c4a58cf73b0e57ca7525465ecafe7660ba4ede6a0f5b6e0f8b273df@group.calendar.google.com",
+          "mode": "list",
+          "cachedResultName": "AI_Daily_Itinerary_Calendar"
+        },
+        "start": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Start', ``, 'string') }}",
+        "end": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('End', ``, 'string') }}",
+        "useDefaultReminders": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Use_Default_Reminders', ``, 'boolean') }}",
+        "additionalFields": {
+          "summary": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Summary', ``, 'string') }}"
+        }
+      },
+      "type": "n8n-nodes-base.googleCalendarTool",
+      "typeVersion": 1.3,
+      "position": [
+        1728,
+        1584
+      ],
+      "id": "53120ee9-5213-4a8c-94fb-0d7f66c86dbb",
+      "name": "Create Calendar Event",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "MOfMzV7ClNmqZfez",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "calendar": {
+          "__rl": true,
+          "value": "df2af6554c4a58cf73b0e57ca7525465ecafe7660ba4ede6a0f5b6e0f8b273df@group.calendar.google.com",
+          "mode": "list",
+          "cachedResultName": "AI_Daily_Itinerary_Calendar"
+        },
+        "eventId": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Event_ID', ``, 'string') }}",
+        "useDefaultReminders": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Use_Default_Reminders', ``, 'boolean') }}",
+        "updateFields": {}
+      },
+      "type": "n8n-nodes-base.googleCalendarTool",
+      "typeVersion": 1.3,
+      "position": [
+        3552,
+        1488
+      ],
+      "id": "34a75a85-2938-463f-9aaf-62fa9eb27a2c",
+      "name": "Update Calendar Event",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "MOfMzV7ClNmqZfez",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "delete",
+        "calendar": {
+          "__rl": true,
+          "value": "df2af6554c4a58cf73b0e57ca7525465ecafe7660ba4ede6a0f5b6e0f8b273df@group.calendar.google.com",
+          "mode": "list",
+          "cachedResultName": "AI_Daily_Itinerary_Calendar"
+        },
+        "eventId": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Event_ID', ``, 'string') }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleCalendarTool",
+      "typeVersion": 1.3,
+      "position": [
+        3392,
+        1664
+      ],
+      "id": "079ce31e-a05b-4686-9b9d-72a59a7dfa31",
+      "name": "Google Calendar",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "MOfMzV7ClNmqZfez",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "df2af6554c4a58cf73b0e57ca7525465ecafe7660ba4ede6a0f5b6e0f8b273df@group.calendar.google.com",
+          "mode": "list",
+          "cachedResultName": "AI_Daily_Itinerary_Calendar"
+        },
+        "timeMin": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('After', ``, 'string') }}",
+        "timeMax": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Before', ``, 'string') }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleCalendarTool",
+      "typeVersion": 1.3,
+      "position": [
+        3552,
+        1664
+      ],
+      "id": "80d3e3d6-d9ae-4b98-92b4-c0b74f3af350",
+      "name": "Get Many Calendar Events",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "MOfMzV7ClNmqZfez",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "taskListId": "AAMkAGEyNmIxYWMyLWJjYjAtNDc4MS1iY2UzLTJlYjdmYzEyOWRkNgAuAAAAAADjr94rvi8BS5ARm8YiPpwoAQC94z8G3A6cS6rs9MO82yKfAAFmWeZKAAA=",
+        "title": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Subject', ``, 'string') }}",
+        "additionalFields": {
+          "dueDateTime": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Due', ``, 'string') }}",
+          "reminderDateTime": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Reminder', ``, 'string') }}",
+          "importance": "normal",
+          "status": "notStarted"
+        }
+      },
+      "type": "n8n-nodes-base.microsoftToDoTool",
+      "typeVersion": 1,
+      "position": [
+        3920,
+        1888
+      ],
+      "id": "74bd3f7c-9a3f-4288-9017-e21b3e63ab87",
+      "name": "Create Microsoft To Do Task",
+      "credentials": {
+        "microsoftToDoOAuth2Api": {
+          "id": "tMoK11PYneTFiqyL",
+          "name": "Microsoft To Do account - Von Ellis"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "list",
+        "operation": "create",
+        "displayName": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('List_Name', ``, 'string') }}"
+      },
+      "type": "n8n-nodes-base.microsoftToDoTool",
+      "typeVersion": 1,
+      "position": [
+        4080,
+        1888
+      ],
+      "id": "77897b83-2d37-4a35-9ded-5160b973fc7d",
+      "name": "Create Microsoft To Do List",
+      "credentials": {
+        "microsoftToDoOAuth2Api": {
+          "id": "tMoK11PYneTFiqyL",
+          "name": "Microsoft To Do account - Von Ellis"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "taskListId": "AAMkAGEyNmIxYWMyLWJjYjAtNDc4MS1iY2UzLTJlYjdmYzEyOWRkNgAuAAAAAADjr94rvi8BS5ARm8YiPpwoAQC94z8G3A6cS6rs9MO82yKfAAFmWeZKAAA=",
+        "taskId": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Task_ID', ``, 'string') }}",
+        "updateFields": {
+          "dueDateTime": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Due_Date_Time', ``, 'string') }}",
+          "reminderDateTime": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Reminder', ``, 'string') }}",
+          "importance": "normal",
+          "status": "notStarted"
+        }
+      },
+      "type": "n8n-nodes-base.microsoftToDoTool",
+      "typeVersion": 1,
+      "position": [
+        1840,
+        1568
+      ],
+      "id": "873f8410-ad3d-459b-96d9-0ad39166794f",
+      "name": "Microsoft To Do",
+      "credentials": {
+        "microsoftToDoOAuth2Api": {
+          "id": "tMoK11PYneTFiqyL",
+          "name": "Microsoft To Do account - Von Ellis"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "=user_von_ellis_persistent_memory",
+        "tableName": "chat_messages2",
+        "contextWindowLength": 20
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.3,
+      "position": [
+        1392,
+        2544
+      ],
+      "id": "624b465c-483a-4230-9d11-0c2ebb4b4baf",
+      "name": "Postgres Chat Memory6",
+      "credentials": {
+        "postgres": {
+          "id": "LtcAY1DJhYiOGE2W",
+          "name": "Azure Postgres Slack ChatMemoriesDB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Update human messages (where bot_id is null or undefined)\nUPDATE public.chat_messages2\nSET \n  channel_id = COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n  thread_ts = COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n  user_id = COALESCE(user_id, '{{($('When Executed by Another Workflow').item.json.sender || $('When Executed by Another Workflow').item.json.output.inputData.sender || '').replace(/'/g, \"''\")}}'),\n  message_text = COALESCE(message_text, '{{($('When Executed by Another Workflow').item.json.output || '').replace(/'/g, \"''\")}}'),\n  content = COALESCE(content, '{{( $json.output.inputData.text || '').replace(/'/g, \"''\")}}'),\n  context = COALESCE(context, '{{ $json.output.inputData || 'NA' }}'),\n  initial_target_recipient = COALESCE(initial_target_recipient, '{{$('When Executed by Another Workflow').item.json.target_recipient || $('When Executed by Another Workflow').item.json.output.inputData.initial_TargetRecipient}}'),\n  resolved_channel = COALESCE(resolved_channel, '{{($('When Executed by Another Workflow').item.json.channel_resolved || $('When Executed by Another Workflow').item.json.output.inputData.resolved_channel || '').replace(/'/g, \"''\")}}'),\n  channel_type = COALESCE(channel_type, '{{$json.output.inputData.channelType || 'GRP'}}'),\n  message_type = 'human',\n  role = 'sender',\n  updated_at = NOW(),\n  message_json = jsonb_build_object(\n    'role', 'sender',\n    'content', COALESCE(content, '{{( $json.output.inputData.text || '').replace(/'/g, \"''\")}}'),\n    'context', COALESCE(context, '{{($('When Executed by Another Workflow').item.json.output.inputData.context || 'NA').replace(/'/g, \"''\")}}'),\n    'metadata', jsonb_build_object(\n      'sender', COALESCE(user_id, '{{($('When Executed by Another Workflow').item.json.sender || $('When Executed by Another Workflow').item.json.output.inputData.sender || '').replace(/'/g, \"''\")}}'),\n      'channel', COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n      'thread', COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n      'channelType', COALESCE(channel_type, '{{$('When Executed by Another Workflow').item.json.output.inputData.channelType || 'GRP'}}'),\n      'timestamp', NOW()\n    )\n  )\nWHERE \n  id IN (\n    SELECT id FROM public.chat_messages2\n    WHERE (message->>'bot_id') IS NULL OR (message->>'bot_id') = 'undefined'\n    ORDER BY id DESC\n    LIMIT 10\n  );\n\n-- Update orchestrator messages (where bot_id is populated AND content includes \"prompt\")\nUPDATE public.chat_messages2\nSET \n  channel_id = COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n  thread_ts = COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n  message_type = 'ai',\n  role = 'orchestrator',\n  updated_at = NOW(),\n  message_json = jsonb_build_object(\n    'role', 'orchestrator',\n    'content', COALESCE(content, 'Prompt processing...'),\n    'metadata', jsonb_build_object(\n      'channel', COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n      'thread', COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n      'timestamp', NOW()\n    )\n  )\nWHERE \n  id IN (\n    SELECT id FROM public.chat_messages2\n    WHERE (message->>'bot_id') IS NOT NULL \n      AND (message->>'bot_id') != 'undefined'\n      AND (LOWER(COALESCE(content, '')) LIKE '%prompt%' OR LOWER(COALESCE(message_text, '')) LIKE '%prompt%')\n    ORDER BY id DESC\n    LIMIT 10\n  );\n\n-- Update responder messages (where bot_id is populated AND content doesn't include \"prompt\")\nUPDATE public.chat_messages2\nSET \n  channel_id = COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n  thread_ts = COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n  assistant_name = COALESCE(assistant_name, '{{$input.item.json.agentName}}'),\n  user_id = COALESCE(user_id, '{{$input.item.json.agentName}}'),\n  message_text = COALESCE(message_text, '{{($('When Executed by Another Workflow').item.json.output || '').replace(/'/g, \"''\")}}'),\n  content = COALESCE(content, '{{($json.response || '').replace(/'/g, \"''\")}}'),\n  message_type = 'ai',\n  role = 'responder',\n  updated_at = NOW(),\n  message_json = jsonb_build_object(\n    'role', 'responder',\n    'content', COALESCE(content, '{{($json.response || '').replace(/'/g, \"''\")}}'),\n    'metadata', jsonb_build_object(\n      'assistant', COALESCE(assistant_name, '{{$input.item.json.agentName}}'),\n      'channel', COALESCE(channel_id, '{{$('When Executed by Another Workflow').item.json.channel_id || $('When Executed by Another Workflow').item.json.channel}}'),\n      'thread', COALESCE(thread_ts, '{{$('When Executed by Another Workflow').item.json.thread_id}}'),\n      'timestamp', NOW()\n    )\n  )\nWHERE \n  id IN (\n    SELECT id FROM public.chat_messages2\n    WHERE (message->>'bot_id') IS NOT NULL \n      AND (message->>'bot_id') != 'undefined'\n      AND (LOWER(COALESCE(content, '')) NOT LIKE '%prompt%' AND LOWER(COALESCE(message_text, '')) NOT LIKE '%prompt%')\n    ORDER BY id DESC\n    LIMIT 10\n  );\n\n-- Verify update worked\nSELECT --DISTINCT ON (output) \n  content\nFROM public.chat_messages2 \n--WHERE \n  -- thread_ts = '{{$json.thread_id}}' \n  -- AND \n  --role = 'responder' \n  -- AND \n -- assistant_name = '{{$json.agentName}}'\nORDER BY content, created_at DESC \nLIMIT 1;\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2304,
+        2144
+      ],
+      "id": "101ba983-c631-4282-814d-0db56b9da1f5",
+      "name": "Postgres Slack Field Updates7",
+      "alwaysOutputData": true,
+      "executeOnce": true,
+      "credentials": {
+        "postgres": {
+          "id": "LtcAY1DJhYiOGE2W",
+          "name": "Azure Postgres Slack ChatMemoriesDB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a0c45826-c46d-458b-81d8-bc0b539cba5e",
+              "name": "context",
+              "value": "={{ $('When Executed by Another Workflow').item.json.output }}",
+              "type": "object"
+            },
+            {
+              "id": "39f4b39c-eb55-44e9-b787-7ead86f3eefc",
+              "name": "complexOutput",
+              "value": "={{ $json.output }}",
+              "type": "string"
+            },
+            {
+              "id": "b83b4f8b-bdb2-4ad3-a1ec-d157bf819317",
+              "name": "=agentName",
+              "value": "={{ (typeof $('When Executed by Another Workflow').item.json.output === 'string' ? JSON.parse($('When Executed by Another Workflow').item.json.output) : $('When Executed by Another Workflow').item.json.output)?.targets?.[0]?.agentConfig?.handle }}",
+              "type": "string"
+            },
+            {
+              "id": "43fc8fa4-9e77-445c-9b4b-a2d99ee1ea3f",
+              "name": "threadId",
+              "value": "={{ $('Thread Mapping6').item.json.conversationId }}",
+              "type": "string"
+            },
+            {
+              "id": "15e5fe1b-12d0-4335-a30a-a336d66bd0cb",
+              "name": "session_id",
+              "value": "={{ $('When Executed by Another Workflow').item.json.sessionId }}",
+              "type": "string"
+            },
+            {
+              "id": "119dccc4-11cb-4ed7-a41c-950e7a723d22",
+              "name": "usage",
+              "value": "={{ $json.usage }}",
+              "type": "string"
+            },
+            {
+              "id": "ac3c09e7-0ff0-48f7-9f5f-fe42f227c145",
+              "name": "channel",
+              "value": "={{ $('When Executed by Another Workflow').item.json.channel }}",
+              "type": "string"
+            },
+            {
+              "id": "caf1239d-7843-4553-b7e8-9bf302c3ae66",
+              "name": "thread_id",
+              "value": "={{ $('When Executed by Another Workflow').item.json.thread_id }}",
+              "type": "string"
+            },
+            {
+              "id": "15564082-29cf-49ed-b350-868c5dddcff5",
+              "name": "sender",
+              "value": "={{ $('When Executed by Another Workflow').item.json.sender }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1984,
+        2240
+      ],
+      "id": "d8fddf09-3562-494e-82a7-03f299618e3e",
+      "name": "Calculate fields for database update6"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "b7502705-a7ad-40b2-9a16-c8b28d42035a",
+              "leftValue": "={{ \n  ($node[\"When Executed by Another Workflow\"].json.output.targets &&\n    $node[\"When Executed by Another Workflow\"].json.output.targets.some(target => target.agentConfig.handle.includes('cole')))\n  ||\n  (typeof $node[\"When Executed by Another Workflow\"].json.output === 'string' &&\n    JSON.parse($node[\"When Executed by Another Workflow\"].json.output).targets.some(target => target.agentConfig.handle.includes('cole')))\n}}\n",
+              "rightValue": "complex",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "7e2a7aa6-f64a-4e72-8241-bc857fb56911",
+              "leftValue": "={{ $('When Executed by Another Workflow').item.json.messageComplexity }}",
+              "rightValue": "complex",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1664,
+        2352
+      ],
+      "id": "88ebc065-cb70-4353-aa3d-66a8c2b94874",
+      "name": "Is Complex or Simple?6"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "4nNrekpWW9z47vQs",
+          "mode": "list",
+          "cachedResultName": "My first project — OpenAI Thread Manager"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "forceNew": false,
+            "channelId": "={{ $('When Executed by Another Workflow').item.json.channel }}",
+            "channelResolved": "={{ $('When Executed by Another Workflow').item.json.channel_resolved }}",
+            "sender": "={{ $('When Executed by Another Workflow').item.json.sender }}",
+            "userResolved": "={{ $('When Executed by Another Workflow').item.json.sender }}",
+            "assistantName": "={{ $('When Executed by Another Workflow').item.json.target_recipient }}",
+            "userId": "null"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "channelId",
+              "displayName": "channelId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "channelResolved",
+              "displayName": "channelResolved",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "userId",
+              "displayName": "userId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "userResolved",
+              "displayName": "userResolved",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "assistantName",
+              "displayName": "assistantName",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "sender",
+              "displayName": "sender",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "forceNew",
+              "displayName": "forceNew",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "boolean"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        992,
+        2272
+      ],
+      "id": "eb2e7758-d049-43bc-8412-9a87e6b42d5e",
+      "name": "Thread Mapping6"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "b7502705-a7ad-40b2-9a16-c8b28d42035a",
+              "leftValue": "={{ $json.output.targets.some(target => target.agentConfig.handle.includes('cole')) }}",
+              "rightValue": "flex",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "25fc2ff0-9734-49b8-b5d4-284a2a18d52d",
+              "leftValue": "={{ JSON.parse($json.output).targets.some(target => target.agentConfig.handle.includes('cole')) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        688,
+        2288
+      ],
+      "id": "291fcad9-4e09-420c-97d3-8d3b43235a79",
+      "name": "To Charleston (Cole)"
+    },
+    {
+      "parameters": {
+        "resource": "assistant",
+        "assistantId": {
+          "__rl": true,
+          "value": "asst_epZActkpqNmqw7KusXBmyfuT",
+          "mode": "list",
+          "cachedResultName": "Personal Chef"
+        },
+        "prompt": "define",
+        "text": "=\nYour incoming message will be available at one of the paths below. Disregard the other. \n\nIncoming message:\n{{ JSON.parse($('When Executed by Another Workflow').item.json.output).inputData.text }}\n\nor \n\nIncoming message:\n{{ JSON.stringify(\n      $('When Executed by Another Workflow').item.json.output.targets.find(\n        t => t.agentConfig.handle.toLowerCase().includes('cole')\n      )?.prompt || ''\n) }}\n\n-use the attached chat memory db to maintain conversational facts retrieving and storing throughout conversations \n-output your reply to the message only. ",
+        "memory": "threadId",
+        "threadId": "={{ $json.openaiThreadId || $json.openai_thread_id }}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        1200,
+        2352
+      ],
+      "id": "7fcf8d91-5484-479e-b49f-0c79f3a6805b",
+      "name": "Cole Blake (Career Coach)",
+      "credentials": {
+        "openAiApi": {
+          "id": "Ly9qM4iX1nABLUjs",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "={{ $('When Executed by Another Workflow').first().json.channel }}",
+          "mode": "id"
+        },
+        "text": "={{ $json.output || $json.complexOutput  }}",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        2928,
+        2352
+      ],
+      "id": "80befda7-2af0-439b-b5f4-e232dc6c7ce0",
+      "name": "Cole Blake (Career Coach)1",
+      "webhookId": "21b5dcbd-5b82-444c-8d0e-c5a22e82581e",
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "wuCP3Z5NtdQB1R4s",
+          "name": "Cole Blake (Career Coach)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {
+          "includeUnpaired": true
+        }
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2704,
+        2352
+      ],
+      "id": "43b58d26-b366-4df7-96e9-b37d2d1b357d",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {
+          "includeUnpaired": true
+        }
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2720,
+        1984
+      ],
+      "id": "8036a15c-fc1e-4b60-b3e3-41d66f507cd5",
+      "name": "Merge1"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {
+          "includeUnpaired": true
+        }
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2720,
+        1472
+      ],
+      "id": "5f52092b-5edc-4fd6-acf9-d0fae42dc260",
+      "name": "Merge2"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {
+          "includeUnpaired": true
+        }
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2720,
+        1152
+      ],
+      "id": "e2ed5774-6d93-4874-af37-115f0e2dd64a",
+      "name": "Merge3"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {
+          "includeUnpaired": true
+        }
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2720,
+        864
+      ],
+      "id": "9f276ce4-6e52-47b8-9a6a-1489b821f63b",
+      "name": "Merge4"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {
+          "includeUnpaired": true
+        }
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2752,
+        368
+      ],
+      "id": "d06e91c0-1059-4578-a197-77fd1d7738be",
+      "name": "Merge5"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {
+          "includeUnpaired": true
+        }
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2752,
+        624
+      ],
+      "id": "a50965ff-7259-4039-aee2-2291d72cddc1",
+      "name": "Merge6"
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "reaction",
+        "channelId": {
+          "__rl": true,
+          "value": "={{ $json.channel }}",
+          "mode": "id"
+        },
+        "timestamp": "={{ $json.thread_ts }}",
+        "name": "two"
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        224,
+        272
+      ],
+      "id": "45eb7d19-6b39-4bff-afae-8e3e925ab8d3",
+      "name": "Thinking Update",
+      "webhookId": "6fd73d66-8aaf-4140-8fa3-514acc965714",
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "DZmn5Bjp9z2Yads3",
+          "name": "Von Ellis"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sseEndpoint": "https://edsdevn8n.app.n8n.cloud/mcp/23750a31-470a-4071-9706-c3b8e2d835f0/sse",
+        "authentication": "headerAuth",
+        "include": "except",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.mcpClientTool",
+      "typeVersion": 1,
+      "position": [
+        1520,
+        848
+      ],
+      "id": "3a06b3c2-8472-4e5b-9df1-c8340723571e",
+      "name": "MCP Client - Server 1",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "7pNhpKC95Zysu5bL",
+          "name": "Header Auth account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "rKv0VIWo7aKNks2H",
+          "mode": "list",
+          "cachedResultName": "My first project — MCP Server 1"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [
+        1664,
+        848
+      ],
+      "id": "9065123f-35b6-458a-9c10-b16ef181c04f",
+      "name": "Call n8n Workflow Tool"
+    }
+  ],
+  "pinData": {
+    "When Executed by Another Workflow": [
+      {
+        "json": {
+          "output": "{\"inputData\":{\"sender\":\"von.ellis\",\"initial_TargetRecipient\":\"eli\",\"resolved_channel\":\"all-eds\",\"channel_id\":\"C0934TLKHCY\",\"thread_id\":\"thread_von_ellis_all-eds\",\"thread_ts\":\"1754497296.170289\",\"text\":\"eli, i don't believe you have the list. ask iris using @ symbol\",\"context\":\"simple_message\",\"channelType\":\"GRP\"},\"targets\":[{\"agentConfig\":{\"handle\":\"eli\",\"realName\":\"Eli Vaughn\",\"displayName\":\"Eli Vaughn (Executive Assistant)\",\"role\":\"Executive Assistant\",\"roleFunction\":\"Handles scheduling, email triage, follow-ups, errands, and cross-agent coordination.\",\"tone\":\"Warm, helpful, and precise. Communicate like a top-tier executive assistant.\"},\"prompt\":\"You are Eli Vaughn, Executive Assistant. Message for responding: eli, i don't believe you have the list. ask iris using @ symbol\"}],\"generalAnswer\":null}\n",
+          "channel": "C0934TLKHCY",
+          "thread_ts": "1754497296.170289",
+          "thread_id": "thread_von_ellis_all-eds",
+          "sender": "von.ellis",
+          "channel_resolved": "all-eds",
+          "target_recipient": "eli",
+          "sessionId": "user_von_ellis_persistent_memory",
+          "messageComplexity": "simple"
+        }
+      }
+    ]
+  },
+  "connections": {
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "To Elle",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "To Liam",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "To Iris",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "To Charleston (Chef)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "To Eli",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "To Flex",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "To Charleston (Cole)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Thinking Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres Chat Memory1": {
+      "ai_memory": [
+        []
+      ]
+    },
+    "Liam Kingsley (Life Strategy)": {
+      "main": [
+        [
+          {
+            "node": "Is Complex or Simple?2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "To Liam": {
+      "main": [
+        [
+          {
+            "node": "Thread Mapping",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Eli Vaught (Exec Assistant)1": {
+      "main": [
+        [
+          {
+            "node": "Is Complex or Simple?4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "To Eli": {
+      "main": [
+        [
+          {
+            "node": "Thread Mapping3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Elle Rowan (EMBA Planner)": {
+      "main": [
+        [
+          {
+            "node": "Is Complex or Simple?3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "To Elle": {
+      "main": [
+        [
+          {
+            "node": "Thread Mapping2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code": {
+      "main": [
+        []
+      ]
+    },
+    "To Iris": {
+      "main": [
+        [
+          {
+            "node": "Thread Mapping1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "To Flex": {
+      "main": [
+        [
+          {
+            "node": "Thread Mapping4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Iris Chase (Daily Itinerary)": {
+      "main": [
+        [
+          {
+            "node": "Is Complex or Simple?5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres Chat Memory2": {
+      "ai_memory": [
+        []
+      ]
+    },
+    "Postgres Chat Memory": {
+      "ai_memory": [
+        []
+      ]
+    },
+    "Postgres Chat Memory3": {
+      "ai_memory": [
+        []
+      ]
+    },
+    "Postgres Chat Memory4": {
+      "ai_memory": [
+        []
+      ]
+    },
+    "Flex Grimes (Fitness Trainer)": {
+      "main": [
+        [
+          {
+            "node": "Is Complex or Simple?1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres Chat Memory5": {
+      "ai_memory": [
+        []
+      ]
+    },
+    "To Charleston (Chef)": {
+      "main": [
+        [
+          {
+            "node": "Thread Mapping5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Charleston Lewis (Personal Chef)": {
+      "main": [
+        [
+          {
+            "node": "Is Complex or Simple?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres Slack Field Updates": {
+      "main": [
+        [
+          {
+            "node": "Merge3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate fields for database update": {
+      "main": [
+        [
+          {
+            "node": "Postgres Slack Field Updates",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate fields for database update1": {
+      "main": [
+        [
+          {
+            "node": "Postgres Slack Field Updates2",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres Slack Field Updates2": {
+      "main": [
+        [
+          {
+            "node": "Merge5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate fields for database update2": {
+      "main": [
+        [
+          {
+            "node": "Postgres Slack Field Updates3",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge6",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres Slack Field Updates3": {
+      "main": [
+        [
+          {
+            "node": "Merge6",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate fields for database update3": {
+      "main": [
+        [
+          {
+            "node": "Postgres Slack Field Updates4",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres Slack Field Updates4": {
+      "main": [
+        [
+          {
+            "node": "Merge4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate fields for database update4": {
+      "main": [
+        [
+          {
+            "node": "Postgres Slack Field Updates5",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres Slack Field Updates5": {
+      "main": [
+        [
+          {
+            "node": "Merge2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate fields for database update5": {
+      "main": [
+        [
+          {
+            "node": "Postgres Slack Field Updates6",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres Slack Field Updates6": {
+      "main": [
+        [
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Complex or Simple?": {
+      "main": [
+        [
+          {
+            "node": "Calculate fields for database update5",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Is Complex or Simple?1": {
+      "main": [
+        [
+          {
+            "node": "Calculate fields for database update4",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge2",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Is Complex or Simple?2": {
+      "main": [
+        [
+          {
+            "node": "Calculate fields for database update1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge5",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Is Complex or Simple?3": {
+      "main": [
+        [
+          {
+            "node": "Calculate fields for database update2",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge6",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Is Complex or Simple?4": {
+      "main": [
+        [
+          {
+            "node": "Calculate fields for database update3",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge4",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Is Complex or Simple?5": {
+      "main": [
+        [
+          {
+            "node": "Calculate fields for database update",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge3",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Thread Mapping": {
+      "main": [
+        [
+          {
+            "node": "Liam Kingsley (Life Strategy)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Thread Mapping1": {
+      "main": [
+        [
+          {
+            "node": "Iris Chase (Daily Itinerary)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Thread Mapping2": {
+      "main": [
+        [
+          {
+            "node": "Elle Rowan (EMBA Planner)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Thread Mapping3": {
+      "main": [
+        [
+          {
+            "node": "Eli Vaught (Exec Assistant)1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Thread Mapping4": {
+      "main": [
+        [
+          {
+            "node": "Flex Grimes (Fitness Trainer)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Thread Mapping5": {
+      "main": [
+        [
+          {
+            "node": "Charleston Lewis (Personal Chef)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Tasks": {
+      "ai_tool": [
+        [
+          {
+            "node": "Iris Chase (Daily Itinerary)",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Microsoft Outlook": {
+      "ai_tool": [
+        [
+          {
+            "node": "Iris Chase (Daily Itinerary)",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Calendar Event": {
+      "ai_tool": [
+        [
+          {
+            "node": "Iris Chase (Daily Itinerary)",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Calendar Event": {
+      "ai_tool": [
+        [
+          {
+            "node": "Iris Chase (Daily Itinerary)",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Calendar Event": {
+      "ai_tool": [
+        [
+          {
+            "node": "Iris Chase (Daily Itinerary)",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Calendar": {
+      "ai_tool": [
+        [
+          {
+            "node": "Iris Chase (Daily Itinerary)",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Many Calendar Events": {
+      "ai_tool": [
+        [
+          {
+            "node": "Iris Chase (Daily Itinerary)",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Microsoft To Do Task": {
+      "ai_tool": [
+        [
+          {
+            "node": "Iris Chase (Daily Itinerary)",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Microsoft To Do List": {
+      "ai_tool": [
+        [
+          {
+            "node": "Iris Chase (Daily Itinerary)",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Microsoft To Do": {
+      "ai_tool": [
+        [
+          {
+            "node": "Iris Chase (Daily Itinerary)",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres Chat Memory6": {
+      "ai_memory": [
+        []
+      ]
+    },
+    "Postgres Slack Field Updates7": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate fields for database update6": {
+      "main": [
+        [
+          {
+            "node": "Postgres Slack Field Updates7",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Complex or Simple?6": {
+      "main": [
+        [
+          {
+            "node": "Calculate fields for database update6",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Thread Mapping6": {
+      "main": [
+        [
+          {
+            "node": "Cole Blake (Career Coach)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "To Charleston (Cole)": {
+      "main": [
+        [
+          {
+            "node": "Thread Mapping6",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cole Blake (Career Coach)": {
+      "main": [
+        [
+          {
+            "node": "Is Complex or Simple?6",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Cole Blake (Career Coach)1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge1": {
+      "main": [
+        [
+          {
+            "node": "Charleston Lewis (Personal Chef)1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge2": {
+      "main": [
+        [
+          {
+            "node": "Flex Grimes (Fitness)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge3": {
+      "main": [
+        [
+          {
+            "node": "Slack3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge4": {
+      "main": [
+        [
+          {
+            "node": "Slack2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge5": {
+      "main": [
+        [
+          {
+            "node": "Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge6": {
+      "main": [
+        [
+          {
+            "node": "Slack1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MCP Client - Server 1": {
+      "ai_tool": [
+        [
+          {
+            "node": "Elle Rowan (EMBA Planner)",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call n8n Workflow Tool": {
+      "ai_tool": [
+        [
+          {
+            "node": "Elle Rowan (EMBA Planner)",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "Uji5TUYz7zqLz3up"
+  },
+  "versionId": "8a24e9a9-72bf-499d-be3d-8290b6be1f01",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "e2700e85aebddec5b38109488f0918bb62b8a55a073cb26ae7dca7e4bc35139b"
+  },
+  "nodeGroups": [],
+  "id": "pEvIFavogJymCobp",
+  "tags": []
+}
