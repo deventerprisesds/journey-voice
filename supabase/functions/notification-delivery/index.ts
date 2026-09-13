@@ -139,6 +139,9 @@ serve(async (req) => {
 
     let delivered = 0;
     let failed = 0;
+    // Partial fan-outs are counted separately so a run summary can never present
+    // "some channels silently dropped" as a clean delivery.
+    let partial = 0;
 
     // Process scheduled_call notifications separately
     for (const callNotification of scheduledCallNotifications) {
@@ -266,27 +269,37 @@ serve(async (req) => {
         // not a second fan-out.
         const unifiedModes = commsModes.filter((m) => m === 'slack' || m === 'email');
         if (unifiedModes.length > 0) {
-          console.log(`📧 Routing scheduled call to ${commsMode} for user ${userId}`);
-          
+          // CANONICAL channel names. Previously this sent lowercase `[commsMode]`, which
+          // matched none of send-unified-notification's branches ('SLACK' :831 etc).
+          const unifiedChannels = normalizeChannels(unifiedModes);
+          console.log(`📧 Routing scheduled call to ${JSON.stringify(unifiedChannels)} for user ${userId}`);
+
           const { data: unifiedResult, error: unifiedError } = await supabaseClient.functions.invoke('send-unified-notification', {
             body: {
               userId,
               taskId: null,
               title: callConfig.call_name || callNotification.title,
               body: `Time for your ${(callConfig.call_name || callNotification.title).toLowerCase()}. ${callConfig.context || ''}`,
-              channels: [commsMode]
+              channels: unifiedChannels
             }
           });
 
-          if (unifiedError) {
-            console.error(`📧 ${commsMode} delivery failed for user ${userId}:`, unifiedError);
-            deliveryError = unifiedError;
-          } else {
-            console.log(`✅ ${commsMode} notification delivered for user ${userId}: ${callNotification.title}`);
-            deliverySuccess = true;
+          // `functions.invoke` sets `error` only on a non-2xx, and a PARTIAL fan-out
+          // returns 2xx -- so the absence of `unifiedError` is NOT evidence of delivery.
+          // Read the per-channel results out of the body instead.
+          const unifiedSummary = summarizeDelivery(
+            unifiedChannels,
+            (unifiedResult as any)?.channelResults,
+            unifiedError ? (unifiedError.message || String(unifiedError)) : null,
+          );
+          console.log(`📧 unified outcome=${unifiedSummary.outcome} (${unifiedSummary.reason})`);
+          for (const c of unifiedSummary.perChannel) {
+            if (!attemptedChannels.includes(c.channel)) attemptedChannels.push(c.channel);
+            channelResults[channelResultKey(c.channel)] = { success: c.success, error: c.error };
           }
+        }
 
-        } else {
+        if (commsModes.includes('phone')) {
           // === PHONE CALL DELIVERY (default) ===
           const { data: profile } = await supabaseClient
             .from('profiles')
@@ -370,28 +383,42 @@ serve(async (req) => {
           }
 
           if (callError) {
-            deliveryError = callError;
+            recordChannel('phone', false, callError);
           } else {
-            deliverySuccess = true;
+            recordChannel('phone', true);
           }
         }
 
-        // Update notification status based on delivery result
-        if (deliveryError) {
-          console.error(`📞 Delivery failed for user ${userId}:`, deliveryError);
-          
+        // Update notification status from the PER-CHANNEL truth.
+        // Stored-row invariant: a clean success is `failure_reason IS NULL`. A partial
+        // delivery keeps delivered_at (something did reach the user) but ALWAYS carries a
+        // non-null failure_reason naming the channels that did not, so no query can read a
+        // partial as a success. Previously this branched on `deliveryError` alone, which a
+        // 2xx-partial never set.
+        const summary = summarizeDelivery(attemptedChannels, channelResults, null);
+
+        if (summary.outcome === 'failed') {
+          console.error(`📞 Delivery FAILED for user ${userId}: ${summary.reason}`);
           await supabaseClient
             .from('scheduled_notifications')
             .update({
               failed_at: new Date().toISOString(),
-              failure_reason: deliveryError.message || 'Delivery failed'
+              failure_reason: summary.reason.slice(0, 500)
             })
             .eq('id', callNotification.id);
-          
           failed++;
+        } else if (summary.outcome === 'partial') {
+          console.warn(`⚠️ PARTIAL delivery for user ${userId}: ${summary.reason}`);
+          await supabaseClient
+            .from('scheduled_notifications')
+            .update({
+              delivered_at: new Date().toISOString(),
+              failure_reason: `partial: ${summary.reason}`.slice(0, 500)
+            })
+            .eq('id', callNotification.id);
+          partial++;
         } else {
-          console.log(`✅ Delivery successful for user ${userId}: ${callNotification.title} (mode: ${commsMode})`);
-          
+          console.log(`✅ Delivery successful for user ${userId}: ${callNotification.title} (modes: ${JSON.stringify(commsModes)})`);
           await supabaseClient
             .from('scheduled_notifications')
             .update({
@@ -399,7 +426,6 @@ serve(async (req) => {
               failure_reason: null
             })
             .eq('id', callNotification.id);
-          
           delivered++;
         }
 
@@ -831,15 +857,16 @@ serve(async (req) => {
       }
     }
 
-    console.log(`Notification processing complete: ${delivered} delivered, ${failed} failed`);
+    console.log(`Notification processing complete: ${delivered} delivered, ${partial} partial, ${failed} failed`);
 
     return new Response(
       JSON.stringify({ 
         success: true, 
         processed: pendingNotifications.length,
         delivered,
+        partial,
         failed,
-        message: `Processed ${pendingNotifications.length} notifications: ${delivered} delivered, ${failed} failed`
+        message: `Processed ${pendingNotifications.length} notifications: ${delivered} delivered, ${partial} partial, ${failed} failed`
       }),
       { 
         status: 200, 
