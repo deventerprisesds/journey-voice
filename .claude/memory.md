@@ -1402,3 +1402,42 @@ them. That bridge is the only route for any new credential the Worker needs. Add
 until the Request URL is registered in the Slack app, which needs an app CONFIGURATION token
 (`xoxe.xoxp-…`) that cannot be minted from here — a bot token is the wrong token class for
 `apps.manifest.update`.
+
+### TWO different failures are both called "403" — and only ONE has a tool (measured 2026-09-13)
+Owner asked why 403s keep appearing "when we have Tavily and Playwright". They are the right answer to
+a DIFFERENT 403. Measured in-sandbox, not reasoned:
+
+| | who refuses | error text | fix |
+|---|---|---|---|
+| **Gateway denial** | the agent proxy, BEFORE the destination is contacted | `curl: (56) CONNECT tunnel failed, response 403` / `net::ERR_TUNNEL_CONNECTION_FAILED` | **none in-container** — use pg_net or GitHub Actions |
+| **Origin bot-block** | the destination site, after the tunnel opened | a real HTTP `403` body from the site | Tavily / Playwright |
+
+The proxy names it itself: `curl -sS "$HTTPS_PROXY/__agentproxy/status"` →
+`recentRelayFailures: [{kind: 'connect_rejected', detail: 'gateway answered 403 to CONNECT (policy
+denial)', host: 'slack.c…' / 'twilio-…' / 'esm.sh'}]`. **`connect_rejected` = no destination was ever
+reached, so no client-side tool can change the outcome.**
+
+**PROOF that Playwright does not bypass it** — same browser, same launch, one run:
+
+    200   https://api.github.com                       <- allowed host
+    FAIL  https://twilio-…workers.dev/health           <- net::ERR_TUNNEL_CONNECTION_FAILED
+
+Playwright runs INSIDE this container, so its traffic takes the same gateway. It defeats bot
+detection, never an allowlist.
+
+**BUT THIS DID FIND A REAL GAP — Playwright IS usable in-sandbox and I had never established it.**
+Two non-obvious steps, both required, and the error changes when you get the first one right:
+1. `chromium.launch({ proxy: { server: process.env.HTTPS_PROXY } })` — without it Chromium never
+   reaches the gateway at all (`ERR_TUNNEL_CONNECTION_FAILED` even for an ALLOWED host, which reads
+   exactly like a policy denial and is not one).
+2. `browser.newContext({ ignoreHTTPSErrors: true })` — the proxy MITMs TLS and Chromium does not trust
+   its CA, so step 1 alone yields `ERR_CERT_AUTHORITY_INVALID`. **That error is GOOD NEWS: it means the
+   tunnel opened.** (Cleaner alternative: trust `/root/.ccr/ca-bundle.crt`.)
+   Recipe: `node` + `require('/opt/node22/lib/node_modules/playwright')` (global install; ESM `import`
+   of that CJS module puts the exports on `.default`, and `NODE_PATH` does not help ESM).
+
+**Diagnostic order for any future block:** read the error STRING first. `CONNECT tunnel failed` /
+`ERR_TUNNEL_CONNECTION_FAILED` ⇒ allowlist, go to pg_net or Actions immediately. `ERR_CERT_AUTHORITY_INVALID`
+⇒ your client's CA config, fixable here. A real HTTP 403 body ⇒ bot protection, Tavily/Playwright.
+Also note `example.com` is NOT allowlisted — a bad choice of control host, which briefly made a working
+browser look broken.
