@@ -1351,3 +1351,24 @@ specific fix and the mutation proof it will require.
 **Generalises to:** when a guard accuses correct code, first ask which side the defect is on. If the
 accused code has a better spelling anyway (it did — the real type beats a hand-rolled one), take it
 and leave the guard alone until the guard can be changed at its own tier.
+
+### Verified — inbound Slack route, 8/8 CONFIRMED by an independent verifier (2026-09-13)
+`docs/qc-evidence/VERIFY-slack-inbound-1.md` (loop 1, pushed per claim: `c892953`/`ecce839`/`14b31f0`).
+All eight claims CONFIRMED, none REFUTED. The two that carry weight:
+- **The CI gate was not weakened by `d882c6d`.** Injecting a genuine undefined call made
+  `undef-check.mjs` exit 1 naming file:line:symbol; restore verified with `git diff --exit-code`,
+  re-run exit 0. I could not self-certify this and should not have been believed on it.
+- **No unauthenticated path reaches a Huddle agent turn** — the signature gate runs before
+  `body.type` is inspected at all, so an unsigned request never reaches the `url_verification` or
+  `event_callback` branches.
+
+**Lesson worth more than the verdicts: a brief's PROPOSED evidence can be the defective part.** I told
+the verifier to prove "the guard is untouched" with `git diff origin/main -- scripts/undef-check.mjs`,
+expecting empty. Invalid — the file doesn't exist on `origin/main`, the branch being 151 commits
+ahead, so the diff is a whole new file. It rejected my method, said why, and tested the real question
+from the file's own history. **Never write a brief that only permits the test you named; that turns
+the author's blind spot into a verdict.**
+
+**Contract placement:** the VERIFY LOOP header (slug, loop, wall-clock budget, commit-AND-PUSH-per-claim
+artifact) belongs in the SPAWN TEXT. Delivered mid-run by message it still works — the artifact was
+pushed per claim — but the Stop-gate checker reads the spawn, so an amendment is invisible to it.

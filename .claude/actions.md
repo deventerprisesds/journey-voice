@@ -1160,3 +1160,37 @@ how a guard silently stops catching the thing it exists for.
 **The fix when it is done:** skip a match whose enclosing context is a type annotation — after `:` in
 a parameter/property position, inside `interface`/`type` bodies, or following `=>`. It must be
 mutation-proved that a genuinely undefined symbol is STILL caught afterwards.
+
+## ACT:slack-inbound — VERIFIED 8/8 by an independent verifier (loop 1) — 2026-09-13
+Evidence: `docs/qc-evidence/VERIFY-slack-inbound-1.md`, written incrementally and pushed per claim
+across `c892953` / `ecce839` / `14b31f0`. Verified at HEAD `d574e1c`. 42 tool calls, ~4 min.
+
+| # | Claim | Verdict |
+|---|---|---|
+| C1 | `undef-check.mjs` untouched by the Slack work | CONFIRMED |
+| C2 | **the symbols guard still catches genuinely undefined symbols** | **CONFIRMED** |
+| C3 | `undef-check.mjs --all` green (82 files, 0 undefined, exit 0) | CONFIRMED |
+| C4 | worker suite 22/22 | CONFIRMED |
+| C5 | bot-loop guard mutation-proved (`mutate.sh` → FIRED) | CONFIRMED |
+| C6 | signature check FAILS CLOSED with no signing secret (AC-S1c) | CONFIRMED |
+| C7 | 0 typecheck errors in `slack-events.ts` / `index.ts` | CONFIRMED |
+| C8 | no unauthenticated path to a Huddle agent turn | CONFIRMED (none found) |
+
+**C2 is the one that mattered** and is the one I could not self-certify: it injected
+`totallyUndefinedSymbolXyzzy123(42)`, got exit 1 naming the exact file:line:symbol, restored, and
+re-ran to exit 0 — asserting the restore with `git diff --exit-code` rather than by eye. So the fix
+in `d882c6d` did not weaken the CI gate.
+
+**THE VERIFIER CORRECTED MY BRIEF, which is the most useful thing in this pass.** I instructed it to
+prove C1 via `git diff origin/main -- scripts/undef-check.mjs`, "expect empty". That test is invalid:
+the file does not exist on `origin/main` at all, so the diff is 514 lines of `new file mode` — the
+branch is 151 commits ahead and carries a lot of unrelated work. It refused the stated method and
+tested the real question instead (the file's own `git log`: all three touching commits precede the
+four Slack commits). **Standing lesson: the evidence a brief PROPOSES can itself be the defective
+part, so a verifier must be free to reject the method and say why — a brief that only permits the
+named test converts the author's blind spot into a verdict.**
+
+**Process note for the next spawn.** The VERIFY LOOP contract (work slug, loop number, wall-clock
+budget, commit-AND-PUSH-per-claim artifact) must be in the SPAWN TEXT. I delivered it mid-run by
+message; it worked — the artifact was pushed per claim exactly as asked — but the Stop-gate checker
+reads the spawn, so a mid-run amendment is invisible to it and the contract reads as absent.
