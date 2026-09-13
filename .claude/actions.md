@@ -856,3 +856,39 @@ and outbound (agents -> Slack) are separate directions that share exactly ONE th
 credential. Notifications only ever use outbound. The channel->agent map is an inbound-only
 concern, so choosing journey now and Huddle later changes nothing about EMAIL / OUTLOOK_EVENT /
 GOOGLE_EVENT / PUSH / SLACK delivery.
+
+## ACT: the token IN the n8n export — tested, and it CANNOT post — 2026-09-13
+Owner asked whether the Slack token in the JSON could be used. Determined by test, not inference.
+**What is actually in the export**, and my earlier summary was incomplete:
+- **ONE token VALUE**: `xoxp-…` (79 chars) — an OAuth **USER** token, not a bot token, sitting on
+  the **DISABLED** `HTTP Request` node.
+- **NINE `slackOAuth2Api` credential REFERENCES** with no values — n8n exports credential names and
+  ids, never their secrets. One per agent: Liam, Elle, Eli, Iris, Flex, Charleston, Cole, plus
+  "Von Ellis". **So the credentials the LIVE nodes used are not in the file at all.**
+
+**CORRECTION to an earlier claim in this file.** I wrote that n8n used "one app, one bot, many
+channels". It did not — it used a **separate Slack credential per agent**, which is how each persona
+posted as itself. That was an inference from the free plan's 10-app cap, and the export contradicts
+it. Eight personas + Von Ellis = nine, right against that ceiling.
+
+**Test results (pg_net; slack.com is egress-blocked from CCR so pg_net is the only route):**
+- `auth.test` → **`ok:true`**, team `EDS`, user `von.ellis`, team_id `T0934TLA8F2`. **Token is LIVE.**
+- `conversations.list` → **19 channels**, including every agent lane in the `___` convention the
+  inbound parser splits on: `flex-grimes___fitness_trainer`, `iris-chase___itinerary`,
+  `terry-locke___team_lead`, `finn-reid___finance`, `sam-trent___startup_planner`, etc.
+- `chat.postMessage` → **`ok:false, error:missing_scope`**
+  - `needed: chat:write:bot`
+  - `provided: identify, channels:history, groups:history, im:history, mpim:history, channels:read,
+    groups:read, im:read, mpim:read`
+
+**CONCLUSION: this is the INBOUND token.** Every scope it holds is read/history; it has no write
+scope of any kind. That is precisely why it sat on a disabled node — it could never post. It is
+therefore useless for notifications, which are entirely outbound.
+**What would make Slack notifications work**, in order of cheapness:
+1. Add `chat:write` to that Slack app's scopes and reinstall — the SAME token then posts.
+2. Or pull a bot token out of n8n's credential store (the 9 `slackOAuth2Api` entries) — those are
+   the credentials that were actually doing the posting.
+Either way the value becomes a `SLACK_BOT_TOKEN` org secret and the already-wired workflows carry
+it to the Worker with no code change.
+**Test hygiene:** the token was sent only to Supabase (owner's own project) and Slack (its issuer).
+`net._http_response` rows 715331/715335/715336 deleted, verified 0 remaining; local copy removed.
