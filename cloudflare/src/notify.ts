@@ -186,11 +186,31 @@ export async function sendSlack(env: NotifyEnv, title: string, body: string): Pr
 }
 
 /**
- * Channels journey handles ITSELF and must never be forwarded here. Reporting them `unsupported`
- * is deliberate: silently accepting one would let a caller believe journey's edge function had been
- * relieved of work it is still doing, and the calendar event would simply never be created.
+ * Channels journey handles ITSELF and never forwards. Verified by reading the producer rather than
+ * assuming it: `send-unified-notification/index.ts` strips OUTLOOK_EVENT at line 470 (after calling
+ * Microsoft Graph directly at 450) and PUSH at line 599 (handing it to `send-push-notification`), so
+ * neither can arrive here at all. Seeing one means the caller changed and something is now
+ * double-sending — `unsupported` is the honest answer, not silent acceptance.
  */
-const HANDLED_BY_JOURNEY_EDGE = new Set(['outlook_event', 'google_event', 'push']);
+const HANDLED_BY_JOURNEY_EDGE = new Set(['outlook_event', 'push']);
+
+/**
+ * Channels journey DOES forward, which this endpoint cannot yet fulfil.
+ *
+ * `google_event` was n8n's job and remains unbuilt here. This is a REAL GAP, not a routing note:
+ * `send-unified-notification` builds `dynamicGoogleEvent` (index.ts:783) and forwards GOOGLE_EVENT
+ * in `remainingChannels`, and journey has no Google Calendar code on this path — the only Google
+ * Calendar functions in the repo (`calendar-integration-manager`, `calendar-delta-sync`,
+ * `test-google-calendar`) are never called from it.
+ *
+ * This set exists SEPARATELY from the one above because an earlier version of this file lumped
+ * `google_event` in with them and answered "handled by journey edge functions, not here". That was
+ * false, and it is the most dangerous shape of wrong answer available: a caller reading it would
+ * conclude the event was created elsewhere when in fact nothing created it anywhere. Creating the
+ * event needs the user's Google OAuth token, which lives in journey's database, so it is a
+ * deliberate follow-on — but until it is built the answer must say so plainly.
+ */
+const NOT_IMPLEMENTED_HERE = new Set(['google_event']);
 
 export async function handleNotify(request: Request, env: NotifyEnv): Promise<Response> {
   const json = (b: unknown, status = 200) =>
@@ -253,6 +273,12 @@ export async function handleNotify(request: Request, env: NotifyEnv): Promise<Re
   for (const ch of channels) {
     if (HANDLED_BY_JOURNEY_EDGE.has(ch)) {
       results[ch] = { ok: false, status: 'unsupported', detail: 'handled by journey edge functions, not here' };
+    } else if (NOT_IMPLEMENTED_HERE.has(ch)) {
+      results[ch] = {
+        ok: false,
+        status: 'not_implemented',
+        detail: `"${ch}" was delivered by the n8n webhook and is NOT built here yet — nothing created it`,
+      };
     } else if (ch === 'email') {
       results[ch] = await sendEmail(env, profile.email ?? '', title, body);
     } else if (ch === 'slack') {

@@ -82,13 +82,35 @@ test('AC-N3b a missing recipient is a failure, not a silent success', async () =
 // ---------------------------------------------------------------------------
 test('AC-N4 channels journey handles itself are refused, not silently accepted', async () => {
   const res = await handleNotify(
-    req({ channels: ['OUTLOOK_EVENT', 'google_event', 'PUSH'], userProfile: { email: 'a@b.c' } }),
+    req({ channels: ['OUTLOOK_EVENT', 'PUSH'], userProfile: { email: 'a@b.c' } }),
     baseEnv,
   );
   const j: any = await res.json();
-  for (const c of ['outlook_event', 'google_event', 'push']) {
+  for (const c of ['outlook_event', 'push']) {
     assert.equal(j.results[c].status, 'unsupported', `${c} must not be claimed by this endpoint`);
   }
+  assert.equal(j.delivered, false);
+});
+
+// ---------------------------------------------------------------------------
+// AC-N4b — GOOGLE_EVENT is a GAP, and must not be described as someone else's job.
+//
+// Ground truth, read rather than recalled: send-unified-notification/index.ts:783 builds
+// `dynamicGoogleEvent` and forwards GOOGLE_EVENT in `remainingChannels` (line 602). Nothing in
+// journey creates that event on this path — n8n did. An earlier version of notify.ts answered
+// "handled by journey edge functions, not here", which would have let a reader conclude the event
+// existed somewhere. This asserts the answer tells the truth about who, if anyone, did the work.
+// ---------------------------------------------------------------------------
+test('AC-N4b google_event reports not_implemented, NOT "handled elsewhere"', async () => {
+  const res = await handleNotify(
+    req({ channels: ['GOOGLE_EVENT'], userProfile: { email: 'a@b.c' } }),
+    baseEnv,
+  );
+  const j: any = await res.json();
+  assert.equal(j.results.google_event.status, 'not_implemented',
+    'a forwarded channel nobody fulfils must say so, not borrow another lane as an excuse');
+  assert.ok(!/handled by journey edge/i.test(j.results.google_event.detail ?? ''),
+    'google_event is NOT handled by journey edge functions — that claim is false');
   assert.equal(j.delivered, false);
 });
 
