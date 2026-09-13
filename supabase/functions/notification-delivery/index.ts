@@ -1,7 +1,8 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import { GLOBAL_VERSION, FUNCTION_IDS, corsHeaders, createHealthResponse } from "../_shared/config.ts";
-import { buildCallContext } from "../_shared/call-context-builder.ts";
+import { buildCallContext, getTasksForWindow } from "../_shared/call-context-builder.ts";
+import { renderBriefingBody } from "../_shared/notification-body.ts";
 
 // Version derived from centralized config
 const DELIVERY_VERSION = `${GLOBAL_VERSION}-${FUNCTION_IDS.DELIVERY}`;
@@ -230,13 +231,37 @@ serve(async (req) => {
 
         } else if (commsMode === 'slack' || commsMode === 'email') {
           console.log(`📧 Routing scheduled call to ${commsMode} for user ${userId}`);
-          
+
+          // RENDER A BRIEFING, do not ship the voice script. The line this replaces concatenated
+          // `callConfig.context` straight into the body, and that context is the ASSISTANT'S
+          // SCRIPT — "[WINDOW:morning] ... BRANCH 1 (morning tasks exist): - Greet: \"Hello Sir.\""
+          // Correct for a phone call, unreadable in an inbox. The phone branch below is untouched
+          // and still gets the script verbatim via buildCallContext.
+          const callName = callConfig.call_name || callNotification.title;
+          const windowMatch = String(callConfig.context || '').match(/\[WINDOW:(\w+)\]/i);
+          let windowTasks: any[] = [];
+          try {
+            // Reuses the EXISTING window fetcher rather than a second task query, so email sees
+            // exactly what the scheduler placed. Non-fatal: a briefing with no task list still
+            // beats no notification, and it says "nothing scheduled" rather than going silent.
+            windowTasks = await getTasksForWindow(
+              supabaseClient, userId, windowMatch?.[1]?.toLowerCase() || '', userPrefs?.timezone || 'America/New_York',
+            );
+          } catch (e) {
+            console.error(`📧 task fetch for briefing failed (sending without the list):`, e);
+          }
+
           const { data: unifiedResult, error: unifiedError } = await supabaseClient.functions.invoke('send-unified-notification', {
             body: {
               userId,
               taskId: null,
-              title: callConfig.call_name || callNotification.title,
-              body: `Time for your ${(callConfig.call_name || callNotification.title).toLowerCase()}. ${callConfig.context || ''}`,
+              title: callName,
+              body: renderBriefingBody({
+                callName,
+                context: callConfig.context,
+                tasks: windowTasks,
+                timezone: userPrefs?.timezone || 'America/New_York',
+              }),
               channels: [commsMode]
             }
           });
