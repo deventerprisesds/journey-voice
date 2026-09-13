@@ -133,3 +133,81 @@ Also found while testing: **`'2026-09-15T14:00:00+00'` (no offset minutes) is an
 in V8, and `isDateInTimezone` returns `false` on an unparseable date — so a bad timestamp format
 **silently deletes a meeting from the digest** rather than erroring. Three guards now assert the
 Postgres space form, the ISO `+00:00` form and the `Z` form all bucket identically.
+
+---
+
+## Chunk 2 — wiring both sync paths + types (COMPLETE)
+
+### `calendar-delta-sync/index.ts`
+- `:189` `$select` now ends `...,showAs,seriesMasterId,attendees,organizer`.
+- Outlook upsert (`:327-329`) and Google upsert (`:542-544`) both write
+  `attendees` / `show_as` / `organizer_email` through the **same** `normalizeAttendees` /
+  `normalizeShowAs` helpers — one shape, two providers, no second mapping.
+
+### `calendar-integration-manager/index.ts`
+- `CalendarEvent` gains the three fields (`:20-22`).
+- Google list mapper (`:275-277`): **attendees were already arriving on the wire and being
+  discarded** — now captured; no extra API call, no new scope.
+- Outlook list mapper (`:295-297`): that call has no `$select`, so Graph returns the full event
+  including `attendees` — also already on the wire.
+- Upsert (`:193-194`) persists all three.
+
+### `src/integrations/supabase/types.ts`
+Hand-added `attendees: Json`, `show_as`, `organizer_email` to Row/Insert/Update.
+**Not regenerated** — `generate_typescript_types` reflects the LIVE schema, and the migration is
+deliberately unapplied, so a regeneration today would *delete* these three fields. Re-run the
+generator after the migration is applied and the hand edit becomes redundant.
+
+### MUTATION PROOF — `scripts/mutate.sh`, 3 of 3 **FIRED**
+
+| # | Defect reinstated | Test that had to fail | Outcome |
+|---|---|---|---|
+| 1 | `isWithPerson` keys on `organizer_email` instead of attendees — **the exact AC-MTG-2 trap** | `FAIL solo` (Haircut classified as a meeting) | **FIRED** |
+| 2 | `free`/`oof` no longer excluded (AC-MTG-7 rule deleted) | `FAIL free does NOT` | **FIRED** |
+| 3 | Day bucketing replaced by `day.offset === 0` — every meeting collapses into today | `FAIL exactly three days` | **FIRED** |
+
+Each reported `restored: ... matches HEAD` and a clean tree afterwards. No `INERT`, no
+`NOT-APPLIED` in the final set. (One earlier run returned `NOT-APPLIED` because the anchor file
+was written to the wrong directory — reported here rather than hidden, since that outcome is
+precisely the "nothing was tested" case, and it was re-run correctly.)
+
+### AC status
+
+| AC | Status | Evidence |
+|---|---|---|
+| AC-MTG-1 | **Code complete, NOT live-verified** | `$select` contains `attendees` (grep, `:189`); column exists in the migration. **The DB read-back half is NOT done** — migration unapplied, nothing deployed, so `SELECT attendees FROM external_calendar_events` would still error. **This AC is not satisfied until that read-back is observed.** |
+| AC-MTG-2 | **PASS** | real Haircut / Travis rows; mutation 1 FIRED |
+| AC-MTG-3 | PASS | self-flag, address-match and resource-mailbox cases |
+| AC-MTG-4 | PASS | `shouldSendMeetingsDigest` false on a solo-only window |
+| AC-MTG-5 | **PASS** | days +0/+2/+6 present, +1/+3/+4/+5 absent; mutation 3 FIRED |
+| AC-MTG-6 | **PASS** | `grep -rn "setDate(.*+ 7)\|totalDays = " supabase/functions/` → only PRE-EXISTING hits (`nightly-schedule-builder:432,:717`, `execute-tool:214`); this work's only matches are inside a comment in `_shared/meetings.ts` |
+| AC-MTG-7 | PASS | stated rule + 6 tests; mutation 2 FIRED |
+| AC-MTG-8 | **PARTIAL — do not read as done** | the classifier is pure over rows handed to it and holds no global lookup, which is asserted. **The real guard is that the CALLER scopes its query by `user_id`, and no caller exists yet** — the digest that consumes this is another lane's work. The two-user seeded test the AC asks for was NOT run. |
+
+## NOT REACHED (45-minute budget)
+
+1. **Migration not applied**, so no live read-back. AC-MTG-1 is therefore half-proven: the
+   capture code is right, the stored result is unobserved. **This is the gap that matters most.**
+2. **Nothing deployed** — feature branch only, as instructed.
+3. **No live Graph call** to confirm `attendees` returns under the existing consent. Reasoned,
+   high confidence, **not measured** (see chunk 1).
+4. **The digest renderer/sender itself is not built here** — this task was capture + classifier +
+   grouping. `groupMeetingsByDay` / `shouldSendMeetingsDigest` are the seams it should consume.
+5. `nightly-schedule-builder:432,:717` still inline their own `7`. One-line import each; that
+   file is not owned by this task.
+
+## HANDOFF — what the next person must do, in order
+
+1. Apply `supabase/migrations/20260913140000_calendar_attendee_capture.sql`.
+2. Deploy `calendar-delta-sync` + `calendar-integration-manager`.
+3. `update calendar_connections set sync_token = null;` — **after** step 2, so the full re-sync
+   is minted with the new `$select`.
+4. Trigger a sync, then the read-back that actually closes AC-MTG-1:
+   ```sql
+   select title, show_as, jsonb_array_length(attendees) as n, attendees
+   from external_calendar_events
+   where start_time > now() order by start_time limit 10;
+   ```
+   Expect `Call with Travis Wagner` / `EDS Team Sync` with `n >= 2`, and `Haircut` with `n = 0`.
+   **If every row comes back `n = 0`, the Graph consent theory in chunk 1 is wrong** — that is the
+   disconfirming result to look for, and the permission to name is delegated `Calendars.Read`.

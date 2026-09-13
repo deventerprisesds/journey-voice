@@ -1746,6 +1746,7 @@ export type Database = {
       }
       external_calendar_events: {
         Row: {
+          attendees: Json
           calendar_id: string
           connection_id: string
           created_at: string
@@ -1757,6 +1758,8 @@ export type Database = {
           is_recurring: boolean | null
           last_synced_at: string
           location: string | null
+          organizer_email: string | null
+          show_as: string | null
           source_task_id: string | null
           start_time: string
           title: string
@@ -1764,6 +1767,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          attendees?: Json
           calendar_id: string
           connection_id: string
           created_at?: string
@@ -1775,6 +1779,8 @@ export type Database = {
           is_recurring?: boolean | null
           last_synced_at?: string
           location?: string | null
+          organizer_email?: string | null
+          show_as?: string | null
           source_task_id?: string | null
           start_time: string
           title: string
@@ -1782,6 +1788,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          attendees?: Json
           calendar_id?: string
           connection_id?: string
           created_at?: string
@@ -1793,6 +1800,8 @@ export type Database = {
           is_recurring?: boolean | null
           last_synced_at?: string
           location?: string | null
+          organizer_email?: string | null
+          show_as?: string | null
           source_task_id?: string | null
           start_time?: string
           title?: string

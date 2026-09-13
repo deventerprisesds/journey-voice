@@ -26,6 +26,10 @@ import {
   WEEKLY_DIGEST_LOCAL_HOUR,
   WEEKLY_DIGEST_LOCAL_WEEKDAY,
 } from '../../supabase/functions/_shared/digest-content.ts';
+import type { DigestChannel } from '../../supabase/functions/_shared/digest-content.ts';
+
+/** Read channels, typed once so every loop below narrows correctly. */
+const READ_CHANNELS: DigestChannel[] = ['email', 'push', 'slack', 'app_message'];
 
 const LINK = 'https://journey.example.org/priorities';
 
@@ -61,7 +65,7 @@ describe('AC-BUILD-2 — schedule / priorityLane / calendarHolds', () => {
     });
     const p = buildDailyBriefPayload(ctx, { deepLink: LINK });
     assert.equal(p.schedule.length, 3);
-    assert.equal(p.priorityLane, undefined, 'payload must not re-export the raw lane name');
+    assert.equal('priorityLane' in p, false, 'payload must not re-export the raw lane name');
     assert.equal(p.priorities.length, 2);
     assert.deepEqual(p.priorities.map((x) => x.rank), [1, 2]);
     assert.deepEqual(p.priorities.map((x) => x.title), ['First', 'Second']);
@@ -91,7 +95,7 @@ describe('AC-BUILD-2 — schedule / priorityLane / calendarHolds', () => {
 
 // --------------------------------------------------------------------------
 describe('AC-BUILD-3 — empty state is explicit, never "undefined"', () => {
-  for (const ch of ['email', 'push', 'slack', 'app_message']) {
+  for (const ch of READ_CHANNELS) {
     it(`${ch}: renders real text with no undefined/[object Object]/NaN`, () => {
       const p = buildDailyBriefPayload(ctxWith(), { deepLink: LINK });
       const r = renderDigest(p, ch);
@@ -146,7 +150,7 @@ describe('AC-REND-1 (Tier 1) — a phone script must never reach a read channel'
     assert.match(r.body, /morning check-in/i);
   });
 
-  for (const ch of ['app_message', 'push', 'slack']) {
+  for (const ch of (['app_message', 'push', 'slack'] as DigestChannel[])) {
     it(`${ch} body excludes the script too`, () => {
       const r = renderScheduledCall({ callName: 'Morning Check-in', context: REAL_SCRIPT, channel: ch });
       assert.equal(r.body.includes(REAL_SCRIPT), false);
@@ -185,7 +189,7 @@ describe('AC-REND-2 — per-channel renderers produce different bodies', () => {
   });
 
   it('all four read channels are pairwise distinct', () => {
-    const bodies = ['email', 'push', 'slack', 'app_message'].map((c) => renderDigest(p, c).body);
+    const bodies = READ_CHANNELS.map((c) => renderDigest(p, c).body);
     assert.equal(new Set(bodies).size, 4);
   });
 
@@ -346,7 +350,7 @@ describe('AC-LINK-1 — deep link fails CLOSED', () => {
 describe('AC-LINK-3 — the same absolute URL in every channel that carries one', () => {
   it('email, slack and app_message carry byte-identical URLs', () => {
     const p = buildDailyBriefPayload(ctxWith(), { deepLink: LINK });
-    const urls = ['email', 'slack', 'app_message']
+    const urls = (['email', 'slack', 'app_message'] as DigestChannel[])
       .map((c) => (renderDigest(p, c).body.match(/https?:\/\/\S*?priorities/) || [])[0]);
     assert.deepEqual(urls, [LINK, LINK, LINK]);
   });

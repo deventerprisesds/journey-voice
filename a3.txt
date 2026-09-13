@@ -1,0 +1,4 @@
+      if (isDateInTimezone(row.start_time, day.date, tz)) {
+        day.meetings.push(row);
+        break;
+      }
