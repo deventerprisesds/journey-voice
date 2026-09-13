@@ -109,3 +109,44 @@ the restore matches HEAD, and a post-restore re-run of the same command passes a
 confirmed clean before and after by both mutate.sh and my own independent `git diff --exit-code`.
 
 ---
+
+## C3. `node scripts/undef-check.mjs --all` exits 0 with 0 undefined symbols.
+
+**Verdict: CONFIRMED** — covered above in "Cheap suite re-run": `undef-check: 82 file(s) checked, 0
+NEW undefined symbol(s)`, exit 0.
+
+## C4. Worker suite `cd cloudflare && npx tsx --test src/slack-events.test.ts`, counts verbatim.
+
+**Verdict: CONFIRMED** — covered above in "Cheap suite re-run": `tests 22, pass 22, fail 0`, exit 0,
+all 22 subtests individually `ok`. Same count loop 1 reported.
+
+---
+
+## C5. Bot-loop guard (`shouldHandleMessage`'s `bot_id` check) is mutation-proof — re-run via
+mutate.sh, anchors from FILES not shell arguments, restore asserted independently.
+
+**Verdict: CONFIRMED**
+
+```
+$ grep -c "if (event.bot_id) return false;" cloudflare/src/slack-events.ts
+1   # unique anchor, confirmed before mutating
+
+$ mutate.sh cloudflare/src/slack-events.ts anchor_botid.txt repl_botid.txt \
+    "cd cloudflare && npx tsx --test src/slack-events.test.ts" \
+    "AC-S4 a message carrying bot_id is IGNORED"
+FIRED: 'AC-S4 a message carrying bot_id is IGNORED' failed with the defect reinstated. The guard is real.
+restored: cloudflare/src/slack-events.ts matches HEAD
+tree clean: 'AC-S4 a message carrying bot_id is IGNORED' passes again on the restored tree
+
+$ git diff --exit-code -- cloudflare/src/slack-events.ts && echo CLEAN
+CLEAN — my own git diff confirms restore, not just mutate.sh's own claim
+```
+
+Commenting out `if (event.bot_id) return false;` (the specific check `bot_id` alone catches —
+`app_id`/`subtype` are separate, independent checks on the same lines and were left untouched)
+reinstates the exact infinite-loop hazard the docstring above the function names ("the single most
+damaging way this feature can fail"). The suite FIRED specifically on the `bot_id` test, not some
+other test. Restore verified twice: once by mutate.sh's internal check and once by my own separate
+`git diff --exit-code` invocation after the tool exited.
+
+---
