@@ -660,3 +660,37 @@ only, success. Triggers unchanged (workflow_dispatch), no step logic touched, Py
 apart from two `\"` shell escapes that are a hard SyntaxError in a real file.
 **Same defect bit me the same hour** in `graph-mailbox-probe.yml` — it is a repeat pattern, not a
 one-off. Do not embed a multi-line script in a `run:` block; put it in `scripts/` and call it.
+
+## ACT: what the two n8n Slack exports actually tell us — 2026-09-13
+Owner supplied `Slack Outgoing Message Huddle` (86 nodes) and `Working Slack Comms Tool copy`
+(50 nodes). Read node-by-node; four findings, one of which was a live defect in OUR code.
+
+**1. Slack was never an Incoming Webhook.** All 8 `n8n-nodes-base.slack` nodes use
+`authentication: oAuth2` with credential `slackOAuth2Api` — a BOT TOKEN calling `chat.postMessage`
+to a per-message `channelId` (`={{ $('When Executed by Another Workflow').first().json.channel }}`)
+carrying `thread_ts`. journey's entire Slack notion is an Incoming Webhook URL
+(`slackWebhook`/`SLACK_WEBHOOK_URL`), which posts to ONE fixed channel and CANNOT thread. So
+"restore Slack" is not a transport swap — the two mechanisms differ in capability.
+
+**2. The sub-workflow's input contract** (`executeWorkflowTrigger`) is:
+`output, channel, thread_ts, thread_id, sender, channel_resolved, target_recipient, bot_id,
+sessionId, messageComplexity`. Any journey-side replacement must produce `channel` + `thread_ts`,
+neither of which journey currently has anywhere.
+
+**3. Agent identity comes from the CHANNEL NAME, not from the message.** `Extract handle from
+channel` splits `flex-grimes___fitness_trainer` on `___` then `-` to get `flex`, falling back to a
+substring scan over 16 handles (`cole compass eli elle ezra faith finn iris liam sam tess troy
+terry flex charleston cam`). That is the same roster Huddle has in `agents.ts` — a real
+integration seam, not a coincidence.
+
+**4. A live bug in the n8n routing, for the owner's awareness (their system, not ours to edit):**
+`To Charleston (Chef)` and `To Charleston (Cole)` BOTH test `handle.includes("flex")` — copy-paste
+from `To Flex`. Charleston and Cole can never be selected on their own, and both fire whenever Flex
+is targeted.
+
+**OUR DEFECT, FIXED (78297de):** `/notify` parsed `slackWebhook` NOWHERE. journey collects it per
+user (NotificationSettings.tsx:1026) and appends it to the query (index.ts:814); the GET parser read
+six fields and that was not one, and `sendSlack` consulted only `env.SLACK_WEBHOOK_URL`. A user who
+configured their own webhook had it discarded and still saw `not_configured`. Caller's value now
+beats the env default. Guard AC-N5b observes the URL actually fetched on BOTH transports — a 200
+proves nothing here, since the env default would also return 200. mutate.sh: **FIRED**. 15/15.
