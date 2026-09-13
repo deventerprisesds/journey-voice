@@ -172,3 +172,25 @@ anywhere a token is present.
 **Still the trap:** partial freshness — check the LINE, not the file's vintage.
 Fixed by dispatching `deploy-supabase-functions.yml`; re-proved by request 715120, which now returns
 `google_event: {"success":false,...}` with a populated `errors[]`.
+
+## 8. "Every frequent cron we own is Supabase" — generalised from ONE app's table — 2026-09-13
+**Claim I made:** *"Every frequent cron we own IS Supabase pg_cron"*, offered to the owner as the
+reason his suggestion (reuse the most frequent cron) could not coexist with "move off Supabase".
+**Ground truth:** the Azure migration is real and I talked over it. `cron.job` on
+`wwxgajrtmslzklnyplah` is **journey's** scheduler and says nothing about Huddle. Huddle's recurring
+jobs live in **Azure Postgres** — `scheduler.server.ts` says so in its first line: *"resident in the
+Huddle app + Azure Huddle PG (NOT supabase) … driven by the SAME every-minute heartbeat … the
+run-turn route journey's pg_cron pokes."* Supabase supplies the **clock**; Azure holds the **data and
+the dispatch logic**.
+**The single source that would have settled it up front:** `scheduler.server.ts`'s header — one file,
+one line, and I had already grepped that repo twice in the same turn without opening it.
+**Root-cause pattern:** the recurring one. I read ONE authoritative source (journey's `cron.job`),
+which was genuinely authoritative *for journey*, and let the word **"we"** silently widen its scope to
+both apps. A query answers the question it was asked, never the broader one it resembles — the same
+error as concluding a capability is absent from a single-file grep.
+**Why the owner caught it and I did not:** he knows what was migrated. I had disconfirming evidence
+one grep away and did not look, because the query I *had* run felt like enough. That is exactly
+"actively seek disconfirming evidence for your leading hypothesis" going unperformed.
+**Guard it implies:** before any sentence about what **"we"** / the org / the stack does, name every
+app the claim covers and cite a source PER APP. A cross-app claim needs cross-app evidence; one
+project's system table is not it.

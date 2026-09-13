@@ -1082,8 +1082,18 @@ cron. Ground truth, `select schedule, jobname from cron.job` on `wwxgajrtmslzkln
 | `0 * * * *` | notification-scheduler-job | pg_cron → Supabase edge fn |
 | `0 5 * * *` | nightly-schedule-builder | pg_cron → Supabase edge fn |
 
-**Every frequent cron we own IS Supabase pg_cron.** "Reuse the most frequent cron" and "get off
-Supabase" are the same sentence pointing in opposite directions — so the answer to the question as
+**CORRECTED 2026-09-13, same day, by the owner: *"didn't we migrate to azure?"* He was right and the
+sentence below overstated.** The table above is journey's `cron.job` and nothing more. What it proves
+is that the every-minute **CLOCK** is Supabase pg_cron. It does NOT prove the DATA or the job LOGIC
+is — and they are not. `src/features/huddle/lib/tasks/scheduler.server.ts` (origin/main), verbatim:
+*"resident in the Huddle app + Azure Huddle PG (**NOT supabase**) … driven by the SAME every-minute
+heartbeat … the run-turn route **journey's pg_cron pokes**."* So Azure holds Huddle's scheduled-job
+rows and dispatch; Supabase holds only the heartbeat that pokes it. The Azure migration is real. The
+accurate line is **"the every-minute TICK is Supabase pg_cron"**, and that tick is the LAST Supabase
+dependency in Huddle's scheduled path — which sharpens the owner's point rather than answering it.
+
+**The every-minute TICK is Supabase pg_cron.** "Reuse the most frequent cron" and "get off
+Supabase" therefore still point in opposite directions for the SCHEDULING half — so the answer to the question as
 asked is *no*, and the reason is arithmetic rather than preference: a one-minute poll means 0–60s
 before an agent has even SEEN the message, before it starts thinking. Slack's own push is ~1s and
 needs no cron and no cursor.
