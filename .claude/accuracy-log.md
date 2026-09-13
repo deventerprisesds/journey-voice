@@ -262,3 +262,23 @@ structural guards over prose, applied to the log itself.*
 **Guard:** never put FAIL/FAILED/ERROR in a test NAME. The harness's own three-state reporting
 (`FIRED`/`INERT`/`NOT-APPLIED`+`PRE-DIRTY`) is what caught it both times; a two-state harness would
 have reported the guard broken.
+
+## 12. "DMs need the im:history scope and an app reinstall" — the premise was never tested — 2026-09-13
+**Claim (told to the owner twice, and written into a commit message):** inbound DMs are blocked until
+`im:history`/`im:read` are added to the Slack app, which forces a reinstall.
+**Ground truth:** both scopes were already granted. Proven by USING them, not by reading a list:
+`conversations.list?types=im` returned DM channels, and `conversations.history` on one returned
+`ok:true` — neither raised `missing_scope`. The real gap is the `message.im` EVENT SUBSCRIPTION, which
+is a checkbox rather than a scope, and needs no reinstall.
+**The single source that would have settled it up front:** one API call with the token we already
+hold. Forty seconds.
+**Root-cause pattern — a CORRECTLY RECALLED RULE applied to an UNTESTED PREMISE.** "Scope changes
+require a reinstall" is true. I never checked the premise it rests on: that a scope change was needed.
+I had even recorded the granted scopes in my own earlier notes this session. This is subtler than the
+usual proxy error, because nothing I said was false in isolation — the general rule was right, the
+conclusion was wrong, and the join between them went unexamined.
+**Cost:** the owner was told to do a reinstall he did not need, twice, having already told me he was
+not doing manual chores.
+**Guard:** before reporting that a capability is BLOCKED on acquiring a permission, ATTEMPT the
+operation and read the error. An API that answers `ok:true` has settled it; `missing_scope` names
+exactly what is missing. Never infer a permission gap from a rule about permissions.

@@ -1675,3 +1675,37 @@ fetch must not cost the reply"*, and `mutate.sh` scans test OUTPUT for the must-
 name matched before any mutation existed. **I logged this exact defect this morning (`8f8e17a`) and
 then walked into it.** Renamed; it then FIRED. *A prose note about a trap does not stop you falling
 in it — which is the argument for the harness having a `NOT-APPLIED`/`PRE-DIRTY` state at all.*
+
+## ACT:slack-inbound — loop 3 VERIFIED 13/13, and the DM blocker is SMALLER than I said — 2026-09-13
+**Loop 3: 13/13 CONFIRMED, 0 REFUTED** (`docs/qc-evidence/VERIFY-slack-inbound-3.md`, pushed per
+claim). Every prior claim re-checked against the twice-rewritten file, not carried over.
+- **N1 mutation-proved FIRED** — making the channel guard permissive breaks `AC-S11c`. The three-way
+  split did NOT become a catch-all, which was the security-relevant risk of adding DM support.
+- **C5 re-mutation-proved at FULL DEPTH** — the loop guard still real after two rewrites. *A guard
+  proved against code that no longer exists is a belief, not a guard.*
+- N4 was verified STRONGER than the shipped test: the verifier threw a real exception rather than
+  returning `ok:false`, and the reply still posted.
+
+**N5 found one thing I had not:** **multi-person DMs (`is_mpim`) are silently ignored** — they are
+neither a `___` lane nor `is_im`, so they exit `channel_is_not_an_agent_lane`. Fail-closed, so not a
+security gap, but a real coverage gap and mine, from the same "enumerate the shapes" blind spot that
+produced the 1:1 DM gap. Not fixed; recorded.
+
+### CORRECTION — DMs do NOT need a new scope or a reinstall
+I told the owner twice that DMs were blocked on adding `im:history`/`im:read` plus the reinstall a
+scope change forces. **Both scopes are ALREADY GRANTED**, proven by using them:
+
+    conversations.list?types=im          -> ok:true, returned DM channels   => im:read held
+    conversations.history?channel=D…     -> ok:true, messages:[]            => im:history held
+      (probed with oldest=9999999999 deliberately, so the scope is proven without printing
+       anyone's DM content into a CI log)
+
+Neither returned `missing_scope`. **What is actually missing is the `message.im` EVENT SUBSCRIPTION —
+a subscription checkbox, not a scope — and subscribing to a bot event whose scope you already hold
+does not require a reinstall.** So the owner action shrinks from "add a scope, reinstall the app" to
+"tick `message.im` under Subscribe to bot events".
+
+*Why I got it wrong: I reasoned from the general rule (scope changes need a reinstall) without
+checking whether a scope change was needed at all. The scopes were listed in my own earlier notes.
+**A rule correctly recalled is still the wrong answer when its premise was never tested** — and the
+test was one API call that cost forty seconds.*
