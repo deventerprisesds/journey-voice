@@ -16,6 +16,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Checkbox } from '@/components/ui/checkbox';
+import { selectedCommsModes, toggleCommsMode } from '@/utils/commsModes';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 
 const DEFAULT_CORE_INSTRUCTIONS = `You are Iris, a knowledgeable and proactive executive assistant.
@@ -423,28 +424,12 @@ const VoiceAssistantSettings: React.FC = () => {
     );
   };
 
-  /**
-   * The delivery methods a call is actually sent on. `commsModes` (multi-select) is the
-   * new shape; `commsMode` (scalar) is what every EXISTING stored row has, so it stays the
-   * fallback -- notification-delivery:172-182 resolves the identical precedence, so an
-   * untouched row behaves exactly as it did before this control became multi-select.
-   */
-  const selectedCommsModes = (call: ScheduledCall): CommsMode[] =>
-    call.commsModes && call.commsModes.length > 0 ? call.commsModes : [call.commsMode || 'phone'];
-
+  // The two channel rules live in `@/utils/commsModes` so they can be TESTED. They used to be
+  // closures over React state here, which is why a verifier could confirm them only by reading the
+  // source -- the one claim in that pass it could not mutation-prove. This is the same code, moved.
   const handleToggleCallCommsMode = (callId: string, mode: CommsMode, on: boolean) => {
     setScheduledCalls(calls =>
-      calls.map(call => {
-        if (call.id !== callId) return call;
-        const current = selectedCommsModes(call);
-        const next = on ? [...new Set([...current, mode])] : current.filter(m => m !== mode);
-        // Never let the user save a call with no delivery method -- it would schedule and
-        // then silently deliver nowhere. Unchecking the last one is a no-op.
-        if (next.length === 0) return call;
-        // Keep the scalar in step so an older reader (or scheduleNextOccurrence, which
-        // preserves comms_mode) never sees a channel the user just turned off.
-        return { ...call, commsModes: next, commsMode: next[0] };
-      })
+      calls.map(call => (call.id === callId ? toggleCommsMode(call, mode, on) : call))
     );
   };
 
