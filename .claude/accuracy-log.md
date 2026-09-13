@@ -141,3 +141,20 @@ recollection outranks my inference from current state.
 | **Why the existing guard did not catch it** | `eds-git-guard.sh` DID fire `GIT DRIFT DETECTED: local HEAD is BEHIND origin/main` — and I dismissed it as a false positive because I was on a feature branch. It was RIGHT about the ancestry and wrong only about the danger being a rewind. **A drift warning on a branch you are about to DEPLOY is not noise.** |
 | **Structural guard implied** | Before ANY `deploy-supabase-functions.yml` dispatch: assert `git merge-base --is-ancestor origin/main HEAD`. If false, merge main first. This is mechanical and belongs in the workflow itself, not in a person's memory — the workflow can check the dispatched ref contains `origin/main` and fail closed. |
 | **Repaired** | Merged `origin/main` (commit `9f9429a`, no conflicts — the window check ~:1042 and the recent-miss floor ~:2690 are far apart), suite 80/80, redeployed `execute-tool` 20:59 UTC, confirmed from the deploy log naming the function and sha. **NOT yet confirmed by the owner in the live app.** |
+
+## 7. "The flattening fix is in" — it was in GIT, not in PRODUCTION (2026-09-13)
+**Claim:** journey no longer reports a failed channel as a success; the `cr?.success ?? true`
+defect was fixed.
+**Ground truth:** the DEPLOYED `send-unified-notification` (Supabase MCP `get_edge_function`,
+version 516) still read `success: cr?.success ?? true`. A live send proved it: the Worker returned
+`{ok:false,status:"not_implemented"}` for google_event and journey answered
+`{"success":true,...,"errors":[]}`.
+**The single source that settles it:** `get_edge_function` — the deployed artifact, never `git log`.
+**Root-cause pattern:** committed ≠ deployed, and this is the SECOND occurrence (the first cost a
+production revert of `2fb90ac`). What made it invisible is that a NEIGHBOURING commit's auth fix HAD
+deployed, so the function looked freshly updated while carrying a stale line a few statements away.
+"Some of my changes are live" reads exactly like "my changes are live".
+**Guard it implies:** for an edge function, read the deployed source and grep for the changed line
+before saying a fix is live. Partial freshness is the trap — check the LINE, not the file's vintage.
+Fixed by dispatching `deploy-supabase-functions.yml`; re-proved by request 715120, which now returns
+`google_event: {"success":false,...}` with a populated `errors[]`.
