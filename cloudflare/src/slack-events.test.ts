@@ -380,7 +380,7 @@ test('AC-S10d history is ordered oldest → newest', async () => {
   } finally { f.restore(); }
 });
 
-test('AC-S10e a FAILED context fetch must not cost the reply', async () => {
+test('AC-S10e a broken context fetch must not cost the reply', async () => {
   // Context is an enhancement. Slack answering ok:false here must degrade to no history, never to
   // a dropped message -- the agent answering with less context beats it not answering.
   const f = stubFetch({ replies: { ok: false, error: 'channel_not_found' },
