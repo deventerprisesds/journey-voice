@@ -193,3 +193,43 @@ accept "the whole project typechecks" as the test (it doesn't, and never did per
 identical finding) — I tested the claim as actually scoped.
 
 ---
+
+## C8. No unauthenticated path to a Huddle agent turn — re-trace `handleSlackEvents` into
+`processMessageEvent`.
+
+**Verdict: CONFIRMED**
+
+```
+$ grep -rn "processMessageEvent\|handleSlackEvents" cloudflare/src/*.ts   # excl. .test.ts
+cloudflare/src/index.ts:3:  import { handleSlackEvents, ... } from './slack-events';
+cloudflare/src/index.ts:46:      return handleSlackEvents(request, env, ctx);
+cloudflare/src/slack-events.ts:210:export async function processMessageEvent(
+cloudflare/src/slack-events.ts:252:export async function handleSlackEvents(
+cloudflare/src/slack-events.ts:298:      processMessageEvent(body, env)
+
+$ grep -rn "runHuddleAgentTurn" cloudflare/src/*.ts
+cloudflare/src/slack-events.ts:147:export async function runHuddleAgentTurn(args: {
+cloudflare/src/slack-events.ts:225:  const turn = await runHuddleAgentTurn({
+```
+
+Traced the full chain by hand, not by trusting the test suite alone:
+- `index.ts:46` routes exactly one path, `/slack/events`, to `handleSlackEvents` — the only route
+  registration for it in the whole Worker (`grep` above shows one `import`, one call).
+- `handleSlackEvents` (line 252-306): line 265 rejects non-POST; lines 268-279 compute
+  `verifySlackSignature(...)` and **return 401 immediately if `!verdict.ok`, before any further
+  code runs** — `processMessageEvent` is not reachable on that branch at all, it's after an early
+  `return`, not behind a flag checked later.
+- The ONLY call to `processMessageEvent` in the whole Worker (line 298) sits inside
+  `if (body.type === 'event_callback')`, which is itself only reached after the signature check has
+  already passed (line 274-279 already returned on failure).
+- `processMessageEvent`'s only call to `runHuddleAgentTurn` (line 225) is inside that same function,
+  and `runHuddleAgentTurn` has exactly one call site in the whole `src/` tree.
+- `processMessageEvent` and `runHuddleAgentTurn` are both `export`ed (so importable), but grepping
+  confirms nothing else in `cloudflare/src/*.ts` imports or calls either one — no second, unguarded
+  entry point exists.
+
+Chain: `POST /slack/events` → verify signature (401 on ANY failure: bad sig, missing headers, stale/
+future timestamp, or unset secret per C6) → only on success, `event_callback` → `processMessageEvent`
+→ `runHuddleAgentTurn`. No branch skips the signature gate.
+
+---
