@@ -252,7 +252,15 @@ export async function processMessageEvent(
 export async function handleSlackEvents(
   request: Request,
   env: SlackEventsEnv,
-  ctx: { waitUntil(p: Promise<unknown>): void },
+  // `Pick<ExecutionContext,…>` rather than a hand-written `{ waitUntil(p): void }`. Two reasons,
+  // and the second is the one worth recording: it is the REAL Cloudflare type narrowed to the one
+  // member this function uses, so it cannot drift from the runtime's actual signature; and a method
+  // signature written inline (`waitUntil(p: Promise<unknown>): void`) is indistinguishable from a
+  // CALL to `waitUntil` under scripts/undef-check.mjs's call regex, which flagged it as an undefined
+  // symbol and failed CI. That is a blind spot in the checker (a type position is not a call site) —
+  // tracked in .claude/actions.md — but the real type is the better spelling regardless, so this is
+  // a correction rather than a workaround.
+  ctx: Pick<ExecutionContext, 'waitUntil'>,
 ): Promise<Response> {
   if (request.method !== 'POST') return new Response('Method Not Allowed', { status: 405 });
 

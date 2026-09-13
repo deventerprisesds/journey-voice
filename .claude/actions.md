@@ -1129,3 +1129,34 @@ because Slack does not set them consistently across message shapes.
    `message.channels` and `message.groups` (add `message.im` for DMs).
 
 Until (2) nothing reaches the route at all, so this is inert on the branch and inert after deploy.
+
+## ACT:undef-check-type-position — the symbols guard cries wolf on TS method signatures — 2026-09-13
+**OPEN — tracked, not fixed.** Found by CI failing my own PR #26 (`Tests + symbols guard`, runs
+34764890052 / 34765108359 / 34765181610; tests were 132/132 green, only `check:symbols` failed).
+
+**The false positive.** `scripts/undef-check.mjs` finds call sites with
+`(?:^|[^.\w$?])(ID)\s*(?:<[^<>()]*>\s*)?\(` — deliberately skipping `.foo(` because member calls
+resolve at runtime. But a TypeScript **method signature in a TYPE position** has the identical
+lexical shape:
+
+    ctx: { waitUntil(p: Promise<unknown>): void },   // <- a TYPE. Flagged as a call to `waitUntil`.
+    ctx.waitUntil(...)                               // <- the real call. Correctly ignored.
+
+It reported `cloudflare/src/slack-events.ts:255  waitUntil` as "called but bound nowhere".
+
+**Fixed on my side, correctly rather than by dodging** (commit below): the parameter is now
+`Pick<ExecutionContext, 'waitUntil'>` — the REAL Cloudflare type narrowed to the member used, which
+cannot drift from the runtime signature the way my hand-written structural type could. Proved it
+resolves rather than degrading to `any`: swapping `'waitUntil'` for a bogus member yields
+`TS2344 … does not satisfy keyof ExecutionContext<unknown>` + a downstream TS2339; restoring → 0.
+
+**Why the CHECKER is still wrong and still open.** Any inline callback/method type triggers this, so
+the next person hits it. The org rule is explicit that a guard firing on correct code is worse than
+no guard — the same reasoning that got boost's smart-quote linter deleted the night it was written.
+**Deliberately NOT fixed in this pass:** `undef-check.mjs` decides a CI gate across 82 files, which
+makes it Tier 1 by this org's own table (AC subagent + independent verifier + mutation proof), and it
+is nowhere near what the owner asked for right now. Loosening a gate's regex without that ceremony is
+how a guard silently stops catching the thing it exists for.
+**The fix when it is done:** skip a match whose enclosing context is a type annotation — after `:` in
+a parameter/property position, inside `interface`/`type` bodies, or following `=>`. It must be
+mutation-proved that a genuinely undefined symbol is STILL caught afterwards.
