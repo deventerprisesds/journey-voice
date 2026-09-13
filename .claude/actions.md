@@ -1503,3 +1503,57 @@ Two guards were wrong and both have been fixed:
 **Standing lesson: a probe that cannot fail VISIBLY will report success.** The negative result was
 confident, specific, plausible, and entirely manufactured; its own raw output was the only thing that
 could catch it. *Before believing a probe's null result, make it show you what it actually saw.*
+
+## ACT:slack-inbound — WORKING END TO END, and what the n8n workflow did that we DIDN'T keep — 2026-09-13
+**Working, proven from Slack's API.** In `iris-chase___itinerary` (`C093J5EQVDL`): human `U0934TLA8FJ`
+posted *"Who are you and what do you do? …"* (`ts 1789316380.723369`, no `bot_id` ⇒ a real person),
+`reply_count: 2`, `reply_users: [U0931QP8YQ2, U0934TLA8FJ]`. **`U0931QP8YQ2` is our bot.** So
+human → Worker → Huddle agent → threaded reply is live.
+
+**"It says n8n comms" is OUR app, not the other one.** Our app is literally named
+`Custom n8n to EDS Comms` (`A093F91755X`) — built for the n8n integration, never renamed; bot display
+name `EDS Slack Comms`. n8n's own app is `A016X0AT6QL`. Every message in both channels carries
+`A093F91755X`. *A stale NAME reads as a stale SYSTEM; this is the second time today that has cost a
+double-take (the Worker is still called `twilio-openai-bridge`).*
+
+### What the 49-node n8n workflow did, and what we retained
+Conditions below are READ from the export, not inferred from node names.
+
+| mechanism | n8n | ours | status |
+|---|---|---|---|
+| event transport | `slackTrigger` webhook | Events API → Worker | **RETAINED**, new vehicle |
+| channel → agent | `Extract handle from channel` | `agentIdFromChannelName`, `___` split | **RETAINED** |
+| threading | `Obtain ThreadID` | `thread_ts ?? ts` | **RETAINED** |
+| reply | `Send Reply` sub-workflow ×4 | `chat.postMessage` in thread | **RETAINED** |
+| self-loop guard | `sender !== target` | `bot_id`/`app_id`/`subtype` drop | **RETAINED**, stricter |
+| the brain | 4 LangChain agents + `gpt-4o-mini` + 3 output parsers | Huddle `run-agent-turn` (router, snapshots, 40+ tools) | **REPLACED, richer** |
+| memory | `memoryBufferWindow` + `memoryPostgresChat` + Store/Retrieve sub-workflows | Huddle RAG + `chat.pending_turns` | **REPLACED** |
+| **@-mention gating** | see below | **none** | **DROPPED** |
+| **agent→agent messaging** | see below | **none** | **DROPPED** |
+| "thinking" reaction | `Thinking Update` (slack reaction) | none | DROPPED |
+| complexity routing | `Simple or Complex Message?` | none (Huddle decides internally) | DROPPED |
+| research pre-pass | `Research Node for Enhanced Context` | none (Huddle tools) | DROPPED |
+| perf monitoring | `Performance Monitoring`, `Execution Data` | none | DROPPED (n8n-specific) |
+
+### The two DROPPED behaviours that actually change how it feels
+**1. Scope gating. n8n distinguished 1:1 from group; we do not.** Verbatim:
+
+    ( event.bot_id === undefined && channel_resolved.includes(targetAgent…) )   // 1:1 -> human only
+    || ( text.includes('@' + targetAgent) )                                     // group -> ONLY on @mention
+
+**Ours answers EVERY human message in any `___` channel.** In a lane where two people are talking to
+each other, the agent replies to all of it. n8n only spoke when addressed.
+
+**2. Agent-to-agent handoff. n8n deliberately ALLOWED bot messages that contain an `@`:**
+
+    Confirm Sender is human:        bot_id === undefined || text.includes('@')
+    If Bot must also have an @:     bot_id !== undefined && text.includes('@')
+    Confirm Sender not Target:      extract_user_resolved !== extract_target_resolved
+
+So an agent could @-address ANOTHER agent, with a sender≠target check as the loop guard. **Our
+blanket `bot_id` drop makes that impossible.** Partly redundant — Huddle already does capability-based
+handoff internally — but in SLACK it is gone, and that is a deliberate-looking design that was
+actually an accident of my simpler guard.
+
+**Neither is a defect in what shipped; both are scope differences worth a decision.** Adding the
+@-gate for multi-person channels is small and self-contained.
