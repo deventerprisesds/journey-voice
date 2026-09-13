@@ -50,10 +50,16 @@ export function isHuddleIntegrated(env: {
 /**
  * THE SWITCH. Which app supplies `digest`'s content.
  *
- * Standalone journey answers every digest from itself -- including the stand-up, whose content is
- * then whatever journey can say about the day, because there are no agents to report on. Integrated,
- * journey stays the one that DECIDES and DELIVERS (it owns scheduling and the notification
- * transport), and pulls only the content it does not own: the stand-up.
+ * Standalone journey answers every digest it CAN from itself -- the daily brief and the meetings
+ * digest, both of which read journey's own tables. It returns "journey" for the stand-up too, but
+ * that is the switch saying "not from Huddle", NOT a promise that a stand-up exists: the stand-up
+ * reports on AGENTS' work and journey has no agents, so `send-digests` records
+ * `standup_requires_huddle` and sends nothing. An earlier version of this comment claimed journey
+ * produces a stand-up of its own; nothing implemented that and nothing could, and a verifier caught
+ * the doc contradicting its only consumer four lines below.
+ *
+ * Integrated, journey stays the one that DECIDES and DELIVERS (it owns scheduling and the
+ * notification transport), and pulls only the content it does not own: the stand-up.
  *
  * Read the return value as "where do I fetch this from", never as "who sends it" -- journey always
  * sends, which is the whole point of journey being the switch.
