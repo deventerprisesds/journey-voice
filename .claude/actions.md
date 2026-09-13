@@ -1388,3 +1388,40 @@ not what I implied, and the distinction is the whole reason `shouldHandleMessage
 made a weaker version of that error in prose before the code ever ran.*
 
 **The probe closes the "cannot reach slack.com" gap permanently** — one dispatch, ~40s, any read method.
+
+## ACT:pr26-merge — measured blast radius; NOT merged on a one-word instruction — 2026-09-13
+Owner said "merge it" after a discussion of eds-claude-skills PR #84. **#84 merged** (squash
+`7e17436`). journey-voice **#26 deliberately NOT merged**, and the reason is measured rather than
+cautious.
+
+`deploy-supabase-functions.yml` fires on push to `main` for `supabase/functions/**` and deploys the
+CHANGED functions. `git diff --name-only origin/main...HEAD -- supabase/functions/` →
+**13 functions + `_shared`**. Cross-referencing what is actually deployed today
+(`list_edge_functions`):
+
+| function | deployed version | last deployed |
+|---|---|---|
+| notification-delivery | 516 | **2026-09-13 12:51** |
+| send-unified-notification | 525 | **2026-09-13 14:44** |
+| execute-tool | 434 | 2026-09-03 |
+| nightly-assignment-sync | 181 | 2026-09-03 |
+| nightly-schedule-builder | 235 | 2026-09-03 |
+| send-chat-message | 252 | 2026-09-03 |
+| sync-google-sheets / sync-mit-sheets | 693 / 432 | 2026-09-03 |
+| batch-calendar-scheduler | 426 | 2026-08-29 |
+| classify-task-topic | 240 | 2026-08-29 |
+| confirm-external-meeting | 76 | 2026-08-29 |
+| notification-scheduler | 515 | 2026-08-29 |
+| smart-calendar-scheduler | 506 | 2026-08-29 |
+
+**Only 2 of 13 were deployed today** (both mine, this session). **The other 11 carry branch changes
+that have NEVER reached production** — among them all three scheduling engines and `execute-tool`,
+precisely the paths `CLAUDE.md` marks config-authoritative and expensive to re-derive.
+
+**So merging #26 is NOT a no-op that aligns main with what is already running — it is a live deploy of
+11 functions' worth of accumulated, unreviewed change.** That is a different act from merging a
+4-file workflow PR, and "merge it" said in the context of #84 is not authorisation for it. Authorship
+gives no comfort either: all 56 commits read `Claude`, which covers every session, not this one.
+
+**Nothing is blocked by leaving it.** The Slack route is already live — the Worker was deployed from
+the branch and `send-unified-notification` dispatched at 14:44 — so inbound Slack does not need #26.
