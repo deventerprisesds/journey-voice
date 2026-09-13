@@ -154,3 +154,131 @@ Received a VERIFY LOOP contract amendment mid-task: 25-minute wall-clock budget 
 Adopting it now; claims below are being committed/pushed incrementally rather than held to the end.
 
 ---
+
+## C5. Bot-loop guard (`shouldHandleMessage`) is real, not inert (mutation-proof via `mutate.sh`)
+
+**Verdict: CONFIRMED**
+
+Used `/usr/local/bin/mutate.sh` per the org convention (anchors from files, not shell args).
+
+Anchor file (exact text removed from `cloudflare/src/slack-events.ts`):
+```
+  if (event.bot_id) return false;
+  if (event.app_id) return false;
+```
+Replacement file:
+```
+  // bot_id/app_id checks removed by mutation probe
+```
+Command:
+```
+mutate.sh cloudflare/src/slack-events.ts <anchor-file> <repl-file> \
+  "cd cloudflare && npx tsx --test src/slack-events.test.ts" \
+  "AC-S4 a message carrying bot_id is IGNORED"
+```
+Output:
+```
+FIRED: 'AC-S4 a message carrying bot_id is IGNORED' failed with the defect reinstated. The guard is real.
+restored: cloudflare/src/slack-events.ts matches HEAD
+tree clean: 'AC-S4 a message carrying bot_id is IGNORED' passes again on the restored tree (build output regenerated)
+```
+`mutate.sh` runs the baseline, the mutated run, and the post-restore run itself (three-outcome
+harness) and reports **FIRED** — not INERT, not NOT-APPLIED. Independently re-asserted the restore
+myself afterward:
+```
+$ git diff --exit-code -- cloudflare/src/slack-events.ts
+$ echo $?
+0
+```
+File matches HEAD exactly. The `bot_id`/`app_id` guard removal reliably breaks `AC-S4`, which
+proves the guard is load-bearing, not decorative.
+
+---
+
+## C6. Signature verification fails CLOSED when `SLACK_SIGNING_SECRET` is unset
+
+**Verdict: CONFIRMED**
+
+**Code path** (`cloudflare/src/slack-events.ts:60-93`, `verifySlackSignature`):
+```js
+export async function verifySlackSignature(
+  rawBody, timestamp, signature, signingSecret, nowMs = Date.now(),
+) {
+  if (!signingSecret) return { ok: false, reason: 'signing_secret_not_configured' };
+  ...
+```
+First line of the function. `signingSecret` comes straight from `env.SLACK_SIGNING_SECRET`
+(`SlackEventsEnv.SLACK_SIGNING_SECRET?: string`, explicitly commented "Absent -> every request is
+refused; this never fails open"). `!signingSecret` is true for `undefined` and for `''`, so an
+unset OR empty secret both refuse. There is no other branch that could accept a request before
+this check runs: `handleSlackEvents` calls `verifySlackSignature` immediately after reading the
+raw body, and returns `401` on any `!verdict.ok`, BEFORE `body.type` is even parsed — so
+`event_callback`/`processMessageEvent` is unreachable without a passing verdict.
+
+**Test** (`slack-events.test.ts:115-121`, `AC-S1c`, part of the 22/22 pass already reported at
+C4):
+```js
+test('AC-S1c an UNSET signing secret fails CLOSED', async () => {
+  const res = await verifySlackSignature('{}', '1', 'v0=aa', undefined);
+  assert.equal(res.ok, false);
+  assert.equal((res as { reason: string }).reason, 'signing_secret_not_configured');
+});
+```
+This is an existing test in the already-run suite (C4, `pass 22 / fail 0`), so it is currently
+green on this exact tree — not merely present in source.
+
+---
+
+## C8. Adversarial read: can an UNAUTHENTICATED caller reach `processMessageEvent`?
+
+**Method:** read `handleSlackEvents` in full and traced every code path that can lead to
+`processMessageEvent`, plus every caller of `handleSlackEvents` itself
+(`grep -rn "processMessageEvent\|handleSlackEvents" cloudflare/src/`, excluding tests).
+
+**Finding: no unauthenticated path found.**
+
+1. **Single entry point.** `grep` shows exactly one non-test caller of `handleSlackEvents`:
+   `cloudflare/src/index.ts:46`, wired only to `POST /slack/events`. There is no second route, no
+   direct export call, and no other file that reaches `processMessageEvent` — `processMessageEvent`
+   itself is called from exactly one place, `slack-events.ts:298`, inside `handleSlackEvents`.
+2. **Method gate first.** `handleSlackEvents` (line 265) returns 405 for anything but `POST`
+   before reading the body.
+3. **Signature check runs before ANY body interpretation.** The raw body is read
+   (`request.text()`), then `verifySlackSignature` runs immediately (lines 267-273) — this happens
+   **before** `JSON.parse`, before checking `body.type`, before the `event_callback` branch that
+   calls `processMessageEvent`. Any failure (`!verdict.ok`) returns `401` at line 278 and the
+   function returns — nothing after that line executes. So an attacker cannot reach the
+   `event_callback`/`processMessageEvent` branch without a passing signature verdict, full stop.
+4. **The signature check itself** (see C6) requires: (a) `SLACK_SIGNING_SECRET` configured, (b)
+   both `x-slack-request-timestamp` and `x-slack-signature` headers present, (c) the timestamp
+   parses as a number and is within 300s of "now" **in either direction** (line 74, explicitly
+   guards a future-dated replay too — `AC-S2b` in the suite), (d) the signature is `v0=<hex>` of
+   even length, (e) `crypto.subtle.verify` (HMAC-SHA256, constant-time by the API's own design, not
+   a manual `===` compare — the code comment explicitly calls out why: `a === b` on a hex digest
+   leaks correctness of leading characters via timing) accepts `v0:{ts}:{rawBody}` against the real
+   secret. None of these can be satisfied by a caller who does not hold `SLACK_SIGNING_SECRET`.
+5. **`url_verification` is not a bypass.** It's handled at line 290, but only *after* the same
+   signature gate — it doesn't call `processMessageEvent` anyway, so it's moot for this claim, but
+   it is not special-cased ahead of auth either.
+6. **A genuine replay is bounded, not an unauthenticated forgery.** Someone who has captured a
+   real, validly-signed Slack request (e.g. via a MITM or a logging leak) could resend it within
+   the 5-minute window and it would re-verify — but that requires an already-authentic signed
+   payload, not an ability to forge one. And even then, `runHuddleAgentTurn` forwards Slack's
+   `event_id` as `idempotencyKey`, and the code comments this is deliberately meant to make Huddle
+   replay a stored reply rather than re-run/re-bill the turn — so even a successful replay is not
+   expected to re-trigger a fresh agent turn on the Huddle side (I did not independently verify
+   Huddle's idempotency handling; that lives in a different repo/service and is out of scope for
+   this file-level trace — noting it as an assumption this code's own comment states, not something
+   I confirmed against Huddle's source).
+7. **No other footgun found:** body is read as text exactly once (no parse/reparse skew that could
+   desync signature-checked bytes from processed bytes); `channel`/`agentId` resolution requires a
+   live Slack API lookup with the bot token (not client-suppliable); nothing in this file trusts a
+   client-supplied header to select an env, a secret, or a routing decision.
+
+**Conclusion:** I found no path for an unauthenticated caller (someone without a valid Slack
+signature, which requires knowing `SLACK_SIGNING_SECRET`) to cause `processMessageEvent` — and
+therefore a Huddle agent turn — to run. This is an adversarial read, not an automated proof; I did
+not attempt to break `crypto.subtle`'s HMAC implementation or find a Workers-runtime-level way to
+call the module's internals directly, both of which are outside what a code read can settle.
+
+---
