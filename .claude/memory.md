@@ -973,3 +973,85 @@ Asked "why is 7.1 later in the week if it's overdue within 14 days", the ground 
 ordering. Reading the ordering code would have produced a confident wrong answer; the row
 timestamps settled it in one query. When a placement looks wrong, check WHEN it was placed
 before checking HOW.
+
+## journey owns comms: `/notify` on journey's Cloudflare Worker (2026-09-08)
+
+**OWNERSHIP LANE, owner-corrected.** journey is the COMMS MODULE; huddle and boost integrate WITH it
+rather than each building a sender. An earlier plan put the endpoint in huddle because that is where
+the working Graph sender lives — wrong lane. huddle's sender is the PATTERN to copy; the HOST is journey.
+
+**THE HOST WAS ALREADY THERE.** journey has a live non-Supabase runtime nobody had reached for: the
+Cloudflare Worker `twilio-openai-bridge` (`cloudflare/`, `deploy-cloudflare.yml`) with its own deploy
+workflow, `wrangler secret put` mechanism and health check. No new Azure app, no new pipeline. Routing
+is a plain `url.pathname ===` chain, so `/notify` sits beside `/health` and `/call` additively.
+
+**WHY n8n NEVER DELIVERED** — from the workflow export, not inference. NINE nodes carry
+`"disabled": true`, including `Execute Workflow`, the ONLY producer of `openaiThreadId`, which the
+assistant node consumes via `memory:"threadId"`. Every deterministic sender (`Switch`,
+`Send a message`, `Create an event`, `Slack3`, `Split Out`, `Edit Fields1`, `Code`, `Merge3`) is off,
+leaving ONE route: the `Email` node attached as an `ai_tool`. Mail sends only if the LLM elects to
+call it. The owner confirmed independently: *"n8n webhook fires but the llm which passes to email
+fails so it doesn't get that far in the chain."*
+
+**THE CASE THEORY WAS WRONG, and the owner's inbox check is what killed it.** The n8n prompt tests
+for `"EMAIL"` while the nightly path sends `["email"]`, so case looked causal. But the Settings test
+button (`NotificationSettings.tsx:543`) sends `['EMAIL']` UPPERCASE and produced no mail either. Case
+is a real fragility, NOT the blocker. Second time this session a tidy hypothesis survived only until
+someone checked the primary source.
+
+**Live probes, owner-authorised.** pg_net GETs `693932` (lowercase) and `693933` (uppercase) both
+returned `200 {"message":"Workflow was started"}` — the only thing n8n ever returns, and exactly why
+journey logged success for mail that never left.
+
+**What `/notify` does differently:** channels normalised case-insensitively; delivery by `switch`,
+not by prompt; `delivered` true ONLY if every channel actually sent (207 + per-channel reason
+otherwise); missing config reports `not_configured`/503 rather than green; `outlook_event` /
+`google_event` / `push` refused as `unsupported` because journey's edge functions still own them.
+Reuses `JOURNEY_PROXY_TOKEN` + the existing `AZURE_*` Graph app — no new org secret.
+
+**Status: built, tested, mutation-proved, NOT DEPLOYED, NOT live-confirmed.** The Worker is not
+deployed and `UNIFIED_WEBHOOK_URL` still points at n8n. The one open unknown is whether `Mail.Send`
+is admin-consented — settled by deploying and sending one message, not by more code.
+
+**STILL BROKEN EVEN IF TRANSPORT IS FIXED: the email body is the VOICE SCRIPT.** journey passes the
+phone assistant's stage directions verbatim (`[WINDOW:morning]`, `BRANCH 1 …`, `Greet: "Hello Sir."`)
+as email content. Transport and content are two separate bugs.
+
+## The symbols guard was covering 72 files and silently NOT the Worker (2026-09-08)
+
+CI printed `72 file(s) checked` both BEFORE and AFTER `cloudflare/src/notify.ts` landed. New
+production code shipped outside the guard whose entire reason for existing is that bundlers accept
+undefined identifiers. The scope note justified excluding `src/` (vite/tsc rejects them — strictly
+stronger) but predated the Worker, and **wrangler/esbuild resolves IMPORTS, not SYMBOLS**, exactly
+like Deno. Both non-vite runtimes now share one scope: **72 → 78 files**.
+
+A missing or empty root is now FATAL, not skipped — a root resolving to nothing is how a guard
+reports a confident green over code it never opened.
+
+Extending it immediately found `WebSocketPair` (`TwilioCallSession.ts:184`) — a real Cloudflare
+Workers global, so it went into `GLOBALS` and **NOT the baseline**. The baseline is for genuine
+defects awaiting a fix; parking a legitimate global there would be filing a lie to make a run green.
+
+**Proved, not assumed:** renaming `parseChannels` to a name bound nowhere yields
+`cloudflare/src/notify.ts:218 parseChannelsTypo`. Before the change it reported nothing.
+
+**The generalisable lesson: when adding a runtime, check the GUARD'S COUNT, not its colour.** A guard
+green because it read nothing is indistinguishable from one green because the code is clean. The file
+count was the only thing that separated them, and it took reading a CI log to see it.
+
+## A REAL container rewind, and the recovery that is easy to get backwards (2026-09-13)
+
+The drift banner had cried wolf for days (feature branch legitimately ahead of `main`), and then it
+was right. Signature: local HEAD sat at `7123233` — `origin/main`'s tip — while the branch NAME was
+still `claude/huddle-journey-integration-xokgv1`, and `.claude/actions.md` **did not exist**.
+
+**The check that decides the recovery, and it is the whole rule:**
+`git rev-list --left-right --count origin/<branch>...HEAD` → `behind<TAB>ahead`. Measured **101 0**.
+
+- `ahead` = 0 → `git reset --hard origin/<branch>` is CORRECT and lossless.
+- `ahead` ≠ 0 → `reset --hard` DESTROYS those commits. Merge or rebase instead.
+
+Both states look identical from a prompt banner, which is exactly why the direction must be measured
+rather than assumed. All four commits were already in the local object store, so recovery was instant
+and nothing was lost. The one modified file was saved to a patch first — cheap insurance that cost
+one command.

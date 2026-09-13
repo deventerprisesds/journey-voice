@@ -416,3 +416,38 @@ Also observed and self-healed: earlier today Business Hours Start ran as `phone`
 Kickstart as `app_message` because the pending `scheduled_notifications` rows were STALE (created
 before the toggles were switched to Email). Each delivery rewrites the next occurrence, so the
 queue is now correct — all five pending rows carry `comms_mode: email`.
+
+## ACT: journey `/notify` endpoint — owner-requested 2026-09-08, BUILT, NOT DEPLOYED
+**Ask:** *"journey is the comms module… make quick work of standing up a non-supabase solution in
+journey for the notify endpoint"* + *"go ahead and send me a real email firing the webhook."*
+
+| Part of the ask | Outcome |
+|---|---|
+| Non-Supabase endpoint owned by journey | BUILT on journey's EXISTING Cloudflare Worker — no new infra |
+| Reuse what worked in huddle | Graph client-credentials sender copied from `graph-email.server.ts` |
+| Fire the webhook for real | DONE — pg_net probes 693932/693933, both `200 "Workflow was started"` |
+| Feasibility table + pre-dev tests | Delivered inline AND in the artifact (owner had not seen them) |
+| Explain the "voice defect" | Explained: the email body is the phone assistant's script, not a briefing |
+
+**Evidence:** commits `2f04b88`, `32eb8c5`, `8fc7f73`. 89/89 tests (8 files, 3 roots). undef-check
+78 files / 0 findings. CI verified at step level on `8fc7f73` — `undef-check: 78 file(s) checked`
+read from the job log, because a step-level green would not have shown the count that was the point.
+Three mutations FIRED: delivered-without-checking → AC-N3; drop case-normalisation → AC-N1; remove
+auth → AC-N2.
+
+**NOT live:** Worker undeployed; `UNIFIED_WEBHOOK_URL` still points at n8n. Both are deliberate.
+**OPEN — needs the owner:** (1) deploy the Worker + send one real message, which settles whether
+`Mail.Send` is admin-consented — the only genuine unknown left; (2) decide who renders the email
+body, journey before dispatch or `/notify`; (3) whether Slack survives at all (nothing routes to it).
+
+## ACT: symbols guard extended to the Worker — self-found gap, 2026-09-08 — DONE
+CI reported `72 file(s) checked` before AND after new Worker code landed. Coverage 72 → 78; missing
+or empty root now fatal; `WebSocketPair` added to GLOBALS (a real Workers global — NOT baselined).
+Mutation-proved by renaming `parseChannels`: guard reports `notify.ts:218 parseChannelsTypo`, where
+before it reported nothing. Commit `8fc7f73`.
+
+## ACT: container rewind recovered — 2026-09-13
+Local HEAD had reverted to `origin/main` (`7123233`) with `.claude/actions.md` absent. Measured
+direction `101 behind / 0 ahead` → `reset --hard origin/<branch>` correct and lossless; all four
+commits were already in the object store. Restored to `8fc7f73`, suite 89/89 green. Diff of the
+rewound tree saved to a patch before touching anything.
