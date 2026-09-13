@@ -1363,3 +1363,28 @@ can satisfy a receiver that checks it. **Our route does NOT use it** — `verify
 the v0 HMAC signing secret only, so this exposure does not weaken `/slack/events`. The risk is any
 OTHER consumer that still accepts the verification token. One click: App Credentials ▸ Verification
 Token ▸ **Regenerate**. The Signing Secret and Client Secret stayed masked in the image.
+
+## ACT:slack-inbound — app id CONFIRMED live, and a correction to my own earlier evidence — 2026-09-13
+`slack-api-probe.yml` merged to eds-claude-skills `main` (PR #84, squash `7e17436`) and ran twice:
+
+    auth.test  -> ok:true  team "EDS"  team_id T0934TLA8F2  user custom_n8n_to_eds_com
+                            user_id U0931QP8YQ2  bot_id B0931QP844A
+    bots.info  -> ok:true  app_id **A093F91755X**  name "Custom n8n to EDS Comms"
+
+So the app id matches the owner's screenshot from the LIVE API, not just the image, and the bot token
+belongs to that same app. `team_id T0934TLA8F2` also matches the n8n export — same workspace.
+
+**CORRECTION to my own earlier claim.** When I first argued inbound was already solved I cited a
+`conversations.history` row as proof the read token exposes a human message:
+
+    U0931QP8YQ2 | ts=1789310710.240879 | thread_ts=… | "*Test- per-agent lane…"
+
+**`U0931QP8YQ2` is the BOT's own user id** (`auth.test.user_id`, and `bots.info.user_id`) — that row
+was OUR OWN post coming back, not a human's. The structural point stands unchanged: the fields
+`user`/`ts`/`thread_ts`/`text` are all present and that is what the design needs. But the sample was
+not what I implied, and the distinction is the whole reason `shouldHandleMessage` drops `bot_id` /
+`app_id` / `subtype` — **the first message that route was ever going to see coming back was its own.**
+*Reading a bot's echo as a user message is exactly the failure the loop guard exists to prevent, and I
+made a weaker version of that error in prose before the code ever ran.*
+
+**The probe closes the "cannot reach slack.com" gap permanently** — one dispatch, ~40s, any read method.
