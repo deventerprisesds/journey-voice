@@ -25,7 +25,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          # Full history: the change detection below diffs github.event.before..github.sha, and a
+          # shallow clone does not contain `before` for a multi-commit push -- which would send
+          # every ordinary merge down the deploy-everything fallback.
+          fetch-depth: 0
 
       - uses: supabase/setup-cli@v1
         with:
@@ -69,10 +72,42 @@ jobs:
             echo "fn=$INPUT" >> "$GITHUB_OUTPUT"
 
           else
-            CHANGED=$(git diff --name-only HEAD~1 HEAD -- supabase/functions/ \
+            # THE RANGE MUST MATCH THE PUSH, NOT THE LAST COMMIT.
+            # The `paths:` trigger above fires when ANY commit in the push touches
+            # supabase/functions/**, but this diff used to read HEAD~1..HEAD -- one commit. A push
+            # whose LAST commit happens to touch something else (a docs tweak, a .gitignore fix, a
+            # merge commit) therefore deployed NOTHING while reporting success.
+            # Measured 2026-09-13: a merge to main carrying a brand-new `send-digests` function and
+            # a fix to `notification-delivery` went green and deployed neither, because the final
+            # commit in the push was `chore: untrack tsc build cache`. Confirmed by listing the
+            # project's live functions afterwards -- `send-digests` was absent.
+            # github.event.before is the ref main pointed at BEFORE this push, so this covers every
+            # commit the trigger considered. It is all-zeros for a branch's first push, and
+            # unreachable if the range was force-pushed away; both fall back to deploying
+            # everything, because under-deploying silently is the failure being fixed.
+            BEFORE="${{ github.event.before }}"
+            if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] \
+               || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+              echo "Push range unavailable (first push, or history rewritten) -- deploying all"
+              echo "mode=all" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            TOUCHED=$(git diff --name-only "$BEFORE" "${{ github.sha }}" -- supabase/functions/ \
               | grep -oP 'supabase/functions/\K[^/]+' \
-              | sort -u \
-              | grep -v '^_' || true)
+              | sort -u || true)
+
+            # A _shared/ change has NO function directory of its own, and the filter below strips
+            # it -- so a pure _shared edit used to deploy nothing while changing code that EVERY
+            # consumer bundles at deploy time. Supabase bundles shared modules into each function,
+            # so an undeployed consumer keeps running the old copy indefinitely. Deploy everything
+            # rather than try to resolve the import graph in bash.
+            if printf '%s\n' "$TOUCHED" | grep -q '^_'; then
+              echo "_shared changed -- every consumer bundles it, so deploying all"
+              echo "mode=all" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            CHANGED=$(printf '%s\n' "$TOUCHED" | grep -v '^_' || true)
             if [ -z "$CHANGED" ]; then
               echo "No deployable function changes detected"
               echo "mode=none" >> "$GITHUB_OUTPUT"
