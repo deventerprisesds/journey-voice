@@ -892,3 +892,23 @@ Either way the value becomes a `SLACK_BOT_TOKEN` org secret and the already-wire
 it to the Worker with no code change.
 **Test hygiene:** the token was sent only to Supabase (owner's own project) and Slack (its issuer).
 `net._http_response` rows 715331/715335/715336 deleted, verified 0 remaining; local copy removed.
+
+## ACT: inbound routing — CORRECTED to Huddle — 2026-09-13
+Supersedes the "journey by default" line recorded earlier today. Owner: *"we are already integrated
+with huddle so it should be switched from the default."* **Inbound Slack routes to the HUDDLE
+OpenAI agents**, not journey. Huddle already owns the roster (`agents.ts`) that the channel→agent
+map keys off, so this also removes the duplication the journey-default would have created.
+Still no impact on notifications: inbound and outbound are separate directions sharing only the
+Slack app credential, and notifications are outbound-only.
+
+## ACT: Slack credentials — searched BOTH orgs, not present — 2026-09-13
+| org | AZURE_* | SLACK_BOT_TOKEN | SLACK_DEFAULT_CHANNEL | SLACK_WEBHOOK_URL |
+|---|---|---|---|---|
+| `deventerpriseds-org` (eds run 34762354426) | readable | **NO** | **NO** | **NO** |
+| `deventerprisesds` (journey deploy 34762382782 annotations) | empty (cross-org, expected) | **empty** | **empty** | **empty** |
+The posting credential is in **n8n's credential store** — the nine `slackOAuth2Api` entries — which
+is not reachable from here. It must be re-obtained from Slack or exported from n8n by the owner.
+
+**Iris's channel, read from the live workspace (`conversations.list`):**
+`iris-chase___itinerary` = **`C093J5EQVDL`** — this is the `SLACK_DEFAULT_CHANNEL` value. Use the
+ID, not the name: ids survive a channel rename, names do not.
