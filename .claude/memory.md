@@ -1199,3 +1199,41 @@ them as one produced a wrong answer in this very session.
    `AC-N9b ... is a FAILURE, not a send` read as red and the harness refused to certify the guard.
    It errs safe (PRE-DIRTY, never a false FIRED) but the guard stays unproven. **Do not put FAIL in a
    test name.**
+
+## Notification delivery — SETTLED STATE 2026-09-13 (n8n removed from the path)
+Four of five channels verified live end to end. Supersedes every earlier "channel X is broken" note.
+
+| channel | how it is delivered now | proof |
+|---|---|---|
+| EMAIL | Microsoft Graph `sendMail` from journey's `/notify` Worker | `graph 202`, found unread in the recipient mailbox |
+| SLACK | `chat.postMessage` with a BOT token, per-message channel + `thread_ts` | `C0939A7CYEB` + `(in thread)` |
+| OUTLOOK_EVENT | journey's edge fn direct via Graph, user OAuth from `calendar_connections` | real eventId + webLink |
+| PUSH | journey's `send-push-notification` (5 subs, 3 FCM) | fired |
+| GOOGLE_EVENT | journey's edge fn direct, mirrors the Outlook block | code done; **both google connections `is_active:false`, tokens expired Mar/Jun** |
+
+- **The recipient address is `public.profiles.email`.** Settings > Notifications writes it
+  (`NotificationSettings.tsx:515`); `send-unified-notification` reads it (`index.ts:606`). Changing
+  it in Settings redirects every channel. A caller may override per-call with `userProfile.email`.
+- **Slack needs `SLACK_BOT_TOKEN` + `SLACK_DEFAULT_CHANNEL` on the WORKER.** Both ride the org-secret
+  sync (journey `deploy-cloudflare.yml`, or eds `cloudflare-secret-sync.yml` cross-org). Iris's
+  channel is `C093J5EQVDL`; use channel IDs, not names — ids survive a rename.
+- **A webhook URL is NOT needed and cannot do the job**: it is welded to one channel and cannot
+  thread. One bot token posts to all 14 agent lanes.
+
+### Hardening — 2026-09-13: three defects that a green response would never have shown
+1. **A bug can live in the GAP between two correct components.** `/notify` honoured `slackChannel`
+   (six passing guards) and `send-unified-notification` built a valid request — but never FORWARDED
+   the field, so every agent posted into the default lane while reporting `sent` with a real ts.
+   Neither side's unit tests could reach it. Only driving the real chain found it.
+2. **A probe that reads a SUBSET must never report absence from the whole.** The mailbox probe read
+   inbox/sentitems/junkemail and I twice reported mail "not delivered" that was sitting in the
+   mailbox, filed by a rule the owner had already told me about.
+3. **Graph `$search` orders by RELEVANCE, not time** — the first fix for #2 returned July messages
+   and none from today. Use `$filter` on `receivedDateTime` with an explicit descending `$orderby`.
+
+### Inbound Slack needs NO Events API endpoint (2026-09-13)
+`conversations.history` on the existing READ token returns `user`, `ts`, `thread_ts`, `text` in one
+response, and `channel` is the thing queried — every field the n8n sub-workflow contract wanted.
+Scopes already held. So no public endpoint, no `url_verification` challenge, no 3-second ACK, no
+signature verification. Poll per channel since the last `ts`, split the channel name on `___` for
+the agent handle, route to HUDDLE (owner's decision), reply with the bot token in-thread.
