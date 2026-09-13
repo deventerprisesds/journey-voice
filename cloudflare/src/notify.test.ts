@@ -49,7 +49,10 @@ test('AC-N2 a wrong or missing secret is rejected, and an unset secret fails clo
   assert.equal((await handleNotify(req({ channels: ['email'] }, null), baseEnv)).status, 401);
   // No token configured -> 503, never "open". A misconfigured Worker must not accept traffic.
   assert.equal((await handleNotify(req({ channels: ['email'] }), {})).status, 503);
-  assert.equal((await handleNotify(req({ channels: ['email'] }, SECRET, 'GET'), baseEnv)).status, 405);
+  // Was `GET -> 405`. GET is now a SUPPORTED method (AC-N8: it is the contract journey's own
+  // caller uses), so that expectation is obsolete BY DESIGN, not loosened — the coverage it
+  // provided, "an unsupported method is refused", moved to AC-N8d and widened to PUT/DELETE/PATCH.
+  assert.equal((await handleNotify(req({ channels: ['email'] }, SECRET, 'PUT'), baseEnv)).status, 405);
 });
 
 // ---------------------------------------------------------------------------
@@ -110,4 +113,69 @@ test('AC-N7 send-as allow-list and Graph config gate behave', () => {
   assert.equal(graphConfigured({}), false);
   assert.equal(graphConfigured({ AZURE_CLIENT_ID: 'a', AZURE_CLIENT_SECRET: 'b' }), false); // partial
   assert.equal(graphConfigured({ AZURE_CLIENT_ID: 'a', AZURE_CLIENT_SECRET: 'b', AZURE_TENANT_ID: 'c' }), true);
+});
+
+// ---------------------------------------------------------------------------
+// AC-N8 — THE GET CONTRACT. Regression guard for a defect a LIVE test caught, not a unit
+// test: the endpoint shipped POST-only and journey's own send-unified-notification builds a
+// query string and fetches with method GET (index.ts:839), so production answered
+// `405 POST only`. These assert the caller's real shape, taken from that file.
+// ---------------------------------------------------------------------------
+function getReq(params: Record<string, string>, secret: string | null = SECRET) {
+  const u = new URL('https://w.dev/notify');
+  for (const [k, v] of Object.entries(params)) u.searchParams.set(k, v);
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  if (secret !== null) headers['x-webhook-secret'] = secret;
+  return new Request(u, { method: 'GET', headers });
+}
+
+test('AC-N8 a GET carrying the legacy query contract is accepted, not 405', async () => {
+  // Exactly the shape send-unified-notification sends: JSON-ENCODED STRINGS in query params.
+  const res = await handleNotify(
+    getReq({
+      userId: 'u1',
+      title: 'Morning Kickstart',
+      body: 'test body',
+      channels: '["email"]',
+      userProfile: '{"email":"a@b.c","phone":"+1"}',
+      taskData: '{}',
+    }),
+    baseEnv,
+  );
+  assert.notEqual(res.status, 405, 'the 2026-09-13 production defect: GET was rejected outright');
+  const j: any = await res.json();
+  // Graph is unconfigured in baseEnv, so the honest answer is not_configured — NOT a 405 and
+  // NOT a false success. That it reached the channel switch at all is the point.
+  assert.equal(j.results.email.status, 'not_configured');
+  assert.equal(j.delivered, false);
+});
+
+test('AC-N8b GET and POST produce IDENTICAL results for the same notification', async () => {
+  const params = {
+    userId: 'u1', title: 'T', body: 'B',
+    channels: '["EMAIL"]', userProfile: '{"email":"a@b.c"}', taskData: '{}',
+  };
+  const g: any = await (await handleNotify(getReq(params), baseEnv)).json();
+  const p: any = await (await handleNotify(
+    req({ userId: 'u1', title: 'T', body: 'B', channels: ['EMAIL'], userProfile: { email: 'a@b.c' } }),
+    baseEnv,
+  )).json();
+  // Transport must not change the verdict. Uppercase on both sides also re-proves AC-N1
+  // across the query path, where the value arrives as a JSON string rather than an array.
+  assert.deepEqual(g.results, p.results);
+  assert.equal(g.delivered, p.delivered);
+});
+
+test('AC-N8c a GET is still AUTHENTICATED — the query path is not a bypass', async () => {
+  const res = await handleNotify(getReq({ channels: '["email"]' }, null), baseEnv);
+  assert.equal(res.status, 401, 'no secret on a GET must 401, exactly as on a POST');
+  const wrong = await handleNotify(getReq({ channels: '["email"]' }, 'nope'), baseEnv);
+  assert.equal(wrong.status, 401);
+});
+
+test('AC-N8d genuinely unsupported methods are still refused', async () => {
+  for (const m of ['PUT', 'DELETE', 'PATCH']) {
+    const r = new Request('https://w.dev/notify', { method: m, headers: { 'x-webhook-secret': SECRET } });
+    assert.equal((await handleNotify(r, baseEnv)).status, 405, `${m} must be refused`);
+  }
 });

@@ -836,10 +836,24 @@ async function callUnifiedWebhook(
   }).then(() => {}).catch(() => {});
 
   try {
+    // AUTHENTICATE THE CALL. The n8n webhook this replaced was unauthenticated, so this
+    // request carried no credential at all — anyone who learned the URL could send mail as the
+    // user. journey's own /notify requires the shared secret, which is ALREADY in this
+    // function's edge secrets (deploy-supabase-functions.yml syncs JOURNEY_PROXY_TOKEN), so no
+    // new secret is introduced.
+    //
+    // Sent as a HEADER, never a query param: the query string is logged in full by this
+    // function and by any intermediary, and a token in a URL leaks into those logs.
+    //
+    // Absent -> the header is omitted rather than sent empty, so /notify answers a clean 401
+    // instead of comparing against "". Rolling back to an unauthenticated webhook still works:
+    // an endpoint that ignores the header is unaffected by its presence.
+    const proxyToken = Deno.env.get('JOURNEY_PROXY_TOKEN');
     const response = await fetch(fullUrl, {
       method: 'GET',
       headers: {
         'Accept': 'application/json',
+        ...(proxyToken ? { 'x-webhook-secret': proxyToken } : {}),
       }
     });
 

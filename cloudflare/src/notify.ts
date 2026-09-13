@@ -196,8 +196,17 @@ export async function handleNotify(request: Request, env: NotifyEnv): Promise<Re
   const json = (b: unknown, status = 200) =>
     new Response(JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json' } });
 
-  if (request.method !== 'POST') {
-    return json({ ok: false, error: 'POST only' }, 405);
+  // GET **and** POST, because the CALLER'S CONTRACT IS GET and the endpoint must speak it.
+  // Measured 2026-09-13: a POST-only endpoint returned `405 POST only` to journey's own
+  // `send-unified-notification`, which builds `?userId=…&channels=…` and fetches with
+  // `method: 'GET'` (index.ts:839). Forcing the caller to change instead would also have
+  // broken rollback, since the n8n webhook this replaces is GET-only too.
+  //
+  // POST stays the PREFERRED shape for new callers: the GET contract puts the entire
+  // notification body in the query string, and a long digest can exceed URL limits. Both are
+  // accepted; neither is privileged at the auth layer.
+  if (request.method !== 'POST' && request.method !== 'GET') {
+    return json({ ok: false, error: 'GET or POST only' }, 405);
   }
   // Same shared-secret scheme huddle's public routes use. Reuses JOURNEY_PROXY_TOKEN.
   const expected = env.JOURNEY_PROXY_TOKEN;
@@ -208,11 +217,27 @@ export async function handleNotify(request: Request, env: NotifyEnv): Promise<Re
     return json({ ok: false, error: 'unauthorized' }, 401);
   }
 
+  // Both shapes land in the SAME NotifyRequest, so everything below this point is
+  // transport-agnostic. `parseChannels`/`parseProfile` already accept the JSON-ENCODED-STRING
+  // forms the query contract produces (`channels='["email"]'`), which is why the GET path
+  // needs no separate parsing rules — that was designed in, not discovered here.
   let payload: NotifyRequest;
-  try {
-    payload = (await request.json()) as NotifyRequest;
-  } catch {
-    return json({ ok: false, error: 'body must be JSON' }, 400);
+  if (request.method === 'GET') {
+    const q = new URL(request.url).searchParams;
+    payload = {
+      userId: q.get('userId') ?? undefined,
+      title: q.get('title') ?? undefined,
+      body: q.get('body') ?? undefined,
+      channels: q.get('channels') ?? undefined,
+      userProfile: q.get('userProfile') ?? undefined,
+      taskData: q.get('taskData') ?? undefined,
+    };
+  } else {
+    try {
+      payload = (await request.json()) as NotifyRequest;
+    } catch {
+      return json({ ok: false, error: 'body must be JSON' }, 400);
+    }
   }
 
   const channels = parseChannels(payload.channels);
