@@ -312,3 +312,45 @@ reports damage it did not cause.
 **A partial implementation must SAY it is partial, in the file.** `send-digests` delivers the
 stand-up only until the two source lanes land, and the comment at the empty slot says exactly that.
 A file that looks finished is how a session strands itself on a dead path (the provenance rule).
+
+## Verification closed — 2026-09-13 (loops 1 + 2)
+
+175/175 tests. 31/32 mutations FIRED cumulatively. Artifacts:
+`.claude/VERIFY-digest-delivery-loop{1,2}.md`. Branch pushed, PR #27. **Not merged, not deployed,
+no digest observed reaching an inbox.**
+
+### Facts worth not re-deriving
+- **`app_message` is NOT a verbatim-delivery channel, and finding 5 of loop 2 was wrong about it.**
+  Email/Slack concatenated `callConfig.context` (the phone script) straight into `body` — that was
+  the real leak and it is fixed. `app_message` passes the same string to `buildCallContext` →
+  `contextualInstructions` → `userInput` for `hybrid-assistant-api`, with *"Generate your opening
+  message for this check-in based on the context above"* (`send-chat-message/index.ts:517`). The user
+  gets the MODEL'S message. It is an LLM-generation path by design, the same role the script plays on
+  a phone call. **Do not "fix" it into a rendered body — that would break the in-app assistant.**
+- **`tsc` typechecks NO edge function.** `tsconfig.app.json` includes `src` only. A green `tsc`
+  reads as coverage it does not have, and that is exactly how a raw NUL byte survived in
+  `send-digests/index.ts` through an entirely green suite. `_shared/*` is now partly covered because
+  the node test glob imports it (typecheck-by-execution); `supabase/functions/*/index.ts` is checked
+  by nothing.
+- **An edge function's `index.ts` is unreachable by tests** — its only entry is `serve()` and nothing
+  imports it. Any logic that must be guarded has to live in `_shared/`. `digest-run.ts` exists for
+  exactly this reason; the loop was there, undefended, when loop 1 found the silent drop in it.
+
+## Hardening — 2026-09-13 (post-verification)
+
+**A `continue` that emits no outcome row is invisible to a reading and to a single-branch test.**
+The silent stand-up drop looked fine in isolation; it showed only as "three digests planned, two rows
+emitted". The guard is now an explicit invariant (`digestRunIsComplete`) asserted over EVERY
+combination of integrated/standalone x ok/null/throw x which loader — brute-forced on purpose,
+because the defect was one uncovered branch among many that each looked correct alone.
+
+**I certified a fix I had not made.** A commit message stated the misleading prose in
+`digest-source.ts` "was wrong and is corrected"; the diff shows that commit touched only two lines
+of the EVIDENCE header. A verifier caught it by reading the diff rather than the message. **A commit
+message is a claim about a diff — check it against the diff before writing it.**
+
+**Do not take a verifier's severity at face value.** Loop 2's finding 5 named a real code path and
+drew the wrong conclusion from it. Reading the two paths side by side settled it in one look; acting
+on the report would have broken the in-app assistant. The rule cuts both ways: a verifier catching me
+in a false claim, and me catching a verifier in a misread, came from the same habit of reading the
+primary source.
