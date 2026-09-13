@@ -182,3 +182,47 @@ digest renderer's live wire-up at `notification-delivery:239` (one line, written
   `shouldSendAtLocalHour` is exported; one-line swap each.
 - `nightly-schedule-builder:432,:717` still inline their own `7` rather than importing
   `MEETING_HORIZON_DAYS`.
+
+---
+
+### ACT:digest-delivery-journey — UPDATE 2026-09-13 (second pass)
+
+**Status: still on `claude/huddle-workflows-setup-cucecs`, pushed. NOT merged, NOT deployed, NOT
+live-confirmed.** 150/150 tests; 12/12 mutations FIRED this pass (23/23 cumulative across lanes).
+
+**Closed since the entry above:**
+- ✅ **Multi-select CONTROL** — `VoiceAssistantSettings.tsx` now writes `commsModes` from a checkbox
+  popover. The backend had resolved the array since the channel lane; only the control was single.
+  The last checked channel cannot be unchecked (a call with no channel schedules and delivers nowhere).
+- ✅ **`notification-delivery` wire-up** — the scheduled-call body is `renderScheduledCall(...)`,
+  not the phone script interpolated into every channel. Mutation FIRED.
+- ✅ **The owner's source ruling has a home** — `_shared/digest-source.ts`. Standalone ⇒ journey
+  answers all three; integrated ⇒ journey keeps the day plan and the calendar and pulls only the
+  stand-up. Mutation FIRED.
+- ✅ **Digest 3 (Terry's stand-up) is no longer chat-only** — Huddle's `runScheduledStandup` returns
+  `result.digest` and accepts `deliver:false`; journey pulls it over the existing
+  `JOURNEY_PROXY_TOKEN`. 3 mutations FIRED (2 Huddle-side).
+- ✅ **Digest 2 (meetings)** — `_shared/digest-source-meetings.ts`, wired into `send-digests`.
+  6 mutations FIRED.
+- ✅ **`send-digests` exists** — the caller that was missing. Channels grouped by rendered body;
+  per-channel result read rather than "no transport error"; 503 on a missing `APP_BASE_URL`.
+- ✅ **Morning Kickstart back to 08:00** — it was at **15:21** (`user_scheduling_prefs`, user
+  `a3378f93-…`, `scheduled_calls[7]`). This is the session's ONLY live change.
+
+**ROOT CAUSE of "I get no digests", found this pass:** `notification-scheduler`'s
+`generateDailyDigest` reads the channel preference into `userChannels` at `index.ts:523` and NEVER
+USES IT — `send-push-notification` is invoked unconditionally. Switching the setting to email could
+not have worked on any run, for anyone. `send-digests` is the replacement path.
+
+**STILL OPEN:**
+- ⏳ **Digest 1 (daily brief) source** — `_shared/digest-source-daily.ts`, lane in flight. Its slot
+  in `send-digests` is marked NOT YET WIRED in the file itself.
+- ⏳ **Independent verifier** for the journey lanes (batched, after the daily lane lands).
+- ⏳ One mutation deferred: `digest-source-standup.ts` "fails closed BEFORE the network call". It
+  returned PRE-DIRTY because a background lane was mid-write on a file in the `src/utils/*.test.ts`
+  glob. Nothing was proven; re-run once the tree is quiet.
+- ⏳ Cron trigger for `send-digests` (every 15 min) not yet added.
+
+**BLOCKING, owner action (unchanged and now harder-gating):**
+- `supabase secrets set APP_BASE_URL=https://<app-host>` — every digest fails closed without it.
+  `send-digests` returns 503 rather than emailing a dead relative link.
