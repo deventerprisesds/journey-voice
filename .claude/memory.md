@@ -1372,3 +1372,33 @@ the author's blind spot into a verdict.**
 **Contract placement:** the VERIFY LOOP header (slug, loop, wall-clock budget, commit-AND-PUSH-per-claim
 artifact) belongs in the SPAWN TEXT. Delivered mid-run by message it still works — the artifact was
 pushed per claim — but the Stop-gate checker reads the spawn, so an amendment is invisible to it.
+
+### Hardening — 2026-09-13: a GREEN DEPLOY IS NOT EVIDENCE A SECRET WAS APPLIED (cross-org)
+`deploy-cloudflare.yml` run 34766148996 reported **success** while silently applying NONE of
+`SLACK_SIGNING_SECRET`, `SLACK_BOT_TOKEN`, `SLACK_DEFAULT_CHANNEL`, `SLACK_WEBHOOK_URL`,
+`AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_TENANT_ID` — each logged
+`##[warning]<NAME> is empty — skipping`.
+
+**Root cause:** `journey-voice` is in the **`deventerprisesds`** org; those secrets live in
+**`deventerpriseds-org`**. **GitHub gives a workflow an unreadable org secret as an EMPTY STRING and
+never errors.** Only `JOURNEY_PROXY_TOKEN` is readable from journey-voice (it shows masked in the env
+block while the rest show blank — that contrast IS the diagnostic).
+
+**So the Worker's Slack/Graph credentials never came from journey's deploy at all** — they come from
+`eds-claude-skills/.github/workflows/cloudflare-secret-sync.yml`, which runs in the org that CAN read
+them. That bridge is the only route for any new credential the Worker needs. Added
+`SLACK_SIGNING_SECRET` to it (4 points) and confirmed via `wrangler secret list`.
+
+**Two reusable facts:**
+1. **`workflow_dispatch` runs the workflow file from the REF you dispatch**, so a workflow change can
+   be exercised on a feature branch without touching `main` (it only has to EXIST on the default
+   branch to be dispatchable).
+2. **Read the warnings, not the conclusion.** "success" here meant "nothing threw", not "the thing you
+   wanted happened" — the same class as the n8n `{"message":"Workflow was started"}` that hid four
+   undelivered emails, and as `202 Accepted` from Graph not meaning a mail arrived.
+
+**Live state:** `/slack/events` is deployed and fails closed — `pg_net` 715600, unsigned POST →
+`401 unauthorized` (401 not 404 proves the route exists; 401 proves the gate runs). Inbound is inert
+until the Request URL is registered in the Slack app, which needs an app CONFIGURATION token
+(`xoxe.xoxp-…`) that cannot be minted from here — a bot token is the wrong token class for
+`apps.manifest.update`.
