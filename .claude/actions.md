@@ -974,3 +974,23 @@ as the owner had already told me ("I have a rule that forward emails from dev@ t
 
 **Standing lesson:** a probe that looks in a subset must never report absence from the whole. State
 what was searched, or search everything.
+
+### Per-agent Slack lanes + threading — FIXED and VERIFIED LIVE (2d7728c) — 2026-09-13
+**The defect:** /notify accepted `slackChannel` and its unit tests passed, but
+`send-unified-notification` never FORWARDED it — `callUnifiedWebhook` builds a fixed query string
+and the field was not in it. Every agent's Slack message fell back to `SLACK_DEFAULT_CHANNEL` and
+landed in Iris's lane.
+**Measured before (pg_net 715405):** requested `C0939A7CYEB` (terry-locke), posted to `C093J5EQVDL`
+(Iris) — and reported `sent`, with a real message ts. **The failure was invisible from the
+response.** It looked like success, to a plausible channel.
+**Measured after (pg_net 715428 / 715429):**
+
+    chat.postMessage C0939A7CYEB ts=1789310710.240879               <- terry-locke's own lane
+    chat.postMessage C0939A7CYEB (in thread) ts=1789310738.920809   <- threaded reply
+
+**WHY NO TEST CAUGHT IT — the part worth keeping.** Both sides were individually correct: /notify
+parses and honours `slackChannel` (AC-N9, AC-N9f), and send-unified-notification built a valid
+request. **The defect lived in the GAP between two correct components**, which neither side's unit
+tests can reach. Only driving the real chain end to end exposed it. This is the concrete argument
+for a live per-channel probe rather than trusting two green suites — and it is the second time
+today that reading the actual result, instead of the status, was what found the bug.
