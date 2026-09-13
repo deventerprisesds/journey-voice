@@ -94,3 +94,53 @@ own results (`channelResultKey`), so `summarizeDelivery` reads one shape everywh
 Behavioural where the behaviour is exercisable (`summarizeDelivery`, `normalizeChannels`),
 source-structural for the edge-function wiring (Deno functions are not runnable from the
 node test runner). `npm test` → **36 pass, 0 fail** (20 pre-existing + 16 new).
+
+## Mutation proof (Tier 1 — AC-CH-3/4 store a delivery claim)
+
+Run with `mutate.sh <file> <anchor-file> <replacement-file> <test-cmd> <must-fail-pattern>`.
+Anchors came from files, never shell arguments.
+
+| # | Defect reinstated | File | Outcome |
+|---|---|---|---|
+| M1 | `outcome = succeeded > 0 ? 'success' : 'failed'` — a partial reported as success (F2) | `_shared/notification-channels.ts` | **FIRED** — `'email fails, push succeeds'` failed, restored, tree clean |
+| M2 | zero requested channels returns `outcome: 'success'` — the vacuous pass at `:649` | `_shared/notification-channels.ts` | **FIRED** — `'ZERO channels attempted with zero errors must not count as delivered'` failed |
+| M3 | `const channels = rawChannels` — sender trusts the caller's case again (F3) | `send-unified-notification/index.ts` | **FIRED** — `'sender canonicalises its input'` failed |
+| M4 | `channels: [commsMode]` — the exact F3 defect restored | `notification-delivery/index.ts` | **FIRED** — `'no longer forwards a raw lowercase commsMode'` failed |
+
+All four restored to match HEAD and re-passed on the restored tree.
+
+**One harness gotcha worth recording:** M2 first reported **PRE-DIRTY** ("the named test
+ALREADY FAILS"), which was not true — the suite passed 15/15 in isolation. The cause was the
+word `FAILED` inside the *test title* colliding with the harness's pre-check. The title was
+reworded (the assertion was not touched) and M2 then FIRED. Reported here rather than being
+quietly dropped, because a PRE-DIRTY is "nothing was tested" and must never be read as proven.
+
+## Type change
+
+`src/services/schedulingService.ts` — `ScheduledCall.commsModes?: CommsMode[]` added
+alongside the existing `commsMode?: CommsMode`, which is documented as legacy-but-supported.
+Existing rows store the scalar and keep working with no migration (proven by the
+`liveCall?.commsMode ?? callConfig.comms_mode` fallback guard in the test file).
+
+## NOT REACHED — stated, not guessed
+
+- **The multi-select CONTROL in `src/components/VoiceAssistantSettings.tsx`** (`:862`, a
+  single-value `Select` bound to `call.commsMode`; handler `handleUpdateCallCommsMode` at
+  `:414`). The type, the storage shape and the whole delivery path now accept several
+  channels, but the owner still has a single-select in the UI. This is the remaining piece
+  of "multi-select channels" and it is a self-contained edit to that one file.
+  *(Note: the brief named `NotificationSettings.tsx` as the scheduled-call settings UI; the
+  scheduled calls are actually edited in `VoiceAssistantSettings.tsx` — `NotificationSettings.tsx`
+  holds the global `user_preferences.channels` checkboxes, which are already multi-select.)*
+- **AC-CH-5** (Huddle's `sendGraphEmail` sender allow-list) — that is huddle-extension-app,
+  not this repo.
+- **AC-CH-6** (owner confirms a real email arrived) — cannot be satisfied from here. Status of
+  the email channel remains **MECHANISM ONLY, NOT USER-CONFIRMED**. Nothing was deployed.
+- **No live/deployed verification of any kind.** Every result above is from source on disk
+  plus the node test runner. The edge functions were not run (Deno runtime; and running them
+  would mean deploying, which the brief forbids).
+- **A reconciliation risk to flag, not fix:** section B's agent added `canonicalChannel()` in
+  `_shared/digest-content.ts`, a *lowercase* vocabulary for choosing a RENDERER (it returns
+  null for `OUTLOOK_EVENT`). It is a different concern from this transport vocabulary and its
+  own comment defers to whichever wins. They should be reconciled — ideally `canonicalChannel`
+  delegating to `toCanonicalChannel` — but that file is not mine to edit and I did not touch it.
