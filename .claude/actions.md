@@ -265,3 +265,44 @@ which is exactly how a raw NUL byte survived in `send-digests/index.ts` through 
 
 **STILL BLOCKING, owner action:** `supabase secrets set APP_BASE_URL=https://<app-host>` + add to
 the `deploy-supabase-functions.yml` secret sync. Every digest fails closed without it.
+
+---
+
+### ACT:digest-delivery-journey — DEPLOYED 2026-09-13, TWO LIVE BLOCKERS REMAIN
+
+**All three repos merged to `main` and deployed. Verified against the LIVE project, not against a
+green checkmark.**
+
+| What | Proof |
+|---|---|
+| `send-digests` live | status ACTIVE, `verify_jwt:false`; bundle contains `runDigestsForUser`, `digestRunIsComplete`, `standup_requires_huddle` |
+| script-leak fix live | `notification-delivery` v521 ACTIVE; `renderScheduledCall` present, old verbatim interpolation ABSENT |
+| cron live | `cron.job` row `send-digests-job` `*/15 * * * *` active — applied by MCP, NOT by the deploy workflow |
+| pipeline runs | pg_net probe → HTTP 200, `{"ok":true,"integrated":true,"users":26}`, every user skipped with a reason |
+
+**THREE deploy defects found and fixed (`06147c9`), all of which let a green run ship less than it
+claimed:**
+1. `paths:` trigger reads the whole push; the deploy diffed `HEAD~1..HEAD`. A merge whose LAST commit
+   touched no function deployed NOTHING and reported success. Measured: `send-digests` absent from the
+   live project after a green run.
+2. `fetch-depth: 2` made the push range unavailable to that diff.
+3. `grep -v '^_'` stripped `_shared/`, so a pure `_shared` change deployed nothing while every
+   consumer BUNDLES it — they would have run the old copy indefinitely.
+
+**Pre-existing, NOT caused here, NOT fixed here:** `function_name: all` cannot succeed on this project.
+The `mcp` function bundles to **26 MB** and Supabase returns `413 request entity too large`; the deploy
+loop is alphabetical and exits on first failure, so nothing after `m` ever deploys. Worked around by
+deploying the 8 changed functions individually. **Any future full redeploy is blocked until `mcp` is
+shrunk.**
+
+**BLOCKER 1 — `APP_BASE_URL` unset.** Every digest fails closed without it (no default, by design).
+
+**BLOCKER 2 — the owner's channels contain no EMAIL.** `notification_prefs` for
+`a3378f93-…` (dev@enterpriseds.io): `daily_digest_enabled: true`, but
+`channels = {GOOGLE_EVENT, OUTLOOK_EVENT, PUSH}`. `selectDigestChannels` maps the two calendar-event
+channels to NO render target (correct — you deliver to them, you never render one), leaving `PUSH`
+only. **So the digest would arrive as a phone push, not the 8am email requested.** This is the
+original symptom, and its cause is data, not code.
+**Not changed unilaterally:** `notification_prefs.channels` is ALSO read by
+`notification-delivery:673` for batched task reminders, so adding EMAIL there starts emailing every
+task reminder too — a side effect the owner did not ask for. Real fork, put to the owner.
