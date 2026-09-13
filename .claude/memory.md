@@ -1318,3 +1318,36 @@ to us. It does not help inbound Slack: `conversations.history` is Tier 3 (~50 re
 14 agent channels at 1s = 840 req/min, 17x over — and non-Marketplace apps have been capped at 1
 req/min since 2025-05-29. **Polling cannot reach near-real-time at any cadence; the limit is Slack's
 meter, not our scheduler.** Push costs us no request budget, which is why `/slack/events` needs no cron.
+
+### Hardening — 2026-09-13: a guard that fires on CORRECT code, and where the fix belongs
+**What happened.** CI (`Tests + symbols guard`) failed my own PR #26 on three consecutive commits.
+Tests were **132/132 green**; only `check:symbols` failed, reporting
+`cloudflare/src/slack-events.ts:255  waitUntil` as "called but bound nowhere".
+
+**It was a FALSE POSITIVE.** `scripts/undef-check.mjs` locates call sites with
+`(?:^|[^.\w$?])(ID)\s*(?:<[^<>()]*>\s*)?\(`, deliberately skipping `.foo(` because member calls
+resolve at runtime on the object. A TypeScript **method signature in a TYPE position** has the
+identical lexical shape:
+
+    ctx: { waitUntil(p: Promise<unknown>): void },   // a TYPE -- flagged as a call
+    ctx.waitUntil(...)                              // the real call -- correctly skipped
+
+**What is now TRUE:** the parameter is `Pick<ExecutionContext, 'waitUntil'>` — the real Cloudflare
+type narrowed to the single member used, so it cannot drift from the runtime signature the way a
+hand-written structural type can. Confirmed it RESOLVES rather than degrading to `any` by breaking it
+deliberately: a bogus member yields `TS2344 … does not satisfy keyof ExecutionContext<unknown>` plus a
+downstream TS2339; restored → 0 errors. Local `undef-check` 0 undefined (exit 0), worker suite 22/22,
+and **CI green on d882c6d** (both `Checks` runs `completed/success`).
+
+**The judgement worth keeping, because it will recur.** The tempting move was to relax the checker's
+regex. I did not, and the reason is the tier: `undef-check.mjs` decides a CI gate across 82 files, so
+editing it is **Tier 1** (AC subagent + independent verifier + mutation proof that a genuinely
+undefined symbol is still caught). The change I actually needed was a type annotation on one
+parameter in one file — **Tier 2, type-only, zero runtime effect**. Fixing the accused file is not
+the same act as fixing the accuser, and conflating them is how a gate gets quietly loosened while
+someone believes it still guards. Blind spot tracked OPEN as `ACT:undef-check-type-position` with the
+specific fix and the mutation proof it will require.
+
+**Generalises to:** when a guard accuses correct code, first ask which side the defect is on. If the
+accused code has a better spelling anyway (it did — the real type beats a hand-rolled one), take it
+and leave the guard alone until the guard can be changed at its own tier.
