@@ -136,7 +136,7 @@ describe('AC-CH-3/AC-CH-4 — a partial fan-out is NEVER recorded as a success (
     assert.match(summary.reason, /EMAIL/, 'the reason must name the channel that did not deliver');
   });
 
-  it('ZERO channels attempted with zero errors is FAILED, not success (the vacuous pass at :649)', () => {
+  it('ZERO channels attempted with zero errors must not count as delivered (the vacuous pass at :649)', () => {
     const summary = summarizeDelivery([], {});
     assert.equal(summary.outcome, 'failed');
     assert.equal(isFullDelivery(summary), false);
