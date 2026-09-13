@@ -1594,3 +1594,50 @@ summary of it was not.
 **Not building it unasked.** Supporting `@handle` in general channels means resolving a mention to an
 agent from the roster rather than from the channel name — a real routing addition, and one Huddle's
 own router may be better placed to make than a regex in the Worker.
+
+## ACT:slack-inbound — DM gap (structural) + memory hypothesis REFUTED — 2026-09-13
+Owner: *"only receiving replies from iris using the channel not direct message"* and *"this agent
+doesn't have the memory of the huddle agent"*.
+
+### A. DMs CANNOT work — structural, in my code, not a settings gap
+Two independent reasons, either sufficient:
+1. **Subscriptions.** Only `message.channels`/`message.groups` were named; DMs need `message.im`.
+2. **The mapper, which is the harder one.** `agentIdFromChannelName` requires `___` in the channel
+   NAME. A Slack DM is an IM conversation: `conversations.info` returns `is_im: true` and **no `name`
+   field at all**, so `lookupChannelName` yields `null`, the mapper yields `null`, and
+   `processMessageEvent` exits `channel_is_not_an_agent_lane`. **Adding `message.im` alone would
+   change nothing.**
+*Design question this exposes, which is real rather than a bug:* a DM is addressed to the APP, not to
+a lane, so there is no channel name to derive an agent from. It needs a different rule — a default
+agent, or Huddle's router choosing from the text. The channel-name mapper has no answer by construction.
+
+### B. Memory — my first hypothesis was WRONG, and the data says so
+**Hypothesis:** `deploy-swa.yml:433` defaults `CROSS_APP_TURN_SUBJECT` to `dev@enterpriseds.io`,
+so Slack turns run as a different user from the real owner and see empty memory.
+**REFUTED.** `identity.identity_cache`:
+
+    email                | login_email               | user_id
+    dev@enterpriseds.io  | von.ellis@enterpriseds.io | a3378f93-d655-4913-b2fa-ca5b1d8020f1
+    dev@enterpriseds.io  | dev@enterpriseds.io       | a3378f93-d655-4913-b2fa-ca5b1d8020f1
+
+**Both emails resolve to the SAME `user_id`.** The subject default is harmless; the email is not the
+problem. *I had a plausible mechanism, a named line of config to blame, and a fix to propose — and it
+was wrong. Checking cost one query.*
+
+**What the same query DID surface, unasked:**
+
+    public.rag_chunks BY owner_entra_oid:
+      a89e3652-3ba0-407e-90c3-7b5c0c7b4cad -> 677 chunks
+      (null)                               ->  44 chunks
+
+**Memory is owned by `a89e3652…`, while identity resolves the owner to `a3378f93…`.** Two different
+uuids. That is EITHER the real cause (retrieval filters on an oid that owns nothing) OR entirely
+benign (`user_id` and `owner_entra_oid` are different id spaces — the column names differ for a
+reason, and an internal user id need not equal an Entra object id).
+**I do not yet know which, and will not guess a second time.** The single thing that settles it is the
+retrieval path: what value `searchChunks` actually filters `owner_entra_oid` against for a cross-app
+caller. That is a code read in huddle, not another query.
+
+### C. Reinstall
+`https://api.slack.com/apps/A093F91755X/install-on-team` — needed after SCOPE changes (adding
+`message.im` would be one). A Request-URL change alone does not require it.
