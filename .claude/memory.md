@@ -1281,3 +1281,40 @@ Mutation-proved FIRED — deleting those two lines makes AC-S4 fail.
 **NOT LIVE.** Needs org secret `SLACK_SIGNING_SECRET` (the route fails closed without it, AC-S1c) and
 the Request URL registered in the Slack app's Event Subscriptions. Both are owner actions; nothing
 reaches the route until the second one is done.
+
+### Hardening — 2026-09-13: "we" is not a scope, and one app's system table cannot prove a claim about two
+**The miss.** I told the owner *"every frequent cron we own IS Supabase pg_cron"* and used it to
+argue his suggestion (reuse the most frequent cron) was incompatible with moving off Supabase. He
+caught it in four words: *"didn't we migrate to azure?"* He was right.
+
+**What is actually TRUE about the system** — the split that must not be blurred again:
+
+| | Where it lives |
+|---|---|
+| Huddle's data (memory, identity, tasks, chat/turns, `scheduled_jobs`) | **Azure Postgres** `eds-postgresql`/`RAG_AI_Agents` |
+| Huddle's recurring-job LOGIC (autowork, standup, review digest/recheck) | **Azure** — the Huddle app |
+| journey's data (tasks, profiles, calendar_connections, reminders) | **Supabase** `wwxgajrtmslzklnyplah` |
+| **The every-minute CLOCK that drives all of it** | **Supabase pg_cron** |
+
+`src/features/huddle/lib/tasks/scheduler.server.ts` line 1, verbatim: *"resident in the Huddle app +
+**Azure Huddle PG (NOT supabase)** … driven by the SAME every-minute heartbeat … the run-turn route
+**journey's pg_cron pokes**."* Azure holds the data and the dispatch; Supabase holds only the
+heartbeat. **That tick is the LAST Supabase dependency in Huddle's scheduled path** — a live
+candidate to move to a Cloudflare Cron Trigger, not yet done, needs the owner's go-ahead because
+autowork/standups/turn-draining all hang off it.
+
+**Root cause, and it is the repo's most repeated one.** I ran ONE authoritative query — journey's
+`cron.job` — which was genuinely authoritative *for journey*, and let the pronoun **"we"** silently
+widen its scope to both apps. A query answers the question it was asked, never the broader one it
+resembles. Identical in shape to concluding a capability is absent from a single-file grep. The
+disconfirming evidence was one grep away in a repo I had already searched twice that same turn.
+
+**Guard:** before any sentence about what "we"/the org/the stack does, enumerate every app the claim
+covers and cite a source PER APP. Cross-app claim ⇒ cross-app evidence. Full entry: `.claude/accuracy-log.md` #8.
+
+**Also established, by test rather than recall:** pg_cron here is **1.6.4 and accepts `'5 seconds'`**
+(probe scheduled, schedule read back verbatim, unscheduled, 0 stray). So sub-minute cron IS available
+to us. It does not help inbound Slack: `conversations.history` is Tier 3 (~50 req/min/workspace) and
+14 agent channels at 1s = 840 req/min, 17x over — and non-Marketplace apps have been capped at 1
+req/min since 2025-05-29. **Polling cannot reach near-real-time at any cadence; the limit is Slack's
+meter, not our scheduler.** Push costs us no request budget, which is why `/slack/events` needs no cron.
