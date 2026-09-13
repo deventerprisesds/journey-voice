@@ -245,3 +245,139 @@ test('AC-N8d genuinely unsupported methods are still refused', async () => {
     assert.equal((await handleNotify(r, baseEnv)).status, 405, `${m} must be refused`);
   }
 });
+
+// ===========================================================================
+// AC-N9 — THE OUTBOUND SLACK TRANSPORT (bot token + chat.postMessage).
+//
+// This is what Huddle and journey will actually use, and it is the transport n8n used
+// (`slackOAuth2Api`). It exists because an Incoming Webhook is welded to ONE channel at creation
+// and cannot thread, so it cannot carry per-agent channels or threaded replies.
+//
+// Every case below inspects the REQUEST THAT WENT OUT, not just the returned status. A response
+// alone cannot distinguish "posted to the right channel in the right thread" from "posted
+// somewhere"; only the outgoing call can.
+// ===========================================================================
+
+/** Capture outgoing fetches and reply with a canned Slack body. */
+function captureFetch(reply: unknown, status = 200) {
+  const calls: Array<{ url: string; body: any; auth?: string }> = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (input: any, init: any) => {
+    const url = typeof input === 'string' ? input : input.url;
+    let body: any;
+    try { body = init?.body ? JSON.parse(init.body) : undefined; } catch { body = init?.body; }
+    calls.push({ url, body, auth: init?.headers?.Authorization });
+    return new Response(JSON.stringify(reply), { status });
+  }) as typeof fetch;
+  return { calls, restore: () => { globalThis.fetch = real; } };
+}
+
+const botEnv = { ...baseEnv, SLACK_BOT_TOKEN: 'xoxb-test-token' };
+
+test('AC-N9 the bot transport posts to chat.postMessage with the channel AND the thread', async () => {
+  const cap = captureFetch({ ok: true, ts: '1726231234.000100' });
+  try {
+    const j: any = await (await handleNotify(req({
+      channels: ['SLACK'], title: 'Hi', body: 'there',
+      slackChannel: 'C0FLEX', slackThreadTs: '1726230000.000100',
+    }), botEnv)).json();
+
+    assert.equal(j.results.slack.status, 'sent');
+    assert.equal(cap.calls.length, 1);
+    assert.equal(cap.calls[0].url, 'https://slack.com/api/chat.postMessage');
+    assert.equal(cap.calls[0].auth, 'Bearer xoxb-test-token');
+    assert.equal(cap.calls[0].body.channel, 'C0FLEX', 'the caller names the channel, per message');
+    assert.equal(cap.calls[0].body.thread_ts, '1726230000.000100',
+      'thread_ts must reach Slack or the reply lands outside the conversation');
+  } finally { cap.restore(); }
+});
+
+// ---------------------------------------------------------------------------
+// AC-N9b — THE HEADLINE. chat.postMessage answers HTTP 200 even when it FAILED.
+// `invalid_auth`, `channel_not_found` and `not_in_channel` all come back 200 with ok:false.
+// Reading res.ok would report each as a successful send — the exact silent-success defect this
+// endpoint was built to eliminate, reintroduced one transport lower down.
+// ---------------------------------------------------------------------------
+test('AC-N9b a 200 carrying ok:false is a FAILURE, not a send', async () => {
+  for (const err of ['not_in_channel', 'invalid_auth', 'channel_not_found']) {
+    const cap = captureFetch({ ok: false, error: err }, 200);
+    try {
+      const j: any = await (await handleNotify(
+        req({ channels: ['SLACK'], slackChannel: 'C0X' }), botEnv)).json();
+      assert.equal(j.results.slack.ok, false, `${err} arrived as HTTP 200 and must still be a failure`);
+      assert.equal(j.results.slack.status, 'failed');
+      assert.match(j.results.slack.detail, new RegExp(err),
+        'the Slack error string names the fix and must survive into the detail');
+      assert.equal(j.delivered, false);
+    } finally { cap.restore(); }
+  }
+});
+
+test('AC-N9c a bot token with no channel anywhere reports not_configured, and sends nothing', async () => {
+  const cap = captureFetch({ ok: true });
+  try {
+    const j: any = await (await handleNotify(req({ channels: ['SLACK'] }), botEnv)).json();
+    assert.equal(j.results.slack.status, 'not_configured');
+    assert.equal(cap.calls.length, 0, 'nothing may be sent when the destination is unknown');
+  } finally { cap.restore(); }
+});
+
+test('AC-N9d SLACK_DEFAULT_CHANNEL fills in, and the caller still overrides it', async () => {
+  const withDefault = { ...botEnv, SLACK_DEFAULT_CHANNEL: '#general' };
+  let cap = captureFetch({ ok: true, ts: '1.1' });
+  try {
+    await handleNotify(req({ channels: ['SLACK'] }), withDefault);
+    assert.equal(cap.calls[0].body.channel, '#general');
+  } finally { cap.restore(); }
+
+  cap = captureFetch({ ok: true, ts: '1.1' });
+  try {
+    await handleNotify(req({ channels: ['SLACK'], slackChannel: 'C0MINE' }), withDefault);
+    assert.equal(cap.calls[0].body.channel, 'C0MINE', 'a named channel beats the deployment default');
+  } finally { cap.restore(); }
+});
+
+// ---------------------------------------------------------------------------
+// AC-N9e — the bot must WIN over a webhook, and the webhook must ADMIT what it dropped.
+// If a webhook were preferred, a caller's channel/thread would vanish with a cheerful "sent".
+// ---------------------------------------------------------------------------
+test('AC-N9e bot beats webhook; webhook alone says the channel/thread were ignored', async () => {
+  const both = { ...botEnv, SLACK_WEBHOOK_URL: 'https://hooks.slack.com/services/DEFAULT' };
+  let cap = captureFetch({ ok: true, ts: '1.1' });
+  try {
+    await handleNotify(req({
+      channels: ['SLACK'], slackChannel: 'C0X', slackWebhook: 'https://hooks.slack.com/services/MINE',
+    }), both);
+    assert.equal(cap.calls[0].url, 'https://slack.com/api/chat.postMessage',
+      'with a bot token available, a webhook must NOT be chosen — it cannot honour the channel');
+  } finally { cap.restore(); }
+
+  // No bot token: the webhook is the degraded path and must name the downgrade.
+  cap = captureFetch('ok', 200);
+  try {
+    const j: any = await (await handleNotify(req({
+      channels: ['SLACK'], slackChannel: 'C0X', slackThreadTs: '1.2',
+    }), { ...baseEnv, SLACK_WEBHOOK_URL: 'https://hooks.slack.com/services/DEFAULT' })).json();
+    assert.equal(j.results.slack.status, 'sent');
+    assert.match(j.results.slack.detail, /IGNORED/,
+      'a silently downgraded send is indistinguishable from a correct one');
+    assert.match(j.results.slack.detail, /channel and thread_ts/);
+  } finally { cap.restore(); }
+});
+
+test('AC-N9f the GET contract carries channel and thread_ts too', async () => {
+  const cap = captureFetch({ ok: true, ts: '1.1' });
+  try {
+    const qs = new URLSearchParams({
+      channels: '["SLACK"]', slackChannel: 'C0GET', thread_ts: '1726230000.000200',
+    });
+    const j: any = await (await handleNotify(
+      new Request(`https://w.dev/notify?${qs}`, {
+        method: 'GET', headers: { 'x-webhook-secret': SECRET },
+      }), botEnv)).json();
+    assert.equal(j.results.slack.status, 'sent');
+    assert.equal(cap.calls[0].body.channel, 'C0GET');
+    assert.equal(cap.calls[0].body.thread_ts, '1726230000.000200',
+      'journey calls this endpoint with GET — the query path must carry threading or it is useless there');
+  } finally { cap.restore(); }
+});

@@ -21,6 +21,7 @@
 // rule against minting org secrets for cross-app calls.
 
 const GRAPH = 'https://graph.microsoft.com/v1.0';
+const SLACK_API = 'https://slack.com/api';
 const LOGIN = 'https://login.microsoftonline.com';
 
 export interface NotifyEnv {
@@ -32,12 +33,33 @@ export interface NotifyEnv {
   NOTIFY_EMAIL_FROM?: string;
   /** Optional Slack incoming-webhook URL. Absent -> the slack channel reports not_configured. */
   SLACK_WEBHOOK_URL?: string;
+  /**
+   * Slack BOT token (`xoxb-…`) for `chat.postMessage`. This is the PREFERRED Slack transport and
+   * the one the n8n workflow it replaces actually used (`slackOAuth2Api`), because it is the only
+   * one that can pick a channel per message and reply inside a thread.
+   *
+   * ONE app, ONE bot, MANY channels — never one app per agent. Slack's free plan caps a workspace
+   * at 10 apps/integrations and **each bot user counts as one**, so 16 agents cannot be 16 bots.
+   * Agent identity therefore comes from the CHANNEL, exactly as n8n derived it
+   * (`flex-grimes___fitness_trainer` -> `flex`).
+   */
+  SLACK_BOT_TOKEN?: string;
+  /** Channel used when a caller names none. Id (`C0123…`) or `#name`. */
+  SLACK_DEFAULT_CHANNEL?: string;
 }
 
 export interface ChannelResult {
   ok: boolean;
-  /** Machine-readable outcome. `skipped` and `not_configured` are NOT successes. */
-  status: 'sent' | 'failed' | 'not_configured' | 'unsupported';
+  /**
+   * Machine-readable outcome. ONLY `sent` is a success — `not_configured`, `unsupported` and
+   * `not_implemented` all mean nothing was delivered.
+   *
+   * `not_implemented` was added with the google_event fix and NOT added here, so the union was
+   * wrong for several commits. Nothing caught it: the tests run under `tsx`, which strips types
+   * without checking them, and `wrangler deploy` shipped it too. Worth remembering that a green
+   * suite here is not a type check.
+   */
+  status: 'sent' | 'failed' | 'not_configured' | 'unsupported' | 'not_implemented';
   detail?: string;
 }
 
@@ -58,6 +80,16 @@ export interface NotifyRequest {
    * default set, reported `not_configured` while the caller had supplied a perfectly good URL).
    */
   slackWebhook?: string;
+  /**
+   * Slack channel for this message — id (`C0123…`) or `#name`. Only the bot-token transport can
+   * honour it; an incoming webhook is welded to one channel at creation time.
+   */
+  slackChannel?: string;
+  /**
+   * Slack `ts` of a parent message. Present -> the reply lands INSIDE that thread, which is how
+   * the n8n workflow kept each agent's conversation coherent. Webhooks cannot thread at all.
+   */
+  slackThreadTs?: string;
 }
 
 export interface NotifyResponse {
@@ -177,42 +209,120 @@ export async function sendEmail(
   }
 }
 
+export interface SlackOptions {
+  /** Caller's own incoming-webhook URL (journey's per-user Settings value). */
+  webhook?: string;
+  /** Channel id or `#name`. Bot transport only. */
+  channel?: string;
+  /** Parent message `ts`, to reply in-thread. Bot transport only. */
+  threadTs?: string;
+}
+
+/** Plain-text rendering shared by both transports, so the two never drift apart. */
+function slackText(title: string, body: string): string {
+  return title ? `*${title}*\n${body ?? ''}` : (body ?? '');
+}
+
 /**
- * Post to Slack via an Incoming Webhook URL.
+ * Post via `chat.postMessage` with a bot token — the PREFERRED transport.
  *
- * `override` is the caller's own webhook (journey's per-user Settings value) and WINS over the
- * Worker's env default — the user configuring a destination must beat a deployment default, or the
- * setting does nothing.
+ * `chat.postMessage` ALWAYS RETURNS HTTP 200, including for `invalid_auth`,
+ * `channel_not_found` and `not_in_channel`. The real verdict is the `ok` field in the JSON body.
+ * Reading `res.ok` here would report every one of those failures as a successful send — precisely
+ * the silent-success defect this whole endpoint exists to eliminate, so the body is what decides.
+ */
+async function sendSlackViaBot(
+  env: NotifyEnv,
+  title: string,
+  body: string,
+  opts: SlackOptions,
+): Promise<ChannelResult> {
+  const channel = (opts.channel || '').trim() || env.SLACK_DEFAULT_CHANNEL;
+  if (!channel) {
+    return {
+      ok: false,
+      status: 'not_configured',
+      detail: 'a bot token is set but no channel was given and SLACK_DEFAULT_CHANNEL is unset',
+    };
+  }
+  try {
+    const res = await fetch(`${SLACK_API}/chat.postMessage`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${env.SLACK_BOT_TOKEN}`,
+        'Content-Type': 'application/json; charset=utf-8',
+      },
+      body: JSON.stringify({
+        channel,
+        text: slackText(title, body),
+        ...(opts.threadTs ? { thread_ts: opts.threadTs } : {}),
+      }),
+    });
+    const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; ts?: string };
+    if (data?.ok) {
+      return {
+        ok: true,
+        status: 'sent',
+        detail: `chat.postMessage ${channel}${opts.threadTs ? ' (in thread)' : ''} ts=${data.ts ?? '?'}`,
+      };
+    }
+    // Slack's error strings are the actionable part and name the fix directly:
+    // `not_in_channel` -> invite the bot; `invalid_auth` -> the token; `channel_not_found` -> the id.
+    return {
+      ok: false,
+      status: 'failed',
+      detail: `chat.postMessage ${channel}: ${data?.error ?? `http ${res.status}`}`,
+    };
+  } catch (e) {
+    return { ok: false, status: 'failed', detail: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/**
+ * Post to Slack, preferring the bot token and falling back to an Incoming Webhook.
  *
- * KNOWN LIMITATION, recorded so nobody mistakes this for parity with what n8n did: an Incoming
- * Webhook posts to exactly ONE channel, fixed when the webhook was created, and cannot thread.
- * The n8n workflow it replaces used a Slack BOT TOKEN (`slackOAuth2Api`) with `chat.postMessage`
- * to a per-message `channelId` and a `thread_ts`, which is how each agent answered in its own
- * channel and inside the right thread. A webhook cannot do either.
+ * The order is deliberate. A webhook is welded to ONE channel at creation time and cannot thread,
+ * so honouring a caller's `channel`/`threadTs` through it is impossible — if a bot token exists it
+ * must win, or those fields silently do nothing. The webhook stays as the degraded path for a
+ * workspace where no bot is installed yet.
+ *
+ * Within the webhook path, the CALLER's URL beats the Worker's env default: a user configuring a
+ * destination has to outrank a deployment default, or the setting is theatre.
  */
 export async function sendSlack(
   env: NotifyEnv,
   title: string,
   body: string,
-  override?: string,
+  opts: SlackOptions = {},
 ): Promise<ChannelResult> {
-  const url = (override || '').trim() || env.SLACK_WEBHOOK_URL;
+  if (env.SLACK_BOT_TOKEN) return sendSlackViaBot(env, title, body, opts);
+
+  const url = (opts.webhook || '').trim() || env.SLACK_WEBHOOK_URL;
   if (!url) {
     return {
       ok: false,
       status: 'not_configured',
-      detail: 'no Slack webhook: none supplied on the request and SLACK_WEBHOOK_URL is not set',
+      detail: 'no Slack transport: SLACK_BOT_TOKEN unset, no webhook supplied, SLACK_WEBHOOK_URL unset',
     };
   }
+  // Say so rather than dropping them on the floor: a caller that asked for a thread and got a
+  // top-level post needs to know the request was downgraded, not assume it worked.
+  const dropped = [opts.channel ? 'channel' : null, opts.threadTs ? 'thread_ts' : null]
+    .filter(Boolean)
+    .join(' and ');
   try {
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: title ? `*${title}*\n${body ?? ''}` : (body ?? '') }),
+      body: JSON.stringify({ text: slackText(title, body) }),
     });
     return res.ok
-      ? { ok: true, status: 'sent', detail: `slack ${res.status}` }
-      : { ok: false, status: 'failed', detail: `slack ${res.status}: ${(await res.text()).slice(0, 200)}` };
+      ? {
+          ok: true,
+          status: 'sent',
+          detail: `webhook ${res.status}${dropped ? ` — ${dropped} IGNORED: a webhook cannot target a channel or thread` : ''}`,
+        }
+      : { ok: false, status: 'failed', detail: `webhook ${res.status}: ${(await res.text()).slice(0, 200)}` };
   } catch (e) {
     return { ok: false, status: 'failed', detail: e instanceof Error ? e.message : String(e) };
   }
@@ -285,6 +395,8 @@ export async function handleNotify(request: Request, env: NotifyEnv): Promise<Re
       userProfile: q.get('userProfile') ?? undefined,
       taskData: q.get('taskData') ?? undefined,
       slackWebhook: q.get('slackWebhook') ?? undefined,
+      slackChannel: q.get('slackChannel') ?? q.get('channel') ?? undefined,
+      slackThreadTs: q.get('slackThreadTs') ?? q.get('thread_ts') ?? undefined,
     };
   } else {
     try {
@@ -316,7 +428,11 @@ export async function handleNotify(request: Request, env: NotifyEnv): Promise<Re
     } else if (ch === 'email') {
       results[ch] = await sendEmail(env, profile.email ?? '', title, body);
     } else if (ch === 'slack') {
-      results[ch] = await sendSlack(env, title, body, payload.slackWebhook);
+      results[ch] = await sendSlack(env, title, body, {
+        webhook: payload.slackWebhook,
+        channel: payload.slackChannel,
+        threadTs: payload.slackThreadTs,
+      });
     } else {
       results[ch] = { ok: false, status: 'unsupported', detail: `unknown channel "${ch}"` };
     }
