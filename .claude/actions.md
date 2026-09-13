@@ -994,3 +994,39 @@ request. **The defect lived in the GAP between two correct components**, which n
 tests can reach. Only driving the real chain end to end exposed it. This is the concrete argument
 for a live per-channel probe rather than trusting two green suites — and it is the second time
 today that reading the actual result, instead of the status, was what found the bug.
+
+## ACT: where notification email goes — ANSWERED from the code — 2026-09-13
+**`public.profiles.email`**, which for the owner is `dev@enterpriseds.io`. Full chain, read rather
+than recalled:
+
+    Settings > Notifications  <Input id="email">   NotificationSettings.tsx:922
+      -> profiles.update({ phone, email })          NotificationSettings.tsx:515 (insert at :517 if absent)
+      -> send-unified-notification reads profiles   index.ts:606
+      -> that address is the recipient unless a caller passes userProfile.email
+
+**So the Settings email field IS the control** — it writes straight to `profiles` and every channel
+follows it. This is why the first three test emails landed in the dev@ folder: the profile says
+dev@. The von.ellis tests only differed because I overrode `userProfile.email` per-call.
+
+## ACT: inbound Slack — the READ TOKEN is the whole solution (owner was right) — 2026-09-13
+I had scoped inbound as needing an Events API Request URL: a public endpoint, the
+`url_verification` challenge, a 3-second ACK, signature verification. **None of that is required.**
+The owner pointed out the existing read token already detects messages, and it does.
+
+**Proved live** (`conversations.history` on `C0939A7CYEB`, read token, `ok:true`):
+
+    U0931QP8YQ2 | ts=1789310710.240879 | thread_ts=1789310710.240879 | "*Test- per-agent lane…"
+
+Every field the n8n sub-workflow's contract wanted is in that ONE response — `user`, `ts`,
+`thread_ts`, `text` — and `channel` is the thing you queried. Scopes already held, no change needed:
+`channels:read`/`groups:read` (enumerate + resolve the 14 agent channels), `channels:history`/
+`groups:history` (new messages per channel), `im:history`/`mpim:history` (DMs).
+
+**Design that follows:** poll `conversations.history` per channel since the last seen `ts` -> split
+the channel name on `___` for the agent handle -> hand to the HUDDLE agent (owner's routing
+decision) -> reply via the bot token, in-thread. **The reply half is already built and verified**
+(per-agent channels + threading, pg_net 715428/715429).
+**The one open design choice:** where the poller runs and at what cadence — journey's Worker on a
+Cron trigger, or a Supabase scheduled function.
+**NOT STARTED.** This is a new feature across journey and Huddle, outside the notification
+migration that was asked for. Awaiting a go-ahead.
