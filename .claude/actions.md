@@ -640,3 +640,23 @@ later — while dev@ -> dev@ arrived in about one second. Not resolved: transit 
 look identical from here. Owner check settles it.
 **Decision for the owner, not for the session:** which mailbox should journey notify? Changing it is a
 `profiles.email` edit, and that is the owner's data — do not mutate it unprompted.
+
+## ACT: red check on EVERY push — two unparseable workflows — FIXED 2026-09-13
+Surfaced by PR #26 webhook wakes plus the GitHub notification mails sitting in dev@'s inbox.
+**Not a test failure and not a CI gate**: both `test-priorities-widget-query.yml` and
+`read-widget-debug-log.yml` embedded Python as `python3 -c "` with the body at column 0 inside a
+`run: |` block. A YAML block scalar ENDS at the first line indented below its base, so neither file
+parsed, and GitHub answers an unparseable workflow with a **zero-job startup-failure run on every
+push**. Signature, from run 34759349133: `conclusion=failure`, `jobs: []`, and `name` equal to the
+FILE PATH rather than the workflow's `name:` — that last one is the reliable tell.
+**Pre-existing, not this branch's**: identical failures on `origin/main` and on
+`claude/huddle-workflows-setup-cucecs`. Fixed here only because it fired on every push to this PR.
+**Re-indenting is not available as a fix** — the shell would pass the leading spaces into
+`python3 -c` and Python rejects that, which is exactly why the body sat at column 0. Extraction to
+real files is the only shape that satisfies both parsers. Both workflows now `actions/checkout@v4`,
+which inline code did not need and a script file does.
+**Proof:** push `b34b70a` produced `Checks` + two failure runs; push `60e7565` produced `Checks`
+only, success. Triggers unchanged (workflow_dispatch), no step logic touched, Python byte-identical
+apart from two `\"` shell escapes that are a hard SyntaxError in a real file.
+**Same defect bit me the same hour** in `graph-mailbox-probe.yml` — it is a repeat pattern, not a
+one-off. Do not embed a multi-line script in a `run:` block; put it in `scripts/` and call it.
