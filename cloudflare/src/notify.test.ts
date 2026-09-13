@@ -298,7 +298,12 @@ test('AC-N9 the bot transport posts to chat.postMessage with the channel AND the
 // Reading res.ok would report each as a successful send — the exact silent-success defect this
 // endpoint was built to eliminate, reintroduced one transport lower down.
 // ---------------------------------------------------------------------------
-test('AC-N9b a 200 carrying ok:false is a FAILURE, not a send', async () => {
+// NOTE ON THIS TEST'S NAME: it must not contain the word FAIL. mutate.sh's names_failure()
+// treats any line holding both the test name and the substring "FAIL" as a failure, so a
+// PASSING TAP line `ok N - AC-N9b ... is a FAILURE ...` read as red and the harness refused
+// to certify the guard (PRE-DIRTY). Harness bug, safe direction, but the guard stays
+// unproven until the name stops colliding.
+test('AC-N9b a 200 carrying ok:false is not a send', async () => {
   for (const err of ['not_in_channel', 'invalid_auth', 'channel_not_found']) {
     const cap = captureFetch({ ok: false, error: err }, 200);
     try {
