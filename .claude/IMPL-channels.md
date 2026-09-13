@@ -67,3 +67,30 @@ it reads the per-channel results from the body.
 Verified importable by the repo's node test runner (`--experimental-strip-types`):
 `normalizeChannels(['email','SLACK','bogus','email'])` → `["EMAIL","SLACK"]`;
 partial → `"partial"`; zero channels → `"failed"`.
+
+## Chunk 2 — `notification-delivery` sends canonical channels and records the truth
+
+**Changed:** `supabase/functions/notification-delivery/index.ts`
+
+| Was | Now |
+|---|---|
+| `const commsMode = liveCall?.commsMode ?? …` (scalar) | `commsModes: string[]` from `liveCall.commsModes` → `callConfig.comms_modes` → **the scalar** → `'phone'`. Existing rows store a scalar and are unchanged. |
+| `channels: [commsMode]` (lowercase, matched nothing) | `channels: normalizeChannels(unifiedModes)` — canonical, and slack+email go in **one** invoke (the existing fan-out, now genuinely fanning out) |
+| `if (unifiedError) … else deliverySuccess = true` | `summarizeDelivery(unifiedChannels, unifiedResult.channelResults, unifiedError)` — the body is read, because a partial returns 2xx and sets no `error` |
+| `if (deliveryError) {failed} else {delivered, failure_reason: null}` | three-way on `summary.outcome`: `failed` → `failed_at`; `partial` → `delivered_at` **plus a non-null `failure_reason: 'partial: …'`**; `success` → `delivered_at`, `failure_reason: null` |
+| `let delivered/failed` | plus `let partial`, reported in the run summary and response body |
+
+**Stored-row invariant** (the thing that makes the claim honest): a clean success is
+`delivered_at IS NOT NULL AND failure_reason IS NULL`. A partial always carries a non-null
+`failure_reason`, so no query can read a partial as a success. `deliverySuccess` no longer
+exists in the file.
+
+The `if/else if/else` chain became independent blocks so several channels can fire in one
+run; each records into one `channelResults` map keyed exactly the way the sender keys its
+own results (`channelResultKey`), so `summarizeDelivery` reads one shape everywhere.
+
+## Guards — `src/utils/notificationChannels.test.ts` (16 assertions, AC-CH-1..4)
+
+Behavioural where the behaviour is exercisable (`summarizeDelivery`, `normalizeChannels`),
+source-structural for the edge-function wiring (Deno functions are not runnable from the
+node test runner). `npm test` → **36 pass, 0 fail** (20 pre-existing + 16 new).
