@@ -88,13 +88,43 @@ async function getOutlookConnection(supabaseClient: any, userId: string): Promis
   }
 }
 
-async function getOutlookConnectionForUser(supabaseClient: any, userId: string): Promise<{
+interface CalendarConnection {
   id: string;
   access_token: string;
   refresh_token: string;
   expires_at: string;
   provider_account_email: string;
-} | null> {
+}
+
+/**
+ * Outlook entry point, kept as a thin wrapper so every existing call site is untouched.
+ * The Outlook path is PROVEN live (a real event was created 2026-09-13) and a refactor that
+ * regressed it to add Google would be a bad trade.
+ */
+async function getOutlookConnectionForUser(
+  supabaseClient: any, userId: string,
+): Promise<CalendarConnection | null> {
+  return getCalendarConnectionForUser(supabaseClient, userId, ['office365', 'outlook'], 'Outlook');
+}
+
+/** Google entry point. Same query, same decrypt, different provider rows. */
+async function getGoogleConnectionForUser(
+  supabaseClient: any, userId: string,
+): Promise<CalendarConnection | null> {
+  return getCalendarConnectionForUser(supabaseClient, userId, ['google'], 'Google');
+}
+
+/**
+ * ONE implementation for both providers. Google was added by parameterising this rather than
+ * copying it: two divergent copies of "pick the best connection and decrypt its tokens" is exactly
+ * the shape that rots, and the rule is extend, don't duplicate.
+ */
+async function getCalendarConnectionForUser(
+  supabaseClient: any,
+  userId: string,
+  providers: string[],
+  label: string,
+): Promise<CalendarConnection | null> {
   try {
     // Direct query for service-level access (notification system needs to access user's tokens)
     // Accept both 'outlook' and 'office365' as valid provider names
@@ -107,7 +137,7 @@ async function getOutlookConnectionForUser(supabaseClient: any, userId: string):
       .from('calendar_connections')
       .select('id, access_token, refresh_token, expires_at, provider_account_email, user_id, updated_at')
       .eq('user_id', userId)
-      .in('provider', ['office365', 'outlook'])
+      .in('provider', providers)
       .eq('is_active', true)
       .or(`expires_at.is.null,expires_at.gt.${nowISO}`)
       .order('updated_at', { ascending: false })
@@ -118,33 +148,33 @@ async function getOutlookConnectionForUser(supabaseClient: any, userId: string):
 
     // Query B: Fallback - if no valid connection, get most recently updated (may be expired)
     if (!connection && !validError) {
-      console.log('[Outlook] No valid (non-expired) connection, trying fallback...');
+      console.log(`[${label}] No valid (non-expired) connection, trying fallback...`);
       const { data: fallbackConnection, error: fallbackError } = await supabaseClient
         .from('calendar_connections')
         .select('id, access_token, refresh_token, expires_at, provider_account_email, user_id, updated_at')
         .eq('user_id', userId)
-        .in('provider', ['office365', 'outlook'])
+        .in('provider', providers)
         .eq('is_active', true)
         .order('updated_at', { ascending: false })
         .limit(1)
         .maybeSingle();
 
       if (fallbackError) {
-        console.error('[Outlook] Fallback query error:', fallbackError);
+        console.error(`[${label}] Fallback query error:`, fallbackError);
       }
       connection = fallbackConnection;
     }
 
     if (validError) {
-      console.error('[Outlook] Valid connection query error:', validError);
+      console.error(`[${label}] Valid connection query error:`, validError);
     }
 
     if (!connection) {
-      console.log('[Outlook] No active Office 365 connection for user:', userId);
+      console.log(`[${label}] No active connection for user:`, userId);
       return null;
     }
 
-    console.log('[Outlook] Selected connection:', connection.id, 'expires_at:', connection.expires_at);
+    console.log(`[${label}] Selected connection:`, connection.id, 'expires_at:', connection.expires_at);
 
     // Decrypt tokens using the database function
     const { data: decrypted, error: decryptError } = await supabaseClient.rpc(
@@ -153,7 +183,7 @@ async function getOutlookConnectionForUser(supabaseClient: any, userId: string):
     );
 
     if (decryptError) {
-      console.error('[Outlook] Token decryption failed:', decryptError);
+      console.error(`[${label}] Token decryption failed:`, decryptError);
       return null;
     }
 
@@ -174,7 +204,7 @@ async function getOutlookConnectionForUser(supabaseClient: any, userId: string):
       provider_account_email: connection.provider_account_email
     };
   } catch (err) {
-    console.error('[Outlook] Error in getOutlookConnectionForUser:', err);
+    console.error(`[${label}] Error in getCalendarConnectionForUser:`, err);
     return null;
   }
 }
@@ -357,6 +387,136 @@ async function createOutlookEventDirect(
     const errorMsg = fetchError instanceof Error ? fetchError.message : 'Network error calling Microsoft Graph API';
     console.error('[Outlook] Fetch error:', errorMsg);
     return { success: false, error: errorMsg };
+  }
+}
+
+
+/**
+ * Refresh an expired Google access token. Mirrors refreshOutlookToken -- same encrypt/store dance,
+ * different token endpoint and credentials. GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET are already
+ * used by other journey edge functions, so no new secret is introduced.
+ *
+ * Google omits `refresh_token` from a refresh response (you keep the original), which is why the
+ * update below only writes it when one actually comes back.
+ */
+async function refreshGoogleToken(
+  supabaseClient: any,
+  connectionId: string,
+  refreshToken: string,
+  userId: string
+): Promise<{ access_token: string; expires_at: string } | null> {
+  try {
+    const clientId = Deno.env.get('GOOGLE_CLIENT_ID');
+    const clientSecret = Deno.env.get('GOOGLE_CLIENT_SECRET');
+    if (!clientId || !clientSecret) {
+      console.error('[Google] Missing GOOGLE_CLIENT_ID/SECRET for token refresh');
+      return null;
+    }
+    const response = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        refresh_token: refreshToken,
+        grant_type: 'refresh_token',
+      }).toString(),
+    });
+    if (!response.ok) {
+      console.error('[Google] Token refresh failed:', response.status, (await response.text()).slice(0, 300));
+      return null;
+    }
+    const tokens = await response.json();
+    const expiresAt = new Date(Date.now() + (tokens.expires_in ?? 3600) * 1000).toISOString();
+
+    const { data: encryptedAccess } = await supabaseClient.rpc(
+      'encrypt_token', { token_value: tokens.access_token, p_user_id: userId });
+    const updateData: any = {
+      access_token: encryptedAccess, expires_at: expiresAt, updated_at: new Date().toISOString(),
+    };
+    if (tokens.refresh_token) {
+      const { data: encryptedRefresh } = await supabaseClient.rpc(
+        'encrypt_token', { token_value: tokens.refresh_token, p_user_id: userId });
+      updateData.refresh_token = encryptedRefresh;
+    }
+    await supabaseClient.from('calendar_connections').update(updateData).eq('id', connectionId);
+    console.log('[Google] Token refreshed successfully');
+    return { access_token: tokens.access_token, expires_at: expiresAt };
+  } catch (err) {
+    console.error('[Google] Token refresh error:', err);
+    return null;
+  }
+}
+
+/**
+ * Create a Google Calendar event directly, the way createOutlookEventDirect does for Outlook.
+ *
+ * WHY THIS EXISTS: GOOGLE_EVENT was the LAST channel n8n still owned. journey built the event
+ * payload and forwarded it to the webhook; n8n called Google. With n8n gone, /notify answered
+ * `not_implemented` -- honest, but nothing created the event. This closes the gap in the same
+ * place, and the same way, as its Outlook sibling.
+ *
+ * Measured 2026-09-13: BOTH of the owner's google rows are `is_active:false` with tokens expired
+ * in March and June, so this returns an actionable "reconnect Google" rather than an event, until
+ * the connection is restored in Calendar settings. That is a credential state, not a code gap.
+ */
+async function createGoogleEventDirect(
+  supabaseClient: any,
+  userId: string,
+  eventData: OutlookEventData
+): Promise<ChannelResult> {
+  console.log('[Google] Creating event directly via Google Calendar API for user:', userId);
+  const connection = await getGoogleConnectionForUser(supabaseClient, userId);
+  if (!connection) {
+    return {
+      success: false,
+      error: 'No active Google Calendar connection. Reconnect Google in Calendar settings.',
+    };
+  }
+
+  let accessToken = connection.access_token;
+  const expiresAt = new Date(connection.expires_at);
+  if (expiresAt.getTime() - 5 * 60 * 1000 < Date.now()) {
+    if (!connection.refresh_token) {
+      return { success: false, error: 'Google token expired and no refresh token available. Please reconnect Google.' };
+    }
+    const refreshed = await refreshGoogleToken(supabaseClient, connection.id, connection.refresh_token, userId);
+    if (!refreshed) {
+      return { success: false, error: 'Failed to refresh the expired Google token. Please reconnect Google.' };
+    }
+    accessToken = refreshed.access_token;
+  }
+
+  try {
+    const response = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        summary: eventData.title,
+        description: eventData.description || 'Task reminder from TaskOS',
+        start: { dateTime: eventData.startTime, timeZone: 'UTC' },
+        end: { dateTime: eventData.endTime, timeZone: 'UTC' },
+        reminders: {
+          useDefault: false,
+          overrides: [{ method: 'popup', minutes: eventData.reminderMinutes ?? 15 }],
+        },
+      }),
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      console.error('[Google] Calendar API error:', response.status, text.slice(0, 300));
+      return { success: false, error: `Google Calendar API error: ${response.status} - ${text.slice(0, 200)}` };
+    }
+    const result = JSON.parse(text);
+    console.log('[Google] Event created successfully:', result.id);
+    return {
+      success: true,
+      details: { eventId: result.id, webLink: result.htmlLink, account: connection.provider_account_email },
+    };
+  } catch (fetchError) {
+    const msg = fetchError instanceof Error ? fetchError.message : 'Network error calling Google Calendar API';
+    console.error('[Google] Fetch error:', msg);
+    return { success: false, error: msg };
   }
 }
 
@@ -592,6 +752,83 @@ serve(async (req) => {
       }
     }
     // ============== END OUTLOOK HANDLING ==============
+
+    // ============== HANDLE GOOGLE DIRECTLY ==============
+    // GOOGLE_EVENT was the LAST channel n8n still owned: journey built the event payload and
+    // forwarded it, n8n called Google. Now journey creates the event itself, in the same place and
+    // the same way OUTLOOK_EVENT is handled above, and strips the channel so the webhook never
+    // sees it. Idempotency mirrors Outlook's: one event per task per day, keyed on source_task_id.
+    if (remainingChannels.includes('GOOGLE_EVENT')) {
+      console.log('[Notification] Processing GOOGLE_EVENT channel directly...');
+      const taskData = data;
+      let alreadyExists = false;
+
+      if (taskData?.taskId) {
+        const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+        const { data: existingEvent } = await supabaseClient
+          .from('external_calendar_events')
+          .select('id')
+          .eq('source_task_id', taskData.taskId)
+          .eq('calendar_id', 'google-primary')
+          .gte('created_at', oneDayAgo)
+          .maybeSingle();
+        if (existingEvent) {
+          console.log('[Notification] Google event already exists for task, skipping duplicate');
+          result.channelResults.google = { success: true, details: 'Skipped - event already exists' };
+          alreadyExists = true;
+        }
+      }
+
+      if (!alreadyExists) {
+        const currentTime = new Date();
+        const eventTitle = taskData?.taskTitle || title || 'Task Reminder';
+        const eventDescription = taskData?.taskDescription || body || 'Reminder from TaskOS';
+        const startTime = taskData?.startTime
+          ? new Date(taskData.startTime)
+          : new Date(currentTime.getTime() + 60 * 60 * 1000);
+        const duration = taskData?.estimateMinutes || 60;
+        const endTime = taskData?.endTime
+          ? new Date(taskData.endTime)
+          : new Date(startTime.getTime() + duration * 60 * 1000);
+
+        const googleResult = await createGoogleEventDirect(supabaseClient, userId, {
+          title: eventTitle,
+          startTime: startTime.toISOString(),
+          endTime: endTime.toISOString(),
+          description: eventDescription,
+          reminderMinutes: 15,
+        });
+        result.channelResults.google = googleResult;
+
+        if (googleResult.success) {
+          if (googleResult.details?.eventId && taskData?.taskId) {
+            try {
+              const connection = await getGoogleConnectionForUser(supabaseClient, userId);
+              await supabaseClient.from('external_calendar_events').insert({
+                user_id: userId,
+                connection_id: connection?.id || null,
+                calendar_id: 'google-primary',
+                external_event_id: googleResult.details.eventId,
+                source_task_id: taskData.taskId,
+                title: eventTitle,
+                start_time: startTime.toISOString(),
+                end_time: endTime.toISOString(),
+                last_synced_at: new Date().toISOString(),
+              });
+            } catch (recordError) {
+              // Never fail the notification over bookkeeping: the event exists either way.
+              console.error('[Notification] Failed to record Google event:', recordError);
+            }
+          }
+        } else {
+          console.error('[Notification] Google event creation failed:', googleResult.error);
+          result.errors.push(`Google: ${googleResult.error}`);
+        }
+      }
+
+      remainingChannels = remainingChannels.filter(c => c !== 'GOOGLE_EVENT');
+    }
+    // ============== END GOOGLE HANDLING ==============
 
     // Strip PUSH from webhook channels — handled separately below after webhook
     if (channels.includes('PUSH')) {
