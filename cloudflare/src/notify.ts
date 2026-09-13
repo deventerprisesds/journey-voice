@@ -48,6 +48,16 @@ export interface NotifyRequest {
   channels?: unknown;
   userProfile?: { email?: string; phone?: string } | string | null;
   taskData?: unknown;
+  /**
+   * Per-user Slack Incoming Webhook URL, set in journey's Notification Settings and appended to
+   * the query string by `send-unified-notification` (index.ts:814). Overrides the Worker's own
+   * `SLACK_WEBHOOK_URL` for this one call.
+   *
+   * This field was MISSING from both parse paths, so a user who configured their own webhook had
+   * it silently discarded and every Slack notification went to the Worker's default (or, with no
+   * default set, reported `not_configured` while the caller had supplied a perfectly good URL).
+   */
+  slackWebhook?: string;
 }
 
 export interface NotifyResponse {
@@ -167,12 +177,35 @@ export async function sendEmail(
   }
 }
 
-export async function sendSlack(env: NotifyEnv, title: string, body: string): Promise<ChannelResult> {
-  if (!env.SLACK_WEBHOOK_URL) {
-    return { ok: false, status: 'not_configured', detail: 'SLACK_WEBHOOK_URL is not set' };
+/**
+ * Post to Slack via an Incoming Webhook URL.
+ *
+ * `override` is the caller's own webhook (journey's per-user Settings value) and WINS over the
+ * Worker's env default — the user configuring a destination must beat a deployment default, or the
+ * setting does nothing.
+ *
+ * KNOWN LIMITATION, recorded so nobody mistakes this for parity with what n8n did: an Incoming
+ * Webhook posts to exactly ONE channel, fixed when the webhook was created, and cannot thread.
+ * The n8n workflow it replaces used a Slack BOT TOKEN (`slackOAuth2Api`) with `chat.postMessage`
+ * to a per-message `channelId` and a `thread_ts`, which is how each agent answered in its own
+ * channel and inside the right thread. A webhook cannot do either.
+ */
+export async function sendSlack(
+  env: NotifyEnv,
+  title: string,
+  body: string,
+  override?: string,
+): Promise<ChannelResult> {
+  const url = (override || '').trim() || env.SLACK_WEBHOOK_URL;
+  if (!url) {
+    return {
+      ok: false,
+      status: 'not_configured',
+      detail: 'no Slack webhook: none supplied on the request and SLACK_WEBHOOK_URL is not set',
+    };
   }
   try {
-    const res = await fetch(env.SLACK_WEBHOOK_URL, {
+    const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: title ? `*${title}*\n${body ?? ''}` : (body ?? '') }),
@@ -251,6 +284,7 @@ export async function handleNotify(request: Request, env: NotifyEnv): Promise<Re
       channels: q.get('channels') ?? undefined,
       userProfile: q.get('userProfile') ?? undefined,
       taskData: q.get('taskData') ?? undefined,
+      slackWebhook: q.get('slackWebhook') ?? undefined,
     };
   } else {
     try {
@@ -282,7 +316,7 @@ export async function handleNotify(request: Request, env: NotifyEnv): Promise<Re
     } else if (ch === 'email') {
       results[ch] = await sendEmail(env, profile.email ?? '', title, body);
     } else if (ch === 'slack') {
-      results[ch] = await sendSlack(env, title, body);
+      results[ch] = await sendSlack(env, title, body, payload.slackWebhook);
     } else {
       results[ch] = { ok: false, status: 'unsupported', detail: `unknown channel "${ch}"` };
     }

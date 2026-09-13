@@ -121,6 +121,50 @@ test('AC-N5 slack without a webhook reports not_configured rather than pretendin
   assert.equal(j.delivered, false);
 });
 
+// ---------------------------------------------------------------------------
+// AC-N5b — the CALLER'S webhook must be used, on BOTH transports.
+//
+// journey's Notification Settings lets a user paste their own Slack Incoming Webhook
+// (NotificationSettings.tsx:1026), and `send-unified-notification` appends it to the query string
+// (index.ts:814). The GET parser here read six fields and `slackWebhook` was not among them, so
+// that setting was silently discarded — a configured user still got `not_configured`. A setting
+// the UI collects and the transport drops is worse than an absent feature, because the user has
+// every reason to believe it took effect.
+//
+// Asserted by OBSERVING THE REQUEST, not the response: a 200 could come from the env default just
+// as easily, so only the URL actually fetched proves whose webhook won.
+// ---------------------------------------------------------------------------
+test('AC-N5b a caller-supplied slackWebhook is used, and BEATS the env default', async () => {
+  const realFetch = globalThis.fetch;
+  const hits: string[] = [];
+  globalThis.fetch = (async (input: any) => {
+    hits.push(typeof input === 'string' ? input : input.url);
+    return new Response('ok', { status: 200 });
+  }) as typeof fetch;
+  try {
+    const envWithDefault = { ...baseEnv, SLACK_WEBHOOK_URL: 'https://hooks.slack.com/DEFAULT' };
+    const mine = 'https://hooks.slack.com/services/MINE';
+
+    // POST transport
+    const post: any = await (await handleNotify(
+      req({ channels: ['SLACK'], slackWebhook: mine }), envWithDefault)).json();
+    assert.equal(post.results.slack.status, 'sent');
+
+    // GET transport — the one journey actually uses.
+    const qs = new URLSearchParams({ channels: '["SLACK"]', slackWebhook: mine });
+    const get: any = await (await handleNotify(
+      new Request(`https://w.dev/notify?${qs}`, {
+        method: 'GET', headers: { 'x-webhook-secret': SECRET },
+      }), envWithDefault)).json();
+    assert.equal(get.results.slack.status, 'sent');
+
+    assert.deepEqual(hits, [mine, mine],
+      `both transports must post to the CALLER's webhook, not the env default. Got: ${hits.join(', ')}`);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 test('AC-N6 an empty channel list is rejected outright', async () => {
   assert.equal((await handleNotify(req({ channels: [] }), baseEnv)).status, 400);
   assert.equal((await handleNotify(req({}), baseEnv)).status, 400);
