@@ -618,3 +618,25 @@ proved nothing and its summary table wrongly implied channels were working.
 **Defect found and fixed in the same pass:** /notify listed `google_event` as "handled by journey
 edge functions, not here". False — journey forwards it (index.ts:783) and nothing else creates it.
 Now reports `not_implemented`; guard AC-N4b, mutation-proved FIRED.
+
+## ACT: "I don't see it in my inbox" — RESOLVED, wrong mailbox not failed delivery — 2026-09-13
+Read the mailbox through Graph (`graph-mailbox-probe.yml`, run 34759185763) rather than trusting the
+send API. **All three test emails ARRIVED**, unread, in `dev@enterpriseds.io`'s Inbox:
+
+    2026-09-13T13:08  Dev@EnterpriseDS.io -> Dev@EnterpriseDS.io  Test- third send…          read=False
+    2026-09-13T13:06  Dev@EnterpriseDS.io -> Dev@EnterpriseDS.io  Test- post-deploy check…   read=False
+    2026-09-13T13:04  Dev@EnterpriseDS.io -> Dev@EnterpriseDS.io  Test- journey notify…      read=False
+    junkemail: 2 recent, NONE matching — so not junked, not bounced, not lost.
+
+**Why there:** `public.profiles` stores `dev@enterpriseds.io` as the email for the owner's journey
+account (`a3378f93-…`, 398 tasks — it IS his account). journey sends notifications to the profile
+email, and `NOTIFY_EMAIL_FROM` defaults to the same mailbox, so a send is dev@ -> dev@.
+**Selecting that row by `order by updated_at desc limit 1` was luck, not method** — it happened to be
+right. The task-count check is what actually identified the account.
+
+**OPEN:** a copy addressed to `von.ellis@enterpriseds.io` (pg_net 715136, `graph 202`) is confirmed in
+dev@'s **Sent Items** at 13:13:23 but was NOT in von.ellis's Inbox or Junk at 13:15:14 — two minutes
+later — while dev@ -> dev@ arrived in about one second. Not resolved: transit lag and an inbox rule
+look identical from here. Owner check settles it.
+**Decision for the owner, not for the session:** which mailbox should journey notify? Changing it is a
+`profiles.email` edit, and that is the owner's data — do not mutate it unprompted.
