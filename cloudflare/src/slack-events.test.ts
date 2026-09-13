@@ -68,6 +68,21 @@ function stubFetch(overrides: Record<string, unknown> = {}) {
         overrides.conversationsInfo ?? { ok: true, channel: { name: 'terry-locke___delivery' } },
       ));
     }
+    if (url.includes('conversations.replies')) {
+      return new Response(JSON.stringify(
+        overrides.replies ?? { ok: true, messages: [
+          { ts: '1789300000.111111', user: 'U0931QP8YQ2', bot_id: 'B1', app_id: 'A1', text: 'earlier agent line' },
+          { ts: '1789290000.000001', user: 'U0934TLA8FJ', text: 'earlier human line' },
+        ] },
+      ));
+    }
+    if (url.includes('conversations.history')) {
+      return new Response(JSON.stringify(
+        overrides.history ?? { ok: true, messages: [
+          { ts: '1789295000.000002', user: 'U0934TLA8FJ', text: 'channel context line' },
+        ] },
+      ));
+    }
     if (url.includes('run-agent-turn')) {
       return new Response(JSON.stringify(
         overrides.runAgentTurn ?? { ok: true, turnId: 't1', status: 'completed', replies: [{ text: 'On it.' }] },
@@ -307,5 +322,73 @@ test('AC-S8 the route answers 200 immediately and defers the turn to waitUntil',
     await deferred[0];
     assert.ok(f.calls.some((c) => c.url.includes('run-agent-turn')), 'and then the turn runs');
     assert.ok(f.calls.some((c) => c.url.includes('chat.postMessage')), 'and the reply lands');
+  } finally { f.restore(); }
+});
+
+// ---------------------------------------------------------------------------
+// AC-S10 — HISTORY. Not cosmetic: runHuddleTurn builds its memory-retrieval query from
+// [text, ...history] and discards hits under 0.3, so an empty history means the agent's whole
+// recollection is searched with one Slack sentence. This is the defect the owner reported as
+// "doesn't have the memory of the huddle agent".
+// ---------------------------------------------------------------------------
+test('AC-S10 history is fetched and FORWARDED to Huddle, not left empty', async () => {
+  const f = stubFetch();
+  try {
+    await processMessageEvent(userMessage() as any, ENV);
+    const turn = f.calls.find((c) => c.url.includes('run-agent-turn'));
+    assert.ok(Array.isArray(turn!.body.history), 'history must be present');
+    assert.ok(turn!.body.history.length > 0, 'an empty history is the bug, not a valid state');
+  } finally { f.restore(); }
+});
+
+test('AC-S10b in a thread it reads the THREAD; outside one it reads channel history', async () => {
+  let f = stubFetch();
+  try {
+    await processMessageEvent(userMessage({ thread_ts: '1789300000.111111' }) as any, ENV);
+    assert.ok(f.calls.some((c) => c.url.includes('conversations.replies')), 'thread → replies');
+    assert.ok(!f.calls.some((c) => c.url.includes('conversations.history')), 'thread must not use channel history');
+  } finally { f.restore(); }
+
+  f = stubFetch();
+  try {
+    await processMessageEvent(userMessage() as any, ENV);   // no thread_ts
+    assert.ok(f.calls.some((c) => c.url.includes('conversations.history')), 'no thread → channel history');
+  } finally { f.restore(); }
+});
+
+test('AC-S10c our bot maps to kind:agent with the channel agent; humans to kind:user', async () => {
+  // An invalid agentId fails the endpoint's schema and costs the WHOLE turn, so the mapping must
+  // use the agent resolved from the channel rather than anything taken from the message.
+  const f = stubFetch();
+  try {
+    await processMessageEvent(userMessage({ thread_ts: '1789300000.111111' }) as any, ENV);
+    const turn = f.calls.find((c) => c.url.includes('run-agent-turn'));
+    const kinds = turn!.body.history.map((h: any) => h.author.kind);
+    assert.ok(kinds.includes('agent') && kinds.includes('user'), `got ${JSON.stringify(kinds)}`);
+    const agentEntry = turn!.body.history.find((h: any) => h.author.kind === 'agent');
+    assert.equal(agentEntry.author.agentId, 'terry-locke', 'agent id comes from the CHANNEL');
+  } finally { f.restore(); }
+});
+
+test('AC-S10d history is ordered oldest → newest', async () => {
+  const f = stubFetch();
+  try {
+    await processMessageEvent(userMessage({ thread_ts: '1789300000.111111' }) as any, ENV);
+    const turn = f.calls.find((c) => c.url.includes('run-agent-turn'));
+    const ts = turn!.body.history.map((h: any) => h.ts);
+    assert.deepEqual([...ts].sort((a: number, b: number) => a - b), ts, 'Slack returns replies and history in opposite orders');
+  } finally { f.restore(); }
+});
+
+test('AC-S10e a FAILED context fetch must not cost the reply', async () => {
+  // Context is an enhancement. Slack answering ok:false here must degrade to no history, never to
+  // a dropped message -- the agent answering with less context beats it not answering.
+  const f = stubFetch({ replies: { ok: false, error: 'channel_not_found' },
+                        history: { ok: false, error: 'channel_not_found' } });
+  try {
+    const r = await processMessageEvent(userMessage() as any, ENV);
+    assert.equal(r.handled, true, 'the turn must still run');
+    const turn = f.calls.find((c) => c.url.includes('run-agent-turn'));
+    assert.deepEqual(turn!.body.history, [], 'degrades to empty, not undefined');
   } finally { f.restore(); }
 });

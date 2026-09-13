@@ -143,14 +143,76 @@ export async function lookupChannelName(channelId: string, botToken: string): Pr
   return null;
 }
 
+/**
+ * Slack thread/channel context, shaped as Huddle `HistoryMessage`s.
+ *
+ * THIS IS NOT A NICETY — IT IS HOW MEMORY GETS FOUND. `runHuddleTurn` builds its memory-retrieval
+ * QUERY from `[data.text, ...data.history.slice(-14).map(m => m.text)]` and then drops every hit
+ * scoring under 0.3. Sending `history: []`, as this route did at first, means the agent's entire
+ * recollection is searched using one Slack sentence. Ask "what did I ask you yesterday" with no
+ * history and the embedding is about ASKING, not about the things asked — so it matches the stored
+ * chunks about those things poorly, scores under the floor, and the agent answers with nothing.
+ * **The memory was never missing; the query was too thin to reach it.**
+ *
+ * `author.kind: 'agent'` REQUIRES a valid agent id, so only OUR bot's posts are mapped to the
+ * channel's agent. Anything else that is not a plain human message is dropped rather than guessed
+ * at: an invalid `agentId` fails the endpoint's schema and would cost the whole turn, which is a
+ * far worse outcome than one missing line of context.
+ */
+export async function fetchSlackContext(args: {
+  channel: string;
+  threadTs?: string;
+  botToken: string;
+  agentId: string;
+  huddleId: string;
+  limit?: number;
+}): Promise<Array<Record<string, unknown>>> {
+  const limit = args.limit ?? 12;
+  // In a thread, the thread IS the conversation. Outside one, recent channel traffic is the best
+  // available stand-in for "what we were just talking about".
+  const url = args.threadTs
+    ? `${SLACK_API}/conversations.replies?channel=${encodeURIComponent(args.channel)}&ts=${encodeURIComponent(args.threadTs)}&limit=${limit}`
+    : `${SLACK_API}/conversations.history?channel=${encodeURIComponent(args.channel)}&limit=${limit}`;
+
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${args.botToken}` } });
+  const data = (await res.json().catch(() => null)) as
+    | { ok?: boolean; messages?: Array<Record<string, unknown>> }
+    | null;
+  // `ok !== true` is not fatal. Context is an enhancement; losing it must never cost the reply.
+  if (data?.ok !== true || !Array.isArray(data.messages)) return [];
+
+  const out: Array<Record<string, unknown>> = [];
+  // Slack returns newest-first for history and oldest-first for replies. Normalise by ts so the
+  // model reads the conversation forwards either way.
+  const ordered = [...data.messages].sort(
+    (a, b) => Number(a.ts ?? 0) - Number(b.ts ?? 0),
+  );
+  for (const m of ordered) {
+    const text = typeof m.text === 'string' ? m.text.trim() : '';
+    if (!text) continue;
+    const isOurBot = Boolean(m.bot_id) || Boolean(m.app_id);
+    if (!isOurBot && typeof m.user !== 'string') continue;
+    out.push({
+      id: `slack-${String(m.ts)}`,
+      huddleId: args.huddleId,
+      author: isOurBot ? { kind: 'agent', agentId: args.agentId } : { kind: 'user' },
+      text,
+      ts: Math.round(Number(m.ts ?? 0) * 1000),
+    });
+  }
+  // The endpoint caps history at 40; stay well under and keep the most recent.
+  return out.slice(-limit);
+}
+
 /** Ask Huddle for one agent turn. Returns the replies, already flattened to text. */
 export async function runHuddleAgentTurn(args: {
   text: string;
   agentId: string;
   eventId: string;
   env: SlackEventsEnv;
+  history?: Array<Record<string, unknown>>;
 }): Promise<{ ok: true; text: string } | { ok: false; reason: string }> {
-  const { text, agentId, eventId, env } = args;
+  const { text, agentId, eventId, env, history } = args;
   if (!env.HUDDLE_BASE_URL) return { ok: false, reason: 'huddle_base_url_not_configured' };
   if (!env.JOURNEY_PROXY_TOKEN) return { ok: false, reason: 'proxy_token_not_configured' };
 
@@ -163,6 +225,8 @@ export async function runHuddleAgentTurn(args: {
       scope: 'one-to-one',
       members: [agentId],
       huddleId: `dm-${agentId}`,
+      // Feeds BOTH the conversation and the memory-retrieval query -- see fetchSlackContext.
+      history: history ?? [],
       // Slack's own event id. run-agent-turn derives its durable turn id from this, so a Slack
       // retry replays the stored reply instead of running the turn a second time.
       idempotencyKey: eventId,
@@ -222,11 +286,26 @@ export async function processMessageEvent(
   const agentId = agentIdFromChannelName(name);
   if (!agentId) return { handled: false, reason: 'channel_is_not_an_agent_lane' };
 
+  // Gather context BEFORE the turn: the history is what makes the agent's memory search find
+  // anything (runHuddleTurn embeds text + history to query memory, then drops hits under 0.3).
+  // `parentTs`, not `threadTs`: the reply below computes its own `threadTs` with a different
+  // meaning (thread_ts ?? ts, i.e. always a value). This one is deliberately undefined when the
+  // message is NOT in a thread, which is what selects channel history over thread replies.
+  const parentTs = event!.thread_ts ? String(event!.thread_ts) : undefined;
+  const history = await fetchSlackContext({
+    channel,
+    threadTs: parentTs,
+    botToken: env.SLACK_BOT_TOKEN,
+    agentId,
+    huddleId: `dm-${agentId}`,
+  }).catch(() => []);
+
   const turn = await runHuddleAgentTurn({
     text: String(event!.text),
     agentId,
     eventId: String(body.event_id ?? `${channel}-${String(event!.ts)}`),
     env,
+    history,
   });
   if (!turn.ok) return { handled: false, reason: turn.reason };
 
