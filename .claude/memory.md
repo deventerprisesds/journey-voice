@@ -1462,3 +1462,41 @@ event subscription was empty. Root causes, both fixed:
   bytes is what exposed it.
 **A probe that cannot fail visibly will report success.** Make a null result show its raw evidence
 before believing it — the wrong answer here was the alarming one, which is the kind that gets acted on.
+
+## Slack inbound: a DM does NOT get routed by Huddle — it gets the WHOLE roster (2026-09-13)
+
+**The fact that keeps being got wrong, so read it here before touching the Slack receiver.**
+`/api/public/run-agent-turn` accepts a bare `{text}`, which reads like "Huddle will route it". It
+will not. `buildTurnInput` (`huddle-extension-app` `src/features/huddle/lib/cross-app/turn-gate.ts`):
+
+```ts
+const scope   = body.scope === "one-to-one" ? "one-to-one" : DEFAULT_SCOPE;  // "group"
+const members = members.length > 0 ? members : defaultMembers();             // AGENTS.map(a => a.id)
+```
+
+`defaultMembers()` is the entire roster — **15 agents**. There is no semantic router on this path;
+the router (`routing.ts`) runs INSIDE a turn to pick responders among `members`, so handing it all
+15 is a full group turn, not a routed one. **Always send `scope` + `members` explicitly.**
+
+**How a Slack message picks its agent:**
+
+| Source | Agent |
+|---|---|
+| channel named `<agentId>___<anything>` | that agent (`agentIdFromChannelName`) |
+| **DM** (`is_im`) | `SLACK_DM_AGENT_ID` from `wrangler.toml [vars]` — currently `iris-chase` |
+| anything else | ignored (`channel_is_not_an_agent_lane`) |
+
+Both resolve to `huddleId = dm-<agentId>`, deliberately the SAME huddle as the in-app 1:1, so Slack
+is another surface on one conversation rather than a parallel one with no history.
+
+**Agent ids are hyphenated full names** — `iris-chase`, `finn-reid`, `terry-locke` — NOT `iris`. An
+id outside Huddle's enum fails `run-agent-turn`'s schema and costs the whole turn.
+
+**Hardening — a belief written into a test is not evidence.** `AC-S11` asserted `members ===
+undefined` "so Huddle routes". Three verification loops (8/8, 9/9, 13/13) passed because every one
+checked the code against that same false premise. When a test asserts how a REMOTE service will read
+a payload, it must cite the callee's source line, or it is only re-testing the belief.
+
+**Deploy guard worth knowing:** `deploy-cloudflare.yml` REFUSES to deploy a branch that is behind
+`main` (run 34771076473), because a Worker deploy overwrites the live script wholesale and would
+revert whatever landed on `main` meanwhile. Merge `origin/main` first — that is not optional.

@@ -1741,3 +1741,41 @@ and no upside, so the evidence bar for NOT doing it is low.*
 Token into the `SLACK_BOT_TOKEN` org secret in `deventerpriseds-org`, then dispatch
 `cloudflare-secret-sync.yml` with `apply=true`. journey-voice CANNOT read that secret itself —
 different org — so the cross-org bridge is the only route.
+
+---
+
+## ACT:slack-dm-agent — a DM ran a 15-agent group turn, so it never answered — 2026-09-13
+
+**Owner report:** *"I'm only receiving replies from iris using the channel not direct message"*, then
+after the first fix shipped, *"still no responses"* with a screenshot showing DMs at 12:30 PM
+(`Hi`, `Hello`) and 1:12 PM (`Still not there?`), none answered.
+
+**What was RULED OUT first, each with evidence rather than reasoning:**
+
+| Suspected cause | Verdict | Evidence |
+|---|---|---|
+| `message.im` not subscribed | **no** | owner's screenshot lists `message.im` + `message.mpim` |
+| `im:history` / `im:read` missing | **no** | both used successfully — accuracy-log #12 |
+| Slack not DELIVERING DM events | **no** | `slack-inbound-probe` run **34770751652** on the DM channel: `RESULT: DELIVERED`, Slackbot-signed request in the Worker log |
+| the `is_im` receiver fix not deployed | **no** | worker sha `38e75e63`, deploy run **34769617373**, 16:47 UTC — and the 1:12 PM DM is *after* it |
+
+**The actual cause — in the shape of the forwarded turn, not the receiver.** The DM path omitted
+`scope` and `members`, on the belief Huddle would route. `buildTurnInput`
+(`huddle-extension-app` `src/features/huddle/lib/cross-app/turn-gate.ts`, `origin/main`) instead
+reads `members.length > 0 ? members : defaultMembers()` and
+`scope === "one-to-one" ? … : "group"`. So one DM became a **group turn against all 15 roster
+agents**. See accuracy-log #13 for why three verification loops passed over it.
+
+**Fix (commit `2a7e6f6`):** `SLACK_DM_AGENT_ID` in `wrangler.toml [vars]` (`iris-chase`) names the DM
+agent; the code holds no default and **fails closed** without it, because the fallback is the
+fan-out. A DM now joins `dm-<agentId>` — the agent's own 1:1 huddle — so it carries that memory,
+which is the owner's *"this agent doesn't have the memory of the huddle agent"*.
+
+**Evidence:** 145/145 tests; `undef-check` clean; `mutate.sh` on the new guard returned **FIRED**
+with a clean restore. `AC-S11`/`AC-S11d` rewritten (both asserted the defect); `AC-S11e`, `AC-S12`,
+`AC-S12b`, `AC-S12c` added.
+
+**STATUS: implemented and mutation-proved; NOT yet confirmed live.** Deploy run **34771076473**
+was correctly REFUSED by the workflow's own guard — the branch was behind `main` and deploying it
+would have reverted another session's scheduling-caveats commits. Merging `main` in and redeploying.
+A live DM from the owner is the only thing that confirms it.

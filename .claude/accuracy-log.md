@@ -282,3 +282,32 @@ not doing manual chores.
 **Guard:** before reporting that a capability is BLOCKED on acquiring a permission, ATTEMPT the
 operation and read the error. An API that answers `ok:true` has settled it; `missing_scope` names
 exactly what is missing. Never infer a permission gap from a rule about permissions.
+
+## 13. "A DM omits scope/members so Huddle's own router chooses" — it has no router there — 2026-09-13
+**Claim (in a code comment, in a test assertion, and told to the owner):** the Slack receiver omits
+`scope` and `members` on a DM turn deliberately, because `run-agent-turn` accepts a bare `{text}` and
+Huddle's semantic router picks the agent — so naming one in the transport would hardcode a routing
+decision.
+**Ground truth, read from `huddle-extension-app` `src/features/huddle/lib/cross-app/turn-gate.ts` on
+`origin/main`:**
+```ts
+const scope   = body.scope === "one-to-one" ? "one-to-one" : DEFAULT_SCOPE;   // "group"
+const members = Array.isArray(body.members) && body.members.length > 0
+                  ? body.members : defaultMembers();                          // AGENTS.map(a => a.id)
+```
+There is no router on this path. Omitting both does not delegate the choice — it runs a **group turn
+against all 15 roster agents** for one direct message.
+**The single source that would have settled it up front:** the function the endpoint calls, twenty
+lines, in a repo already checked out. I wrote a claim about a callee's behaviour without opening it.
+**Root-cause pattern — A BELIEF WRITTEN INTO A TEST IS NOT EVIDENCE, IT IS THE BELIEF AGAIN.** This is
+the one that matters. `AC-S11` asserted `members === undefined` "so Huddle routes", so the suite
+confirmed the transport did what I thought, and **three independent verification loops (8/8, 9/9,
+13/13) all passed** — none of them could catch it, because every one checked the code against the same
+wrong premise. Verification depth cannot rescue a false assumption about a system on the other side of
+an HTTP boundary; only reading that system can.
+**Cost:** the owner sent DMs at 12:30 and 1:12 PM and got nothing, and the second was after the
+`is_im` fix had already deployed (worker sha `38e75e63`, 16:47 UTC) — so the fix that was supposed to
+close it shipped, was reported, and did not work.
+**Guard:** when a test asserts that a REMOTE service will interpret a payload some way, the assertion
+must cite the callee's source (file + the line that reads that field), or it is testing my belief.
+`AC-S11`/`AC-S11d` were both rewritten; `AC-S12` mutation-proved `FIRED`.
