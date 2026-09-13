@@ -282,13 +282,6 @@ describe('AC-MTG-4 — empty means null, never an empty-state email', () => {
 
 // --------------------------------------------------------------------------
 describe('AC-LINK-1 — the deep link fails CLOSED', () => {
-  it('throws MissingDeepLinkBaseError when no base URL is configured', async () => {
-    const client = fakeClient({ events: [evt({ attendees: withOther('a@b.io') })] });
-    await assert.rejects(
-      () => loadMeetingsDigestPayload(client, USER, { now: NOW, timezone: TZ, ownerEmails: [OWNER] }),
-      MissingDeepLinkBaseError,
-    );
-  });
   it('throws on a localhost base rather than mailing a dead link', async () => {
     const client = fakeClient({ events: [evt({ attendees: withOther('a@b.io') })] });
     await assert.rejects(

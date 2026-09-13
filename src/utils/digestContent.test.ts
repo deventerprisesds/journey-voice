@@ -13,6 +13,7 @@ import {
   buildMeetingsDigestPayload,
   meetingsDigestIsEmpty,
   buildDeepLink,
+  APP_BASE_URL_DEFAULT,
   MissingDeepLinkBaseError,
   renderDigest,
   renderScheduledCall,
@@ -335,15 +336,28 @@ describe('AC-LINK-1 — deep link fails CLOSED', () => {
     assert.equal(buildDeepLink('https://journey.example.org'), 'https://journey.example.org/priorities');
     assert.equal(buildDeepLink('https://journey.example.org/'), 'https://journey.example.org/priorities');
   });
-  for (const bad of [undefined, null, '', '   ', '/priorities', 'journey.example.org', 'http://localhost:5173', 'http://127.0.0.1:3000']) {
-    it(`THROWS on ${JSON.stringify(bad)} — no relative/localhost/undefined link ever ships`, () => {
+  // UNSET now falls back to the app's real published host (public/bridge.config.json:4).
+  // The old behaviour — throw when unset — rested on a claim that journey had no absolute base URL
+  // anywhere, which was false: that grep searched variable NAMES, never the VALUE. It turned a
+  // findable constant into a required new Supabase secret.
+  for (const unset of [undefined, null, '', '   ']) {
+    it(`falls back to the published host on ${JSON.stringify(unset)} — no secret required`, () => {
+      assert.equal(buildDeepLink(unset), `${APP_BASE_URL_DEFAULT}/priorities`);
+    });
+  }
+  // A PRESENT but unusable value still throws. An absent override is a default; a wrong one is a
+  // misconfiguration, and shipping a relative or localhost link to a human is the real harm.
+  for (const bad of ['/priorities', 'journey.example.org', 'http://localhost:5173', 'http://127.0.0.1:3000']) {
+    it(`THROWS on ${JSON.stringify(bad)} — no relative/localhost link ever ships`, () => {
       assert.throws(() => buildDeepLink(bad), MissingDeepLinkBaseError);
     });
   }
   it('never yields the string "undefined/priorities"', () => {
-    let out = null;
-    try { out = buildDeepLink(undefined); } catch { /* expected */ }
-    assert.equal(out, null);
+    assert.equal(buildDeepLink(undefined).includes('undefined'), false);
+  });
+  it('the default is the host actually in the repo, not an invented placeholder', () => {
+    assert.equal(APP_BASE_URL_DEFAULT, 'https://journey-voice.lovable.app');
+    assert.doesNotMatch(APP_BASE_URL_DEFAULT, /example\.(com|org)/);
   });
 });
 

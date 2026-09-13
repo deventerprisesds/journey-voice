@@ -168,22 +168,18 @@ describe('loadStandupDigestPayload', () => {
     assert.equal(p, null);
   });
 
-  // NOTE the name avoids the substring "FAIL": mutate.sh's matcher (line 117) treats any output
-  // line containing both the test name and "FAIL" as that test failing, so a test whose NAME
-  // contains the word reads as failing even when it passes -- and every mutation against it
-  // returns PRE-DIRTY, proving nothing. Reported; renamed here so the guard can actually be proven.
-  it('a missing APP_BASE_URL stops the run before Huddle is ever called', async () => {
+  it('an unset APP_BASE_URL falls back to the published host, and Huddle IS called', async () => {
+    // Was: "stops the run before Huddle is ever called". The unset case no longer exists —
+    // buildDeepLink defaults to public/bridge.config.json's host. A BAD override still throws
+    // before the network call, which the localhost case below still proves.
     const { impl, seen } = stubFetch({ ok: true, digest: CONTENT });
-    await assert.rejects(
-      () => loadStandupDigestPayload({
-        userEmail: 'o@e.com', date: OPTS.date, timezone: OPTS.timezone,
-        proxyToken: 'tok', env: envOf({}), fetchImpl: impl,
-      }),
-      MissingDeepLinkBaseError,
-    );
-    // Built before the network call: there is no point waking Huddle to assemble content that
-    // cannot be sent to anyone.
-    assert.equal(seen.length, 0, 'Huddle must not be called when the link cannot be built');
+    const p = await loadStandupDigestPayload({
+      userEmail: 'o@e.com', date: OPTS.date, timezone: OPTS.timezone,
+      proxyToken: 'tok', env: envOf({}), fetchImpl: impl,
+    });
+    assert.ok(p);
+    assert.equal(p!.deepLink, 'https://journey-voice.lovable.app/priorities');
+    assert.equal(seen.length, 1, 'Huddle is reached now that a link can always be built');
   });
 
   it('a localhost base URL is rejected the same way a missing one is', async () => {
