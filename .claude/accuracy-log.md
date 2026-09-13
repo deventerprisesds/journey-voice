@@ -194,3 +194,65 @@ one grep away and did not look, because the query I *had* run felt like enough. 
 **Guard it implies:** before any sentence about what **"we"** / the org / the stack does, name every
 app the claim covers and cite a source PER APP. A cross-app claim needs cross-app evidence; one
 project's system table is not it.
+
+## 9. "The Slack agent has no Huddle memory because it runs as the wrong user" — TWICE WRONG — 2026-09-13
+**Claim 1 (to the owner):** the memory gap is caused by `deploy-swa.yml:433` defaulting
+`CROSS_APP_TURN_SUBJECT` to `dev@enterpriseds.io`, so Slack turns act as a different user and see an
+empty memory scope. I named the file, the line, the mechanism and the fix.
+**Ground truth:** `identity.identity_cache` maps **both** `dev@enterpriseds.io` and
+`von.ellis@enterpriseds.io` to the SAME `user_id` `a3378f93-d655-4913-b2fa-ca5b1d8020f1`. The subject
+default is harmless.
+
+**Claim 2 (immediately after):** then it must be the oid mismatch — `rag_chunks` are owned by
+`owner_entra_oid a89e3652…` while identity resolves to `a3378f93…`, so retrieval filters on an oid
+that owns nothing.
+**Ground truth:** `scopeClause` in `azure-pg.server.ts` filters ONLY on `scope` and `agent_id`.
+`owner_entra_oid` appears in INSERT/UPSERT paths and in **no WHERE clause anywhere**. Retrieval is not
+owner-scoped at all, so the mismatch cannot affect it.
+
+**The actual cause, third time:** `runHuddleTurn:2478` builds the memory-retrieval QUERY from
+`[data.text, ...data.history.slice(-14).map(m => m.text)]` and discards hits scoring under 0.3. My
+Worker sent `history: []`. The agent's whole recollection was searched using one Slack sentence.
+
+**The single source that would have settled it up front:** the retrieval path itself — `scopeClause`
+plus the line that builds the query. One `grep -n "owner_entra_oid\|data.history" ` in
+`azure-pg.server.ts` and `huddle.functions.ts`. I reached for config and then for data BEFORE reading
+the code that consumes them.
+
+**Root-cause pattern — I DIAGNOSED FROM THE PERIPHERY INWARD.** Both wrong answers came from places
+that were easy to query (a workflow file, a database) rather than the place the behaviour is decided
+(the function that builds the query). Each had a satisfying shape: a named default, a uuid mismatch.
+**A plausible mechanism found in a convenient place is the most dangerous kind of answer**, because it
+terminates the search. Neither hypothesis was checked against the consumer before I said it out loud.
+
+**Guard:** for "feature X is not working", read the CONSUMER of X before theorising about its inputs.
+The query is built somewhere; find that line first. Config and data explain a consumer's behaviour —
+they never establish it.
+
+## 10. A DM to the bot can never reach an agent — an architectural gap I shipped — 2026-09-13
+**Claim (implicit in what I built):** channel→agent mapping by splitting the channel name on `___`
+covers inbound Slack.
+**Ground truth:** a Slack DM is an IM conversation. `conversations.info` returns `is_im: true` and
+**no `name` field**, so `lookupChannelName` → `null` → `agentIdFromChannelName` → `null` →
+`channel_is_not_an_agent_lane`. Owner observed it directly: *"I'm only receiving replies from iris
+using the channel not direct message."*
+**Pattern:** I generalised from the case in front of me (named agent lanes) to "inbound Slack" without
+asking what OTHER shapes a Slack conversation has. A DM is addressed to the APP, so there is no
+channel name to derive an agent from — the mapper has no answer by construction, and adding the
+`message.im` scope would not change that.
+**Guard:** when a key is derived from an identifier (a name, a path, a title), enumerate the cases
+where that identifier is ABSENT before shipping the derivation. Absence is a case, not an edge.
+
+## 11. mutate.sh false PRE-DIRTY — SAME DEFECT, SAME DAY, SECOND TIME — 2026-09-13
+**Claim:** the new history-forwarding guard could not be mutation-proved; `mutate.sh` reported
+`PRE-DIRTY: 'AC-S10' ALREADY FAILS`.
+**Ground truth:** the suite was 27/27 green. `mutate.sh` scans test OUTPUT for the must-fail pattern,
+and I had named a test *"a FAILED context fetch must not cost the reply"* — the NAME matched before
+any mutation existed. Renamed, it FIRED.
+**What makes this entry worth writing:** I logged this exact defect THIS MORNING (`8f8e17a`,
+"mutate.sh reports false PRE-DIRTY when a test name contains FAIL") and then wrote a test name that
+walks into it. *Knowing a trap is not avoiding it — which is precisely the argument this log makes for
+structural guards over prose, applied to the log itself.*
+**Guard:** never put FAIL/FAILED/ERROR in a test NAME. The harness's own three-state reporting
+(`FIRED`/`INERT`/`NOT-APPLIED`+`PRE-DIRTY`) is what caught it both times; a two-state harness would
+have reported the guard broken.
