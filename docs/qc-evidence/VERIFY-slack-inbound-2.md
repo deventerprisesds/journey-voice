@@ -233,3 +233,91 @@ future timestamp, or unset secret per C6) → only on success, `event_callback` 
 → `runHuddleAgentTurn`. No branch skips the signature gate.
 
 ---
+
+## C9. Which sha am I actually testing, and did a source regression land between `d574e1c` (loop 1)
+and today's HEAD?
+
+**Verdict: CONFIRMED — HEAD advanced (docs-only) since `d574e1c`; zero source changes in that range.**
+
+```
+$ git fetch origin
+$ git rev-list --left-right --count origin/claude/huddle-journey-integration-xokgv1...HEAD
+0	0                                           # local == origin, before I made this loop's commits
+
+$ git diff d574e1c..HEAD --stat -- cloudflare/ scripts/    # BEFORE this loop's own work
+(empty — zero output)
+
+$ git diff d574e1c..HEAD --stat                            # full diff, any path
+ .claude/actions.md                         |  34 +++
+ .claude/memory.md                          |  21 ++
+ docs/qc-evidence/VERIFY-slack-inbound-1.md | 335 +++++++++++++++++++
+ docs/qc-evidence/VERIFY-slack-inbound-2.md |  43 ++++
+ 4 files changed, 433 insertions(+)
+```
+
+I am testing the tree at every intermediate commit this loop pushed (started at `2a8ca5a`, ended at
+`bfbb7aa`, all documentation-only — this artifact itself). Confirmed directly, not assumed from the
+brief's stated radius: the diff between loop 1's tested sha (`d574e1c`) and my starting point touched
+only `.claude/actions.md`, `.claude/memory.md`, and the two verification artifacts. Zero bytes changed
+under `cloudflare/` or `scripts/` — the two directories every claim above depends on. This matches
+and independently re-derives the brief's "blast radius" assertion rather than taking it on faith; had
+the `cloudflare/`/`scripts/` diff been non-empty, every claim above would have been retested at full
+depth per the brief's explicit instruction, and none of the mutation-proofs (C2, C5) or traces (C8)
+would have been eligible for their reduced/full-depth treatment as assigned.
+
+**On the brief's proposed method: it was already the right test and I did not need to reject it.**
+The brief asked me to run exactly this diff and treat a non-empty result as disproof of its radius
+claim — that's a falsifiable, correctly-scoped check (unlike loop 1's rejected origin/main comparison,
+which compared against a ref the file never existed on). I ran it as specified and it settled the
+question directly.
+
+---
+
+## Summary
+
+| # | Claim | Verdict | Evidence (one line) |
+|---|---|---|---|
+| Floor | `undef-check --all` + worker suite | CONFIRMED | 82 files/0 undefined, exit 0; 22/22 pass, exit 0 |
+| C1 | `undef-check.mjs` untouched by Slack work | CONFIRMED | last-touch commit `8fc7f73` is a git ancestor of the first Slack commit `a0fc418` |
+| C2 | Symbols guard catches genuine undefined symbols | CONFIRMED | 1st mutation (member-access) correctly INERT — rejected as out-of-scope for a call-based checker; 2nd mutation (call-site rename) FIRED, restore verified independently |
+| C3 | `undef-check --all` exits 0 | CONFIRMED | covered by floor row |
+| C4 | Worker suite 22/22 | CONFIRMED | covered by floor row |
+| C5 | Bot-loop (`bot_id`) guard mutation-proof | CONFIRMED | commenting out the check FIRED on `AC-S4`, restore verified independently via `git diff --exit-code` |
+| C6 | Signature verification fails closed on unset secret | CONFIRMED | source: `if (!signingSecret) return {ok:false,...}` is the first statement in the function body |
+| C7 | Zero typecheck errors in `slack-events.ts`/`index.ts` | CONFIRMED | `tsc --noEmit` output has 0 lines matching either filename (whole-project errors are pre-existing, in `TwilioCallSession.ts` and test-file `node:test` type resolution, out of C7's stated scope) |
+| C8 | No unauthenticated path to a Huddle agent turn | CONFIRMED | hand-traced full call chain; `processMessageEvent`/`runHuddleAgentTurn` each have exactly one call site, both behind the signature-check early-return |
+| C9 | Sha under test; no source regression since loop 1 | CONFIRMED | `git diff d574e1c..HEAD -- cloudflare/ scripts/` empty before this loop's own (docs-only) commits |
+
+**9/9 CONFIRMED, 0 REFUTED, 0 UNVERIFIED.**
+
+### How each previously-CONFIRMED claim was re-confirmed this loop
+- **C1** — re-derived from the file's own `git log`, replacing loop 1's method (never independently
+  re-run, this was new depth) with an ancestry proof (`git merge-base --is-ancestor`).
+- **C2** — re-run at FULL depth via `mutate.sh`, per the brief's explicit instruction that this claim
+  never drops depth. My first attempt was invalid (member-access mutation, not a call site) and I
+  rejected it rather than banking a false INERT; the corrected mutation FIRED.
+- **C3, C4** — re-run verbatim as the cheap-suite floor, first thing, before any other claim.
+- **C5** — re-run via `mutate.sh` (not the ad-hoc script loop 1 may have used), restore checked twice
+  (mutate.sh's own assertion + my separate `git diff --exit-code`).
+- **C6** — reduced depth: re-read the source (confirms the guard exists and is the first statement)
+  plus the passing `AC-S1c` test from the floor re-run; not re-mutated, since C2/C5 already prove the
+  mutation methodology works and this is a one-line unambiguous guard.
+- **C7** — re-ran `tsc --noEmit` fresh and re-scoped the grep to the claim's actual two files rather
+  than accepting the whole-project exit code.
+- **C8** — re-traced the call graph by hand with fresh `grep` output, not by re-reading loop 1's prose.
+- **C9** — new this loop; answered directly with `git fetch` + `git diff --stat` against `d574e1c`.
+
+### Regressions checked
+- App/worker loads: N/A for this claim set (no live deploy target named in the brief; verification is
+  source + test-level, matching loop 1's scope).
+- `undef-check.mjs` global guard: clean (82 files, 0 undefined) — this also functions as a broad
+  regression check across the whole repo, not just the Slack files.
+- Worker test suite: 22/22, no regressions in signature verification, bot-loop guard, channel-to-agent
+  mapping, or Huddle turn/reply handling.
+- Whole-project `tsc --noEmit`: NOT clean, but the failures are pre-existing and outside the Slack
+  files (`TwilioCallSession.ts`, test-file `node:test` typing) — flagged for visibility, not a Slack
+  regression, and not part of any of the nine claims.
+
+### Wall-clock
+Completed within budget.
+
