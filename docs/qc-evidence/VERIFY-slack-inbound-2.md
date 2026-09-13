@@ -59,3 +59,53 @@ git blame, not a branch-vs-branch diff that (per loop 1) is invalid because the 
 `origin/main`.
 
 ---
+
+## C2. The symbols guard still catches genuinely undefined symbols — full depth, never dropped.
+
+**Verdict: CONFIRMED (after rejecting my own first mutation design, which was invalid)**
+
+`scripts/undef-check.mjs` only checks CALL sites (`grep -n "callRe\|call sites" scripts/undef-check.mjs`
+confirms it walks `code.match(callRe)`, per its own doc comment "asserts the callee is declared").
+My first attempt mutated a **member-access** read (`name.indexOf(...)` → `channelNameTypo.indexOf(...)`)
+— that is not a call site of `channelNameTypo`, it's a call of `.indexOf` on it, so it is structurally
+outside what this guard claims to check.
+
+```
+$ mutate.sh cloudflare/src/slack-events.ts anchor.txt repl.txt \
+    "node scripts/undef-check.mjs --all --tap" "channelNameTypo"
+INERT: 'channelNameTypo' still PASSED with its defect reinstated.
+       ... check whether the mutation is behaviourally EQUIVALENT ...
+restored: cloudflare/src/slack-events.ts matches HEAD
+```
+
+Per the mutate.sh output's own caveat and this loop's instruction to reject an invalid method rather
+than report it as a finding: **this INERT is not evidence the guard is broken.** It proves the guard
+does not treat bare-identifier member-access as a call site — a real scope limit, but not the claim
+C2 makes ("catches genuinely undefined symbols" in the sense the guard's own commit `8fc7f73` proved:
+renaming a CALLED function to a name bound nowhere). I discarded this result and re-derived with a
+mutation inside the guard's actual, documented scope: renaming a real function CALL.
+
+```
+$ git diff --exit-code -- cloudflare/src/slack-events.ts && echo CLEAN   # confirm restore before retry
+CLEAN
+
+$ mutate.sh cloudflare/src/slack-events.ts anchor2.txt repl2.txt \
+    "node scripts/undef-check.mjs --all --tap" "agentIdFromChannelNameTypo"
+  anchor: "  const agentId = agentIdFromChannelName(name);"
+  repl:   "  const agentId = agentIdFromChannelNameTypo(name);"
+FIRED: 'agentIdFromChannelNameTypo' failed with the defect reinstated. The guard is real.
+restored: cloudflare/src/slack-events.ts matches HEAD
+tree clean: 'agentIdFromChannelNameTypo' passes again on the restored tree (build output regenerated)
+
+$ git diff --exit-code -- cloudflare/src/slack-events.ts && echo CLEAN
+CLEAN
+```
+
+Renaming the CALL SITE at `processMessageEvent` (line 222, `agentIdFromChannelName(name)` →
+`agentIdFromChannelNameTypo(name)`) — leaving the function's own declaration untouched, so this is
+purely "call a name bound nowhere" — reinstates exactly the defect class `8fc7f73` exists to catch.
+`undef-check --all --tap` FIRED on it (`not ok N - agentIdFromChannelNameTypo`), mutate.sh confirmed
+the restore matches HEAD, and a post-restore re-run of the same command passes again. Working tree
+confirmed clean before and after by both mutate.sh and my own independent `git diff --exit-code`.
+
+---
