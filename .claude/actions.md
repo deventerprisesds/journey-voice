@@ -1425,3 +1425,36 @@ gives no comfort either: all 56 commits read `Claude`, which covers every sessio
 
 **Nothing is blocked by leaving it.** The Slack route is already live — the Worker was deployed from
 the branch and `send-unified-notification` dispatched at 14:44 — so inbound Slack does not need #26.
+
+## ACT:slack-inbound — cutover VERIFIED by construction; one human message still unexercised — 2026-09-13
+Owner changed the Request URL. **The change verifying itself is the strongest evidence available**, and
+it does not need a probe: **Slack refuses to SAVE a Request URL it cannot verify.** On save it POSTs a
+signed `url_verification` challenge and requires the challenge echoed back. The save succeeded, so as
+of that moment all of the following are true and did not have to be taken on trust:
+
+| proven by the successful save | why |
+|---|---|
+| the Worker route exists at that path | a 404 fails verification |
+| `SLACK_SIGNING_SECRET` on the Worker MATCHES the app's | a bad secret → our 401 → verification fails |
+| Slack can reach the endpoint from outside | it made the call itself |
+| the `url_verification` branch is correct | the challenge came back in the shape Slack demanded |
+
+That last one matters because it is the ONE branch no unit test can fully stand in for — the fixture
+asserts our shape, Slack's acceptance asserts *its* shape.
+
+Independent supporting evidence already on file: `pg_net` 715600, an UNSIGNED POST to the same route →
+`401 unauthorized` (401 not 404 ⇒ route present; 401 ⇒ gate runs, fails closed).
+
+**STILL UNEXERCISED, and it cannot be faked from here.** `conversations.history` on `C0939A7CYEB`
+shows only this session's own bot posts — no human message since the cutover, so no real
+message→agent→threaded-reply round trip has happened. **A bot post cannot substitute: the loop guard
+drops anything carrying `bot_id`/`app_id`, by design.** That guard is why I cannot self-test the last
+mile, and removing it to self-test would destroy the thing being tested.
+**The verdict is one human message in any agent channel** (e.g. `terry-locke___delivery`, `C0939A7CYEB`).
+
+**Noted, no action needed:** the bot's display name now reads `EDS Slack Comms` (`bot_profile.name`,
+updated 2026-09-13 ~16:03) while the app is still `Custom n8n to EDS Comms`. Routing is unaffected —
+the agent handle comes from the CHANNEL name split on `___`, never from the bot's name.
+
+**No longer a manual step:** `slack-manifest-apply.yml` merged (eds-claude-skills PR #85, `7600eb7`).
+Any future URL/scope/event change is a dispatch once a config token exists.
