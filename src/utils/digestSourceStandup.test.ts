@@ -168,7 +168,11 @@ describe('loadStandupDigestPayload', () => {
     assert.equal(p, null);
   });
 
-  it('a missing APP_BASE_URL FAILS CLOSED and never reaches Huddle', async () => {
+  // NOTE the name avoids the substring "FAIL": mutate.sh's matcher (line 117) treats any output
+  // line containing both the test name and "FAIL" as that test failing, so a test whose NAME
+  // contains the word reads as failing even when it passes -- and every mutation against it
+  // returns PRE-DIRTY, proving nothing. Reported; renamed here so the guard can actually be proven.
+  it('a missing APP_BASE_URL stops the run before Huddle is ever called', async () => {
     const { impl, seen } = stubFetch({ ok: true, digest: CONTENT });
     await assert.rejects(
       () => loadStandupDigestPayload({
