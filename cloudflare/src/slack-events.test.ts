@@ -26,6 +26,9 @@ const ENV = {
   SLACK_BOT_TOKEN: FAKE_BOT_TOKEN,
   JOURNEY_PROXY_TOKEN: 'proxy-token-fixture',
   HUDDLE_BASE_URL: 'https://huddle.example',
+  // A real id from huddle's roster (`agents.ts`). A fabricated one fails run-agent-turn's enum and
+  // costs the whole turn, so the fixture uses a genuine one deliberately.
+  SLACK_DM_AGENT_ID: 'iris-chase',
 };
 
 /** Sign exactly the way Slack does, so a passing test proves interop and not just self-consistency. */
@@ -398,17 +401,68 @@ test('AC-S10e a broken context fetch must not cost the reply', async () => {
 // direct message." A Slack IM has NO name, so the `___` mapper cannot derive an agent from one.
 // Routing a DM is therefore a SECOND mode, not an edge case of the first.
 // ---------------------------------------------------------------------------
-test('AC-S11 a DM is handled, and Huddle — not this file — picks the agent', async () => {
+// CORRECTED 2026-09-13. This test used to assert that a DM OMITS `members` and `scope` "so Huddle
+// routes" — and that assertion was the defect, written into a test and so believed. Huddle's
+// `buildTurnInput` (turn-gate.ts on origin/main) reads
+//   members.length > 0 ? members : defaultMembers()   and   scope === "one-to-one" ? … : "group"
+// so omitting both does NOT ask Huddle to route: it runs a GROUP turn against all 15 roster agents
+// for one DM. Measured symptom: the owner's 1:12 PM DM, sent AFTER the is_im fix deployed at 16:47
+// UTC (worker sha 38e75e63), still produced no reply.
+test('AC-S11 a DM pins the CONFIGURED agent — never an omitted-members roster fan-out', async () => {
   const f = stubFetch({ conversationsInfo: { ok: true, channel: { is_im: true } } });
   try {
     const r = await processMessageEvent(userMessage({ channel: 'D0111111111' }) as any, ENV);
     assert.equal(r.handled, true, 'a DM must not be dropped as a non-lane');
     const turn = f.calls.find((c) => c.url.includes('run-agent-turn'));
     assert.ok(turn, 'Huddle must be called for a DM');
-    // Omitting these is the POINT: run-agent-turn accepts a bare {text} and routes internally.
-    // Naming a default agent here would hardcode a routing decision into the transport.
-    assert.equal(turn!.body.members, undefined, 'members must be omitted so Huddle routes');
-    assert.equal(turn!.body.scope, undefined, 'scope must be omitted too');
+    assert.deepEqual(turn!.body.members, ['iris-chase'], 'exactly the configured agent');
+    assert.equal(turn!.body.scope, 'one-to-one', 'a DM is a 1:1, never a group turn');
+  } finally { f.restore(); }
+});
+
+test('AC-S11e a DM joins the agent’s OWN 1:1 huddle, so it carries that memory', async () => {
+  // The owner's words: "this agent doesn't have the memory of the huddle agent". A Slack-specific
+  // huddleId (`slack-dm-<user>`) is a PARALLEL conversation with no history — the same
+  // extend-don't-duplicate error, one surface out.
+  const f = stubFetch({ conversationsInfo: { ok: true, channel: { is_im: true } } });
+  try {
+    await processMessageEvent(userMessage({ channel: 'D0111111111' }) as any, ENV);
+    const turn = f.calls.find((c) => c.url.includes('run-agent-turn'));
+    assert.equal(turn!.body.huddleId, 'dm-iris-chase');
+  } finally { f.restore(); }
+});
+
+test('AC-S12 a DM with SLACK_DM_AGENT_ID unset FAILS CLOSED and never calls Huddle', async () => {
+  // Failing OPEN here is not "no reply" — it is one DM fanned out to every agent on the roster.
+  const f = stubFetch({ conversationsInfo: { ok: true, channel: { is_im: true } } });
+  try {
+    const { SLACK_DM_AGENT_ID: _omitted, ...noDmAgent } = ENV;
+    const r = await processMessageEvent(userMessage({ channel: 'D0111111111' }) as any, noDmAgent);
+    assert.equal(r.handled, false);
+    assert.equal(r.reason, 'dm_agent_not_configured');
+    assert.ok(!f.calls.some((c) => c.url.includes('run-agent-turn')), 'no turn may be sent');
+  } finally { f.restore(); }
+});
+
+test('AC-S12b a blank SLACK_DM_AGENT_ID is treated as unset, not as an agent named ""', async () => {
+  const f = stubFetch({ conversationsInfo: { ok: true, channel: { is_im: true } } });
+  try {
+    const r = await processMessageEvent(
+      userMessage({ channel: 'D0111111111' }) as any,
+      { ...ENV, SLACK_DM_AGENT_ID: '   ' },
+    );
+    assert.equal(r.reason, 'dm_agent_not_configured');
+  } finally { f.restore(); }
+});
+
+test('AC-S12c a NAMED lane still wins over the DM default', async () => {
+  // The configured DM agent must not leak into channel routing, or every lane answers as Iris.
+  const f = stubFetch({ conversationsInfo: { ok: true, channel: { name: 'finn-reid___money', is_im: false } } });
+  try {
+    await processMessageEvent(userMessage() as any, ENV);
+    const turn = f.calls.find((c) => c.url.includes('run-agent-turn'));
+    assert.deepEqual(turn!.body.members, ['finn-reid']);
+    assert.equal(turn!.body.huddleId, 'dm-finn-reid');
   } finally { f.restore(); }
 });
 
@@ -434,14 +488,18 @@ test('AC-S11c a channel that is NEITHER a lane NOR a DM is still ignored', async
   } finally { f.restore(); }
 });
 
-test('AC-S11d in a DM a bot line is recorded as system, never a fabricated agentId', async () => {
-  // An agentId not in Huddle's enum fails the endpoint's schema and costs the WHOLE turn.
+test('AC-S11d in a DM a bot line is attributed to the CONFIGURED agent, and to a real id', async () => {
+  // CORRECTED with AC-S11: with no agent resolvable, past bot lines had to degrade to `system`.
+  // Now one IS resolvable, and in a DM with Iris a bot line simply IS Iris — attributing it to
+  // `system` would hand the model a conversation in which it never spoke. The id must still be a
+  // genuine roster id: one outside Huddle's enum fails run-agent-turn's schema and costs the turn.
   const f = stubFetch({ conversationsInfo: { ok: true, channel: { is_im: true } } });
   try {
     await processMessageEvent(userMessage({ channel: 'D0111111111', thread_ts: '1789300000.111111' }) as any, ENV);
     const turn = f.calls.find((c) => c.url.includes('run-agent-turn'));
-    const kinds = turn!.body.history.map((h: any) => h.author.kind);
-    assert.ok(!kinds.includes('agent'), `no agent kind without a resolved agent; got ${JSON.stringify(kinds)}`);
-    assert.ok(kinds.includes('system'), 'bot lines become system');
+    const authors = turn!.body.history.map((h: any) => h.author);
+    const agentLines = authors.filter((a: any) => a.kind === 'agent');
+    assert.ok(agentLines.length > 0, `bot lines must be attributed; got ${JSON.stringify(authors)}`);
+    for (const a of agentLines) assert.equal(a.agentId, 'iris-chase');
   } finally { f.restore(); }
 });

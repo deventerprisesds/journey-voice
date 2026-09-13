@@ -18,3 +18,8 @@ SUPABASE_URL = "https://wwxgajrtmslzklnyplah.supabase.co"
 # Confirmed against huddle-extension-app origin/main (32 references across its workflows), not
 # recalled.
 HUDDLE_BASE_URL = "https://icy-flower-0f415200f.7.azurestaticapps.net"
+# Which agent answers a Slack DIRECT MESSAGE. THIS LINE is where it changes -- the code holds no
+# default. A lane channel names its agent (`<agentId>___…`); a DM names nothing, and Huddle does not
+# route an unnamed turn, it runs one against the WHOLE 15-agent roster. Must be a real id from
+# huddle-extension-app `src/features/huddle/data/agents.ts`.
+SLACK_DM_AGENT_ID = "iris-chase"

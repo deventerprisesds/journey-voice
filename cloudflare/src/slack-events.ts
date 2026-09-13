@@ -44,6 +44,18 @@ export interface SlackEventsEnv {
   JOURNEY_PROXY_TOKEN?: string;
   /** Base origin of the Huddle app, e.g. https://icy-flower-0f415200f.7.azurestaticapps.net */
   HUDDLE_BASE_URL?: string;
+  /**
+   * Which agent answers a DIRECT MESSAGE, e.g. `iris-chase`. Set in wrangler.toml `[vars]`, which
+   * is where it is changed — never a literal in this file.
+   *
+   * A DM is the one inbound shape where NOTHING names an agent: a lane channel is called
+   * `<agentId>___…`, and a DM has no name at all. Huddle does not fill that gap with a router —
+   * `buildTurnInput` (turn-gate.ts) reads `members.length > 0 ? members : defaultMembers()` and
+   * `scope === "one-to-one" ? … : "group"`, so OMITTING both does not mean "you choose", it means
+   * **a group turn against all 15 roster agents for one DM**. Hence a configured id, and the
+   * fail-closed guard in processMessageEvent when it is absent.
+   */
+  SLACK_DM_AGENT_ID?: string;
 }
 
 /**
@@ -246,10 +258,13 @@ export async function runHuddleAgentTurn(args: {
     headers: { 'Content-Type': 'application/json', 'x-webhook-secret': env.JOURNEY_PROXY_TOKEN },
     body: JSON.stringify({
       text,
-      // A named lane pins the agent. A DM does NOT: `members` and `scope` are OMITTED so Huddle's
-      // OWN router chooses, which is the whole reason run-agent-turn accepts a bare `{text}`.
-      // Picking a default agent here would hardcode a routing decision in the transport, and the
-      // router already does it from the roster -- the systematic answer beats a name in this file.
+      // CORRECTED 2026-09-13. This previously read "a DM omits them so Huddle's OWN router
+      // chooses". It does not. `buildTurnInput` (huddle turn-gate.ts, read on origin/main) is
+      // `members.length > 0 ? members : defaultMembers()` and `scope === "one-to-one" ? … :
+      // "group"` -- there is NO router on this path, so omitting both buys a GROUP turn against
+      // all 15 roster agents, not a routed one. Callers must therefore always pass an agentId;
+      // `processMessageEvent` resolves a DM's from SLACK_DM_AGENT_ID and refuses without it.
+      // The `null` branch is kept only so this function cannot silently send a malformed body.
       ...(agentId ? { scope: 'one-to-one', members: [agentId] } : {}),
       huddleId: args.huddleId ?? (agentId ? `dm-${agentId}` : 'slack-dm'),
       // Feeds BOTH the conversation and the memory-retrieval query -- see fetchSlackContext.
@@ -311,12 +326,23 @@ export async function processMessageEvent(
 
   const conv = await lookupConversation(channel, env.SLACK_BOT_TOKEN);
   const agentId = agentIdFromChannelName(conv.name);
-  // THREE outcomes, not two. A named lane pins an agent; a DM has no name and routes through
-  // Huddle instead; anything else is a channel we were never meant to answer in. Collapsing the
-  // middle case into the last is the bug the owner hit -- "I'm only receiving replies from iris
-  // using the channel not direct message".
+  // THREE outcomes, not two. A named lane pins an agent; a DM has no name and takes the CONFIGURED
+  // agent below; anything else is a channel we were never meant to answer in. Collapsing the middle
+  // case into the last is the bug the owner hit -- "I'm only receiving replies from iris using the
+  // channel not direct message".
   if (!agentId && !conv.isIm) return { handled: false, reason: 'channel_is_not_an_agent_lane' };
-  const huddleId = agentId ? `dm-${agentId}` : `slack-dm-${String(event!.user)}`;
+
+  // A DM names no agent, so the configured one answers it. FAILS CLOSED when unset: the fallback
+  // is not "no reply", it is a GROUP turn against every roster agent (see SLACK_DM_AGENT_ID), so
+  // answering anyway would fan one DM out to 15 agents. Refusing is the cheaper wrong answer.
+  const effectiveAgentId = agentId ?? ((env.SLACK_DM_AGENT_ID ?? '').trim() || null);
+  if (!effectiveAgentId) return { handled: false, reason: 'dm_agent_not_configured' };
+
+  // `dm-<agentId>` DELIBERATELY, not a Slack-specific id: it is the same huddle the in-app 1:1 with
+  // that agent uses, so a DM continues that conversation instead of starting a parallel one the
+  // agent has no history for. This is the "same agent, same memory, different surface" the whole
+  // proxy exists for.
+  const huddleId = `dm-${effectiveAgentId}`;
 
   // Gather context BEFORE the turn: the history is what makes the agent's memory search find
   // anything (runHuddleTurn embeds text + history to query memory, then drops hits under 0.3).
@@ -328,13 +354,13 @@ export async function processMessageEvent(
     channel,
     threadTs: parentTs,
     botToken: env.SLACK_BOT_TOKEN,
-    agentId,
+    agentId: effectiveAgentId,
     huddleId,
   }).catch(() => []);
 
   const turn = await runHuddleAgentTurn({
     text: String(event!.text),
-    agentId,
+    agentId: effectiveAgentId,
     eventId: String(body.event_id ?? `${channel}-${String(event!.ts)}`),
     env,
     history,
