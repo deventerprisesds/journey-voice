@@ -741,3 +741,20 @@ lane) or Huddle (which already owns the roster)? Not decided.
 A live `xoxp-` USER token was hardcoded in the outbound n8n export's `HTTP Request` node. Redacted
 before committing (`ab3ee16`), but it existed in plaintext in an uploaded, copied file and must be
 treated as compromised. api.slack.com/apps → OAuth & Permissions → revoke/rotate.
+
+### Live check of the deployed outbound path — 2026-09-13 (pg_net 715233)
+Fired SLACK through the real chain against the deployed Worker. Verbatim:
+
+    slack: failed — webhook 404: {"code":404,"message":
+      "This webhook is not registered for POST requests. Did you mean to make a GET request?"}
+
+**That is n8n's error string, not Slack's** — n8n registers webhooks per HTTP method. So the Slack
+webhook journey is configured with is **an n8n workflow URL, not a `hooks.slack.com` URL**. Slack
+was routed through n8n exactly like EMAIL was, which is why it died with everything else and why no
+amount of webhook-vs-bot reasoning would have found it: the URL was never a Slack URL.
+**The transport behaved correctly** — it surfaced the provider's own error verbatim and returned
+`delivered:false` with a populated `errors[]`, which is what the endpoint exists to do. Under the
+old `cr?.success ?? true` flattening this would have read as a successful Slack send.
+**Consequence:** the Worker's `SLACK_WEBHOOK_URL` (and/or the edge fn's) must be replaced — with a
+real `hooks.slack.com` URL, or better, superseded by `SLACK_BOT_TOKEN`, which the bot transport
+prefers automatically with no other change.
