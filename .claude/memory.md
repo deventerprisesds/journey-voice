@@ -1441,3 +1441,24 @@ Two non-obvious steps, both required, and the error changes when you get the fir
 ⇒ your client's CA config, fixable here. A real HTTP 403 body ⇒ bot protection, Tavily/Playwright.
 Also note `example.com` is NOT allowlisted — a bad choice of control host, which briefly made a working
 browser look broken.
+
+### Inbound Slack — transport PROVEN in production (2026-09-13)
+`slack-inbound-probe.yml` run 34768323089 caught a real Slack delivery in the Worker's live logs:
+`user-agent: Slackbot`, our `/slack/events` URL, `x-slack-signature: v0=…`, `outcome: ok`, and the
+log line `[slack-events] skipped: not_a_user_message`.
+
+**That single log line is the load-bearing evidence**, because it is reached ONLY after the signature
+gate: a mismatched signing secret returns 401 and logs `refused:`. So subscription, delivery,
+signature verification, body parse and the loop guard are all proven LIVE. The one unproven link is a
+HUMAN message producing a threaded agent reply — a bot post cannot exercise it by design.
+
+**Hardening — my own probe produced two confident false negatives first.** `wrangler@3 tail --name X`
+is not a valid flag; it prints HELP TEXT to stdout, so the probe tailed usage instructions and
+reported "the Worker received traffic but logged nothing". I was one step from telling the owner his
+event subscription was empty. Root causes, both fixed:
+- `kill -0 $TAIL_PID` asserted only that a PROCESS EXISTED, which a help-printing process satisfies.
+  Assert the CONNECTION, and fail loudly on usage output.
+- A byte count is not evidence of content; 1172 bytes of usage read as "traffic". Dumping the raw
+  bytes is what exposed it.
+**A probe that cannot fail visibly will report success.** Make a null result show its raw evidence
+before believing it — the wrong answer here was the alarming one, which is the kind that gets acted on.

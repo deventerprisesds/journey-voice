@@ -1458,3 +1458,48 @@ the agent handle comes from the CHANNEL name split on `___`, never from the bot'
 
 **No longer a manual step:** `slack-manifest-apply.yml` merged (eds-claude-skills PR #85, `7600eb7`).
 Any future URL/scope/event change is a dispatch once a config token exists.
+
+## ACT:slack-inbound — TRANSPORT PROVEN IN PRODUCTION — 2026-09-13
+`slack-inbound-probe.yml` run 34768323089. Slack delivered a real signed event to the Worker and the
+Worker's own log came back:
+
+    "url": "https://twilio-openai-bridge.purple-bush-495e.workers.dev/slack/events"
+    "method": "POST"
+    "user-agent": "Slackbot 1.0 (+https://api.slack.com/robots)"
+    "x-slack-request-timestamp": "1789316506"
+    "x-slack-signature": "v0=f66c4e71ebb8f775301b4255f3392a466d6b690c9f656297f35bebf35613a541"
+    "outcome": "ok"
+    "logs": [ "[slack-events] skipped: not_a_user_message" ]
+
+**Every link except the last is now proven live, not inferred:**
+
+| link | proof |
+|---|---|
+| the event subscription is ACTIVE | Slack sent a `message` event unprompted |
+| Slack reaches the Worker | `user-agent: Slackbot`, our exact URL |
+| the request is signed | `x-slack-signature: v0=…` |
+| **the SIGNING SECRET matches** | the log line is `skipped:`, which is reached only AFTER the signature gate — a mismatch would have returned 401 and logged `refused:` |
+| the body parses | the guard evaluated a parsed event |
+| **the loop guard fires in production** | `not_a_user_message` on our own bot post |
+| the Worker did not error | `outcome: ok` |
+
+**Only remaining unknown: a HUMAN message → agent turn → threaded reply.** A bot post cannot exercise
+it, by design.
+
+### THE PROBE LIED TWICE FIRST, AND THAT IS THE LESSON
+Runs 1 and 2 reported *"the Worker received traffic but logged nothing from /slack/events"* and I was
+one step from reporting an empty event subscription to the owner. **Both were fabrications of my own
+tooling.** `wrangler@3 tail --name X` is not an accepted flag: it printed its HELP TEXT to stdout, and
+the probe dutifully tailed a file full of usage instructions. The 1172 bytes I read as "traffic" were
+wrangler's own usage message.
+
+Two guards were wrong and both have been fixed:
+- **`kill -0 $TAIL_PID` proved only that A PROCESS EXISTED.** A process that printed help and is
+  winding down passes it exactly as well as a working tail. It now waits for a real connection marker
+  and fails loudly if it sees `POSITIONALS`/`GLOBAL FLAGS`.
+- **A byte count is not evidence of content.** Only dumping the bytes exposed it — which is the sole
+  reason the third run was trustworthy.
+
+**Standing lesson: a probe that cannot fail VISIBLY will report success.** The negative result was
+confident, specific, plausible, and entirely manufactured; its own raw output was the only thing that
+could catch it. *Before believing a probe's null result, make it show you what it actually saw.*
