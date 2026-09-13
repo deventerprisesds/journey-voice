@@ -52,6 +52,14 @@ const CHANNEL_ALIASES: Record<string, CanonicalChannel> = {
   'app-message': 'APP_MESSAGE',
   appmessage: 'APP_MESSAGE',
   chat: 'APP_MESSAGE',
+  // Absorbed from digest-content.ts's render-side alias list when the two tables were
+  // reconciled (2026-09-13). These four were known ONLY to the renderer, so delegating
+  // without them silently returned null for 'app' -- caught by digestContent.test.ts.
+  // Proof that one table beats two: the gap was invisible while both existed.
+  app: 'APP_MESSAGE',
+  in_app: 'APP_MESSAGE',
+  message: 'APP_MESSAGE',
+  sms: 'PHONE',
   phone: 'PHONE',
   call: 'PHONE',
   voice: 'PHONE',

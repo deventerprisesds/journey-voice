@@ -29,6 +29,7 @@ import type {
   DayContextCalendarHold,
 } from "./build-day-context.ts";
 import { getTzOffsetMinutesAt } from "./timezone.ts";
+import { toCanonicalChannel, type CanonicalChannel } from "./notification-channels.ts";
 
 // ---------------------------------------------------------------------------
 // Channel + kind vocabulary
@@ -37,12 +38,14 @@ import { getTzOffsetMinutesAt } from "./timezone.ts";
 /**
  * Canonical channel vocabulary for RENDERING.
  *
- * NOTE (AC-CH-1, unbriefed live bug F3): `send-unified-notification` matches
- * channels UPPERCASE ('PUSH' :597, 'SLACK' :831, 'OUTLOOK_EVENT' :450) while
- * `notification-delivery:240` sends lowercase `CommsMode`. That mismatch is a
- * DELIVERY-layer defect owned by another agent. This module deliberately uses
- * the lowercase `CommsMode` spelling (the caller's spelling) and exports
- * `canonicalChannel()` so whichever vocabulary wins, rendering keys off one.
+ * RECONCILED with the transport vocabulary (2026-09-13). Two lanes independently
+ * built an alias table: `toCanonicalChannel` in `notification-channels.ts` returns
+ * UPPERCASE TRANSPORT identifiers (EMAIL, OUTLOOK_EVENT, ...), this one returns
+ * lowercase RENDER targets. They are genuinely different concerns -- you deliver to
+ * OUTLOOK_EVENT but you never RENDER one -- so neither was deleted. What WAS deleted
+ * is the second alias list: `canonicalChannel` now DELEGATES to `toCanonicalChannel`
+ * and maps its result down to a render target. One table, two views, so a new spelling
+ * learned by the transport layer cannot go unknown to the renderer.
  */
 export type DigestChannel = "email" | "app_message" | "push" | "slack" | "phone";
 
@@ -57,13 +60,22 @@ const KNOWN_CHANNELS: readonly DigestChannel[] = [
 ];
 
 /** Normalise any casing/alias to the one rendering vocabulary. */
+/**
+ * Transport identifier -> render target. Calendar-event channels deliberately map to
+ * null: a calendar hold is written, never rendered as a message body, so asking this
+ * for a renderer is a caller error rather than a missing case.
+ */
+const RENDER_TARGET: Partial<Record<CanonicalChannel, DigestChannel>> = {
+  EMAIL: "email",
+  SLACK: "slack",
+  PUSH: "push",
+  APP_MESSAGE: "app_message",
+  PHONE: "phone",
+};
+
 export function canonicalChannel(raw: string): DigestChannel | null {
-  const c = (raw || "").trim().toLowerCase();
-  if (c === "app" || c === "in_app" || c === "message") return "app_message";
-  if (c === "sms" || c === "call" || c === "voice") return "phone";
-  return (KNOWN_CHANNELS as readonly string[]).includes(c)
-    ? (c as DigestChannel)
-    : null;
+  const transport = toCanonicalChannel(raw);
+  return transport ? RENDER_TARGET[transport] ?? null : null;
 }
 
 // ---------------------------------------------------------------------------
