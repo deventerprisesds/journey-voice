@@ -181,3 +181,101 @@ baseline phase reports a bogus PRE-DIRTY and nothing is ever mutated. Independen
 this repo's own history: commit `affcb24` is titled *"test(journey): rename a test whose name broke
 mutate.sh's matcher"* — the implementer hit it and worked around it by renaming rather than fixing
 the matcher, so the trap is still armed for the next caller.
+
+---
+
+## C8 — mutations claimed FIRED. **CONFIRMED. Six re-run independently across five lanes, 6/6 FIRED.**
+
+| # | Lane | File / anchor | Defect reinstated | Test that must fail | Result |
+|---|---|---|---|---|---|
+| M1 | source hygiene | `send-digests/index.ts:81` | escape swapped for a real NUL byte | `no source file contains a NUL or other stray control byte` | **FIRED** |
+| M2 | provenance | `digest-source.ts:12` | EVIDENCE cites a file that does not exist | `every repo-relative path a provenance header cites actually exists` | **FIRED** |
+| M3 | meetings classifier | `meetings.ts:163` `>= 1` -> `>= 0` | the organiser trap: every solo hold becomes a meeting | `a solo block the user organised is absent from the payload` | **FIRED** |
+| M4 | Huddle ranking | `scoring.ts:137` -> `.filter(() => true)` | parking-lot leak (ACT-13/ACT-17) reopened | `AC-SU-2 standup drops the parking-lot task` | **FIRED** |
+| M5 | absent-evidence gate | `digest-content.ts:260` `=== true` -> `!== false` | an unclassified meeting is assumed to be a meeting | `the unclassified row is EXCLUDED from the payload rather than assumed` | **FIRED** |
+| M6 | Huddle deliver gate | `standup.server.ts:260` -> `const deliver = true;` | a content pull posts to chat and moves the watermark | `a content pull posts NOTHING in chat` | **FIRED** |
+
+Every run reported `restored: <file> matches HEAD` and `tree clean`. Both working trees verified
+clean afterwards (`git status --short` -> only this artifact in journey; nothing in Huddle).
+M3 and M5 fired through **`npm test`**, so the real gate — not a hand-run script — catches them.
+
+---
+
+## C5 — `runScheduledStandup(caller, {deliver:false})`. **CONFIRMED, in tests AND in source.**
+
+```
+$ bun scripts/standup-deliver-mode.test.ts        -> 12 passed, 0 failed
+$ bun scripts/standup-ranking.test.ts             -> 13 passed, 0 failed
+```
+Not taken on the tests' word. `standup.server.ts:260-266`:
+```ts
+const deliver = opts.deliver !== false;
+if (deliver) {
+  await surfaceDigest({ email, tz, caller, brief, runId });
+  await setLastStandupAt(email).catch(() => {});
+}
+return { ok: true, skipped: false, ..., digest: {...} };
+```
+Both the chat post (`surfaceDigest`) and the watermark advance (`setLastStandupAt`) are inside the
+one gate; the `digest` object is built and returned **outside** it, so the pull returns content on
+either path. Mutation-proved as M6 above.
+
+---
+
+## C6 — meetings classifier. **CONFIRMED on both halves.**
+
+**Never derives `withPerson` from the organizer.** `meetings.ts:161-164`:
+```ts
+export function isWithPerson(row: MeetingRow, ownerEmails: Iterable<string>): boolean {
+  if (!showAsCountsAsMeeting(row?.show_as)) return false;
+  return otherPeople(row, ownerEmails).length >= 1;
+}
+```
+`grep -n organizer supabase/functions/_shared/meetings.ts` returns only comment lines (`:4-5`,
+`:159`) — no code path reads it. The column is `organizer_email` and is selected
+(`digest-source-meetings.ts:48`) but classification calls `classifyWithPerson(row, ownerEmails)`
+(`:293`), attendees-minus-owner.
+
+**Absent evidence is excluded, not assumed.** `digest-content.ts:260`
+`const withPeople = (meetings ?? []).filter((m) => m.withPerson === true);` — `null` fails
+`=== true`. Mutation-proved as M5.
+
+`npx tsx supabase/functions/_shared/meetings.test.ts` -> **43 passed, 0 failed**, including
+`solo "Haircut" is NOT with-a-person` and `organizer is identical on BOTH rows, so organizer alone
+cannot separate them`.
+
+---
+
+## C7 — `VoiceAssistantSettings.tsx` writes `commsModes` and cannot unselect the last channel.
+**CONFIRMED.** `src/components/VoiceAssistantSettings.tsx:434-447`:
+```ts
+const next = on ? [...new Set([...current, mode])] : current.filter(m => m !== mode);
+if (next.length === 0) return call;                       // unchecking the last one is a no-op
+return { ...call, commsModes: next, commsMode: next[0] };  // plural written; scalar kept in step
+```
+`commsModes` (plural) is genuinely written, and the scalar `commsMode` is maintained as
+`next[0]` so an older reader never sees a channel the user just turned off. Read path
+(`:432-433`) prefers `commsModes` and falls back to `[call.commsMode || 'phone']`.
+**Not mutation-proved** — no test was found exercising this handler (see finding 3 below).
+
+---
+
+## CHALLENGE (2) — the rewritten loop has no test. **CONFIRMED, and it matters.**
+
+```
+$ grep -rn "send-digests/index" --include=*.ts .   # excluding node_modules
+./src/utils/sourceHygiene.test.ts:5://  (1) A raw NUL byte landed at `send-digests/index.ts:81` ...
+```
+The only occurrence anywhere is inside a **comment**. Nothing imports the module; `serve(` at
+`:122` is its only entry point. So the fix for the exact defect loop 1 refuted — the silently
+dropped stand-up — is **unguarded behaviour**. Reinstating `if (source === "huddle")` with no
+`else` would leave all 154 tests green, which is precisely how the NUL byte survived a push.
+
+**Could it be extracted? Yes, and cheaply.** The loop's every dependency is already an import from
+`_shared/` (`planDigestRun`, `resolveDigestSource`, `loadDailyBriefPayload`,
+`loadMeetingsDigestPayload`, `loadStandupDigestPayload`, `renderDigest`, `normalizeChannels`) plus
+the local `deliver()`. A `runDigestsForUser(plan, integrated, deps)` in `_shared/` taking the three
+loaders and `deliver` as injected functions would be directly testable by the existing in-glob
+node-test harness — the same shape `digest-delivery.ts` already uses and
+`digestDelivery.test.ts` already exercises. `serve()` would keep only wiring.
+**Recommended, not merge-blocking** — the behaviour is correct today; it is simply not defended.
