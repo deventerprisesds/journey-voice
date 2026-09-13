@@ -580,3 +580,41 @@ permitted through this proxy"), so this is an UNVERIFIED risk, not a measured on
 **Cheaper and safer:** add `AZURE_CLIENT_ID`/`AZURE_CLIENT_SECRET`/`AZURE_TENANT_ID` as REPO
 secrets on journey-voice. Org secrets cannot be granted across orgs, so that is the only option
 short of migrating.
+
+### RESOLVED 2026-09-13 — the "add them as REPO secrets" recommendation above is SUPERSEDED
+It was not actionable: the owner does not hold the Azure values by memory, so there was nothing for
+him to paste. **The credentials never had to pass through a person at all.** `eds-claude-skills`
+lives in `deventerpriseds-org` and can read BOTH the Azure credentials and the Cloudflare API
+token, so it can write one into the other machine-to-machine. Measured, run 34758663963:
+
+    AZURE_CLIENT_ID  yes 36 | AZURE_CLIENT_SECRET  yes 40 | AZURE_TENANT_ID  yes 36
+    CLOUDFLARE_API_TOKEN  yes 40 | CLOUDFLARE_ACCOUNT_ID  yes 32
+
+`cloudflare-secret-sync.yml` (apply=true, run 34758726953) wrote all three to Worker
+`twilio-openai-bridge` and proved it with `wrangler secret list`. The org migration is NOT needed
+for this, and the risk assessment against it stands on its own merits.
+
+## ACT: "is Mail.Send consented?" — ANSWERED BY READING, 2026-09-13
+Run 34758723122. The client-credentials token's own `roles` claim enumerates 8 granted application
+permissions: `Application.ReadWrite.All`, `Files.ReadWrite.All`, `Mail.Read`, `Mail.ReadBasic`,
+`Mail.ReadBasic.All`, `Mail.ReadWrite`, **`Mail.Send`**, `MailboxSettings.ReadWrite`.
+**Mail.Send GRANTED.** No send was attempted to find this out.
+**Note what is ABSENT: no `Calendars.*` role of any kind.** Anything expecting app-only Graph
+calendar access from this app will 403; that is a separate open question, not a bug.
+
+## ACT: first truthful `sent` from the notification chain — 2026-09-13
+pg_net request 715106 -> `send-unified-notification` -> journey's own /notify Worker -> Graph.
+Response verbatim: `{"success":true,"channelResults":{"email":{"success":true,"details":
+{"ok":true,"status":"sent","detail":"graph 202"}}},"errors":[],"webhookResponse":{"ok":true,
+"delivered":true,...}}`. **Graph 202 = accepted for delivery, NOT proof of an inbox arrival** —
+owner confirmation in the real inbox is the verdict and is still outstanding.
+
+## ACT: what actually crossed journey -> n8n (settled by reading, not recall) — 2026-09-13
+Five channels exist. journey handles two ITSELF and strips them before the webhook call:
+`OUTLOOK_EVENT` (Graph at index.ts:450, filtered 470) and `PUSH` (send-push-notification:597,
+filtered 599). Only `EMAIL`, `SLACK`, `GOOGLE_EVENT` were ever n8n's. `sms`/`carrier-pigeon` from an
+earlier all-channel probe were INVENTED by the session and exist nowhere in the code — that probe
+proved nothing and its summary table wrongly implied channels were working.
+**Defect found and fixed in the same pass:** /notify listed `google_event` as "handled by journey
+edge functions, not here". False — journey forwards it (index.ts:783) and nothing else creates it.
+Now reports `not_implemented`; guard AC-N4b, mutation-proved FIRED.
