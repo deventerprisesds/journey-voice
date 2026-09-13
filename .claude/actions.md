@@ -912,3 +912,40 @@ is not reachable from here. It must be re-obtained from Slack or exported from n
 **Iris's channel, read from the live workspace (`conversations.list`):**
 `iris-chase___itinerary` = **`C093J5EQVDL`** — this is the `SLACK_DEFAULT_CHANNEL` value. Use the
 ID, not the name: ids survive a channel rename, names do not.
+
+## ACT: SLACK IS LIVE — four of five channels delivering — 2026-09-13
+Owner added `SLACK_BOT_TOKEN` + `SLACK_DEFAULT_CHANNEL` as org secrets; eds run 34762997098 synced
+both to Worker `twilio-openai-bridge` (confirmed in `secret list`). Measured, pg_net 715391/715392:
+
+| channel | result |
+|---|---|
+| EMAIL | `graph 202` |
+| **SLACK** | **`sent — chat.postMessage C093J5EQVDL ts=1789310088.881999`** — real message in `iris-chase___itinerary` |
+| OUTLOOK_EVENT | `true` — real event created |
+| PUSH | fired |
+| GOOGLE_EVENT | "Reconnect Google in Calendar settings" — OWNER action, connections expired Mar/Jun |
+
+**n8n is out of the notification path entirely.** The only remaining gap is a dead Google OAuth
+connection, not code.
+
+### Two bugs of mine in the same pass, both caught by reading the run rather than trusting it
+1. **The Slack apply-loop was never inserted.** Run 34762901195 printed "Wrote 3 secrets" — the
+   ORIGINAL line — because my patch anchor did not match and I did not assert the edit applied. The
+   classic silent no-op. Anchors are now asserted (`assert s.count(old) == 1`) so a non-match aborts.
+2. **`wrangler secret delete --force` is not a wrangler 3 flag** ("Unknown argument: force"), so the
+   delete never ran. wrangler 3 prompts only on a TTY and a runner has none, so the flag was never
+   needed in the first place.
+
+### A WRONG CLAIM, corrected
+I wrote that journey's **Worker** carried a stale `SLACK_WEBHOOK_URL` holding an n8n URL. It did
+not, and never has: `secret list` returns six secrets, none Slack. The n8n URL lives in journey's
+**Supabase edge-function env** and reaches /notify as the CALLER's webhook
+(`send-unified-notification/index.ts:610`) — which is why the 404 read as if it came from the
+Worker's own config. It is now MOOT regardless: /notify prefers the bot token over any webhook, so
+the stale URL is never consulted.
+
+### On reusing the export's token to FIND the webhook URL (owner's actual question)
+Not possible, and now unnecessary. A webhook URL is minted by an install-time consent click and is
+not returned by any read API — the two plausible method names both answer `unknown_method`
+unauthenticated, against a `chat.postMessage` control that answers `not_authed`. With the bot token
+working, no webhook URL is needed at all: one token posts to every channel.
