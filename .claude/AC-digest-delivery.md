@@ -15,7 +15,7 @@ EVIDENCE:      every row below carries the command that produced it, run 2026-09
 
 # Acceptance Criteria — three-digest delivery (daily brief / meetings / stand-up)
 
-**Status: IN PROGRESS — sections append as they land.**
+**Status: COMPLETE — delivered 2026-09-13 within a 25-minute budget. See PART 5 for what was NOT reached.**
 
 Written by an independent AC-writing subagent with no knowledge of the implementation plan.
 Stance: *the code will run, every call will return 200, and the digest will arrive — and all
