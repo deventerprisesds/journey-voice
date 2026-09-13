@@ -242,6 +242,12 @@ channel name to derive an agent from — the mapper has no answer by constructio
 `message.im` scope would not change that.
 **Guard:** when a key is derived from an identifier (a name, a path, a title), enumerate the cases
 where that identifier is ABSENT before shipping the derivation. Absence is a case, not an edge.
+**STATUS UPDATED 2026-09-13, same session — the CODE gap is FIXED (`38e75e6`, deployed run
+34769617373).** `lookupConversation` returns `{name, isIm}`, so a DM now routes with `members`/`scope`
+omitted and Huddle's own router picks the agent; 31/31 tests. **Still not end-to-end working:** Slack
+does not DELIVER DM events without the `im:history`/`im:read` scopes and the reinstall a scope change
+requires. *Recorded here because this entry described an unfixed gap and would otherwise keep reading
+as current — the same "true when written, a lie by evening" failure the provenance rule exists for.*
 
 ## 11. mutate.sh false PRE-DIRTY — SAME DEFECT, SAME DAY, SECOND TIME — 2026-09-13
 **Claim:** the new history-forwarding guard could not be mutation-proved; `mutate.sh` reported
