@@ -1123,3 +1123,27 @@ all-channel test still saw the old behaviour. *A fix that is committed is not a 
 
 **Still true and unfixed:** the email body is the voice assistant's script, not a briefing.
 Transport and content are separate bugs; fixing transport alone delivers stage directions faster.
+
+## Notification delivery — status 2026-09-13 (supersedes "no channel has ever delivered")
+- **The journey↔n8n contract, read from the code:** five channels exist (`EMAIL`, `SLACK`,
+  `OUTLOOK_EVENT`, `GOOGLE_EVENT`, `PUSH`). `send-unified-notification` handles `OUTLOOK_EVENT`
+  (Graph, index.ts:450) and `PUSH` (index.ts:597) ITSELF and strips both from `remainingChannels`
+  before the webhook call, so **only EMAIL, SLACK and GOOGLE_EVENT ever reached n8n**. That is the
+  entire surface area of the outage.
+- **`GOOGLE_EVENT` is an unbuilt gap in the replacement.** journey builds `dynamicGoogleEvent`
+  (index.ts:783) and forwards it; n8n created the event; /notify does not. It now answers
+  `not_implemented` rather than the earlier FALSE "handled by journey edge functions". Building it
+  needs the user's Google OAuth token from journey's DB — deliberate follow-on.
+- **Graph app permissions, read from the token's own `roles` claim** (eds run 34758723122):
+  `Mail.Send` GRANTED (with Mail.Read/ReadBasic/ReadBasic.All/ReadWrite, MailboxSettings.ReadWrite,
+  Files.ReadWrite.All, Application.ReadWrite.All). **NO `Calendars.*` role at all** — app-only Graph
+  calendar access from this app would 403.
+- **The cross-org secret problem is SOLVED without the owner touching a value.** journey-voice is in
+  `deventerprisesds`; AZURE_* are org secrets of `deventerpriseds-org`, and org secrets never cross
+  orgs (GitHub returns an empty string, never an error — which is why one deploy step logged
+  `AZURE_CLIENT_ID: (empty)` beside `Uploaded secret ***` for JOURNEY_PROXY_TOKEN). Fix:
+  `eds-claude-skills/.github/workflows/cloudflare-secret-sync.yml` reads both sides and does
+  `wrangler secret put` into Worker `twilio-openai-bridge`. Re-run it after any credential rotation.
+- **First truthful delivery:** pg_net 715106 → send-unified-notification → /notify → Graph returned
+  `graph 202`, `delivered:true`, zero errors. **202 = Graph accepted for delivery; an inbox arrival
+  is still owner-confirmed, not session-confirmed.**
