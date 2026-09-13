@@ -282,3 +282,54 @@ not attempt to break `crypto.subtle`'s HMAC implementation or find a Workers-run
 call the module's internals directly, both of which are outside what a code read can settle.
 
 ---
+
+## C7. `slack-events.ts` and `index.ts` produce ZERO typecheck errors
+
+**Verdict: CONFIRMED**
+
+```
+$ cd cloudflare && npx tsc --noEmit -p tsconfig.json
+(exit 2, 20 errors total)
+$ grep -E "^src/slack-events\.ts|^src/index\.ts" <output>
+(no matches, grep exit 1)
+```
+
+Full list of files with errors:
+```
+src/TwilioCallSession.ts   (9 errors — pre-existing, unrelated to this claim)
+src/notify.test.ts         (3 errors — pre-existing, module-resolution/tsconfig issues)
+src/slack-events.test.ts   (3 errors — pre-existing, SAME module-resolution/tsconfig issues:
+                             'node:test'/'node:assert/strict' types not found, and a TS5097 on
+                             importing a '.ts' extension — these affect the TEST file, not
+                             `slack-events.ts` the implementation file named in the claim)
+```
+Neither `src/slack-events.ts` nor `src/index.ts` appears anywhere in the 20-line error output.
+Zero errors in the two files the claim names. The other files' errors are real but out of scope
+for this claim as instructed — noted, not counted against it. (Worth flagging separately: the
+`slack-events.test.ts` errors are a tsconfig/module-resolution gap, not a code defect — and the
+test suite runs fine under `tsx --test`, per C4 — but `npx tsc --noEmit` on this `tsconfig.json`
+does not currently pass clean for the test file, only the implementation file the claim asked
+about.)
+
+---
+
+## Summary
+
+| # | Claim | Verdict | Evidence (one line) |
+|---|---|---|---|
+| C1 | `undef-check.mjs` not touched by the Slack-inbound work | CONFIRMED | `git diff origin/main` is NOT empty (branch is 151 commits ahead, file is new vs. main), but the file's only 3 touching commits (76/86/101 in branch history) all precede the 4 Slack commits (146/147/150/151); none of the Slack commits appear in `git log -- scripts/undef-check.mjs` |
+| C2 | Guard still catches real undefined symbols (mutation) | **CONFIRMED — the important one** | Injected call to `totallyUndefinedSymbolXyzzy123` in `slack-events.ts` → exit 1, named file:line:symbol exactly; restored, `git diff --exit-code` clean, exit 0 again |
+| C3 | `undef-check.mjs --all` currently exits 0 | CONFIRMED | `82 file(s) checked, 0 NEW undefined symbol(s)`, exit 0 |
+| C4 | Worker suite passes | CONFIRMED | `npx tsx --test src/slack-events.test.ts` → `pass 22 / fail 0` |
+| C5 | Bot-loop guard (`shouldHandleMessage`) is real (mutation) | CONFIRMED | `mutate.sh` on the `bot_id`/`app_id` lines → `FIRED: 'AC-S4 ...' failed`; restore independently re-verified clean vs HEAD |
+| C6 | Signature check fails closed with no `SLACK_SIGNING_SECRET` | CONFIRMED | `verifySlackSignature`'s first line `if (!signingSecret) return {ok:false,...}`; test `AC-S1c` asserts it and is green in the C4 suite run |
+| C7 | Zero typecheck errors in `slack-events.ts`/`index.ts` | CONFIRMED | `tsc --noEmit` has 20 errors total, none in these two files (9 in `TwilioCallSession.ts`, 6 in `notify.test.ts`/`slack-events.test.ts` module-resolution issues — pre-existing, out of scope per the claim) |
+| C8 | Any unauthenticated path to a Huddle turn? | CONFIRMED (none found) | Only caller of `handleSlackEvents` is `POST /slack/events`; signature verification runs and must pass before `body.type`/`event_callback` is even inspected; no bypass found in the file-level trace |
+
+**Overall: 8/8 CONFIRMED.** No REFUTED findings. C8 is an open-ended adversarial read rather than
+a binary test; within the scope of a source-level trace of this repo, I found no unauthenticated
+path to a Huddle agent turn.
+
+Time note: this pass ran within the 25-minute budget named in the mid-run contract amendment;
+evidence was committed and pushed incrementally after each claim landed (commits `c892953` and
+`ecce839` on `claude/huddle-journey-integration-xokgv1`, this final update pending push).
