@@ -1028,8 +1028,10 @@ decision) -> reply via the bot token, in-thread. **The reply half is already bui
 (per-agent channels + threading, pg_net 715428/715429).
 **The one open design choice:** where the poller runs and at what cadence — journey's Worker on a
 Cron trigger, or a Supabase scheduled function.
-**NOT STARTED.** This is a new feature across journey and Huddle, outside the notification
-migration that was asked for. Awaiting a go-ahead.
+**SUPERSEDED-BY:** `ACT:slack-inbound-events` below (commit a0fc418), 2026-09-13. The FINDING above
+stands — the read token really does expose `user`/`ts`/`thread_ts`/`text`. Only the TRANSPORT is
+replaced: the owner asked for a near-real-time reply and to move off Supabase, and polling satisfies
+neither. This entry's "NOT STARTED / awaiting a go-ahead" line is no longer true.
 
 ## ACT:edge-deploy-drift — a STRUCTURAL check for "committed != deployed" (3f2e786) — 2026-09-13
 **Why it exists:** the same defect twice in one day, and neither occurrence was visible from git.
@@ -1066,3 +1068,54 @@ until PR #26 merges**. The script itself runs anywhere a `SUPABASE_ACCESS_TOKEN`
 
 **Supersedes:** the prose guard in `.claude/accuracy-log.md` entry 7, rewritten in the same commit
 to point at the check rather than at a reminder.
+
+## ACT:slack-inbound-events — Slack PUSHES to journey's Worker (a0fc418) — 2026-09-13
+**The owner's two constraints decided this, and they killed my own recommendation.** He asked for a
+near-real-time reply AND to move off Supabase, then asked whether to reuse the most frequent existing
+cron. Ground truth, `select schedule, jobname from cron.job` on `wwxgajrtmslzklnyplah`:
+
+| schedule | job | host |
+|---|---|---|
+| `* * * * *` | notification-delivery-job | pg_cron → Supabase edge fn |
+| `* * * * *` | run-scheduled-ceremonies-job | pg_cron → Supabase edge fn |
+| `* * * * *` | drain-huddle-turns-job | pg_cron → Supabase edge fn |
+| `0 * * * *` | notification-scheduler-job | pg_cron → Supabase edge fn |
+| `0 5 * * *` | nightly-schedule-builder | pg_cron → Supabase edge fn |
+
+**Every frequent cron we own IS Supabase pg_cron.** "Reuse the most frequent cron" and "get off
+Supabase" are the same sentence pointing in opposite directions — so the answer to the question as
+asked is *no*, and the reason is arithmetic rather than preference: a one-minute poll means 0–60s
+before an agent has even SEEN the message, before it starts thinking. Slack's own push is ~1s and
+needs no cron and no cursor.
+
+**ALREADY BUILT, and this is the part that shrank the work.** Huddle needed NOTHING new:
+`src/routes/api/public/run-agent-turn.ts` (origin/main) already takes free text, authenticates on
+`x-webhook-secret` = the existing **`JOURNEY_PROXY_TOKEN`** (standing rule honoured — no new
+cross-app credential), runs a REAL durable turn through `chat.pending_turns`, and returns
+`replies[]`. So inbound reduced to one Worker route.
+
+**Statelessness is borrowed, not engineered.** Slack retries a delivery it thinks failed. Rather
+than hold a cursor or dedupe table, the route forwards Slack's `event_id` as Huddle's
+`idempotencyKey`; run-agent-turn derives its durable turn id from it, so a retry REPLAYS the stored
+reply instead of running and billing the turn twice. No KV, no Durable Object, no table — which also
+retracts the "needs a second state store" objection I raised against the Worker option earlier.
+
+**Evidence — observed:** `npx tsx --test src/slack-events.test.ts` → **22/22**. `tsc` → **0 errors in
+`slack-events.ts` and `index.ts`** (the errors it does print are in `TwilioCallSession.ts`, which is
+byte-identical to origin, plus the `node:test` import shape that `notify.test.ts` already has).
+**Loop guard mutation-proved: `mutate.sh` → FIRED**, restored clean against HEAD.
+
+**The loop guard is the one that would have hurt.** The reply this route posts arrives back as
+another `message` event on the same channel. Without the `bot_id`/`app_id`/`subtype` checks the agent
+answers its own answer forever, in the owner's real Slack, in public. Three markers are checked
+because Slack does not set them consistently across message shapes.
+
+**NOT LIVE — two steps only the owner can do:**
+1. Add org secret **`SLACK_SIGNING_SECRET`** (api.slack.com ▸ the app ▸ Basic Information ▸ App
+   Credentials ▸ Signing Secret). The deploy workflow already syncs it. Until it is set the route
+   refuses every request — it fails CLOSED, asserted by AC-S1c.
+2. Slack app ▸ Event Subscriptions ▸ Request URL =
+   `https://twilio-openai-bridge.purple-bush-495e.workers.dev/slack/events`, then subscribe to
+   `message.channels` and `message.groups` (add `message.im` for DMs).
+
+Until (2) nothing reaches the route at all, so this is inert on the branch and inert after deploy.

@@ -13,3 +13,8 @@ new_sqlite_classes = ["TwilioCallSession"]
 
 [vars]
 SUPABASE_URL = "https://wwxgajrtmslzklnyplah.supabase.co"
+# Where inbound Slack messages are handed to an agent. A plain var, not a secret: it is a public
+# hostname, and the request is authenticated by the JOURNEY_PROXY_TOKEN header, not by the URL.
+# Confirmed against huddle-extension-app origin/main (32 references across its workflows), not
+# recalled.
+HUDDLE_BASE_URL = "https://icy-flower-0f415200f.7.azurestaticapps.net"

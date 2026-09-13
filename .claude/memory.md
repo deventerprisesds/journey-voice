@@ -1257,3 +1257,27 @@ DEFAULT branch, so the job starts firing when PR #26 merges. The script runs any
 **The general lesson, which is the reusable part:** a failure mode that recurs AFTER the prose rule
 against it was written does not need a better-worded rule. It needs something that runs. Entry 7 in
 `.claude/accuracy-log.md` now points at the check instead of at a reminder.
+
+## Inbound Slack — PUSH, not poll (2026-09-13, a0fc418)
+**What is now TRUE about the system:** journey's Worker has a `/slack/events` route. Slack pushes a
+message event → signature verified → channel name resolved (`conversations.info`) → handle taken from
+the part before `___` → Huddle `POST /api/public/run-agent-turn` → the reply posted back **in the
+originating thread** with the bot token. No cron, no cursor, nothing in Supabase.
+
+**Two facts worth not re-deriving:**
+- **Every frequent cron journey owns is Supabase pg_cron.** `cron.job` holds 5 active jobs; the three
+  `* * * * *` ones are all `pg_net` posts into Supabase edge functions. So "reuse our most frequent
+  cron" cannot coexist with "move off Supabase" — the same sentence pointing two ways.
+- **Huddle's cross-app door already existed.** `run-agent-turn` takes free text on the existing
+  `JOURNEY_PROXY_TOKEN`, runs a durable turn, returns `replies[]`, and accepts an `idempotencyKey`.
+  Feeding it Slack's `event_id` is what lets the inbound route hold NO state: Slack's retry replays
+  the stored reply rather than running the turn twice. Do not add a dedupe table — it is one hop
+  downstream already.
+
+**The trap this route is built around:** its own reply comes back as another `message` event. Without
+the `bot_id`/`app_id`/`subtype` guard the agent answers itself forever in the owner's real Slack.
+Mutation-proved FIRED — deleting those two lines makes AC-S4 fail.
+
+**NOT LIVE.** Needs org secret `SLACK_SIGNING_SECRET` (the route fails closed without it, AC-S1c) and
+the Request URL registered in the Slack app's Event Subscriptions. Both are owner actions; nothing
+reaches the route until the second one is done.

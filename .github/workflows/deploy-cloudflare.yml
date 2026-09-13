@@ -76,6 +76,7 @@ jobs:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_DEFAULT_CHANNEL: ${{ secrets.SLACK_DEFAULT_CHANNEL }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_SIGNING_SECRET: ${{ secrets.SLACK_SIGNING_SECRET }}
         run: |
           put() {
             if [ -z "$2" ]; then
@@ -96,6 +97,13 @@ jobs:
           put SLACK_BOT_TOKEN       "$SLACK_BOT_TOKEN"
           put SLACK_DEFAULT_CHANNEL "$SLACK_DEFAULT_CHANNEL"
           put SLACK_WEBHOOK_URL     "$SLACK_WEBHOOK_URL"
+
+          # Inbound. This is the ONLY thing separating a real Slack delivery from anyone who has
+          # learned the /slack/events URL, so the route refuses every request while it is unset —
+          # it fails closed, never open. Issued by Slack for this app (Basic Information ▸ App
+          # Credentials ▸ Signing Secret); it is not a credential we minted to bridge our own apps,
+          # so it is not the kind of new org secret the standing rule forbids.
+          put SLACK_SIGNING_SECRET  "$SLACK_SIGNING_SECRET"
 
       - name: Wait for deployment propagation
         run: sleep 15
