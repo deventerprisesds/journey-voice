@@ -32,3 +32,30 @@ Both floor checks pass, verbatim counts. 82 files scanned (up from 22 tests / sa
 loop 1 reported), 0 undefined symbols; worker suite 22/22, identical count to loop 1's report.
 
 ---
+
+## C1. `scripts/undef-check.mjs` is untouched by the Slack work — re-checked from the file's OWN
+history, not by diffing origin/main (loop 1 proved that comparison invalid).
+
+**Verdict: CONFIRMED**
+
+```
+$ git log -1 --oneline -- scripts/undef-check.mjs
+8fc7f73 fix(guard): the symbols guard was not covering the Worker at all
+
+$ git log --oneline --follow -- cloudflare/src/slack-events.ts | tail -1
+a0fc418 feat(slack): inbound Slack events -> Huddle agent turn -> threaded reply
+
+$ git merge-base --is-ancestor 8fc7f73 a0fc418 && echo ANCESTOR
+ANCESTOR
+```
+
+The most recent commit to ever touch `undef-check.mjs` (`8fc7f73`) is an ANCESTOR of the first
+Slack-inbound commit (`a0fc418`) — i.e. it landed strictly before the Slack feature branch existed,
+not during or after it. Read `8fc7f73`'s own message: it extended guard coverage from 72→78 files to
+catch `cloudflare/src/notify.ts` (a different, pre-existing Cloudflare Worker file, unrelated to
+Slack), and found a real `WebSocketPair` global gap there — nothing to do with Slack. No commit
+since `8fc7f73` has touched the guard script at all. This is the correct test: it asks the file's own
+git blame, not a branch-vs-branch diff that (per loop 1) is invalid because the file doesn't exist on
+`origin/main`.
+
+---
