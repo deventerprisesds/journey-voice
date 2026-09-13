@@ -14,6 +14,22 @@ jobs:
     name: Deploy Worker
     steps:
       - uses: actions/checkout@v4
+        with:
+          # `merge-base --is-ancestor` answers from a shallow clone's TRUNCATED history
+          # WITHOUT erroring, so the staleness guard below needs the real graph.
+          fetch-depth: 0
+
+      - name: Refuse a ref that does not contain the base branch
+        # THE SAME GAP THAT CAUSED THE 2026-09-03 REGRESSION, still open here. That day
+        # execute-tool was deployed from a branch missing 2fb90ac and re-broke explicit-time
+        # reschedules in production for ~2.5 hours. The guard was added to
+        # deploy-supabase-functions.yml and NOT to this workflow — so the Worker, which now
+        # serves both the Twilio voice path and /notify, was still deployable from a stale ref.
+        # A deploy OVERWRITES the Worker with whatever this ref holds, so a branch behind main
+        # reverts every fix that landed since it forked.
+        run: |
+          git fetch --no-tags origin main
+          bash scripts/assert-ref-contains-main.sh origin/main HEAD
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

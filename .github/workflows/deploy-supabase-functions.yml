@@ -88,6 +88,31 @@ jobs:
           supabase secrets set UAT_BYPASS_TOKEN="$UAT_BYPASS_TOKEN" --project-ref wwxgajrtmslzklnyplah
           echo "Synced UAT_BYPASS_TOKEN to Supabase edge secrets"
 
+      - name: Point UNIFIED_WEBHOOK_URL at journey's own /notify endpoint
+        # THE CUTOVER, and it is one value. `send-unified-notification` reads
+        # UNIFIED_WEBHOOK_URL and POSTs the notification there. It pointed at an n8n webhook
+        # whose only live delivery path was an LLM electing to call a tool — measured
+        # 2026-09-08, four sends, zero mail, and n8n answers {"message":"Workflow was started"}
+        # either way, so journey logged success for mail that never left.
+        #
+        # NOT a new secret: this is a URL, and journey already owns the endpoint. The Worker
+        # authenticates the caller with JOURNEY_PROXY_TOKEN, synced above, so no credential is
+        # introduced here.
+        #
+        # OVERRIDABLE: set a repo/org variable NOTIFY_ENDPOINT_URL to send somewhere else
+        # (back to n8n, or to the Azure Function App once /notify moves there — the owner's
+        # stated direction is to EXTEND job-platform-api, not stand up a new app). Rolling back
+        # is therefore a variable change plus a re-run, not a code change.
+        env:
+          NOTIFY_URL: ${{ vars.NOTIFY_ENDPOINT_URL }}
+        run: |
+          URL="${NOTIFY_URL:-https://twilio-openai-bridge.purple-bush-495e.workers.dev/notify}"
+          # Verified live 2026-09-13 from the DB's network path (the CCR sandbox's egress denies
+          # workers.dev): /health -> 200 {"status":"ok","version":"2026-03-11-cf-v9"}, and
+          # /notify -> 401 with no secret and with a wrong one. Route deployed, auth wired.
+          supabase secrets set UNIFIED_WEBHOOK_URL="$URL" --project-ref wwxgajrtmslzklnyplah
+          echo "UNIFIED_WEBHOOK_URL -> $URL"
+
       - name: Determine functions to deploy
         id: changed
         run: |
