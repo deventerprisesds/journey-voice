@@ -1,5 +1,11 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+import {
+  shouldSendAtLocalHour,
+  DAILY_DIGEST_LOCAL_HOUR,
+  WEEKLY_DIGEST_LOCAL_HOUR,
+  WEEKLY_DIGEST_LOCAL_WEEKDAY,
+} from "../_shared/digest-content.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -162,13 +168,13 @@ async function processUserNotifications(
   }
 
   // Process daily digest (check if it's the right time) - only if not in quiet hours
-  if (!inQuietHours && prefs.daily_digest_enabled && shouldSendDailyDigest(now)) {
+  if (!inQuietHours && prefs.daily_digest_enabled && shouldSendDailyDigest(now, prefs.timezone)) {
     const dailyDigest = generateDailyDigest(tasks || [], prefs.user_id, now);
     if (dailyDigest) notifications.push(dailyDigest);
   }
 
   // Process weekly digest (check if it's the right time) - only if not in quiet hours
-  if (!inQuietHours && prefs.weekly_digest_enabled && shouldSendWeeklyDigest(now)) {
+  if (!inQuietHours && prefs.weekly_digest_enabled && shouldSendWeeklyDigest(now, prefs.timezone)) {
     const weeklyDigest = generateWeeklyDigest(tasks || [], prefs.user_id, now);
     if (weeklyDigest) notifications.push(weeklyDigest);
   }
@@ -384,14 +390,23 @@ function generateWeeklyDigest(tasks: Task[], userId: string, now: Date): any | n
   };
 }
 
-function shouldSendDailyDigest(now: Date): boolean {
-  // Send daily digest at 8 AM
-  return now.getHours() === 8 && now.getMinutes() < 15;
+// AC-TZ-1/-3/-4/-5: these used the RUNTIME-local hour. A Supabase edge runtime
+// is UTC, so `getHours() === 8` fired at 08:00 UTC = 04:00 America/New_York --
+// the digest arrived at 4am. Both predicates now resolve the hour in the USER'S
+// stored `user_preferences.timezone`, via the existing `_shared/timezone.ts`
+// offset helper (per-instant, so DST is handled without a fixed -5/-4).
+// A NULL timezone falls back to America/New_York and still sends (AC-TZ-5).
+function shouldSendDailyDigest(now: Date, timezone: string | null | undefined): boolean {
+  return shouldSendAtLocalHour(now, timezone, DAILY_DIGEST_LOCAL_HOUR);
 }
 
-function shouldSendWeeklyDigest(now: Date): boolean {
-  // Send weekly digest on Sunday at 9 AM
-  return now.getDay() === 0 && now.getHours() === 9 && now.getMinutes() < 15;
+function shouldSendWeeklyDigest(now: Date, timezone: string | null | undefined): boolean {
+  return shouldSendAtLocalHour(
+    now,
+    timezone,
+    WEEKLY_DIGEST_LOCAL_HOUR,
+    WEEKLY_DIGEST_LOCAL_WEEKDAY,
+  );
 }
 
 async function generateCalendarEventReminders(

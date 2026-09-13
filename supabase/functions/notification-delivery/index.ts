@@ -2,6 +2,11 @@ import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import { GLOBAL_VERSION, FUNCTION_IDS, corsHeaders, createHealthResponse } from "../_shared/config.ts";
 import { buildCallContext } from "../_shared/call-context-builder.ts";
+import {
+  normalizeChannels,
+  channelResultKey,
+  summarizeDelivery,
+} from "../_shared/notification-channels.ts";
 
 // Version derived from centralized config
 const DELIVERY_VERSION = `${GLOBAL_VERSION}-${FUNCTION_IDS.DELIVERY}`;
@@ -157,8 +162,25 @@ serve(async (req) => {
 
         const liveCall = (userPrefs?.scheduled_calls ?? [])
           .find((c: any) => c.id === callConfig.call_id);
-        const commsMode = liveCall?.commsMode ?? callConfig.comms_mode ?? 'phone';
-        console.log(`📞 Scheduled call commsMode (live): ${commsMode} (body had: ${callConfig.comms_mode || '?'})`);
+
+        // Multi-select delivery. `commsModes` (array) is the new shape; `commsMode`
+        // (scalar) is what every EXISTING row stores, so it stays the fallback and no
+        // migration is required -- an old row keeps behaving exactly as before.
+        const VALID_MODES = ['phone', 'app_message', 'slack', 'email'];
+        const rawModes: unknown[] =
+          Array.isArray(liveCall?.commsModes) && liveCall.commsModes.length > 0
+            ? liveCall.commsModes
+            : Array.isArray(callConfig.comms_modes) && callConfig.comms_modes.length > 0
+              ? callConfig.comms_modes
+              : [liveCall?.commsMode ?? callConfig.comms_mode ?? 'phone'];
+        const commsModes: string[] = [];
+        for (const m of rawModes) {
+          if (typeof m === 'string' && VALID_MODES.includes(m) && !commsModes.includes(m)) commsModes.push(m);
+        }
+        if (commsModes.length === 0) commsModes.push('phone');
+        // Retained for logging and for scheduleNextOccurrence, which preserves the scalar.
+        const commsMode = commsModes[0];
+        console.log(`📞 Scheduled call commsModes (live): ${JSON.stringify(commsModes)} (body had: ${callConfig.comms_mode || callConfig.comms_modes || '?'})`);
 
         // Day-of-week guard: skip if today is not in the allowed days
         if (callConfig.days_of_week && Array.isArray(callConfig.days_of_week) && callConfig.days_of_week.length > 0) {
@@ -181,14 +203,24 @@ serve(async (req) => {
           }
         }
 
-        let deliverySuccess = false;
-        let deliveryError: any = null;
+        // Per-channel outcomes, keyed the same way send-unified-notification keys its
+        // channelResults, so the shared summarizeDelivery() reads them without a second
+        // result shape existing anywhere.
+        const channelResults: Record<string, { success: boolean; error?: string }> = {};
+        const attemptedChannels: string[] = [];
+        const recordChannel = (mode: string, success: boolean, error?: unknown) => {
+          const canonical = normalizeChannels([mode])[0];
+          if (!canonical) return;
+          if (!attemptedChannels.includes(canonical)) attemptedChannels.push(canonical);
+          const msg = error instanceof Error ? error.message : error ? String((error as any)?.message ?? error) : undefined;
+          channelResults[channelResultKey(canonical)] = { success, error: success ? undefined : (msg || 'delivery failed') };
+        };
 
         // window_morning is handled by FocusView's DailyReviewModal — only send a push to wake the phone.
         const callId = callConfig.call_id || '';
         const isWindowMorning = callId === 'window_morning' || callId === 'morning_standup';
 
-        if (commsMode === 'app_message' && isWindowMorning) {
+        if (commsModes.includes('app_message') && isWindowMorning) {
           console.log(`🌅 window_morning: sending push-only (modal handles content in app)`);
           const { error: pushError } = await supabaseClient.functions.invoke('send-push-notification', {
             body: {
@@ -200,13 +232,13 @@ serve(async (req) => {
           });
           if (pushError) {
             console.error(`🌅 Morning push failed for user ${userId}:`, pushError);
-            deliveryError = pushError;
+            recordChannel('app_message', false, pushError);
           } else {
             console.log(`✅ Morning push delivered for user ${userId}`);
-            deliverySuccess = true;
+            recordChannel('app_message', true);
           }
 
-        } else if (commsMode === 'app_message') {
+        } else if (commsModes.includes('app_message')) {
           console.log(`💬 Routing scheduled call to app chat for user ${userId}`);
 
           const { data: chatResult, error: chatError } = await supabaseClient.functions.invoke('send-chat-message', {
@@ -222,13 +254,18 @@ serve(async (req) => {
 
           if (chatError) {
             console.error(`💬 App chat delivery failed for user ${userId}:`, chatError);
-            deliveryError = chatError;
+            recordChannel('app_message', false, chatError);
           } else {
             console.log(`✅ App chat delivered successfully for user ${userId}: ${callNotification.title}`);
-            deliverySuccess = true;
+            recordChannel('app_message', true);
           }
+        }
 
-        } else if (commsMode === 'slack' || commsMode === 'email') {
+        // Slack/email fan out together through the EXISTING send-unified-notification
+        // fan-out -- one invoke carrying every selected channel, not one invoke each and
+        // not a second fan-out.
+        const unifiedModes = commsModes.filter((m) => m === 'slack' || m === 'email');
+        if (unifiedModes.length > 0) {
           console.log(`📧 Routing scheduled call to ${commsMode} for user ${userId}`);
           
           const { data: unifiedResult, error: unifiedError } = await supabaseClient.functions.invoke('send-unified-notification', {

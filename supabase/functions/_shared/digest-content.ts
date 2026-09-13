@@ -280,3 +280,375 @@ export function buildMeetingsDigestPayload(
 export function meetingsDigestIsEmpty(p: MeetingsDigestPayload): boolean {
   return p.today.length === 0 && p.byDay.length === 0;
 }
+
+// ---------------------------------------------------------------------------
+// AC-REND-1 (Tier 1) -- a phone script must never reach an email
+// ---------------------------------------------------------------------------
+
+/**
+ * Structural markers of a phone-call SCRIPT, as authored in
+ * `call_configs.context` (branch labels + stage directions).
+ *
+ * These are a BACKSTOP, not the mechanism. The mechanism is that the renderers
+ * below take a typed payload that has no field capable of carrying a script --
+ * the only way a script reaches an email is if a caller concatenates it in.
+ * This detector catches exactly that.
+ */
+const CALL_SCRIPT_MARKERS: readonly RegExp[] = [
+  /\bBRANCH\s*\d/i,
+  /^\s*Greet\s*:/im,
+  /\bHello Sir\b/i,
+  /^\s*(Stage|Step)\s*\d+\s*:/im,
+  /\bIF (?:THEY|USER|HE|SHE)\b/i,
+];
+
+export function containsCallScript(text: string): boolean {
+  const t = text || "";
+  return CALL_SCRIPT_MARKERS.some((re) => re.test(t));
+}
+
+export class CallScriptLeakError extends Error {
+  constructor(channel: DigestChannel) {
+    super(
+      `Refusing to deliver a phone-call SCRIPT over the "${channel}" channel. ` +
+        `A script is a phone artifact; render the payload for this channel instead.`,
+    );
+    this.name = "CallScriptLeakError";
+  }
+}
+
+/** Channels a human READS. A script rendered to any of these is the defect. */
+export function isReadChannel(channel: DigestChannel): boolean {
+  return channel !== "phone";
+}
+
+// ---------------------------------------------------------------------------
+// Rendering -- one named renderer per channel
+// ---------------------------------------------------------------------------
+
+export interface RenderedDigest {
+  channel: DigestChannel;
+  subject: string;
+  /** Plain-text body. Always safe to send as text/plain. */
+  body: string;
+  /** HTML body, fully escaped. Only produced for `email`. */
+  html: string | null;
+  contentType: "text/plain" | "text/html";
+}
+
+/** AC-REND-4: escape before any HTML body is produced. */
+export function escapeHtml(s: string): string {
+  return (s || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/** AC-REND-2: push is truncated. Word-safe, single trailing ellipsis. */
+export const PUSH_MAX_CHARS = 300;
+
+export function truncateForPush(s: string, max: number = PUSH_MAX_CHARS): string {
+  const t = (s || "").replace(/\s+/g, " ").trim();
+  if (t.length <= max) return t;
+  const cut = t.slice(0, max - 1);
+  const sp = cut.lastIndexOf(" ");
+  return (sp > max * 0.6 ? cut.slice(0, sp) : cut).trimEnd() + "…";
+}
+
+function titlesOf(p: DigestPayload): { schedule: string[]; priorities: string[] } {
+  if (p.kind === "daily_brief") {
+    return {
+      schedule: p.schedule.map((s) => s.title),
+      priorities: p.priorities.map((x) => x.title),
+    };
+  }
+  if (p.kind === "standup") {
+    return { schedule: [], priorities: p.priorities.map((x) => x.title) };
+  }
+  return { schedule: p.today.map((m) => m.title), priorities: [] };
+}
+
+function subjectFor(p: DigestPayload): string {
+  if (p.kind === "daily_brief") return `Your day — ${p.date}`;
+  if (p.kind === "meetings") return `Meetings — ${p.date}`;
+  return `Stand-up — ${p.date}`;
+}
+
+function line(label: string, items: string[], emptyText: string): string[] {
+  if (items.length === 0) return [`${label}: ${emptyText}`];
+  return [`${label}:`, ...items.map((t) => `  • ${t}`)];
+}
+
+function plainBodyFor(p: DigestPayload): string {
+  const out: string[] = [];
+  if (p.kind === "daily_brief") {
+    out.push(
+      ...line(
+        "Today's schedule",
+        p.schedule.map((s) =>
+          s.startLocal ? `${s.startLocal} — ${s.title}` : s.title
+        ),
+        "nothing scheduled",
+      ),
+    );
+    out.push("");
+    out.push(
+      ...line(
+        "Your priorities, in order",
+        p.priorities.map((x, i) => `${i + 1}. ${x.title}`),
+        "no priorities ranked",
+      ),
+    );
+    if (p.calendarHolds.length > 0) {
+      out.push("");
+      out.push(
+        ...line(
+          "Calendar holds",
+          p.calendarHolds.map((h) => `${h.startLocal}–${h.endLocal} ${h.title}`),
+          "none",
+        ),
+      );
+    }
+  } else if (p.kind === "meetings") {
+    out.push(
+      ...line(
+        "Meetings today",
+        p.today.map((m) => `${m.startLocal} — ${m.title}`),
+        "none",
+      ),
+    );
+    const later = p.byDay.filter((d) => d.localDate !== p.date);
+    if (later.length > 0) {
+      out.push("");
+      out.push("Later this week:");
+      for (const d of later) {
+        out.push(`  ${d.localDate}`);
+        for (const m of d.meetings) out.push(`    • ${m.startLocal} — ${m.title}`);
+      }
+    }
+  } else {
+    out.push(...line("Produced", p.produced.map((x) => x.title), "nothing yet"));
+    out.push("");
+    out.push(...line("In review", p.inReview.map((x) => x.title), "nothing"));
+    out.push("");
+    out.push(
+      ...line(
+        "Blocked",
+        p.blocked.map((x) => (x.reason ? `${x.title} (${x.reason})` : x.title)),
+        "nothing blocked",
+      ),
+    );
+    out.push("");
+    out.push(
+      ...line(
+        "Priorities",
+        p.priorities.map((x, i) => `${i + 1}. ${x.title}`),
+        "none ranked",
+      ),
+    );
+  }
+  return out.join("\n");
+}
+
+/**
+ * Render a payload for ONE channel.
+ *
+ * AC-REND-2: email / app_message / push / slack are produced by distinct named
+ * branches and are NOT byte-identical -- push is truncated and carries no link,
+ * email carries the deep link exactly once (AC-REND-3).
+ */
+export function renderDigest(
+  payload: DigestPayload,
+  channel: DigestChannel,
+): RenderedDigest {
+  const subject = subjectFor(payload);
+  const core = plainBodyFor(payload);
+
+  // Backstop: a script must never have been concatenated into a read channel.
+  if (isReadChannel(channel) && containsCallScript(core)) {
+    throw new CallScriptLeakError(channel);
+  }
+
+  if (channel === "email") return renderEmail(subject, core, payload);
+  if (channel === "push") return renderPush(subject, core, payload);
+  if (channel === "slack") return renderSlack(subject, core, payload);
+  if (channel === "app_message") return renderAppMessage(subject, core, payload);
+  return renderPhone(subject, core, payload);
+}
+
+function renderEmail(
+  subject: string,
+  core: string,
+  p: DigestPayload,
+): RenderedDigest {
+  const body = `${core}\n\nRe-rank your priorities: ${p.deepLink}`;
+  const html =
+    `<p>${escapeHtml(core).replace(/\n/g, "<br>")}</p>` +
+    `<p><a href="${escapeHtml(p.deepLink)}">Re-rank your priorities</a></p>`;
+  return { channel: "email", subject, body, html, contentType: "text/plain" };
+}
+
+function renderPush(subject: string, core: string, _p: DigestPayload): RenderedDigest {
+  const t = titlesOf(_p);
+  const head =
+    t.priorities.length > 0
+      ? `First up: ${t.priorities[0]}`
+      : t.schedule.length > 0
+        ? `First up: ${t.schedule[0]}`
+        : core;
+  return {
+    channel: "push",
+    subject,
+    // No link: push taps open the app, and a URL eats the character budget.
+    body: truncateForPush(head),
+    html: null,
+    contentType: "text/plain",
+  };
+}
+
+function renderSlack(subject: string, core: string, p: DigestPayload): RenderedDigest {
+  return {
+    channel: "slack",
+    subject,
+    body: `*${subject}*\n${core}\n\n<${p.deepLink}|Re-rank your priorities>`,
+    html: null,
+    contentType: "text/plain",
+  };
+}
+
+function renderAppMessage(
+  subject: string,
+  core: string,
+  p: DigestPayload,
+): RenderedDigest {
+  return {
+    channel: "app_message",
+    subject,
+    body: `${core}\n\nRe-rank: ${p.deepLink}`,
+    html: null,
+    contentType: "text/plain",
+  };
+}
+
+function renderPhone(subject: string, core: string, _p: DigestPayload): RenderedDigest {
+  // Spoken: no bullets, no URL (a human cannot hear a link).
+  const spoken = core
+    .replace(/•/g, "")
+    .replace(/^\s+/gm, "")
+    .replace(/\n{2,}/g, ". ")
+    .replace(/\n/g, ", ");
+  return { channel: "phone", subject, body: spoken, html: null, contentType: "text/plain" };
+}
+
+// ---------------------------------------------------------------------------
+// AC-REND-1 call site -- the replacement for notification-delivery/index.ts:239
+// ---------------------------------------------------------------------------
+
+/**
+ * Render a SCHEDULED CALL for one channel.
+ *
+ * `notification-delivery/index.ts:239` currently builds every channel's body as
+ *   body: `Time for your ${(call_name || title).toLowerCase()}. ${context}`
+ * where `context` is the phone script verbatim. That is correct for `phone` and
+ * wrong for every other channel.
+ *
+ * WIRING (one line, in a file this module does NOT own):
+ *   body: renderScheduledCall({
+ *     callName: callConfig.call_name || callNotification.title,
+ *     context: callConfig.context || '',
+ *     channel: canonicalChannel(commsMode) ?? 'app_message',
+ *   }).body
+ */
+export function renderScheduledCall(input: {
+  callName: string;
+  context: string;
+  channel: DigestChannel;
+}): RenderedDigest {
+  const name = (input.callName || "your call").trim();
+  const subject = `Time for your ${name.toLowerCase()}`;
+
+  if (input.channel === "phone") {
+    // The script IS the artifact here. Pass it through unchanged.
+    return {
+      channel: "phone",
+      subject,
+      body: `${subject}. ${input.context || ""}`.trim(),
+      html: null,
+      contentType: "text/plain",
+    };
+  }
+
+  // Every read channel gets a human sentence. The script is never included.
+  const body = `${subject}.`;
+  if (containsCallScript(body)) throw new CallScriptLeakError(input.channel);
+  return {
+    channel: input.channel,
+    subject,
+    body,
+    html: input.channel === "email" ? `<p>${escapeHtml(body)}</p>` : null,
+    contentType: "text/plain",
+  };
+}
+
+// ---------------------------------------------------------------------------
+// AC-TZ -- "8am" must mean the USER'S 8am, across DST
+// ---------------------------------------------------------------------------
+
+export const DEFAULT_TIMEZONE = "America/New_York";
+
+export interface LocalClockParts {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  /** 0 = Sunday. */
+  weekday: number;
+}
+
+/**
+ * Wall-clock parts for `now` in `tz`.
+ *
+ * Reuses `_shared/timezone.ts`'s `getTzOffsetMinutesAt`, which resolves the
+ * offset AT THE GIVEN INSTANT via Intl -- so DST is handled per-date and no
+ * fixed -5/-4 is ever assumed (AC-TZ-4). This module adds no second Intl path.
+ */
+export function localClockParts(now: Date, tz: string): LocalClockParts {
+  const zone = tz || DEFAULT_TIMEZONE;
+  const shifted = new Date(now.getTime() + getTzOffsetMinutesAt(now, zone) * 60000);
+  return {
+    year: shifted.getUTCFullYear(),
+    month: shifted.getUTCMonth() + 1,
+    day: shifted.getUTCDate(),
+    hour: shifted.getUTCHours(),
+    minute: shifted.getUTCMinutes(),
+    weekday: shifted.getUTCDay(),
+  };
+}
+
+/** The scheduler's tick width. `notification-scheduler` fires every 15 min. */
+export const TICK_WINDOW_MINUTES = 15;
+
+/**
+ * True when `now` falls in the first `TICK_WINDOW_MINUTES` of `hour` LOCAL to
+ * the user. Pass `weekday` to additionally pin a day (0 = Sunday).
+ *
+ * A NULL/empty timezone falls back to America/New_York and still sends -- the
+ * user is never skipped for missing config (AC-TZ-5).
+ */
+export function shouldSendAtLocalHour(
+  now: Date,
+  tz: string | null | undefined,
+  hour: number,
+  weekday?: number,
+): boolean {
+  const parts = localClockParts(now, tz || DEFAULT_TIMEZONE);
+  if (weekday !== undefined && parts.weekday !== weekday) return false;
+  return parts.hour === hour && parts.minute < TICK_WINDOW_MINUTES;
+}
+
+export const DAILY_DIGEST_LOCAL_HOUR = 8;
+export const WEEKLY_DIGEST_LOCAL_HOUR = 9;
+export const WEEKLY_DIGEST_LOCAL_WEEKDAY = 0; // Sunday
