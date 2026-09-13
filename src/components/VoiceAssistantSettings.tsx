@@ -14,6 +14,9 @@ import { loadUserSchedulingConfig, saveUserSchedulingConfig, type SchedulingConf
 import { Loader2, RotateCcw, Save, Plus, Trash2, Volume2, Phone, Clock, AlertCircle, Radio, Copy, Check, MessageSquare, Mail, Hash } from 'lucide-react';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Checkbox } from '@/components/ui/checkbox';
+import { selectedCommsModes, toggleCommsMode } from '@/utils/commsModes';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 
 const DEFAULT_CORE_INSTRUCTIONS = `You are Iris, a knowledgeable and proactive executive assistant.
@@ -161,6 +164,16 @@ const DEFAULT_SCHEDULED_CALLS: ScheduledCall[] = [
     daysOfWeek: [0, 6],
   }
 ];
+
+// Channel metadata in ONE place, so the trigger, the checkbox list and any future
+// consumer cannot drift on a label or an icon. Order is the order they are offered in.
+const COMMS_MODE_ORDER: CommsMode[] = ['phone', 'app_message', 'slack', 'email'];
+const COMMS_MODE_META: Record<CommsMode, { label: string; icon: typeof Phone }> = {
+  phone: { label: 'Phone Call', icon: Phone },
+  app_message: { label: 'In-App Chat', icon: MessageSquare },
+  slack: { label: 'Slack', icon: Hash },
+  email: { label: 'Email', icon: Mail },
+};
 
 const VoiceAssistantSettings: React.FC = () => {
   const { user } = useAuth();
@@ -411,11 +424,12 @@ const VoiceAssistantSettings: React.FC = () => {
     );
   };
 
-  const handleUpdateCallCommsMode = (callId: string, commsMode: CommsMode) => {
+  // The two channel rules live in `@/utils/commsModes` so they can be TESTED. They used to be
+  // closures over React state here, which is why a verifier could confirm them only by reading the
+  // source -- the one claim in that pass it could not mutation-prove. This is the same code, moved.
+  const handleToggleCallCommsMode = (callId: string, mode: CommsMode, on: boolean) => {
     setScheduledCalls(calls =>
-      calls.map(call =>
-        call.id === callId ? { ...call, commsMode } : call
-      )
+      calls.map(call => (call.id === callId ? toggleCommsMode(call, mode, on) : call))
     );
   };
 
@@ -858,40 +872,52 @@ const VoiceAssistantSettings: React.FC = () => {
                             className="w-24 h-6 text-xs border-none p-0 focus-visible:ring-0 bg-transparent text-muted-foreground"
                           />
                           <span className="text-muted-foreground">•</span>
-                          <Select
-                            value={call.commsMode || 'phone'}
-                            onValueChange={(value) => handleUpdateCallCommsMode(call.id, value as CommsMode)}
-                          >
-                            <SelectTrigger className="h-6 w-28 text-xs border-none p-0 focus:ring-0 bg-transparent">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="phone">
-                                <div className="flex items-center gap-1.5">
-                                  <Phone className="h-3 w-3" />
-                                  <span>Phone Call</span>
-                                </div>
-                              </SelectItem>
-                              <SelectItem value="app_message">
-                                <div className="flex items-center gap-1.5">
-                                  <MessageSquare className="h-3 w-3" />
-                                  <span>In-App Chat</span>
-                                </div>
-                              </SelectItem>
-                              <SelectItem value="slack">
-                                <div className="flex items-center gap-1.5">
-                                  <Hash className="h-3 w-3" />
-                                  <span>Slack</span>
-                                </div>
-                              </SelectItem>
-                              <SelectItem value="email">
-                                <div className="flex items-center gap-1.5">
-                                  <Mail className="h-3 w-3" />
-                                  <span>Email</span>
-                                </div>
-                              </SelectItem>
-                            </SelectContent>
-                          </Select>
+                          <Popover>
+                            <PopoverTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                className="h-6 px-1 text-xs font-normal text-muted-foreground hover:bg-transparent"
+                              >
+                                {selectedCommsModes(call).map((m) => {
+                                  const Icon = COMMS_MODE_META[m].icon;
+                                  return <Icon key={m} className="h-3 w-3 mr-1" />;
+                                })}
+                                <span>
+                                  {selectedCommsModes(call).length === 1
+                                    ? COMMS_MODE_META[selectedCommsModes(call)[0]].label
+                                    : `${selectedCommsModes(call).length} channels`}
+                                </span>
+                              </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-52 p-2" align="start">
+                              <p className="text-xs text-muted-foreground px-1 pb-1.5">
+                                Deliver on every channel you pick.
+                              </p>
+                              {COMMS_MODE_ORDER.map((mode) => {
+                                const Icon = COMMS_MODE_META[mode].icon;
+                                const checked = selectedCommsModes(call).includes(mode);
+                                const isLast = checked && selectedCommsModes(call).length === 1;
+                                return (
+                                  <label
+                                    key={mode}
+                                    className={`flex items-center gap-2 rounded px-1 py-1.5 text-xs ${
+                                      isLast ? 'opacity-60' : 'cursor-pointer hover:bg-accent'
+                                    }`}
+                                  >
+                                    <Checkbox
+                                      checked={checked}
+                                      disabled={isLast}
+                                      onCheckedChange={(v) =>
+                                        handleToggleCallCommsMode(call.id, mode, v === true)
+                                      }
+                                    />
+                                    <Icon className="h-3 w-3" />
+                                    <span>{COMMS_MODE_META[mode].label}</span>
+                                  </label>
+                                );
+                              })}
+                            </PopoverContent>
+                          </Popover>
                           {/* Assistant selector - show for chat/phone modes */}
                           {assistants.length > 0 && (
                             <>
@@ -914,7 +940,7 @@ const VoiceAssistantSettings: React.FC = () => {
                             </>
                           )}
                           {/* Fallback mode selector - shown for phone calls */}
-                          {(call.commsMode || 'phone') === 'phone' && (
+                          {selectedCommsModes(call).includes('phone') && (
                             <>
                               <span className="text-muted-foreground">•</span>
                               <span className="text-[10px] text-muted-foreground">Fallback:</span>

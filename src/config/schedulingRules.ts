@@ -75,6 +75,21 @@ export interface AssignmentsConfig {
   includeUncoursed?: boolean;
 }
 
+// MERGE UNION 2026-09-13 (trait model + caveats model both declare interfaces here).
+// NudgeConfig/AssignmentsConfig (trait branch) and SchedulingCaveat (caveats branch) are three
+// independent declarations that reference nothing of each other's — git flagged this only because
+// both sides inserted at the same line and shared the trailing brace. Both features are kept.
+
+/** Mirrors SchedulingCaveat in supabase/functions/_shared/scheduling-defaults.ts — keep in sync. */
+export interface SchedulingCaveat {
+  id: string;
+  text: string;
+  match: { categories?: string[]; tags?: string[]; keywords?: string[] };
+  preferWindows: string[];
+  expiresAt?: string | null;   // null/omitted = until explicitly cleared
+  createdAt?: string;
+}
+
 export interface SchedulingConfig {
   timezone: string; // IANA timezone identifier (e.g., 'America/New_York')
   timeWindows: {
@@ -117,6 +132,8 @@ export interface SchedulingConfig {
     };
   };
   customAIInstructions?: string; // Free-form text instructions for AI scheduler
+  // MERGE UNION 2026-09-13: the trait branch's scoring/nudge/assignment knobs and the caveats
+  // branch's `caveats` overlay are independent optional fields on the same interface. Both kept.
   // Which scheduling ordering the nightly builder uses for THIS user.
   // 'composite' (default) = recency/deadline/finance lead and explicit priority is a differentiator.
   // 'priority-rank' = legacy, explicit is_priority dominates. Read by nightly-schedule-builder as
@@ -133,6 +150,13 @@ export interface SchedulingConfig {
   // server keeps its own defaults — see the interfaces above.
   nudges?: NudgeConfig;
   assignments?: AssignmentsConfig;
+  /**
+   * TEMPORARY caveats the scheduler follows until they expire or are cleared — e.g. "push research
+   * to the evening for now". A read-time OVERLAY: never merged into timeWindows/categoryMappings, so
+   * clearing one restores prior behaviour exactly, with no migration. Backend contract lives in
+   * supabase/functions/_shared/scheduling-defaults.ts (SchedulingCaveat / activeCaveats / applyCaveats).
+   */
+  caveats?: SchedulingCaveat[];
 }
 
 /**
@@ -163,6 +187,14 @@ export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
     },
     after_work: {
       start: 17,
+      // MERGE UNION 2026-09-13 — the ONE hunk in this file that is a genuine value conflict rather
+      // than two features: HEAD had 17–19, origin/main had 17–22. Settled against ground truth, not
+      // by preference: the canonical `supabase/functions/_shared/scheduling-defaults.ts:164` (already
+      // merged, both sides agreeing) reads `after_work: { start: 17, end: 19 }` with this same
+      // de-overlap comment. 17–22 is the drift CLAUDE.md names explicitly ("after_work 17–22 in the
+      // placer vs 17–19 in UI/tools"); this file is the UI/tools side. 17–19 is also the narrower
+      // window, so it is the CONFIG-AUTHORITATIVE-safe direction — it cannot place work anywhere
+      // 17–22 would not have.
       end: 19, // ends where evening begins — no overlap with evening (19–22)
       days: [1, 2, 3, 4, 5], // weekdays only (Saturday is covered by weekends)
     },
@@ -468,6 +500,11 @@ export function mergeSchedulingConfig(
     customAIInstructions: (userConfig.customAIInstructions && userConfig.customAIInstructions.trim() !== '')
       ? userConfig.customAIInstructions
       : DEFAULT_SCHEDULING_CONFIG.customAIInstructions,
+    // MERGE UNION 2026-09-13: BOTH sides' keys must be emitted here. This function rebuilds the
+    // config object field-by-field, so a key either side forgets is silently dropped on load — and
+    // taking one side alone would wipe the other feature's settings the moment the user touched any
+    // unrelated setting. Trait branch: scoringModel/priorityBoost/nudges/assignments.
+    // Caveats branch: caveats.
     // Carry the user's scoring-model choice through the merge (built field-by-field, so it must be
     // named here or it would be silently dropped on load and the Settings toggle would never persist).
     // Composite is the default: only an explicit 'priority-rank' opts out; absent/anything-else = composite.
@@ -477,8 +514,14 @@ export function mergeSchedulingConfig(
     // anything else keeps the existing behaviour (true). Guarded structurally by
     // assertNormaliserCoversDefaults so the next omitted field is caught, not just this one.
     priorityBoost: userConfig.priorityBoost === false ? false : true,
+    // Caveats are a pass-through overlay. They MUST be carried here: this function rebuilds the
+    // config object explicitly, so any key it forgets is silently dropped on the next save — which
+    // would wipe the owner's active caveats the moment they touched any other setting.
+    caveats: Array.isArray(userConfig.caveats) ? userConfig.caveats : [],
     // Emitted ONLY when the user has actually set them, so "unset" stays distinguishable from
     // "set to nothing" and the server's own defaults still apply. Never given a client default.
+    // Kept LAST: conditional spreads after the plain keys, so the "absent means unset" contract is
+    // visibly the final word on those two namespaces.
     ...(normalizedNudges !== undefined ? { nudges: normalizedNudges } : {}),
     ...(normalizedAssignments !== undefined ? { assignments: normalizedAssignments } : {}),
   };

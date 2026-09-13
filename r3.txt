@@ -1,0 +1,4 @@
+      if (day.offset === 0) {
+        day.meetings.push(row);
+        break;
+      }

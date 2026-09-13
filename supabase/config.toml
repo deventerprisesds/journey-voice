@@ -134,3 +134,10 @@ verify_jwt = false
 # is the shared JOURNEY_PROXY_TOKEN inside the function, not a Supabase JWT.
 [functions.drain-huddle-turns]
 verify_jwt = false
+
+# Pinged by `send-digests-job` (every 15 min) with no Authorization header, exactly like
+# drain-huddle-turns above. Without this block the function deploys with Supabase's default
+# verify_jwt = true and every cron tick is rejected 401 -- silently, since nothing reads the
+# cron's response.
+[functions.send-digests]
+verify_jwt = false

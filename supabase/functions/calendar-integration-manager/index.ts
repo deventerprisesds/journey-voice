@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { normalizeAttendees, normalizeShowAs, type NormalizedAttendee, type ShowAs } from '../_shared/meetings.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -15,6 +16,10 @@ interface CalendarEvent {
   is_all_day: boolean;
   location?: string;
   calendar_id: string;
+  // With-a-person capture -- same normalized shape the delta-sync path writes.
+  attendees: NormalizedAttendee[];
+  show_as: ShowAs | null;
+  organizer_email: string | null;
 }
 
 serve(async (req) => {
@@ -185,6 +190,8 @@ async function syncCalendarEvents(supabaseClient: any, connectionId: string, sta
     external_event_id: event.id, title: event.title, description: event.description,
     start_time: event.start_time, end_time: event.end_time, is_all_day: event.is_all_day,
     location: event.location, calendar_id: event.calendar_id,
+    attendees: event.attendees, show_as: event.show_as,
+    organizer_email: event.organizer_email,
     last_synced_at: new Date().toISOString(),
   }));
 
@@ -264,6 +271,10 @@ async function fetchGoogleCalendarEvents(connection: any, startDate: string, end
     id: event.id, title: event.summary || 'Untitled Event', description: event.description,
     start_time: event.start.dateTime || event.start.date, end_time: event.end.dateTime || event.end.date,
     is_all_day: !event.start.dateTime, location: event.location, calendar_id: 'primary',
+    // Google's events.list already returns `attendees` on the wire -- it was being dropped.
+    attendees: normalizeAttendees(event, 'google'),
+    show_as: normalizeShowAs(event, 'google'),
+    organizer_email: event.organizer?.email?.toLowerCase() || null,
   })) || [];
 }
 
@@ -281,6 +292,9 @@ async function fetchOutlookCalendarEvents(connection: any, startDate: string, en
     id: event.id, title: event.subject || 'Untitled Event', description: event.body?.content,
     start_time: event.start.dateTime + 'Z', end_time: event.end.dateTime + 'Z',
     is_all_day: event.isAllDay, location: event.location?.displayName, calendar_id: 'primary',
+    attendees: normalizeAttendees(event, 'outlook'),
+    show_as: normalizeShowAs(event, 'outlook'),
+    organizer_email: event.organizer?.emailAddress?.address?.toLowerCase() || null,
   })) || [];
 }
 

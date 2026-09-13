@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { normalizeAttendees, normalizeShowAs } from '../_shared/meetings.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -185,7 +186,7 @@ async function syncOutlookDelta(
     console.log(`[calendar-delta-sync] Using delta token for Outlook connection ${connection.id}`);
   } else {
     // Initial sync - get all events in range (include seriesMasterId for recurring occurrences)
-    url = `https://graph.microsoft.com/v1.0/me/calendarView/delta?startDateTime=${startDate.toISOString()}&endDateTime=${endDate.toISOString()}&$select=id,subject,body,start,end,isAllDay,location,showAs,seriesMasterId`;
+    url = `https://graph.microsoft.com/v1.0/me/calendarView/delta?startDateTime=${startDate.toISOString()}&endDateTime=${endDate.toISOString()}&$select=id,subject,body,start,end,isAllDay,location,showAs,seriesMasterId,attendees,organizer`;
     console.log(`[calendar-delta-sync] Initial sync for Outlook connection ${connection.id}`);
   }
 
@@ -320,6 +321,12 @@ async function syncOutlookDelta(
         location: event.location?.displayName || null,
         calendar_id: event.calendar?.id || 'primary',
         is_recurring: isRecurring,
+        // With-a-person capture. ONE shape for both providers (_shared/meetings.ts).
+        // `organizer` is stored for diagnosis only -- it is NOT the classifier's input,
+        // because the owner organizes their own solo holds (AC-MTG-2).
+        attendees: normalizeAttendees(event, 'outlook'),
+        show_as: normalizeShowAs(event, 'outlook'),
+        organizer_email: event.organizer?.emailAddress?.address?.toLowerCase() || null,
         last_synced_at: new Date().toISOString()
       };
     });
@@ -531,6 +538,10 @@ async function syncGoogleDelta(
       location: event.location || null,
       calendar_id: event.organizer?.email || 'primary',
       is_recurring: !!event.recurringEventId,
+      // With-a-person capture -- same shape as the Outlook path above.
+      attendees: normalizeAttendees(event, 'google'),
+      show_as: normalizeShowAs(event, 'google'),
+      organizer_email: event.organizer?.email?.toLowerCase() || null,
       last_synced_at: new Date().toISOString()
     }));
 

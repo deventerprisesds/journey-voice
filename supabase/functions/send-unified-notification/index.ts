@@ -1,5 +1,11 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+import type { DeliveryOutcome, PerChannelOutcome } from "../_shared/notification-channels.ts";
+import {
+  normalizeChannels,
+  summarizeDelivery,
+  isFullDelivery,
+} from "../_shared/notification-channels.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -64,6 +70,10 @@ interface NotificationResult {
   };
   webhookResponse?: any;
   errors: string[];
+  /** 'success' only when EVERY requested channel was delivered; see _shared/notification-channels.ts */
+  outcome?: DeliveryOutcome;
+  perChannel?: PerChannelOutcome[];
+  deliveryReason?: string;
 }
 
 // ============== DIRECT OUTLOOK INTEGRATION ==============
@@ -558,7 +568,7 @@ serve(async (req) => {
       userId, 
       title, 
       body, 
-      channels, 
+      channels: rawChannels, 
       data = {}, 
       slackWebhook,
       slackChannel,
@@ -568,6 +578,16 @@ serve(async (req) => {
       outlookEvent,
       googleEvent
     }: NotificationPayload = await req.json();
+
+    // ONE canonical channel vocabulary (see _shared/notification-channels.ts).
+    // Callers historically disagreed on case: every caller but notification-delivery's
+    // scheduled-call path sent UPPERCASE, so 'slack'/'email' from that path fell through
+    // every special-cased branch below (F3). Normalising here fixes the caller mismatch
+    // for ALL callers at once instead of each call site agreeing by hand.
+    const channels = normalizeChannels(rawChannels);
+    if (Array.isArray(rawChannels) && channels.length !== rawChannels.length) {
+      console.log('[Notification] channel normalisation:', JSON.stringify(rawChannels), '->', JSON.stringify(channels));
+    }
 
     const correlationId = notificationId || crypto.randomUUID();
     
@@ -899,9 +919,19 @@ serve(async (req) => {
     }
     // ============== END PUSH HANDLING ==============
 
-    // Determine overall success - at least one channel succeeded
-    const channelSuccesses = Object.values(result.channelResults).filter(r => r?.success);
-    result.success = channelSuccesses.length > 0 || result.errors.length === 0;
+    // Determine overall delivery truth. `success` is true ONLY when every requested
+    // channel was delivered. The previous expression
+    //   channelSuccesses.length > 0 || result.errors.length === 0
+    // returned true for a PARTIAL fan-out (email dead, slack fine) and for a fan-out that
+    // attempted ZERO channels -- both of which notification-delivery then stored as a
+    // clean delivery (F2). Partial now returns 207 so the caller can see it; 207 is still
+    // 2xx, so no existing caller's `functions.invoke` behaviour changes.
+    const deliverySummary = summarizeDelivery(channels, result.channelResults, null);
+    result.success = isFullDelivery(deliverySummary);
+    result.outcome = deliverySummary.outcome;
+    result.perChannel = deliverySummary.perChannel;
+    result.deliveryReason = deliverySummary.reason;
+    console.log(`[Notification] delivery outcome=${deliverySummary.outcome} (${deliverySummary.reason})`);
 
     // Update the notification record with results
     if (result.notificationId) {

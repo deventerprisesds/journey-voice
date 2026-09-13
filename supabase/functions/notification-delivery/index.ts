@@ -1,8 +1,13 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import { GLOBAL_VERSION, FUNCTION_IDS, corsHeaders, createHealthResponse } from "../_shared/config.ts";
-import { buildCallContext, getTasksForWindow } from "../_shared/call-context-builder.ts";
-import { renderBriefingBody } from "../_shared/notification-body.ts";
+import { buildCallContext } from "../_shared/call-context-builder.ts";
+import {
+  normalizeChannels,
+  channelResultKey,
+  summarizeDelivery,
+} from "../_shared/notification-channels.ts";
+import { renderScheduledCall } from "../_shared/digest-content.ts";
 
 // Version derived from centralized config
 const DELIVERY_VERSION = `${GLOBAL_VERSION}-${FUNCTION_IDS.DELIVERY}`;
@@ -135,6 +140,9 @@ serve(async (req) => {
 
     let delivered = 0;
     let failed = 0;
+    // Partial fan-outs are counted separately so a run summary can never present
+    // "some channels silently dropped" as a clean delivery.
+    let partial = 0;
 
     // Process scheduled_call notifications separately
     for (const callNotification of scheduledCallNotifications) {
@@ -158,8 +166,25 @@ serve(async (req) => {
 
         const liveCall = (userPrefs?.scheduled_calls ?? [])
           .find((c: any) => c.id === callConfig.call_id);
-        const commsMode = liveCall?.commsMode ?? callConfig.comms_mode ?? 'phone';
-        console.log(`📞 Scheduled call commsMode (live): ${commsMode} (body had: ${callConfig.comms_mode || '?'})`);
+
+        // Multi-select delivery. `commsModes` (array) is the new shape; `commsMode`
+        // (scalar) is what every EXISTING row stores, so it stays the fallback and no
+        // migration is required -- an old row keeps behaving exactly as before.
+        const VALID_MODES = ['phone', 'app_message', 'slack', 'email'];
+        const rawModes: unknown[] =
+          Array.isArray(liveCall?.commsModes) && liveCall.commsModes.length > 0
+            ? liveCall.commsModes
+            : Array.isArray(callConfig.comms_modes) && callConfig.comms_modes.length > 0
+              ? callConfig.comms_modes
+              : [liveCall?.commsMode ?? callConfig.comms_mode ?? 'phone'];
+        const commsModes: string[] = [];
+        for (const m of rawModes) {
+          if (typeof m === 'string' && VALID_MODES.includes(m) && !commsModes.includes(m)) commsModes.push(m);
+        }
+        if (commsModes.length === 0) commsModes.push('phone');
+        // Retained for logging and for scheduleNextOccurrence, which preserves the scalar.
+        const commsMode = commsModes[0];
+        console.log(`📞 Scheduled call commsModes (live): ${JSON.stringify(commsModes)} (body had: ${callConfig.comms_mode || callConfig.comms_modes || '?'})`);
 
         // Day-of-week guard: skip if today is not in the allowed days
         if (callConfig.days_of_week && Array.isArray(callConfig.days_of_week) && callConfig.days_of_week.length > 0) {
@@ -182,14 +207,24 @@ serve(async (req) => {
           }
         }
 
-        let deliverySuccess = false;
-        let deliveryError: any = null;
+        // Per-channel outcomes, keyed the same way send-unified-notification keys its
+        // channelResults, so the shared summarizeDelivery() reads them without a second
+        // result shape existing anywhere.
+        const channelResults: Record<string, { success: boolean; error?: string }> = {};
+        const attemptedChannels: string[] = [];
+        const recordChannel = (mode: string, success: boolean, error?: unknown) => {
+          const canonical = normalizeChannels([mode])[0];
+          if (!canonical) return;
+          if (!attemptedChannels.includes(canonical)) attemptedChannels.push(canonical);
+          const msg = error instanceof Error ? error.message : error ? String((error as any)?.message ?? error) : undefined;
+          channelResults[channelResultKey(canonical)] = { success, error: success ? undefined : (msg || 'delivery failed') };
+        };
 
         // window_morning is handled by FocusView's DailyReviewModal — only send a push to wake the phone.
         const callId = callConfig.call_id || '';
         const isWindowMorning = callId === 'window_morning' || callId === 'morning_standup';
 
-        if (commsMode === 'app_message' && isWindowMorning) {
+        if (commsModes.includes('app_message') && isWindowMorning) {
           console.log(`🌅 window_morning: sending push-only (modal handles content in app)`);
           const { error: pushError } = await supabaseClient.functions.invoke('send-push-notification', {
             body: {
@@ -201,13 +236,13 @@ serve(async (req) => {
           });
           if (pushError) {
             console.error(`🌅 Morning push failed for user ${userId}:`, pushError);
-            deliveryError = pushError;
+            recordChannel('app_message', false, pushError);
           } else {
             console.log(`✅ Morning push delivered for user ${userId}`);
-            deliverySuccess = true;
+            recordChannel('app_message', true);
           }
 
-        } else if (commsMode === 'app_message') {
+        } else if (commsModes.includes('app_message')) {
           console.log(`💬 Routing scheduled call to app chat for user ${userId}`);
 
           const { data: chatResult, error: chatError } = await supabaseClient.functions.invoke('send-chat-message', {
@@ -223,58 +258,60 @@ serve(async (req) => {
 
           if (chatError) {
             console.error(`💬 App chat delivery failed for user ${userId}:`, chatError);
-            deliveryError = chatError;
+            recordChannel('app_message', false, chatError);
           } else {
             console.log(`✅ App chat delivered successfully for user ${userId}: ${callNotification.title}`);
-            deliverySuccess = true;
+            recordChannel('app_message', true);
           }
+        }
 
-        } else if (commsMode === 'slack' || commsMode === 'email') {
-          console.log(`📧 Routing scheduled call to ${commsMode} for user ${userId}`);
-
-          // RENDER A BRIEFING, do not ship the voice script. The line this replaces concatenated
-          // `callConfig.context` straight into the body, and that context is the ASSISTANT'S
-          // SCRIPT — "[WINDOW:morning] ... BRANCH 1 (morning tasks exist): - Greet: \"Hello Sir.\""
-          // Correct for a phone call, unreadable in an inbox. The phone branch below is untouched
-          // and still gets the script verbatim via buildCallContext.
-          const callName = callConfig.call_name || callNotification.title;
-          const windowMatch = String(callConfig.context || '').match(/\[WINDOW:(\w+)\]/i);
-          let windowTasks: any[] = [];
-          try {
-            // Reuses the EXISTING window fetcher rather than a second task query, so email sees
-            // exactly what the scheduler placed. Non-fatal: a briefing with no task list still
-            // beats no notification, and it says "nothing scheduled" rather than going silent.
-            windowTasks = await getTasksForWindow(
-              supabaseClient, userId, windowMatch?.[1]?.toLowerCase() || '', userPrefs?.timezone || 'America/New_York',
-            );
-          } catch (e) {
-            console.error(`📧 task fetch for briefing failed (sending without the list):`, e);
-          }
+        // Slack/email fan out together through the EXISTING send-unified-notification
+        // fan-out -- one invoke carrying every selected channel, not one invoke each and
+        // not a second fan-out.
+        const unifiedModes = commsModes.filter((m) => m === 'slack' || m === 'email');
+        if (unifiedModes.length > 0) {
+          // CANONICAL channel names. Previously this sent lowercase `[commsMode]`, which
+          // matched none of send-unified-notification's branches ('SLACK' :831 etc).
+          const unifiedChannels = normalizeChannels(unifiedModes);
+          console.log(`📧 Routing scheduled call to ${JSON.stringify(unifiedChannels)} for user ${userId}`);
 
           const { data: unifiedResult, error: unifiedError } = await supabaseClient.functions.invoke('send-unified-notification', {
             body: {
               userId,
               taskId: null,
-              title: callName,
-              body: renderBriefingBody({
-                callName,
-                context: callConfig.context,
-                tasks: windowTasks,
-                timezone: userPrefs?.timezone || 'America/New_York',
-              }),
-              channels: [commsMode]
+              title: callConfig.call_name || callNotification.title,
+              // `callConfig.context` is the PHONE SCRIPT ("BRANCH 1... Greet: Hello Sir").
+              // This line used to append it verbatim to every channel, so an email or a
+              // Slack message arrived carrying the raw script the assistant reads aloud.
+              // renderScheduledCall keeps the script for `phone` and returns a human
+              // sentence for every read channel -- and throws CallScriptLeakError rather
+              // than let a script through. Slack and email are both read channels, so the
+              // single rendered body is correct for the whole unified fan-out.
+              body: renderScheduledCall({
+                callName: callConfig.call_name || callNotification.title,
+                context: callConfig.context || '',
+                channel: 'email',
+              }).body,
+              channels: unifiedChannels
             }
           });
 
-          if (unifiedError) {
-            console.error(`📧 ${commsMode} delivery failed for user ${userId}:`, unifiedError);
-            deliveryError = unifiedError;
-          } else {
-            console.log(`✅ ${commsMode} notification delivered for user ${userId}: ${callNotification.title}`);
-            deliverySuccess = true;
+          // `functions.invoke` sets `error` only on a non-2xx, and a PARTIAL fan-out
+          // returns 2xx -- so the absence of `unifiedError` is NOT evidence of delivery.
+          // Read the per-channel results out of the body instead.
+          const unifiedSummary = summarizeDelivery(
+            unifiedChannels,
+            (unifiedResult as any)?.channelResults,
+            unifiedError ? (unifiedError.message || String(unifiedError)) : null,
+          );
+          console.log(`📧 unified outcome=${unifiedSummary.outcome} (${unifiedSummary.reason})`);
+          for (const c of unifiedSummary.perChannel) {
+            if (!attemptedChannels.includes(c.channel)) attemptedChannels.push(c.channel);
+            channelResults[channelResultKey(c.channel)] = { success: c.success, error: c.error };
           }
+        }
 
-        } else {
+        if (commsModes.includes('phone')) {
           // === PHONE CALL DELIVERY (default) ===
           const { data: profile } = await supabaseClient
             .from('profiles')
@@ -358,28 +395,42 @@ serve(async (req) => {
           }
 
           if (callError) {
-            deliveryError = callError;
+            recordChannel('phone', false, callError);
           } else {
-            deliverySuccess = true;
+            recordChannel('phone', true);
           }
         }
 
-        // Update notification status based on delivery result
-        if (deliveryError) {
-          console.error(`📞 Delivery failed for user ${userId}:`, deliveryError);
-          
+        // Update notification status from the PER-CHANNEL truth.
+        // Stored-row invariant: a clean success is `failure_reason IS NULL`. A partial
+        // delivery keeps delivered_at (something did reach the user) but ALWAYS carries a
+        // non-null failure_reason naming the channels that did not, so no query can read a
+        // partial as a success. Previously this branched on `deliveryError` alone, which a
+        // 2xx-partial never set.
+        const summary = summarizeDelivery(attemptedChannels, channelResults, null);
+
+        if (summary.outcome === 'failed') {
+          console.error(`📞 Delivery FAILED for user ${userId}: ${summary.reason}`);
           await supabaseClient
             .from('scheduled_notifications')
             .update({
               failed_at: new Date().toISOString(),
-              failure_reason: deliveryError.message || 'Delivery failed'
+              failure_reason: summary.reason.slice(0, 500)
             })
             .eq('id', callNotification.id);
-          
           failed++;
+        } else if (summary.outcome === 'partial') {
+          console.warn(`⚠️ PARTIAL delivery for user ${userId}: ${summary.reason}`);
+          await supabaseClient
+            .from('scheduled_notifications')
+            .update({
+              delivered_at: new Date().toISOString(),
+              failure_reason: `partial: ${summary.reason}`.slice(0, 500)
+            })
+            .eq('id', callNotification.id);
+          partial++;
         } else {
-          console.log(`✅ Delivery successful for user ${userId}: ${callNotification.title} (mode: ${commsMode})`);
-          
+          console.log(`✅ Delivery successful for user ${userId}: ${callNotification.title} (modes: ${JSON.stringify(commsModes)})`);
           await supabaseClient
             .from('scheduled_notifications')
             .update({
@@ -387,7 +438,6 @@ serve(async (req) => {
               failure_reason: null
             })
             .eq('id', callNotification.id);
-          
           delivered++;
         }
 
@@ -819,15 +869,16 @@ serve(async (req) => {
       }
     }
 
-    console.log(`Notification processing complete: ${delivered} delivered, ${failed} failed`);
+    console.log(`Notification processing complete: ${delivered} delivered, ${partial} partial, ${failed} failed`);
 
     return new Response(
       JSON.stringify({ 
         success: true, 
         processed: pendingNotifications.length,
         delivered,
+        partial,
         failed,
-        message: `Processed ${pendingNotifications.length} notifications: ${delivered} delivered, ${failed} failed`
+        message: `Processed ${pendingNotifications.length} notifications: ${delivered} delivered, ${partial} partial, ${failed} failed`
       }),
       { 
         status: 200, 
