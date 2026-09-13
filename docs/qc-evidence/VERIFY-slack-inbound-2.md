@@ -150,3 +150,46 @@ other test. Restore verified twice: once by mutate.sh's internal check and once 
 `git diff --exit-code` invocation after the tool exited.
 
 ---
+
+## C6. Signature verification fails closed when `SLACK_SIGNING_SECRET` is unset.
+
+**Verdict: CONFIRMED — re-checked at reduced depth (source read + passing test), source unchanged since loop 1.**
+
+```
+$ sed -n '60,68p' cloudflare/src/slack-events.ts
+export async function verifySlackSignature(
+  rawBody: string, timestamp: string | null, signature: string | null,
+  signingSecret: string | undefined, nowMs: number = Date.now(),
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  if (!signingSecret) return { ok: false, reason: 'signing_secret_not_configured' };
+  if (!timestamp || !signature) return { ok: false, reason: 'missing_signature_headers' };
+```
+
+The first statement in the function body is the guard: an unset/falsy `signingSecret` returns
+`{ok:false}` immediately, before any HMAC work or header parsing — not "skip verification", not
+"accept unsigned as trusted." Reduced depth is justified here specifically because it is a one-line,
+unambiguous guard (unlike C2/C5, which are guards worth mutation-proving); reading the source
+directly is a stronger check than re-running the test alone, and `AC-S1c an UNSET signing secret
+fails CLOSED` also passed in this loop's cheap-suite re-run above.
+
+---
+
+## C7. Zero typecheck errors in `cloudflare/src/slack-events.ts` and `cloudflare/src/index.ts`.
+
+**Verdict: CONFIRMED, narrowly — the file scope in the claim, not the whole project**
+
+```
+$ cd cloudflare && npx tsc --noEmit 2>&1 | grep -E "^src/slack-events\.ts|^src/index\.ts"
+(no output, grep exit 1 — zero matches)
+```
+
+A whole-project `tsc --noEmit` is NOT clean (exit 2) — but every error is in `src/TwilioCallSession.ts`
+(a pre-existing, unrelated legacy Twilio file: `Property 'length' does not exist on type '{}'`, etc.)
+or in the `.test.ts` files (`Cannot find module 'node:test'` — a `tsconfig.json` `types` array gap,
+not a slack code defect; those tests demonstrably run and pass via `tsx --test`, see C4). C7's claim
+is scoped to exactly two files, and grepping tsc's own file-per-line output for those two paths
+returns nothing — zero errors attributed to `slack-events.ts` or `index.ts` specifically. I did not
+accept "the whole project typechecks" as the test (it doesn't, and never did per loop 1's presumably
+identical finding) — I tested the claim as actually scoped.
+
+---
