@@ -129,3 +129,55 @@ under `src/` or `supabase/`.
 was rejected by the harness — *"command contains control characters"* — because quoting that
 escape sequence in prose emits a literal control byte. The implementer's stated root cause is
 therefore independently reproduced, not just accepted.
+
+---
+
+## Mutation re-run — **BOTH FIRED, re-derived by the verifier, not accepted.**
+
+Anchors taken from FILES (`sed -n '<n>p' > anchor.txt`), never shell arguments.
+
+**M1 — control-byte guard.** Replacement built by a python script that reconstructs the 6-character
+escape as `b'\\' + b'u0000'` (so the script itself carries no control byte) and swaps it for a real
+`b'\x00'`, reinstating the exact defect at `send-digests/index.ts:81`.
+```
+$ mutate.sh supabase/functions/send-digests/index.ts /tmp/anchor1.txt /tmp/repl1.txt \
+    "npm test" "no source file contains a NUL or other stray control byte"
+FIRED: 'no source file contains a NUL or other stray control byte' failed with the defect reinstated. The guard is real.
+restored: supabase/functions/send-digests/index.ts matches HEAD
+tree clean: ... passes again on the restored tree
+```
+
+**M2 — provenance guard.** Anchor is `digest-source.ts:12` (verified `grep -cF` -> exactly 1
+occurrence). Replacement drops the "Standup" suffix, recreating the original dangling citation.
+```
+$ mutate.sh supabase/functions/_shared/digest-source.ts /tmp/anchor2.txt /tmp/repl2.txt \
+    "npm test" "every repo-relative path a provenance header cites actually exists"
+FIRED: 'every repo-relative path a provenance header cites actually exists' failed with the defect reinstated. The guard is real.
+restored: supabase/functions/_shared/digest-source.ts matches HEAD
+```
+Restore verified independently of mutate.sh's own assertion:
+`git show HEAD:supabase/functions/_shared/digest-source.ts | sha256sum` and `sha256sum` on the
+working file both give `8f0c934bf719eec89fb7f4833481b9f73f303e2c3324c43e60494cd2b16e5275`.
+**2/2 FIRED. Claim CONFIRMED.**
+
+*Method note, not a repo defect:* a `git status` chained in the same shell invocation immediately
+after `mutate.sh | tail` briefly reported the file modified. Re-queried a moment later the tree was
+clean and hash-identical to HEAD — the status ran while the restore was still flushing. Verify a
+restore with a hash compare, not with a status racing the tool that did it.
+
+---
+
+## CHALLENGE (1) — mutate.sh:117 matcher bug. **CONFIRMED.**
+
+`names_failure()` builds `any_order` as
+```
+awk -v n="$name_n" 'index($0, n) > 0 && index($0, "FAIL") > 0 { hit = 1 } END { exit !hit }'
+```
+`awk` evaluates per LINE, so both substrings must be on the same line — narrower than "anywhere in
+the output", but the defect stands: **any single output line that contains the test's name AND the
+substring `FAIL` is read as that test failing.** A TAP line for a test whose NAME contains `FAIL`
+(`ok 7 - rejects a FAILED delivery row`) satisfies both `index()` calls on the passing line, so the
+baseline phase reports a bogus PRE-DIRTY and nothing is ever mutated. Independently corroborated in
+this repo's own history: commit `affcb24` is titled *"test(journey): rename a test whose name broke
+mutate.sh's matcher"* — the implementer hit it and worked around it by renaming rather than fixing
+the matcher, so the trap is still armed for the next caller.
