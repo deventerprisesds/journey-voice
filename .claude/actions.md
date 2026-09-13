@@ -1557,3 +1557,40 @@ actually an accident of my simpler guard.
 
 **Neither is a defect in what shipped; both are scope differences worth a decision.** Adding the
 @-gate for multi-person channels is small and self-contained.
+
+## ACT:slack-inbound — CORRECTION: I stated the @-gate gap BACKWARDS — 2026-09-13
+One turn after writing it, re-reading the condition I had already quoted shows I described the risk
+inside out. The n8n guard is a TWO-BRANCH test:
+
+    ( event.bot_id === undefined && channel_resolved.includes(targetAgent…) )   // branch A
+    || ( text.includes('@' + targetAgent) )                                     // branch B
+
+**Branch A fires when the CHANNEL NAME CONTAINS THE AGENT'S HANDLE** — which is exactly what every
+`<handle>___<topic>` lane is. So in `iris-chase___itinerary`, n8n answered ANY human message with no
+`@` required. **That is identical to what we do.** My claim that "ours answers every human message
+where n8n only spoke when addressed" was wrong for every channel we actually serve.
+
+**Branch B is the real gap, and it points the OTHER WAY.** It catches `@agent-handle` in a channel
+whose name does NOT contain the handle — a general channel like `#all-eds`. Ours cannot:
+`agentIdFromChannelName` returns `null` when there is no `___`, so `processMessageEvent` exits
+`channel_is_not_an_agent_lane` and nothing happens.
+
+| where | n8n | ours |
+|---|---|---|
+| `<handle>___<topic>` lane | any human message | **same** |
+| general channel, `@handle` in the text | **replies** | **ignored entirely** |
+
+**So the correction is a reversal of consequence.** I warned of a NOISE risk — "the agent will answer
+everything, it will be annoying". The truth is a COVERAGE gap: it answers exactly where it should and
+is silent where you might reasonably expect a reply. Nothing needs gating; something is missing.
+
+**Why I got it wrong:** I read branch B, recognised the `@` gate, and generalised it to "group
+channels" without checking what branch A already covered — then described the union of both branches
+as if only B existed. *The condition was in front of me and quoted correctly in my own note; the error
+was in the sentence I wrote about it, not in the evidence.* Reading a disjunction and reporting only
+one arm is the same class of error as answering from a proxy: the source was right there and the
+summary of it was not.
+
+**Not building it unasked.** Supporting `@handle` in general channels means resolving a mention to an
+agent from the roster rather than from the channel name — a real routing addition, and one Huddle's
+own router may be better placed to make than a regex in the Worker.
