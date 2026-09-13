@@ -131,16 +131,33 @@ export function agentIdFromChannelName(name: string | null | undefined): string 
   return handle || null;
 }
 
-/** Resolve a channel ID to its name. Needs `channels:read`/`groups:read`, both already granted. */
-export async function lookupChannelName(channelId: string, botToken: string): Promise<string | null> {
+/**
+ * Resolve a conversation to its NAME and whether it is a DM.
+ *
+ * **`isIm` is not a detail — it is a whole second routing mode.** A Slack DM has no `name` field at
+ * all, so the `___` mapper can never derive an agent from one; a null name alone cannot tell
+ * "this is a DM" apart from "the lookup failed", and those need opposite responses. Returning the
+ * flag is what lets a DM route by a different rule instead of being silently dropped as a non-lane.
+ *
+ * Needs `channels:read`/`groups:read` (held) and, for DMs, `im:read`.
+ */
+export async function lookupConversation(
+  channelId: string,
+  botToken: string,
+): Promise<{ name: string | null; isIm: boolean }> {
   const res = await fetch(`${SLACK_API}/conversations.info?channel=${encodeURIComponent(channelId)}`, {
     headers: { Authorization: `Bearer ${botToken}` },
   });
   // Slack answers 200 with `ok:false` in the body for real failures, so the status alone proves
   // nothing. Same trap the outbound side documents.
-  const data = (await res.json().catch(() => null)) as { ok?: boolean; channel?: { name?: string } } | null;
-  if (data?.ok === true && typeof data.channel?.name === 'string') return data.channel.name;
-  return null;
+  const data = (await res.json().catch(() => null)) as
+    | { ok?: boolean; channel?: { name?: string; is_im?: boolean } }
+    | null;
+  if (data?.ok !== true) return { name: null, isIm: false };
+  return {
+    name: typeof data.channel?.name === 'string' ? data.channel.name : null,
+    isIm: data.channel?.is_im === true,
+  };
 }
 
 /**
@@ -163,7 +180,8 @@ export async function fetchSlackContext(args: {
   channel: string;
   threadTs?: string;
   botToken: string;
-  agentId: string;
+  /** null in a DM: there is no channel-derived agent, so a bot line cannot claim one. */
+  agentId: string | null;
   huddleId: string;
   limit?: number;
 }): Promise<Array<Record<string, unknown>>> {
@@ -195,7 +213,12 @@ export async function fetchSlackContext(args: {
     out.push({
       id: `slack-${String(m.ts)}`,
       huddleId: args.huddleId,
-      author: isOurBot ? { kind: 'agent', agentId: args.agentId } : { kind: 'user' },
+      // With no channel-derived agent (a DM), a bot line is recorded as 'system' rather than
+      // asserting an agentId we do not have: an invalid one fails the endpoint's schema and costs
+      // the entire turn, which is far worse than a slightly flatter transcript.
+      author: isOurBot
+        ? (args.agentId ? { kind: 'agent', agentId: args.agentId } : { kind: 'system' })
+        : { kind: 'user' },
       text,
       ts: Math.round(Number(m.ts ?? 0) * 1000),
     });
@@ -207,10 +230,12 @@ export async function fetchSlackContext(args: {
 /** Ask Huddle for one agent turn. Returns the replies, already flattened to text. */
 export async function runHuddleAgentTurn(args: {
   text: string;
-  agentId: string;
+  /** Absent for a DM: see below — Huddle's own router picks, rather than this file guessing. */
+  agentId: string | null;
   eventId: string;
   env: SlackEventsEnv;
   history?: Array<Record<string, unknown>>;
+  huddleId?: string;
 }): Promise<{ ok: true; text: string } | { ok: false; reason: string }> {
   const { text, agentId, eventId, env, history } = args;
   if (!env.HUDDLE_BASE_URL) return { ok: false, reason: 'huddle_base_url_not_configured' };
@@ -221,10 +246,12 @@ export async function runHuddleAgentTurn(args: {
     headers: { 'Content-Type': 'application/json', 'x-webhook-secret': env.JOURNEY_PROXY_TOKEN },
     body: JSON.stringify({
       text,
-      // A Slack channel is one agent's lane, so this is a 1:1 turn with that agent as the member.
-      scope: 'one-to-one',
-      members: [agentId],
-      huddleId: `dm-${agentId}`,
+      // A named lane pins the agent. A DM does NOT: `members` and `scope` are OMITTED so Huddle's
+      // OWN router chooses, which is the whole reason run-agent-turn accepts a bare `{text}`.
+      // Picking a default agent here would hardcode a routing decision in the transport, and the
+      // router already does it from the roster -- the systematic answer beats a name in this file.
+      ...(agentId ? { scope: 'one-to-one', members: [agentId] } : {}),
+      huddleId: args.huddleId ?? (agentId ? `dm-${agentId}` : 'slack-dm'),
       // Feeds BOTH the conversation and the memory-retrieval query -- see fetchSlackContext.
       history: history ?? [],
       // Slack's own event id. run-agent-turn derives its durable turn id from this, so a Slack
@@ -282,9 +309,14 @@ export async function processMessageEvent(
   const channel = String(event!.channel ?? '');
   if (!channel) return { handled: false, reason: 'no_channel' };
 
-  const name = await lookupChannelName(channel, env.SLACK_BOT_TOKEN);
-  const agentId = agentIdFromChannelName(name);
-  if (!agentId) return { handled: false, reason: 'channel_is_not_an_agent_lane' };
+  const conv = await lookupConversation(channel, env.SLACK_BOT_TOKEN);
+  const agentId = agentIdFromChannelName(conv.name);
+  // THREE outcomes, not two. A named lane pins an agent; a DM has no name and routes through
+  // Huddle instead; anything else is a channel we were never meant to answer in. Collapsing the
+  // middle case into the last is the bug the owner hit -- "I'm only receiving replies from iris
+  // using the channel not direct message".
+  if (!agentId && !conv.isIm) return { handled: false, reason: 'channel_is_not_an_agent_lane' };
+  const huddleId = agentId ? `dm-${agentId}` : `slack-dm-${String(event!.user)}`;
 
   // Gather context BEFORE the turn: the history is what makes the agent's memory search find
   // anything (runHuddleTurn embeds text + history to query memory, then drops hits under 0.3).
@@ -297,7 +329,7 @@ export async function processMessageEvent(
     threadTs: parentTs,
     botToken: env.SLACK_BOT_TOKEN,
     agentId,
-    huddleId: `dm-${agentId}`,
+    huddleId,
   }).catch(() => []);
 
   const turn = await runHuddleAgentTurn({
@@ -306,6 +338,7 @@ export async function processMessageEvent(
     eventId: String(body.event_id ?? `${channel}-${String(event!.ts)}`),
     env,
     history,
+    huddleId,
   });
   if (!turn.ok) return { handled: false, reason: turn.reason };
 

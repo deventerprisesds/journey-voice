@@ -392,3 +392,56 @@ test('AC-S10e a broken context fetch must not cost the reply', async () => {
     assert.deepEqual(turn!.body.history, [], 'degrades to empty, not undefined');
   } finally { f.restore(); }
 });
+
+// ---------------------------------------------------------------------------
+// AC-S11 — DMs. The owner's report: "I'm only receiving replies from iris using the channel not
+// direct message." A Slack IM has NO name, so the `___` mapper cannot derive an agent from one.
+// Routing a DM is therefore a SECOND mode, not an edge case of the first.
+// ---------------------------------------------------------------------------
+test('AC-S11 a DM is handled, and Huddle — not this file — picks the agent', async () => {
+  const f = stubFetch({ conversationsInfo: { ok: true, channel: { is_im: true } } });
+  try {
+    const r = await processMessageEvent(userMessage({ channel: 'D0111111111' }) as any, ENV);
+    assert.equal(r.handled, true, 'a DM must not be dropped as a non-lane');
+    const turn = f.calls.find((c) => c.url.includes('run-agent-turn'));
+    assert.ok(turn, 'Huddle must be called for a DM');
+    // Omitting these is the POINT: run-agent-turn accepts a bare {text} and routes internally.
+    // Naming a default agent here would hardcode a routing decision into the transport.
+    assert.equal(turn!.body.members, undefined, 'members must be omitted so Huddle routes');
+    assert.equal(turn!.body.scope, undefined, 'scope must be omitted too');
+  } finally { f.restore(); }
+});
+
+test('AC-S11b a DM still replies in the DM, in thread', async () => {
+  const f = stubFetch({ conversationsInfo: { ok: true, channel: { is_im: true } } });
+  try {
+    await processMessageEvent(userMessage({ channel: 'D0111111111' }) as any, ENV);
+    const post = f.calls.find((c) => c.url.includes('chat.postMessage'));
+    assert.equal(post!.body.channel, 'D0111111111');
+    assert.equal(post!.body.thread_ts, '1789310710.240879');
+  } finally { f.restore(); }
+});
+
+test('AC-S11c a channel that is NEITHER a lane NOR a DM is still ignored', async () => {
+  // The three-way split must not become a catch-all: widening DM support into "answer everywhere"
+  // would put an agent into every channel the bot is in.
+  const f = stubFetch({ conversationsInfo: { ok: true, channel: { name: 'general', is_im: false } } });
+  try {
+    const r = await processMessageEvent(userMessage() as any, ENV);
+    assert.equal(r.handled, false);
+    assert.equal(r.reason, 'channel_is_not_an_agent_lane');
+    assert.ok(!f.calls.some((c) => c.url.includes('run-agent-turn')));
+  } finally { f.restore(); }
+});
+
+test('AC-S11d in a DM a bot line is recorded as system, never a fabricated agentId', async () => {
+  // An agentId not in Huddle's enum fails the endpoint's schema and costs the WHOLE turn.
+  const f = stubFetch({ conversationsInfo: { ok: true, channel: { is_im: true } } });
+  try {
+    await processMessageEvent(userMessage({ channel: 'D0111111111', thread_ts: '1789300000.111111' }) as any, ENV);
+    const turn = f.calls.find((c) => c.url.includes('run-agent-turn'));
+    const kinds = turn!.body.history.map((h: any) => h.author.kind);
+    assert.ok(!kinds.includes('agent'), `no agent kind without a resolved agent; got ${JSON.stringify(kinds)}`);
+    assert.ok(kinds.includes('system'), 'bot lines become system');
+  } finally { f.restore(); }
+});
