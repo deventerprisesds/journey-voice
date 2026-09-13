@@ -9,7 +9,8 @@
 //             they would drift -- the exact failure mode the org's "one core funnel" rule exists for.
 // SUPERSEDES: nothing
 // SUPERSEDED-BY: nothing -- current
-// EVIDENCE:   src/utils/digestSource.test.ts; integration detection matches the existing Huddle
+// EVIDENCE:   src/utils/digestSourceStandup.test.ts (the switch is tested there alongside the pull
+//             it feeds); integration detection matches the existing Huddle
 //             reach pattern in huddle-task-sync/index.ts:18-20 and drain-huddle-turns/index.ts:15-17.
 
 /**
