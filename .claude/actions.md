@@ -1194,3 +1194,42 @@ named test converts the author's blind spot into a verdict.**
 budget, commit-AND-PUSH-per-claim artifact) must be in the SPAWN TEXT. I delivered it mid-run by
 message; it worked — the artifact was pushed per claim exactly as asked — but the Stop-gate checker
 reads the spawn, so a mid-run amendment is invisible to it and the contract reads as absent.
+
+## ACT:slack-inbound — loop 2 re-verification: 9/9 CONFIRMED — 2026-09-13
+Evidence `docs/qc-evidence/VERIFY-slack-inbound-2.md` (final commit `2479926`), pushed per claim,
+completed inside the 15-minute budget. All eight loop-1 claims re-checked plus C9 (which sha is under
+test / no source regression since loop 1). **0 REFUTED, 0 UNVERIFIED.**
+
+**The most valuable thing in this loop is the verifier catching ITSELF.** Its first C2 mutation
+changed a member-access READ (`name.indexOf(...)` → `channelNameTypo.indexOf(...)`). `mutate.sh`
+reported **INERT**. The wrong move — and the tempting one — is to bank that as "the guard protects
+nothing". It refused to: `undef-check.mjs` only inspects CALL SITES, never bare identifier reads, so
+the mutation was **outside the guard's scope and INERT was the correct answer to an invalid test**. It
+restored, re-derived with a genuine call-site rename (`agentIdFromChannelName(name)` →
+`agentIdFromChannelNameTypo(name)`), and that **FIRED**.
+**Standing lesson, and it generalises past this repo:** an INERT result is a statement about the
+MUTATION as much as about the guard. Before concluding a guard is worthless, prove the mutation was
+inside the thing the guard actually inspects. This is the same failure the three-outcome `mutate.sh`
+exists to prevent (`NOT-APPLIED` ≠ `INERT`), one level up: the anchor matched and the tool ran, but
+the mutated construct was of a kind the checker never examines.
+
+**C1 re-derived a better proof than loop 1 had:** `undef-check.mjs`'s last-touch commit `8fc7f73` is a
+git ANCESTOR of the first Slack commit `a0fc418` — an ordering fact, independent of what `origin/main`
+happens to contain. That is the test my original brief should have named.
+
+## ACT:huddle-drift — the "50 unpushed commits" warning is BENIGN — 2026-09-13
+The drift guard flagged `huddle-extension-app` as `behind 1325 / ahead 50` every turn, and the git
+Stop-hook asked for those 50 to be pushed. **They were never unpushed work.**
+`git branch -r --contains 6f6b79c` → `origin/main` + 3 other remote branches, and
+`git merge-base --is-ancestor HEAD origin/main` → true. The local checkout was parked on a commit
+`main` had long since absorbed, while the remote feature branch moved 1325 commits down another line.
+Pushing would have manufactured a merge of already-merged history onto an active branch.
+Resolved by `git checkout -B <branch> origin/<branch>` — now `behind=0 ahead=0`, with `6f6b79c`
+re-confirmed as an ancestor of `origin/main` AFTERWARDS, so nothing was discarded.
+**Two readings, opposite responses, and they look identical from `ahead=N` alone:** real local work at
+risk, vs. work already merged elsewhere. `git branch -r --contains` / `merge-base --is-ancestor`
+separates them in one command. With `ahead=50`, the reflexive `reset --hard` would have been the
+genuinely destructive move — this is the case the direction-check rule was written for.
+**Consequence worth keeping:** that local tree was 1325 commits stale, which is why every read of
+Huddle this session went through `git show origin/main:` — the Azure-vs-Supabase correction rests on
+`scheduler.server.ts` being current.
