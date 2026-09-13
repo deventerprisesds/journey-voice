@@ -73,6 +73,9 @@ jobs:
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_DEFAULT_CHANNEL: ${{ secrets.SLACK_DEFAULT_CHANNEL }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
           put() {
             if [ -z "$2" ]; then
@@ -86,6 +89,13 @@ jobs:
           put AZURE_CLIENT_ID     "$AZURE_CLIENT_ID"
           put AZURE_CLIENT_SECRET "$AZURE_CLIENT_SECRET"
           put AZURE_TENANT_ID     "$AZURE_TENANT_ID"
+          # Slack. Absent secrets are SKIPPED, never blanked, so adding these names is safe before
+          # the credential exists -- the moment it is added to the org, the next deploy carries it.
+          # SLACK_BOT_TOKEN is the one that matters: /notify prefers it and it is the only transport
+          # that can post per-channel and thread, which an incoming webhook structurally cannot.
+          put SLACK_BOT_TOKEN       "$SLACK_BOT_TOKEN"
+          put SLACK_DEFAULT_CHANNEL "$SLACK_DEFAULT_CHANNEL"
+          put SLACK_WEBHOOK_URL     "$SLACK_WEBHOOK_URL"
 
       - name: Wait for deployment propagation
         run: sleep 15
