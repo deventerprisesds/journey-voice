@@ -209,3 +209,57 @@ exactly — that is the whole point of the overlay design.
 
 Only re-open this if the owner says the ±1 is costing more than it is worth. Then build the
 day-level fallback; the analysis above is the starting point, not something to redo.
+
+
+## Active work — 2026-09-13: three-digest delivery (journey side)
+
+**Owner's architecture ruling, applied throughout:** both apps must run standalone; **when integrated,
+journey is the source AND the switch** (the owner's case). journey owns the send and the content
+builder; Huddle keeps the whole capability for a journey-less user.
+
+ACs: `.claude/AC-digest-delivery.md` — 45 ACs from an independent `ac-writer` subagent, BEFORE code.
+Branch `claude/huddle-workflows-setup-cucecs`. **Nothing merged, nothing deployed, nothing
+live-confirmed.**
+
+| Lane | What landed | Mutations | Record |
+|---|---|---|---|
+| Channels (F2/F3, AC-CH-*) | `_shared/notification-channels.ts`; delivery truth; multi-select behind the UI | 4/4 FIRED | `.claude/IMPL-channels.md` |
+| Content builder (A/B/D/E) | `_shared/digest-content.ts` (654 ln); true-local 8am; deep link | 4/4 FIRED | `.claude/IMPL-digest-builder.md` |
+| Meetings (F, AC-MTG-*) | `_shared/meetings.ts`; attendee capture both providers; 7-day buckets | 3/3 FIRED | `.claude/IMPL-meetings.md` |
+| Vocabulary merge | `canonicalChannel` delegates to `toCanonicalChannel` | 1/1 FIRED | this file |
+
+83/83 tests.
+
+### Facts worth not re-deriving
+- **UPPERCASE is the canonical channel vocabulary, by evidence** — `user_preferences.channels`
+  STORES uppercase, so lowercasing needs a data migration. Normalisation happens at the SENDER's
+  entry, which repairs every caller at once.
+- **Partial delivery invariant:** clean success ⟺ `delivered_at IS NOT NULL AND failure_reason IS
+  NULL`. A partial keeps `delivered_at` but ALWAYS carries `failure_reason: 'partial: …'`.
+- **`APP_BASE_URL` has no default ON PURPOSE.** Digests fail closed without it; a silent
+  `app.example.com` in a real email is worse than no email.
+- **The two `buildDayContext` copies were NOT merged, deliberately.** They have diverged (Deno-safe
+  vs Vite-aliased imports; `score: number|null` vs `number`; +5 client-only fields). Merging is a
+  refactor of the client scoring pipeline, not a delete. `interface DayContext` still appears in
+  exactly 2 files — no third copy.
+- **A calendar-event channel maps to NO render target.** You deliver to `OUTLOOK_EVENT`; you never
+  render one. Asking `canonicalChannel` for it returns null by design.
+
+## Hardening — 2026-09-13
+
+**Two lanes independently built the same alias table, and only the MERGE could see the bug.**
+`canonicalChannel` (render, lowercase) and `toCanonicalChannel` (transport, UPPERCASE) were both
+correct about their own concern. The defect was the second LIST. Delegating one to the other
+instantly broke `canonicalChannel('app')` — the renderer knew `app`, `in_app`, `message`, `sms` and
+the transport did not. **That gap was invisible while both existed and would have stayed invisible.**
+Reconcile parallel lookups by DELEGATION, never by picking a winner: the delegation is what surfaces
+the entries only one side had.
+
+**A vocabulary mismatch is never one site.** The reported case bug was in `notification-delivery`;
+`twilio-voice-handler:1757` had the identical defect, silently dropping the email branch from the
+missed-call fallback. Sweep every producer AND consumer of a vocabulary before calling it fixed.
+
+**`UNDETERMINED` from `mutate.sh` is not a soft pass — nothing was proven.** Hit twice in one
+session: once `NOT-APPLIED` (dirty file, a correct refusal), once `UNDETERMINED` because the
+must-fail marker was a count (`fail 1`) while `mutate.sh:114` matches `not ok .*<name>`. The fix was
+to READ the matcher, not to guess a second literal.

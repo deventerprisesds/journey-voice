@@ -148,3 +148,37 @@ the numbers, the rejected alternative and the reason are in `.claude/memory.md` 
 is now `reason: 'no_window_capacity_caveats_active'` and the run log states the tradeoff and the
 remedy, so the eventual "why wasn't this scheduled?" answers itself without anyone remembering this
 conversation.
+
+
+## ACT:digest-delivery-journey — three morning digests, journey side (2026-09-13)
+
+**Origin:** owner request — an 8am brief (schedule + current ranking + widget deep link), a meetings
+digest (with-a-person, today + 7 days by day), and Terry's stand-up delivered like the others.
+**Owner ruling:** both apps standalone; integrated ⇒ journey is source and switch.
+
+**Status: IMPLEMENTED + PUSHED on `claude/huddle-workflows-setup-cucecs`. NOT merged, NOT deployed,
+NOT live-confirmed.** ACs `.claude/AC-digest-delivery.md` (45, subagent-authored before code).
+83/83 tests; 12/12 mutations FIRED across four lanes.
+
+**BLOCKING before anything delivers:**
+- `supabase secrets set APP_BASE_URL=https://<app-host>` + add to `deploy-supabase-functions.yml`
+  secret sync. No default by design — digests fail closed.
+- The meetings **migration is written and deliberately UNAPPLIED**, so AC-MTG-1's DB read-back is
+  unobserved.
+- After deploying the `$select` change: `update calendar_connections set sync_token = null;` —
+  prospective only, because all 6 rows are already NULL.
+
+**NOT REACHED:** the multi-select CONTROL (`VoiceAssistantSettings.tsx:862` — the brief named the
+wrong file; `NotificationSettings.tsx` holds the already-multi-select global channel prefs); the
+digest renderer's live wire-up at `notification-delivery:239` (one line, written verbatim in
+`IMPL-digest-builder.md`); independent verifier for the journey lanes.
+
+### Live defects found while doing this — OUT OF SCOPE, owner not yet asked
+- **Delta sync is not incremental.** All 6 `calendar_connections` rows have `sync_token = NULL`
+  while rows sync daily, so every sync takes the full-fetch branch. `update_calendar_sync_token`'s
+  result is UNCHECKED at both call sites — a silent failure would look exactly like this.
+- **Three more UTC-vs-user-timezone defects** in `notification-scheduler` — `:202` quiet hours,
+  `:280` due-today 9am, `:337` overdue 9am. Identical class to the digest bug just fixed.
+  `shouldSendAtLocalHour` is exported; one-line swap each.
+- `nightly-schedule-builder:432,:717` still inline their own `7` rather than importing
+  `MEETING_HORIZON_DAYS`.
