@@ -1709,3 +1709,35 @@ does not require a reinstall.** So the owner action shrinks from "add a scope, r
 checking whether a scope change was needed at all. The scopes were listed in my own earlier notes.
 **A rule correctly recalled is still the wrong answer when its premise was never tested** — and the
 test was one API call that cost forty seconds.*
+
+## ACT:slack-inbound — incoming webhooks are DEAD WEIGHT for us; do NOT reinstall — 2026-09-13
+Owner asked whether the `hooks.slack.com/services/…` URLs still help, and whether reinstalling breaks
+anything.
+
+### The webhooks are unreachable in our code
+`cloudflare/src/notify.ts:325` — `if (env.SLACK_BOT_TOKEN) return sendSlackViaBot(...)`. The bot token
+wins unconditionally; `SLACK_WEBHOOK_URL` is consulted only at :327, i.e. only when no bot token
+exists. And the Worker's own `wrangler secret list` (run 34766293446) shows **`SLACK_BOT_TOKEN` set
+and no `SLACK_WEBHOOK_URL` at all**. So those URLs are never reached by journey or Huddle.
+**They also could not do the job now even if wired in:** an incoming webhook is welded to ONE channel
+and cannot thread. Per-agent lanes and in-thread replies — the two things that make this feel like a
+conversation — are both impossible through a webhook. *That is why the n8n design used the OAuth bot
+token for posting and kept the webhooks for something else.*
+**Scope of this claim:** proven for journey + Huddle. I cannot prove nothing ELSE in the workspace
+uses them; n8n or another integration might. Absence from our code is not absence everywhere.
+
+### REINSTALLING IS A REAL RISK AND BUYS NOTHING
+**It buys nothing** because the thing DMs actually need — the `message.im` event subscription — is a
+subscription checkbox, not a scope, and `im:read`/`im:history` are ALREADY granted (proved by using
+them: `conversations.list?types=im` and `conversations.history` both returned `ok:true`).
+**And it risks breaking what works:** a reinstall issues a NEW `xoxb-` bot token and revokes the old
+one. The Worker holds `SLACK_BOT_TOKEN`; the moment it is revoked, outbound notifications, the
+history fetch AND the threaded reply all fail — the whole inbound feature goes down with it.
+*Calibration: that token-rotation behaviour is from secondary sources, not read from Slack's own docs.
+High confidence, not proven — and the asymmetry is what decides it: reinstalling has a known downside
+and no upside, so the evidence bar for NOT doing it is low.*
+
+**Recovery IF a reinstall has already happened** (or is ever needed): copy the new Bot User OAuth
+Token into the `SLACK_BOT_TOKEN` org secret in `deventerpriseds-org`, then dispatch
+`cloudflare-secret-sync.yml` with `apply=true`. journey-voice CANNOT read that secret itself —
+different org — so the cross-org bridge is the only route.
