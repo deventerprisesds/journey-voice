@@ -1641,3 +1641,37 @@ caller. That is a code read in huddle, not another query.
 ### C. Reinstall
 `https://api.slack.com/apps/A093F91755X/install-on-team` — needed after SCOPE changes (adding
 `message.im` would be one). A Request-URL change alone does not require it.
+
+## ACT:slack-inbound — memory gap ROOT-CAUSED and FIXED (4479276) — 2026-09-13
+Owner: *"this agent doesn't have the memory of the huddle agent… doesn't seem like a true post
+through proxy"*. **Two hypotheses died before the real one, and both deaths were cheap.**
+
+| # | hypothesis | verdict | what killed it |
+|---|---|---|---|
+| 1 | `CROSS_APP_TURN_SUBJECT` defaults to `dev@enterpriseds.io`, so turns run as the wrong user | **REFUTED** | `identity_cache`: `dev@` and `von.ellis@` both map to user_id `a3378f93` |
+| 2 | memory is owned by entra oid `a89e3652` ≠ identity `a3378f93`, so retrieval finds nothing | **REFUTED** | `scopeClause` filters ONLY on `scope` and `agent_id` — `owner_entra_oid` appears in INSERTs and in NO WHERE clause. Retrieval is not owner-scoped at all |
+| 3 | **the retrieval QUERY was too thin** | **CONFIRMED, and it is my code** | `runHuddleTurn:2478` builds it from `[data.text, ...data.history.slice(-14)]`, floor 0.3 — and I sent `history: []` |
+
+**The memory was never missing. The question was.** Asking *"what did I ask you yesterday"* with no
+history embeds a sentence about ASKING, which matches stored chunks about the things asked poorly,
+scores under 0.3, and returns nothing. Both refuted hypotheses were plausible, had a named line of
+config to blame and a fix to propose — *the habit that saved this was checking each one instead of
+shipping the first story that fit.*
+
+**Fix:** `fetchSlackContext` reads the thread (`conversations.replies`) or recent channel traffic,
+normalises Slack's OPPOSITE orderings (history newest-first, replies oldest-first) to oldest-first,
+maps our bot to `kind:'agent'` with the **channel's** agent id and humans to `kind:'user'`, and
+degrades to `[]` on any failure — context is an enhancement and must never cost the reply. An invalid
+`agentId` fails the endpoint's zod schema and would cost the whole turn, which is why the id comes
+from the channel and never from the message.
+
+**Evidence:** 27/27 tests (5 new: forwarding, thread-vs-channel source, author mapping, ordering,
+graceful degradation), 0 typecheck errors in the changed files, and the forwarding is
+**mutation-proved FIRED** — delete `history: history ?? []` and AC-S10 fails.
+
+**The mutation harness lied first, for the second time today.** It reported `PRE-DIRTY: 'AC-S10'
+ALREADY FAILS` while the suite was genuinely 27/27 — because I had named a test *"a **FAILED** context
+fetch must not cost the reply"*, and `mutate.sh` scans test OUTPUT for the must-fail pattern, so the
+name matched before any mutation existed. **I logged this exact defect this morning (`8f8e17a`) and
+then walked into it.** Renamed; it then FIRED. *A prose note about a trap does not stop you falling
+in it — which is the argument for the harness having a `NOT-APPLIED`/`PRE-DIRTY` state at all.*
