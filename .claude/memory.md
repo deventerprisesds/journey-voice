@@ -1237,3 +1237,23 @@ response, and `channel` is the thing queried — every field the n8n sub-workflo
 Scopes already held. So no public endpoint, no `url_verification` challenge, no 3-second ACK, no
 signature verification. Poll per channel since the last `ts`, split the channel name on `___` for
 the agent handle, route to HUDDLE (owner's decision), reply with the bot token in-thread.
+
+### Hardening — 2026-09-13: "committed != deployed" is now checkable, not rememberable
+Twice in one day a fix was committed, green, and NOT running: `execute-tool` deployed from a branch
+4 commits behind main (reverting `2fb90ac` in prod), and the success-flattening fix left live code
+still reading `success: cr?.success ?? true`. The second is the nastier shape — a neighbouring
+commit's auth fix HAD deployed, so the function looked current while one statement was stale.
+
+**What is now TRUE about the system:** `scripts/check-edge-deploy-drift.mjs` diffs each edge
+function's DEPLOYED body (Supabase Management API) against the tree, and
+`.github/workflows/check-edge-deploy-drift.yml` runs it after every *Deploy Supabase Functions* run.
+Exit `0`/`1`/`2` = match / DRIFT / could-not-check; the third means an unreachable API can never be
+read as a pass. Proved: 5/5 cases, D1 (one-line difference) mutation-proved FIRED.
+
+**Not yet ACTIVE:** GitHub only exposes `workflow_dispatch`/`workflow_run` for workflows on the
+DEFAULT branch, so the job starts firing when PR #26 merges. The script runs anywhere today with
+`SUPABASE_ACCESS_TOKEN` set (the org secret is spelled `SUPERBASE_ACCESS_TOKEN`).
+
+**The general lesson, which is the reusable part:** a failure mode that recurs AFTER the prose rule
+against it was written does not need a better-worded rule. It needs something that runs. Entry 7 in
+`.claude/accuracy-log.md` now points at the check instead of at a reminder.

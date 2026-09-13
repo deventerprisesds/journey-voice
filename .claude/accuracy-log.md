@@ -154,7 +154,21 @@ version 516) still read `success: cr?.success ?? true`. A live send proved it: t
 production revert of `2fb90ac`). What made it invisible is that a NEIGHBOURING commit's auth fix HAD
 deployed, so the function looked freshly updated while carrying a stale line a few statements away.
 "Some of my changes are live" reads exactly like "my changes are live".
-**Guard it implies:** for an edge function, read the deployed source and grep for the changed line
-before saying a fix is live. Partial freshness is the trap — check the LINE, not the file's vintage.
+**Guard — STRUCTURAL, not prose (2026-09-13, after the Stop gate flagged the recurrence).**
+The original wording here was a reminder — *"read the deployed source and grep for the changed
+line"* — which is the form this repo has already shown to fail: the reminder existed, and the
+defect recurred anyway. Replaced by a check that RUNS:
+- `scripts/check-edge-deploy-drift.mjs` fetches each function's DEPLOYED body from the Supabase
+  Management API and diffs it against the tree. Exit **0** match / **1** DRIFT / **2**
+  COULD-NOT-CHECK — the third exists so an unreachable API can never read as a pass.
+- `.github/workflows/check-edge-deploy-drift.yml` runs it on demand AND automatically after every
+  *Deploy Supabase Functions* run, which is when the answer is cheapest.
+- `scripts/check-edge-deploy-drift.test.mjs` proves it against a local stand-in API: **D1, a
+  ONE-LINE difference is drift**, is the headline because that is the real defect's shape. 5/5,
+  D1 mutation-proved **FIRED**.
+**Limitation, stated rather than left to be found:** `workflow_dispatch`/`workflow_run` only see
+workflows on the DEFAULT branch, so the job cannot fire until PR #26 merges. The script runs
+anywhere a token is present.
+**Still the trap:** partial freshness — check the LINE, not the file's vintage.
 Fixed by dispatching `deploy-supabase-functions.yml`; re-proved by request 715120, which now returns
 `google_event: {"success":false,...}` with a populated `errors[]`.

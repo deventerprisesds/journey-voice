@@ -1030,3 +1030,39 @@ decision) -> reply via the bot token, in-thread. **The reply half is already bui
 Cron trigger, or a Supabase scheduled function.
 **NOT STARTED.** This is a new feature across journey and Huddle, outside the notification
 migration that was asked for. Awaiting a go-ahead.
+
+## ACT:edge-deploy-drift — a STRUCTURAL check for "committed != deployed" (3f2e786) — 2026-09-13
+**Why it exists:** the same defect twice in one day, and neither occurrence was visible from git.
+(a) `execute-tool` deployed from a branch 4 commits behind main, silently REVERTING `2fb90ac` in
+prod. (b) the success-flattening fix was committed and green while the LIVE function still read
+`success: cr?.success ?? true` — and a NEIGHBOURING commit's auth fix HAD deployed, so the function
+looked freshly updated while carrying a stale line a few statements away. **"Some of my changes are
+live" is indistinguishable from "my changes are live" by inspection**, which is exactly why the
+prose guard (accuracy-log entry 7: *"read the deployed source and grep for the changed line"*) did
+not hold — it already existed when (b) happened.
+
+**What was built:**
+
+| file | role |
+|---|---|
+| `scripts/check-edge-deploy-drift.mjs` | fetches each function's DEPLOYED body from the Supabase Management API (`/v1/projects/wwxgajrtmslzklnyplah/functions/{slug}/body`) and diffs it against this tree |
+| `scripts/check-edge-deploy-drift.test.mjs` | proves the checker detects drift, against a local stand-in API |
+| `.github/workflows/check-edge-deploy-drift.yml` | runs it on demand and automatically after every *Deploy Supabase Functions* run |
+
+**Exit-code contract — the 2 is the point.** `0` every checked function matches · `1` DRIFT · `2`
+COULD-NOT-CHECK (no token / API error). A checker that cannot reach the API must never be mistaken
+for one that checked and found nothing: *absent evidence is not a pass*, applied to the guard itself.
+
+**Evidence (observed, not asserted):** `node scripts/check-edge-deploy-drift.test.mjs` → **5/5
+pass**. D1 (*a one-line difference is DRIFT*) is the headline because that is the real defect's
+shape, and it was **mutation-proved FIRED** — with the comparison neutered, D1 failed. D5 proves an
+unreachable API exits 2, not 0. Run with no token: exits **2**.
+
+**Limitation, stated rather than left to be discovered:** GitHub only offers
+`workflow_dispatch`/`workflow_run` for workflows on the DEFAULT branch, so this job **cannot fire
+until PR #26 merges**. The script itself runs anywhere a `SUPABASE_ACCESS_TOKEN` is present.
+**Secret name is `SUPERBASE_ACCESS_TOKEN`** — the typo is real and load-bearing;
+`deploy-supabase-functions.yml` reads the same misspelling.
+
+**Supersedes:** the prose guard in `.claude/accuracy-log.md` entry 7, rewritten in the same commit
+to point at the check rather than at a reminder.
