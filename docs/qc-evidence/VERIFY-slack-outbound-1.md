@@ -224,3 +224,98 @@ Matches source exactly: `title ? \`*${title}*\n${body ?? ''}\` : (body ?? '')`. 
 **VERDICT: CONFIRMED.**
 
 ---
+
+## C8 — Mutation independence (own anchors, read from the file, not recalled)
+
+Anchors extracted via `grep`, matched exactly once each before mutating (`grep -c` = 1 for both).
+
+**AC-N9b** — reinstate "trust HTTP status instead of the JSON body":
+```
+mutate.sh src/notify.ts anchor-n9b.txt replacement-n9b.txt "npx tsx --test src/notify.test.ts" AC-N9b
+  anchor:      if (data?.ok) {
+  replacement: if (res.ok) {
+```
+**Result: `FIRED: 'AC-N9b' failed with the defect reinstated. The guard is real.`**
+`restored: src/notify.ts matches HEAD` / `tree clean: 'AC-N9b' passes again on the restored tree`.
+
+Note on the harness's known name-collision bug (flagged in the brief): `AC-N9b` does not contain
+the substring `FAIL`, so the PRE-DIRTY false-positive described in the source comment did not apply
+here — no PRE-DIRTY was reported, and none was expected.
+
+**AC-N9e** — reinstate "a webhook can beat the bot token":
+```
+mutate.sh src/notify.ts anchor-n9e.txt replacement-n9e.txt "npx tsx --test src/notify.test.ts" AC-N9e
+  anchor:      if (env.SLACK_BOT_TOKEN) return sendSlackViaBot(env, title, body, opts);
+  replacement: if (env.SLACK_BOT_TOKEN && !((opts.webhook || '').trim() || env.SLACK_WEBHOOK_URL)) return sendSlackViaBot(env, title, body, opts);
+```
+(Minimal single-line mutation: bot-token dispatch is suppressed whenever ANY webhook — caller or
+env — is also present, exactly reinstating "webhook beats bot token".)
+
+**Result: `FIRED: 'AC-N9e' failed with the defect reinstated. The guard is real.`**
+`restored: src/notify.ts matches HEAD` / `tree clean: 'AC-N9e' passes again on the restored tree`.
+
+`git status --short` and `git diff --stat` after both runs: **empty** — tree fully restored.
+
+**VERDICT: CONFIRMED.** Both guards are real, not inert; neither NOT-APPLIED.
+
+---
+
+## C9 — `ChannelResult.status` union vs every literal actually returned
+
+Declared union (line 62): `'sent' | 'failed' | 'not_configured' | 'unsupported' | 'not_implemented'`
+
+`grep -n "status:" src/notify.ts` (all non-comment hits, both `sendEmail` and Slack/dispatch code):
+
+| Literal returned | Line(s) | In union? |
+|---|---|---|
+| `'not_configured'` | 182, 244, 304 | yes |
+| `'failed'` | 185, 206, 208, 273, 277, 325, 327 | yes |
+| `'sent'` | 203, 265, 322 | yes |
+| `'unsupported'` | 421, 437 | yes |
+| `'not_implemented'` | 425 | yes |
+
+Every literal `status:` value assigned anywhere in the file is one of the five union members; all
+five union members are actually produced somewhere (no dead member either). `not_implemented` —
+the member the file's own comment says was once missing — is present in both the union (line 62)
+and its single call site (line 425, the `NOT_IMPLEMENTED_HERE`/`google_event` branch).
+
+Re-affirming the file's own warning: `tsx --test` does not typecheck (confirmed by re-reading, not
+re-running — this is a static claim about the tool, not something a passing suite could prove
+either way), so this reconciliation was done by **reading the code**, not by trusting C1's green
+suite.
+
+**VERDICT: CONFIRMED.**
+
+---
+
+## Summary
+
+| # | Claim | Verdict |
+|---|---|---|
+| C1 | suite 21/21 | CONFIRMED (pre-existing, on disk) |
+| C2 | bot beats ANY webhook | CONFIRMED |
+| C3 | HTTP 200 + `ok:false` reported as failure, error preserved | CONFIRMED |
+| C4 | channel/thread_ts on both transports, GET canonical + alias params | CONFIRMED |
+| C5 | no channel/no default → `not_configured`, zero requests | CONFIRMED |
+| C6 | webhook path states channel/thread were ignored | CONFIRMED |
+| C7 | adversarial: no crash on malformed bodies; no real token leak; slackText degrades safely | CONFIRMED (2 low-severity, non-exploitable hardening gaps logged as extra findings) |
+| C8 | mutation independence, AC-N9b and AC-N9e | CONFIRMED — both FIRED, tree restored clean |
+| C9 | status union reconciles with every literal | CONFIRMED |
+
+**Extra findings (not claim failures, logged per the brief's instruction):**
+1. `sendSlackViaBot` checks `if (data?.ok)` (plain truthiness) rather than `=== true`. A non-boolean
+   truthy `ok` value (e.g. the JSON string `"false"`, or the number `1`) in a `chat.postMessage`
+   response body is reported as `sent`. Not reachable via any caller-controlled input in this file —
+   the bot path always targets the hardcoded `https://slack.com/api/chat.postMessage` — so this
+   would require Slack's own API to violate its documented boolean contract, or a MITM. Recommend
+   `=== true` for defense in depth; not a functional defect against any real Slack response.
+2. The `catch (e)` blocks in `sendEmail`, `sendSlackViaBot`, and the webhook branch of `sendSlack`
+   put `e.message` into `detail` with no redaction. No real code path was found where this leaks
+   the bot token (a realistic `fetch` network-error throw contains no header/token content), but
+   the code does not actively defend against a future HTTP client whose thrown error happens to
+   echo request headers. Recommend stripping any `Bearer <token>`-shaped substring from `e.message`
+   before it reaches a response body, as defense in depth.
+
+**Overall: 9/9 claims CONFIRMED against C1's pre-existing verdict plus this run's independent
+re-derivation of C2-C9.** No REFUTED claims. No claim NOT_REACHED — the full budget was not
+required.
