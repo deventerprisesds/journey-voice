@@ -949,3 +949,28 @@ Not possible, and now unnecessary. A webhook URL is minted by an install-time co
 not returned by any read API — the two plausible method names both answer `unknown_method`
 unauthenticated, against a `chat.postMessage` control that answers `not_authed`. With the bot token
 working, no webhook URL is needed at all: one token posts to every channel.
+
+## ACT: "no email in von.ellis@" — THEY WERE ALWAYS THERE; MY PROBE WAS WRONG — 2026-09-13
+Owner reported no email in von.ellis@. I had twice concluded "sent but not delivered" from mailbox
+probe runs. **Both conclusions were wrong.** A whole-mailbox, date-ordered read
+(eds run 34763395360) found both messages sitting unread:
+
+    2026-09-13T14:39:15Z  Dev@ -> Von.Ellis@  "Test- addressed to von.ellis directly"   read=False
+    2026-09-13T13:13:24Z  Dev@ -> Von.Ellis@  "Test- journey email to von.ellis (...)"  read=False
+
+The Inbox FOLDER holds one message, from Sept 7 — a rule files nearly everything elsewhere, exactly
+as the owner had already told me ("I have a rule that forward emails from dev@ to a folder").
+**EMAIL delivery has been working the entire time, to both addresses.**
+
+### Two probe defects behind the false negatives, both found by re-reading rather than re-asserting
+1. **Three folders are not a mailbox.** The probe read `inbox`/`sentitems`/`junkemail` only, so a
+   rule-filed message was invisible. Reporting that as "did not arrive" is the same error as
+   answering from a proxy instead of the primary source — three folders were a proxy for "the
+   mailbox". Fixed: `/messages` spans every folder.
+2. **`$search` orders by RELEVANCE, not time.** The first whole-mailbox fix returned JULY messages
+   and none from today, because a `$top` cut can exclude the newest. Reading THAT as "not
+   delivered" would have been the identical false absence one layer down. Fixed: `$filter` on
+   `receivedDateTime` with an explicit descending `$orderby`, which is time-ordered by construction.
+
+**Standing lesson:** a probe that looks in a subset must never report absence from the whole. State
+what was searched, or search everything.
