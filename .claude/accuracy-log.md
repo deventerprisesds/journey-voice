@@ -73,3 +73,63 @@ predicts.
 required, how much verification is needed — grep every attached repo's `CLAUDE.md` for an
 existing rule on it. A process question is a fact question. And the structural fix is to teach
 the gate the tiering, not to add another line about it.
+
+
+## 2026-09-13 — three corrections from the digest-delivery build
+
+### 1. I described the partial-failure defect backwards, twice, and the AC inherited it
+
+**Claim.** I told the owner "one non-2xx marks the whole notification failed", then the AC pass
+wrote that `send-unified-notification:659` returns **207 on partial success** and the caller
+mis-reads it as 2xx.
+
+**Ground truth** (read by the channels lane): the line is
+`status: result.success ? 200 : 207` with `success = channelSuccesses.length > 0 || errors.length === 0`.
+A partial fan-out returned **HTTP 200**; 207 appeared only when NOTHING succeeded. So partial was
+indistinguishable from full success *even to a caller that checked the status code properly* —
+worse than either description.
+
+**The one source that settles it:** reading the `status:` expression, not the 207 literal. I
+pattern-matched "207 exists in this file" into "207 means partial", and the AC pass repeated it
+because my brief asserted it.
+
+**Guard earned:** a brief that ASSERTS a code fact must cite the expression, not the constant. The
+AC pass was told to verify every briefed claim and did — it caught this one. **Briefs are claims,
+and the cold reader is the check on the briefer.** That worked; keep it.
+
+### 2. "The case mismatch" was three instances, not one
+
+**Claim.** One caller/callee case mismatch, in `notification-delivery`.
+
+**Ground truth.** Also `twilio-voice-handler:1757` —
+`fallbackMode === 'email' ? 'email' : 'SLACK'` — so the **missed-call fallback silently dropped the
+email branch**. And the direction was not free: UPPERCASE is canonical by evidence, because
+`user_preferences.channels` STORES uppercase, so lowercasing would have needed a data migration.
+
+**Root cause:** I reported the instance the symptom pointed at. **A vocabulary mismatch is never
+one site** — it is every producer and every consumer of that vocabulary.
+
+**Guard earned:** the fix normalises at the sender's ENTRY, which repairs every caller at once.
+Structural, not prose.
+
+### 3. Two lanes built two alias tables, and the merge found a bug neither could see
+
+**Claim.** `canonicalChannel` (lowercase, renderer) and `toCanonicalChannel` (UPPERCASE, transport)
+were a naming collision to reconcile.
+
+**Ground truth.** They are genuinely different concerns — you deliver to `OUTLOOK_EVENT`, you never
+RENDER one — so neither was wrong. The real defect was the **second alias list**. Delegating one to
+the other immediately broke `canonicalChannel('app')`: the RENDERER knew four aliases the transport
+did not (`app`, `in_app`, `message`, `sms`). **That gap was invisible while both tables existed and
+would have stayed invisible.**
+
+**Guard earned, and it is the generalisable one:** parallel lanes will independently build the same
+lookup. Reconcile by making one DELEGATE to the other rather than by picking a winner — the
+delegation is what surfaces the entries only one side knew. Mutation-proven (`FIRED`) so the
+delegation cannot be quietly unpicked.
+
+**Process note:** the mutation harness first returned `NOT-APPLIED` (file dirty — correct refusal)
+then `UNDETERMINED` (my must-fail marker was a count, `fail 1`, while `mutate.sh:114` matches
+`not ok .*<name>`). Both were reported and re-run rather than worked around. **`UNDETERMINED` means
+nothing was proven — it is not a soft pass**, and I read the matcher rather than guessing a second
+literal.
