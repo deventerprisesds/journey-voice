@@ -181,4 +181,25 @@ describe('AC-CH-3/AC-CH-4 — a partial fan-out is NEVER recorded as a success (
     assert.match(src, /summary\.outcome === 'partial'/);
     assert.match(src, /failure_reason: `partial: \$\{summary\.reason\}`/, 'a partial row must carry a non-null failure_reason so no query reads it as clean success');
   });
+
+  it('the unified body is RENDERED, not the raw phone script interpolated (F-script-leak)', () => {
+    const src = read(DELIVERY);
+    // THE DEFECT, measured: notification-delivery built every channel's body as
+    //   `Time for your ${name.toLowerCase()}. ${callConfig.context || ''}`
+    // and `context` is the phone script the assistant reads aloud, so a Morning Kickstart
+    // EMAIL arrived reading "BRANCH 1... Greet: Hello Sir". renderScheduledCall keeps the
+    // script for `phone` and returns a human sentence for read channels; digestContent.test
+    // proves that behaviour, and this proves the delivery function actually calls it.
+    assert.doesNotMatch(
+      src,
+      /body: `Time for your \$\{[^`]*\}\. \$\{callConfig\.context/,
+      'the exact leak: the phone script interpolated straight into the unified body',
+    );
+    assert.match(
+      src,
+      /body: renderScheduledCall\(\{[\s\S]{0,200}?\}\)\.body/,
+      'the unified invoke must take its body from renderScheduledCall',
+    );
+    assert.match(src, /import \{ renderScheduledCall \} from "\.\.\/_shared\/digest-content\.ts"/);
+  });
 });

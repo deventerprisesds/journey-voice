@@ -7,6 +7,7 @@ import {
   channelResultKey,
   summarizeDelivery,
 } from "../_shared/notification-channels.ts";
+import { renderScheduledCall } from "../_shared/digest-content.ts";
 
 // Version derived from centralized config
 const DELIVERY_VERSION = `${GLOBAL_VERSION}-${FUNCTION_IDS.DELIVERY}`;
@@ -279,7 +280,18 @@ serve(async (req) => {
               userId,
               taskId: null,
               title: callConfig.call_name || callNotification.title,
-              body: `Time for your ${(callConfig.call_name || callNotification.title).toLowerCase()}. ${callConfig.context || ''}`,
+              // `callConfig.context` is the PHONE SCRIPT ("BRANCH 1... Greet: Hello Sir").
+              // This line used to append it verbatim to every channel, so an email or a
+              // Slack message arrived carrying the raw script the assistant reads aloud.
+              // renderScheduledCall keeps the script for `phone` and returns a human
+              // sentence for every read channel -- and throws CallScriptLeakError rather
+              // than let a script through. Slack and email are both read channels, so the
+              // single rendered body is correct for the whole unified fan-out.
+              body: renderScheduledCall({
+                callName: callConfig.call_name || callNotification.title,
+                context: callConfig.context || '',
+                channel: 'email',
+              }).body,
               channels: unifiedChannels
             }
           });
