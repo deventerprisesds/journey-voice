@@ -226,3 +226,42 @@ not have worked on any run, for anyone. `send-digests` is the replacement path.
 **BLOCKING, owner action (unchanged and now harder-gating):**
 - `supabase secrets set APP_BASE_URL=https://<app-host>` — every digest fails closed without it.
   `send-digests` returns 503 rather than emailing a dead relative link.
+
+---
+
+### ACT:digest-delivery-journey — UPDATE 2026-09-13 (verifier loops 1 + 2 closed)
+
+**Verification: loop 1 (6/10 claims, killed mid-run) + loop 2 (14 CONFIRMED / 1 REFUTED / 0 NOT
+REACHED, 7 min of a 25-min budget). Artifacts `.claude/VERIFY-digest-delivery-loop{1,2}.md`.**
+175/175 tests. 31/32 mutations FIRED cumulatively; the 32nd reported INERT (behaviourally
+equivalent → NOT PROVEN, not passed).
+
+**Every loop-2 finding, and what happened to it:**
+| # | Finding | Outcome |
+|---|---|---|
+| 1 | commit `f5556e4` certified a prose fix it did not make | FIXED `4de2964` — the comment now says journey cannot produce a stand-up alone |
+| 2 | `meetings.test.ts` outside the `npm test` glob (ran by hand only) | FIXED — glob now includes `supabase/functions/_shared/*.test.ts` |
+| 3 | `handleToggleCallCommsMode` untested (the one unprovable claim) | FIXED — extracted to `src/utils/commsModes.ts`, 9 tests, 3/3 mutations FIRED |
+| 4 | `mutate.sh` matcher still armed for the next caller | FIXED in eds-claude-skills PR #89, 3 regression cases, 28 guard suites green |
+| 5 | "`app_message` script leak still open" | **NOT A DEFECT — verifier misread the mechanism.** See below |
+| 6 | `tsc` typechecks no edge function | ACKNOWLEDGED, see below |
+| challenge | the `send-digests` loop is untested and cheaply extractable | DONE — `_shared/digest-run.ts`, 12 tests incl. a brute-forced completeness sweep, 3/3 mutations FIRED |
+
+**Finding 5 REJECTED after grounding — do not "fix" this again.** The verifier reported
+`notification-delivery:245-258` as the same verbatim script leak as the email path. It is not.
+- Email/Slack (the real defect): `callConfig.context` was concatenated **directly into `body`** and
+  shipped verbatim — a phone script reached a human unchanged.
+- `app_message`: `context` → `buildCallContext` → `contextualInstructions` → `userInput` to
+  `hybrid-assistant-api` with *"Generate your opening message for this check-in based on the context
+  above"* (`send-chat-message/index.ts:517`). The user receives the **LLM's generated message**.
+That is an LLM-generation path by design — the same role the script plays on a phone call — not
+verbatim delivery, so AC-REND-1 is not breached there.
+
+**Finding 6 stands and is worth knowing:** `tsconfig.app.json` includes `src` only, so `npx tsc
+--noEmit` typechecks **no edge function**. A green `tsc` reads as coverage it does not have. The
+widened test glob partly compensates (`_shared/*` is now imported by the node suite, which does
+typecheck-by-execution), but `supabase/functions/*/index.ts` remains unchecked by anything —
+which is exactly how a raw NUL byte survived in `send-digests/index.ts` through a green suite.
+
+**STILL BLOCKING, owner action:** `supabase secrets set APP_BASE_URL=https://<app-host>` + add to
+the `deploy-supabase-functions.yml` secret sync. Every digest fails closed without it.
