@@ -1335,3 +1335,31 @@ app_id, which yields the exact `https://api.slack.com/apps/<APP_ID>/event-subscr
 brand-new workflow cannot be dispatched from a feature branch, whereas an EXISTING one can be
 dispatched AT a ref (which is how cloudflare-secret-sync.yml ran from the branch earlier). It rides on
 PR #84.
+
+## ACT:slack-inbound — the app is identified; exact Event Subscriptions URL — 2026-09-13
+Owner supplied the Slack app credentials screen. **App: "Custom n8n to EDS Comms", App ID
+`A093F91755X`, created 2025-06-25.** So the page to change is:
+
+    https://api.slack.com/apps/A093F91755X/event-subscriptions
+
+and the Request URL to put in it:
+
+    https://twilio-openai-bridge.purple-bush-495e.workers.dev/slack/events
+
+**This also settles the near-miss recorded above.** The n8n export contains `app_id: A016X0AT6QL`,
+and `A016X0AT6QL != A093F91755X` — that one really is n8n's own Slack app, captured inside a message
+payload, exactly as the context suggested. Had I built a deep link from the export's id it would have
+pointed at the wrong app. *Shape is not identity; the owner's own app screen is the ground truth.*
+
+**The app NAME is now misleading and worth renaming later.** "Custom n8n to EDS Comms" describes the
+vehicle it was built for, and n8n is being removed from this path — the same defect as the Worker
+still being called `twilio-openai-bridge` when it now serves /notify and /slack/events and touches no
+Twilio code. Not urgent; a name that states a ROLE rather than a vintage is the standing convention.
+
+**SECURITY — the Verification Token is now exposed and should be REGENERATED.** The screenshot shows
+it in plaintext (deliberately not reproduced here, and it is NOT to be committed anywhere). It is a
+deprecated Slack credential that can still verify that requests come from Slack, so anyone holding it
+can satisfy a receiver that checks it. **Our route does NOT use it** — `verifySlackSignature` checks
+the v0 HMAC signing secret only, so this exposure does not weaken `/slack/events`. The risk is any
+OTHER consumer that still accepts the verification token. One click: App Credentials ▸ Verification
+Token ▸ **Regenerate**. The Signing Secret and Client Secret stayed masked in the image.
