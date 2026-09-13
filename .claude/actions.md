@@ -451,3 +451,35 @@ Local HEAD had reverted to `origin/main` (`7123233`) with `.claude/actions.md` a
 direction `101 behind / 0 ahead` → `reset --hard origin/<branch>` correct and lossless; all four
 commits were already in the object store. Restored to `8fc7f73`, suite 89/89 green. Diff of the
 rewound tree saved to a patch before touching anything.
+
+## ACT: notify endpoint HOST — owner decision 2026-09-13 — Cloudflare now, Azure later
+**Owner:** *"I'm leaning towards keeping the cloudflare option if it is free and we will plan to
+transfer to azure once other higher priority items are settled"* + *"we shouldn't need an entire new
+azure app rather than extending the resources we have… we are limited on how many static apps we can
+make. it seems we already have a function app that can be reused."*
+
+**DECISION — Cloudflare Worker `/notify` STAYS for now.** Marginal cost is zero: the Worker is
+already deployed for the Twilio voice path, `/notify` adds ~6 requests/day against a 100k/day free
+allowance, and the Durable Object uses `new_sqlite_classes` (the free-tier-eligible SQLite backend),
+so no plan change is triggered by this route.
+
+**DEFERRED — Azure migration, and the SHAPE is now decided so it is not re-litigated:**
+- **EXTEND `job-platform-api`** (the existing Function App in `EnterpriseDS_ResourceGRP`). Do NOT
+  create a new Function App. My earlier "option A — new `enterpriseds-journey-api`" is WITHDRAWN:
+  the owner corrected it, and it was the same rebuild-instead-of-extend error the org rule forbids.
+- **NO Static Web App is needed at all.** `/notify` is API-only — no MSAL, no Entra app, no Google
+  broker. The owner's SWA scarcity does not bind on this work, and any future plan that provisions
+  one for `/notify` is wrong.
+- Porting cost is small and measured: of 250 lines in `notify.ts`, only the 56-line `handleNotify`
+  is host-shaped, and it already uses standard `Request`/`Response`. The Graph token exchange,
+  `sendEmail`, `sendSlack`, `parseChannels`, `parseProfile` and all 9 tests are plain `fetch` and
+  objects with ZERO Cloudflare API.
+
+**OPEN — unchanged by this decision:** (1) deploy the Worker + send one real message, which settles
+whether `Mail.Send` is admin-consented — the only genuine unknown; (2) who renders the email body;
+(3) whether Slack survives. **NOT live:** Worker undeployed, `UNIFIED_WEBHOOK_URL` still n8n.
+
+**CAVEAT carried forward:** journey-voice is in org `deventerprisesds` while the `AZURE_*` secrets
+are org secrets of `deventerpriseds-org`. Whether journey-voice is on that secret's access list is
+UNVERIFIED. If it is not, the Graph sender cannot authenticate on EITHER platform — so this is a
+shared gate, not a Cloudflare-vs-Azure tiebreaker.

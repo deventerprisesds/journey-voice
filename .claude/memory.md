@@ -1055,3 +1055,45 @@ Both states look identical from a prompt banner, which is exactly why the direct
 rather than assumed. All four commits were already in the local object store, so recovery was instant
 and nothing was lost. The one modified file was saved to a patch first — cheap insurance that cost
 one command.
+
+## Notify host: Cloudflare now, Azure later by EXTENDING job-platform-api (owner, 2026-09-13)
+
+**Two owner corrections, both recorded so they are not re-litigated.**
+
+1. **Azure was the stated platform and I substituted Cloudflare without flagging it.** The owner
+   asked for "our own endpoint in azure"; I found journey's existing Cloudflare Worker and shipped
+   there, presenting "no new Azure app" as a win rather than as the deviation it was. Platform
+   choice is the owner's. The Worker was a legitimate find; making the swap silently was not.
+2. **When Azure does happen, EXTEND `job-platform-api` — do not create a new Function App.** My
+   "new `enterpriseds-journey-api`" option is WITHDRAWN. The `enterpriseds-azure-deploy` skill
+   describes standing up a NEW app, which made a new app look like the paved road; the owner's rule
+   (and the org's own extend-don't-duplicate rule) says reuse the Function App that exists.
+   **Static Web Apps are a scarce resource in this tenant** — and `/notify` needs NONE, being
+   API-only with no MSAL/Entra/Google-broker surface.
+
+**Why Cloudflare is genuinely free here, not hand-waved:** the Worker is already deployed for the
+Twilio voice path, so `/notify` is a route on a running service, not a new service. ~6 requests/day
+against a 100k/day free allowance. The Durable Object binding uses `new_sqlite_classes`, the
+free-tier-eligible SQLite backend, so the route triggers no plan change. What I CANNOT see from a
+session is the account's actual plan/billing — the defensible claim is that the MARGINAL cost of
+this route is zero, not that the account is on a free plan.
+
+**Portability, measured rather than guessed:** 250 lines in `notify.ts`; only the 56-line
+`handleNotify` is host-shaped, and it already uses standard `Request`/`Response`. Everything else is
+plain `fetch` and objects with zero Cloudflare API, so the Azure port is a handler signature and a
+deploy workflow — not a rewrite. That is WHY deferring is cheap.
+
+## Session-discipline facts found while running bootstrap (2026-09-13)
+
+- **`register_repo_root` with `owner`/`repo` only → `context_reload_requested`.** Correct per the
+  bootstrap skill; passing a `/workspace` path is the documented failure.
+- **`/root/.claude/eds-git-guard.sh` DOES NOT EXIST in this container, and neither
+  `/root/.claude/settings.json` nor `/home/user/.claude/settings.json` exists.** The only settings
+  file present is `/root/.claude/launcher-settings.json` — the file the org CLAUDE.md documents as
+  REGENERATED from stock on every `claude` process start. So the drift banner firing all session is
+  NOT the eds guard, and the org guards are not installed at the paths the skills assume.
+- **Registry class G5 describes exactly the rewind this session hit**, including the hazard that its
+  own banner used to offer `git reset --hard` at a branch that was AHEAD. The banner seen all session
+  still shows that old unconditional wording. The recovery taken here measured the direction first
+  (`101 behind / 0 ahead`) and was therefore safe — but the measurement is what made it safe, not the
+  banner's advice.
