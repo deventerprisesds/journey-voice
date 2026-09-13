@@ -927,13 +927,29 @@ async function callUnifiedWebhook(
       } else if (responseJson?.channelResults) {
         result.channelResults = responseJson.channelResults;
       } else if (responseJson?.results) {
+        // journey's own /notify answers {ok, status, detail} per channel — NOT {success}.
+        // This branch read `cr?.success ?? true`, and since `success` is absent the `?? true`
+        // turned an explicit failure into a pass. Measured live 2026-09-13: the endpoint
+        // correctly returned `{ok:false, status:"not_configured", detail:"Graph app credentials
+        // are not set on the Worker"}` and this function reported `success: true` with an EMPTY
+        // errors[] — the exact silent-success pattern that let the n8n outage run for days,
+        // reproduced one layer up.
+        //
+        // `ok` is read FIRST and the default is FALSE. A shape this code does not recognise is
+        // now "not proven delivered" rather than "delivered": for a notification, a false
+        // negative costs a duplicate, a false positive costs a message nobody knows was lost.
         for (const [channel, channelResult] of Object.entries(responseJson.results)) {
           const cr = channelResult as any;
+          const ok = cr?.ok ?? cr?.success ?? false;
+          const detail = cr?.detail ?? cr?.error;
           result.channelResults[channel.toLowerCase() as keyof typeof result.channelResults] = {
-            success: cr?.success ?? true,
-            error: cr?.error,
+            success: ok,
+            error: ok ? undefined : (detail ?? `channel reported status "${cr?.status ?? 'unknown'}"`),
             details: cr
           };
+          if (!ok) {
+            result.errors.push(`${channel}: ${cr?.status ?? 'failed'}${detail ? ` — ${detail}` : ''}`);
+          }
         }
       } else {
         for (const channel of payload.channels) {

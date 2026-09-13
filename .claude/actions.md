@@ -483,3 +483,51 @@ whether `Mail.Send` is admin-consented — the only genuine unknown; (2) who ren
 are org secrets of `deventerpriseds-org`. Whether journey-voice is on that secret's access list is
 UNVERIFIED. If it is not, the Graph sender cannot authenticate on EITHER platform — so this is a
 shared gate, not a Cloudflare-vs-Azure tiebreaker.
+
+## ACT: /notify cutover LIVE — 2026-09-13. Chain works; blocked on ONE GitHub secret grant.
+Owner: *"presenting options/decisions that could be determined by a test rather than asking me
+slows progress."* Correct — deploying WAS the test. Stopped asking, ran it.
+
+**Done and verified live** (from the DB's network path; the CCR sandbox's egress denies workers.dev):
+| Step | Evidence |
+|---|---|
+| Worker deployed | run 34757357880 success; `/health` 200 `{"status":"ok","version":"2026-03-11-cf-v9"}` |
+| Voice path intact | `/call` → 426 (upgrade required), version string unchanged |
+| Auth wired | `/notify` → 401 with no secret AND with a wrong one |
+| `UNIFIED_WEBHOOK_URL` repointed | new deploy step ran; journey now calls its own endpoint |
+| End-to-end through journey's real path | 200, reached the channel switch, truthful per-channel result |
+
+**Two defects the LIVE test caught that unit tests had not:**
+1. `405 POST only` — /notify shipped POST-only; `send-unified-notification` fetches with GET
+   (index.ts:839). Fixed AT THE ENDPOINT (accepts GET+POST) rather than at the caller, because
+   changing the caller would also have broken rollback to n8n, which is GET-only. AC-N8a–d added.
+2. journey flattened the Worker's honest `{ok:false,status:"not_configured"}` into
+   `success:true` with an EMPTY errors[] — `cr?.success ?? true`, and `success` is absent from
+   the /notify shape. Now reads `ok` first and DEFAULTS TO FALSE. Same silent-success class that
+   hid the n8n outage, reproduced one layer up.
+
+**Also:** journey now AUTHENTICATES the webhook call (the n8n one was unauthenticated — anyone
+with the URL could send mail as the user). Header, not query param, because this function logs the
+full query string. And `deploy-cloudflare.yml` got the staleness guard it was missing — the Worker
+now serves the voice path AND /notify, and was still deployable from a ref behind main.
+
+**THE ONE BLOCKER, and it is not code.** Deploy log, verbatim:
+```
+AZURE_CLIENT_ID:            (empty)
+AZURE_CLIENT_SECRET:        (empty)
+AZURE_TENANT_ID:            (empty)
+##[warning]AZURE_CLIENT_ID is empty — skipping.
+✨ Success! Uploaded secret ***     <- JOURNEY_PROXY_TOKEN, same step, worked
+```
+journey-voice is in org **deventerprisesds**; the `AZURE_*` secrets are org secrets of
+**deventerpriseds-org**. GitHub passes an EMPTY STRING for a secret a repo cannot read — it never
+errors. This is the cross-org caveat flagged before the build, now confirmed as the actual blocker.
+
+**Owner action:** grant `deventerprisesds/journey-voice` access to `AZURE_CLIENT_ID`,
+`AZURE_CLIENT_SECRET`, `AZURE_TENANT_ID` (Org → Settings → Secrets → each → Repository access), or
+add them to journey-voice's own repo secrets. Then re-run Deploy Cloudflare Worker and the next
+scheduled call sends real mail.
+
+**STILL UNKNOWN until then:** whether Graph `Mail.Send` is admin-consented. Cannot be tested while
+the credentials are absent. **NOT a regression:** n8n delivered nothing either, and /notify now says
+so out loud instead of answering "Workflow was started".
