@@ -139,3 +139,88 @@ caller reading the result cannot mistake this for a correctly targeted, threaded
 **VERDICT: CONFIRMED.**
 
 ---
+
+## C7 — ADVERSARIAL
+
+**Independent probe:** `/tmp/.../scratchpad/probe-c7.mjs`, own fetch mocks, `chat.postMessage`
+bot-token path unless noted.
+
+### Non-JSON / empty / 500 bodies — honest degradation, never a crash
+
+| Case | HTTP | Body | `threw` | `status` | `detail` |
+|---|---|---|---|---|---|
+| non-JSON | 200 | `<html>not json</html>` | `null` | `failed` | `chat.postMessage C0X: http 200` |
+| empty | 200 | `''` | `null` | `failed` | `chat.postMessage C0X: http 200` |
+| 500, non-JSON | 500 | `Internal Server Error` | `null` | `failed` | `chat.postMessage C0X: http 500` |
+| 500, JSON error | 500 | `{"ok":false,"error":"internal_error"}` | `null` | `failed` | `chat.postMessage C0X: internal_error` |
+
+No case threw. Confirms `res.json().catch(() => ({}))` absorbs a JSON-parse failure and the
+`data?.error ?? \`http ${res.status}\`` fallback produces an honest, non-crashing failure detail
+in every case. **No defect.**
+
+### Can ANY input make it report `sent` when nothing was delivered? — YES, one real gap found
+
+Tried a network-level fetch throw (realistic `TypeError('fetch failed')`) — correctly reported
+`failed`, no false-sent. **But the JSON-body truthiness check IS exploitable by a non-boolean `ok`
+value:**
+
+| Slack body | `resultStatus` | `resultOk` |
+|---|---|---|
+| `{"ok":1,"ts":"1.1"}` | **`sent`** | **`true`** |
+| `{"ok":"false","ts":"1.1"}` | **`sent`** | **`true`** |
+
+Source: `sendSlackViaBot` branches on `if (data?.ok)` — plain truthiness, not `=== true`. The
+JavaScript string `"false"` is truthy, so a response body carrying the STRING `"false"` for `ok`
+(rather than the boolean) is reported as a successful send. **Real Slack's API always returns a
+proper JSON boolean**, so this is not reachable through legitimate `chat.postMessage` traffic — it
+would need an adversarial or malformed responder (e.g. a caller-supplied `slackWebhook`/proxy URL
+is NOT in play here since this is the bot path, which always targets `https://slack.com/api/...`
+hardcoded — so the response would have to come from `slack.com` itself misbehaving, or a MITM).
+**EXTRA FINDING (low severity, not exploitable via any caller-controlled input in this codebase):**
+`if (data?.ok)` should be `if (data?.ok === true)` for defense in depth against a malformed/
+non-conformant response body.
+
+### Auth header + token leakage — header correct; NO leak on any real code path; one theoretical gap
+
+```json
+"authHeaderCheck": { "auth": "Bearer xoxb-SUPER-SECRET-TOKEN-abc123", "match": true }
+```
+Header format is exactly `Bearer <SLACK_BOT_TOKEN>`, matching Slack's requirement.
+
+Checked **every return path** in `sendSlackViaBot` for the token in `detail`:
+- success (`data.ok`): `detail` = `chat.postMessage ${channel}... ts=${data.ts}` — **no token.**
+- Slack-reported failure: `detail` = `chat.postMessage ${channel}: ${data.error}` — **no token.**
+- realistic thrown exception (`TypeError('fetch failed')`, no token anywhere in the throw):
+  `detail` = `'fetch failed'` — **no token.**
+
+**One theoretical gap, deliberately provoked, not a proven real leak:** the `catch (e)` block does
+`detail: e instanceof Error ? e.message : String(e)` with **no redaction**. I constructed a fetch
+mock whose thrown `Error.message` literally contained the token (to see whether anything downstream
+strips it) — it passed straight through into `detail` unredacted. This proves the code does not
+defend against an exception message containing the token; it does **not** prove any real HTTP
+client (fetch/undici) ever produces such a message — the realistic throw case above confirms
+ordinary network errors do not contain the token. **EXTRA FINDING (defense-in-depth gap, not a
+confirmed real leak):** no redaction on `e.message` before it reaches a JSON response body.
+
+**VERDICT on C7 as stated: CONFIRMED** — non-JSON/empty/500 bodies degrade honestly with no crash;
+the auth header is correct and the token was never observed leaking on any *realistic* code path.
+Two low-severity, non-exploitable-by-caller-input hardening gaps are logged above as extra findings
+per the brief's instruction to report defects the claims don't cover, not as refutations of C7.
+
+### `slackText()` — empty title / empty body / both / neither provided
+
+Probed via the observable webhook `text` field (the function itself is not exported):
+
+| title | body | output |
+|---|---|---|
+| `''` | `'onlybody'` | `'onlybody'` |
+| `'onlytitle'` | `''` | `'*onlytitle*\n'` |
+| `''` | `''` | `''` |
+| *(omitted entirely)* | *(omitted)* | `''` |
+
+Matches source exactly: `title ? \`*${title}*\n${body ?? ''}\` : (body ?? '')`. No crash, no
+`undefined`/`null` leaking into the rendered text in any combination.
+
+**VERDICT: CONFIRMED.**
+
+---
