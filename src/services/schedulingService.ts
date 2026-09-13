@@ -33,7 +33,18 @@ export interface ScheduledCall {
   enabled: boolean;
   callType: 'morning_standup' | 'midday_checkin' | 'eod_wrapup' | 'custom';
   context: string;
-  commsMode?: CommsMode; // Delivery method (default: 'phone')
+  /**
+   * Single delivery method. LEGACY but fully supported: every existing stored row has
+   * this and no `commsModes`, and notification-delivery falls back to it, so no
+   * migration is required. New writes should set `commsModes`.
+   */
+  commsMode?: CommsMode;
+  /**
+   * Multi-select delivery methods (default: `[commsMode ?? 'phone']`). Slack and email
+   * fan out together in ONE send-unified-notification invoke; app_message and phone are
+   * delivered on their own paths in the same run.
+   */
+  commsModes?: CommsMode[];
   fallbackMode?: CommsMode; // Fallback when primary fails (default: 'app_message')
   assistantId?: string;  // Which assistant sends the message (for chat/phone modes)
   daysOfWeek?: number[]; // 0=Sun,1=Mon,2=Tue,3=Wed,4=Thu,5=Fri,6=Sat
