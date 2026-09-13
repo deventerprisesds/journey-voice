@@ -22,3 +22,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Python bytecode. This repo gained its first committed .py files on 2026-09-13, when the inline
+# Python in two workflows was extracted to scripts/ to make those workflows parse. Anyone who
+# runs `python3 -m py_compile scripts/*.py` — the check that proves the extraction is valid —
+# leaves a __pycache__ behind, so ignore it rather than have every such check dirty the tree.
+__pycache__/
+*.py[cod]
