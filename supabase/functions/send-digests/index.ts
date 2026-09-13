@@ -42,6 +42,7 @@ import {
 import { loadStandupDigestPayload } from "../_shared/digest-source-standup.ts";
 import { loadMeetingsDigestPayload } from "../_shared/digest-source-meetings.ts";
 import { loadDailyBriefPayload } from "../_shared/digest-source-daily.ts";
+import { runDigestsForUser, digestRunIsComplete } from "../_shared/digest-run.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -156,67 +157,34 @@ serve(async (req) => {
         continue;
       }
 
-      const outcomes: SendOutcome[] = [];
+      // The loop itself lives in `_shared/digest-run.ts` so it can be TESTED: this file's only
+      // entry is `serve()` and nothing imports it, so while the loop lived here the silent-drop
+      // fix was undefended behaviour. Dependencies are injected; these are the real ones.
+      const outcomes: SendOutcome[] = await runDigestsForUser(
+        plan,
+        integrated,
+        {
+          loadDailyBrief: (userId, o) => loadDailyBriefPayload(supabaseClient, userId, o),
+          loadMeetings: (userId, o) => loadMeetingsDigestPayload(supabaseClient, userId, o),
+          resolveUserEmail: (userId) => resolveUserEmail(supabaseClient, userId),
+          loadStandup: (a) => loadStandupDigestPayload({ ...a, proxyToken }),
+          deliver: (userId, payload, channels) =>
+            deliver(supabaseClient, userId, payload, channels as DigestChannel[]),
+          // A deploy that cannot build an absolute link fails the run CLOSED rather than mailing a
+          // human a dead relative path.
+          isFatalConfigError: (err) => err instanceof MissingDeepLinkBaseError,
+        },
+        now,
+      );
 
-      // ONE loop over `plan.digests`, with the switch choosing each one's source. The earlier shape
-      // was three `if (resolveDigestSource(...) === "journey")` blocks, two of which were true for
-      // EVERY possible input -- the function can only return "huddle" for "standup" -- so they read
-      // as decisions while deciding nothing; and the third silently dropped the stand-up with no
-      // outcome row whenever this deployment was standalone. Driving the loop off the switch makes
-      // every digest account for itself: exactly one row per digest per user, every run.
-      for (const digest of plan.digests) {
-        const source = resolveDigestSource(digest, integrated);
-        const note = (ok: boolean, error?: string) =>
-          outcomes.push({ digest, channels: [], ok, error });
-        try {
-          let payload: DigestPayload | null = null;
-
-          if (digest === "daily_brief") {
-            // The 8am message: today's schedule, the current ranking, and a deep link to the
-            // drag-to-rank widget. journey's own day plan -- it owns scheduling.
-            payload = await loadDailyBriefPayload(supabaseClient, plan.userId, {
-              timezone: plan.timezone,
-              todayStr: plan.date,
-            });
-            // null = nothing scheduled AND nothing ranked. A calendar hold alone is not a brief.
-            if (!payload) { note(true, "empty_day"); continue; }
-
-          } else if (digest === "meetings") {
-            payload = await loadMeetingsDigestPayload(supabaseClient, plan.userId, {
-              now,
-              timezone: plan.timezone,
-            });
-            // null = no meetings WITH A PERSON in the horizon. The owner asked for this digest only
-            // when there ARE meetings, so silence here is the requirement, not a failure.
-            if (!payload) { note(true, "no_meetings"); continue; }
-
-          } else {
-            // STAND-UP. Its content is Huddle's: produced by Huddle's agents, about their own work.
-            // journey has no agents, so when this deployment is NOT integrated there is genuinely
-            // no stand-up to send and nothing to fall back to. Reported as its own outcome rather
-            // than skipped -- a run that quietly emitted two rows where three were planned is
-            // indistinguishable from a bug.
-            if (source !== "huddle") { note(true, "standup_requires_huddle"); continue; }
-
-            const email = await resolveUserEmail(supabaseClient, plan.userId);
-            if (!email) { note(false, "no_user_email"); continue; }
-
-            payload = await loadStandupDigestPayload({
-              userEmail: email,
-              date: plan.date,
-              timezone: plan.timezone,
-              proxyToken,
-              runId: `digest-${plan.date}-${plan.userId}`,
-            });
-            // Huddle's own change gate: nothing happened since the last stand-up.
-            if (!payload) { note(true, "nothing_to_report"); continue; }
-          }
-
-          outcomes.push(...(await deliver(supabaseClient, plan.userId, payload, plan.channels)));
-        } catch (err) {
-          if (err instanceof MissingDeepLinkBaseError) throw err; // fail closed, loudly
-          note(false, err instanceof Error ? err.message : String(err));
-        }
+      // The invariant, asserted at runtime and not only in tests: a planned digest that produced no
+      // row at all is the silent drop, and it is invisible in a report that lists only what DID
+      // happen. Logged rather than thrown -- the user's other digests already went out.
+      if (!digestRunIsComplete(plan, outcomes)) {
+        console.error(
+          `[send-digests] INCOMPLETE RUN for ${plan.userId}: planned ${JSON.stringify(plan.digests)}, ` +
+            `accounted ${JSON.stringify(outcomes.map((o) => o.digest))}`,
+        );
       }
 
       report.push({ userId: plan.userId, channels: plan.channels, date: plan.date, outcomes });
