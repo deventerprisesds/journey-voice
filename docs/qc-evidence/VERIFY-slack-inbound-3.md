@@ -77,3 +77,66 @@ restored: cloudflare/src/slack-events.ts matches HEAD
 tree clean: 'infinite-loop guard' passes again on the restored tree
 ```
 CONFIRMED at full depth as instructed (this claim never drops depth).
+
+## C2 — symbols guard catches a genuinely undefined symbol (MUTATION, FULL DEPTH)
+
+Inserted a real call to an undefined identifier (`totallyUndefinedSymbolXYZ();`) into
+`processMessageEvent`, ran `node scripts/undef-check.mjs --all`:
+```
+undef-check: 82 file(s) checked, 1 NEW undefined symbol(s), 0 known, 0 not analysable
+UNDEFINED SYMBOLS — ...
+  cloudflare/src/slack-events.ts:310  totallyUndefinedSymbolXYZ
+exit=1
+```
+Restored via `git checkout --`, confirmed `git diff --quiet` clean, re-ran: `0 NEW undefined
+symbol(s)`, exit=0. CONFIRMED at full depth (this claim never drops depth, per instructions).
+
+## C6 — signature verification fails closed (direct execution, not just the test suite)
+
+Called `verifySlackSignature` directly via `tsx`, bypassing the test file entirely:
+```
+verifySlackSignature('{}', '1', 'v0=aa', undefined)  -> {"ok":false,"reason":"signing_secret_not_configured"}
+verifySlackSignature('{}', '1', 'v0=aa', '')          -> {"ok":false,"reason":"signing_secret_not_configured"}
+```
+CONFIRMED for both undefined and falsy-empty-string secret — no accidental fail-open on either shape.
+
+## N2 — a DM sends neither `members` nor `scope` (verified from the actual request body)
+
+Called `runHuddleAgentTurn({agentId: null, ...})` directly with a stubbed `fetch`, inspected the
+REAL serialized JSON body sent to Huddle:
+```
+has members key: false
+has scope key: false
+raw: {"text":"dm text","huddleId":"slack-dm-U1","history":[{"id":"x"}],"idempotencyKey":"Ev1"}
+```
+Keys are genuinely absent (not merely `undefined`), confirming Huddle's own router picks the agent.
+CONFIRMED, from the wire body, not from reading the source.
+
+## N3 — no fabricated agentId can reach Huddle from a DM
+
+Called `fetchSlackContext({agentId: null, ...})` directly against a stubbed Slack response
+containing a bot-authored line, inspected the real output:
+```
+{ "author": { "kind": "system" }, "text": "a bot line with no channel agent", ... }
+any fabricated agent kind: false
+```
+With no channel-derived agent, the bot's own line is recorded as `kind:'system'`, never
+`kind:'agent'` with an invented id. Also traced: `agentIdFromChannelName` returns `null` for any
+input without a `___` separator, and a Slack DM has no `name` field at all (confirmed by reading
+`lookupConversation`: `name: typeof data.channel?.name === 'string' ? ... : null`), so there is no
+path in a DM by which a real-but-wrong agentId is derived either — the value is structurally null,
+not merely unset. CONFIRMED.
+
+## N4 — a failed context fetch never costs the reply (stronger than the shipped test)
+
+The shipped AC-S10e only exercises Slack answering `ok:false`. I additionally made `fetch` THROW a
+real exception for `conversations.history`/`conversations.replies` (simulating a genuine network
+failure, not just a Slack-side error body) and ran `processMessageEvent` directly:
+```
+{"handled":true}
+turn still called Huddle: true
+reply still posted: true
+```
+The `.catch(() => [])` around `fetchSlackContext` in `processMessageEvent` (line ~333) absorbs a
+thrown exception, not only an `ok:false` response. CONFIRMED, and this is a wider test than the one
+already in the suite.
