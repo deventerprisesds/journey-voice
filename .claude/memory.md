@@ -1147,3 +1147,22 @@ Transport and content are separate bugs; fixing transport alone delivers stage d
 - **First truthful delivery:** pg_net 715106 → send-unified-notification → /notify → Graph returned
   `graph 202`, `delivered:true`, zero errors. **202 = Graph accepted for delivery; an inbox arrival
   is still owner-confirmed, not session-confirmed.**
+
+## Hardening — 2026-09-13: do not embed a multi-line script in a workflow `run:` block
+Bit this repo and eds-claude-skills within the same hour, from one root cause.
+`test-priorities-widget-query.yml` and `read-widget-debug-log.yml` both held Python at column 0
+inside a `run: |` block. **A YAML block scalar ENDS at the first line indented below its base**, so
+neither file parsed — and GitHub answers an unparseable workflow with a **zero-job startup-failure
+run on EVERY push**, on every branch, `main` included. That was the red check appearing on every
+commit; it was never a test failure and never a CI gate.
+**The reliable tell:** the run's `name` comes back as the FILE PATH rather than the workflow's
+`name:`, with `jobs: []`. Runs 34759349133 / 34759010059.
+**Re-indenting is not an available fix** — the shell would pass the leading spaces into
+`python3 -c` and Python rejects that, which is precisely why the body sat at column 0. Extraction to
+a real file in `scripts/` is the only shape both parsers accept. Fixed in 60e7565; proof is the run
+count per commit dropping from 4 to 2 with the two named failures gone.
+Consequence worth remembering: an extracted script needs `actions/checkout@v4`, which inline code did
+not, and skipping it merely trades a parse failure for a missing-file failure. Also, code extracted
+out of a double-quoted `python3 -c "..."` carries `\"` shell escapes that are invalid in a real file
+and a hard SyntaxError inside an f-string expression — unescape them and re-compile, don't assume the
+move was purely mechanical.
