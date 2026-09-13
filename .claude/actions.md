@@ -799,3 +799,30 @@ shape before the Bearer shape left `Bearer xox*-REDACTED`, safe but half-rewritt
 remaining stub is too short for the Bearer rule's `{8,}`. Bearer is consumed first now. Mutation FIRED.
 24/24. **The lesson worth keeping: the implementer declared this done, mutation-proved, and shipped
 it — and an independent read still found two real things. Self-verification did not substitute.**
+
+## ACT: all five notify channels — n8n parity — 2026-09-13
+Goal restated by the owner: every channel working as if n8n were still in the loop. Measured live,
+not asserted (pg_net 715287 before, 715300 after):
+
+| channel | before | after | what remains |
+|---|---|---|---|
+| EMAIL | sent (graph 202) | sent | nothing |
+| OUTLOOK_EVENT | real event created | real event created | nothing |
+| PUSH | fired async | fired async | owner confirms on device (5 subs, 3 FCM) |
+| GOOGLE_EVENT | `not_implemented` | **"Reconnect Google in Calendar settings"** | OWNER: reconnect Google |
+| SLACK | `webhook 404` | `webhook 404` | OWNER: a real Slack credential |
+
+**GOOGLE_EVENT was the only remaining CODE gap** and is now closed (e11b5bc) — journey creates the
+event itself in send-unified-notification, same place/pattern as OUTLOOK_EVENT, stripped from
+`remainingChannels` so the webhook never sees it. Extended rather than duplicated:
+`getOutlookConnectionForUser` is now a wrapper over a parameterised
+`getCalendarConnectionForUser(providers, label)`; the Outlook call sites are byte-identical because
+that path is proven live.
+**Why it still will not deliver, and it is NOT the code:** both `google` rows in
+`calendar_connections` are `is_active:false`, tokens expired 2026-03-28 and 2026-06-24. The channel
+now says so in a way the owner can act on.
+**SLACK is not a code gap either:** the URL journey is configured with is an n8n workflow URL (its
+404 text is n8n's own). Needs `SLACK_BOT_TOKEN` on the Worker (preferred — per-channel + threading)
+or a real `hooks.slack.com` URL.
+**Scope note:** digests were investigated earlier and are OUT of scope — the owner already has them
+and said so. Nothing was changed there.
