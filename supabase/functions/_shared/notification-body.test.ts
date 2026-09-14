@@ -145,3 +145,23 @@ test('AC-B8 the richer briefing still passes the call-script leak detector', () 
   assert.equal(containsCallScript(out), false,
     `the briefing leaked stage directions: ${JSON.stringify(out)}`);
 });
+
+test('AC-B9 an orphaned heading is dropped; a heading with content is kept', () => {
+  // Measured 2026-09-14 in the real Daily Wrap-up body: "WRAP-UP FLOW:" survived with every
+  // bullet beneath it stripped, so it read as introducing the task list that follows.
+  const wrapup = `[WINDOW:after_work]
+End of day wrap-up call.
+
+WRAP-UP FLOW:
+- Greet: "Hello Sir."
+- Ask: "Any tasks completed today that I should mark done?"
+- Ask: "Any tasks blocked or to move to another day?"`;
+  const out = stripVoiceScript(wrapup);
+  assert.ok(!/WRAP-UP FLOW:/.test(out), `orphaned heading survived: ${JSON.stringify(out)}`);
+  assert.match(out, /End of day wrap-up call\./, 'the real guidance must survive');
+
+  // The inverse, so this never becomes "delete every heading".
+  const kept = stripVoiceScript('Notes:\nBring the signed form.');
+  assert.match(kept, /Notes:/);
+  assert.match(kept, /Bring the signed form\./);
+});

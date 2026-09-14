@@ -282,8 +282,15 @@ serve(async (req) => {
           const briefingTz = userPrefs?.timezone || callConfig.timezone || 'America/New_York';
           const briefingWindow = String(callConfig.context || '').match(/\[WINDOW:(\w+)\]/i)?.[1]?.toLowerCase() || '';
           let briefingTasks: any[] = [];
+          let briefingLater: any[] = [];
           try {
             briefingTasks = await getTasksForWindow(supabaseClient, userId, briefingWindow, briefingTz);
+            // REST OF TODAY. getTasksForWindow returns the unfiltered day when the window name is
+            // unknown, so '' is the documented way to ask for everything rather than a second query
+            // that could drift from the first. Subtract what is already listed above.
+            const allToday = await getTasksForWindow(supabaseClient, userId, '', briefingTz);
+            const inWindow = new Set(briefingTasks.map((t: any) => t.id));
+            briefingLater = allToday.filter((t: any) => !inWindow.has(t.id));
           } catch (e) {
             // NON-FATAL on purpose: a briefing without the list still beats no notification, and
             // renderBriefingBody says "Nothing is scheduled for this window" rather than going
@@ -294,6 +301,7 @@ serve(async (req) => {
             callName: callConfig.call_name || callNotification.title,
             context: callConfig.context || '',
             tasks: briefingTasks,
+            restOfDay: briefingLater,
             timezone: briefingTz,
           });
           // FAILS CLOSED, and this is the guard that must never be removed: if the stripper ever

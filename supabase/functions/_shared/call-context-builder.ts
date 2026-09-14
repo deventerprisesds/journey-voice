@@ -8,6 +8,7 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { DEFAULT_CATEGORY_MAPPINGS, DEFAULT_TIME_WINDOWS } from "./scheduling-defaults.ts";
+import { localClockParts } from "./digest-content.ts";
 
 // ── Rollback Flag ──────────────────────────────────────────────────
 // Flip to false for instant revert to current (V1) scripts
@@ -155,8 +156,17 @@ export async function getTasksForWindow(
     }
 
     if (task.start_time) {
-      const taskTime = new Date(task.start_time);
-      const taskHour = taskTime.getHours();
+      // `getHours()` here read the RUNTIME's local hour. A Supabase edge function runs in UTC, so
+      // a 9:00 AM America/New_York task is hour 13 and matched NO morning window (6-9) at all.
+      // Measured 2026-09-14 against the owner's real board: the Morning Kickstart email said
+      // "Nothing is scheduled for this window" while nine tasks sat on that day. Every window was
+      // being filtered against the wrong clock, and the display was correct meanwhile — so the
+      // email contradicted itself, listing a 2:00 PM task it had selected as if it were 18:00.
+      //
+      // localClockParts resolves the offset AT THE INSTANT via Intl (timezone.ts), so DST is
+      // handled per-date. It is the SAME helper the digest path uses — one timezone
+      // implementation for the repo, not a third.
+      const taskHour = localClockParts(new Date(task.start_time), timezone).hour;
       return taskHour >= windowRange.start && taskHour < windowRange.end;
     }
 

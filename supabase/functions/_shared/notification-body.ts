@@ -28,6 +28,17 @@ export interface BriefingInput {
   /** The stored call context. May contain [WINDOW:x] markers and BRANCH directives. */
   context?: string | null;
   tasks?: BriefingTask[];
+  /**
+   * The rest of TODAY, outside this window. The stored prompts ask for it explicitly —
+   * Morning Kickstart's own BRANCH 1 reads "List morning tasks for this time window / List all
+   * remaining tasks for the rest of the day" — and the renderer only ever did the first half.
+   *
+   * That omission is not cosmetic. The morning window is 06:00-09:00 ET and the owner's tasks
+   * begin at 09:00, so a window-only briefing is EMPTY BY CONSTRUCTION for the 8am email
+   * (measured 2026-09-14 against his real board: 0 of 9 tasks in-window, all 9 later that day).
+   * Reporting "Nothing is scheduled" to someone with nine tasks is technically true and useless.
+   */
+  restOfDay?: BriefingTask[];
   timezone?: string;
 }
 
@@ -70,7 +81,26 @@ export function stripVoiceScript(context?: string | null): string {
     kept.push(withoutMarker);
   }
 
-  return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  // DROP AN ORPHANED HEADING. A line like `WRAP-UP FLOW:` is not itself a direction, so it
+  // survives the filters above — but every `- Ask: ...` beneath it is stripped by the
+  // outside-a-branch rule, leaving a heading introducing nothing. Measured 2026-09-14: the real
+  // Daily Wrap-up body read "End of day wrap-up call.\n\nWRAP-UP FLOW:\n\nOn your schedule (1):",
+  // where the heading appears to introduce the task list it has no relationship to — worse than
+  // noise, because it misattributes.
+  //
+  // A heading is dropped only when NOTHING substantive follows it: the next kept line is absent,
+  // blank, or itself another heading. A heading with real content under it is untouched.
+  const isHeading = (s: string) => /:$/.test(s) && !/\s-\s/.test(s);
+  const pruned = kept.filter((line, i) => {
+    if (!isHeading(line)) return true;
+    for (let j = i + 1; j < kept.length; j++) {
+      if (kept[j] === '') continue;
+      return !isHeading(kept[j]);
+    }
+    return false; // nothing at all follows it
+  });
+
+  return pruned.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 function formatTime(iso?: string | null, timezone = 'America/New_York'): string | null {
@@ -115,6 +145,18 @@ export function renderBriefingBody(input: BriefingInput): string {
     }
   } else {
     parts.push('', 'Nothing is scheduled for this window.');
+  }
+
+  const later = (input.restOfDay ?? []).filter(
+    (t) => String(t?.status ?? '').toUpperCase() !== 'DONE',
+  );
+  if (later.length > 0) {
+    parts.push('', `Later today (${later.length}):`);
+    for (const t of later) {
+      const time = formatTime(t.start_time, tz);
+      const title = String(t.title ?? '').trim() || '(untitled)';
+      parts.push(time ? `  ${time} — ${title}` : `  ${title}`);
+    }
   }
 
   return parts.join('\n').trim();
