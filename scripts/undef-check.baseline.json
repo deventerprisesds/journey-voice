@@ -1,0 +1,7 @@
+{
+  "_what": "Known pre-existing undefined symbols, exempted from failing CI so that NEW ones can fail it. Keyed '<path>:<symbol>' \u2014 never by line number, which moves.",
+  "_why": "scripts/undef-check.mjs was rewritten 2026-09-03 and found this on its first real run over the tree. It is a genuine latent defect, not a false positive, and it is NOT in the lane that rewrote the guard \u2014 so it is recorded rather than silently fixed in someone else's file.",
+  "_rules": "Every entry here is PRINTED on every run. Adding an entry is a deliberate, reviewable act. An entry that stops reproducing FAILS the run until it is deleted, so an exemption can never outlive the defect it covers.",
+  "_evidence": "docs/impl/laneD-test-infra.md, section 'TASK 2 \u2014 the real defect the guard found'",
+  "known": {}
+}

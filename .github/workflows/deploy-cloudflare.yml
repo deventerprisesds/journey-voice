@@ -14,6 +14,22 @@ jobs:
     name: Deploy Worker
     steps:
       - uses: actions/checkout@v4
+        with:
+          # `merge-base --is-ancestor` answers from a shallow clone's TRUNCATED history
+          # WITHOUT erroring, so the staleness guard below needs the real graph.
+          fetch-depth: 0
+
+      - name: Refuse a ref that does not contain the base branch
+        # THE SAME GAP THAT CAUSED THE 2026-09-03 REGRESSION, still open here. That day
+        # execute-tool was deployed from a branch missing 2fb90ac and re-broke explicit-time
+        # reschedules in production for ~2.5 hours. The guard was added to
+        # deploy-supabase-functions.yml and NOT to this workflow — so the Worker, which now
+        # serves both the Twilio voice path and /notify, was still deployable from a stale ref.
+        # A deploy OVERWRITES the Worker with whatever this ref holds, so a branch behind main
+        # reverts every fix that landed since it forked.
+        run: |
+          git fetch --no-tags origin main
+          bash scripts/assert-ref-contains-main.sh origin/main HEAD
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -39,6 +55,55 @@ jobs:
         run: |
           echo "${{ secrets.CF_OPENAI_API_KEY }}" | npx wrangler secret put OPENAI_API_KEY
           echo "${{ secrets.CF_SUPABASE_SERVICE_KEY }}" | npx wrangler secret put SUPABASE_SERVICE_KEY
+
+      # Secrets for the /notify endpoint. All FOUR already exist as org secrets — the Graph app
+      # is the same service principal boost and huddle use, and JOURNEY_PROXY_TOKEN is the shared
+      # journey<->huddle token. No new org secret is minted, per the standing rule.
+      #
+      # Each is skipped rather than blanked when absent: `wrangler secret put` with empty stdin
+      # would STORE an empty string, and graphConfigured() would then read as configured and the
+      # endpoint would fail at Graph instead of reporting not_configured. A skipped secret leaves
+      # the honest "not_configured" answer intact.
+      - name: Set notification secrets
+        working-directory: ./cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          JOURNEY_PROXY_TOKEN: ${{ secrets.JOURNEY_PROXY_TOKEN }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_DEFAULT_CHANNEL: ${{ secrets.SLACK_DEFAULT_CHANNEL }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_SIGNING_SECRET: ${{ secrets.SLACK_SIGNING_SECRET }}
+        run: |
+          put() {
+            if [ -z "$2" ]; then
+              echo "::warning::$1 is empty — skipping. /notify will report not_configured for that capability."
+            else
+              printf '%s' "$2" | npx wrangler secret put "$1"
+              echo "set $1"
+            fi
+          }
+          put JOURNEY_PROXY_TOKEN "$JOURNEY_PROXY_TOKEN"
+          put AZURE_CLIENT_ID     "$AZURE_CLIENT_ID"
+          put AZURE_CLIENT_SECRET "$AZURE_CLIENT_SECRET"
+          put AZURE_TENANT_ID     "$AZURE_TENANT_ID"
+          # Slack. Absent secrets are SKIPPED, never blanked, so adding these names is safe before
+          # the credential exists -- the moment it is added to the org, the next deploy carries it.
+          # SLACK_BOT_TOKEN is the one that matters: /notify prefers it and it is the only transport
+          # that can post per-channel and thread, which an incoming webhook structurally cannot.
+          put SLACK_BOT_TOKEN       "$SLACK_BOT_TOKEN"
+          put SLACK_DEFAULT_CHANNEL "$SLACK_DEFAULT_CHANNEL"
+          put SLACK_WEBHOOK_URL     "$SLACK_WEBHOOK_URL"
+
+          # Inbound. This is the ONLY thing separating a real Slack delivery from anyone who has
+          # learned the /slack/events URL, so the route refuses every request while it is unset —
+          # it fails closed, never open. Issued by Slack for this app (Basic Information ▸ App
+          # Credentials ▸ Signing Secret); it is not a credential we minted to bridge our own apps,
+          # so it is not the kind of new org secret the standing rule forbids.
+          put SLACK_SIGNING_SECRET  "$SLACK_SIGNING_SECRET"
 
       - name: Wait for deployment propagation
         run: sleep 15

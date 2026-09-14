@@ -1,6 +1,14 @@
 import { supabase } from '@/integrations/supabase/client';
 import { Task } from '@/types/task';
 import { MIT_PROGRAM_ID } from '@/utils/programIds';
+import { fetchNexusAssignmentsSafe, inProgram, notInProgram, dueBetween, titleNotLike } from '@/utils/nexusAssignments';
+
+/** Mirrors the old `.order('due_date', { ascending: true })` — undated rows sort last. */
+const byDueDateAsc = (a: { due_date?: string | null }, b: { due_date?: string | null }) => {
+  if (!a.due_date) return 1;
+  if (!b.due_date) return -1;
+  return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
+};
 
 // Demo user IDs that share class schedules
 const DEMO_EMBA_USER_IDS = [
@@ -21,17 +29,17 @@ export async function fetchPendingAssignments(
     if (includeEmba) {
       if (importMode === 'full') {
         // Full import: get all EMBA assignments, no date filtering
-        let embaQuery = supabase
-          .from('assignments')
-          .select('*')
-          .or(`program_id.is.null,program_id.neq.${MIT_PROGRAM_ID}`);
-
+        // NEXUS (Azure) is the source of truth; Supabase `assignments` is a dead
+        // 2026-04-06 snapshot. Owner-scoped fetch then filter in memory — see
+        // nexusAssignments.ts for why fetch-all-then-filter rather than server-side
+        // predicates (the d1 filter grammar has no IN, and callers need id/title/range).
         const isDemo = DEMO_EMBA_USER_IDS.includes(userId);
-        embaQuery = isDemo
-          ? embaQuery.in('user_id', DEMO_EMBA_USER_IDS)
-          : embaQuery.eq('user_id', userId);
-
-        const { data: embaAssignments } = await embaQuery.order('due_date', { ascending: true });
+        const embaOwners = isDemo ? DEMO_EMBA_USER_IDS : [userId];
+        const embaAssignments = (
+          await Promise.all(embaOwners.map((o) => fetchNexusAssignmentsSafe(o)))
+        ).flat()
+          .filter((a) => notInProgram(a, MIT_PROGRAM_ID))
+          .sort(byDueDateAsc);
 
         if (embaAssignments) {
           assignments.push(
@@ -106,18 +114,14 @@ export async function fetchPendingAssignments(
         const nextWeekendEnd = weekendGroups[0]
           .sort((a, b) => new Date(b.end_time).getTime() - new Date(a.end_time).getTime())[0];
 
-        let embaQuery = supabase
-          .from('assignments')
-          .select('*')
-          .or(`program_id.is.null,program_id.neq.${MIT_PROGRAM_ID}`)
-          .gte('due_date', lastWeekend?.end_time || new Date().toISOString())
-          .lte('due_date', nextWeekendEnd.end_time);
-
-        embaQuery = isDemo
-          ? embaQuery.in('user_id', DEMO_EMBA_USER_IDS)
-          : embaQuery.eq('user_id', userId);
-
-        const { data: embaAssignments } = await embaQuery.order('due_date', { ascending: true });
+        const embaOwners2 = isDemo ? DEMO_EMBA_USER_IDS : [userId];
+        const fromISO = lastWeekend?.end_time || new Date().toISOString();
+        const embaAssignments = (
+          await Promise.all(embaOwners2.map((o) => fetchNexusAssignmentsSafe(o)))
+        ).flat()
+          .filter((a) => notInProgram(a, MIT_PROGRAM_ID))
+          .filter((a) => dueBetween(a, fromISO, nextWeekendEnd.end_time))
+          .sort(byDueDateAsc);
 
         if (embaAssignments) {
           assignments.push(
@@ -146,21 +150,16 @@ export async function fetchPendingAssignments(
 
     // Fetch MIT assignments (program_id = MIT_PROGRAM_ID, exclude office hours)
     if (includeMit) {
-      let mitQuery = supabase
-        .from('assignments')
-        .select('*')
-        .eq('user_id', userId)
-        .eq('program_id', MIT_PROGRAM_ID)
-        .not('title', 'ilike', '%office hour%')
-        .order('due_date', { ascending: true });
+      let mitAssignments = (await fetchNexusAssignmentsSafe(userId))
+        .filter((a) => inProgram(a, MIT_PROGRAM_ID))
+        .filter((a) => titleNotLike(a, 'office hour'))
+        .sort(byDueDateAsc);
 
       if (importMode === 'upcoming') {
         const twoWeeksFromNow = new Date();
         twoWeeksFromNow.setDate(twoWeeksFromNow.getDate() + 14);
-        mitQuery = mitQuery.lte('due_date', twoWeeksFromNow.toISOString());
+        mitAssignments = mitAssignments.filter((a) => dueBetween(a, null, twoWeeksFromNow.toISOString()));
       }
-
-      const { data: mitAssignments } = await mitQuery;
 
       if (mitAssignments) {
         assignments.push(

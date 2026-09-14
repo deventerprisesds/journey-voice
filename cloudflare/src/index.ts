@@ -1,6 +1,8 @@
 import { TwilioCallSession } from './TwilioCallSession';
+import { handleNotify, type NotifyEnv } from './notify';
+import { handleSlackEvents, type SlackEventsEnv } from './slack-events';
 
-interface Env {
+interface Env extends NotifyEnv, SlackEventsEnv {
   CALL_SESSIONS: DurableObjectNamespace;
   SUPABASE_URL: string;
   SUPABASE_SERVICE_KEY: string;
@@ -10,7 +12,10 @@ interface Env {
 export { TwilioCallSession };
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  // `ctx` is new here. The Slack route needs `waitUntil`: Slack abandons a delivery it cannot get
+  // an answer to in 3 seconds, an agent turn takes far longer, so the 200 goes back first and the
+  // turn finishes under `waitUntil`. Without it the isolate can be torn down mid-turn.
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
     // Health check endpoint
@@ -25,6 +30,20 @@ export default {
           headers: { 'Content-Type': 'application/json' }
         }
       );
+    }
+
+    // Notification delivery — journey's OWN endpoint, replacing the n8n webhook hop.
+    // Purely additive: no existing route's behaviour changes, and nothing points here until
+    // journey's UNIFIED_WEBHOOK_URL is repointed, which is a separate deliberate step.
+    if (url.pathname === '/notify') {
+      return handleNotify(request, env);
+    }
+
+    // Inbound Slack — Slack PUSHES message events here. Additive and inert: nothing reaches this
+    // route until the URL is registered in the Slack app's Event Subscriptions, and every request
+    // is refused unless it carries a valid Slack signature.
+    if (url.pathname === '/slack/events') {
+      return handleSlackEvents(request, env, ctx);
     }
 
     // WebSocket endpoint for Twilio

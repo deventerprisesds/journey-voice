@@ -2,7 +2,7 @@ import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { normalizeDateTime, getTodayInTimezone, getTzOffsetMinutesAt, localDateToUtcBounds } from "../_shared/timezone.ts";
-import { DEFAULT_TIME_WINDOWS, DEFAULT_CATEGORY_MAPPINGS, resolveConfig, validateTaskWindow } from "../_shared/scheduling-defaults.ts";
+import { DEFAULT_TIME_WINDOWS, DEFAULT_CATEGORY_MAPPINGS, resolveConfig, validateTaskWindow, resolveCategoryDailyCap, isWeekendInTimezone } from "../_shared/scheduling-defaults.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -40,7 +40,7 @@ serve(async (req) => {
   const startTime = Date.now();
 
   try {
-    const { tasks, userId, timezone = 'UTC', targetDate, allowOverflow = false } = await req.json();
+    const { tasks, userId, timezone = 'UTC', targetDate, allowOverflow = false, busySlots = [] } = await req.json();
     
     console.log(`📦 Batch scheduling ${tasks?.length || 0} tasks for user ${userId}${targetDate ? ` (target: ${targetDate})` : ''}${allowOverflow ? ' (overflow allowed)' : ''}`);
     
@@ -149,7 +149,7 @@ serve(async (req) => {
     const [tasksResult, eventsResult] = await Promise.all([
       supabase
         .from('tasks')
-        .select('id, title, start_time, end_time')
+        .select('id, title, start_time, end_time, category')
         .eq('user_id', userId)
         .eq('is_scheduled', true)
         // For tasks: must end after busy-window start AND start before busy-window end
@@ -164,12 +164,27 @@ serve(async (req) => {
         .lte('start_time', busyEndIso)
     ]);
 
-    const existingTaskSlots = (tasksResult.data || []).map(t => ({
+    const dbTaskSlots = (tasksResult.data || []).map(t => ({
       ...t,
       _source: 'task' as const,
       _startMs: new Date(t.start_time).getTime(),
       _endMs: new Date(t.end_time).getTime(),
     }));
+    // Injected busy slots: intervals the CALLER has already placed this run but has not (yet) persisted
+    // — e.g. the nightly builder's earlier passes in a dry run, whose writes are skipped so a later pass
+    // cannot see them via the DB load above. Treated exactly like a scheduled task for overlap purposes.
+    // Deduped against DB slots so a real run (where the same slot is already persisted) gains no prompt noise.
+    const injectedBusySlots = (Array.isArray(busySlots) ? busySlots : [])
+      .filter((s: any) => s && s.start_time && s.end_time)
+      .map((s: any, i: number) => ({
+        id: `injected-${i}`, title: 'in-run placement',
+        start_time: s.start_time, end_time: s.end_time,
+        _source: 'task' as const,
+        _startMs: new Date(s.start_time).getTime(),
+        _endMs: new Date(s.end_time).getTime(),
+      }))
+      .filter((inj: any) => !dbTaskSlots.some(t => t._startMs === inj._startMs && t._endMs === inj._endMs));
+    const existingTaskSlots = [...dbTaskSlots, ...injectedBusySlots];
     const existingEventSlots = (eventsResult.data || []).map(e => ({
       ...e,
       _source: 'event' as const,
@@ -178,7 +193,20 @@ serve(async (req) => {
     }));
     const existingBusySlots = [...existingTaskSlots, ...existingEventSlots];
 
-    console.log(`📊 Found ${existingBusySlots.length} existing busy slots (${existingTaskSlots.length} tasks, ${existingEventSlots.length} events)`);
+    console.log(`📊 Found ${existingBusySlots.length} existing busy slots (${dbTaskSlots.length} db tasks, ${injectedBusySlots.length} injected, ${existingEventSlots.length} events)`);
+
+    // PER-CATEGORY DAILY CAP (maxPerDay): count already-scheduled tasks by category + local day so the
+    // validation loop can enforce categoryMappings[cat].maxPerDay (e.g. PROF_EDUCATION: 2/day). Injected
+    // in-run slots carry no category so they don't count here; in a real run prior-pass placements are
+    // persisted (is_scheduled=true) and DO count via dbTaskSlots.
+    const dayKeyOf = (iso: string) => new Date(iso).toLocaleDateString('en-CA', { timeZone: timezone });
+    const catDayCount: Record<string, number> = {};
+    for (const t of dbTaskSlots) {
+      if (!(t as any).category) continue;
+      const k = `${(t as any).category}|${dayKeyOf(t.start_time)}`;
+      catDayCount[k] = (catDayCount[k] || 0) + 1;
+    }
+
 
     // Build category mappings from user config (authoritative), falling back to shared defaults
     const { timeWindows: resolvedTimeWindows, categoryMappings: resolvedCategoryMappings } = resolveConfig(userConfig);
@@ -315,7 +343,14 @@ OVERFLOW RULES:
     // Day name for context-aware scheduling
     const dayName = new Date(`${targetDateISO}T12:00:00Z`).toLocaleDateString('en-US', { timeZone: timezone, weekday: 'long' }).toUpperCase();
     
-    const batchPrompt = `You are a scheduling assistant. Schedule ALL ${tasks.length} tasks efficiently, avoiding conflicts.
+    // Honor the user's free-text scheduling instructions from the GUI
+    // (contextRules customAIInstructions). Previously only the smart scheduler used
+    // these; the nightly/batch placer ignored them.
+    const customInstr = (typeof userConfig?.customAIInstructions === 'string' && userConfig.customAIInstructions.trim())
+      ? `\n\n=== USER'S CUSTOM SCHEDULING INSTRUCTIONS (honor these) ===\n${userConfig.customAIInstructions.trim()}`
+      : '';
+
+    const batchPrompt = `You are a scheduling assistant. Schedule ALL ${tasks.length} tasks efficiently, avoiding conflicts.${customInstr}
 
 === CRITICAL DATE CONTEXT (READ CAREFULLY) ===
 TODAY'S DATE (ISO format): ${todayISO}
@@ -331,7 +366,7 @@ TIMEZONE: ${timezone}
 ⚠️ Use ISO format for all times: "${targetDateISO}T10:00:00${tzOffset}"
 
 === DAY-SPECIFIC RULES ===
-${dayName === 'SATURDAY' || dayName === 'SUNDAY' ? '- This is a WEEKEND day. Use weekend-appropriate scheduling.\n' : '- This is a WEEKDAY. Use business-hour scheduling.\n'}
+${dayName === 'SATURDAY' || dayName === 'SUNDAY' ? '- This is a WEEKEND day. Use weekend-appropriate scheduling.\n- PROTECTED: Do NOT auto-schedule tasks in the evening (after 7:00 PM) on this weekend day. Weekend evenings are protected downtime — leave them free UNLESS the task is an appointment/fixed-time commitment or was explicitly requested for that time. Prefer daytime weekend slots; if only weekend-evening is left, mark the task OVERFLOW instead.\n' : '- This is a WEEKDAY. Use business-hour scheduling.\n'}
 === RULE 1c: COMMON-SENSE DAY/TIME MATCHING ===
 Consider whether the ACTIVITY described in each task title makes sense on ${dayName} at the time you pick. Apply general knowledge:
 - Weekly religious/worship activities belong on their traditional day (e.g., church on Sunday, mosque on Friday)
@@ -544,10 +579,60 @@ IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include tim
       return d.toISOString();
     }
 
+    // WINDOW REPAIR (measured 2026-08-21): the AI reliably proposes times OUTSIDE the task's allowed
+    // windows — 11 of 15 window violations in a real shadow run were at or before 09:00, several at
+    // 05:00–07:00, e.g. "2026-08-24T05:00:00-04:00". NOT a timezone bug: the offset is correct
+    // Eastern, the model genuinely picks pre-dawn hours (and, when overflowing to the next day,
+    // starts at 06:00 even though Saturday's first legal window opens at 10:00).
+    //
+    // Rejecting is terminal — the task silently vanishes from the day even when its own allowed
+    // window sits empty. So instead of dropping it, relocate it to the earliest free slot INSIDE an
+    // allowed window on the same local day.
+    //
+    // CONFIG-AUTHORITATIVE (hard rule): this only ever moves a task INTO a window the config already
+    // allows for its category, filtered to windows active on that weekday. It never widens a window,
+    // never borrows another category's window, and never overrides a pinned/appointed time. If no
+    // legal free slot exists, the task is rejected exactly as before and overflows to another day.
+    function findLegalSlot(
+      proposedStartISO: string,
+      durationMinutes: number,
+      allowedWindowNames: string[],
+    ): { start: string; end: string; window: string } | null {
+      const dayStr = new Date(proposedStartISO).toLocaleDateString('en-CA', { timeZone: timezone });
+      const dow = new Date(new Date(proposedStartISO).toLocaleString('en-US', { timeZone: timezone })).getDay();
+      const nowMs = Date.now();
+
+      // Only windows the category allows AND that are active on this weekday.
+      const candidates = allowedWindowNames
+        .map((name) => ({ name, win: (userTimeWindows as any)[name] }))
+        .filter(({ win }) => win && (!win.days || win.days.includes(dow)))
+        .sort((a, b) => a.win.start - b.win.start);
+
+      for (const { name, win } of candidates) {
+        // Step in 15-min increments from the window open to the last start that still fits.
+        for (let mins = win.start * 60; mins + durationMinutes <= win.end * 60; mins += 15) {
+          const hh = String(Math.floor(mins / 60)).padStart(2, '0');
+          const mm = String(mins % 60).padStart(2, '0');
+          const startISO = normalizeDateTime(`${dayStr}T${hh}:${mm}:00`, timezone);
+          if (!startISO) continue;
+          const startMs = new Date(startISO).getTime();
+          const endMs = startMs + durationMinutes * 60000;
+          if (startMs < nowMs) continue; // never place in the past
+          if (acceptedSlots.some((s) => startMs < s.end && endMs > s.start)) continue;
+          if (existingEventSlots.some((s: any) => startMs < s._endMs && endMs > s._startMs)) continue;
+          if (existingTaskSlots.some((s: any) => startMs < s._endMs && endMs > s._startMs)) continue;
+          return { start: startISO, end: new Date(endMs).toISOString(), window: name };
+        }
+      }
+      return null;
+    }
+
     // Map results back to task IDs, normalizing times as a safety net
     // Then validate each task against its allowed windows (HARD CONSTRAINT)
     const scheduledTasks = [];
     const rejectedTasks = [];
+    // Window-repair audit: slots the AI put outside an allowed window that we relocated INTO one.
+    const repairedTasks: Array<Record<string, unknown>> = [];
     const acceptedSlots: Array<{ start: number; end: number }> = [];
     
     for (const result of scheduledResults) {
@@ -571,6 +656,21 @@ IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include tim
         console.log(`⚠️ Normalized start_time: ${result.start_time} → ${normalizedStart}`);
       }
 
+      // Guard: a null/empty/invalid AI time must NOT fall through — snapTo15(new Date(null)) coerces it
+      // to epoch-0 (1970-01-01), which then slips past window/overlap checks (19:00 local = an allowed
+      // window, and a 1970 slot overlaps nothing in the present) and gets "scheduled" at a bogus date.
+      // Reject the slot instead so the task stays unscheduled / eligible for the reshuffle retry.
+      if (!normalizedStart || !normalizedEnd) {
+        console.warn(`🚫 MISSING_TIME: "${originalTask.title}" — AI returned no valid start/end (start=${result.start_time}, end=${result.end_time}) — REJECTED`);
+        rejectedTasks.push({
+          taskId: originalTask.id,
+          taskIndex: result.taskIndex,
+          reason: 'ai_missing_or_invalid_time',
+          reasoning: result.reasoning,
+        });
+        continue;
+      }
+
       // Snap to 15-minute boundaries
       normalizedStart = snapTo15(normalizedStart);
       normalizedEnd = snapTo15(normalizedEnd);
@@ -592,14 +692,35 @@ IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include tim
       );
       
       if (!validation.valid) {
-        console.warn(`🚫 WINDOW VIOLATION: "${originalTask.title}" (${originalTask.category}) scheduled in "${validation.actualWindow}" but allowed: [${validation.allowedWindows.join(', ')}] — REJECTED`);
-        rejectedTasks.push({
-          taskId: originalTask.id,
-          taskIndex: result.taskIndex,
-          reason: `Window violation: placed in ${validation.actualWindow}, allowed: ${validation.allowedWindows.join(', ')}`,
-          reasoning: result.reasoning,
-        });
-        continue;
+        // Try to REPAIR into an allowed window before giving up (see findLegalSlot above).
+        const durMin = Math.max(
+          15,
+          Math.round((new Date(normalizedEnd).getTime() - new Date(normalizedStart).getTime()) / 60000),
+        );
+        const repaired = findLegalSlot(normalizedStart, durMin, validation.allowedWindows);
+
+        if (repaired) {
+          console.log(`🔧 WINDOW REPAIR: "${originalTask.title}" (${originalTask.category}) ${normalizedStart} → ${repaired.start} (${repaired.window}); AI had placed it in "${validation.actualWindow}"`);
+          repairedTasks.push({
+            taskId: originalTask.id,
+            taskIndex: result.taskIndex,
+            from: normalizedStart,
+            to: repaired.start,
+            window: repaired.window,
+            aiWindow: validation.actualWindow,
+          });
+          normalizedStart = repaired.start;
+          normalizedEnd = repaired.end;
+        } else {
+          console.warn(`🚫 WINDOW VIOLATION: "${originalTask.title}" (${originalTask.category}) scheduled in "${validation.actualWindow}" but allowed: [${validation.allowedWindows.join(', ')}] — no free slot in an allowed window today — REJECTED`);
+          rejectedTasks.push({
+            taskId: originalTask.id,
+            taskIndex: result.taskIndex,
+            reason: `Window violation: placed in ${validation.actualWindow}, allowed: ${validation.allowedWindows.join(', ')}`,
+            reasoning: result.reasoning,
+          });
+          continue;
+        }
       }
 
       // POST-AI VALIDATION 2: Check overlap with previously accepted slots in this batch
@@ -643,8 +764,41 @@ IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include tim
         continue;
       }
 
+      // POST-AI VALIDATION 4: per-category daily cap (categoryMappings[cat].maxPerDay). Counts existing
+      // scheduled + accepted-this-batch of the same category on the placement's local day; rejects beyond
+      // the cap so the extra task overflows to another day instead of stacking (e.g. 4 PROF_EDUCATION on
+      // one day when the cap is 2). No cap configured → no limit.
+      // Resolved through the SHARED resolver so this agrees with the nightly builder's cap
+      // exactly — weekday/weekend aware, same precedence. Previously this read maxPerDay
+      // directly while the builder used a hardcoded constant, so the two could disagree.
+      // Weekend must be judged in the USER'S timezone. `new Date(...).getDay()` would use the
+      // runtime zone (UTC on Deno), which makes Friday 20:00 ET read as Saturday.
+      const capDayIsWeekend = isWeekendInTimezone(new Date(normalizedStart), timezone);
+      const catCap = resolveCategoryDailyCap(
+        { categoryMappings: filteredCategoryMappings },
+        originalTask.category,
+        capDayIsWeekend,
+      );
+      if (Number.isFinite(catCap) && catCap > 0) {
+        const capKey = `${originalTask.category}|${dayKeyOf(normalizedStart)}`;
+        if ((catDayCount[capKey] || 0) >= catCap) {
+          console.warn(`🚫 CATEGORY_CAP: "${originalTask.title}" (${originalTask.category}) exceeds ${catCap}/day on ${dayKeyOf(normalizedStart)} — REJECTED`);
+          rejectedTasks.push({
+            taskId: originalTask.id,
+            taskIndex: result.taskIndex,
+            reason: `category_cap_${catCap}_per_day: ${originalTask.category}`,
+            reasoning: result.reasoning,
+          });
+          continue;
+        }
+      }
+
       acceptedSlots.push({ start: slotStartMs, end: slotEndMs });
-      
+      if (Number.isFinite(catCap) && catCap > 0) {
+        const capKey = `${originalTask.category}|${dayKeyOf(normalizedStart)}`;
+        catDayCount[capKey] = (catDayCount[capKey] || 0) + 1;
+      }
+
       scheduledTasks.push({
         taskId: originalTask?.id,
         taskIndex: result.taskIndex,
@@ -745,9 +899,48 @@ IMPORTANT: Only flag truly nonsensical placements. Do NOT flag tasks just becaus
     const totalTime = Date.now() - startTime;
     console.log(`✅ Batch scheduling complete in ${totalTime}ms for ${tasks.length} tasks`);
 
-    return new Response(JSON.stringify({ 
+    // [SLOTTER-TRACE] Diagnostic (TEMPORARY — remove after the "day starts 1h late" bug is pinned).
+    // Console output is NOT retrievable via the logs API, so persist the exact input→output of every
+    // scheduling call to activity_log where it can be queried. Shows: current time, target day, tasks,
+    // the busy intervals the AI was told to avoid, the AI's RAW slots, the final placements, and rejects.
+    // Fire-and-forget + guarded so it can never affect scheduling.
+    try {
+      await supabase.from('activity_log').insert({
+        user_id: userId,
+        activity_type: 'slotter_trace',
+        status: 'completed',
+        stage: targetDateISO,
+        metadata: {
+          input: {
+            targetDate: targetDateISO,
+            nowET: now.toLocaleString('en-US', { timeZone: timezone }),
+            tzOffset,
+            allowOverflow,
+            taskCount: tasks.length,
+            tasks: tasks.map((t: any, i: number) => ({ i, title: t.title, cat: t.category, pri: t.priority, est: t.estimate_minutes })),
+            busy: existingBusySlots.map((s: any) => ({
+              src: s._source,
+              startET: new Date(s._startMs).toLocaleString('en-US', { timeZone: timezone }),
+              endET: new Date(s._endMs).toLocaleString('en-US', { timeZone: timezone }),
+            })),
+          },
+          output: {
+            rawAI: (scheduledResults || []).map((r: any) => ({ taskIndex: r.taskIndex, start: r.start_time, end: r.end_time })),
+            finalScheduled: scheduledTasks.map((s: any) => ({
+              taskIndex: s.taskIndex,
+              startET: new Date(s.start_time).toLocaleString('en-US', { timeZone: timezone }),
+            })),
+            rejected: rejectedTasks.map((r: any) => ({ taskIndex: r.taskIndex, reason: r.reason })),
+            repaired: repairedTasks,
+          },
+        },
+      });
+    } catch (_e) { /* diagnostic must never break scheduling */ }
+
+    return new Response(JSON.stringify({
       scheduled: scheduledTasks,
       rejected: rejectedTasks,
+      repaired: repairedTasks,
       tasksCount: tasks.length,
       processingTimeMs: totalTime
     }), {
