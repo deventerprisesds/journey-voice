@@ -1,13 +1,14 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import { GLOBAL_VERSION, FUNCTION_IDS, corsHeaders, createHealthResponse } from "../_shared/config.ts";
-import { buildCallContext } from "../_shared/call-context-builder.ts";
+import { buildCallContext, getTasksForWindow } from "../_shared/call-context-builder.ts";
 import {
   normalizeChannels,
   channelResultKey,
   summarizeDelivery,
 } from "../_shared/notification-channels.ts";
-import { renderScheduledCall } from "../_shared/digest-content.ts";
+import { renderScheduledCall, containsCallScript, CallScriptLeakError } from "../_shared/digest-content.ts";
+import { renderBriefingBody } from "../_shared/notification-body.ts";
 
 // Version derived from centralized config
 const DELIVERY_VERSION = `${GLOBAL_VERSION}-${FUNCTION_IDS.DELIVERY}`;
@@ -275,23 +276,59 @@ serve(async (req) => {
           const unifiedChannels = normalizeChannels(unifiedModes);
           console.log(`📧 Routing scheduled call to ${JSON.stringify(unifiedChannels)} for user ${userId}`);
 
+          // BUILD THE BRIEFING. The window comes from the script's own `[WINDOW:x]` marker, which
+          // is what the nightly builder already keys placement on, so email sees exactly the
+          // tasks the scheduler placed rather than a second, divergent query.
+          const briefingTz = userPrefs?.timezone || callConfig.timezone || 'America/New_York';
+          const briefingWindow = String(callConfig.context || '').match(/\[WINDOW:(\w+)\]/i)?.[1]?.toLowerCase() || '';
+          let briefingTasks: any[] = [];
+          try {
+            briefingTasks = await getTasksForWindow(supabaseClient, userId, briefingWindow, briefingTz);
+          } catch (e) {
+            // NON-FATAL on purpose: a briefing without the list still beats no notification, and
+            // renderBriefingBody says "Nothing is scheduled for this window" rather than going
+            // silent. Never let a task-query hiccup suppress the whole send.
+            console.error('📧 briefing task fetch failed (sending without the list):', e);
+          }
+          let briefingBody = renderBriefingBody({
+            callName: callConfig.call_name || callNotification.title,
+            context: callConfig.context || '',
+            tasks: briefingTasks,
+            timezone: briefingTz,
+          });
+          // FAILS CLOSED, and this is the guard that must never be removed: if the stripper ever
+          // misses and the voice script survives into a read channel, fall back to the bare
+          // one-line render rather than mail the user "BRANCH 1... Greet: Hello Sir." A thin
+          // email is a disappointment; a leaked script is the defect main's renderer existed to
+          // prevent, and restoring the richer body must not quietly undo that.
+          if (containsCallScript(briefingBody)) {
+            console.error(`📧 ${new CallScriptLeakError('email').message} — falling back to the one-line render`);
+            briefingBody = renderScheduledCall({
+              callName: callConfig.call_name || callNotification.title,
+              context: callConfig.context || '',
+              channel: 'email',
+            }).body;
+          }
+
           const { data: unifiedResult, error: unifiedError } = await supabaseClient.functions.invoke('send-unified-notification', {
             body: {
               userId,
               taskId: null,
               title: callConfig.call_name || callNotification.title,
-              // `callConfig.context` is the PHONE SCRIPT ("BRANCH 1... Greet: Hello Sir").
-              // This line used to append it verbatim to every channel, so an email or a
-              // Slack message arrived carrying the raw script the assistant reads aloud.
-              // renderScheduledCall keeps the script for `phone` and returns a human
-              // sentence for every read channel -- and throws CallScriptLeakError rather
-              // than let a script through. Slack and email are both read channels, so the
-              // single rendered body is correct for the whole unified fan-out.
-              body: renderScheduledCall({
-                callName: callConfig.call_name || callNotification.title,
-                context: callConfig.context || '',
-                channel: 'email',
-              }).body,
+              // `callConfig.context` is the PHONE SCRIPT ("BRANCH 1... Greet: Hello Sir"), so it
+              // must never reach a read channel verbatim. But the fix for that was ALSO the bug:
+              // `renderScheduledCall` returns literally `${subject}.` for every read channel
+              // (digest-content.ts:608), so the owner's 8am email read, in full, "Time for your
+              // morning kickstart." -- one sentence, no data, measured 2026-09-14 across four
+              // real emails. Stripping the script is necessary; sending NOTHING in its place
+              // makes the notification pointless.
+              //
+              // renderBriefingBody (notification-body.ts, commit fb80729) is the renderer that
+              // was written for exactly this and was orphaned in the 09-13 merge -- it survived
+              // in the repo with ZERO callers. It opens with the same sentence, appends the
+              // guidance with the voice script stripped, and then lists the window's REAL tasks
+              // with times, or says plainly that nothing is scheduled.
+              body: briefingBody,
               channels: unifiedChannels
             }
           });

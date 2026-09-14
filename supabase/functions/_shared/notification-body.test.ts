@@ -5,6 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { stripVoiceScript, renderBriefingBody } from './notification-body.ts';
+import { containsCallScript } from './digest-content.ts';
 
 // Verbatim from the live 2026-09-08 send-unified-notification payload.
 const REAL_SCRIPT = `Time for your morning kickstart. [WINDOW:morning]
@@ -96,4 +97,51 @@ test('AC-B6 missing/degenerate inputs never throw and never emit placeholders', 
   const noTime = renderBriefingBody({ callName: 'X', tasks: [{ title: 'Untimed task' }] });
   assert.match(noTime, /Untimed task/);
   assert.ok(!/Invalid Date/.test(noTime));
+});
+
+// ---------------------------------------------------------------------------
+// AC-B7/B8 -- the ONE-SENTENCE REGRESSION, measured in the owner's inbox.
+//
+// On 2026-09-14 four real scheduled-call emails arrived reading, in their entirety,
+// "Time for your evening start." / "Time for your morning kickstart." -- because the delivery
+// function had been wired to `renderScheduledCall`, whose read-channel branch is literally
+// `const body = `${subject}.`` (digest-content.ts:608). Stripping the voice script was correct;
+// sending nothing in its place made the notification pointless. The owner: "each email had
+// exactly one sentence... this proves nothing."
+//
+// B7 is the regression itself. B8 is the composition guard: restoring the richer body must not
+// quietly undo the leak protection that the thin renderer was introduced to provide.
+// ---------------------------------------------------------------------------
+test('AC-B7 a briefing carries the REAL tasks, not just the opening sentence', () => {
+  const out = renderBriefingBody({
+    callName: 'Morning Kickstart',
+    context: REAL_SCRIPT,
+    tasks: [
+      { title: 'Finish MIT AI Strategy Brief', start_time: '2026-09-14T13:00:00Z', status: 'UP_NEXT' },
+      { title: 'Transfer funds for bills', start_time: '2026-09-14T15:30:00Z', status: 'BACKLOG' },
+      { title: 'Already handled', status: 'DONE' },
+    ],
+    timezone: 'America/New_York',
+  });
+  assert.match(out, /Finish MIT AI Strategy Brief/, 'the task list is the POINT of the email');
+  assert.match(out, /Transfer funds for bills/);
+  assert.ok(!out.includes('Already handled'), 'DONE work must not be presented as upcoming');
+  // The exact shape of the defect: body === opening sentence and nothing else.
+  assert.notEqual(out.trim(), 'Time for your morning kickstart.');
+  assert.ok(out.split('\n').filter((l) => l.trim()).length >= 3,
+    `a one-line body is the regression this guards; got: ${JSON.stringify(out)}`);
+});
+
+test('AC-B8 the richer briefing still passes the call-script leak detector', () => {
+  // Composition guard. renderBriefingBody and containsCallScript were written by different
+  // passes for opposite purposes -- one adds content, one refuses content -- and nothing had
+  // ever asserted they agree on a REAL script.
+  const out = renderBriefingBody({
+    callName: 'Morning Kickstart',
+    context: REAL_SCRIPT,
+    tasks: [{ title: 'A task', start_time: '2026-09-14T13:00:00Z' }],
+    timezone: 'America/New_York',
+  });
+  assert.equal(containsCallScript(out), false,
+    `the briefing leaked stage directions: ${JSON.stringify(out)}`);
 });
