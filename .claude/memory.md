@@ -1794,3 +1794,58 @@ drew the wrong conclusion from it. Reading the two paths side by side settled it
 on the report would have broken the in-app assistant. The rule cuts both ways: a verifier catching me
 in a false claim, and me catching a verifier in a misread, came from the same habit of reading the
 primary source.
+
+## Notification delivery: the URL moved to the Worker before the SENDER did (2026-09-14)
+
+**Read this before touching `send-unified-notification`, `UNIFIED_WEBHOOK_URL`, or any "why didn't
+the notification arrive" question.**
+
+### The shape of the system, so the failure mode is obvious next time
+
+```
+pg_cron notification-delivery-job (every minute)
+  -> notification-delivery          (reads scheduled_notifications; callConfig = JSON.parse(row.body),
+  |                                  channel re-read LIVE from user_scheduling_prefs.scheduled_calls)
+  -> send-unified-notification      (EDGE FN -- deploys from `main` ONLY)
+  -> UNIFIED_WEBHOOK_URL            (set by deploy-supabase-functions.yml step 8 to journey's Worker)
+  -> cloudflare/src/notify.ts       (requires header x-webhook-secret == JOURNEY_PROXY_TOKEN)
+```
+
+**Two halves, deployed by DIFFERENT pipelines, and that is the whole hazard.** The Worker deploys
+from any branch via `deploy-cloudflare.yml`; the edge function deploys from `main`. So the URL can
+be pointed at the new Worker while the SENDER calling it is still the old one — which is exactly
+what happened: the deployed sender did a bare `GET` with `{Accept}` and no credential, and the
+Worker answered `401 {"ok":false,"error":"unauthorized"}`. Emails silently stopped.
+
+### Facts worth not re-deriving
+
+- **`failure_reason: EMAIL(not_reported)` does NOT mean the email bounced.** It means
+  `summarizeDelivery` (`_shared/notification-channels.ts`) found no `channelResults.email` key at
+  all. Look at `activity_log` `notification_webhook_response` for the real HTTP status.
+- **`delivered_at` was historically a FALSE SUCCESS.** The old sender set `success:true` for every
+  channel whenever the webhook returned 2xx. `summarizeDelivery` (live 2026-09-13 17:47 UTC)
+  replaced that with a real per-channel check — so a NEW "failure" on an OLD path is usually the
+  guard starting to tell the truth, not a new break. Do not "fix" it by loosening the check.
+- **Diagnosis order that worked, fastest first:** `cron.job` + `cron.job_run_details` (did it fire)
+  -> `scheduled_notifications.failure_reason` (what did delivery conclude) -> `activity_log`
+  `notification_webhook_*` (the actual HTTP status and body). The third one is what named the cause;
+  the first two only narrowed it.
+- **`scheduled_notifications.metadata` is `{}` for scheduled calls — the config is in `body`.**
+  To replay one through the REAL path: set `scheduled_for = now()` and null out
+  `delivered_at/failed_at/failure_reason/processing_at/processing_instance`. The every-minute cron
+  does the rest. To replay one WITHOUT consuming its future occurrence, INSERT a copy instead.
+- **`wrong_day_of_week` is a correct skip, not a failure** (Weekend Morning on a Monday).
+- **In-App Chat (`APP_MESSAGE`) is separately broken** and was failing identically on 09-12 and
+  09-13, before any of this work. Not caused by, and not fixed by, the email repair.
+
+### Hardening — a union merge across a `run:`/`with:` boundary is not a union
+
+The 09-13 merge resolution appended `main`'s `fetch-depth: 0` (an `actions/checkout` INPUT) onto the
+end of the staleness guard's `run:` script in `deploy-supabase-functions.yml`. The runner executed
+it as a shell command: **exit 127**, two failed deploys before it was spotted.
+
+**YAML parsing cannot catch this** — a `run:` block is an opaque string, so the file parsed cleanly
+both before and after (verified: all 11 workflows parse, including the broken one). "Keep both
+sides" is the right default for prose and for independent declarations; across a `run:`/`with:`
+boundary the two sides are different KINDS of thing and unioning them produces garbage that only
+fails at execution time.
