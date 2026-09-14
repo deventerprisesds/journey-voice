@@ -1,6 +1,7 @@
 # Project Memory — journey-voice
 Last updated: 2026-09-03  (see also `.claude/accuracy-log.md` — wrong-first-answers + their structural guards)
 Last updated: 2026-08-26
+Last updated: 2026-09-13
 
 ## get_tasks now honors the advertised `query` param (fuzzy title search) — 2026-08-02
 `getTasks` (`supabase/functions/execute-tool/index.ts`) previously IGNORED the `query`/`keyword` param

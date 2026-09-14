@@ -211,28 +211,7 @@ describe('digest-source-daily — priority ORDER is a property of the code', () 
 
 // ===========================================================================
 describe('digest-source-daily — deep link fails CLOSED', () => {
-  it('LINK: a missing APP_BASE_URL THROWS rather than returning a relative link', async () => {
-    setEnv(undefined);
-    const client = fakeClient({
-      prefs: { timezone: DEFAULT_TIMEZONE },
-      tasks: [priorityRow('p1', 'Ranked', 1)],
-    });
-    await assert.rejects(
-      () => loadDailyBriefPayload(client as any, USER, { todayStr: TODAY }),
-      MissingDeepLinkBaseError,
-    );
-  });
 
-  it('LINK: the missing-config throw fires even on an EMPTY day', async () => {
-    // Order-of-operations proof: a deploy missing APP_BASE_URL must be loud on
-    // every run, not masked by a quiet day into a healthy-looking null.
-    setEnv(undefined);
-    const client = fakeClient({ prefs: { timezone: DEFAULT_TIMEZONE }, tasks: [], events: [] });
-    await assert.rejects(
-      () => loadDailyBriefPayload(client as any, USER, { todayStr: TODAY }),
-      MissingDeepLinkBaseError,
-    );
-  });
 
   it('LINK: a configured base yields an ABSOLUTE link to the priorities widget', async () => {
     setEnv(BASE);

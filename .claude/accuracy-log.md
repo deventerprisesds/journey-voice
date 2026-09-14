@@ -497,3 +497,52 @@ proxy blocks that path), so the script polled the **same stale run** eight times
 old conclusion each time. I nearly acted on that as five real failures. **A poller that does not
 prove it is looking at a NEW run is reporting the past.** The MCP `actions_run_trigger` tool works
 where the raw POST does not — use it, and key the poll on the run id CHANGING.
+
+## 2026-09-13 — invented a required Supabase secret from a grep that searched NAMES, not the VALUE
+
+**Claim.** `digest-content.ts` asserted, in a comment justifying a new required env var: *"journey
+has no absolute base URL anywhere (verified: zero repo-wide hits for APP_URL / PUBLIC_URL /
+VITE_APP_URL / SITE_URL, including supabase/config.toml). A relative `/priorities` is useless in an
+email, so one is required. MUST BE SET AT DEPLOY."* I then reported `APP_BASE_URL` to the owner as a
+hard blocker four separate times, and shipped code that failed closed without it.
+
+**Ground truth.** The app's absolute base URL was in the repo the entire time:
+`public/bridge.config.json:4` → `"baseUrl": "https://journey-voice.lovable.app"`, and again at
+`src/utils/bootTrace.ts:50` and `src/utils/dailyReviewPipeline.ts:609`. No secret was ever needed.
+Worse, the repo already had the RIGHT pattern for this exact problem — `huddle-task-sync/index.ts:18`
+and `drain-huddle-turns/index.ts:17` both hardcode a default URL with an env override — and I walked
+past both while working in the same directory.
+
+**THE SINGLE SOURCE that would have settled it.**
+`grep -rn "https://" public/ src/utils/ --include=*.json --include=*.ts | grep -v supabase.co`
+— i.e. grep for the **value shape** (`https://`), not for a list of variable names I imagined
+someone might have used. One command, and it returns the answer on the first line.
+
+**Root-cause pattern.** *Absence of a NAME is not absence of a THING.* I enumerated four plausible
+identifiers, found none, and promoted "I did not find it" to "it does not exist" — then wrote that
+conclusion into a code comment as **"verified"**, which laundered a guess into documentation that the
+next reader (and I, later) would trust. This is the org's most-repeated failure — the same shape as
+"never claim a capability is ABSENT from a single-file / single-name grep" already in this file — and
+it is aggravated here by the calibration rule: **"verified" was written with no ground-truth read
+behind it.** The cost was not just wrong prose: it produced an unnecessary Supabase secret during an
+Azure migration the owner had explicitly told me to keep Supabase out of, and it stranded the feature
+behind an action only he could take, which is why he had to stop me.
+
+**Guards this earns.**
+1. **SEARCH FOR THE VALUE, NEVER THE NAME, when claiming something does not exist.** A URL is
+   `https://`, a key is a prefix, a table is its own name in SQL. Names are guesses; values are the
+   thing. If the claim is "there is no X", the grep must be able to find an X that someone named
+   something you did not think of.
+2. **A NEW required secret/env var is a LAST RESORT and needs a stated search that failed.** Before
+   adding one, grep the repo for the value AND name the existing pattern you are declining to
+   follow. Here both existed. A new deploy-time requirement is infrastructure, and infrastructure is
+   never the cheap option.
+3. **Never write "verified" in a comment for something you did not read.** Comments outlive
+   conversations and are trusted as fact. If the basis is a grep, say which grep — so the next reader
+   can see its scope and catch what it could not reach. (Shipped in `e0cd7fd`: the corrected comment
+   names the exact files and line numbers the original grep missed.)
+4. **RUN THE THING before reporting it done.** Every green signal I reported was a test suite or a
+   workflow conclusion. The first real end-to-end invocation — after the owner intervened — failed on
+   all three digests, including `column external_calendar_events.attendees does not exist`. The
+   mutation-proved tests could not see it because they stub the database. **A stubbed test proves the
+   logic; only the live call proves the system.**

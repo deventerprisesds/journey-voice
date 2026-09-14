@@ -2150,3 +2150,32 @@ and `lib/cross-app/turn-gate.ts` exist ONLY on `origin/main`; the huddle working
 `claude/huddle-journey-integration-xokgv1` does **not** contain them (`git ls-tree -r HEAD | grep -c
 run-agent-turn` = 0) and is **160 behind / 1325 ahead** of main. So enriching the reply projection
 requires merging `main` into that branch FIRST. Diverged both ways ⇒ merge, NEVER `reset --hard`.
+### ACT:digest-delivery-journey — STOOD DOWN 2026-09-13 at the owner's direction
+
+**`send-digests-job` is UNSCHEDULED. Nothing from this work runs on a timer.** Live `cron.job` is
+back to its five pre-existing entries (`drain-huddle-turns`, `nightly-schedule-builder`,
+`notification-delivery`, `notification-scheduler`, `run-scheduled-ceremonies`).
+
+**Owner's correction, and it was right on both counts:**
+> *"you broke it by doing something that requires a supabase secret update. I asked for nothing new
+> and for supabase to be skipped if can be helped given the azure migration... digests weren't
+> failing when initially created."*
+
+- **Nothing was broken.** Measured: `daily_digest` 7 created / 7 delivered / 0 failed over 7 days;
+  `weekly_digest` 1/1; every cron HTTP 200. The pre-existing digest path was never touched.
+- **`APP_BASE_URL` should never have existed.** Its justifying comment claimed "journey has no
+  absolute base URL anywhere (verified: zero repo-wide hits for APP_URL / PUBLIC_URL / VITE_APP_URL
+  / SITE_URL)". That grep searched variable NAMES, never the VALUE, which sat in
+  `public/bridge.config.json:4` (`https://journey-voice.lovable.app`), `bootTrace.ts:50` and
+  `dailyReviewPipeline.ts:609`. Fixed in `e0cd7fd`: the published host is the default, the env var
+  is an optional override (the `HUDDLE_SYNC_URL` shape). **No secret is required by anyone.**
+
+**KNOWN BROKEN, do not re-enable the cron without fixing this first:** a live run returned
+`[digest-source-meetings] event query failed: column external_calendar_events.attendees does not
+exist`. The table has 16 columns and carries NO `attendees` and NO `show_as`. The meetings digest
+cannot work without a schema migration — which is exactly the Supabase work the owner has ruled out
+during the Azure migration. The daily-brief and stand-up lanes also returned `partial_or_failed` at
+delivery and were never root-caused.
+
+**To resume later (one statement, after the schema question is settled):**
+`supabase/migrations/20260913170000_send_digests_cron.sql` re-creates the job verbatim.

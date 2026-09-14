@@ -164,26 +164,37 @@ export type DigestPayload =
 // ---------------------------------------------------------------------------
 
 /**
- * The ONE env var this work adds.
+ * Optional override for the app's public base URL. NO DEPLOY ACTION IS REQUIRED.
  *
- * journey has no absolute base URL anywhere (verified: zero repo-wide hits for
- * APP_URL / PUBLIC_URL / VITE_APP_URL / SITE_URL, including supabase/config.toml).
- * A relative `/priorities` is useless in an email, so one is required.
+ * CORRECTED 2026-09-13. An earlier version of this comment claimed "journey has no absolute base
+ * URL anywhere (verified: zero repo-wide hits for APP_URL / PUBLIC_URL / VITE_APP_URL / SITE_URL)"
+ * and therefore made `APP_BASE_URL` a REQUIRED new secret with no default. That grep searched for
+ * variable NAMES and never for the VALUE, which was in the repo the whole time --
+ * `public/bridge.config.json:4` `"baseUrl": "https://journey-voice.lovable.app"`, plus
+ * `src/utils/bootTrace.ts:50` and `src/utils/dailyReviewPipeline.ts:609`. The owner caught it:
+ * a new Supabase secret was invented on the back of a bad search, against a standing instruction
+ * to add no new Supabase infrastructure during the Azure migration.
  *
- * MUST BE SET AT DEPLOY:  supabase secrets set APP_BASE_URL=https://<app-host>
- *
- * There is deliberately NO fallback default. A default such as
- * `?? "https://app.example.com"` would make the missing-config branch
- * unreachable and ship a dead link to a human (AC-LINK-1's stated trap).
+ * So the default below is the REAL published host, and the env var is an override for a different
+ * deployment -- exactly the shape `huddle-task-sync/index.ts:18` (`HUDDLE_SYNC_URL`) and
+ * `drain-huddle-turns/index.ts:17` already use in this repo.
  */
 export const APP_BASE_URL_ENV = "APP_BASE_URL";
 
+/** `public/bridge.config.json:4` -- the app's published host, read from the repo, not invented. */
+export const APP_BASE_URL_DEFAULT = "https://journey-voice.lovable.app";
+
+/**
+ * Still thrown, but now only for a base URL that is present and UNUSABLE -- a non-http value, or
+ * localhost, which would ship a dead link to a human. The "unset" case can no longer occur, since
+ * `buildDeepLink` falls back to the published host above.
+ */
 export class MissingDeepLinkBaseError extends Error {
-  constructor() {
+  constructor(detail = "") {
     super(
-      `${APP_BASE_URL_ENV} is not set. A digest cannot be rendered without an ` +
-        `absolute base URL -- a relative path is dead in an email. Set it with: ` +
-        `supabase secrets set ${APP_BASE_URL_ENV}=https://<app-host>`,
+      `Cannot build an absolute deep link${detail ? `: ${detail}` : ""}. A relative or localhost ` +
+        `path is dead in an email. Override the default with ${APP_BASE_URL_ENV} if this ` +
+        `deployment is not ${APP_BASE_URL_DEFAULT}.`,
     );
     this.name = "MissingDeepLinkBaseError";
   }
@@ -201,8 +212,9 @@ export function buildDeepLink(
   baseUrl: string | null | undefined,
   path: string = PRIORITIES_PATH,
 ): string {
-  const base = (baseUrl || "").trim();
-  if (!base) throw new MissingDeepLinkBaseError();
+  // Unset falls back to the published host. An explicitly BAD value still throws -- a wrong
+  // override is a misconfiguration worth failing on, where an absent one is simply the default.
+  const base = ((baseUrl || "").trim() || APP_BASE_URL_DEFAULT).trim();
   if (!/^https?:\/\//i.test(base)) throw new MissingDeepLinkBaseError();
   if (/^https?:\/\/(localhost|127\.0\.0\.1)/i.test(base)) {
     throw new MissingDeepLinkBaseError();
