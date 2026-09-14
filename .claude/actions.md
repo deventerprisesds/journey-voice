@@ -2179,3 +2179,60 @@ delivery and were never root-caused.
 
 **To resume later (one statement, after the schema question is settled):**
 `supabase/migrations/20260913170000_send_digests_cron.sql` re-creates the job verbatim.
+
+---
+
+## ACT:email-401 — why no 8am email: the deployed sender called the Worker with NO token — 2026-09-14
+
+**Owner:** *"so why didn't I receive an email at 8am?"*
+
+**Ground truth, from `activity_log`, not inferred:**
+```
+2026-09-14 08:00:03 ET  notification_webhook_response  status=error  http=401
+  channels=["EMAIL"]   Webhook failed: 401 - {"ok":false,"error":"unauthorized"}
+```
+Identical at 11:00 for Business Hours Start. `scheduled_notifications.failure_reason` read
+`0/1 delivered; not delivered: EMAIL(not_reported)`.
+
+**The chain, every link measured:**
+| Link | State |
+|---|---|
+| pg_cron `notification-scheduler-job` / `notification-delivery-job` | active, 18 + 1080 runs, all succeeded |
+| row `Morning Kickstart` @ 08:00 ET | existed, fired on time |
+| `send-unified-notification` (DEPLOYED, from `main`) | **GET** to `UNIFIED_WEBHOOK_URL`, headers `{Accept}` only — **no credential** |
+| Worker `/notify` (`cloudflare/src/notify.ts:407`) | requires `x-webhook-secret` == `JOURNEY_PROXY_TOKEN`; else `{ok:false,error:'unauthorized'}` 401 — byte-identical to the logged body |
+
+**Root cause:** `deploy-supabase-functions.yml` step 8 *"Point UNIFIED_WEBHOOK_URL at journey's own
+/notify endpoint"* repointed the URL to the new Worker, but the deployed EDGE FUNCTION was still the
+old n8n-shaped caller. Edge functions deploy from `main` only, and the rewritten sender (+308 lines,
+POST + `x-webhook-secret` at index.ts:1146-1151) has only ever lived on this feature branch.
+
+**Why it looked fine until today:** the old sender marked every channel `success:true` when the
+webhook returned 2xx, so earlier "delivered" flags were FALSE SUCCESSES. `summarizeDelivery`
+(from main, deployed 09-13 17:47 UTC) replaced that with a real per-channel check — so today's
+"failure" is the new guard telling the truth for the first time, not a new breakage.
+
+**A defect I introduced and fixed in the same pass:** the 09-13 union merge of
+`deploy-supabase-functions.yml` appended main's `fetch-depth: 0` (a `with:` INPUT) into the
+staleness guard's `run:` block, so the shell executed it → exit 127. **YAML parsing does not catch
+this** — a `run:` block is just a string, so the file parsed cleanly before and after. Union is the
+right default for prose and independent declarations; it is WRONG across a `run:`/`with:` boundary.
+
+**RESULT — all six re-queued through the real cron path (no shortcuts, no direct sends):**
+| Call | Channel | Outcome |
+|---|---|---|
+| Morning Kickstart | Email | **delivered** |
+| Business Hours Start | Email | **delivered** |
+| Daily Wrap-up | Email | **delivered** |
+| Evening Start | Email | **delivered** |
+| Weekend Morning | Email | correctly skipped — `wrong_day_of_week` (Monday) |
+| Test call | In-App Chat | **failed** — `APP_MESSAGE(Edge Function returned a non-2xx status code)` |
+
+Webhook responses in the window: **4 × HTTP 200, 0 non-200** (was 401). Weekend Morning was run as
+a COPY so its real 09-19 occurrence stays intact.
+
+**Still open:** the In-App Chat (`APP_MESSAGE`) channel fails the same way it did on 09-12 and
+09-13 — a separate, pre-existing defect untouched by today's work.
+
+**STATUS: mechanism verified live (200s + delivered flags). NOT owner-confirmed until the emails
+are actually seen in the inbox.**
