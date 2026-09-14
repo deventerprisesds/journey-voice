@@ -228,5 +228,21 @@ describe('AC-CH-3/AC-CH-4 — a partial fan-out is NEVER recorded as a success (
     const src = read(DELIVERY);
     assert.match(src, /getTasksForWindow\(/, 'the briefing must read the real scheduled tasks');
     assert.match(src, /renderBriefingBody\(\{/, 'the normal path renders a briefing, not a sentence');
+    // THE ASSERTION THAT ACTUALLY BITES, added after mutate.sh reported the first two INERT.
+    // Reinstating the defect — building the briefing and then sending the one-line render anyway —
+    // left both greps above satisfied, because a renderer that is CALLED but whose output is
+    // DISCARDED still appears in the source. That is not a hypothetical: renderBriefingBody sat in
+    // this repo with zero callers for a day for exactly that reason. So pin what is SENT.
+    assert.match(
+      src,
+      /body: briefingBody,/,
+      'the unified invoke must SEND the briefing — calling the renderer and discarding it is the bug',
+    );
+    // ...and the thin render must remain reachable ONLY as the leak fallback.
+    assert.match(
+      src,
+      /containsCallScript\(briefingBody\)[\s\S]{0,400}?briefingBody = renderScheduledCall\(/,
+      'renderScheduledCall is the fallback for a detected leak, not the normal path',
+    );
   });
 });
