@@ -1895,3 +1895,24 @@ The pre-existing `F-script-leak` test required the literal `body: renderSchedule
 That pinned one FUNCTION NAME rather than the invariant — and the four hollow emails satisfied it
 completely. It was WIDENED (not relaxed) to assert the two things that actually matter: the body
 comes from a renderer rather than `callConfig.context`, and whatever is sent is leak-checked.
+
+### Hardening — NEVER describe the CONTENT of something sent to a person from delivery evidence
+
+Logged as accuracy-log #14, and generalised here because it is not about email.
+
+On 2026-09-14 four notifications were reported to the owner as *"rendered from real data"* on the
+strength of HTTP 200s, `delivered_at` timestamps, matching send times and green cron ticks. Every
+one of those is evidence about **DELIVERY**. Not one is evidence about the **BODY**. The bodies
+contained a single sentence and no data at all.
+
+**The rule:** before describing what a message CONTAINS — email, Slack post, push notification,
+report, digest — **print the rendered body and read it**, or say plainly *"delivery verified;
+content not inspected."* A 200 is evidence about a channel, never about what was in it. The cheap
+version of this check is one `deno eval` calling the renderer with a realistic fixture; it takes
+seconds and would have caught this before the owner did.
+
+**Why it was missed, so the tell is recognisable:** the hard half (why nothing arrived — a 401 from
+an un-credentialed caller) had just been solved with real evidence. Having proved the difficult
+thing, the easy thing was narrated from memory of code written the day before — code that had been
+changed in the interim, by me, in a merge whose own notes said the task list was being dropped.
+**Confidence earned on one half of a system does not transfer to the other half.**

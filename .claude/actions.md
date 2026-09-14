@@ -2287,3 +2287,9 @@ gate here.
 
 **Untouched and still broken:** the In-App Chat (`APP_MESSAGE`) channel, failing identically on
 09-12, 09-13 and 09-14. A separate defect, neither caused nor fixed by this work.
+
+**Accuracy follow-through (2026-09-14):** logged as accuracy-log **#14** — the material false
+claim was mine (*"rendered from real data"*), made from DELIVERY evidence only. Guard now in
+memory.md Hardening: never describe a message's CONTENT without printing the rendered body; a
+200 is evidence about a channel, never about what was in it. Commits: `c529ff3` (fix),
+`6cd8bbf` (guard made non-inert), `4ffdc8c` (ledgers), `892c6f2` (accuracy #14).
