@@ -1849,3 +1849,49 @@ both before and after (verified: all 11 workflows parse, including the broken on
 sides" is the right default for prose and for independent declarations; across a `run:`/`with:`
 boundary the two sides are different KINDS of thing and unioning them produces garbage that only
 fails at execution time.
+
+## The notification BODY is a second, separate failure from notification DELIVERY (2026-09-14)
+
+Delivery and content broke independently on the same day, and fixing the first made the second
+visible rather than causing it. Keep them apart when diagnosing: a `delivered_at` timestamp and
+HTTP 200 say the message left; they say NOTHING about whether it was worth receiving.
+
+**What the owner received, verbatim, after delivery was fixed:** *"Time for your morning
+kickstart."* — the entire email. Four of them. His words: *"each email had exactly one sentence...
+this proves nothing."*
+
+**Why:** `renderScheduledCall` (`_shared/digest-content.ts:588`) has two branches. `phone` passes
+the script through; **every read channel gets `const body = `${subject}.`` (:608)** — one sentence,
+by construction. That renderer exists to stop the VOICE SCRIPT leaking into email (a real defect:
+emails once arrived reading *"BRANCH 1... Greet: Hello Sir"*). Stripping the script was right;
+sending nothing in its place made the notification pointless.
+
+**The richer renderer already existed and I orphaned it.** `renderBriefingBody`
+(`_shared/notification-body.ts`, commit `fb80729`) opens with the same sentence, appends the
+guidance with the script stripped, then lists the window's REAL tasks with times. In the 09-13
+union merge I took main's `renderScheduledCall` wholesale and filed the task list as a
+"follow-up" — leaving `notification-body.ts` in the repo with **zero callers** for a day. Fixed in
+`c529ff3`: window from the script's own `[WINDOW:x]` marker, tasks via `getTasksForWindow` (the
+same source the nightly builder places from, so email cannot diverge from the schedule), DONE
+filtered, task fetch non-fatal, and `containsCallScript` still gates the result — a detected leak
+falls back to the thin render rather than mailing the script.
+
+### Hardening — "the renderer is CALLED" is not "the output is SENT"
+
+`mutate.sh` reported the first version of the regression guard **INERT**, and it was right. The
+mutation reinstated the defect exactly — build the briefing, then send the one-line render anyway —
+and the guard still passed, because it only grepped for `renderBriefingBody(` and
+`getTasksForWindow(` in the source. **A renderer that is called and whose output is discarded still
+appears in the source.** That is not hypothetical; it is precisely how `notification-body.ts` sat
+unused for a day. The guard now pins `body: briefingBody,` and requires `renderScheduledCall` to
+appear only inside the `containsCallScript` fallback (`6cd8bbf`); the same mutation then FIRED.
+
+**Generalise it:** a source-grep guard over a pipeline must assert what the pipeline OUTPUTS, never
+merely that a helper is mentioned. The identical trap sits in any "did we wire X in" check.
+
+### A guard that a hollow implementation passes is protecting the wrong thing
+
+The pre-existing `F-script-leak` test required the literal `body: renderScheduledCall({...}).body`.
+That pinned one FUNCTION NAME rather than the invariant — and the four hollow emails satisfied it
+completely. It was WIDENED (not relaxed) to assert the two things that actually matter: the body
+comes from a renderer rather than `callConfig.context`, and whatever is sent is leak-checked.

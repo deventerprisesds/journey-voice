@@ -2236,3 +2236,54 @@ a COPY so its real 09-19 occurrence stays intact.
 
 **STATUS: mechanism verified live (200s + delivered flags). NOT owner-confirmed until the emails
 are actually seen in the inbox.**
+
+---
+
+## ACT:hollow-email — the emails delivered, and said nothing — 2026-09-14
+
+**Owner, after the delivery fix:** *"each email had exactly one sentence. clearly you skirted the
+real creation pipeline and sent some test batch not using the production pipeline. this proves
+nothing."*
+
+**The observation was right; the inferred cause was not — and the truth is worse.** Those emails
+DID go through the production path: the real `scheduled_notifications` rows, re-queued by setting
+`scheduled_for = now()`, collected by the every-minute `notification-delivery-job` pg_cron, with
+`activity_log.notification_webhook_response` recording **HTTP 200, channels=["EMAIL"]** and send
+times (1:18/1:20 PM ET) matching the re-queue at 13:17:56 ET. So one sentence is **what the 8am
+email would have contained all along** had it not been 401ing. Delivery and content were two
+independent failures; fixing the first only made the second visible.
+
+**Cause:** `renderScheduledCall` (`_shared/digest-content.ts:588`) returns
+`const body = `${subject}.`` for every READ channel (:608). One sentence, by construction.
+
+**My fault, specifically:** `renderBriefingBody` (`_shared/notification-body.ts`, `fb80729`) was
+written for exactly this and I **orphaned it in the 09-13 union merge** — took main's thin renderer
+wholesale, filed the task list as a "follow-up", left the file with ZERO callers for a day. This is
+the same class of miss I had flagged one hunk earlier in that very merge (`collectOverflow`, where
+taking main wholesale would have silently deleted behaviour) and then committed anyway.
+
+**Fix — `c529ff3`:** delivery now builds the briefing from the script's own `[WINDOW:x]` marker +
+`getTasksForWindow` (the source the nightly builder places from, so email cannot diverge from the
+schedule), DONE filtered, times localised, task fetch non-fatal. `containsCallScript` still gates
+the body; a detected leak falls back to the thin render rather than mailing the voice script.
+
+**Guard was INERT first, and that is the finding worth keeping — `6cd8bbf`:** `mutate.sh`
+reinstated the exact defect (build the briefing, send the one-line render anyway) and the guard
+PASSED, because it only grepped that `renderBriefingBody(`/`getTasksForWindow(` appear in the
+source. A renderer that is called and discarded still appears in the source — which is precisely
+how the file sat unused for a day. The guard now pins `body: briefingBody,` and requires
+`renderScheduledCall` only inside the fallback; the same mutation then reported **FIRED**.
+The pre-existing `F-script-leak` test was WIDENED (not relaxed) for the same reason: it pinned one
+function NAME, and the four hollow emails passed it completely.
+
+**Evidence:** 315 pass / 0 fail; undef-check 93 files, 0 new; `mutate.sh` FIRED with a clean
+restore. Deploy run **34877395448** (`notification-delivery`, sha `6cd8bbfa`) success.
+One Morning Kickstart re-queued at 13:53:34 ET → `delivered=true`, no failure reason.
+
+**STATUS: deployed and mechanism-verified; NOT owner-confirmed.** Only one email was re-sent, on
+purpose — the owner reads the content and says whether it is right before the rest go out. The
+one-sentence version passed every automated check it had, which is exactly why his eyes are the
+gate here.
+
+**Untouched and still broken:** the In-App Chat (`APP_MESSAGE`) channel, failing identically on
+09-12, 09-13 and 09-14. A separate defect, neither caused nor fixed by this work.
