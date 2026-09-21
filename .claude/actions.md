@@ -6,6 +6,22 @@ the technical findings) and `.claude/accuracy-log.md` (wrong-first-answers).
 
 ---
 
+## ACT-jv-2: PR triage pass — 5 open PRs
+
+**Asked (2026-09-21, owner):** "go ahead with the triage pass" (across all repos with open PRs).
+
+**Status: DONE for 2/5 PRs, 3 left open pending owner review.**
+
+Evidence:
+- Full per-PR findings → `.claude/pr-triage-2026-09-21.md` (committed `f2e1c26`).
+- #16 merged → `b7cf46d`. #21 closed as superseded → PR comment + close, evidence cites merged #24
+  (`54f12c7`).
+- #13 (app-load caching), #17 (scheduler trait model), #26 (dryRun harness, 97 files/~29.5k lines,
+  much bigger than its title) — real, un-landed, non-stale, but each has genuine merge conflicts in
+  actively-evolving files. Left OPEN for the owner's own scoping/merge-vs-reimplement call.
+
+---
+
 ## ACT-jv-1: Temporary scheduling caveats — a way to add expiring rules the scheduler obeys until cleared
 
 **Asked (2026-08-26, owner):** a model following existing patterns that allows *temporary*
