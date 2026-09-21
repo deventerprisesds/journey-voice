@@ -1,5 +1,22 @@
 # Project Memory — journey-voice
-Last updated: 2026-09-13
+Last updated: 2026-09-21
+
+## PR triage pass (2026-09-21) — 5 open PRs read-evidence-checked, 2 acted on
+Full per-PR evidence in `.claude/pr-triage-2026-09-21.md`. Method: content-grepped against
+`origin/main` (never `git log` ancestry alone — this repo's history has been rewritten) plus real
+3-way `git merge-file` against each PR's actual historical base commit where `git merge-base` with
+current main didn't resolve.
+- **#16 MERGED** (`b7cf46d`) — test-custom-alarm-sound bugfix, 0 conflicts, target file untouched
+  since PR's base.
+- **#21 CLOSED-SUPERSEDED** — its core feature (`definition_of_done` wiring) already landed via
+  merged PR #24 (`54f12c7`), confirmed by reading #24's own commit content. Two small unlanded
+  pieces still worth a fresh edit: `tool-definitions.ts`'s `update_task` schema entry (cosmetic —
+  the write path works without it), and the `cleanup-board` skill.
+- **#13, #17, #26 → NEEDS-HUMAN-CALL, left open.** All three are real, un-landed, non-stale
+  features with genuine merge conflicts in files that have kept evolving on main (app-load caching
+  vs. `CommsConsoleContext.tsx`/`useUnifiedTasks.ts`; scheduler trait-model vs.
+  `nightly-schedule-builder`/`execute-tool`; the 97-file/29.5k-line dryRun-harness branch whose
+  title undersells its real scope). None is safe to auto-merge or auto-close — see the triage file.
 
 ## get_tasks now honors the advertised `query` param (fuzzy title search) — 2026-08-02
 `getTasks` (`supabase/functions/execute-tool/index.ts`) previously IGNORED the `query`/`keyword` param
