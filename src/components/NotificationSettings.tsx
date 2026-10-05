@@ -635,16 +635,23 @@ const NotificationSettings = () => {
 
   const sendTestCustomAlarm = () => {
     if (!window.AndroidBridge) return;
-    window.AndroidBridge.cancelAlarm?.('test-alarm-custom');
-    window.AndroidBridge.notify(JSON.stringify({
-      channel: 'calendar_events',
-      title: '🔔 Event Starting Now',
-      body: 'Test: custom sound alarm with Snooze and Dismiss',
-      deepLink: '/calendar',
-      tag: 'test-alarm-custom',
-      soundSource: 'custom',
-    }));
-    toast({ title: 'Custom alarm fired', description: 'Check your notification shade' });
+    if (window.AndroidBridge.testAlarmSound) {
+      // Direct sound preview — bypasses gate flow so the alarm sound actually plays
+      window.AndroidBridge.testAlarmSound('system');
+      toast({ title: 'Playing alarm sound', description: 'Stops automatically after 10s' });
+    } else {
+      // Fallback for older APKs without testAlarmSound
+      window.AndroidBridge.cancelAlarm?.('test-alarm-custom');
+      window.AndroidBridge.notify(JSON.stringify({
+        channel: 'calendar_events',
+        title: '🔔 Event Starting Now',
+        body: 'Test: custom sound alarm with Snooze and Dismiss',
+        deepLink: '/calendar',
+        tag: 'test-alarm-custom',
+        soundSource: 'custom',
+      }));
+      toast({ title: 'Custom alarm fired', description: 'Check your notification shade' });
+    }
   };
 
   const sendTestMessage = () => {
