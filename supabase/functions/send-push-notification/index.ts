@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import webpush from "npm:web-push@3.6.7";
+import { mintActionToken, isUuid } from "../_shared/action-token.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -28,6 +29,8 @@ interface NotificationRequest {
     openCommsConsole?: boolean;
     batchSize?: number;
     notificationIds?: string[];
+    deepLink?: string;
+    tag?: string;
     // Opt-in delivery controls (default omitted → unchanged behavior). ttl = seconds FCM/web-push may
     // retry an undelivered push; collapseKey = a newer push replaces an older undelivered one.
     ttl?: number | string;
@@ -243,6 +246,18 @@ serve(async (req) => {
       deepLink: data?.deepLink ?? '/',
       tag: data?.tag ?? data?.notificationId ?? 'fcm',
     };
+
+    // Phone alarm buttons (Done/Doing) authenticate with a signed single-task token carried in the
+    // push itself, so they work when the app is killed, the session expired, or the user signed out.
+    // FCM only (never the web payload) and never logged. A mint failure must not block delivery.
+    if (isUuid(data?.taskId)) {
+      try {
+        fcmData.actionToken = await mintActionToken(userId, data!.taskId!);
+        fcmData.actionUrl = `${(Deno.env.get('SUPABASE_URL') ?? '').replace(/\/$/, '')}/functions/v1/alarm-action`;
+      } catch (e) {
+        console.warn('[send-push-notification] action token mint failed:', e instanceof Error ? e.message : e);
+      }
+    }
 
     const results = await Promise.allSettled(
       subscriptions.map(async (sub) => {

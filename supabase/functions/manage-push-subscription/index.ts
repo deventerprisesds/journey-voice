@@ -71,6 +71,17 @@ serve(async (req) => {
         return new Response(JSON.stringify({ error: 'Failed to store FCM token', details: upsertError.message }),
           { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
       }
+      // One device, one owner. Sign-out deliberately does NOT unregister the device (alarms and their
+      // Done buttons keep working signed out), so if a DIFFERENT account later registers this same
+      // device token, drop the previous owner's rows — otherwise their alarms keep arriving here.
+      const { error: dedupeError } = await supabaseClient
+        .from('push_subscriptions')
+        .delete()
+        .eq('fcm_token', fcmToken)
+        .neq('user_id', userId);
+      if (dedupeError) {
+        console.warn('[manage-push-subscription] device-owner dedupe failed (non-blocking):', dedupeError.message);
+      }
       console.log('[manage-push-subscription] FCM token stored for user:', userId);
       return new Response(JSON.stringify({ success: true, message: 'FCM token saved' }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
