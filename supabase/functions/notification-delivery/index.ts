@@ -10,6 +10,11 @@ import {
 import { renderScheduledCall, containsCallScript, CallScriptLeakError } from "../_shared/digest-content.ts";
 import { renderBriefingBody } from "../_shared/notification-body.ts";
 
+// Notification types that become the phone's full-screen alarm (channel `calendar_events`).
+const ALARM_TYPES = ['calendar_event_reminder', 'task_start_now', 'task_start_reminder'];
+// Mirrors src/utils/alarmDeepLink.ts: single-task alarms open that task, others the calendar.
+const alarmDeepLink = (taskId: string | null | undefined) => (taskId ? `/calendar?task=${taskId}` : '/calendar');
+
 // Version derived from centralized config
 const DELIVERY_VERSION = `${GLOBAL_VERSION}-${FUNCTION_IDS.DELIVERY}`;
 
@@ -570,6 +575,12 @@ serve(async (req) => {
             userBatches.set(summaryKey, []);
           }
           userBatches.get(summaryKey).push(notification);
+        } else if (ALARM_TYPES.includes(notification.notification_type)) {
+          // Alarms are NEVER batched. A batch of 2+ becomes a `batched_reminders` push on `messages`
+          // with taskId:null, so the phone shows no full-screen alarm and no Done/Doing — and a Done
+          // that can't reach the task means the task rolls forward and alarms again tomorrow.
+          // Back-to-back tasks (B starts as C's 15-min warning fires) hit this every day.
+          userBatches.set(`${userId}_alarm_${notification.id}`, [notification]);
         } else {
           const batchKey = `${userId}_${Math.floor(new Date(notification.scheduled_for).getTime() / (2 * 60 * 1000))}`;
           if (!userBatches.has(batchKey)) {
@@ -712,7 +723,7 @@ serve(async (req) => {
           // Determine the Android notification channel based on notification type
           const primaryType = batchNotifications.length === 1 ? batchNotifications[0].notification_type : 'batched_reminders';
           let androidChannel = 'task-reminders';
-          if (['calendar_event_reminder', 'task_start_now', 'task_start_reminder'].includes(primaryType)) androidChannel = 'calendar_events';
+          if (ALARM_TYPES.includes(primaryType)) androidChannel = 'calendar_events';
           else if (primaryType === 'daily_digest' || primaryType === 'batched_reminders') androidChannel = 'messages';
 
           // Server-side trace for alarm-channel dispatches
@@ -763,7 +774,14 @@ serve(async (req) => {
                 type: primaryType,
                 taskId: batchNotifications.length === 1 ? batchNotifications[0].task_id : null,
                 notificationIds: notificationIds,
-                batchSize: batchNotifications.length
+                batchSize: batchNotifications.length,
+                // A unique tag per push: without one, send-push-notification falls back to 'fcm' for
+                // EVERY alarm, so the phone can't tell two alarms apart. The deep link opens the task.
+                ...(batchNotifications.length === 1 ? {
+                  notificationId: batchNotifications[0].id,
+                  tag: `n-${batchNotifications[0].id}`,
+                  deepLink: alarmDeepLink(batchNotifications[0].task_id),
+                } : {}),
               }
             }
           });

@@ -443,7 +443,27 @@ async function generateCalendarEventReminders(
 
   if (!events || events.length === 0) return notifications;
 
+  // Events that are just the calendar copy of a journey task (mirrored out to Outlook/Google) get
+  // NO calendar reminder: the task's own start reminder already alarms with its task id, so this
+  // one only produced a SECOND, task-less alarm (no Done/Doing) — and when both landed in the same
+  // delivery bucket they were batched into a task-less `messages` push. The link is recorded on
+  // either side: external_calendar_events.source_task_id, or tasks.external_event_id.
+  const taskBackedEventIds = new Set<string>();
+  const eventIds = events.map((e: any) => e.external_event_id).filter(Boolean);
+  if (eventIds.length > 0) {
+    const { data: linkedTasks } = await supabaseClient
+      .from('tasks')
+      .select('external_event_id')
+      .eq('user_id', prefs.user_id)
+      .in('external_event_id', eventIds);
+    for (const t of linkedTasks || []) if (t.external_event_id) taskBackedEventIds.add(t.external_event_id);
+  }
+
   for (const event of events) {
+    if (event.source_task_id || taskBackedEventIds.has(event.external_event_id)) {
+      console.log(`Skipping calendar reminder for task-backed event ${event.external_event_id}`);
+      continue;
+    }
     // Calculate when the reminder should fire
     const eventStart = new Date(event.start_time);
     let scheduledFor = new Date(eventStart.getTime() - leadMinutes * 60 * 1000);
