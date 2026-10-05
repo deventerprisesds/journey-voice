@@ -1931,3 +1931,30 @@ an un-credentialed caller) had just been solved with real evidence. Having prove
 thing, the easy thing was narrated from memory of code written the day before — code that had been
 changed in the interim, by me, in a merge whose own notes said the task list was being dropped.
 **Confidence earned on one half of a system does not transfer to the other half.**
+
+## Phone alarm Done/Doing — signed action token (2026-10-05)
+**Bug:** Done on the Android full-screen alarm closed the screen but never saved. The bridge PATCHed
+`tasks` with the WebView JWT (expired ~1h after the app is dismissed, blanked on sign-out) on a bare
+thread; failure was only logged locally. Task stayed open → 3am builder rolled it forward
+(`pushed_count` 44 on "Go to church") → same alarm next day.
+**Fix (live):**
+- `_shared/action-token.ts`: `v1.<b64url{u,t,exp}>.<HMAC>`; key = HMAC(service-role key, label) — no
+  new secret. 7-day TTL. Minted by `send-push-notification` into FCM data (`actionToken`, `actionUrl`)
+  whenever `data.taskId` is a UUID. Never logged.
+- `alarm-action` fn (verify_jwt=false): `set_status` DOING|DONE scoped to token user+task, idempotent,
+  sets `completed_at` on DONE (the reminder trigger keys on it → pending reminders deleted); `trace`
+  op writes `android_alarm_trace` with `via=action_token` so phone diagnostics arrive signed out.
+  Outcomes logged as `activity_log.activity_type='android_alarm_action'` (`matched`/`changed`).
+- `notification-delivery`: alarm types (`task_start_reminder|task_start_now|calendar_event_reminder`)
+  are NEVER batched (a batch dropped taskId → no Done button); unique `tag n-<id>` + deep link.
+- `notification-scheduler`: no calendar reminder for task-backed events (source_task_id /
+  tasks.external_event_id) — the task's own start reminder covers it.
+- `manage-push-subscription`: one device, one owner (sign-out deliberately does NOT unregister).
+- Android bridge: `AlarmActionWorker` (WorkManager, retries, survives process death) does every
+  Done/Doing; Huddle passes `taskId` only for reminders linked to an existing board task.
+**Debug:** `select created_at, activity_type, metadata from activity_log where activity_type in
+('android_alarm_trace','android_alarm_action') order by created_at desc limit 50;` — look for
+`ALARM_ACTION SUCCESS|RETRY|GIVE_UP`, `tok=present|absent`.
+**Deploy line:** this repo's `main` is an 83-commit re-rooted line far behind what's live; the live
+functions come from `claude/huddle-journey-integration-xokgv1`. Diff the DEPLOYED code
+(`get_edge_function`) before shipping a function, and deploy by name via workflow_dispatch.
