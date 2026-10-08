@@ -479,3 +479,57 @@ groups `LIFE, PERSONAL, HEALTH` (and `HEALTH` isn't even in the enum).
 **`EDUCATION` vs `PROF_EDUCATION` is a DIFFERENT case — leave it.** That split is deliberate and
 documented in the parser prompt: formal degree programme with fixed deadlines vs self-paced online
 course.
+
+## SIX writers wrote a category into `tasks.status`, not four — and the VOICE one was the big one
+
+Final count after the full sweep, 2026-10-08. **The order matters: the two found LAST were the ones
+that actually produced the bad rows.**
+
+| # | Writer | Kind | Fixed in |
+|---|---|---|---|
+| 1 | `ai-task-parser` prompt — TWO separate blocks | edge fn | #28 |
+| 2 | `SmartTaskInput.tsx` `mapCategoryToStatus()` | client | #28 |
+| 3-4 | `TaskCreationModal.tsx` — a byte-identical copy (`:620`) + a hardcoded literal (`:943`) | client | #28 |
+| 5 | `smart-calendar-scheduler` PRIORITY 3 → `taskScheduling.ts:133` → `.update({status})` | edge fn + client | #31 |
+| 6 | **`RealtimeVoiceAssistant.ts:1676` → `.insert([taskData])`** — every task created BY VOICE | client | #33 |
+
+**#6 IS THE ONE THAT HID BEST, AND THE REASON IS WORTH REMEMBERING.** It read
+`normalizedCategory === 'EDUCATION' ? 'PROF_EDUCATION' : normalizedCategory`. `EDUCATION` is a
+`task_category` but NOT a `task_status` member, so without that ternary Postgres would have
+rejected the insert loudly and it would have been found years ago. **The workaround silenced the
+error without fixing the mapping** — it converted a loud failure into a quiet wrong value, and a
+quiet wrong value survives indefinitely. Whenever you find a special case that exists only to dodge
+a constraint, suspect the mapping it is protecting.
+
+**HOW TO SWEEP FOR THIS CLASS, because two attempts failed first.** Grepping the helper NAME
+(`mapCategoryToStatus`) and the LITERAL (`status: 'PROF_EDUCATION'`) found #1-#4 and could never
+find #5 or #6, which assign a VARIABLE holding a category. The sweep that works is the
+**ASSIGNMENT TARGET**:
+
+    grep -rnE "status: *['\"]|status *= *['\"]|status: *[a-zA-Z_.]*(ategory|Status)" src supabase/functions
+
+Then separate real writers from board-LANE definitions (a column's `status` legitimately IS the lane
+name, including the category-named lanes in `KanbanBoard` `STANDARD_COLUMNS` and the demo columns).
+
+**`src/utils/workflowStatus.ts` is the one place to get a status from.** `WORKFLOW_STATUSES` (nine
+lanes, the four category-shaped enum members deliberately absent), `asWorkflowStatus()`,
+`defaultStatusForNewTask({dated})`.
+
+## journey's CLIENT does NOT deploy from GitHub Actions — it is a LOVABLE app
+
+**Nothing in `.github/workflows/` builds `src/`.** Verified 2026-10-08 by checking every workflow's
+paths. `deploy-cloudflare.yml` watches `cloudflare/**` only (a Worker, not the React app).
+
+The live app is **https://journey-voice.lovable.app** (`README.md:7`, `public/bridge.config.json:4`),
+there is a `.lovable` directory and `lovable-tagger` in `package.json` — so the client is built and
+deployed by **Lovable's own pipeline** on push to `main`, outside GitHub and NOT observable from a
+CCR session.
+
+**CONSEQUENCE FOR ANY "is it live?" ANSWER — these two halves have different evidence:**
+
+| Change | Can I verify it live? |
+|---|---|
+| `supabase/functions/**` | **YES.** `deploy-supabase-functions.yml` run conclusion, and `mcp__Supabase__get_edge_function` reads the DEPLOYED source back (that is how `ai-task-parser` v560 was confirmed, and how a failed deploy was caught) |
+| `src/**` | **NO.** Merged to `main` is all that can be shown. Lovable's deploy is not in Actions, and the SWA/bundle is not reachable from the session. The owner hard-refreshing is the only confirmation |
+
+Never report a `src/` change as "live" from a green Actions run — there is no Actions run for it.
