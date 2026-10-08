@@ -1,3 +1,14 @@
+// NOTE ON `status` IN THIS FILE: the objects built here are NEVER inserted. They are returned to
+// `SmartTaskInput`, which appends them to `allTasks` purely as scheduling CONTEXT for
+// `ItineraryEngine.findOptimalTimeSlot` — and that engine only ever compares `status` against
+// 'DONE' (ItineraryEngine.ts:69,103,157,175,516). Verified 2026-10-08: this file contains no
+// `.from('tasks')` and no insert.
+//
+// These three literals formerly read `status: 'PROF_EDUCATION'` — a CATEGORY, not a lane. Inert,
+// but it is the exact decoy that let three real writers hide from a value-shaped grep during the
+// #28/#31 sweep, so they now hold a real workflow lane. Behaviour is unchanged: neither value is
+// 'DONE'. If anything here ever becomes a real insert, use
+// `defaultStatusForNewTask()` from src/utils/workflowStatus.ts.
 import { supabase } from '@/integrations/supabase/client';
 import { Task } from '@/types/task';
 import { MIT_PROGRAM_ID } from '@/utils/programIds';
@@ -39,7 +50,7 @@ export async function fetchPendingAssignments(
               id: assignment.id,
               title: assignment.title,
               description: assignment.description || '',
-              status: 'PROF_EDUCATION' as const,
+              status: 'BACKLOG' as const, // a WORKFLOW lane, not the category -- see note at top of file
               category: 'PROF_EDUCATION' as const,
               priority: assignment.priority as 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT',
               due_date: assignment.due_date,
@@ -125,7 +136,7 @@ export async function fetchPendingAssignments(
               id: assignment.id,
               title: assignment.title,
               description: assignment.description || '',
-              status: 'PROF_EDUCATION' as const,
+              status: 'BACKLOG' as const, // a WORKFLOW lane, not the category -- see note at top of file
               category: 'PROF_EDUCATION' as const,
               priority: assignment.priority as 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT',
               due_date: assignment.due_date,
@@ -168,7 +179,7 @@ export async function fetchPendingAssignments(
             id: assignment.id,
             title: assignment.title,
             description: assignment.description || '',
-            status: 'PROF_EDUCATION' as const,
+            status: 'BACKLOG' as const, // a WORKFLOW lane, not the category -- see note at top of file
             category: 'PROF_EDUCATION' as const,
             priority: assignment.priority as 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT',
             due_date: assignment.due_date,

@@ -198,6 +198,11 @@ export async function createTask(
       description: args.description?.trim() || null,
       priority: normalizedPriority,
       category: normalizedCategory,
+      // DEAD FILE — nothing imports this (verified 2026-10-08), so this line is inert. It is
+      // annotated rather than changed so it cannot be restored as a working copy of a known
+      // defect: `status` must be a WORKFLOW lane, never the category. The live version in
+      // RealtimeVoiceAssistant.ts now uses defaultStatusForNewTask(). See #31 and
+      // src/utils/workflowStatus.ts. DO NOT restore this file without fixing this line.
       status: normalizedCategory === 'EDUCATION' ? 'PROF_EDUCATION' : normalizedCategory,
       board_id: defaultBoard.id,
       user_id: userId
