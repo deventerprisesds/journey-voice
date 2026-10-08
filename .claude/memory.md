@@ -371,3 +371,59 @@ drew the wrong conclusion from it. Reading the two paths side by side settled it
 on the report would have broken the in-app assistant. The rule cuts both ways: a verifier catching me
 in a false claim, and me catching a verifier in a misread, came from the same habit of reading the
 primary source.
+
+---
+
+## Task creation silently failing — ROOT-CAUSED AND SHIPPED (2026-10-08)
+
+**The two enums are different and only partly overlap. This is the fact to keep:**
+
+| enum | values |
+|---|---|
+| `task_status` | `BACKLOG, TODO, DOING, DONE, BLOCKED, CAREER, PROF_EDUCATION, VENTURES, PLANNING, READY, UP_NEXT, LIFE, IN_REVIEW` |
+| `task_category` | `LIFE, CAREER, VENTURES, EDUCATION, PROF_EDUCATION, PERSONAL` |
+
+**`EDUCATION` and `PERSONAL` are categories but NOT statuses.** Four writers copied the chosen
+category into `status`, so anything categorised `EDUCATION` or `PERSONAL` was rejected by the enum
+and the create failed with no visible cause. The other four values saved into a lane the task did
+not belong in. Fixed in #28/#29/#30; each writer now sets `UP_NEXT` when dated, `BACKLOG` when not
+— journey's own existing server-side rule at `execute-tool/index.ts:1482`, which was never at fault.
+
+**THE BOARD HAS TWO SURFACES AND THEY RESOLVE LANES DIFFERENTLY. This is the non-obvious part and
+it cost a wrong diagnosis:**
+- `TasksPage` → `TabbedKanbanBoard` → `KanbanBoard useStandardColumns={true}` → the hardcoded
+  `STANDARD_COLUMNS` (Backlog/Blocked/Ready/Up Next/Doing/Done). `TabbedKanbanBoard:22-37` also
+  rewrites a category-shaped status to `{category, status:'BACKLOG'}` **in memory**, never in the DB.
+- `Dashboard` → `KanbanBoard` with the prop **omitted** (it defaults to `false`) → lanes come from
+  the live **`public.columns` table**. Measured 2026-10-08: `LIFE`/`CAREER`/`PROF_EDUCATION`/
+  `VENTURES` each have 123 lane rows labelled Life / Career / Prof. Education / Ventures. **On that
+  surface a category-shaped status IS a real, rendered lane** — the older board model, seeded by
+  migration `20250925163916`. So those rows were never invisible; I claimed they were and was wrong.
+- No task can fall through either way: `KanbanBoard.tsx:571` `mapTaskStatusForColumns` falls back to
+  the task's own status if a lane exists, then `PROF_EDUCATION` for an `EDUCATION` category, then
+  `BACKLOG`, then the first lane.
+
+**Data cleanup applied:** 11 rows had `status = VENTURES` (all with `category = VENTURES`). 10 →
+`BACKLOG`, `8e1b45a4` (the only dated one) → `UP_NEXT`, all keeping their category. Verified 0 rows
+now carry a category-shaped status; the 68 open `category = VENTURES` tasks sit in
+`BACKLOG/DONE/IN_REVIEW/TODO/UP_NEXT`.
+
+**`supabase/functions/**` IS NOT TYPE-CHECKED BY THE APP's tsc.** Reporting "tsc exits 0" for an edge
+function is meaningless — the file is not in that program. The right parser is Deno's, locally and
+with no network: `deno fmt --check <file>`, and a `SyntaxError` in its output is a real parse
+failure. `deno check` would resolve the module graph for 51 functions over the network and fail for
+unrelated reasons. A syntax error merged this way on #28 and only surfaced in the post-merge deploy.
+
+**A delimiter is never punctuation inside its own string.** Backticks around `category`/`status`
+inside the backtick-delimited prompt closed the template literal. Same trap as the smart-quote rule,
+one delimiter over. This file's prose style (plain CAPS for emphasis) is the safe form.
+
+**NEW GUARD: `.github/workflows/parse-edge-functions.yml`** — this repo's FIRST `pull_request` check.
+Before it, all nine workflows were `workflow_dispatch` or `push`-to-`main`, so PRs ran **zero**
+checks. It fails only on a `SyntaxError` (these files are not deno-fmt formatted, so a bare
+`fmt --check` would be red from run one and get ignored) and fails if the glob matches nothing.
+Mutation-proved FIRED.
+
+**Two pre-existing red workflows, NOT ours:** `test-priorities-widget-query.yml` and
+`read-widget-debug-log.yml` have failed on every `push` to `main` back to 2026-09-21, including
+`0459770` before any of this work. Do not read them as a regression.
