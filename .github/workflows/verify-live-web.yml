@@ -16,7 +16,7 @@ on:
         default: 'https://journey-voice.lovable.app/'
       markers:
         description: 'Comma-separated strings the served JS must contain'
-        default: 'bridgeFcmRegistration,source:"web"'
+        default: 'subscribe_fcm,bridgeFcmRegistration,source:"web"'
   push:
     branches: [claude/mobile-widget-web-bridge-debug-nsishi]
     paths: ['.github/workflows/verify-live-web.yml']
@@ -32,7 +32,7 @@ jobs:
       - name: Load live page in Chromium and inspect served bundles
         env:
           URL: ${{ github.event.inputs.url || 'https://journey-voice.lovable.app/' }}
-          MARKERS: ${{ github.event.inputs.markers || 'bridgeFcmRegistration,source:"web"' }}
+          MARKERS: ${{ github.event.inputs.markers || 'subscribe_fcm,bridgeFcmRegistration,source:"web"' }}
         run: |
           npm i --no-save playwright@1.47.2 >/dev/null 2>&1
           npx playwright install --with-deps chromium >/dev/null 2>&1
