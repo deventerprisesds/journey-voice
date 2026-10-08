@@ -406,3 +406,71 @@ instrument was pointed somewhere other than the claim.
    apostrophes in a single-quoted string. The existing CLAUDE.md rule covers smart quotes; this is
    the same trap one delimiter over. The repo's own prose style here (plain CAPS for emphasis) was
    already the safe form.
+
+## 2026-10-08 — declared the status/category bug fixed while the main writer was still live
+
+**Claim.** After PRs #28/#29/#30 I reported the status/category defect fixed, having "read all
+eleven consumers" and swept the repo for writers. I told the owner the mechanism was verified and
+only live user confirmation was outstanding.
+
+**Ground truth.** The biggest writer was untouched and still shipping the defect:
+
+```
+smart-calendar-scheduler:531   PRIORITY 3, when there is no AI suggestion and no
+                               timeWindow: in scheduling_context:
+                                 suggestedStatus = mapping.defaultStatus     <- a CATEGORY
+      v  returned over HTTP
+taskScheduling.ts:133          status: scheduleResult.suggestedStatus || task.status || 'BACKLOG'
+      v
+supabase.from('tasks').update({ status })        <- live write
+```
+
+Reached from four call sites (`KanbanBoard:372`, `TaskCreationModal:756`, `useAutoScheduling`,
+`assignmentSync`). PRIORITY 3 fires for any task whose title matches none of the keyword table
+(`standup`, `lunch`, `gym`, …) — **which describes every one of the 11 rows I had just cleaned up.**
+They would have come straight back on the next scheduling pass, and I would have "verified" a fix
+that reinstated its own defect.
+
+**Why the sweep missed it.** I grepped for the HELPER NAME (`mapCategoryToStatus`) and for the
+LITERAL (`status: 'PROF_EDUCATION'`). This site assigns a **variable** that happens to hold a
+category. Neither pattern can match that, and no amount of re-running those two greps would ever
+have found it.
+
+**How it was actually found.** The owner asked an unrelated product question — *"I don't think one
+of either personal or life should have exist"* — and grepping the enum value `PERSONAL` through the
+codebase surfaced `scheduling-defaults.ts:44`, `PERSONAL: { …, defaultStatus: 'LIFE' }`. The field
+NAME `defaultStatus` holding a category name is what gave it away. **Found by accident, off the back
+of a question about something else.**
+
+**Root-cause pattern, and it is a new one for this log.** *I swept for the SHAPE of the defect I had
+already found, not for the CONCEPT.* Grepping a helper's name finds copies of that helper; grepping
+a literal finds that literal. Neither asks the actual question, which is **"what else assigns
+anything to `status`?"** The right sweep was the assignment target, not the assigned value — and it
+is both simpler and cheaper than what I did.
+
+**Guards this earns.**
+1. **Sweep the ASSIGNMENT TARGET, not the value.** For a field defect, grep
+   `status[:=]` / `set status` / `.status =` and read every hit, rather than grepping the wrong
+   values you happen to know about. A value-shaped grep can only ever re-find the instance you
+   started from.
+2. **A field NAMED for one concept holding a value from another is the tell.** `defaultStatus:
+   'VENTURES'`, `suggestedStatus = mapping.defaultStatus`. When sweeping, read the field names on
+   both sides of the assignment, not just the literals.
+3. **`src/utils/workflowStatus.ts` + its test — the structural guard** (PR #31). `WORKFLOW_STATUSES`
+   lists the nine real lanes and deliberately OMITS the four category-shaped `task_status` members;
+   that omission is the guard. `asWorkflowStatus()` refuses anything else, so the caller's
+   `?? task.status` leaves a task where it was. **A type check cannot do this** — `task_status`
+   contains `LIFE`/`CAREER`/`PROF_EDUCATION`/`VENTURES`, so `Task['status']` admits a category and
+   `tsc` is happy either way. The distinction exists only because it is now written down.
+   Mutation-proved with `mutate.sh`: "completing" the list from the enum →
+   **FIRED**, restore asserted against HEAD.
+4. **"I read all N consumers" is a claim about a SET I chose.** Say how the set was enumerated, so
+   the enumeration itself can be challenged. "Eleven consumers" sounded exhaustive and was a count
+   of what two greps returned.
+
+**Also corrected the same day.** I had written that the bug hit "anything the parser categorised as
+`EDUCATION` or `PERSONAL`". The parser's own schema is
+`LIFE|CAREER|VENTURES|PROF_EDUCATION|EDUCATION` — it **cannot emit `PERSONAL`**. Only `EDUCATION`
+was the parser's failure path; `PERSONAL` is reachable only through the agent tool enums
+(`tool-definitions.ts:48,270`). Asserting a second value without checking the schema that produces
+it is the same instrument-pointed-elsewhere error as the `tsc` entry above.
