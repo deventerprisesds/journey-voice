@@ -427,3 +427,55 @@ Mutation-proved FIRED.
 **Two pre-existing red workflows, NOT ours:** `test-priorities-widget-query.yml` and
 `read-widget-debug-log.yml` have failed on every `push` to `main` back to 2026-09-21, including
 `0459770` before any of this work. Do not read them as a regression.
+
+## The scheduler was the OTHER category→status writer — fixed 2026-10-08 (#31)
+
+**There were TWO sources, and the parser was the smaller one.** PRs #28/#29/#30 fixed the parser and
+three client writers. This is the one that actually produced the 11 rows:
+
+```
+smart-calendar-scheduler:531  PRIORITY 3 (no AI suggestion, no timeWindow: in context)
+                                suggestedStatus = mapping.defaultStatus   <- a CATEGORY
+      v over HTTP
+taskScheduling.ts:133         status: scheduleResult.suggestedStatus || task.status || 'BACKLOG'
+      v
+supabase.from('tasks').update({ status })
+```
+
+PRIORITY 3 fires for any task whose title matches **none** of the keyword table
+(`standup`/`lunch`/`gym`/`doctor`/…) — i.e. most real work. Line ~509 already said
+`// Don't suggest status changes - preserve existing status`; line 540 overrode it. Removed.
+
+**THERE ARE FOUR COPIES OF THE CATEGORY→STATUS MAP. They disagree with each other, and none of them
+should be read for status:** `_shared/scheduling-defaults.ts:39-44`,
+`src/config/schedulingRules.ts:121-147`, `smart-calendar-scheduler:261-265` (this one maps
+`EDUCATION→'PROF_EDUCATION'`, a third variant), and the user's own `user_scheduling_config` row.
+`defaultStatus` is also still a **user-editable control** at `SchedulingSettings.tsx:506` — now
+**dead UI**, since nothing reads it for status any more.
+
+**`src/utils/workflowStatus.ts` IS THE SINGLE SOURCE OF TRUTH NOW.** Use it rather than writing a
+status literal:
+- `WORKFLOW_STATUSES` — the nine real lanes. The four category-shaped `task_status` members are
+  deliberately ABSENT and **that absence is the guard** — do not "complete" it from the enum.
+- `asWorkflowStatus(v)` — null unless `v` names a real lane.
+- `defaultStatusForNewTask({dated})` — `UP_NEXT` / `BACKLOG`, journey's own server rule
+  (`execute-tool:1482`) stated once.
+
+**A TYPE CHECK CANNOT CATCH THIS.** `task_status` contains `LIFE`/`CAREER`/`PROF_EDUCATION`/
+`VENTURES`, so `Task['status']` admits a category and `tsc` passes either way. Only a runtime list
+distinguishes them. Mutation-proved FIRED; `npm test` 179/179.
+
+## `PERSONAL` is a vestigial category and a TRAP — `LIFE` is the real one
+
+Reachable **only** by agents (`_shared/tool-definitions.ts:48` and `:270`). Absent from everything
+a person touches: the parser's schema (`LIFE|CAREER|VENTURES|PROF_EDUCATION|EDUCATION`),
+`TaskFilters.categoryOptions` (5 options), and `EnhancedTaskGridView:1169`'s category editor. So an
+agent setting `PERSONAL` creates a row that is **invisible to the category filter and uneditable
+from the grid**. Everywhere the code does know about it, it means Life: `classify-task-topic:109`
+buckets `LIFE || PERSONAL` together, `Priorities.tsx:50` gives it `--category-life`,
+`scheduling-defaults.ts:44` set its own `defaultStatus: 'LIFE'`, and huddle's `workability.ts:50`
+groups `LIFE, PERSONAL, HEALTH` (and `HEALTH` isn't even in the enum).
+
+**`EDUCATION` vs `PROF_EDUCATION` is a DIFFERENT case — leave it.** That split is deliberate and
+documented in the parser prompt: formal degree programme with fixed deadlines vs self-paced online
+course.

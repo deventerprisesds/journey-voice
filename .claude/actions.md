@@ -392,3 +392,35 @@ rule this stays "implemented, mechanism verified, NOT confirmed live" until they
   it.
 - **Original request #3, still never started:** a settings page to add calendars to be monitored —
   *"my University of michigan inbox is not currently being monitored"*.
+
+### ACT:task-status-mapping — REOPENED and re-shipped the same day
+
+Item 1-8 above were reported done. They were not: the **main** writer was still live.
+
+| # | What | State | Evidence |
+|---|---|---|---|
+| 9 | `smart-calendar-scheduler` PRIORITY 3 returned `mapping.defaultStatus` (a CATEGORY); `taskScheduling.ts:133` wrote it to `tasks.status`. **This, not the parser, produced the 11 rows** — they would have returned on the next scheduling pass | **LIVE** | PR #31 → `3c30427`; deploy run `37803250420` success, log reads `✅ smart-calendar-scheduler deployed` to project `wwxgajrtmslzklnyplah` |
+| 10 | Guard `src/utils/workflowStatus.ts` + test — nine real lanes, the four category-shaped enum members deliberately omitted | **LIVE** | PR #31; `mutate.sh` **FIRED**; 179/179; `tsc` 0 |
+
+**Found by accident**, grepping `PERSONAL` for an unrelated product question. My sweep had grepped
+the helper NAME and a LITERAL; this site assigns a VARIABLE holding a category, which neither
+pattern can match. Logged in `.claude/accuracy-log.md` with the guard it earns: sweep the
+**assignment target** (`status[:=]`), never the value.
+
+### Open decision for the owner — `PERSONAL` vs `LIFE`
+
+Owner, 2026-10-08: *"I don't think one of either personal or life should have exist."* Correct, and
+`PERSONAL` is worse than redundant — it is settable by agents and invisible to the category filter.
+Three options put to them; **recommended A: retire it** — drop it from the two agent tool enums,
+map any existing row to `LIFE`, leave the DB enum value in place (inert, so re-enabling is one
+line). Not actioned: it is a product call, and nothing is bleeding while it waits.
+
+### Also open
+- **Dead UI:** `SchedulingSettings.tsx:506` still offers a per-category `defaultStatus` editor that
+  now affects nothing. Either remove the control or make it offer real workflow lanes.
+- **Three stale copies** of the category→status map remain (`_shared/scheduling-defaults.ts:39-44`,
+  `src/config/schedulingRules.ts:121-147`, `smart-calendar-scheduler:261-265`), unread for status
+  purposes but a landmine for the next reader.
+- Still outstanding from before: the four near-duplicate task titles, the `todayStr` UTC/local
+  off-by-one, the `boards.name`-vs-`boards.id` lane-count question, and **original request #3, the
+  calendar-monitoring settings page**, which has never been started.
