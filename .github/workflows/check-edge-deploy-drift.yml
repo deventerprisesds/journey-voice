@@ -1,0 +1,50 @@
+# WHAT:       Runs scripts/check-edge-deploy-drift.mjs, which diffs each edge function's DEPLOYED
+#             source against this ref. Fails the job when what is committed is not what is running.
+# WHY:        "committed != deployed" has bitten twice (see the script's header for both). Neither
+#             occurrence was visible from git, and the second was actively misleading: a
+#             neighbouring commit's fix HAD deployed, so the function looked current while carrying
+#             a stale line. A prose reminder to "check the deployed source" already existed and did
+#             not prevent the recurrence, which is why this is a job rather than a note.
+# SUPERSEDES: the prose guard in .claude/accuracy-log.md entry 7.
+# SUPERSEDED-BY: nothing -- current.
+# EVIDENCE:   .claude/accuracy-log.md entry 7.
+#
+# Runs on demand, and automatically after a deploy finishes, which is the moment the answer is both
+# cheapest and most valuable -- a deploy that silently skipped a function is caught within a minute
+# rather than at the next live test.
+
+name: Check Edge Deploy Drift
+
+on:
+  workflow_dispatch:
+    inputs:
+      functions:
+        description: 'Space-separated function slugs. Blank = every function in supabase/functions.'
+        required: false
+        default: ''
+  workflow_run:
+    workflows: ['Deploy Supabase Functions']
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Diff deployed source against this ref
+        env:
+          # Note the spelling: the org secret is SUPERBASE_ACCESS_TOKEN, not SUPABASE_. That typo is
+          # real and load-bearing -- deploy-supabase-functions.yml reads the same name. Matching a
+          # corrected spelling here would silently yield an empty token, and the script would exit 2
+          # rather than pass, which is the right failure but an avoidable one.
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPERBASE_ACCESS_TOKEN }}
+          FUNCTIONS: ${{ inputs.functions }}
+        run: node scripts/check-edge-deploy-drift.mjs $FUNCTIONS

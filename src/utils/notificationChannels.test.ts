@@ -195,11 +195,54 @@ describe('AC-CH-3/AC-CH-4 — a partial fan-out is NEVER recorded as a success (
       /body: `Time for your \$\{[^`]*\}\. \$\{callConfig\.context/,
       'the exact leak: the phone script interpolated straight into the unified body',
     );
+    // WIDENED 2026-09-14, and deliberately widened rather than relaxed. This used to require the
+    // literal `body: renderScheduledCall({...}).body`, which pinned ONE function name rather than
+    // the invariant — and that turned out to protect the wrong thing. renderScheduledCall's
+    // read-channel branch is `${subject}.`, so satisfying this assertion produced four real emails
+    // whose entire content was "Time for your morning kickstart." The script was gone; so was
+    // everything worth reading. A guard that a hollow implementation passes is not protecting the
+    // reader.
+    //
+    // The invariant is TWO things, and both are asserted now:
+    //   1. the body is produced by a RENDERER, never the raw context (the anti-leak half, above);
+    //   2. whatever body is sent is CHECKED by containsCallScript before it goes (the half the
+    //      old name-pin only implied by proxy).
     assert.match(
       src,
-      /body: renderScheduledCall\(\{[\s\S]{0,200}?\}\)\.body/,
-      'the unified invoke must take its body from renderScheduledCall',
+      /body: (?:briefingBody|renderScheduledCall\(|renderBriefingBody\()/,
+      'the unified invoke body must come from a renderer, never from callConfig.context',
     );
-    assert.match(src, /import \{ renderScheduledCall \} from "\.\.\/_shared\/digest-content\.ts"/);
+    assert.match(
+      src,
+      /containsCallScript\(/,
+      'the delivered body must be leak-checked, whichever renderer produced it',
+    );
+    assert.match(src, /from "\.\.\/_shared\/digest-content\.ts"/);
+  });
+
+  it('the unified body is not merely the one-line render (F-hollow-email)', () => {
+    // The 2026-09-14 regression, guarded at its own level. The owner received four emails reading
+    // exactly one sentence and said: "each email had exactly one sentence... this proves nothing."
+    // The delivery function must fetch the window's tasks and render a briefing; the thin render
+    // is a FALLBACK for a detected leak, never the normal path.
+    const src = read(DELIVERY);
+    assert.match(src, /getTasksForWindow\(/, 'the briefing must read the real scheduled tasks');
+    assert.match(src, /renderBriefingBody\(\{/, 'the normal path renders a briefing, not a sentence');
+    // THE ASSERTION THAT ACTUALLY BITES, added after mutate.sh reported the first two INERT.
+    // Reinstating the defect — building the briefing and then sending the one-line render anyway —
+    // left both greps above satisfied, because a renderer that is CALLED but whose output is
+    // DISCARDED still appears in the source. That is not a hypothetical: renderBriefingBody sat in
+    // this repo with zero callers for a day for exactly that reason. So pin what is SENT.
+    assert.match(
+      src,
+      /body: briefingBody,/,
+      'the unified invoke must SEND the briefing — calling the renderer and discarding it is the bug',
+    );
+    // ...and the thin render must remain reachable ONLY as the leak fallback.
+    assert.match(
+      src,
+      /containsCallScript\(briefingBody\)[\s\S]{0,400}?briefingBody = renderScheduledCall\(/,
+      'renderScheduledCall is the fallback for a detected leak, not the normal path',
+    );
   });
 });

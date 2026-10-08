@@ -1,0 +1,2318 @@
+{
+  "name": "Working Slack Comms Tool copy",
+  "nodes": [
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Incoming Message Data:\n- UserID: {{ $node[\"Debug assignment logic\"].json.user }}\n- UserIDResolved: {{ $node[\"Debug assignment logic\"].json.user_resolved }}\n- Sender: {{ $node[\"Debug assignment logic\"].json.user_resolved }}\n- Channel: {{ $node[\"Debug assignment logic\"].json.channel }}\n- Channel_resolved: {{ $node[\"Debug assignment logic\"].json.channel_resolved }}\n- Thread_ts: {{ $node[\"Debug assignment logic\"].json.ts }}\n- Thread_id: {{ $node[\"Debug assignment logic\"].json.threadID }}\n- Message: {{ $node[\"Debug assignment logic\"].json.text }}\n- Context: {{ $node[\"Debug assignment logic\"].json.context || \"NA\" }}\n- initial_TargetRecipient: {{ $node[\"Debug assignment logic\"].json.initial_TargetRecipient || null }}\n- replyNeeded: {{ $node[\"Debug assignment logic\"].json.replyNeeded }}\n- messageComplexity: {{ $node[\"Debug assignment logic\"].json.messageComplexity }}\n- Agent Count: {{ $node[\"Debug assignment logic\"].json.agents_config.length }} agents available\n\nPrevious Conversation:\n{{ $node[\"Retrieve Memory\"].json.conversationHistory }}\n{{ $node[\"Retrieve Memory\"].json.contextSummary }}\n\nTarget Identification Debug:\n- Method: {{ $node[\"Debug assignment logic\"].json.targetIdentificationMethod }}\n- Confidence: {{ $node[\"Debug assignment logic\"].json.targetConfidence }}\n- Channel Match: {{ $node[\"Debug assignment logic\"].json.debug_info.channel_matches }}\n- Extracted Agent: {{ $node[\"Debug assignment logic\"].json.debug_info.extracted_agent }}\n\nROUTING MODE: {{ $node[\"Debug assignment logic\"].json.messageComplexity }} message detected\n\nsessionId: {{ $node[\"Debug assignment logic\"].json.sessionId }}\n\nProcess this message according to its complexity level:\n\nFOR SIMPLE MESSAGES (messageComplexity = 'simple'):\n- Route to ONE agent only based on initial_TargetRecipient or channel owner\n- Generate a brief, minimal prompt without team directory\n- Skip theme analysis and multi-agent collaboration\n- Target response time: 1-2 seconds\n\nExample output for simple messages:\n{\n  \"inputData\": {\n    \"userID\": \"{{ $node[\"Debug assignment logic\"].json.user }}\"\n    \"userIDResolved\": \"{{ $node[\"Debug assignment logic\"].json.user_resolved }}\"\n    \"sender\": \"{{ $node[\"Debug assignment logic\"].json.user_resolved }}\",\n    \"resolved_channel\": \"{{ $node[\"Debug assignment logic\"].json.channel_resolved }}\",\n    \"channel\": \"{{ $node[\"Debug assignment logic\"].json.channel }}\",\n    \"thread_id\": \"{{ $node[\"Debug assignment logic\"].json.threadID }}\",\n    \"thread_ts\": \"{{ $node[\"Debug assignment logic\"].json.ts }}\",\n    \"text\": \"{{ $node[\"Debug assignment logic\"].json.text }}\",\n    \"channelType\": \"{{ $node[\"Debug assignment logic\"].json.channelType }}\",\n    \"initial_TargetRecipient\": \"{{ $node[\"Debug assignment logic\"].json.initial_TargetRecipient }}\"\n    \"MessageComplexity\": \"{{ $node[\"Debug assignment logic\"].json.messageComplexity }}\"\n    \"sessionID\": \"{{ $node[\"Debug assignment logic\"].json.sessionId }}\"\n  },\n  \"targets\": [{\n    \"agentConfig\": [single agent config from agents_config],\n    \"prompt\": \"You are [DisplayName], [Role]. Von sent: '{{ $node[\"Debug assignment logic\"].json.text }}'.\\n\\nPrevious Conversation:\\n{{ $node[\"Retrieve Memory\"].json.conversationHistory }}\\n\\nRespond briefly in your tone, incorporating relevant context where helpful.\"\n  }],\n  \"generalAnswer\": null\n}\n\nFOR COMPLEX MESSAGES (messageComplexity = 'complex'):\n- Use all data from Debug assignment logic node\n- Include conversation history from Retrieve Memory node\n- Build comprehensive agent prompts with context\n\n**Enhanced Prompt Structure:**\nToday's date is {{ DateTime.now().toFormat('DDDD') }}\nYou are [DisplayName], [Role].\n\nVon sent: \"{{ $node[\"Debug assignment logic\"].json.text }}\"\n\nPrevious Conversation and knowledge graph facts:\n{{ $node[\"Retrieve Memory\"].json.conversationHistory }}\n\nChannel Context: {{ $node[\"Debug assignment logic\"].json.channel_resolved }} ({{ $node[\"Debug assignment logic\"].json.channelType }})\n\n[Include team directory, filtered to recipients, if applicable]\n\nPlease respond in your [tone] style, incorporating the conversation history and context.\n\nCRITICAL REQUIREMENTS:\n- Use agents_config data from Debug assignment logic node\n- Include conversation history from Retrieve Memory node\n- Reference Debug assignment logic for all original workflow data\n- Be honest about what you can and cannot do. Never give the impression that you will get back when done. \n- Solve all requests in as few responses possible, ideally all, in your first response.\n- Use the web for research and be very thourough and accurate in your answers.  Provide sources for any of your knowledge found on the web. ",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "=You are Terry Locke, Team Lead and backend AI-agent messaging orchestrator. You implement the Meta-Orchestrator pattern to route messages between Von (CEO) and specialized AI agents.\nInput Data Structure\nYou receive these exact fields:\n\ninputData.sender - sender handle (string)\ninputData.channel - Slack channel ID (string)\ninputData.resolved_channel - Slack channel slug (string)\ninputData.thread_id - thread identifier (string)\ninputData.thread_ts - thread timestamp (string)\ninputData.text - raw message text (string)\ninputData.context - research summary or \"NA\" (string)\ninitial_TargetRecipient - seeded target handle or null (string|null)\nreplyNeeded - boolean flag (boolean)\nevent.bot_id - bot identifier if from bot (string|null)\n\nAgent Directory\nAgent Routing Directory: {{ JSON.stringify($('Workflow Settings').item.json.agents_config.map(a => ({\n  handle: a.handle,\n  role: a.role,\n  roleFunction: a.roleFunction.split('.')[0] + '...',\n  channelSlug: a.handle.replace('.', '-')\n})), null, 2) }}\n\nStructure: handle → channel slug prefix → role/function → tone\nProcessing Steps\n\nTarget Identification\n\nHuman mentions name OR @handle in message → use that agent as primary target\n1:1 channel slug matches agent → use that agent as primary target\nGroup channel with no mention → infer best agent from content\nNo clear target → classify as general question\n\n\nChannel Type Calculation\n\nchannelType = \"DM\" if resolved_channel matches any agent slug\nchannelType = \"GRP\" otherwise\n\n\nTheme-Based Analysis\n\nAnalyze message text for keywords/topics that match other agent roles\nFor each matching theme, identify the specialist agent using the full agents_config array (not just the routing directory)\nAdd matching agents as additional targets for collaboration\n\n\nAgent Targeting\n\nPrimary Target: Always include the initial target with their exact agent config\nAdditional Targets: Add theme-matched agents from step 3\nBuild targets[] array with proper agent configurations and tailored prompts\nCritical: Use exact agent metadata from agents_config - never modify role, tone, or other properties\n\n\n\nOutput Requirements\nReturn ONLY valid JSON matching the exact schema. No additional text, markdown, or explanations.\nCRITICAL REQUIREMENTS:\n\nUse Exact Agent Config: Copy agent metadata exactly from agents_config array - never modify role, displayName, tone, or any properties\nTheme Analysis: Identify topics in the message that match other agent roleFunction descriptions\nMulti-Agent Targeting: Add relevant agents based on theme analysis, not just the primary target\nDynamic Prompt Generation: Generate complete, ready-to-use prompts for each agent - do not use template syntax\nVerbatim Data: All agent properties must match the source configuration exactly\n\nLoop Prevention\nOnly agents with explicit @mentions will reply in subsequent rounds. Humans are exempt from this rule.\n\n## MESSAGE ROUTING OPTIMIZATION\n\nYou operate in two modes based on message complexity:\n\n**SIMPLE MODE (messageComplexity = 'simple'):**\n- Messages under 100 chars without questions or complex keywords\n- Route to ONE agent only - no theme analysis needed\n- Use minimal processing - just identify target and generate basic prompt\n- Skip team directory in prompts for speed\n- Goal: 1-2 second response time\n\n**COMPLEX MODE (messageComplexity = 'complex'):**\n- Longer messages, questions, or action/research requests\n- Full theme analysis and multi-agent collaboration\n- Include complete team directory in prompts\n- Generate comprehensive collaborative instructions\n- Goal: 5-8 second response time with quality\n- hard requirement - no matter simple or complex always review the connected chat history memory to store the question and offer any context from related threads or historic messages to help the agents maintain longer conversations without everything being lost between messages\n\n\n**CRITICAL PROMPT OPTIMIZATION RULES:**\n\n1. For agent directory in prompts, use SELECTIVE inclusion:\n   - If asking about a specific role/agent → include only that agent's info\n   - If collaboration needed → include only collaborating agents\n   - If general query → include only domain-relevant agents\n\n2. Directory inclusion logic:\n   - Message mentions \"life strategist\" → include only liam's details\n   - Message mentions \"education\" → include only elle, liam\n   - Message mentions \"schedule\" → include only eli, iris, faith\n   - Message mentions \"fitness\" → include only flex, charleston\n   - Default: Include only agents in targets array\n\n3. Never dump all 16 agents unless explicitly needed for a \"team overview\" request\n\nExample output for \"who is our life strategist?\":\nInstead of 16 agents, include only:\n- @elle: Elle Rowan (Executive Education Planner) - primary target\n- @liam: Liam Kingsley (Life Strategist) - query subject\n\nThis reduces prompt tokens by ~80% for most queries."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2,
+      "position": [
+        5296,
+        -128
+      ],
+      "id": "060bcba0-9cfe-4c78-92b3-5716b330143a",
+      "name": "AI Agent",
+      "retryOnFail": true,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "trigger": [
+          "any_event"
+        ],
+        "watchWorkspace": true,
+        "downloadFiles": true,
+        "options": {
+          "resolveIds": true,
+          "userIds": []
+        }
+      },
+      "type": "n8n-nodes-base.slackTrigger",
+      "typeVersion": 1,
+      "position": [
+        -736,
+        80
+      ],
+      "id": "7641112d-7aee-4e51-99c7-dcd6130d1482",
+      "name": "Slack Trigger",
+      "webhookId": "838957ef-b9c8-43ca-9d4e-f390e366b8c0",
+      "credentials": {
+        "slackApi": {
+          "id": "f9T0In6II2mjFfUI",
+          "name": "Slack account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4o-mini"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        5216,
+        144
+      ],
+      "id": "44be4830-fd10-4224-9cfc-15e37c5ddffe",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "Ly9qM4iX1nABLUjs",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract thread_ts from Slack Trigger event\nconst inputData = $input.first().json;\n\n// Check if message is part of a thread\nconst threadTs = inputData.thread_ts || inputData.ts;\nconst isThreadedMessage = inputData.thread_ts !== undefined;\nconst isParentMessage = inputData.thread_ts === inputData.ts;\n\nconst output ={\n  ...inputData,\n    thread_id: threadTs,\n    message_ts: inputData.ts,\n    is_threaded: isThreadedMessage,\n    is_parent: isParentMessage,\n    channel: inputData.channel,\n    text: inputData.text,\n    user: inputData.user\n};\n\nreturn [\n  {\n  json: output\n}\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2128,
+        112
+      ],
+      "id": "7b866245-5a29-4bee-9ea6-4d22b775479c",
+      "name": "Obtain ThreadID",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "8605dfb3-729c-403b-9dec-5f5d4eec618b",
+              "leftValue": "={{\n  (\n    // 1:1 → human only\n    $json.event.bot_id === undefined\n    &&\n    $json.channel_resolved.includes($json.targetAgent.replace(/\\./g,'-'))\n  )\n  ||\n  (\n    // group → only on @mention\n    $json.text.includes('@' + $json.targetAgent)\n  )\n}}\n",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "3761fb0a-eadb-4b95-9f27-a269b0787561",
+              "leftValue": "",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2752,
+        80
+      ],
+      "id": "c1a2b89e-6b22-4dbd-bad2-feb666cefbb9",
+      "name": "If bot not responding to self",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract thread_ts from Slack Trigger event\nconst inputData = $input.first().json;\n\n// Check if message is part of a thread\nconst threadTs = inputData.thread_ts || inputData.ts;\nconst threadID = \"thread_von_ellis_\" + inputData.channel_resolved\nconst isThreadedMessage = inputData.thread_ts !== undefined;\nconst isParentMessage = inputData.thread_ts === inputData.ts;\n\nconst output ={\n  ...inputData,\n      threadTs: threadTs,\n    threadID: threadID,\n    message_ts: inputData.ts,\n    is_threaded: isThreadedMessage,\n    is_parent: isParentMessage,\n    channel: inputData.channel,\n    text: inputData.combined_message_text,\n    user: inputData.user\n};\n\nreturn [\n  {\n  json: output\n}\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2544,
+        112
+      ],
+      "id": "190245ab-f81c-45d1-8e47-4b0aa57b051c",
+      "name": "Obtain ThreadID1"
+    },
+    {
+      "parameters": {
+        "jsCode": "return items.map(item => {\n  const { channel_resolved, text, user_resolved } = item.json;\n  // by default (1:1 channels), targetAgentId is whoever sent it\n  let targetAgentId = user_resolved;\n  // if it's a group channel, look for an @mention and use that ID instead\n  if (!channel_resolved.includes('___')) {\n    const m = text.match(/<@([A-Z0-9]+)>/);\n    if (m) {\n      targetAgentId = m[1];\n    }\n  }\n  item.json.targetAgentId = targetAgentId;\n  return item;\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2880,
+        -208
+      ],
+      "id": "b12570c6-bfbd-4539-87da-7065501c4e5a",
+      "name": "Code2"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Grab every item output by the Code2 node\nconst code2Items = $items('Code2');\n\n// Map over those items, extracting the prefix and\n// writing it into targetAgent just like you did before\nreturn code2Items.map(item => {\n  const prefix = item.json.name;\n  item.json.targetAgent = prefix;\n  return item;\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3408,
+        -208
+      ],
+      "id": "9df9ac40-b925-4f46-9148-c9c74c126d40",
+      "name": "Code3"
+    },
+    {
+      "parameters": {
+        "jsCode": "return items.map(item => {\n  const email = $input.first().json.email || '';\n  // take everything before the \"@\"\n  const prefix = email.split('@')[0];\n  item.json.targetAgent = prefix;\n  return item;\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1152,
+        -384
+      ],
+      "id": "45f9ef64-9252-4dc2-8b76-7cd497b19fa4",
+      "name": "Code",
+      "disabled": true
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.executionData",
+      "typeVersion": 1,
+      "position": [
+        2320,
+        112
+      ],
+      "id": "58839672-3acb-400d-bbf3-12dbb7db61a1",
+      "name": "Execution Data"
+    },
+    {
+      "parameters": {
+        "jsCode": "return items.map(item => {\n  // 1) Coerce to string\n  const rawValue = item.json.output;\n  const raw = typeof rawValue === 'string' \n    ? rawValue \n    : JSON.stringify(rawValue);\n\n  // 2) Find JSON substring\n  const start = raw.indexOf('{');\n  const end   = raw.lastIndexOf('}');\n  if (start === -1 || end === -1) {\n    return {\n      json: {\n        ...item.json,\n        parse_error: true,\n        parse_message: 'No JSON object found in output',\n        raw,\n      }\n    };\n  }\n\n  // 3) Extract that JSON\n  const jsonString = raw.substring(start, end + 1);\n\n  // 4) Try to parse\n  try {\n    const parsed = JSON.parse(jsonString);\n    return {\n      json: {\n        ...item.json,\n        ...parsed,\n        parse_error: false,\n      }\n    };\n  } catch (err) {\n    return {\n      json: {\n        ...item.json,\n        parse_error: true,\n        parse_message: err.message,\n        raw: jsonString,\n      }\n    };\n  }\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6384,
+        0
+      ],
+      "id": "b1b348d6-3092-42a0-bc6b-91964f19d6f4",
+      "name": "Output to Json",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"inputData\": {\n      \"type\": \"object\",\n      \"properties\": {\n        \"sender\":           { \"type\": \"string\" },\n        \"initial_TargetRecipient\":           { \"type\": \"string\" },\n        \"resolved_channel\": { \"type\": \"string\" },\n        \"thread_id\":        { \"type\": \"string\" },\n        \"thread_ts\":        { \"type\": \"string\" },\n        \"text\":             { \"type\": \"string\" },\n        \"context\":          { \"type\": \"string\" },\n        \"channelType\":      { \"type\": \"string\", \"enum\": [\"DM\",\"GRP\"] }\n      },\n      \"required\": [\n        \"sender\",\"resolved_channel\",\"thread_id\",\n        \"thread_ts\",\"text\",\"context\",\"channelType\"\n      ]\n    },\n    \"targets\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"agentConfig\": {\n            \"type\": \"object\",\n            \"properties\": {\n              \"handle\":       { \"type\": \"string\" },\n              \"realName\":     { \"type\": \"string\" },\n              \"displayName\":  { \"type\": \"string\" },\n              \"role\":         { \"type\": \"string\" },\n              \"roleFunction\": { \"type\": \"string\" },\n              \"tone\":         { \"type\": \"string\" }\n            },\n            \"required\": [\"handle\",\"displayName\",\"role\",\"tone\"]\n          },\n          \"prompt\": { \"type\": \"string\" }\n        },\n        \"required\": [\"agentConfig\",\"prompt\"]\n      }\n    },\n    \"generalAnswer\": {\n      \"type\": [\"string\",\"null\"]\n    }\n  },\n  \"required\": [\"inputData\",\"targets\",\"generalAnswer\"]\n}\n"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.2,
+      "position": [
+        2256,
+        496
+      ],
+      "id": "324be3b1-e51f-4e49-af1a-c0fed6695645",
+      "name": "Structured Output Parser",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "275ff6f7-54e0-4f9c-8486-7f811235f22d",
+              "leftValue": "={{$json.extract_user_resolved !== $json.extract_target_resolved}}\n",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1488,
+        -496
+      ],
+      "id": "43621b11-372f-4556-bc8d-f5873c856227",
+      "name": "Confirm Sender not Target (avoid loop)1",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Accumulate outputs here\nconst out = [];\n\n// Loop over each incoming item\nfor (const item of items) {\n  // 1) Clone the payload\n  const msg = { ...item.json };\n\n  // 2) Your existing routing logic:\n  const text    = (msg.text || '').toLowerCase();\n  const channel = (msg.channel_resolved || '').toLowerCase();\n  const isBot   = !!msg.event?.bot_id;\n\n  let initial = null;\n  let replyN  = false;\n\n  // A) @mention\n  for (const a of msg.agent_handles) {\n    if (new RegExp(`@${a}\\\\b`, 'i').test(text)) {\n      initial = a; replyN = true; break;\n    }\n  }\n  // B) plain-word (humans only)\n  if (!initial && !isBot) {\n    for (const a of msg.agent_handles) {\n      if (new RegExp(`\\\\b${a}\\\\b`, 'i').test(text)) {\n        initial = a; replyN = true; break;\n      }\n    }\n  }\n  // C) 1:1 slug (humans only)\n  if (!initial && !isBot) {\n    for (const a of msg.agent_handles) {\n      if (channel.includes(a)) {\n        initial = a; replyN = true; break;\n      }\n    }\n  }\n\n  msg.initial_TargetRecipient = initial;\n  msg.replyNeeded            = replyN;\n\n  // 3) Slack user‐ID resolution\n  let targetUserId = null;\n  if (initial) {\n    const roster = $items(\"Slack List Users\").map(i => i.json);\n    const u = roster.find(u =>\n      u.name === initial ||\n      u.profile?.display_name_normalized?.toLowerCase() === initial.toLowerCase() ||\n      u.profile?.real_name_normalized?.toLowerCase() === initial.toLowerCase()\n    );\n    targetUserId = u?.id || null;\n  }\n  msg.targetUserId = targetUserId;\n\n  // 4) Push into the output array\n  out.push({ json: msg });\n}\n\n// 5) Return the array of items\nreturn out;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1888,
+        -48
+      ],
+      "id": "96950e3e-81a8-4e0d-9949-6e262d6ea766",
+      "name": "Resolve TargetAgent",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Incoming Message:\n  • Sender:        {{ $json.extract_user_resolved }}\n  • Channel:       {{ $json.channel_resolved }}\n  • Thread_ts:     {{ $json.thread_ts }}\n  • Thread_id:     {{ $json.thread_id }}\n  • Text:          {{ $('Code3').item.json.blocks[0].elements[0].elements[0].text }}\n  • Additional Context: {{ $json.additionalContext || \"NA\" }}\n\nYour task:\n\n1. Match the message to the correct agent(s).\n2. If research is needed, build a `context` summary.\n3. If multi-agent collaboration is required, define `targets[]` in correct order.\n4. If no agent matches, return `targets: []` and fill `generalAnswer` instead.\n\nReturn output as a valid JSON object only — no extra text.\n",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "=You are Terry Locke, the Team Lead Orchestrator AI.\n\nYour job is to interpret incoming Slack messages and delegate them to the appropriate agent(s) based on:\n\n- The channel name\n- The text content (including keywords, @mentions, or implicit task cues)\n- Known agent roles and responsibilities\n\nYou NEVER answer messages yourself.\n\nIf the request is simple and clearly relevant to one agent, delegate with a single `targets` entry.  \nIf it requires collaboration, list multiple agents in order of involvement.  \nIf no match is found, leave `targets` as an empty array and fill in `generalAnswer`.\n\nYou MUST support agents with **context** if research is needed: query prior threads, include SDKs, documentation, or past messages.\n\nReturn **pure JSON only** — no markdown, no backticks, no commentary.\n\nSchema:\n{\n  \"sender\": \"string\",\n  \"channel\": \"string\",\n  \"thread_id\": \"string\",\n  \"thread_ts\": \"string\",\n  \"text\": \"string\",\n  \"context\": \"string or 'NA'\",\n  \"targets\": [\n    {\n      \"agent\": \"string (handle)\",\n      \"role\": \"string (matching known agent function)\",\n      \"prompt\": \"string (instructions tailored for agent)\"\n    }\n  ],\n  \"generalAnswer\": \"null or fallback text if no target is found\"\n}\n\nAgent Directory (handle → slug → role):\n\n• cole    → cole-blake___career_coach            → Career Coach  \n• compass → compass___compass_planner           → Compass Planner  \n• eli     → eli-vaughn___exec_assistant          → Executive Assistant  \n• elle    → elle-rowan___exec_edu_planner       → Executive Education Planner  \n• ezra    → ezra-miles___errands_home           → Errands & Home  \n• faith   → faith-hartley___family_scheduler    → Family Scheduler  \n• finn    → finn-reid___finance_strategist      → Finance Strategist  \n• iris    → iris-chase___daily_itinerary        → Daily Itinerary  \n• liam    → liam-kingsley___life_strategist     → Life Strategist  \n• sam     → sam-trent___startup_planner         → Startup Planner  \n• tess    → tess-sutton___task_tracker          → Task Tracker  \n• troy    → troy-lennox___travel_agent          → Travel Agent  \n• terry   → terry-locke___team_lead             → Team Lead  \n• flex    → flex-grimes___fitness_trainer       → Fitness Trainer  \n\nOutput pure JSON. Never include formatting like backticks or explanations.\n"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2,
+      "position": [
+        2512,
+        -544
+      ],
+      "id": "a8739e87-c8b2-44b6-8ea1-2083441986a7",
+      "name": "AI Agent1",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ee7b56a2-575b-4d66-850d-982433202a24",
+              "name": "=agent_handles",
+              "value": "=[\n  \"cole\",\"compass\",\"eli\",\"elle\",\"ezra\",\n  \"faith\",\"finn\",\"iris\",\"liam\",\"sam\",\n  \"tess\",\"troy\",\"terry\",\"flex\",\n  \"charleston\",\"cam\"\n]\n",
+              "type": "array"
+            },
+            {
+              "id": "bcda5550-3d8a-49ed-9910-4fb75a566915",
+              "name": "=agents_config",
+              "value": "[   {     \"handle\": \"cole\",     \"realName\": \"Cole Blake\",     \"displayName\": \"Cole Blake (Career Coach)\",     \"role\": \"Career Coach\",     \"roleFunction\": \"Focuses on resume, LinkedIn, job search, interview prep, and personal branding.\",     \"tone\": \"Speak with confidence and empathy. Offer career advice like a trusted mentor.\"   },   {     \"handle\": \"compass\",     \"realName\": \"Compass\",     \"displayName\": \"Compass (Compass Planner)\",     \"role\": \"Compass Planner\",     \"roleFunction\": \"Startup strategist for CompassBoard; manages roadmap, MVP planning, and founder workflows.\",     \"tone\": \"Use analytical, structured language. Prioritize clarity and logic in planning support.\"   },   {     \"handle\": \"eli\",     \"realName\": \"Eli Vaughn\",     \"displayName\": \"Eli Vaughn (Executive Assistant)\",     \"role\": \"Executive Assistant\",     \"roleFunction\": \"Handles scheduling, email triage, follow-ups, errands, and cross-agent coordination.\",     \"tone\": \"Warm, helpful, and precise. Communicate like a top-tier executive assistant.\"   },   {     \"handle\": \"elle\",     \"realName\": \"Elle Rowan\",     \"displayName\": \"Elle Rowan (Executive Education Planner)\",     \"role\": \"Executive Education Planner\",     \"roleFunction\": \"Manages assignments, class tracking, deadlines, and support for executive education programs.\",     \"tone\": \"Sharp, academic, and organized. Stay structured and deadline-driven in tone.\"   },   {     \"handle\": \"ezra\",     \"realName\": \"Ezra Miles\",     \"displayName\": \"Ezra Miles (Errands & Home)\",     \"role\": \"Errands & Home\",     \"roleFunction\": \"Manages Amazon returns, home maintenance, local errands, and personal logistics.\",     \"tone\": \"Friendly and steady. Speak with practicality and a reassuring tone.\"   },   {     \"handle\": \"faith\",     \"realName\": \"Faith Hartley\",     \"displayName\": \"Faith Hartley (Family Scheduler)\",     \"role\": \"Family Scheduler\",     \"roleFunction\": \"Coordinates family calendars, school events, appointments, and shared tasks.\",     \"tone\": \"Supportive and gentle. Use warm, family-oriented language.\"   },   {     \"handle\": \"finn\",     \"realName\": \"Finn Reid\",     \"displayName\": \"Finn Reid (Finance Strategist)\",     \"role\": \"Finance Strategist\",     \"roleFunction\": \"Advises on budgeting, credit optimization, loans, refinancing, and runway planning.\",     \"tone\": \"Professional and precise. Communicate with financial clarity and logic.\"   },   {     \"handle\": \"iris\",     \"realName\": \"Iris Chase\",     \"displayName\": \"Iris Chase (Daily Itinerary)\",     \"role\": \"Daily Itinerary\",     \"roleFunction\": \"Builds next-day itineraries based on goals, schedule, and deadlines.\",     \"tone\": \"Fast-paced and efficient. Speak with clarity and urgency.\"   },   {     \"handle\": \"liam\",     \"realName\": \"Liam Kingsley\",     \"displayName\": \"Liam Kingsley (Life Strategist)\",     \"role\": \"Life Strategist\",     \"roleFunction\": \"Oversees exec priorities, EMBA-life balance, income planning, and big-picture strategy.\",     \"tone\": \"Inspirational, calm, and thoughtful. Offer big-picture thinking and encouragement.\"   },   {     \"handle\": \"sam\",     \"realName\": \"Sam Trent\",     \"displayName\": \"Sam Trent (Startup Planner)\",     \"role\": \"Startup Planner\",     \"roleFunction\": \"Drives Lean Canvas, MVPs, customer discovery, investor prep, and founder support.\",     \"tone\": \"Bold, driven, and energetic. Use startup lingo and founder energy.\"   },   {     \"handle\": \"tess\",     \"realName\": \"Tess Sutton\",     \"displayName\": \"Tess Sutton (Task Tracker)\",     \"role\": \"Task Tracker\",     \"roleFunction\": \"Monitors tasks, deadlines, and status updates across projects.\",     \"tone\": \"Direct and efficient. Keep tone focused and action-oriented.\"   },   {     \"handle\": \"troy\",     \"realName\": \"Troy Lennox\",     \"displayName\": \"Troy Lennox (Travel Agent)\",     \"role\": \"Travel Agent\",     \"roleFunction\": \"Plans itineraries, books flights/hotels, tracks preferences, and handles logistics.\",     \"tone\": \"Relaxed and curious. Speak with a light, adventurous tone.\"   },   {     \"handle\": \"terry\",     \"realName\": \"Terry Locke\",     \"displayName\": \"Terry Locke (Team Lead)\",     \"role\": \"Team Lead\",     \"roleFunction\": \"Orchestrates; routes tasks, mediates collaboration, ensures aligned execution.\",     \"tone\": \"Strategic, calm, and facilitative. Keep language composed and leadership-oriented.\"   },   {     \"handle\": \"flex\",     \"realName\": \"Flex Grimes\",     \"displayName\": \"Flex Grimes (Fitness Trainer)\",     \"role\": \"Fitness Trainer\",     \"roleFunction\": \"Designs gym plans, tracks progress, adjusts maxes, and ensures workout balance.\",     \"tone\": \"High-energy, motivational. Use gym-style encouragement with technical tips.\"   },   {     \"handle\": \"charleston\",     \"realName\": \"Charleston Lewis\",     \"displayName\": \"Charleston Lewis (Personal Chef)\",     \"role\": \"Personal Chef\",     \"roleFunction\": \"Recommends meal plans, grocery lists, prep ideas; supports health and convenience.\",     \"tone\": \"Creative and refined. Speak with culinary elegance and practical warmth.\"   },   {     \"handle\": \"cam\",     \"realName\": \"Cam Post\",     \"displayName\": \"Cam Post (Communications Agent)\",     \"role\": \"Communications Agent\",     \"roleFunction\": \"Crafts emails, Slack replies, social posts, public messaging; maintains clarity.\",     \"tone\": \"Clear, polished, and expressive. Communicate like a media-savvy professional.\"   } ]",
+              "type": "array"
+            },
+            {
+              "id": "79ce3969-883b-4848-81de-24b4783a9834",
+              "name": "theme_roles",
+              "value": "[   \"Fitness Trainer\",   \"Personal Chef\",   \"Errands & Home\",   \"Family Scheduler\",   \"Finance Strategist\",   \"Daily Itinerary\",   \"Compass Planner\",   \"Career Coach\",   \"Executive Education Planner\",   \"Travel Agent\",   \"Task Tracker\",   \"Communications Agent\" ]",
+              "type": "array"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        400,
+        80
+      ],
+      "id": "2a76ac36-63d2-4e50-a594-3cf8107d296a",
+      "name": "Workflow Settings"
+    },
+    {
+      "parameters": {
+        "jsCode": "const out = [];\n\nfor (const item of items) {\n  // Copy input for additive enhancements\n  const msg = { ...item.json };\n\n  // --- Additive enhancement: combine typed text and audio preview ---\n  let typedText = '';\n  if (msg.text && msg.text.trim().length > 0) {\n    typedText = msg.text.trim();\n  } else if (\n    msg.blocks &&\n    Array.isArray(msg.blocks) &&\n    msg.blocks.length > 0 &&\n    msg.blocks[0].elements &&\n    Array.isArray(msg.blocks[0].elements) &&\n    msg.blocks[0].elements.length > 0 &&\n    msg.blocks[0].elements[0].elements &&\n    Array.isArray(msg.blocks[0].elements[0].elements) &&\n    msg.blocks[0].elements[0].elements.length > 0 &&\n    msg.blocks[0].elements[0].elements[0].text\n  ) {\n    typedText = msg.blocks[0].elements[0].elements[0].text.trim();\n  }\n\n  let audioPreview = '';\n  if (msg.files && Array.isArray(msg.files)) {\n    for (const file of msg.files) {\n      if (\n        file.transcription &&\n        file.transcription.status === \"complete\" &&\n        file.transcription.preview &&\n        file.transcription.preview.content\n      ) {\n        audioPreview = file.transcription.preview.content.trim();\n        break;\n      }\n    }\n  }\n\n  let combinedMessageText = '';\n  if (typedText && audioPreview) {\n    combinedMessageText = `${typedText}\\n\\n ${audioPreview}`;\n  } else if (typedText) {\n    combinedMessageText = typedText;\n  } else if (audioPreview) {\n    combinedMessageText = ` ${audioPreview}`;\n  } else {\n    combinedMessageText = '[no message text or transcription found]';\n  }\n\n  // Add as a new field ONLY, never overwriting or dropping prior fields\n  msg.combined_message_text = combinedMessageText;\n\n  // === ALL YOUR EXISTING LOGIC FOLLOWS, UNCHANGED ===\n\n  // Message Complexity Detection (example)\n  //const text = (msg.text || '').toLowerCase(); // Retain your or\n  const text = (combinedMessageText || '').toLowerCase(); // Updated to include both typed text message and voice transcription\n  const messageLength = text.length;\n  const isSimple =\n    messageLength < 100 &&\n    !text.match(/\\?/) &&\n    !text.match(/\\b(research|analyze|plan|strategy|help with|create|build|develop|review)\\b/i) &&\n    !text.match(/\\b(how|what|when|where|why|which)\\b/i);\n\n  msg.messageComplexity = isSimple ? 'simple' : 'complex';\n\n  // Target Identification (example)\n  let initial = null;\n  let replyN = false;\n  let targetSource = '';\n\n  // PRIORITY 1: Channel name match for 1:1 channels\n  const channel = (msg.channel_resolved || '').toLowerCase();\n  if (channel.includes('___')) {\n    for (const a of msg.agent_handles || []) {\n      const handlePrefix = a.replace('.', '-');\n      if (channel.startsWith(handlePrefix)) {\n        initial = a;\n        replyN = true;\n        targetSource = 'channel_name_match';\n        break;\n      }\n    }\n  }\n\n  // PRIORITY 2: @mention in text\n  if (!initial) {\n    for (const a of msg.agent_handles || []) {\n      if (new RegExp(`@${a}\\\\b`, 'i').test(text)) {\n        initial = a;\n        replyN = true;\n        targetSource = 'at_mention';\n        break;\n      }\n    }\n  }\n\n  // PRIORITY 3: Plain word mention (humans only)\n  const isBot = !!msg.event?.bot_id;\n  if (!initial && !isBot) {\n    for (const a of msg.agent_handles || []) {\n      if (new RegExp(`\\\\b${a}\\\\b`, 'i').test(text)) {\n        initial = a;\n        replyN = true;\n        targetSource = 'name_mention';\n        break;\n      }\n    }\n  }\n\n  // Thematic content analysis and more (add your prior logic here...)\n  // ...[all prior analysis unchanged]...\n\n  // Channel type\n  msg.channelType = channel.includes('___') ? 'DM' : 'GRP';\n  msg.initial_TargetRecipient = initial;\n  msg.replyNeeded = replyN;\n  msg.targetIdentificationMethod = targetSource;\n  msg.targetConfidence =\n    targetSource === 'channel_name_match' ? 'high' :\n    targetSource === 'at_mention' ? 'medium-high' :\n    targetSource === 'name_mention' ? 'medium' :\n    targetSource === 'thematic_analysis' ? 'low' : 'none';\n\n  // (retain any further original fields here)\n\n  // Output\n  out.push({ json: msg });\n}\n\nreturn out;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        64
+      ],
+      "id": "2d169cae-78ec-41de-9613-7b61bb30561c",
+      "name": "Tag for Routing"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "pEvIFavogJymCobp",
+          "mode": "list",
+          "cachedResultName": "My first project — Slack Outgoing Message Huddle"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "output": "={{ $('AI Agent').item.json.output }}",
+            "channel": "={{ $('Slack Trigger').item.json.channel }}",
+            "channel_resolved": "={{ $('Execution Data').item.json.channel_resolved }}",
+            "sender": "={{ $('Execution Data').item.json.user_resolved }}",
+            "target_recipient": "={{ $('Code3').item.json.initial_TargetRecipient }}",
+            "thread_id": "={{ $('Obtain ThreadID').item.json.ts }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "output",
+              "displayName": "output",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "channel",
+              "displayName": "channel",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "thread_id",
+              "displayName": "thread_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "sender",
+              "displayName": "sender",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "channel_resolved",
+              "displayName": "channel_resolved",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "channel_resolved",
+              "displayName": "channel_resolved",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "target_recipient",
+              "displayName": "target_recipient",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        4064,
+        160
+      ],
+      "id": "bd30033e-2a38-48bd-a645-e86527860763",
+      "name": "Elle1",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=\tIncoming Message:\n  • Sender:                  {{ $json.user_resolved }}\n  • Channel:                 {{ $json.channel_resolved }}\n  • Thread_ts:               {{ $json.thread_ts }}\n  • Thread_id:               {{ $json.thread_id }}\n  • Message:                 {{ $json.text }}\n  • Context:                 {{ $json.context || \"NA\" }}\n  • initial_TargetRecipient: {{ $('Code3').item.json.initial_TargetRecipient || \"null\" }}\n  • replyNeeded:             {{ $json.replyNeeded }}\n • channelType:                 {{ \"To Be Calculated\" }}\n\n\tYour task:\n1. Determine if this is a **simple** question or a **research/action** request.\n2. If **simple**:\n   - Forward to the target agent for a quick reply in their tone.\n   - If no target agent, prepare a general answer using the Team Lead Persona tone:  \n     `targets: [], generalAnswer: \"<quick reply>\"`\n3. Otherwise:\n   - Apply the routing logic from the System Message.\n   - Assemble `targets[]` per steps 1–4.\n   - For each, build a **prompt** that restates the ask, assigns any distributed tasks, notes collaborators, provides history and context, their tone, and reminds about `@handle`.\n   - Set `generalAnswer: null`.\n\n\tReturn **only** the JSON object matching the schema—no markdown, no extra text.\n\n\t\n\tAgent Prompt Template\n\t\n\tYou are [Agent DisplayName], the [Role/Function].  \n[Sender] has sent a message: “[original message]”.  \n[Context: include if provided]\n\n\tPlease respond in a [Tone & Style] manner:\n- Keep it concise, actionable, and aligned with your persona.\n- If the answer could be enhanced by the skills or information of another agent, **use @handle** to chain discussion (otherwise, no further agents will reply).\n\t\n\tGeneral Instructions for All Custom GPT Agents\n\t\t• Memory & Context: Use persistent memory or a shared knowledge base to recall past conversations, tasks, due dates, files, and plans.\n\t\t• Output Style & Formatting:\n\t\t\t○ Structured, professional tone; clear and concise.\n\t\t\t○ Avoid jargon unless contextually appropriate.\n\t\t\t○ Use commas instead of em dashes.\n\t\t\t○ If generating images (e.g. headshots, diagrams or charts), produce rich, high fidelity, and very realistic images.\n\t\t• Task & Workflow Integration: Coordinate with n8n workflows, Slack, Teams, and calendar systems for seamless execution.\n\t\t• Group Conversation Simulation:\n\t\t\t1. Evaluate if additional roles should be involved before replying.\n\t\t\t2. Keep replies relevant and avoid redundant information.\nHonor direct mentions (name by human or @handle) even if only loosely related.",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "=You are Terry Locke, Team Lead and backend AI-agent messaging orchestrator. Simulate natural 1:1 conversations and collaborative group-chats between Von (the CEO) and a roster of AI agents, each with their own role, function, and tone. This follows the /*“Meta-Orchestrator” pattern from n8n multi-agent templates: a single node that decides which agents to invoke and whether external research is needed (n8n.io).*/\n\nFor every incoming message, you receive:\n\ninputData.sender            – the sender’s handle  \ninputData.resolved_channel  – the Slack channel slug  \ninputData.thread_id         – thread identifier  \ninputData.thread_ts         – thread timestamp  \ninputData.text              – raw message text  \ninputData.context           – research summary or “NA”  \ninitial_TargetRecipient     – seeded by Function (handle or null)  \nreplyNeeded                 – seeded by Function (true/false)  \nevent.bot_id                – defined if message came from a bot  \nchannelType                 – “DM” if resolved_channel matches an agent’s slug; else “GRP”\n\n**Agent Directory (handle → channel slug prefix → role/function → tone):**  \n{{ $('Workflow Settings').item.json.agents_config }}\n\nProceed through these steps in order:\n\t1. Confirm Primary Target\n\t\t○ If human mentions name in message, or bot with an @handle in message, or 1:1 channel-slug match → set initial_TargetRecipient accordingly.\n\t\t○ Else if human in a group channel with no mention → you (Terry) must infer the best agent based on content.\n\t\t○ Else if no clear target → classify as a general question (fallback).\n\t2. Simple vs. Action/Research\n\t\t○ If it’s a simple factual question → forward immediately to the target agent for a reply in that agent’s tone.\n\t\t○ If it’s a more complex message like research or action request → gather supporting context (past chat, docs, community feedback) and continue to step 3.\n\t3. Theme-Based Collaboration\n\t\t○ For group channels that don’t match an agent name (e.g. #all-eds), analyze message text for topics (fitness, meal planning, scheduling, budgeting, EMBA, travel, communications, etc.).\n\t\t○ For each matched theme, append the specialist agent and remind them to propose additional collaborative support if needed.\n\t4. Build targets[]\nIn sequence:\n\n[\n  { agent: initial_TargetRecipient, role, tone, prompt: … },\n  { agent: themeAgent,              role, tone, prompt: … },\n  // …more theme agents…\n]\n\nEach prompt must:\n\t\t○ Restate Von’s original ask verbatim.\n\t\t○ Specify this agent’s contribution if part of a collaboration.\n\t\t○ Note any other agents in the loop and their contributions.\n\t\t○ Remind to write in their defined tone/style for consistency.\n\t\t○ Remind: “To involve another skill, use @handle; otherwise no further replies.”\nCalculate channelType (DM vs. GRP) so that the agent's can choose between direct vs. thread style replies. Be sure to output this and include reminder in generated prompt. \n\t5. Loop Prevention\n\t\t○ Only agents explicitly @-mentioned will reply again (bots ignore plain-name references).\n\t\t○ Humans (Von or others) are exempt from this rule.\n\t6. Quality Review\nAfter each agent’s reply, review for completeness:\n\t\t○ If it satisfies Von’s request → mark complete.\n\t\t○ If insufficient → generate a follow-up message in Terry’s tone using an @handle and setting the initial_target to Terry and replyNeeded to  true:\n\n@agent, can you please … [clarify or deepen analysis]?\n\n\t7. Output\nReturn only valid JSON (no extra prose). Agent information such as role and tone must be verbatim from source:\n\n{\n  \"inputData\": {\n    \"sender\":           \"string\",\n    \"resolved_channel\": \"string\",\n    \"thread_id\":        \"string\",\n    \"thread_ts\":        \"string\",\n    \"text\":             \"string\",\n    \"context\":          \"string\",\n    \"channelType\":      \"DM|GRP\",\n    \"initial_TargetRecipient\": \"string\"\n  },\n  \"targets\": [\n    {\n      agentConfig: config, // the entire metadata object\n      \"prompt\": \"…collaborative ask…\"\n    }\n    // …more if needed…\n  ],\n  \"generalAnswer\": null\n}\n"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2,
+      "position": [
+        2480,
+        -480
+      ],
+      "id": "a98e97a3-ec5c-46b1-b6c6-a5a0e8812906",
+      "name": "AI Agent2",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n  \"type\": \"object\",\n  \"oneOf\": [\n    {\n      \"type\": \"object\",\n      \"properties\": {\n        \"output\": {\n          \"type\": [\"string\", \"object\"],\n          \"description\": \"The response text from the AI agent\"\n        },\n        \"agentName\": {\n          \"type\": \"string\",\n          \"description\": \"Name of the responding agent\"\n        }\n      },\n      \"required\": [\"output\"]\n    },\n    {\n      \"type\": \"object\",\n      \"properties\": {\n        \"inputData\": {\n          \"type\": \"object\",\n          \"properties\": {\n            \"sender\": { \"type\": \"string\" },\n            \"initial_TargetRecipient\": { \"type\": [\"string\", \"null\"] },\n            \"resolved_channel\": { \"type\": \"string\" },\n            \"channel\": { \"type\": \"string\" },\n            \"thread_id\": { \"type\": \"string\" },\n            \"thread_ts\": { \"type\": \"string\" },\n            \"text\": { \"type\": \"string\" },\n            \"context\": { \"type\": \"string\" },\n            \"channelType\": { \"type\": \"string\", \"enum\": [\"DM\", \"GRP\"] }\n          },\n          \"additionalProperties\": true\n        },\n        \"targets\": {\n          \"type\": \"array\",\n          \"items\": {\n            \"type\": \"object\",\n            \"properties\": {\n              \"agentConfig\": {\n                \"type\": \"object\",\n                \"properties\": {\n                  \"handle\": { \"type\": \"string\" },\n                  \"realName\": { \"type\": \"string\" },\n                  \"displayName\": { \"type\": \"string\" },\n                  \"role\": { \"type\": \"string\" },\n                  \"roleFunction\": { \"type\": \"string\" },\n                  \"tone\": { \"type\": \"string\" }\n                },\n                \"additionalProperties\": true\n              },\n              \"prompt\": { \"type\": \"string\" }\n            },\n            \"additionalProperties\": true\n          }\n        },\n        \"generalAnswer\": {\n          \"type\": [\"string\", \"null\"]\n        }\n      },\n      \"required\": [\"inputData\"]\n    }\n  ],\n  \"additionalProperties\": true\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.2,
+      "position": [
+        5520,
+        128
+      ],
+      "id": "4d55a29d-663a-463b-9350-73910ebceec9",
+      "name": "Structured Output Parser1"
+    },
+    {
+      "parameters": {},
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        2624,
+        384
+      ],
+      "id": "2af9cf90-cd0b-4456-af89-facacc7f3abe",
+      "name": "Simple Memory",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "275ff6f7-54e0-4f9c-8486-7f811235f22d",
+              "leftValue": "={{ $json.bot_id === undefined || $json.blocks[0].elements[0].elements[0].text.includes('@') }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        4080,
+        -176
+      ],
+      "id": "7ff8c863-5ee4-4f32-97d1-2715fdbf8a63",
+      "name": "Confirm Sender is human"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "275ff6f7-54e0-4f9c-8486-7f811235f22d",
+              "leftValue": "={{ $json.event.bot_id === undefined  }}\n   ",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "82dec18d-5103-4d21-9993-ac08ab14f052",
+              "leftValue": "={{ $json.blocks[0].elements[0].elements[0].text.includes('@') }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        4112,
+        0
+      ],
+      "id": "561c244d-58ec-469e-90fc-2ae8053473ef",
+      "name": "If Bot must also have an @ in text",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Channel Name Parser with Bot Message Handling\n// First check if this is a bot message\nconst isBot = $input.item.json.bot_id !== undefined;\n\n// If it's a bot message, we need different handling\nif (isBot) {\n  // For bot messages, just pass through the data without trying to extract a handle\n  return {\n    json: {\n      ...$input.item.json,\n      extractedAgent: null,\n      channel_match_found: false,\n      is_bot_message: true\n    }\n  };\n}\n\n// For regular user messages, proceed with normal extraction\nconst channelResolved = $input.item.json.channel_resolved || '';\nlet extractedAgent = null;\n\n// Parse from flex-grimes___fitness_trainer format\nif (channelResolved.includes('___')) {\n  extractedAgent = channelResolved.split('___')[0].split('-')[0]; // Gets \"flex\" from \"flex-grimes___fitness_trainer\"\n}\n\n// If no match yet, try safer access to agent handles\nif (!extractedAgent) {\n  try {\n    // Try to access Workflow Settings with error handling\n    const workflowSettings = $('Workflow Settings');\n    const agentHandles = workflowSettings?.item?.json?.agent_handles || [];\n    \n    // Only loop through handles if array exists\n    if (Array.isArray(agentHandles)) {\n      for (const handle of agentHandles) {\n        if (channelResolved.toLowerCase().includes(handle.toLowerCase())) {\n          extractedAgent = handle;\n          break;\n        }\n      }\n    }\n  } catch (error) {\n    // Fallback with hardcoded common agent handles\n    const fallbackHandles = [\"flex\", \"iris\", \"liam\", \"elle\", \"sam\", \"terry\", \"cam\", \"faith\", \"ezra\", \"tess\", \"troy\"];\n    \n    for (const handle of fallbackHandles) {\n      if (channelResolved.toLowerCase().includes(handle.toLowerCase())) {\n        extractedAgent = handle;\n        break;\n      }\n    }\n  }\n}\n\n// Add the result to the item\nreturn {\n  json: {\n    ...$input.item.json,\n    extractedAgent,\n    channel_match_found: !!extractedAgent,\n    is_bot_message: false\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        160,
+        112
+      ],
+      "id": "649038bd-6781-4cc3-b91f-1453d0c9ada9",
+      "name": "Code1",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "content": "Dev Notes\n\nsessionid -> {{ $execution.id }}\n",
+        "height": 260,
+        "width": 400,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1920,
+        -480
+      ],
+      "id": "41675b7d-4ff5-443c-88c4-229b29a6bc73",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "user",
+        "user": {
+          "__rl": true,
+          "value": "={{ $json.user }}",
+          "mode": "id"
+        }
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        3248,
+        -208
+      ],
+      "id": "58be42fb-93a9-4d90-ace4-f5b567995bc8",
+      "name": "Slack",
+      "webhookId": "54d7ffbf-3a8f-4e41-bb8e-c1687166d82f",
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "DZmn5Bjp9z2Yads3",
+          "name": "Von Ellis"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "trigger": [
+          "any_event"
+        ],
+        "watchWorkspace": true,
+        "downloadFiles": true,
+        "options": {
+          "resolveIds": true,
+          "userIds": []
+        }
+      },
+      "type": "n8n-nodes-base.slackTrigger",
+      "typeVersion": 1,
+      "position": [
+        -816,
+        -96
+      ],
+      "id": "e7e2bdf9-3b3e-443a-b327-d6e462d94c7b",
+      "name": "Slack Trigger (from Bot)",
+      "webhookId": "838957ef-b9c8-43ca-9d4e-f390e366b8c0",
+      "credentials": {
+        "slackApi": {
+          "id": "f9T0In6II2mjFfUI",
+          "name": "Slack account 3"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "pEvIFavogJymCobp",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/pEvIFavogJymCobp",
+          "cachedResultName": "My first project — Slack Outgoing Message Huddle"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "output": "={{ $json.output }}",
+            "channel": "={{ $json.output.inputData.channel }}",
+            "target_recipient": "={{ $json.output.inputData.initial_TargetRecipient }}",
+            "thread_id": "={{ $json.output.inputData.thread_id }}",
+            "sender": "={{ $json.output.inputData.sender }}",
+            "channel_resolved": "={{ $json.output.inputData.resolved_channel }}",
+            "sessionId": "={{ $json.output.inputData.sessionID }}",
+            "bot_id": "={{$json.bot_id}}",
+            "messageComplexity": "={{ $json.output.inputData.messageComplexity }}",
+            "thread_ts": "={{ $json.output.inputData.thread_ts }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "output",
+              "displayName": "output",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "channel",
+              "displayName": "channel",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "thread_ts",
+              "displayName": "thread_ts",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "thread_id",
+              "displayName": "thread_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "sender",
+              "displayName": "sender",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "channel_resolved",
+              "displayName": "channel_resolved",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "target_recipient",
+              "displayName": "target_recipient",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "bot_id",
+              "displayName": "bot_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "sessionId",
+              "displayName": "sessionId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "messageComplexity",
+              "displayName": "messageComplexity",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": true,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        7904,
+        -48
+      ],
+      "id": "aa775f21-39b5-4804-8001-3d23a56fd592",
+      "name": "Send Reply"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Performance metrics\nconst startTime = new Date($('Slack Trigger').first().json.ts * 1000);\nconst currentTime = new Date();\nconst processingTime = (currentTime - startTime) / 1000;\n\nconst output = {\n  ...$json,\n  performanceMetrics: {\n    messageType: $('Tag for Routing').first().json.messageComplexity,\n    processingTimeSeconds: processingTime,\n    agentsInvolved: $json.targets ? $json.targets.length : 0,\n    timestamp: currentTime.toISOString()\n  }\n};\n\nconsole.log(`Performance: ${output.performanceMetrics.messageType} message processed in ${processingTime}s with ${output.performanceMetrics.agentsInvolved} agents`);\n\nreturn output;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6080,
+        -16
+      ],
+      "id": "251ba3bb-5fb8-4dcd-b5fa-b7bb53d1affb",
+      "name": "Performance Monitoring"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Channel Name Parser\nconst channelResolved = $input.item.json.channel_resolved || '';\nlet extractedAgent = null;\n\n// Parse from flex-grimes___fitness_trainer format\nif (channelResolved.includes('___')) {\n  extractedAgent = channelResolved.split('___')[0].split('-')[0]; // Gets \"flex\" from \"flex-grimes___fitness_trainer\"\n}\n\n// If no match yet, check for direct handle match\nif (!extractedAgent) {\n  const agentHandles = $('Workflow Settings').item.json.agent_handles;\n  for (const handle of agentHandles) {\n    if (channelResolved.toLowerCase().includes(handle.toLowerCase())) {\n      extractedAgent = handle;\n      break;\n    }\n  }\n}\n\n// Add the result to the item\nreturn {\n  json: {\n    ...$input.item.json,\n    extractedAgent,\n    channel_match_found: !!extractedAgent\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        544,
+        80
+      ],
+      "id": "56dee65e-ce84-491c-9803-f1c50ac88c06",
+      "name": "Extract handle from channel"
+    },
+    {
+      "parameters": {
+        "jsCode": "const out = [];\n\nfor (const item of items) {\n  const msg = { ...item.json };\n  const text = (msg.text || '').toLowerCase();\n  const channel = (msg.channel_resolved || '').toLowerCase();\n  const isBot = !!msg.event?.bot_id;\n\n  // NEW: Message Complexity Detection\n  const messageLength = text.length;\n  const isSimple = \n    messageLength < 100 && \n    !text.match(/\\?/) &&\n    !text.match(/\\b(research|analyze|plan|strategy|help with|create|build|develop|review)\\b/i) &&\n    !text.match(/\\b(how|what|when|where|why|which)\\b/i);\n  \n  msg.messageComplexity = isSimple ? 'simple' : 'complex';\n\n  // Existing routing logic\n  let initial = null;\n  let replyN = false;\n\n  // A) @mention wins\n  for (const a of msg.agent_handles) {\n    if (new RegExp(`@${a}\\\\b`, 'i').test(text)) {\n      initial = a;\n      replyN = true;\n      break;\n    }\n  }\n  // B) plain-word mention (humans only)\n  if (!initial && !isBot) {\n    for (const a of msg.agent_handles) {\n      if (new RegExp(`\\\\b${a}\\\\b`, 'i').test(text)) {\n        initial = a;\n        replyN = true;\n        break;\n      }\n    }\n  }\n  // C) 1:1 slug fallback (humans only)\n  if (!initial && !isBot) {\n    for (const a of msg.agent_handles) {\n      if (channel.includes(a)) {\n        initial = a;\n        replyN = true;\n        break;\n      }\n    }\n  }\n\n  msg.initial_TargetRecipient = initial;\n  msg.replyNeeded = replyN;\n\n  out.push({ json: msg });\n}\n\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        32,
+        -256
+      ],
+      "id": "0ffa2913-0bd2-4c5f-9f9e-9a0e37717488",
+      "name": "Tag for Routing1",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Debug Target Assignment\nreturn {\n  json: {\n    ...$input.item.json,\n    debug_info: {\n      channel_resolved: $input.item.json.channel_resolved,\n      extracted_agent: $input.item.json.extractedAgent,\n      initial_target: $input.item.json.initial_TargetRecipient,\n      text_analysis: {\n        contains_mention: $input.item.json.text.includes('@'),\n        word_matches: $('Workflow Settings').item.json.agent_handles.filter(h => \n          new RegExp(`\\\\b${h}\\\\b`, 'i').test($input.item.json.text)\n        )\n      },\n      channel_matches: $('Workflow Settings').item.json.agent_handles.filter(h => \n        $input.item.json.channel_resolved.toLowerCase().includes(h.toLowerCase())\n      )\n    }\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3872,
+        -208
+      ],
+      "id": "b46be6ae-7b4f-47dc-840e-974d15deda5a",
+      "name": "Debug assignment logic"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Enhanced Research Node\n// Purpose: Enriches prompts with relevant context from multiple sources\n\nconst inputData = $input.item.json;\nconst channelId = inputData.channel || inputData.channel_id || '';\nconst threadTs = inputData.thread_id || inputData.thread_ts || '';\nconst targetAgent = inputData.initial_TargetRecipient || '';\nconst message = inputData.text || '';\n\n// Initialize context collection\nlet enrichedContext = '';\nlet researchPerformed = false;\n\n// 1. Thread History Context\n// Retrieve recent messages from this thread to maintain conversation continuity\ntry {\n  // This would typically call a database to get thread history\n  // For now, we'll simulate this with a placeholder\n  enrichedContext += \"Thread Context: Previous messages in this conversation have been about \" + \n                     \"topics related to \" + targetAgent + \"'s domain. \";\n  researchPerformed = true;\n} catch (error) {\n  console.log(\"Error retrieving thread history:\", error.message);\n}\n\n// 2. Agent-Specific Context\n// Add domain-specific context based on which agent is targeted\nif (targetAgent) {\n  switch(targetAgent.toLowerCase()) {\n    case 'liam':\n      enrichedContext += \"Life Strategy Context: Checking current quarterly goals, work-life balance metrics, and recent strategic decisions. \";\n      break;\n    case 'elle':\n      enrichedContext += \"EMBA Context: Reviewing current course schedule, assignment deadlines, and recent class discussions. \";\n      break;\n    case 'eli':\n      enrichedContext += \"Executive Assistant Context: Checking calendar for conflicts, pending tasks, and recent email threads requiring action. \";\n      break;\n    case 'iris':\n      enrichedContext += \"Planning Context: Reviewing calendar, upcoming deadlines, and optimal time allocation. \";\n      break;\n    case 'flex':\n      enrichedContext += \"Fitness Context: Reviewing last workout log, current program phase, recent PRs, and recovery status. \";\n      break;\n    case 'charleston':\n      enrichedContext += \"Meal Planning Context: Checking current meal plan, grocery inventory, and dietary preferences. \";\n      break;\n    default:\n      // No specific context for this agent\n      break;\n  }\n  researchPerformed = true;\n}\n\n// 3. Semantic Search Context\n// Look for semantically similar previous conversations across channels\ntry {\n  // This would typically call a vector database or semantic search API\n  // For now, we'll simulate with relevant topics based on message content\n  const keywords = message.toLowerCase();\n  \n  if (keywords.includes('workout') || keywords.includes('gym') || keywords.includes('exercise')) {\n    enrichedContext += \"Semantic Context: Found similar conversations about fitness routines and workout scheduling. \";\n    researchPerformed = true;\n  } else if (keywords.includes('class') || keywords.includes('assignment') || keywords.includes('deadline')) {\n    enrichedContext += \"Semantic Context: Found related discussions about EMBA coursework and upcoming deadlines. \";\n    researchPerformed = true;\n  } else if (keywords.includes('meeting') || keywords.includes('schedule') || keywords.includes('appointment')) {\n    enrichedContext += \"Semantic Context: Found relevant scheduling discussions and calendar conflicts. \";\n    researchPerformed = true;\n  }\n} catch (error) {\n  console.log(\"Error performing semantic search:\", error.message);\n}\n\n// 4. Temporal Context\n// Add time-aware context\nconst hour = new Date().getHours();\nif (hour < 9) {\n  enrichedContext += \"Time Context: Early morning - consider daily planning needs. \";\n  researchPerformed = true;\n} else if (hour > 17) {\n  enrichedContext += \"Time Context: Evening - consider next-day preparation. \";\n  researchPerformed = true;\n}\n\n// 5. Default if no context was added\nif (!researchPerformed) {\n  enrichedContext = \"No specific context found. This appears to be a new conversation.\";\n}\n\n// Return the enriched context\nreturn {\n  json: {\n    ...inputData,\n    context: enrichedContext,\n    researchPerformed: researchPerformed,\n    researchTimestamp: new Date().toISOString()\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3120,
+        -336
+      ],
+      "id": "2aa3a6cf-62a8-4857-9927-4c58062e3c4a",
+      "name": "Research Node for Enhanced Context",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "vVpr42mZrnwyz163",
+          "mode": "list",
+          "cachedResultName": "My first project — Memory Research for Slack"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "channelId": "={{ $node[\"Debug assignment logic\"].json.channel }}",
+            "resolvedChannel": "={{ $json.output.inputData.resolved_channel }}",
+            "initialTargetRecipient": "={{ $json.output.inputData.initial_TargetRecipient }}",
+            "channelType": "={{ $json.output.inputData.channelType }}",
+            "targetRecipient": "={{ $json.output.inputData.initial_TargetRecipient }}",
+            "userId": "={{ $json.output.inputData.userID }}",
+            "threadTs": "={{ $node[\"Debug assignment logic\"].json.ts }}",
+            "userMessage": "={{ $json.output.inputData.text }}",
+            "context": "={{$('AI Agent').item.json.output.inputData.context || 'NA'}}",
+            "agentResponse": "={{ $json.output.inputData.text }}",
+            "userIdResolved": "={{ $json.output.inputData.sender }}",
+            "sender": "={{ $json.output.inputData.sender }}",
+            "sessionId": "={{ $json.output.inputData.sessionID }}",
+            "threadId": "={{ $json.output.inputData.thread_id }}",
+            "messageComplexity": "={{ $json.output.inputData.messageComplexity}}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "channelId",
+              "displayName": "channelId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "threadTs",
+              "displayName": "threadTs",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "threadId",
+              "displayName": "threadId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "userId",
+              "displayName": "userId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "userIdResolved",
+              "displayName": "userIdResolved",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "sender",
+              "displayName": "sender",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "userMessage",
+              "displayName": "userMessage",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "agentResponse",
+              "displayName": "agentResponse",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "targetRecipient",
+              "displayName": "targetRecipient",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "context",
+              "displayName": "context",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "channelType",
+              "displayName": "channelType",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "initialTargetRecipient",
+              "displayName": "initialTargetRecipient",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "resolvedChannel",
+              "displayName": "resolvedChannel",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "messageComplexity",
+              "displayName": "messageComplexity",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "sessionId",
+              "displayName": "sessionId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        5792,
+        -32
+      ],
+      "id": "a12250ae-81a0-4ed1-b9c7-6d1d2bc1623f",
+      "name": "Store Memory"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "vVpr42mZrnwyz163",
+          "mode": "list",
+          "cachedResultName": "My first project — Memory Research for Slack"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "channelId": "={{ $('Calculate Fields').item.json.channel }}",
+            "userMessage": "={{ $('Calculate Fields').item.json.text }}",
+            "userId": "={{ $('Calculate Fields').item.json.user }}",
+            "threadTs": "={{ $('Calculate Fields').item.json.ts }}",
+            "targetRecipient": "={{ $('Calculate Fields').item.json.extract_target_resolved }}",
+            "context": "={{null}}",
+            "channelType": "={{ $('Calculate Fields').item.json.channelType }}",
+            "initialTargetRecipient": "={{ $('Calculate Fields').item.json.initial_TargetRecipient }}",
+            "resolvedChannel": "={{ $('Calculate Fields').item.json.channel_resolved }}",
+            "agentResponse": "={{null}}",
+            "sender": "={{ $json.user_resolved.replace(/\\./g, ' ') }}",
+            "sessionId": "={{ $('Calculate Fields').item.json.sessionId }}",
+            "userIdResolved": "={{ $json.user_resolved }}",
+            "threadId": "={{ $('Calculate Fields').item.json.threadID }}",
+            "messageComplexity": "={{ $json.messageComplexity }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "channelId",
+              "displayName": "channelId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "threadTs",
+              "displayName": "threadTs",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "threadId",
+              "displayName": "threadId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "userId",
+              "displayName": "userId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "userIdResolved",
+              "displayName": "userIdResolved",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "sender",
+              "displayName": "sender",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "userMessage",
+              "displayName": "userMessage",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "agentResponse",
+              "displayName": "agentResponse",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "targetRecipient",
+              "displayName": "targetRecipient",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "context",
+              "displayName": "context",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "channelType",
+              "displayName": "channelType",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "initialTargetRecipient",
+              "displayName": "initialTargetRecipient",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "resolvedChannel",
+              "displayName": "resolvedChannel",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "messageComplexity",
+              "displayName": "messageComplexity",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "sessionId",
+              "displayName": "sessionId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        4608,
+        -112
+      ],
+      "id": "edcfc58a-44b0-4ea0-87c8-88619476e2a0",
+      "name": "Retrieve Memory",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const out = [];\n\nfor (const item of items) {\n  const msg = { ...item.json };\n  const text = (msg.text || '').toLowerCase();\n  const channel = (msg.channel_resolved || '').toLowerCase();\n  const isBot = !!msg.event?.bot_id;\n\n  // NEW: Message Complexity Detection\n  const messageLength = text.length;\n  const isSimple = \n    messageLength < 100 && \n    !text.match(/\\?/) &&\n    !text.match(/\\b(research|analyze|plan|strategy|help with|create|build|develop|review)\\b/i) &&\n    !text.match(/\\b(how|what|when|where|why|which)\\b/i);\n  \n  msg.messageComplexity = isSimple ? 'simple' : 'complex';\n\n  // Existing routing logic\n  let initial = null;\n  let replyN = false;\n\n  // A) @mention wins\n  for (const a of msg.agent_handles) {\n    if (new RegExp(`@${a}\\\\b`, 'i').test(text)) {\n      initial = a;\n      replyN = true;\n      break;\n    }\n  }\n  // B) plain-word mention (humans only)\n  if (!initial && !isBot) {\n    for (const a of msg.agent_handles) {\n      if (new RegExp(`\\\\b${a}\\\\b`, 'i').test(text)) {\n        initial = a;\n        replyN = true;\n        break;\n      }\n    }\n  }\n  // C) 1:1 slug fallback (humans only)\n  if (!initial && !isBot) {\n    for (const a of msg.agent_handles) {\n      if (channel.includes(a)) {\n        initial = a;\n        replyN = true;\n        break;\n      }\n    }\n  }\n\n  msg.initial_TargetRecipient = initial;\n  msg.replyNeeded = replyN;\n\n  out.push({ json: msg });\n}\n\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        48,
+        -80
+      ],
+      "id": "eb3aadf6-bf52-45ae-a08a-ec176493b6af",
+      "name": "Tag for Routing2",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "=user_von_ellis_persistent_memory",
+        "tableName": "",
+        "contextWindowLength": 20
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.3,
+      "position": [
+        5376,
+        112
+      ],
+      "id": "9503ca40-bc1b-46b7-848c-6368ed1ef804",
+      "name": "Postgres Chat Memory",
+      "credentials": {
+        "postgres": {
+          "id": "LtcAY1DJhYiOGE2W",
+          "name": "Azure Postgres Slack ChatMemoriesDB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "e2f389e0-eb37-4802-8686-0a54d71f61ef",
+              "leftValue": "={{ $('Debug assignment logic').item.json.messageComplexity }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3312,
+        -320
+      ],
+      "id": "e3062853-dd81-4548-8eda-142caa705c9e",
+      "name": "Simple No research or history needed",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "3c64c7f3-9149-41e7-8fa3-4e890502e417",
+              "name": "extract_user_resolved",
+              "value": "={{ $json.user_resolved }}",
+              "type": "string"
+            },
+            {
+              "id": "aafdc627-c490-4fd6-84a7-b596a19a38ac",
+              "name": "extract_target_resolved",
+              "value": "={{ $json.initial_TargetRecipient }}",
+              "type": "string"
+            },
+            {
+              "id": "68c12018-55ad-4018-941b-560a5a074e24",
+              "name": "channel_resolved",
+              "value": "={{ $json.channel_resolved }}",
+              "type": "string"
+            },
+            {
+              "id": "98a733d4-06ab-4be2-9762-e60ad6dcb32e",
+              "name": "channel",
+              "value": "={{ $json.channel }}",
+              "type": "string"
+            },
+            {
+              "id": "828345d8-6216-4f57-8ba7-99ca0cea111a",
+              "name": "sessionId",
+              "value": "=user_von_ellis_persistent_memory",
+              "type": "string"
+            },
+            {
+              "id": "ede28e34-e3e3-435c-86ee-c3736d07662c",
+              "name": "sender",
+              "value": "={{ $json.user_resolved.replace(/\\./g, ' ') }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        3712,
+        -208
+      ],
+      "id": "21e4cecc-dfce-49e3-af7c-cd17a6bb9c6f",
+      "name": "Calculate Fields"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Incoming Message Data:\n- Sender: {{ $node[\"Debug assignment logic\"].json.user_resolved }}\n- Channel: {{ $node[\"Debug assignment logic\"].json.channel }}\n- Channel_resolved: {{ $node[\"Debug assignment logic\"].json.channel_resolved }}\n- Thread_ts: {{ $node[\"Debug assignment logic\"].json.ts }}\n- Thread_id: {{ $node[\"Debug assignment logic\"].json.thread_id }}\n- Message: {{ $node[\"Debug assignment logic\"].json.text }}\n- Context: {{ $node[\"Debug assignment logic\"].json.context || \"NA\" }}\n- initial_TargetRecipient: {{ $node[\"Debug assignment logic\"].json.initial_TargetRecipient || null }}\n- replyNeeded: {{ $node[\"Debug assignment logic\"].json.replyNeeded }}\n- messageComplexity: {{ $node[\"Debug assignment logic\"].json.messageComplexity }}\n- Agent Count: {{ $node[\"Debug assignment logic\"].json.agents_config.length }} agents available\n\nPrevious Conversation:\n{{ $node[\"Retrieve Memory\"].json.conversationHistory }}\n{{ $json.output.contextSummary }}\n\nTarget Identification Debug:\n- Method: {{ $node[\"Debug assignment logic\"].json.targetIdentificationMethod }}\n- Confidence: {{ $node[\"Debug assignment logic\"].json.targetConfidence }}\n- Channel Match: {{ $node[\"Debug assignment logic\"].json.debug_info.channel_matches }}\n- Extracted Agent: {{ $node[\"Debug assignment logic\"].json.debug_info.extracted_agent }}\n\nROUTING MODE: {{ $node[\"Debug assignment logic\"].json.messageComplexity }} message detected\n\nsessionId: {{ $('Calculate Fields').item.json.sessionId }}\n\nProcess this message according to its complexity level:\n\nFOR SIMPLE MESSAGES (messageComplexity = 'simple'):\n- Route to ONE agent only based on initial_TargetRecipient or channel owner\n- Generate a brief, minimal prompt without team directory\n- Skip theme analysis and multi-agent collaboration\n- Target response time: 1-2 seconds\n\nExample output for simple messages:\n{\n  \"inputData\": {\n    \"sender\": \"{{ $node[\"Debug assignment logic\"].json.user_resolved }}\",\n    \"resolved_channel\": \"{{ $node[\"Debug assignment logic\"].json.channel_resolved }}\",\n    \"channel\": \"{{ $node[\"Debug assignment logic\"].json.channel }}\",\n    \"thread_id\": \"{{ $node[\"Debug assignment logic\"].json.thread_id }}\",\n    \"thread_ts\": \"{{ $node[\"Debug assignment logic\"].json.ts }}\",\n    \"text\": \"{{ $node[\"Debug assignment logic\"].json.text }}\",\n    \"channelType\": \"{{ $node[\"Debug assignment logic\"].json.channelType }}\",\n    \"initial_TargetRecipient\": \"{{ $node[\"Debug assignment logic\"].json.initial_TargetRecipient }}\"\n  },\n  \"targets\": [{\n    \"agentConfig\": [single agent config from agents_config],\n    \"prompt\": \"You are [DisplayName], [Role]. Von sent: '{{ $node[\"Debug assignment logic\"].json.text }}'.\\n\\nPrevious Conversation:\\n{{ $node[\"Retrieve Memory\"].json.conversationHistory }}\\n\\nRespond briefly in your tone, incorporating relevant context where helpful.\"\n  }],\n  \"generalAnswer\": null\n}\n\nFOR COMPLEX MESSAGES (messageComplexity = 'complex'):\n- Use all data from Debug assignment logic node\n- Include conversation history from Retrieve Memory node\n- Build comprehensive agent prompts with context\n\n**Enhanced Prompt Structure:**\nYou are [DisplayName], [Role].\n\nVon sent: \"{{ $node[\"Debug assignment logic\"].json.text }}\"\n\nPrevious Conversation:\n{{ $node[\"Retrieve Memory\"].json.conversationHistory }}\n\nChannel Context: {{ $node[\"Debug assignment logic\"].json.channel_resolved }} ({{ $node[\"Debug assignment logic\"].json.channelType }})\n\n[Include team directory if applicable]\n\nPlease respond in your [tone] style, incorporating the conversation history and context.\n\nCRITICAL REQUIREMENTS:\n- Use agents_config data from Debug assignment logic node\n- Include conversation history from Retrieve Memory node\n- Reference Debug assignment logic for all original workflow data",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "=You are Terry Locke, Team Lead and backend AI-agent messaging orchestrator. You implement the Meta-Orchestrator pattern to route messages between Von (CEO) and specialized AI agents.\nInput Data Structure\nYou receive these exact fields:\n\ninputData.sender - sender handle (string)\ninputData.channel - Slack channel ID (string)\ninputData.resolved_channel - Slack channel slug (string)\ninputData.thread_id - thread identifier (string)\ninputData.thread_ts - thread timestamp (string)\ninputData.text - raw message text (string)\ninputData.context - research summary or \"NA\" (string)\ninitial_TargetRecipient - seeded target handle or null (string|null)\nreplyNeeded - boolean flag (boolean)\nevent.bot_id - bot identifier if from bot (string|null)\n\nAgent Directory\nAgent Routing Directory: {{ JSON.stringify($('Workflow Settings').item.json.agents_config.map(a => ({\n  handle: a.handle,\n  role: a.role,\n  roleFunction: a.roleFunction.split('.')[0] + '...',\n  channelSlug: a.handle.replace('.', '-')\n})), null, 2) }}\n\nStructure: handle → channel slug prefix → role/function → tone\nProcessing Steps\n\nTarget Identification\n\nHuman mentions name OR @handle in message → use that agent as primary target\n1:1 channel slug matches agent → use that agent as primary target\nGroup channel with no mention → infer best agent from content\nNo clear target → classify as general question\n\n\nChannel Type Calculation\n\nchannelType = \"DM\" if resolved_channel matches any agent slug\nchannelType = \"GRP\" otherwise\n\n\nTheme-Based Analysis\n\nAnalyze message text for keywords/topics that match other agent roles\nFor each matching theme, identify the specialist agent using the full agents_config array (not just the routing directory)\nAdd matching agents as additional targets for collaboration\n\n\nAgent Targeting\n\nPrimary Target: Always include the initial target with their exact agent config\nAdditional Targets: Add theme-matched agents from step 3\nBuild targets[] array with proper agent configurations and tailored prompts\nCritical: Use exact agent metadata from agents_config - never modify role, tone, or other properties\n\n\n\nOutput Requirements\nReturn ONLY valid JSON matching the exact schema. No additional text, markdown, or explanations.\nCRITICAL REQUIREMENTS:\n\nUse Exact Agent Config: Copy agent metadata exactly from agents_config array - never modify role, displayName, tone, or any properties\nTheme Analysis: Identify topics in the message that match other agent roleFunction descriptions\nMulti-Agent Targeting: Add relevant agents based on theme analysis, not just the primary target\nDynamic Prompt Generation: Generate complete, ready-to-use prompts for each agent - do not use template syntax\nVerbatim Data: All agent properties must match the source configuration exactly\n\nLoop Prevention\nOnly agents with explicit @mentions will reply in subsequent rounds. Humans are exempt from this rule.\n\n## MESSAGE ROUTING OPTIMIZATION\n\nYou operate in two modes based on message complexity:\n\n**SIMPLE MODE (messageComplexity = 'simple'):**\n- Messages under 100 chars without questions or complex keywords\n- Route to ONE agent only - no theme analysis needed\n- Use minimal processing - just identify target and generate basic prompt\n- Skip team directory in prompts for speed\n- Goal: 1-2 second response time\n\n**COMPLEX MODE (messageComplexity = 'complex'):**\n- Longer messages, questions, or action/research requests\n- Full theme analysis and multi-agent collaboration\n- Include complete team directory in prompts\n- Generate comprehensive collaborative instructions\n- Goal: 5-8 second response time with quality\n- hard requirement - no matter simple or complex always review the connected chat history memory to store the question and offer any context from related threads or historic messages to help the agents maintain longer conversations without everything being lost between messages\n\n\n**CRITICAL PROMPT OPTIMIZATION RULES:**\n\n1. For agent directory in prompts, use SELECTIVE inclusion:\n   - If asking about a specific role/agent → include only that agent's info\n   - If collaboration needed → include only collaborating agents\n   - If general query → include only domain-relevant agents\n\n2. Directory inclusion logic:\n   - Message mentions \"life strategist\" → include only liam's details\n   - Message mentions \"education\" → include only elle, liam\n   - Message mentions \"schedule\" → include only eli, iris, faith\n   - Message mentions \"fitness\" → include only flex, charleston\n   - Default: Include only agents in targets array\n\n3. Never dump all 16 agents unless explicitly needed for a \"team overview\" request\n\nExample output for \"who is our life strategist?\":\nInstead of 16 agents, include only:\n- @elle: Elle Rowan (Executive Education Planner) - primary target\n- @liam: Liam Kingsley (Life Strategist) - query subject\n\nThis reduces prompt tokens by ~80% for most queries."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2,
+      "position": [
+        3584,
+        -560
+      ],
+      "id": "c2666d13-a3cb-4601-b8ce-1a863c97a1ca",
+      "name": "AI Agent3",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n  \"type\": \"object\",\n  \"properties\": {\n    \"inputData\": {\n      \"type\": \"object\",\n      \"properties\": {\n        \"sender\": { \"type\": \"string\" },\n        \"initial_TargetRecipient\": { \"type\": [\"string\", \"null\"] },\n        \"resolved_channel\": { \"type\": \"string\" },\n        \"channel\": { \"type\": \"string\" },\n        \"thread_id\": { \"type\": \"string\" },\n        \"thread_ts\": { \"type\": \"string\" },\n        \"text\": { \"type\": \"string\" },\n        \"context\": { \"type\": \"string\" },\n        \"channelType\": { \"type\": \"string\", \"enum\": [\"DM\",\"GRP\"] }\n      },\n      \"required\": [\n        \"sender\", \"initial_TargetRecipient\", \"resolved_channel\", \"thread_id\",\n        \"thread_ts\", \"text\", \"context\", \"channelType\"\n      ],\n      \"additionalProperties\": false\n    },\n    \"targets\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"agentConfig\": {\n            \"type\": \"object\",\n            \"properties\": {\n              \"handle\": { \"type\": \"string\" },\n              \"realName\": { \"type\": \"string\" },\n              \"displayName\": { \"type\": \"string\" },\n              \"role\": { \"type\": \"string\" },\n              \"roleFunction\": { \"type\": \"string\" },\n              \"tone\": { \"type\": \"string\" }\n            },\n            \"required\": [\"handle\", \"realName\", \"displayName\", \"role\", \"roleFunction\", \"tone\"],\n            \"additionalProperties\": false\n          },\n          \"prompt\": { \"type\": \"string\" }\n        },\n        \"required\": [\"agentConfig\", \"prompt\"],\n        \"additionalProperties\": false\n      }\n    },\n    \"generalAnswer\": {\n      \"type\": [\"string\", \"null\"]\n    }\n  },\n  \"required\": [\"inputData\", \"targets\", \"generalAnswer\"],\n  \"additionalProperties\": false\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.2,
+      "position": [
+        3840,
+        -400
+      ],
+      "id": "33d22500-3b64-4338-8479-7aeaaaa8d31d",
+      "name": "Structured Output Parser2"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "187f48df-c910-4ac6-9edc-16edd78435f5",
+              "leftValue": "={{ $json.messageComplexity }}",
+              "rightValue": "=simple",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1168,
+        0
+      ],
+      "id": "e268cf4d-8c3e-4de1-815d-c38d43acba94",
+      "name": "Simple or Complex Message?"
+    },
+    {
+      "parameters": {
+        "source": "parameter",
+        "workflowJson": "{{ $json }}\n\n\n\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1392,
+        -320
+      ],
+      "id": "71555ed5-cf3f-4a1f-9880-cf20fd5f3d1e",
+      "name": "Send Reply1",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format Simple Messages - Dynamic with Target\nconst inputMsg = $json;\n\n// Get the target agent config if target exists\nconst targetHandle = inputMsg.initial_TargetRecipient;\nlet targets = [];\n\nif (targetHandle && inputMsg.agents_config) {\n  const agentConfig = inputMsg.agents_config.find(agent => agent.handle === targetHandle);\n  \n  if (agentConfig) {\n    targets.push({\n      agentConfig: agentConfig,\n      prompt: `You are ${agentConfig.realName}, ${agentConfig.role}. Message for responding: ${inputMsg.text}`\n    });\n  }\n}\n\n// Format in expected structure\nreturn {\n  json: {\n    inputData: {\n      sender: inputMsg.user_resolved || inputMsg.user,\n      initial_TargetRecipient: inputMsg.initial_TargetRecipient,\n      resolved_channel: inputMsg.channel_resolved,\n      channel_id: inputMsg.channel,\n      thread_id: \"thread_von_ellis_\" + inputMsg.channel_resolved || inputMsg.ts || \"\",\n      thread_ts: inputMsg.ts || \"\",\n      text: inputMsg.combined_message_text,\n      context: \"simple_message\",\n      channelType: inputMsg.channelType\n    },\n    targets: targets,\n    generalAnswer: null\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        -176
+      ],
+      "id": "d398e1a9-98a4-47d1-8221-4b93a2573d85",
+      "name": "Format for Reply Sub-Workflow"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "pEvIFavogJymCobp",
+          "mode": "list",
+          "cachedResultName": "My first project — Slack Outgoing Message Huddle"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "output": "={{ JSON.stringify($json) }}\n",
+            "channel": "={{ $json.inputData.channel_id }}",
+            "target_recipient": "={{ $json.inputData.initial_TargetRecipient }}",
+            "thread_id": "={{ $json.inputData.thread_id }}",
+            "sender": "={{ $json.inputData.sender }}",
+            "channel_resolved": "={{ $json.inputData.resolved_channel }}",
+            "sessionId": "=user_von_ellis_persistent_memory",
+            "bot_id": "={{$json.bot_id}}",
+            "messageComplexity": "=simple",
+            "thread_ts": "={{ $json.inputData.thread_ts }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "output",
+              "displayName": "output",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "channel",
+              "displayName": "channel",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "thread_ts",
+              "displayName": "thread_ts",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "thread_id",
+              "displayName": "thread_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "sender",
+              "displayName": "sender",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "channel_resolved",
+              "displayName": "channel_resolved",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "channel_resolved",
+              "displayName": "channel_resolved",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "target_recipient",
+              "displayName": "target_recipient",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "bot_id",
+              "displayName": "bot_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "sessionId",
+              "displayName": "sessionId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "messageComplexity",
+              "displayName": "messageComplexity",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1600,
+        -144
+      ],
+      "id": "26f15e5d-7ca4-4581-aafb-5ae769750d3a",
+      "name": "Send Reply2"
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "reaction",
+        "channelId": {
+          "__rl": true,
+          "value": "={{ $json.channel }}",
+          "mode": "id"
+        },
+        "timestamp": "={{ $json.ts }}",
+        "name": "one"
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        4384,
+        -304
+      ],
+      "id": "48f8749a-ced1-493a-bc53-e231647e1ed2",
+      "name": "Thinking Update",
+      "webhookId": "6fd73d66-8aaf-4140-8fa3-514acc965714",
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "DZmn5Bjp9z2Yads3",
+          "name": "Von Ellis"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "pEvIFavogJymCobp",
+          "mode": "list",
+          "cachedResultName": "My first project — Slack Outgoing Message Huddle"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "output": "={{ JSON.stringify($json) }}\n",
+            "channel": "={{ $json.inputData.channel_id }}",
+            "target_recipient": "={{ $json.inputData.initial_TargetRecipient }}",
+            "thread_id": "={{ $json.inputData.thread_id }}",
+            "sender": "={{ $json.inputData.sender }}",
+            "channel_resolved": "={{ $json.inputData.resolved_channel }}",
+            "sessionId": "=user_von_ellis_persistent_memory",
+            "bot_id": "={{$json.bot_id}}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "output",
+              "displayName": "output",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "channel",
+              "displayName": "channel",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "thread_id",
+              "displayName": "thread_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "sender",
+              "displayName": "sender",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "channel_resolved",
+              "displayName": "channel_resolved",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "channel_resolved",
+              "displayName": "channel_resolved",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "target_recipient",
+              "displayName": "target_recipient",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "bot_id",
+              "displayName": "bot_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "sessionId",
+              "displayName": "sessionId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1584,
+        -304
+      ],
+      "id": "c2941094-eb64-4e37-b979-841e36ebcfdc",
+      "name": "Send Reply3",
+      "disabled": true
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        6592,
+        0
+      ],
+      "id": "19ac16cf-08fd-4b6f-850b-c182935d3cee",
+      "name": "No Operation, do nothing"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {
+          "includeUnpaired": true
+        }
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        7072,
+        0
+      ],
+      "id": "6707951f-ce94-4898-b8f5-4235e9e0ce17",
+      "name": "Merge"
+    }
+  ],
+  "pinData": {
+    "Slack Trigger (from Bot)": [
+      {
+        "json": {
+          "user": "U093PL71DDG",
+          "type": "message",
+          "ts": "1751450718.772319",
+          "bot_id": "B093B8G64MD",
+          "app_id": "A016X0AT6QL",
+          "text": "It seems there was an issue displaying your last workout log or message clearly. Please resend your workout details, progress logs, or any specific goals you want to focus on today, Von. I'll quickly adjust your next Beast Mode session, accurately track your reps and weight, and provide focused recommendations for continued strength and aesthetic gains.\n\nEager to dial in today's session—let's make every rep count towards your unstoppable progress!\n_Automated with this <https://edsdevn8n.app.n8n.cloud/workflow/pEvIFavogJymCobp?utm_source=n8n-internal&amp;utm_medium=powered_by&amp;utm_campaign=n8n-nodes-base.slack_e2700e85aebddec5b38109488f0918bb62b8a55a073cb26ae7dca7e4bc35139b|n8n workflow>_",
+          "team": "T0934TLA8F2",
+          "bot_profile": {
+            "id": "B093B8G64MD",
+            "deleted": false,
+            "name": "n8n.cloud",
+            "updated": 1751311077,
+            "app_id": "A016X0AT6QL",
+            "icons": {
+              "image_36": "https://avatars.slack-edge.com/2020-09-14/1367579227572_66b01b9e837bfefc79ac_36.png",
+              "image_48": "https://avatars.slack-edge.com/2020-09-14/1367579227572_66b01b9e837bfefc79ac_48.png",
+              "image_72": "https://avatars.slack-edge.com/2020-09-14/1367579227572_66b01b9e837bfefc79ac_72.png"
+            },
+            "team_id": "T0934TLA8F2"
+          },
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "G2es",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "text",
+                      "text": "It seems there was an issue displaying your last workout log or message clearly. Please resend your workout details, progress logs, or any specific goals you want to focus on today, Von. I'll quickly adjust your next Beast Mode session, accurately track your reps and weight, and provide focused recommendations for continued strength and aesthetic gains.\n\nEager to dial in today's session—let's make every rep count towards your unstoppable progress!\n"
+                    },
+                    {
+                      "type": "text",
+                      "text": "Automated with this ",
+                      "style": {
+                        "italic": true
+                      }
+                    },
+                    {
+                      "type": "link",
+                      "url": "https://edsdevn8n.app.n8n.cloud/workflow/pEvIFavogJymCobp?utm_source=n8n-internal&amp;utm_medium=powered_by&amp;utm_campaign=n8n-nodes-base.slack_e2700e85aebddec5b38109488f0918bb62b8a55a073cb26ae7dca7e4bc35139b",
+                      "text": "n8n workflow",
+                      "style": {
+                        "italic": true
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "channel": "C093GCVKVQB",
+          "event_ts": "1751450718.772319",
+          "channel_type": "channel",
+          "user_resolved": "fitness",
+          "channel_resolved": "flex-grimes___fitness_trainer"
+        }
+      }
+    ],
+    "Slack Trigger": [
+      {
+        "json": {
+          "type": "message",
+          "user": "U093PKVSML2",
+          "ts": "1773871215.240959",
+          "bot_id": "B0939TL51T9",
+          "app_id": "A016X0AT6QL",
+          "text": "Your task \"Finish MIT assignment\" is starting now\n_Automated with this <https://edsdevn8n.app.n8n.cloud/workflow/NuVmdcELpDSbQ3ou?utm_source=n8n-internal&amp;utm_medium=powered_by&amp;utm_campaign=n8n-nodes-base.slack_e2700e85aebddec5b38109488f0918bb62b8a55a073cb26ae7dca7e4bc35139b|n8n workflow>_",
+          "team": "T0934TLA8F2",
+          "bot_profile": {
+            "id": "B0939TL51T9",
+            "deleted": false,
+            "name": "n8n.cloud",
+            "updated": 1762870622,
+            "app_id": "A016X0AT6QL",
+            "icons": {
+              "image_36": "https://avatars.slack-edge.com/2025-11-11/9894814927220_b1da99c80f22031c7ca9_36.png",
+              "image_48": "https://avatars.slack-edge.com/2025-11-11/9894814927220_b1da99c80f22031c7ca9_48.png",
+              "image_72": "https://avatars.slack-edge.com/2025-11-11/9894814927220_b1da99c80f22031c7ca9_72.png"
+            },
+            "team_id": "T0934TLA8F2"
+          },
+          "blocks": [
+            {
+              "type": "rich_text",
+              "block_id": "MZUSD",
+              "elements": [
+                {
+                  "type": "rich_text_section",
+                  "elements": [
+                    {
+                      "type": "text",
+                      "text": "Your task \"Finish MIT assignment\" is starting now\n"
+                    },
+                    {
+                      "type": "text",
+                      "text": "Automated with this ",
+                      "style": {
+                        "italic": true
+                      }
+                    },
+                    {
+                      "type": "link",
+                      "url": "https://edsdevn8n.app.n8n.cloud/workflow/NuVmdcELpDSbQ3ou?utm_source=n8n-internal&amp;utm_medium=powered_by&amp;utm_campaign=n8n-nodes-base.slack_e2700e85aebddec5b38109488f0918bb62b8a55a073cb26ae7dca7e4bc35139b",
+                      "text": "n8n workflow",
+                      "style": {
+                        "italic": true
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "channel": "C093J5EQVDL",
+          "event_ts": "1773871215.240959",
+          "channel_type": "channel",
+          "user_resolved": "itinerary",
+          "channel_resolved": "iris-chase___itinerary"
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      }
+    ]
+  },
+  "connections": {
+    "Slack Trigger": {
+      "main": [
+        [
+          {
+            "node": "Code1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Store Memory",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Obtain ThreadID": {
+      "main": [
+        [
+          {
+            "node": "Execution Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If bot not responding to self": {
+      "main": [
+        [
+          {
+            "node": "Code2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Obtain ThreadID1": {
+      "main": [
+        [
+          {
+            "node": "If bot not responding to self",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code2": {
+      "main": [
+        [
+          {
+            "node": "Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code3": {
+      "main": [
+        [
+          {
+            "node": "Calculate Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execution Data": {
+      "main": [
+        [
+          {
+            "node": "Obtain ThreadID1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Output to Json": {
+      "main": [
+        [
+          {
+            "node": "No Operation, do nothing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        []
+      ]
+    },
+    "Resolve TargetAgent": {
+      "main": [
+        [
+          {
+            "node": "Obtain ThreadID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Workflow Settings": {
+      "main": [
+        [
+          {
+            "node": "Extract handle from channel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tag for Routing": {
+      "main": [
+        [
+          {
+            "node": "Simple or Complex Message?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser1": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        []
+      ]
+    },
+    "Confirm Sender is human": {
+      "main": [
+        [
+          {
+            "node": "Retrieve Memory",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Thinking Update",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "If Bot must also have an @ in text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Bot must also have an @ in text": {
+      "main": [
+        []
+      ]
+    },
+    "Code1": {
+      "main": [
+        [
+          {
+            "node": "Workflow Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack": {
+      "main": [
+        [
+          {
+            "node": "Code3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Performance Monitoring": {
+      "main": [
+        [
+          {
+            "node": "Output to Json",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract handle from channel": {
+      "main": [
+        [
+          {
+            "node": "Tag for Routing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Debug assignment logic": {
+      "main": [
+        [
+          {
+            "node": "Confirm Sender is human",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Research Node for Enhanced Context": {
+      "main": [
+        []
+      ]
+    },
+    "Store Memory": {
+      "main": [
+        [
+          {
+            "node": "Performance Monitoring",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retrieve Memory": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres Chat Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple No research or history needed": {
+      "main": [
+        [],
+        []
+      ]
+    },
+    "Calculate Fields": {
+      "main": [
+        [
+          {
+            "node": "Debug assignment logic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser2": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI Agent3",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple or Complex Message?": {
+      "main": [
+        [
+          {
+            "node": "Format for Reply Sub-Workflow",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Resolve TargetAgent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format for Reply Sub-Workflow": {
+      "main": [
+        [
+          {
+            "node": "Send Reply2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "No Operation, do nothing": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Send Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "Uji5TUYz7zqLz3up"
+  },
+  "versionId": "62d7dd7d-2c8f-4096-8c6b-02e69ba8a1f2",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "e2700e85aebddec5b38109488f0918bb62b8a55a073cb26ae7dca7e4bc35139b"
+  },
+  "nodeGroups": [],
+  "id": "jZTF4kPexZGdOUMG",
+  "tags": []
+}

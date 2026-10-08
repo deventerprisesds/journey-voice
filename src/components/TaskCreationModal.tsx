@@ -35,6 +35,14 @@ import { useAssignmentSelection } from '@/contexts/AssignmentSelectionContext';
 import TimeSlotGrid from '@/components/TimeSlotGrid';
 import { useBatchScheduling } from '@/hooks/useBatchScheduling';
 import { getOrCreateDefaultBoardId, loadExistingTasksForContext, insertDemoTasks, DEMO_USER_ID } from '@/utils/demoData';
+import { fetchNexusAssignmentsSafe, byIds, inProgram, notInProgram, dueBetween, titleNotLike } from '@/utils/nexusAssignments';
+
+/** Mirrors `.order('due_date', { ascending: true })` — undated rows sort last. */
+const nexusByDueDateAsc = (a: { due_date?: string | null }, b: { due_date?: string | null }) => {
+  if (!a.due_date) return 1;
+  if (!b.due_date) return -1;
+  return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
+};
 
 interface ParsedTask {
   title: string;
@@ -232,20 +240,16 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
         const nextWeekendEnd = weekendGroups[0]
           .sort((a, b) => new Date(b.end_time).getTime() - new Date(a.end_time).getTime())[0];
 
-        let embaQuery = supabase
-          .from('assignments')
-          .select('*, courses(name)')
-          .gte('due_date', lastWeekend?.end_time || new Date().toISOString())
-          .lte('due_date', nextWeekendEnd.end_time);
-
-        embaQuery = isDemo
-          ? embaQuery.in('user_id', DEMO_EMBA_USER_IDS)
-          : embaQuery.eq('user_id', userId);
-
-        const { data } = await embaQuery
-          .order('due_date', { ascending: true });
-        
-        embaAssignments = data;
+        // NEXUS (Azure) is the source of truth; Supabase `assignments` is a dead
+        // 2026-04-06 snapshot. Nexus already attaches the `courses` embed the old
+        // `select('*, courses(name)')` asked for, so consumers of a.courses.name work.
+        const embaOwners = isDemo ? DEMO_EMBA_USER_IDS : [userId];
+        const fromISO = lastWeekend?.end_time || new Date().toISOString();
+        embaAssignments = (
+          await Promise.all(embaOwners.map((o: string) => fetchNexusAssignmentsSafe(o)))
+        ).flat()
+          .filter((a) => dueBetween(a, fromISO, nextWeekendEnd.end_time))
+          .sort(nexusByDueDateAsc) as any;
       } else {
         // No class schedules found - show error
         toast({
@@ -259,14 +263,11 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
 
       // Fetch MIT assignments (exclude office hours) — unified table, program_id discriminates
       const MIT_PROGRAM_ID = '4793d933-86ca-4fd5-9b4d-e7a593a513a6';
-      const { data: mitAssignments } = await supabase
-        .from('assignments')
-        .select('*, courses(name)')
-        .eq('user_id', userId)
-        .eq('program_id', MIT_PROGRAM_ID)
-        .eq('status', 'active')
-        .not('title', 'ilike', '%office hour%')
-        .order('due_date', { ascending: true });
+      const mitAssignments = (await fetchNexusAssignmentsSafe(userId))
+        .filter((a) => inProgram(a, MIT_PROGRAM_ID))
+        .filter((a) => a.status === 'active')
+        .filter((a) => titleNotLike(a, 'office hour'))
+        .sort(nexusByDueDateAsc);
 
       // Filter out already converted assignments and format
       const availableEmba: Assignment[] = (embaAssignments || [])
@@ -973,20 +974,11 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
         
         // Fetch EMBA assignments (program_id NULL or non-MIT)
         const MIT_PROGRAM_ID = '4793d933-86ca-4fd5-9b4d-e7a593a513a6';
-        const { data: embaAssignments } = await supabase
-          .from('assignments')
-          .select('*')
-          .in('id', selectedIds)
-          .eq('user_id', userId)
-          .or(`program_id.is.null,program_id.neq.${MIT_PROGRAM_ID}`);
-
-        // Fetch MIT assignments (program_id = MIT_PROGRAM_ID)
-        const { data: mitAssignments } = await supabase
-          .from('assignments')
-          .select('*')
-          .in('id', selectedIds)
-          .eq('user_id', userId)
-          .eq('program_id', MIT_PROGRAM_ID);
+        // One owner-scoped Nexus fetch serves both splits (d1 has no IN filter).
+        const ownedForSelection = await fetchNexusAssignmentsSafe(userId);
+        const selected = byIds(ownedForSelection, selectedIds);
+        const embaAssignments = selected.filter((a) => notInProgram(a, MIT_PROGRAM_ID));
+        const mitAssignments = selected.filter((a) => inProgram(a, MIT_PROGRAM_ID));
 
         const allAssignments: Assignment[] = [
           ...(embaAssignments || []).map(a => ({ ...a, source: 'emba' as const })),

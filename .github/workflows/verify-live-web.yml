@@ -1,0 +1,66 @@
+# Verifies what the LIVE journey web app (Lovable-published) is actually serving.
+#
+# WHY: the CCR session's egress blocks journey-voice.lovable.app, so "is the fix published?" can't be
+# answered from a session. A GitHub runner can reach it. Loads the page in headless Chromium
+# (Playwright) to find the served JS bundle, then checks the bundle for marker strings. Results are
+# emitted as check-run annotations (readable via the API, no log download needed).
+#
+# Usage: workflow_dispatch with `markers` (comma-separated strings that must appear in the bundle).
+name: Verify live web bundle
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Live URL'
+        default: 'https://journey-voice.lovable.app/'
+      markers:
+        description: 'Comma-separated strings the served JS must contain'
+        default: 'subscribe_fcm,bridgeFcmRegistration,source:"web"'
+  push:
+    branches: [claude/mobile-widget-web-bridge-debug-nsishi]
+    paths: ['.github/workflows/verify-live-web.yml']
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Load live page in Chromium and inspect served bundles
+        env:
+          URL: ${{ github.event.inputs.url || 'https://journey-voice.lovable.app/' }}
+          MARKERS: ${{ github.event.inputs.markers || 'subscribe_fcm,bridgeFcmRegistration,source:"web"' }}
+        run: |
+          npm i --no-save playwright@1.47.2 >/dev/null 2>&1
+          npx playwright install --with-deps chromium >/dev/null 2>&1
+          cat > check.mjs <<'EOF'
+          import { chromium } from 'playwright';
+          const url = process.env.URL;
+          const markers = process.env.MARKERS.split(',').map(s => s.trim()).filter(Boolean);
+          const browser = await chromium.launch();
+          const page = await browser.newPage();
+          const scripts = new Map();
+          page.on('response', async (r) => {
+            if (r.request().resourceType() === 'script' && r.url().includes(new URL(url).host)) {
+              try { scripts.set(r.url(), await r.text()); } catch {}
+            }
+          });
+          await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
+          await page.waitForTimeout(3000);
+          const all = [...scripts.values()].join('\n');
+          const names = [...scripts.keys()].map(u => new URL(u).pathname).join(' ');
+          console.log(`::notice title=Bundles served::${names || '(none)'}`);
+          let missing = 0;
+          for (const m of markers) {
+            const hit = all.includes(m);
+            if (!hit) missing++;
+            console.log(`::notice title=Marker ${hit ? 'FOUND' : 'MISSING'}::${m}`);
+          }
+          await browser.close();
+          if (missing) { console.log(`::warning title=Result::${missing} marker(s) missing — the live site does not serve this code yet`); }
+          else { console.log('::notice title=Result::all markers present — the fix is live'); }
+          EOF
+          node check.mjs

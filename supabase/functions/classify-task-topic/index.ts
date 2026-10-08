@@ -34,16 +34,51 @@ interface ClassificationResult {
   topic_summary: string;
 }
 
+/**
+ * FRAGMENTATION GUARD — normalize a topic name for duplicate detection.
+ *
+ * Lowercases, strips punctuation, drops filler words that the classifier tacks on inconsistently
+ * ("tasks", "management", "projects", ...), and sorts the remaining tokens. So these all collapse
+ * to the same key and are recognised as ONE topic instead of forking new rows:
+ *   "Career Development" / "Career Development Tasks" / "Development Career"
+ *   "Family Grooming Plans" / "Family Grooming Management" / "Family Grooming Tasks"
+ * Deliberately conservative: it only collapses names that are the same words plus filler, never
+ * merges genuinely different subjects (e.g. "Vehicle Maintenance" vs "Vehicle Rental" stay apart).
+ */
+const TOPIC_FILLER_WORDS = new Set([
+  'task', 'tasks', 'management', 'managing', 'project', 'projects', 'plan', 'plans', 'planning',
+  'activities', 'activity', 'general', 'misc', 'miscellaneous', 'related', 'and', 'the', 'of', 'for',
+]);
+function normalizeTopicName(name: string): string {
+  const tokens = (name || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter((w) => !TOPIC_FILLER_WORDS.has(w));
+  // If filler was ALL there was, fall back to the raw words so we don't collapse to an empty key.
+  const base = tokens.length > 0
+    ? tokens
+    : (name || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean);
+  return [...base].sort().join(' ');
+}
+
 async function classifyTaskWithAI(
   taskTitle: string,
   taskCategory: string,
   existingTopics: Topic[]
 ): Promise<ClassificationResult> {
+  // (normalizeTopicName is defined at module scope — see the fragmentation guard below.)
   const topicList = existingTopics.length > 0
     ? existingTopics.map(t => `- "${t.topic_name}": ${t.topic_summary || 'No description'}`).join('\n')
     : '(No existing topics)';
 
   const prompt = `You are a task organization assistant. Classify this task into a semantic topic.
+
+STRONGLY PREFER AN EXISTING TOPIC. Creating a near-duplicate of one that already exists (e.g. a
+separate "Career Development Tasks" when "Career Development" exists) fragments the user's board and
+is a failure. Only create a new topic when the task genuinely belongs to no listed topic — a broader
+existing topic is almost always the right answer. Do not invent a topic for a single task.
 
 EXISTING TOPICS FOR THIS USER:
 ${topicList}
@@ -153,11 +188,17 @@ serve(async (req) => {
       });
     }
 
-    // Get existing topics for this user
+    // Get existing topics for this user.
+    // LIVE ONLY: archived topics (no open tasks) and merged-away duplicates are excluded so they
+    // stop attracting new tasks and stop bloating the prompt. Measured 2026-08-25: 119 topics had
+    // accumulated for one user — 74 with zero open tasks — and stuffing all of them into every
+    // prompt made the model miss real matches, which spawned yet more near-duplicate topics.
     const { data: existingTopics, error: topicsError } = await supabase
       .from('task_topic_index')
       .select('id, topic_name, topic_summary, window_affinity, example_tasks, task_count')
       .eq('user_id', user_id)
+      .is('archived_at', null)
+      .is('merged_into', null)
       .order('task_count', { ascending: false });
 
     if (topicsError) {
@@ -199,10 +240,25 @@ serve(async (req) => {
     let topicId: string;
 
     if (classification.action === 'existing') {
-      // Find the matching topic
-      const matchingTopic = topics.find(t => 
+      // Find the matching topic.
+      //
+      // FRAGMENTATION GUARD (added 2026-08-25): this used to require an EXACT (case-insensitive)
+      // name match, and silently fell through to creating a NEW topic when the model answered
+      // "existing" with a slightly different string. That single line is the main reason one user
+      // accumulated 119 topics with clusters like "Career Development" / "Career Development Tasks" /
+      // "Career Coaching" / "Career Review Management" — the model MEANT the existing topic every
+      // time; the code just didn't recognise the name it gave back.
+      //
+      // Now: exact match first, then a normalized match (case/punctuation/stopword-insensitive), so
+      // an intended reuse is honoured instead of silently forking a duplicate.
+      const matchingTopic = topics.find(t =>
         t.topic_name.toLowerCase() === classification.topic_name.toLowerCase()
+      ) ?? topics.find(t =>
+        normalizeTopicName(t.topic_name) === normalizeTopicName(classification.topic_name)
       );
+      if (matchingTopic && matchingTopic.topic_name.toLowerCase() !== classification.topic_name.toLowerCase()) {
+        console.log(`[CLASSIFY-TOPIC] Fuzzy-matched "${classification.topic_name}" → existing "${matchingTopic.topic_name}" (duplicate avoided)`);
+      }
 
       if (matchingTopic) {
         topicId = matchingTopic.id;
@@ -230,6 +286,37 @@ serve(async (req) => {
     }
 
     if (classification.action === 'new') {
+      // REVIVE-BEFORE-CREATE: the live list excludes archived/merged topics, so the model can't see
+      // them and may "invent" a topic that already exists in archived form. Creating it again would
+      // both hit the (user_id, topic_name) unique constraint and re-fragment the board. Instead,
+      // un-archive the existing row (following merged_into to the canonical topic) and reuse it.
+      const { data: dormant } = await supabase
+        .from('task_topic_index')
+        .select('id, topic_name, task_count, example_tasks, merged_into')
+        .eq('user_id', user_id)
+        .or(`archived_at.not.is.null,merged_into.not.is.null`);
+
+      const dormantMatch = (dormant || []).find((t: any) =>
+        t.topic_name.toLowerCase() === classification.topic_name.toLowerCase() ||
+        normalizeTopicName(t.topic_name) === normalizeTopicName(classification.topic_name)
+      );
+
+      if (dormantMatch) {
+        // Follow the merge chain to the canonical topic, if this one was merged away.
+        const reviveId = dormantMatch.merged_into || dormantMatch.id;
+        await supabase
+          .from('task_topic_index')
+          .update({ archived_at: null, updated_at: new Date().toISOString() })
+          .eq('id', reviveId);
+
+        await supabase.from('task_topic_mappings').insert({ task_id, topic_id: reviveId });
+        console.log(`[CLASSIFY-TOPIC] Revived dormant topic "${dormantMatch.topic_name}" instead of creating a duplicate`);
+
+        return new Response(JSON.stringify({
+          success: true, topic_id: reviveId, topic_name: dormantMatch.topic_name, action: 'revived',
+        }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+
       // Get window affinity from category
       const windowAffinity = CATEGORY_WINDOW_MAPPING[category] || ['flexible'];
 

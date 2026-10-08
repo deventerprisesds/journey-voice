@@ -146,6 +146,12 @@ async function processUserNotifications(
     console.log(`User ${prefs.user_id} is in quiet hours, generating future reminders but skipping immediate digests`);
   }
 
+  // TIMEZONE FIX: all "fire at Nam" trigger checks below must use the USER's local clock, not the
+  // Deno server's UTC clock. Previously `now.getHours()===8/9` fired the digest at 4am and overdue
+  // reminders at 5am ET (8/9 UTC). `userNow` carries the user-timezone wall-clock for those checks.
+  const userTz = prefs.timezone || 'UTC';
+  const userNow = new Date(now.toLocaleString('en-US', { timeZone: userTz }));
+
   // Get user's tasks
   const { data: tasks, error: tasksError } = await supabaseClient
     .from('tasks')
@@ -161,9 +167,10 @@ async function processUserNotifications(
   // NOTE: Due date and start time reminders are now handled by the database trigger
   // on the tasks table (schedule_task_reminders function) to prevent duplicates
 
-  // Process overdue reminders
-  if (prefs.overdue_reminders_enabled) {
-    const overdueReminders = generateOverdueReminders(tasks || [], prefs.user_id, now);
+  // Process overdue reminders — gated by quiet hours (previously fired at 5am ET, un-gated) and
+  // triggered on the USER's 9am, not the server's 9am-UTC.
+  if (!inQuietHours && prefs.overdue_reminders_enabled) {
+    const overdueReminders = generateOverdueReminders(tasks || [], prefs.user_id, now, userNow);
     notifications.push(...overdueReminders);
   }
 
@@ -318,7 +325,7 @@ function generateStartTimeReminders(tasks: Task[], userId: string, now: Date): a
   return notifications;
 }
 
-function generateOverdueReminders(tasks: Task[], userId: string, now: Date): any[] {
+function generateOverdueReminders(tasks: Task[], userId: string, now: Date, userNow: Date = now): any[] {
   const notifications: any[] = [];
   const today = new Date(now);
   today.setHours(0, 0, 0, 0);
@@ -333,8 +340,9 @@ function generateOverdueReminders(tasks: Task[], userId: string, now: Date): any
     if (dueDate < today) {
       const daysOverdue = Math.floor((today.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24));
       
-      // Send reminder every 3 days for overdue tasks, but only once per day to prevent spam
-      if (daysOverdue % 3 === 0 && now.getHours() === 9 && now.getMinutes() < 15) {
+      // Send reminder every 3 days for overdue tasks, but only once per day to prevent spam.
+      // Trigger on the USER's 9am (userNow), not the server's 9am-UTC (which is 5am ET).
+      if (daysOverdue % 3 === 0 && userNow.getHours() === 9 && userNow.getMinutes() < 15) {
         notifications.push({
           user_id: userId,
           task_id: task.id,
@@ -435,7 +443,27 @@ async function generateCalendarEventReminders(
 
   if (!events || events.length === 0) return notifications;
 
+  // Events that are just the calendar copy of a journey task (mirrored out to Outlook/Google) get
+  // NO calendar reminder: the task's own start reminder already alarms with its task id, so this
+  // one only produced a SECOND, task-less alarm (no Done/Doing) — and when both landed in the same
+  // delivery bucket they were batched into a task-less `messages` push. The link is recorded on
+  // either side: external_calendar_events.source_task_id, or tasks.external_event_id.
+  const taskBackedEventIds = new Set<string>();
+  const eventIds = events.map((e: any) => e.external_event_id).filter(Boolean);
+  if (eventIds.length > 0) {
+    const { data: linkedTasks } = await supabaseClient
+      .from('tasks')
+      .select('external_event_id')
+      .eq('user_id', prefs.user_id)
+      .in('external_event_id', eventIds);
+    for (const t of linkedTasks || []) if (t.external_event_id) taskBackedEventIds.add(t.external_event_id);
+  }
+
   for (const event of events) {
+    if (event.source_task_id || taskBackedEventIds.has(event.external_event_id)) {
+      console.log(`Skipping calendar reminder for task-backed event ${event.external_event_id}`);
+      continue;
+    }
     // Calculate when the reminder should fire
     const eventStart = new Date(event.start_time);
     let scheduledFor = new Date(eventStart.getTime() - leadMinutes * 60 * 1000);
