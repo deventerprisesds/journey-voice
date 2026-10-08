@@ -339,8 +339,12 @@ Examples (category varies; status is a workflow state in every one):
       // Return tasks with AI's scheduling context hints
       const rawTasks = Array.isArray(parsed.tasks) ? parsed.tasks : [];
       
-      // POST-PARSE STATUS LOGIC: If task is for today, set status to UP_NEXT
-      // Otherwise keep the existing category-based status
+      // POST-PARSE STATUS LOGIC: If task is for today, set status to UP_NEXT.
+      // Otherwise keep whatever WORKFLOW status the model returned (BACKLOG by default).
+      // NOT "the category-based status" — that phrasing described the defect fixed in #28,
+      // where the prompt told the model to copy `category` into `status`. EDUCATION and
+      // PERSONAL are categories but not members of the task_status enum, so those inserts
+      // were rejected outright and task creation failed silently.
       const todayStr = targetDate 
         ? new Date(targetDate).toDateString() 
         : new Date().toDateString();
