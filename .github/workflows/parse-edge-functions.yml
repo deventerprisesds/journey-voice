@@ -1,0 +1,73 @@
+# WHAT:       Parses every supabase/functions/*/index.ts on a PR and on pushes to main, and fails
+#             the check if any one of them has a SyntaxError.
+# WHY:        PR #28 merged a syntax error into ai-task-parser and nothing caught it. The commit
+#             reported "tsc exits 0" -- true, and worthless, because the app tsconfig does not
+#             cover supabase/functions/**, so the checker could not see the changed file. There was
+#             also no pull_request-triggered workflow in this repo at all (all nine were
+#             workflow_dispatch or push-to-main), so PR #28 ran ZERO checks. The error surfaced
+#             only in deploy run 37798480006, AFTER the merge:
+#               Expected a semicolon at ai-task-parser/index.ts:219:2
+#               `category` is WHAT KIND of task it is.  <- backticks inside a template literal
+# SUPERSEDES: nothing.
+# SUPERSEDED-BY: nothing -- current.
+# EVIDENCE:   .claude/accuracy-log.md (2026-10-08 entry); failing run 37798480006; the fix is
+#             commit 3f225ed, whose parse was proven by reproducing the error on the broken file
+#             and confirming it absent on the fixed one.
+#
+# WHY `deno fmt --check` AND NOT `deno check`: deno check resolves the module graph, which means
+# network access to esm.sh/deno.land for 51 functions -- slow, and it fails for reasons that have
+# nothing to do with the code under review. `deno fmt` parses locally with Deno's own parser, the
+# SAME parser the bundler used to reject the file, and needs no network.
+#
+# IT FAILS ONLY ON A SyntaxError, DELIBERATELY. These files are not deno-fmt formatted (the repo
+# uses single quotes; Deno wants double), so a bare `deno fmt --check` reports all 51 as "not
+# formatted" and would be red from the first run. A check that is red by default gets ignored,
+# which is the cry-wolf failure that makes a guard worse than none. So the grep for SyntaxError is
+# load-bearing, not laziness -- this guard answers exactly one question: does it parse.
+
+name: Parse Edge Functions
+
+on:
+  pull_request:
+    paths:
+      - 'supabase/functions/**'
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/functions/**'
+  workflow_dispatch:
+
+jobs:
+  parse:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: denoland/setup-deno@v1
+        with:
+          deno-version: v1.x
+
+      - name: Parse every edge function
+        run: |
+          set -uo pipefail
+          failed=0
+          count=0
+          for f in supabase/functions/*/index.ts; do
+            [ -e "$f" ] || continue
+            count=$((count + 1))
+            # Capture both streams: the SyntaxError and its source excerpt go to stderr.
+            out=$(deno fmt --check "$f" 2>&1 || true)
+            if printf '%s' "$out" | grep -q 'SyntaxError'; then
+              echo "::error file=$f::edge function does not parse"
+              printf '%s\n' "$out" | grep -A4 'SyntaxError'
+              failed=$((failed + 1))
+            fi
+          done
+          echo "Parsed $count edge function(s); $failed failed."
+          if [ "$count" -eq 0 ]; then
+            # A glob that matched nothing would make this check vacuously green -- the
+            # "absent evidence is not a pass" rule. Treat it as a failure to investigate.
+            echo "::error::no edge functions were found to parse -- the glob matched nothing"
+            exit 1
+          fi
+          [ "$failed" -eq 0 ]
