@@ -10,7 +10,9 @@
 // user, only DOING/DONE, for 7 days. Replays are harmless — setting the same status is a no-op.
 //
 // Ops:
-//   { op: "set_status", token, status: "DOING"|"DONE", requestId?, attempt?, tapAt? }
+//   { op: "set_status", token, status: "DOING"|"DONE"|"BACKLOG"|"PARK", requestId?, attempt?, tapAt? }
+//     BACKLOG = off the calendar now (the nightly planner may re-place it later).
+//     PARK    = BACKLOG + the "parking-lot" tag: skipped by all automation until un-parked.
 //     200 {ok:true, matched:0|1, changed:boolean}   — matched:0 → task gone / not this user's
 //     401 {ok:false, reason:"bad_token"|"expired"}  — phone falls back or shows "couldn't mark"
 //     400 bad request · 500 transient (phone retries)
@@ -30,7 +32,8 @@ const corsHeaders = {
 const TRACE_GRACE_SEC = 30 * 24 * 60 * 60;
 const MAX_TRACE_LINES = 20;
 const MAX_TRACE_CHARS = 500;
-const STATUSES = new Set(["DOING", "DONE"]);
+const STATUSES = new Set(["DOING", "DONE", "BACKLOG", "PARK"]);
+const PARKING_LOT_TAG = "parking-lot"; // exact lowercase — every filter (journey builder, Huddle) matches it verbatim
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -94,7 +97,7 @@ serve(async (req) => {
 
       const { data: task, error: readErr } = await supabase
         .from("tasks")
-        .select("id, status")
+        .select("id, status, tags, start_time, is_scheduled")
         .eq("id", claims.taskId)
         .eq("user_id", claims.userId)
         .maybeSingle();
@@ -104,13 +107,25 @@ serve(async (req) => {
       let changed = false;
       if (task) {
         matched = 1;
-        if (task.status !== status) {
+        const unscheduling = status === "BACKLOG" || status === "PARK";
+        const tags: string[] = Array.isArray(task.tags) ? task.tags : [];
+        const alreadyThere = unscheduling
+          ? task.status === "BACKLOG" && !task.start_time && !task.is_scheduled &&
+            (status !== "PARK" || tags.includes(PARKING_LOT_TAG))
+          : task.status === status;
+        if (!alreadyThere) {
           const now = new Date().toISOString();
           // Same fields the web app writes (FocusView handleCompleteTask / handleStartTask). DONE
           // must set completed_at: the schedule_task_reminders trigger keys on it to delete the
           // task's pending reminders, which is what stops tomorrow's repeat alarm.
-          const update: Record<string, unknown> = { status, updated_at: now };
+          const update: Record<string, unknown> = { status: unscheduling ? "BACKLOG" : status, updated_at: now };
           if (status === "DONE") update.completed_at = now;
+          if (unscheduling) {
+            // Off the calendar, like execute-tool unschedule_task. Tags are REPLACED by writes, so
+            // PARK writes the union (same rule as Huddle's withParkingLotTag).
+            Object.assign(update, { start_time: null, end_time: null, is_scheduled: false });
+            if (status === "PARK" && !tags.includes(PARKING_LOT_TAG)) update.tags = [...tags, PARKING_LOT_TAG];
+          }
           const { error: writeErr } = await supabase
             .from("tasks")
             .update(update)
@@ -118,6 +133,14 @@ serve(async (req) => {
             .eq("user_id", claims.userId);
           if (writeErr) return json({ ok: false, reason: "db", detail: writeErr.message }, 500);
           changed = true;
+        }
+        if (unscheduling) {
+          // Cancel everything still queued for it (the 2nd start alarm, due reminders). The trigger
+          // also drops start alarms when start_time is cleared; this covers the rest explicitly.
+          await supabase.from("scheduled_notifications").delete()
+            .eq("task_id", claims.taskId)
+            .neq("notification_type", "task_created")
+            .is("delivered_at", null).is("failed_at", null);
         }
       }
 

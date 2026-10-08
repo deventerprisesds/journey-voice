@@ -648,7 +648,30 @@ serve(async (req) => {
                 .map((t: any) => t.id) || []
             );
 
+            // Drop START alarms for tasks that are no longer scheduled. The nightly builder and the
+            // phone's Backlog/Park buttons clear start_time; before the 2026-10-08 trigger fix their
+            // task_start_* rows survived and fired full-screen alarms for tasks off the calendar.
+            // The trigger now deletes them; this is the delivery-side safety net.
+            const unscheduledIds = new Set(
+              (tasks || []).filter((t: any) => !t.start_time).map((t: any) => t.id)
+            );
+            const unscheduledStartNotifIds = new Set(
+              batchNotifications
+                .filter((n: any) => n.task_id && unscheduledIds.has(n.task_id)
+                  && (n.notification_type === 'task_start_reminder' || n.notification_type === 'task_start_now'))
+                .map((n: any) => n.id)
+            );
+            if (unscheduledStartNotifIds.size > 0) {
+              await supabaseClient
+                .from('scheduled_notifications')
+                .update({ failed_at: new Date().toISOString(), failure_reason: 'task_unscheduled' })
+                .in('id', [...unscheduledStartNotifIds]);
+              console.log(`⏭️ Skipped ${unscheduledStartNotifIds.size} start alarm(s) for unscheduled tasks`);
+              failed += unscheduledStartNotifIds.size;
+            }
+
             const validNotifications = batchNotifications.filter((n: any) => {
+              if (unscheduledStartNotifIds.has(n.id)) return false;
               if (n.task_id && completedTaskIds.has(n.task_id)) {
                 console.log(`⏭️ Skipping notification ${n.id} - task ${n.task_id} is completed`);
                 return false;
@@ -661,6 +684,7 @@ serve(async (req) => {
             });
 
             const skippedIds = batchNotifications
+              .filter((n: any) => !unscheduledStartNotifIds.has(n.id))
               .filter((n: any) => n.task_id && (completedTaskIds.has(n.task_id) || ancientTaskIds.has(n.task_id)))
               .map((n: any) => n.id);
 
