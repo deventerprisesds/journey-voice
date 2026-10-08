@@ -216,7 +216,7 @@ CRITICAL RULES:
 4. "Study at MIT" ≠ "Sell to MIT" - different categories!
 
 CATEGORY AND STATUS ARE DIFFERENT FIELDS (CRITICAL):
-`category` is WHAT KIND of task it is. `status` is WHERE IT IS in the workflow.
+CATEGORY is WHAT KIND of task it is. STATUS is WHERE IT IS in the workflow.
 NEVER copy the category into status. A new task's status is BACKLOG unless the user
 explicitly says it is already started (DOING) or queued up (READY / UP_NEXT).
 
