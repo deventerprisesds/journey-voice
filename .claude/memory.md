@@ -1958,3 +1958,19 @@ thread; failure was only logged locally. Task stayed open → 3am builder rolled
 **Deploy line:** this repo's `main` is an 83-commit re-rooted line far behind what's live; the live
 functions come from `claude/huddle-journey-integration-xokgv1`. Diff the DEPLOYED code
 (`get_edge_function`) before shipping a function, and deploy by name via workflow_dispatch.
+
+## DB bloat + scheduled maintenance (2026-10-08)
+Supabase SQL calls were timing out. Cause: two churn tables never shrank.
+- `net._http_response` (pg_net, UNLOGGED, 6h TTL): 458 MB for ~1.2K live rows; last autovacuum
+  2026-08-05 (tiny row count → rarely crosses autovacuum thresholds; plain vacuum never shrinks).
+  `VACUUM FULL` → 1.4 MB.
+- `cron.job_run_details`: ~805K rows / 696 MB, never pruned (every-minute jobs ≈4.3K rows/day).
+  Pruned to 7 days + `VACUUM FULL` → 14 MB. DB total ≈1.5 GB → 322 MB.
+**Constraints (don't re-derive):** both tables are owned by `supabase_admin` → per-table autovacuum
+reloptions are impossible as `postgres`; global `autovacuum_*` GUCs are NOT in Supabase's
+CLI-overridable list; `pg_net.ttl` needs a Support grant. BUT `postgres` has PG17 **MAINTAIN** +
+DELETE on both, and MCP `execute_sql` runs `VACUUM FULL` fine (not wrapped in a transaction).
+No `SUPABASE_DB_URL` secret exists — don't add one; use MCP / pg_cron.
+**Ongoing (migration `20261008130000_db_maintenance_cron.sql`):** pg_cron jobs
+`maint-http-response-vacuum` (*/15), `maint-cron-history-prune` (04:17 UTC, keep 7d),
+`maint-cron-history-vacuum` (04:27), `maint-weekly-vacuum-full` (Sun 04:37).
