@@ -354,3 +354,41 @@ delivery and were never root-caused.
 
 **To resume later (one statement, after the schema question is settled):**
 `supabase/migrations/20260913170000_send_digests_cron.sql` re-creates the job verbatim.
+
+---
+
+## ACT:task-status-mapping — task creation silently failing. SHIPPED AND LIVE 2026-10-08.
+
+Owner, 2026-10-06: *"It is also failing to create tasks on the board with no clear cause after
+asking for two tasks to be created back to back"*, then 2026-10-08: *"Approved, fix the prompt and
+SmartTaskInput and cleanup"*.
+
+| # | What | State | Evidence |
+|---|---|---|---|
+| 1 | `ai-task-parser` prompt — BOTH blocks told the model to set `status` = `category` | **LIVE** | PR #28 → `0920e1c`; deploy of `b272540` succeeded; deployed fn is **version 560, ACTIVE**, source read back and carries the fix |
+| 2 | `SmartTaskInput.tsx` — `mapCategoryToStatus()` deleted | **LIVE** | PR #28 |
+| 3 | `TaskCreationModal.tsx` — a byte-identical copy of that helper (`:620`) plus a hardcoded `status:'PROF_EDUCATION'` (`:943`) | **LIVE** | PR #28; found by the repo-wide sweep, not in the original two |
+| 4 | Data cleanup, 11 rows | **DONE** | 10 → `BACKLOG`, `8e1b45a4` → `UP_NEXT`, category preserved; post-state verified 0 remaining |
+| 5 | Deploy fix — backticks closed the prompt template literal | **LIVE** | PR #29 → `b272540`; reproduced the parse error, proved the fix |
+| 6 | Guard — `parse-edge-functions.yml`, the repo's first `pull_request` check | **LIVE** | PR #29; mutation-proved FIRED |
+| 7 | Stale comment telling the next reader to reinstate the defect | PR #30 open | `315c84b` |
+| 8 | Huddle: log journey's real refusal reason instead of dropping it | **MERGED** | huddle PR #64 → `eba25f0` |
+
+**NOT YET USER-CONFIRMED.** Every mechanism above is verified — the deployed function source was
+read back, not inferred — but the owner has not created a task in the app since. Per the standing
+rule this stays "implemented, mechanism verified, NOT confirmed live" until they report back.
+
+### Open, deliberately not done
+- **Four near-duplicate pairs** among those 11 ("Build **a** responsive Geo-AI…" / "Build
+  responsive Geo-AI…", "AppBuilder **App**" / "**app**", "Research AI-assisted SDLC" / "…SDLC
+  **practices**"). The cross-turn dedup normalises titles but not case or trailing-word variants.
+- **`todayStr` UTC/local off-by-one** (`ai-task-parser` ~:344): `new Date('2026-10-08')` parses as
+  UTC midnight while `.toDateString()` renders local, so "is this for today → `UP_NEXT`" can be a
+  day out for a user behind UTC. Pre-existing, behaviour change, out of scope.
+- **UNRESOLVED, recorded as unknown rather than guessed:** the lane query grouped by `boards.name`,
+  not `boards.id`, so "123 `VENTURES` lane rows" cannot distinguish *123 boards with one lane each*
+  (benign — the seed migration `CROSS JOIN`s every default board) from *one board with 123 duplicate
+  lanes* (~1,627 columns on the Dashboard board, a visible defect). One `group by board_id` settles
+  it.
+- **Original request #3, still never started:** a settings page to add calendars to be monitored —
+  *"my University of michigan inbox is not currently being monitored"*.
