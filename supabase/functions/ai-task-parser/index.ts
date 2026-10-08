@@ -215,9 +215,10 @@ CRITICAL RULES:
 3. Look at the VERB and INTENT, not just the noun
 4. "Study at MIT" ≠ "Sell to MIT" - different categories!
 
-CATEGORY-TO-STATUS MAPPING (CRITICAL):
-BOTH category AND status MUST be set to the same value for consistency.
-These values represent task organization (category) AND workflow column (status).
+CATEGORY AND STATUS ARE DIFFERENT FIELDS (CRITICAL):
+`category` is WHAT KIND of task it is. `status` is WHERE IT IS in the workflow.
+NEVER copy the category into status. A new task's status is BACKLOG unless the user
+explicitly says it is already started (DOING) or queued up (READY / UP_NEXT).
 
 CATEGORY DISTINCTION:
 
@@ -243,13 +244,14 @@ Primary task types:
 - PROF_EDUCATION: Formal degree programs (MIT, EMBA, universities)
 - EDUCATION: Self-paced learning (Coursera, certifications, personal study)
 
-Examples:
-- "Doctor appointment" → category: "LIFE", status: "LIFE"
-- "Team standup meeting" → category: "CAREER", status: "CAREER"
-- "Complete MIT assignment" → category: "PROF_EDUCATION", status: "PROF_EDUCATION"
-- "EMBA group project" → category: "PROF_EDUCATION", status: "PROF_EDUCATION"
-- "Take Coursera course" → category: "EDUCATION", status: "EDUCATION"
-- "Research startup funding" → category: "VENTURES", status: "VENTURES"
+Examples (note the status is a WORKFLOW state in every one, never the category):
+- "Doctor appointment" → category: "LIFE", status: "BACKLOG"
+- "Team standup meeting" → category: "CAREER", status: "BACKLOG"
+- "Complete MIT assignment" → category: "PROF_EDUCATION", status: "BACKLOG"
+- "EMBA group project" → category: "PROF_EDUCATION", status: "BACKLOG"
+- "Take Coursera course" → category: "EDUCATION", status: "BACKLOG"
+- "Research startup funding" → category: "VENTURES", status: "BACKLOG"
+- "I already started the Geo-AI app" → category: "VENTURES", status: "DOING"
 
 INTENT DETECTION — KEYWORD ONLY:
 Scan the original user input for the literal words "priority" or "priorities" (case-insensitive).
@@ -269,7 +271,7 @@ Return JSON in this exact format:
       "start_time": null,
       "end_time": null,
       "estimate_minutes": number or null,
-      "status": "LIFE|CAREER|VENTURES|PROF_EDUCATION|EDUCATION (must match category)",
+      "status": "BACKLOG|READY|UP_NEXT|DOING (a workflow state, NEVER the category)",
       "scheduling_context": [],
       "intent": "task|priority"
     }
@@ -282,17 +284,17 @@ Guidelines:
 - Infer category from SEMANTIC CONTEXT: Look at the VERB and INTENT, not just keywords
 - Parse relative dates ("tomorrow", "next week", "in 3 days") into ISO dates
 - Parse time estimates ("2 hours", "30 minutes", "half day") into minutes
-- **CRITICAL**: Set status to match category (LIFE→LIFE, CAREER→CAREER, VENTURES→VENTURES, EDUCATION→PROF_EDUCATION)
+- **CRITICAL**: status is a WORKFLOW state, never the category. New tasks are BACKLOG unless the user says the work is already underway (DOING) or queued (READY/UP_NEXT).
 - Make titles concise but actionable
 - Add context to descriptions when helpful
 
-Examples:
-- "Study for MIT midterm exam" → category: "EDUCATION", status: "PROF_EDUCATION"
-- "Complete EMBA group project" → category: "EDUCATION", status: "PROF_EDUCATION"
-- "Find universities to sell our software to" → category: "VENTURES", status: "VENTURES"
-- "Pitch product to MIT procurement office" → category: "VENTURES", status: "VENTURES"
-- "Pay credit cards" → category: "LIFE", status: "LIFE"
-- "Prepare slides for client meeting" → category: "CAREER", status: "CAREER"`;
+Examples (category varies; status is a workflow state in every one):
+- "Study for MIT midterm exam" → category: "PROF_EDUCATION", status: "BACKLOG"
+- "Complete EMBA group project" → category: "PROF_EDUCATION", status: "BACKLOG"
+- "Find universities to sell our software to" → category: "VENTURES", status: "BACKLOG"
+- "Pitch product to MIT procurement office" → category: "VENTURES", status: "BACKLOG"
+- "Pay credit cards" → category: "LIFE", status: "BACKLOG"
+- "Prepare slides for client meeting" → category: "CAREER", status: "BACKLOG"`;
 
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
