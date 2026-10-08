@@ -353,3 +353,56 @@ have been gone.
 2. **Never conclude absence from a truncated listing.** `| head`, `| tail` and a result cap all
    produce silence that looks like a negative result. Test the specific path (`ls -la <path>`,
    `test -f`) when the answer being inferred is "it is not there".
+
+## 2026-10-08 — reported "tsc exits 0" for a file tsc does not check
+
+**Claim.** PR #28's commit and body both stated `tsc` exits 0, offered as the evidence the change
+was sound.
+
+**Ground truth.** The change's most important file was
+`supabase/functions/ai-task-parser/index.ts`, and **the app's tsconfig does not cover
+`supabase/functions/**`** — those are Deno edge functions, not part of the Vite app's program. So
+`tsc` never read it. The file did not parse at all: the prompt is a backtick-delimited template
+literal, and I wrote `` `category` `` and `` `status` `` inside it, which closed the string.
+
+Caught by the deploy, after the merge (run `37798480006`):
+
+```
+Error: failed to create the graph
+    The module's source code could not be parsed at ai-task-parser/index.ts:219:48
+failed to bundle function: exit 1
+```
+
+**Why nothing else caught it.** Two independent gaps, and the second is the structural one:
+`tsc`'s program excluded the file, **and no workflow in this repo triggered on `pull_request`** —
+all nine were `workflow_dispatch` or `push`-to-`main` — so PR #28 ran **zero** checks. The error
+could not surface until after the merge, by construction.
+
+**Blast radius: none live.** The bundle failed, so the previous `ai-task-parser` stayed deployed.
+The real cost was that #28's fix was merged and silently not in force, which is the most expensive
+shape of this failure — it looks shipped.
+
+**Root-cause pattern.** *A green signal is only evidence if the checker's scope includes the thing
+that changed.* This is the same family as answering from a proxy: `tsc` exiting 0 is a true fact
+about a program that did not contain the file. The same shape as the earlier entry claiming a
+capability absent from a grep that searched variable NAMES and never the VALUE — in both cases the
+instrument was pointed somewhere other than the claim.
+
+**Guards this earns, and the first is a mechanism rather than a sentence.**
+1. **`.github/workflows/parse-edge-functions.yml`** — this repo's first `pull_request` check. It
+   parses every `supabase/functions/*/index.ts` with Deno's own parser (`deno fmt --check`, which
+   parses locally; `deno check` would resolve the module graph over the network for 51 functions
+   and fail for reasons unrelated to the diff). It fails ONLY on a `SyntaxError`, because these
+   files are not deno-fmt formatted and a bare `fmt --check` would be red from its first run — a
+   check that is red by default is one people learn to ignore. It also fails when the glob matches
+   nothing, so it cannot go vacuously green.
+   **Mutation-proved:** fixed tree → 51 parsed / 0 failed / rc=0; defect reinstated → names the
+   file, rc=1 (**FIRED**); restored → asserted clean against HEAD, rc=0 again.
+2. **Before quoting a checker as evidence, name the files it actually read.** "The suite passes"
+   and "the build is green" are claims about a scope. When the changed file lives outside the main
+   program — edge functions, workflows, SQL, a separate package — find the checker whose scope
+   includes it, or say plainly that none ran.
+3. **A delimiter is never punctuation inside its own string.** Backticks in a template literal,
+   apostrophes in a single-quoted string. The existing CLAUDE.md rule covers smart quotes; this is
+   the same trap one delimiter over. The repo's own prose style here (plain CAPS for emphasis) was
+   already the safe form.
