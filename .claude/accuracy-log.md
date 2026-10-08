@@ -251,10 +251,27 @@ added **Life**. In that generation of the board a category-shaped status IS a le
 `TasksPage` → `TabbedKanbanBoard` normalises them away, and it does so in memory
 (`TabbedKanbanBoard.tsx:22-37`), never in the database.
 
-**The one source that would have settled it.** `public.columns` — the table that DEFINES the lanes
-— plus the effective prop value at each `<KanbanBoard>` call site. I had read the hardcoded
-`STANDARD_COLUMNS` array and the one component that repairs the data, and generalised from those
-two to "no lane renders them". The table that actually decides was never opened.
+**And wrong for a second, more basic reason, found one read later.**
+`KanbanBoard.tsx:571-578` is `mapTaskStatusForColumns`, whose own comment reads *"Map a task to a
+visible column status, even if the task's status doesn't have a matching column"*. It falls back
+explicitly: the task's own status if a lane exists for it, else `PROF_EDUCATION` when the category
+is `EDUCATION`, else `BACKLOG`, else the first lane. **No task is ever dropped on either surface.**
+So the rows were never invisible at all — not on the Dashboard, and not on TasksPage, where the
+absent `VENTURES` lane sends them to Backlog even without `TabbedKanbanBoard`'s separate in-memory
+rewrite. Two independent compensations were already in place and I had read neither.
+
+**The one source that would have settled it.** The function that assigns a task to a lane —
+`mapTaskStatusForColumns` — and, for *which* lane, `public.columns`, the table that DEFINES them. I
+had read the hardcoded `STANDARD_COLUMNS` array and the one component that repairs the data, and
+generalised from those two to "no lane renders them". Neither the assignment function nor the lane
+table was opened.
+
+**What this changes about the fix.** The cleanup is a correctness tidy-up, not a rescue: nothing is
+bleeding, because the display already compensates. Its real effect depends on the live lanes — if a
+`Ventures` lane still exists, the 11 rows are showing in **Ventures** today and the UPDATE would
+visibly move them to Backlog/Up Next; if it does not, they already show in Backlog and the UPDATE
+only makes the stored value agree with what is displayed. Either way the compensation is
+display-only and never writes back, so the stored value stays wrong until something fixes it.
 
 **Root cause.** *Answered from the consumers I happened to find, not from the thing that defines
 the answer* — the same shape as resolving a field's correctness by comparing two derived fields.
@@ -275,9 +292,30 @@ be used?"* — asked before the UPDATE ran, which is the only reason it cost not
    EFFECTIVE value including the default — a call site that omits the prop never appears in a grep
    for it.
 
+**GROUND TRUTH, read 2026-10-08 from live `public.columns` (project `wwxgajrtmslzklnyplah`).** The
+category-named lanes are **live**, not vestigial: `LIFE`, `CAREER`, `PROF_EDUCATION` and `VENTURES`
+each have 123 lane rows, labelled Life / Career / Prof. Education / Ventures. And all 11 tasks have
+`status = VENTURES` **and** `category = VENTURES`, on the board `Personal Tasks`, which carries a
+`VENTURES` lane. **So the 11 cards are visible in the Ventures column today.** The claim they were
+invisible was wrong in every respect, and the owner's question caught it before the UPDATE ran.
+
 **Status.** The code fix (PR #28) is unaffected and shipped as-is: `BACKLOG` is also a seeded lane
 on that board (`20250925200403`), so writing `BACKLOG`/`UP_NEXT` renders correctly on both surfaces
-regardless. The 11-row data cleanup is **held** pending a read of `public.columns`.
+regardless. The 11-row data cleanup is **held and re-presented to the owner**, because the approval
+they gave rested on the refuted "invisible corruption" premise, and the UPDATE would visibly move
+11 cards out of a lane they can see.
+
+**The deeper guard, and it is the one worth carrying.** *An approval is only as good as the premise
+it was given on.* I had the owner's explicit "Approved ... and cleanup" and would have been within
+the letter of it to proceed. Re-checking is not re-asking permission for approved work — it is
+noticing that what was approved is not what would have happened.
+
+**One thing still NOT established, stated as unknown rather than guessed.** That query selected
+`boards.name`, not `boards.id`, so "123 `VENTURES` lane rows" cannot distinguish *123 boards with
+one Ventures lane each* (benign — the seed migration `CROSS JOIN`s every default board) from *one
+board with 123 duplicate Ventures lanes* (a visible defect: ~1,627 columns on one board). Grouping
+by a NAME when the question is about an ID is the same proxy error this whole entry is about, so it
+is recorded as open, not answered.
 
 ## 2026-10-08 — overwrote this very file without reading it
 
