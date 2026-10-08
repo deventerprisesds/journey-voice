@@ -286,6 +286,17 @@ serve(async (req) => {
               error_message: err.message,
               metadata: { token_prefix: sub.fcm_token.substring(0, 20), channel: fcmData.channel, title }
             }).then(() => {}).catch(() => {});
+            // A token FCM reports as UNREGISTERED belongs to an app install that no longer exists
+            // (reinstall / data cleared) and will never work again. Remove it, like the web-push
+            // 410/404 cleanup below — otherwise every push keeps hitting it (the user had 6 dead
+            // tokens, ~60 failures/day) and a dead row can mask the fact the live install never registered.
+            if (/\(404\)/.test(err.message) && /UNREGISTERED|NotRegistered/.test(err.message)) {
+              await supabaseClient.from('push_subscriptions').delete().eq('id', sub.id);
+              await supabaseClient.from('activity_log').insert({
+                user_id: userId, activity_type: 'fcm_token_pruned', status: 'completed',
+                metadata: { token_prefix: sub.fcm_token.substring(0, 20), endpoint_prefix: String(sub.endpoint).slice(0, 40) }
+              }).then(() => {}).catch(() => {});
+            }
             return { success: false, endpoint: sub.endpoint, error: err.message };
           }
         }

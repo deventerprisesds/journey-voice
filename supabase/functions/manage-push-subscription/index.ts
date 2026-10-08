@@ -19,6 +19,8 @@ interface RequestBody {
   subscription?: PushSubscription;
   fcmToken?: string;
   userId: string;
+  /** Who registered: 'settings' (NotificationSettings), 'web' (app-shell hook), 'native' (Android). */
+  source?: string;
 }
 
 serve(async (req) => {
@@ -33,7 +35,7 @@ serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
-    const { action, subscription, fcmToken, userId }: RequestBody = await req.json();
+    const { action, subscription, fcmToken, userId, source }: RequestBody = await req.json();
 
     // Validate userId is provided
     if (!userId) {
@@ -82,6 +84,12 @@ serve(async (req) => {
       if (dedupeError) {
         console.warn('[manage-push-subscription] device-owner dedupe failed (non-blocking):', dedupeError.message);
       }
+      // Leave a trace: a registration used to be invisible, so "the phone never registered its new
+      // token after a reinstall" took a database dig to find. Never log the full token.
+      supabaseClient.from('activity_log').insert({
+        user_id: userId, activity_type: 'fcm_token_registered', status: 'completed',
+        metadata: { token_prefix: fcmToken.substring(0, 20), token_tail: fcmToken.slice(-6), source: source ?? 'settings' }
+      }).then(() => {}, () => {});
       console.log('[manage-push-subscription] FCM token stored for user:', userId);
       return new Response(JSON.stringify({ success: true, message: 'FCM token saved' }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
