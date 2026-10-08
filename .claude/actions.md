@@ -6,6 +6,18 @@ the technical findings) and `.claude/accuracy-log.md` (wrong-first-answers).
 
 ---
 
+<!-- The SessionStart planning digest prints the first 8 lines under the exact heading below. Keep it a
+     short index of what is OPEN NOW; the detail stays in the ACT entries below. -->
+## Open
+- **Owner confirmation pending** — task creation fix (ACT:task-status-mapping, items 1-13): live/merged, owner has not created a task since.
+- **Owner decision** — retire `PERSONAL` in favour of `LIFE` (recommended A), not actioned.
+- **Never started** — original request #3: settings page to add monitored calendars (UMich inbox).
+- **Known, not done** — 4 near-duplicate task titles; `todayStr` UTC/local off-by-one; `boards.name` vs `boards.id` lane count.
+- **Dead UI** — `SchedulingSettings.tsx:506` per-category `defaultStatus` editor affects nothing; 3 stale category→status maps.
+- **ACT-jv-1 remainder** — scheduling caveats "STILL NOT BUILT (needs sign-off)" items.
+
+---
+
 ## ACT-jv-2: PR triage pass — 5 open PRs
 
 **Asked (2026-09-21, owner):** "go ahead with the triage pass" (across all repos with open PRs).

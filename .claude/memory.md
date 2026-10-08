@@ -1,5 +1,15 @@
 # Project Memory — journey-voice
-Last updated: 2026-09-21
+Last updated: 2026-10-08 (added the `## Active work` index the SessionStart digest reads)
+Previous: 2026-09-21 (PR triage pass)
+
+<!-- The SessionStart planning digest prints the first 8 lines under the exact heading below. Keep it a
+     current index; the dated sections below hold the detail. -->
+## Active work
+- **2026-10-08 — task creation writing a CATEGORY into `tasks.status`:** six writers found and fixed (parser, scheduler, voice, modals). Edge fns LIVE; client MERGED but deploys via Lovable, not Actions. NOT owner-confirmed.
+- **Trap:** `PERSONAL` is vestigial, `LIFE` is the real category — see the section of that name below.
+- **Trap:** journey's CLIENT does not deploy from GitHub Actions — see the Lovable section at the bottom.
+- **Stood down 2026-09-13:** three-digest delivery (journey side), at the owner's direction.
+- Open items and owner decisions live in `.claude/actions.md` → `## Open`.
 
 ## PR triage pass (2026-09-21) — 5 open PRs read-evidence-checked, 2 acted on
 Full per-PR evidence in `.claude/pr-triage-2026-09-21.md`. Method: content-grepped against
