@@ -28,6 +28,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import { supabase, SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from "@/integrations/supabase/client";
 import { useEffect } from "react";
 import { bootTrace } from "@/utils/bootTrace";
+import { registerBridgeFcmToken } from '@/utils/bridgeFcmRegistration';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1 } },
@@ -53,8 +54,12 @@ const App = () => {
   useEffect(() => {
     const bridge = (window as any).AndroidBridge;
     if (!bridge?.secureStore) return;
+    let stopFcm: () => void = () => {};
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session) {
+        // Register this install's push token on every app open / sign-in (not only from Settings).
+        stopFcm();
+        stopFcm = registerBridgeFcmToken(session.user.id);
         bridge.secureStore('supabase_url', SUPABASE_URL);
         bridge.secureStore('supabase_anon_key', SUPABASE_PUBLISHABLE_KEY);
         bridge.secureStore('supabase_access_token', session.access_token);
@@ -66,7 +71,7 @@ const App = () => {
         bridge.secureStore('supabase_user_id', '');
       }
     });
-    return () => subscription.unsubscribe();
+    return () => { stopFcm(); subscription.unsubscribe(); };
   }, []);
 
   return (
