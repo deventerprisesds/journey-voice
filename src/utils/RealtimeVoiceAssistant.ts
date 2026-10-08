@@ -1,5 +1,9 @@
 import { supabase, SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from '@/integrations/supabase/client';
 import { VOICE_CONFIG } from '@/config/voiceConfig';
+// A task's `status` is a WORKFLOW lane and never its category. One shared rule, so this path
+// stops inventing its own -- see src/utils/workflowStatus.ts for why a type check cannot
+// enforce it (task_status contains LIFE/CAREER/PROF_EDUCATION/VENTURES too).
+import { defaultStatusForNewTask } from '@/utils/workflowStatus';
 
 // Global instance tracking for debugging visibility
 let globalInstanceCounter = 0;
@@ -1658,7 +1662,18 @@ export class RealtimeVoiceAssistant {
         description: args.description?.trim() || null,
         priority: normalizedPriority,
         category: normalizedCategory,
-        status: normalizedCategory === 'EDUCATION' ? 'PROF_EDUCATION' : normalizedCategory, // Map EDUCATION to PROF_EDUCATION status
+        // A WORKFLOW lane, never the category. This line used to read
+        //   normalizedCategory === 'EDUCATION' ? 'PROF_EDUCATION' : normalizedCategory
+        // i.e. every task created BY VOICE got its category as its status -- the same defect
+        // fixed in #28 (parser) and #31 (scheduler), on the path the owner actually uses most.
+        // The EDUCATION->PROF_EDUCATION special case was there because EDUCATION is a
+        // task_category but NOT a task_status member, so without it Postgres rejected the
+        // insert outright. That workaround is what made the wrongness survive: it stopped the
+        // error without fixing the mapping.
+        //
+        // Nothing here sets due_date or start_time, so by journey's own server-side rule
+        // (execute-tool/index.ts:1482) an undated new task is BACKLOG.
+        status: defaultStatusForNewTask({ dated: false }),
         board_id: defaultBoard.id,
         user_id: userId
       };
