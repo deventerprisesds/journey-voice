@@ -616,23 +616,6 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
     }
   };
 
-  // Helper to map category to status
-  const mapCategoryToStatus = (category: string): Task['status'] => {
-    switch (category) {
-      case 'LIFE':
-        return 'LIFE';
-      case 'CAREER':
-        return 'CAREER';
-      case 'VENTURES':
-        return 'VENTURES';
-      case 'EDUCATION':
-      case 'PROF_EDUCATION':
-        return 'PROF_EDUCATION';
-      default:
-        return 'BACKLOG';
-    }
-  };
-
   const handleCreateTasks = async (tasksToCreate: ParsedTask[]) => {
     setIsCreating(true);
     try {
@@ -672,7 +655,12 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
           user_id: userId,
           priority: task.priority,
           category: (task.category === 'PROF_EDUCATION' ? 'EDUCATION' : task.category) as any,
-          status: mapCategoryToStatus(task.category) as Task['status'],
+          // WORKFLOW state, never the category. Mirrors journey's own insert rule
+          // (execute-tool: (start_time || due_date) ? 'UP_NEXT' : 'BACKLOG') using the very
+          // fields set just below, so a dated task lands in Up Next and an undated one in Backlog.
+          // Replaced a second copy of mapCategoryToStatus() -- the same defect also lived in
+          // SmartTaskInput.tsx and in the ai-task-parser prompt.
+          status: ((task.start_time || task.due_date) ? 'UP_NEXT' : 'BACKLOG') as Task['status'],
           due_date: task.due_date || null,
           // Preserve AI-parsed times from preview
           start_time: task.start_time || null,
@@ -940,7 +928,9 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
       description: assignment.description || `${assignment.course_name || 'Assignment'} - Due: ${assignment.due_date ? format(new Date(assignment.due_date), 'PPP') : 'No due date'}`,
       priority: mapPriority(assignment.priority),
       category: 'PROF_EDUCATION',
-      status: 'PROF_EDUCATION',
+      // Was `status: 'PROF_EDUCATION'` -- the category again. An imported assignment carries a
+      // due_date, so UP_NEXT is journey's rule for it; BACKLOG when the source has no date.
+      status: assignment.due_date ? 'UP_NEXT' : 'BACKLOG',
       due_date: assignment.due_date,
       estimate_minutes: 60, // Default 1 hour
       assignment_id: assignment.id,

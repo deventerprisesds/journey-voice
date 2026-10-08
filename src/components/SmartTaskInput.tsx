@@ -28,23 +28,6 @@ interface TaskSuggestion {
   aiReasoning: string;
 }
 
-// Helper to map category to status
-const mapCategoryToStatus = (category: string): Task['status'] => {
-  switch (category) {
-    case 'LIFE':
-      return 'LIFE';
-    case 'CAREER':
-      return 'CAREER';
-    case 'VENTURES':
-      return 'VENTURES';
-    case 'EDUCATION':
-    case 'PROF_EDUCATION':
-      return 'PROF_EDUCATION';
-    default:
-      return 'BACKLOG';
-  }
-};
-
 const SmartTaskInput: React.FC<SmartTaskInputProps> = ({
   tasks,
   targetDate,
@@ -143,7 +126,13 @@ const SmartTaskInput: React.FC<SmartTaskInputProps> = ({
           end_time: endTime.toISOString(),
           estimate_minutes: editedSuggestion.estimate_minutes,
           is_scheduled: true,
-          status: mapCategoryToStatus(editedSuggestion.category),
+          // `status` is a WORKFLOW state, never the category. This path always writes
+          // is_scheduled: true with a start_time just above, so UP_NEXT is journey's own rule
+          // for a dated task (execute-tool: (start_time || due_date) ? 'UP_NEXT' : 'BACKLOG').
+          // It replaced mapCategoryToStatus(), a client-side copy of the same category-into-status
+          // defect the ai-task-parser prompt carried -- fixing only the prompt would have left this
+          // path still corrupting rows. See .claude/actions.md ACT:task-status-mapping.
+          status: 'UP_NEXT',
           user_id: user.id,
           board_id: boards[0].id,
           reminder_minutes: 15

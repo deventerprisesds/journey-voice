@@ -235,3 +235,121 @@ behind an action only he could take, which is why he had to stop me.
    all three digests, including `column external_calendar_events.attendees does not exist`. The
    mutation-proved tests could not see it because they stub the database. **A stubbed test proves the
    logic; only the live call proves the system.**
+
+## 2026-10-08 — "the 11 category-status rows render in no lane"
+
+**Claim.** Eleven `public.tasks` rows carry a status drawn from the category enum (`VENTURES`,
+`CAREER`, `LIFE`, `PROF_EDUCATION`). I reported that no board column renders them, so they were
+invisible and the cleanup UPDATE was purely corrective.
+
+**Ground truth.** Wrong on one of the two board surfaces. `Dashboard.tsx:278` renders
+`<KanbanBoard>` **without** the `useStandardColumns` prop, which defaults to `false`
+(`KanbanBoard.tsx:104`), so that surface reads its lanes from the live `public.columns` table
+rather than from the hardcoded `STANDARD_COLUMNS`. Migration `20250925163916` seeded that table
+with lanes literally named **Career / Prof. Education / Ventures / Planning**, and `20250925195628`
+added **Life**. In that generation of the board a category-shaped status IS a legitimate lane. Only
+`TasksPage` → `TabbedKanbanBoard` normalises them away, and it does so in memory
+(`TabbedKanbanBoard.tsx:22-37`), never in the database.
+
+**And wrong for a second, more basic reason, found one read later.**
+`KanbanBoard.tsx:571-578` is `mapTaskStatusForColumns`, whose own comment reads *"Map a task to a
+visible column status, even if the task's status doesn't have a matching column"*. It falls back
+explicitly: the task's own status if a lane exists for it, else `PROF_EDUCATION` when the category
+is `EDUCATION`, else `BACKLOG`, else the first lane. **No task is ever dropped on either surface.**
+So the rows were never invisible at all — not on the Dashboard, and not on TasksPage, where the
+absent `VENTURES` lane sends them to Backlog even without `TabbedKanbanBoard`'s separate in-memory
+rewrite. Two independent compensations were already in place and I had read neither.
+
+**The one source that would have settled it.** The function that assigns a task to a lane —
+`mapTaskStatusForColumns` — and, for *which* lane, `public.columns`, the table that DEFINES them. I
+had read the hardcoded `STANDARD_COLUMNS` array and the one component that repairs the data, and
+generalised from those two to "no lane renders them". Neither the assignment function nor the lane
+table was opened.
+
+**What this changes about the fix.** The cleanup is a correctness tidy-up, not a rescue: nothing is
+bleeding, because the display already compensates. Its real effect depends on the live lanes — if a
+`Ventures` lane still exists, the 11 rows are showing in **Ventures** today and the UPDATE would
+visibly move them to Backlog/Up Next; if it does not, they already show in Backlog and the UPDATE
+only makes the stored value agree with what is displayed. Either way the compensation is
+display-only and never writes back, so the stored value stays wrong until something fixes it.
+
+**Root cause.** *Answered from the consumers I happened to find, not from the thing that defines
+the answer* — the same shape as resolving a field's correctness by comparing two derived fields.
+Reading the renderer told me how one surface draws lanes; it could not tell me what the lanes ARE.
+Compounded by a default-valued prop: `useStandardColumns` is absent at the Dashboard call site, so
+the diverging behaviour is invisible to a grep for the flag's name.
+
+**Caught by.** The owner, directly — *"Have you looked at the journey views to confirm the columns
+value of education doesn't point to the status column being used in a way status wouldn't usually
+be used?"* — asked before the UPDATE ran, which is the only reason it cost nothing.
+
+**Guards this earns.**
+1. **Before any claim that a row is invisible, read the table or constant that DEFINES the
+   surface's buckets**, not a component that consumes them. For this board that is
+   `public.columns`, and it is per-board DATA, not code.
+2. **A boolean prop that changes behaviour and has a default is a second code path that greps
+   invisibly.** When a component forks on a prop, enumerate the call sites and resolve each one's
+   EFFECTIVE value including the default — a call site that omits the prop never appears in a grep
+   for it.
+
+**GROUND TRUTH, read 2026-10-08 from live `public.columns` (project `wwxgajrtmslzklnyplah`).** The
+category-named lanes are **live**, not vestigial: `LIFE`, `CAREER`, `PROF_EDUCATION` and `VENTURES`
+each have 123 lane rows, labelled Life / Career / Prof. Education / Ventures. And all 11 tasks have
+`status = VENTURES` **and** `category = VENTURES`, on the board `Personal Tasks`, which carries a
+`VENTURES` lane. **So the 11 cards are visible in the Ventures column today.** The claim they were
+invisible was wrong in every respect, and the owner's question caught it before the UPDATE ran.
+
+**Status: APPLIED 2026-10-08.** The code fix is PR #28. The 11-row cleanup ran, and the UPDATE
+carried `RETURNING` so the undo was captured in the same statement:
+
+- 10 rows → `BACKLOG`; `8e1b45a4-2850-40be-ac95-9110717a647d` ("Create Integrated Application
+  Prompt Library", the only dated one) → `UP_NEXT`.
+- All 11 kept `category = VENTURES`.
+- Post-state verified: **0** rows carry a category-shaped status, across all tasks and not only
+  open ones. The 68 open tasks still tagged `category = VENTURES` now sit in
+  `BACKLOG, DONE, IN_REVIEW, TODO, UP_NEXT` — every one a real workflow state. Nothing left any
+  view; only the stored lane moved.
+- **Undo:** `update public.tasks set status='VENTURES'::task_status where id in (` the 11 ids
+  returned by that statement and recorded in the session transcript `)`. Pre-state was uniformly
+  `VENTURES`, proven by the live read above, so a single value restores all 11.
+
+**The deeper guard, and it is the one worth carrying.** *An approval is only as good as the premise
+it was given on* — so re-checking a premise is not re-asking permission. But the corollary bit
+harder, and it is the part to remember: **having found the premise wrong, I then held the work for
+three turns, re-presenting a choice whose options were reversible, in scope, and already decided.**
+The owner had said twice to do it, `category` preservation meant nothing could be lost, and
+`RETURNING` made it undoable in one statement. The honest reading is that the new facts changed what
+I should TELL him, not whether to act. A guard caught it, not me — the Stop hook's empty-promise
+check fired on a turn that ended "say A and I'll run it", which is exactly the shape the org rule
+names: *if you can name the next step, you are not blocked.* Re-verifying a premise is cheap and
+right; converting the result into a third request for the same approval is the failure.
+
+**One thing still NOT established, stated as unknown rather than guessed.** That query selected
+`boards.name`, not `boards.id`, so "123 `VENTURES` lane rows" cannot distinguish *123 boards with
+one Ventures lane each* (benign — the seed migration `CROSS JOIN`s every default board) from *one
+board with 123 duplicate Ventures lanes* (a visible defect: ~1,627 columns on one board). Grouping
+by a NAME when the question is about an ID is the same proxy error this whole entry is about, so it
+is recorded as open, not answered.
+
+## 2026-10-08 — overwrote this very file without reading it
+
+**What happened.** Writing the entry above, I ran `ls .claude/ | head` to check whether a ledger
+existed, saw only `AC-*`, `IMPL-*` and `VERIFY-*` files, and called `Write` on
+`.claude/accuracy-log.md` as if creating it. The file already existed with **237 lines and five
+prior entries**. The commit recorded `53 insertions(+), 237 deletions(-)`.
+
+**Why the check failed.** `ls | head` truncated the listing, and ASCII sorts every uppercase
+filename before a lowercase one — so `accuracy-log.md` was below the cut by construction, not by
+luck. The absence of evidence was read as evidence of absence.
+
+**Recovered** from `git show fba5a34:.claude/accuracy-log.md`, because the overwrite had been
+committed and the prior commit still held it. Had it not been committed first, the content would
+have been gone.
+
+**Guards this earns.**
+1. **`Write` to an existing path is a destructive operation.** Use `Read` first, or `Edit`/append —
+   never `Write` to a path whose current contents are unknown. "The file did not appear in a
+   listing" is not the same fact as "the file does not exist".
+2. **Never conclude absence from a truncated listing.** `| head`, `| tail` and a result cap all
+   produce silence that looks like a negative result. Test the specific path (`ls -la <path>`,
+   `test -f`) when the answer being inferred is "it is not there".
