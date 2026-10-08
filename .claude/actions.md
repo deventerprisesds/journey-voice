@@ -424,3 +424,21 @@ line). Not actioned: it is a product call, and nothing is bleeding while it wait
 - Still outstanding from before: the four near-duplicate task titles, the `todayStr` UTC/local
   off-by-one, the `boards.name`-vs-`boards.id` lane-count question, and **original request #3, the
   calendar-monitoring settings page**, which has never been started.
+
+| # | What | State | Evidence |
+|---|---|---|---|
+| 11 | **`RealtimeVoiceAssistant.ts:1676`** wrote `status: normalizedCategory` into a real `.insert([taskData])` — every task created BY VOICE. A SIXTH writer, and the likeliest origin of the 11 rows (their titles are dictated work items) | merged | PR #33 → `e7588ed`; re-swept clean; tsc 0; 179/179 |
+| 12 | `RealtimeVoiceAssistant.tools.backup.ts` — no importers (verified), annotated not changed so it can't be restored as a working copy of the defect | merged | PR #33 |
+| 13 | `assignmentFetching.ts` ×3 — verified NOT writers (no `.from('tasks')`, consumer uses them as context, engine only compares `'DONE'`), changed to `BACKLOG` to remove the decoy | merged | PR #33 |
+
+**THE `EDUCATION → PROF_EDUCATION` TERNARY IS WHY #11 SURVIVED SIX YEARS OF THIS CODEBASE.**
+`EDUCATION` is not a `task_status` member, so without the special case the insert would have failed
+loudly. It silenced the error without fixing the mapping — a loud failure became a quiet wrong
+value.
+
+### What is verified live vs what needs the owner
+
+| Layer | Status |
+|---|---|
+| `ai-task-parser`, `smart-calendar-scheduler` (edge fns) | **LIVE, verified** — deploy runs succeeded; the parser's deployed source was read back (v560 ACTIVE) |
+| `SmartTaskInput`, `TaskCreationModal`, `taskScheduling`, `RealtimeVoiceAssistant` (client) | **MERGED to `main`.** NOT verifiable from here: nothing in Actions builds `src/` — journey's client is a **Lovable** app deployed outside GitHub. The owner hard-refreshing and creating a task is the only confirmation |
