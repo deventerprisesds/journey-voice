@@ -2,6 +2,12 @@ import { supabase } from "@/integrations/supabase/client";
 import { Task } from "@/types/task";
 import { toast } from "sonner";
 import { loadUserSchedulingConfig } from "@/services/schedulingService";
+// A status suggestion from the scheduler edge fn must be a real WORKFLOW lane, never a
+// category. `smart-calendar-scheduler` used to return `mapping.defaultStatus` (= 'VENTURES',
+// 'EDUCATION', …) and this file wrote it straight to tasks.status — the source of the 11
+// category-shaped rows. Fixed at the source too; this stays because the edge fn deploys
+// separately and the client cannot assume the two are in step.
+import { asWorkflowStatus } from "./workflowStatus";
 
 export interface SchedulingResult {
   success: boolean;
@@ -130,7 +136,7 @@ export async function scheduleNewTask(
       title: task.title || 'Untitled Task',
       board_id: task.board_id,
       user_id: task.user_id,
-      status: scheduleResult.suggestedStatus || task.status || 'BACKLOG',
+      status: asWorkflowStatus(scheduleResult.suggestedStatus) || task.status || 'BACKLOG',
       priority: task.priority || 'MEDIUM',
       category: scheduleResult.suggestedCategory || task.category || 'LIFE'
     };

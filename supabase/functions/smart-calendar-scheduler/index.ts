@@ -537,8 +537,18 @@ Return ONLY valid JSON (no markdown):
     else if (taskCategory && config.categoryMappings[taskCategory]) {
       const mapping = config.categoryMappings[taskCategory];
       timeWindow = mapping.defaultTimeWindow;
-      suggestedStatus = mapping.defaultStatus;
       estimatedDuration = mapping.estimatedDuration;
+      // `mapping.defaultStatus` is DELIBERATELY NOT READ. It holds a CATEGORY name
+      // ('CAREER', 'VENTURES', 'LIFE', 'EDUCATION'), and assigning it to suggestedStatus
+      // made the caller write a category into tasks.status -- the defect fixed in #28 for
+      // the parser, still live on this path until now. 'EDUCATION' is not even a member of
+      // the task_status enum, so that one was rejected outright.
+      //
+      // Leaving suggestedStatus null is what line ~509 already says this code wants:
+      // "Don't suggest status changes - preserve existing status". The caller
+      // (src/utils/taskScheduling.ts) then falls through to `task.status || 'BACKLOG'`.
+      // A time window and a duration ARE legitimately a function of category; a workflow
+      // lane is not.
     }
 
     // Override with explicit estimate from caller if provided
