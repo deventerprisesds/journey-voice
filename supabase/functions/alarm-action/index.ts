@@ -7,7 +7,7 @@
 // send-push-notification); this endpoint accepts that token instead of a JWT.
 //
 // verify_jwt = false (config.toml): the token IS the auth. It authorises exactly one task for one
-// user, only DOING/DONE, for 7 days. Replays are harmless — setting the same status is a no-op.
+// user (DOING/DONE/BACKLOG/PARK), for 7 days. Replays are harmless — a repeat tap is a no-op.
 //
 // Ops:
 //   { op: "set_status", token, status: "DOING"|"DONE"|"BACKLOG"|"PARK", requestId?, attempt?, tapAt? }
