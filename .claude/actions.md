@@ -472,3 +472,8 @@ Dashboard board still shows a lane headed "Life". Deleting them moves no task. I
 - The dead `defaultStatus` control (`SchedulingSettings.tsx:506`); the four near-duplicate task
   titles; the `todayStr` UTC/local off-by-one; the `boards.name`-vs-`boards.id` lane-count
   question; and **original request #3, the calendar-monitoring settings page**, never started.
+
+| # | What | State | Evidence |
+|---|---|---|---|
+| 4 | `.claude/memory.md` header read `Last updated: 2026-09-21` while carrying 2026-10-08 and 2026-10-12 sections. Stamped, with a note to trust per-section dates over the file-level one | **MERGED** | PR #37 |
+| 5 | Ledger commits verified to exist against `origin`, not a local tree: `git cat-file -t` returns `commit` for both `833d650` (#35) and `4576ea5` (#36) | **DONE** | `4576ea5` is `origin/main`'s tip |
