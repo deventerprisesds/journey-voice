@@ -533,3 +533,52 @@ CCR session.
 | `src/**` | **NO.** Merged to `main` is all that can be shown. Lovable's deploy is not in Actions, and the SWA/bundle is not reachable from the session. The owner hard-refreshing is the only confirmation |
 
 Never report a `src/` change as "live" from a green Actions run — there is no Actions run for it.
+
+## "LIFE" vs "PERSONAL" — the key stays LIFE, the LABEL says Personal (#35, 2026-10-12)
+
+Owner: *"I don't think one of either personal or life should have exist"*, then *"swap life and
+persona terms"*. Correct — and the code's own prose already agreed: `ai-task-parser:206` reads
+`LIFE (Personal/non-work activities)` and `:241` `LIFE: Personal activities, health, family,
+hobbies, self-care`. **Only the key said LIFE.**
+
+**MEASURED BEFORE DECIDING — the asymmetry is the whole argument:**
+
+| | `LIFE` | `PERSONAL` |
+|---|---|---|
+| `tasks.category` rows | **153** (largest category) | **0** |
+| `columns.status` lanes | **123** | 0 |
+| journey code | 153 lines / 51 files | ~13 |
+| Huddle | treated as **CANONICAL** | folded INTO it, `widgets.server.ts:503-504`, labelled `"Life & Personal"` |
+
+**TWO THINGS MAKE A TRUE RENAME HARD, not merely long, and both are easy to miss:**
+1. **Postgres has no `ALTER TYPE … DROP VALUE`.** Retiring an enum member means recreating BOTH
+   `task_category` and `task_status` and rewriting every dependent column. You can add a value
+   forever; you can never remove one cheaply.
+2. **Huddle's alias map points the OTHER WAY** — `PERSONAL → LIFE`. A rename has to invert it in
+   the other app, in the same change, or the two disagree about which term is canonical.
+
+**So the swap was done at the LABEL layer**, which is where the word is actually read. Nine sites:
+`TaskDetailModal:543`, `EditableTaskSuggestion:170`, `TaskCreationModal:1343` and `:1692`,
+`TaskFilters:45` and `:66`, `Priorities:58`, `TabbedKanbanBoard:171`, `MainLayout:106`.
+`PROF_EDUCATION` is the precedent — an internal key nobody ever sees.
+
+**NOT changed, and this is deliberate, not an oversight:**
+- `TabbedKanbanBoard:171`'s `value: 'life'` and `MainLayout:106`'s `path=…&tab=life` — a URL
+  contract; renaming breaks saved links.
+- The FOUR status/lane label sites — `KanbanBoard:55` (`statusLabels`, used once, in the drag
+  toast "Task moved to Life"), `AddColumnModal:30`, `KanbanBoard:826` and `:873` (demo/default
+  column seeds). These name the legacy **category-as-LANE**, which is what #28/#31/#33 stopped
+  writing to task rows. Renaming them to Personal would ENTRENCH that model instead of letting it
+  die.
+
+**CONSEQUENCE TO EXPECT: one lane still reads "Life".** Board lane headers render the DB's
+`columns.name`, not a code map, and there are 123 rows with `name = 'Life'`.
+
+**MEASURED 2026-10-12 — every category-shaped lane is now EMPTY**, which is what makes retiring
+them cheap whenever that is decided:
+
+| lane | lane rows | tasks sitting in it |
+|---|---|---|
+| `LIFE` / `CAREER` / `VENTURES` / `PROF_EDUCATION` / `PLANNING` | 123 each | **0** each |
+
+615 empty column rows across the boards. No task would move if they were deleted.

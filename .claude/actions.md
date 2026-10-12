@@ -442,3 +442,33 @@ value.
 |---|---|
 | `ai-task-parser`, `smart-calendar-scheduler` (edge fns) | **LIVE, verified** — deploy runs succeeded; the parser's deployed source was read back (v560 ACTIVE) |
 | `SmartTaskInput`, `TaskCreationModal`, `taskScheduling`, `RealtimeVoiceAssistant` (client) | **MERGED to `main`.** NOT verifiable from here: nothing in Actions builds `src/` — journey's client is a **Lovable** app deployed outside GitHub. The owner hard-refreshing and creating a task is the only confirmation |
+
+## ACT:personal-category-label — the shown word is now "Personal". MERGED 2026-10-12.
+
+Owner, 2026-10-12: *"Read to see where we would need to change life in scripts and filters to swap
+life and persona terms?"* — a survey request; the survey is in `.claude/memory.md`.
+
+| # | What | State | Evidence |
+|---|---|---|---|
+| 1 | Survey: all 153 `LIFE` occurrences in journey (51 files) + ~24 in Huddle, bucketed by surface — enums, defaults, colour/label maps, pickers, prompt text, tool enums, lane definitions, and the CSS token `--category-life` | **DONE** | recorded in `memory.md` |
+| 2 | Nine CATEGORY labels → "Personal" | **MERGED** | PR #35 → `833d650`; tsc 0; 179/179; codepoint-scanned all 7 files for smart quotes |
+| 3 | The `value`/`path` literals and the four status/lane labels left alone, deliberately | **MERGED** | reasons in the PR body and `memory.md` |
+
+**NOT verifiable from here** — `src/` only, and journey's client deploys via Lovable, not Actions.
+Status is "merged, mechanism sound, NOT confirmed live" until the owner hard-refreshes.
+
+### Open decision for the owner — retire the five empty category lanes?
+
+Measured 2026-10-12: `LIFE`, `CAREER`, `VENTURES`, `PROF_EDUCATION` and `PLANNING` each have **123
+lane rows and ZERO tasks in them** — 615 empty columns across the boards, and the reason the
+Dashboard board still shows a lane headed "Life". Deleting them moves no task. It is still a
+615-row delete against the live board and a visible change, so it waits on the owner. Put to them
+2026-10-12; not actioned.
+
+### Also still open
+- **`PERSONAL` as a settable value** — reachable only via the agent tool enums
+  (`tool-definitions.ts:48,270`) and invisible to the category filter. Recommended: drop it from
+  those two enums. Unchanged by #35, which touched labels only.
+- The dead `defaultStatus` control (`SchedulingSettings.tsx:506`); the four near-duplicate task
+  titles; the `todayStr` UTC/local off-by-one; the `boards.name`-vs-`boards.id` lane-count
+  question; and **original request #3, the calendar-monitoring settings page**, never started.
