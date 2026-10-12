@@ -55,7 +55,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   PROF_EDUCATION: 'Prof. Education',
   EDUCATION: 'Education',
   VENTURES: 'Ventures',
-  LIFE: 'Life',
+  LIFE: 'Personal',
   PERSONAL: 'Personal',
 };
 
