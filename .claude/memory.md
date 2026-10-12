@@ -1,5 +1,16 @@
 # Project Memory — journey-voice
-Last updated: 2026-09-21
+Last updated: 2026-10-12
+
+> **MOVE THE DATE ABOVE IN THE SAME COMMIT THAT APPENDS A SECTION.** It read `2026-09-21` while
+> this file already carried sections dated 2026-10-08 and 2026-10-12 — three weeks of the header
+> claiming the document was current when it was not. Caught by the Stop gate, not by a reader.
+>
+> **Trust a section's own date over this header.** Every section below names its date and PR
+> (`## … (#35, 2026-10-12)`), which is the shape that cannot rot: a section is stamped by the
+> commit that writes it, so the stamp and the content arrive together. This file-level date is a
+> convenience and is structurally the most likely thing here to be stale — so it is the one to
+> distrust, never the sections. `actions.md` has no file-level stamp at all, deliberately, for
+> the same reason: its ACT entries each carry their own date.
 
 ## PR triage pass (2026-09-21) — 5 open PRs read-evidence-checked, 2 acted on
 Full per-PR evidence in `.claude/pr-triage-2026-09-21.md`. Method: content-grepped against
