@@ -168,7 +168,7 @@ const TabbedKanbanBoard: React.FC<TabbedKanbanBoardProps> = ({
     { value: 'career', label: 'Career', count: getFilteredTasks('career').length },
     { value: 'prof_education', label: 'Prof. Education', count: getFilteredTasks('prof_education').length },
     { value: 'ventures', label: 'Ventures', count: getFilteredTasks('ventures').length },
-    { value: 'life', label: 'Personal', count: getFilteredTasks('life').length },
+    { value: 'life', label: 'Life', count: getFilteredTasks('life').length },
   ];
 
   const timeFilteredCount = getTimeFilteredTasks().length;

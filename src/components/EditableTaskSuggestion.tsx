@@ -167,7 +167,7 @@ const EditableTaskSuggestion: React.FC<EditableTaskSuggestionProps> = ({
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="LIFE">Personal</SelectItem>
+                        <SelectItem value="LIFE">Life</SelectItem>
                         <SelectItem value="CAREER">Career</SelectItem>
                         <SelectItem value="VENTURES">Ventures</SelectItem>
                         <SelectItem value="EDUCATION">Education</SelectItem>

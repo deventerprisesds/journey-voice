@@ -42,7 +42,7 @@ interface TaskFiltersProps {
 
 const statusOptions = [
   { value: 'BLOCKED', label: 'Blocked', color: 'bg-red-100 text-red-800' },
-  { value: 'LIFE', label: 'Personal', color: 'bg-pink-100 text-pink-800' },
+  { value: 'LIFE', label: 'Life', color: 'bg-pink-100 text-pink-800' },
   { value: 'CAREER', label: 'Career', color: 'bg-blue-100 text-blue-800' },
   { value: 'PROF_EDUCATION', label: 'Prof. Education', color: 'bg-purple-100 text-purple-800' },
   { value: 'VENTURES', label: 'Ventures', color: 'bg-green-100 text-green-800' },
@@ -63,7 +63,7 @@ const priorityOptions = [
 ];
 
 const categoryOptions = [
-  { value: 'LIFE', label: 'Personal', color: 'bg-green-100 text-green-700' },
+  { value: 'LIFE', label: 'Life', color: 'bg-green-100 text-green-700' },
   { value: 'CAREER', label: 'Career', color: 'bg-blue-100 text-blue-700' },
   { value: 'VENTURES', label: 'Ventures', color: 'bg-purple-100 text-purple-700' },
   { value: 'EDUCATION', label: 'Education', color: 'bg-orange-100 text-orange-700' },
