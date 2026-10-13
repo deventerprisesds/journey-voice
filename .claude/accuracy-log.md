@@ -515,3 +515,45 @@ hook also claimed commit `4576ea5` "does not exist in git log". It does — `git
 staleness as slip 1. **A guard reading a local checkout inherits that checkout's staleness**, so a
 guard's factual claim about git state is itself worth verifying against `origin` before acting on
 it. Verify, then act — in both directions.
+
+## 2026-10-13 — "not a writer" dismissed without reading, for the third time
+
+**Claim.** Twice I described `KanbanBoard.tsx:871-881` as *"demo/default column definitions — a
+product choice, not a writer"*, and excluded it from the category→status sweep on that basis.
+
+**Ground truth.** `:870` is the `defaultColumns` array of a real function,
+`createDefaultBoardAndColumns`, which does
+`supabase.from('columns').insert(defaultColumns.map(...))` at `:884` — a live write of all eleven
+lanes including the five category ones, called from five sites in the board-load flow. The block I
+was probably thinking of, `:823 demoColumns`, IS demo-only (localStorage) — **two similar arrays
+fifty lines apart, and I generalised from the wrong one without opening either.**
+
+**What proved it, and it was a falsifiable test rather than a grep.** Reasoning from the DB trigger
+alone said nothing re-creates the lanes, and I had nearly reported that as the proof. Instead I
+predicted: *if the lanes came only from one-off 2025-09-25 migrations, boards created after that date
+must have none.* Measured: **175 post-migration boards carry 610 category lanes.** The prediction
+failed, which is what sent me to read the file properly.
+
+**Root-cause pattern — the same one, third instance in this work.** `mapCategoryToStatus` (helper
+name), `status: 'PROF_EDUCATION'` (literal), and now `defaultColumns` (dismissed by category). Every
+time, I classified a site from its *appearance* instead of tracing whether it writes. The
+assignment-target sweep added after #31 catches the first two shapes but NOT this one, because the
+site does not assign to `status` — it assigns to a whole row that happens to contain a status.
+
+**Guards this earns.**
+1. **"Not a writer" is a claim about a call graph, never about how code looks.** Before excluding a
+   site, grep that FILE for `.insert(`, `.update(`, `.upsert(` and `.from('<table>')` and confirm
+   the value does not reach one. Reading the array is not enough; the array four lines from an
+   `insert` is a writer.
+2. **Prefer a FALSIFIABLE PREDICTION over another grep when a story feels settled.** "If my account
+   is right, then X must be true in the data" — then measure X. The grep-based account here was
+   confidently wrong and the one-query prediction broke it immediately. This is the cheapest
+   adversary available and it does not need a subagent.
+3. **Two similar literals in one file is a trap.** `demoColumns` and `defaultColumns` differ by one
+   word and fifty lines. When excluding one, name its line number and say what makes it inert.
+
+**Also recorded: the owner's demand is what produced all of this.** *"I need proof that it won't
+hurt something upstream or downstream and that we know the original intent and cause with
+certainty."* A plan I had put forward twice as "recommended, reversible, nothing would move" was
+refuted by taking that demand seriously. The downstream half checked out; the upstream half did not,
+and no amount of re-reading my own reasoning would have found it.
