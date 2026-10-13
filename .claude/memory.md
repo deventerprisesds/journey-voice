@@ -593,3 +593,58 @@ them cheap whenever that is decided:
 | `LIFE` / `CAREER` / `VENTURES` / `PROF_EDUCATION` / `PLANNING` | 123 each | **0** each |
 
 615 empty column rows across the boards. No task would move if they were deleted.
+
+## The category LANES: original intent, and why deleting them does NOT work yet (2026-10-13)
+
+Owner demanded proof before a destructive delete: *"I need proof that it won't hurt something
+upstream or downstream and that we know the original intent and cause with certainty."* The proof
+**refuted the plan.** Recorded in full because the refutation is the valuable part.
+
+### ORIGINAL INTENT — certain, from the migrations' own comments
+
+| when | migration | what |
+|---|---|---|
+| 2025-09-24 | `20250924210213` | `task_status` = BACKLOG, TODO, DOING, DONE — **workflow only**. `task_category` = LIFE, CAREER, VENTURES, EDUCATION |
+| 2025-09-25 16:36 | `20250925163653` | `ALTER TYPE task_status ADD VALUE` ×9 — **deliberately widened** to hold CAREER, PROF_EDUCATION, VENTURES, PLANNING |
+| 2025-09-25 16:39 | `20250925163916` | *"use new 9-column structure"* — DELETE + re-seed lanes **Career / Prof. Education / Ventures** alongside the workflow ones |
+| 2025-09-25 19:55 | `20250925195540` | `ADD VALUE 'LIFE'` |
+| 2025-09-25 19:56 | `20250925195628` | INSERT the **Life** lane at position 1 |
+| 2025-10-20 | `20251020185713` | `UPDATE tasks SET status = <category>`, commented *"their correct **category-based status**"* |
+| 2025-10-30 | `20251030160017` | the same mapping again, for scheduled tasks |
+
+**So category-as-status was a DELIBERATE DESIGN, not a bug.** The board's lanes were meant to BE
+the categories, and the status enum was widened on purpose to allow it. In October 2025 that was
+considered *correct* — the migration says so in its own comment.
+
+**THE CAUSE of the 2026 bug is the ABANDONMENT, not the design.** The model was dropped without
+removing its writers: `TabbedKanbanBoard` gained an in-memory repair, `STANDARD_COLUMNS` dropped the
+category lanes, `execute-tool:1482` started writing workflow statuses — but five writers kept
+writing category-into-status until #28/#31/#33. A half-retired design is what caused this.
+
+### DOWNSTREAM — proven safe
+
+- **`task_columns.column_id REFERENCES columns(id) ON DELETE CASCADE` exists** — and
+  `task_columns` holds **0 rows**. The cascade is real and has nothing to delete. (Found only by
+  introspecting `pg_constraint`; it is invisible from the app code.)
+- **`tasks` has NO foreign key to `columns`.** No task can be deleted by removing a lane.
+- `mapTaskStatusForColumns` (`KanbanBoard:571`) falls back own-status → `PROF_EDUCATION` for an
+  EDUCATION category → `BACKLOG` → first lane. No task can become unrenderable.
+- `statusToCategory` (`:243`) returns `null` for non-lane statuses and the write is spread-guarded
+  (`...(mappedCategory ? {category} : {})`), so with the lanes gone that branch never fires.
+- 0 tasks in all five lanes; no view reads `columns`; the only trigger on it is `updated_at`.
+
+### UPSTREAM — **NOT safe. This is why the delete fails.**
+
+- The DB trigger `on_profile_created → create_default_board_for_user()` seeds only **four**
+  workflow lanes (Backlog, To Do, In Progress, Done). Harmless.
+- **BUT `KanbanBoard.tsx:806 createDefaultBoardAndColumns` does a real
+  `supabase.from('columns').insert()` of ALL ELEVEN lanes, including the five category ones** — and
+  it is called from **five** sites (`:161, :168, :195, :219, :231`) whenever the board lookup comes
+  back empty.
+- **Falsifiable test, and it REFUTED the "nothing re-creates them" story:** 175 boards created
+  AFTER 2025-09-26 carry **610 category lanes**. The one-off migrations cannot have made those.
+- It is also why there are **176 boards, all `is_default=true`, across 26 users** — ~6.8 "default"
+  boards each. A lookup miss mints another board. That duplication is a separate, larger defect.
+
+**So deleting the lanes now is FUTILE: the next board-create brings all eleven back.** Correct
+order is seeder-first, delete-second.
