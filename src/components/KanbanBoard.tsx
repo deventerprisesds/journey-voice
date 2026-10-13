@@ -821,17 +821,13 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
       };
 
       const demoColumns = [
-        { id: 'demo-col-1', name: 'Blocked', status: 'BLOCKED' as const, position: 0, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
-        { id: 'demo-col-2', name: 'Backlog', status: 'BACKLOG' as const, position: 1, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
-        { id: 'demo-col-3', name: 'Life', status: 'LIFE' as const, position: 2, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
-        { id: 'demo-col-4', name: 'Career', status: 'CAREER' as const, position: 3, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
-        { id: 'demo-col-5', name: 'Prof. Education', status: 'PROF_EDUCATION' as const, position: 4, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
-        { id: 'demo-col-6', name: 'Ventures', status: 'VENTURES' as const, position: 5, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
-        { id: 'demo-col-7', name: 'Planning', status: 'PLANNING' as const, position: 6, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
-        { id: 'demo-col-8', name: 'Ready', status: 'READY' as const, position: 7, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
-        { id: 'demo-col-9', name: 'Up Next', status: 'UP_NEXT' as const, position: 8, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
-        { id: 'demo-col-10', name: 'Doing', status: 'DOING' as const, position: 9, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
-        { id: 'demo-col-11', name: 'Done', status: 'DONE' as const, position: 10, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+        { id: 'demo-col-1', name: 'Backlog', status: 'BACKLOG' as const, position: 0, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+        { id: 'demo-col-2', name: 'Blocked', status: 'BLOCKED' as const, position: 1, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+        { id: 'demo-col-3', name: 'Ready', status: 'READY' as const, position: 2, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+        { id: 'demo-col-4', name: 'Up Next', status: 'UP_NEXT' as const, position: 3, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+        { id: 'demo-col-5', name: 'Doing', status: 'DOING' as const, position: 4, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+        { id: 'demo-col-6', name: 'In Review', status: 'IN_REVIEW' as const, position: 5, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+        { id: 'demo-col-7', name: 'Done', status: 'DONE' as const, position: 6, board_id: 'demo-board-1', created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
       ];
 
       // Save board/columns to localStorage (do NOT overwrite tasks - they come from Supabase)
@@ -866,19 +862,30 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
 
       console.log('Board created successfully:', boardData);
 
-      // Create default columns with BACKLOG and LIFE columns in correct order
+      // WORKFLOW LANES ONLY. This array is four lines above a real
+      // `supabase.from('columns').insert()`, so it is a LIVE WRITER -- not, as it was twice
+      // described, a demo/default definition. It used to seed Life / Career / Prof. Education /
+      // Ventures / Planning as LANES, which is why 175 boards created AFTER the 2025-09-25
+      // migrations still carry 610 category lanes: this path, called from five sites whenever the
+      // board lookup comes back empty, kept minting them.
+      //
+      // Those five were the category-as-LANE design (migrations 20250925163653 widened
+      // task_status on purpose; 20250925163916 seeded the lanes). That design was abandoned --
+      // STANDARD_COLUMNS has no category lane, TabbedKanbanBoard repairs category-shaped statuses
+      // in memory, and #28/#31/#33 stopped five writers putting a category into tasks.status --
+      // but this seeder was never updated, so it kept re-creating the lanes the rest of the app
+      // had stopped using.
+      //
+      // The set below matches STANDARD_COLUMNS (the lanes TasksPage already renders) plus
+      // In Review, which migration 20260727000001 added to every board and which autowork uses.
       const defaultColumns = [
-        { name: 'Blocked', status: 'BLOCKED' as const, position: 0 },
-        { name: 'Backlog', status: 'BACKLOG' as const, position: 1 },
-        { name: 'Life', status: 'LIFE' as const, position: 2 },
-        { name: 'Career', status: 'CAREER' as const, position: 3 },
-        { name: 'Prof. Education', status: 'PROF_EDUCATION' as const, position: 4 },
-        { name: 'Ventures', status: 'VENTURES' as const, position: 5 },
-        { name: 'Planning', status: 'PLANNING' as const, position: 6 },
-        { name: 'Ready', status: 'READY' as const, position: 7 },
-        { name: 'Up Next', status: 'UP_NEXT' as const, position: 8 },
-        { name: 'Doing', status: 'DOING' as const, position: 9 },
-        { name: 'Done', status: 'DONE' as const, position: 10 }
+        { name: 'Backlog', status: 'BACKLOG' as const, position: 0 },
+        { name: 'Blocked', status: 'BLOCKED' as const, position: 1 },
+        { name: 'Ready', status: 'READY' as const, position: 2 },
+        { name: 'Up Next', status: 'UP_NEXT' as const, position: 3 },
+        { name: 'Doing', status: 'DOING' as const, position: 4 },
+        { name: 'In Review', status: 'IN_REVIEW' as const, position: 5 },
+        { name: 'Done', status: 'DONE' as const, position: 6 }
       ];
 
       const { data: columnsData, error: columnsError } = await supabase
