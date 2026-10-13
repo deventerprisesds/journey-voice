@@ -103,7 +103,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
     { label: 'Career', path: '/tasks?view=kanban&tab=career' },
     { label: 'Prof. Education', path: '/tasks?view=kanban&tab=prof_education' },
     { label: 'Ventures', path: '/tasks?view=kanban&tab=ventures' },
-    { label: 'Personal', path: '/tasks?view=kanban&tab=life' },
+    { label: 'Life', path: '/tasks?view=kanban&tab=life' },
   ];
 
   const navItems: NavItem[] = [
