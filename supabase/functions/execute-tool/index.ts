@@ -2193,7 +2193,9 @@ async function getTaskTopics(supabase: any, userId: string): Promise<ExecuteTool
   try {
     const { data: topics, error: topicsError } = await supabase
       .from('task_topic_index')
-      .select('id, topic_name, position, category_affinity, window_affinity, parent_topic_id')
+      // updated_at: Huddle orders EMPTY topics by it, most recently touched first (owner, 2026-10-15:
+      // "grey empty topics should be below by date"). Additive — older readers ignore the field.
+      .select('id, topic_name, position, category_affinity, window_affinity, parent_topic_id, updated_at')
       .eq('user_id', userId)
       .order('position', { ascending: true });
     if (topicsError) return { success: false, error: extractErrorMessage(topicsError) };
