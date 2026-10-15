@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { normalizeDueDate, normalizeDateTime, getTodayInTimezone, formatInTimezone } from "../_shared/timezone.ts";
+import { normalizeDueDate, normalizeDateTime, getTodayInTimezone, formatInTimezone, localDateToUtcBounds } from "../_shared/timezone.ts";
 import { getToolDefinitions } from "../_shared/tool-definitions.ts";
 import { getTopicGroupsManual, WINDOW_RANGES, CATEGORY_WINDOW_MAPPING } from "../_shared/call-context-builder.ts";
 import { resolveConfig, validateTaskWindow, activeCaveats } from "../_shared/scheduling-defaults.ts";
@@ -421,6 +421,11 @@ async function executeToolCall(
       // widget. Not advertised to LLMs (agents use get_tasks / get_tasks_by_topic). See getTaskTopics.
       case 'get_task_topics':
         return await getTaskTopics(supabase, userId);
+
+      // Internal: the user's synced external calendar (Outlook/Google) for one or more LOCAL days.
+      // Called by Huddle's 8am/8pm schedule brief, whose own app-only Graph read is 403. See getCalendarEvents.
+      case 'get_calendar_events':
+        return await getCalendarEvents(supabase, userId, args, context.timezone);
 
       // ============ ITINERARY TOOLS ============
       case 'explain_task_score':
@@ -2160,6 +2165,58 @@ interface WebSearchArgs {
   include_domains?: string[];
   exclude_domains?: string[];
   max_results?: number;
+}
+
+// ============================================================================
+// GET CALENDAR EVENTS - the user's synced external calendar, read-only
+// ============================================================================
+
+/**
+ * get_calendar_events — the user's external calendar events (Outlook/Google, as synced into
+ * external_calendar_events by calendar-delta-sync) for LOCAL days `start_date`..`end_date`.
+ * Internal: called by Huddle's schedule brief through huddle-proxy, not offered to LLMs.
+ *
+ * WHY IT EXISTS (2026-10-15). The owner gets no meeting schedule. Huddle's brief reads Outlook with
+ * an app-only Graph token that answers 403 (no Calendars.Read consent; measured by a live dry run),
+ * while journey reads the same calendars with the owner's own delegated OAuth connections, which
+ * work. So the brief reads journey's copy. A best-effort delta sync runs first so a meeting added
+ * since the last sync (nightly / app open) is included; a failed sync still returns stored rows.
+ *
+ * SHAPE: { events: [{title,start_time,end_time,location,is_all_day,show_as}], timezone, start_date,
+ * end_date }. Errors are RETURNED, never swallowed -- an unreadable calendar must never look empty.
+ */
+async function getCalendarEvents(
+  supabase: any,
+  userId: string,
+  args: Record<string, any>,
+  timezone?: string,
+): Promise<ExecuteToolResponse> {
+  try {
+    const tz = timezone || 'America/New_York';
+    const isDay = (v: unknown) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
+    const startDate = isDay(args?.start_date) ? args.start_date : getTodayInTimezone(tz);
+    const endDate = isDay(args?.end_date) ? args.end_date : startDate;
+
+    const { error: syncError } = await supabase.functions.invoke('calendar-delta-sync', { body: { user_id: userId } });
+    if (syncError) console.error('[get_calendar_events] pre-read sync failed (reading stored events):', syncError);
+
+    const { start } = localDateToUtcBounds(startDate, tz);
+    const { end } = localDateToUtcBounds(endDate, tz);
+    const { data, error } = await supabase
+      .from('external_calendar_events')
+      .select('title, start_time, end_time, location, is_all_day, show_as')
+      .eq('user_id', userId)
+      .lt('start_time', end)
+      .gt('end_time', start)
+      .order('start_time', { ascending: true });
+    if (error) return { success: false, error: extractErrorMessage(error) };
+    return {
+      success: true,
+      result: { events: data ?? [], timezone: tz, start_date: startDate, end_date: endDate },
+    };
+  } catch (error) {
+    return { success: false, error: extractErrorMessage(error) };
+  }
 }
 
 // ============================================================================
