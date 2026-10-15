@@ -673,3 +673,13 @@ order is seeder-first, delete-second.
   which also forbids `KanbanBoard` creating a board inside a `catch`. Data: 4 boards remain estate-wide.
 - `sourceHygiene.test.ts`'s path regex used to read `Foo.tsx` as `Foo.ts` (alternation order); fixed.
 
+
+## Window calls also trigger Iris (2026-10-15, DEPLOYED, NOT owner-confirmed)
+- `notification-delivery` → `iris-window.ts`: a delivered `window_*` call POSTs Huddle
+  `/api/public/run-schedule-brief` with `{caller, timeZone, window}` (JOURNEY_PROXY_TOKEN, URL derived from
+  HUDDLE_SYNC_URL). The window name comes from the script's `[WINDOW:x]` marker + WINDOW_RANGES. The 8am
+  morning window is sent WITHOUT a window (Huddle morning edition) so it shares Huddle's own 8am turn key.
+- Runs in `EdgeRuntime.waitUntil` — never delays/fails the email. Huddle must be deployed BEFORE any
+  change that sends new body fields (an old Huddle route ignores `window` and would run an hour-derived
+  edition, e.g. 5pm -> the EVENING edition, pre-empting the 8pm brief).
+- The live email relay (Cloudflare worker /notify) is now on main (#55); never deploy it from a side branch.
