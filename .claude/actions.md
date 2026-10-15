@@ -533,3 +533,21 @@ deploy on merge. The 7 tasks on dev@'s second board stay where they are (not mov
 | 8 | Owner: "where are the tasks scheduled for that day?" + "show the window, rest of the day, and then the next 7 days (as available)" | merged #50 (b53fbca), deploy run 38786859013 success | live test 18:38 UTC: graph 202, delivered_at set; body = "This window — morning, 6 AM–9 AM: nothing scheduled" / "Rest of today (2 meetings, 11 tasks)" / "Next 7 days (0 meetings, 39 tasks)" by day; npm test 201/201; tomorrow's window_morning still 1 pending row after the test (dedupe held) |
 
 **Format live-tested 2026-10-15 2:38 PM ET; NOT yet confirmed by the owner in their inbox.** Iris meeting list still blocked on Huddle Graph Calendars.Read (Exchange RBAC steps, owner action — huddle ACT:schedule-brief-403).
+
+## ACT:alarm-sound-any-file — custom alarm sound "doesn't stick" + pick any mp3 (2026-10-15)
+
+**Asked:** why the alarm sound picked in Settings plays on the Test button but not on the real full-screen
+alarm; why only Android's built-in sounds can be chosen. Then: "go ahead and add the mp3 solution".
+
+**Findings (observed):** the real alarm's first ring was the notification channel's fixed sound
+(Android default) until android-bridge-template `f8d4cc1` (Journey APK v1.0.6, 2026-10-12) moved it to
+AlarmSoundService. The alarm log (`activity_log`, `android_alarm_trace`) shows 58 full-screen alarms since
+that build and **zero** `GATE_TONE` lines, which v1.0.6 always writes. Inference: the phone's ring step is
+still the pre-v1.0.6 code. The owner disputes this; the APK version on the phone is not yet confirmed.
+
+| # | Item | Status | Evidence |
+|---|---|---|---|
+| 1 | Android: any-audio-file picker, copied to private storage, decode-probed | PR open | deventerprisesds/android-bridge-template#4, CI green run 38786739773 |
+| 2 | Android: one play order (file → picked → bundled → system) + `ALARM_SOUND played=` trace | PR open | same PR; mutation FIRED run 38786992685 (`customFileIsTriedFirstWhenPresent`) |
+| 3 | Journey Settings: "File" button + error toast (shows only on APKs with `openAlarmFilePicker`) | PR open | vite build OK; lint 27→27, tsc errors unchanged (2 pre-existing `testAlarmSound`) |
+| 4 | Journey Voice APK rebuild + owner installs + real alarm logs `ALARM_SOUND played=custom-file` | **NOT confirmed live** | — |
