@@ -72,7 +72,9 @@ describe('source hygiene', () => {
     // Scoped to the WHAT/WHY/SUPERSEDES/SUPERSEDED-BY/EVIDENCE block, which by the org convention
     // sits in the first 30 lines. A path named further down is ordinary prose, not a provenance
     // claim, and is not this guard's business.
-    const PATH_RE = /(?:^|[\s(`'"])((?:src|supabase|scripts|docs|\.claude)\/[A-Za-z0-9_.\/-]+\.(?:ts|tsx|mjs|js|sql|md|toml|yml))/g;
+    const PATH_RE = /(?:^|[\s(`'"])((?:src|supabase|scripts|docs|\.claude)\/[A-Za-z0-9_.\/-]+\.(?:tsx|ts|mjs|js|sql|md|toml|yml))(?![A-Za-z0-9])/g;
+    // `tsx` before `ts`, plus the lookahead: without them `Foo.tsx` matched as `Foo.ts` and this
+    // guard reported a real .tsx citation as a missing file (found 2026-10-15, boardLookup.test.ts).
     const bad: string[] = [];
     for (const f of FILES) {
       const header = readFileSync(f, 'utf8').split('\n').slice(0, 30).join('\n');

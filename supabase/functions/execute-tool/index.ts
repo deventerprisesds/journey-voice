@@ -866,6 +866,7 @@ async function createTask(supabase: any, userId: string, args: any): Promise<Exe
       .from('boards')
       .select('id')
       .eq('user_id', userId)
+      .order('created_at', { ascending: true })
       .limit(1)
       .single();
 
@@ -1369,6 +1370,7 @@ async function parseAndCreateTasks(
       .from('boards')
       .select('id')
       .eq('user_id', userId)
+      .order('created_at', { ascending: true })
       .limit(1)
       .single();
       

@@ -42,6 +42,8 @@ export async function createTasksFromAssignments(
       .select('id')
       .eq('user_id', userId)
       .eq('is_default', true)
+      .order('created_at', { ascending: true })
+      .limit(1)
       .single();
 
     if (!defaultBoard) {
@@ -167,6 +169,8 @@ export async function createTasksFromMitAssignments(
       .select('id')
       .eq('user_id', userId)
       .eq('is_default', true)
+      .order('created_at', { ascending: true })
+      .limit(1)
       .single();
 
     if (!defaultBoard) {
