@@ -417,6 +417,11 @@ async function executeToolCall(
       case 'get_tasks_by_topic':
         return await getTasksByTopic(supabase, userId, args);
 
+      // Internal: the whole topic tree plus its task links, in ONE call, for Huddle's priorities
+      // widget. Not advertised to LLMs (agents use get_tasks / get_tasks_by_topic). See getTaskTopics.
+      case 'get_task_topics':
+        return await getTaskTopics(supabase, userId);
+
       // ============ ITINERARY TOOLS ============
       case 'explain_task_score':
         return await explainTaskScore(supabase, userId, args);
@@ -2158,6 +2163,63 @@ interface WebSearchArgs {
 // ============================================================================
 // GET TASKS BY TOPIC - Topic drill-down to prevent hallucination
 // ============================================================================
+
+/**
+ * get_task_topics — every topic the user has, plus which tasks sit under which topic. Two reads, no
+ * per-topic loop. Internal: called by Huddle's priorities widget through huddle-proxy, not offered to
+ * LLMs.
+ *
+ * WHY IT EXISTS (2026-10-15). Huddle has called a tool by this name for weeks and always got
+ * "Unknown tool", so its widget could show categories but never the topics/sub-categories beneath
+ * them. The owner's Android home widget shows Category -> Topic -> Task, and he wanted Huddle to
+ * match. None of the deployed tools gives the topic-to-task links for the whole board affordably:
+ *   - get_tasks caps at .limit(50), and the owner has 101 open tasks;
+ *   - get_tasks_by_topic needs one call per topic (~75 of them), and it throws away the error from
+ *     .maybeSingle(), so a topic name that appears twice comes back as success with 0 tasks.
+ *
+ * SHAPE: { topics: [...task_topic_index rows], mappings: [{task_id, topic_id}] }. These are the
+ * same two reads the Android widget makes (SupabaseTaskClient.getPriorityGroups and
+ * getTasksForTopics). Task rows are deliberately NOT included: Huddle already has them in its own
+ * mirror, and attaching them here would make the payload heavy.
+ *
+ * SCOPING: topics are filtered on user_id; mappings are filtered on the OWNER of their topic (an
+ * inner join through the foreign key), so a caller only ever sees links on their own topics. Both errors are RETURNED, never swallowed.
+ * Discarding the error is exactly how get_tasks_by_topic ended up reporting a duplicate topic name
+ * as "found 0 tasks".
+ */
+async function getTaskTopics(supabase: any, userId: string): Promise<ExecuteToolResponse> {
+  try {
+    const { data: topics, error: topicsError } = await supabase
+      .from('task_topic_index')
+      .select('id, topic_name, position, category_affinity, window_affinity, parent_topic_id')
+      .eq('user_id', userId)
+      .order('position', { ascending: true });
+    if (topicsError) return { success: false, error: extractErrorMessage(topicsError) };
+
+    // Scoped through the topic_id -> task_topic_index.id foreign key (an inner join on the topic's
+    // owner), NOT through `.in('topic_id', ids)`. The owner has 169 topics, so an id list would put
+    // ~6KB into the request URL and grow with every topic; the join keeps the URL constant and does
+    // the scoping in the database.
+    const { data: rows, error: mappingsError } = await supabase
+      .from('task_topic_mappings')
+      .select('task_id, topic_id, task_topic_index!inner(user_id)')
+      .eq('task_topic_index.user_id', userId);
+    if (mappingsError) return { success: false, error: extractErrorMessage(mappingsError) };
+    // ROW CEILING: PostgREST returns at most `db-max-rows` (Supabase default 1000) per read, and it
+    // TRUNCATES SILENTLY. Measured 2026-10-15: 169 topics, 369 links for the heaviest user. If either
+    // nears 1000, page with .range() rather than raising the server limit.
+    // Drop the embedded join object: the caller asked for links, not owner records.
+    const mappings = (rows ?? []).map((r: any) => ({ task_id: r.task_id, topic_id: r.topic_id }));
+
+    return {
+      success: true,
+      result: { topics: topics ?? [], mappings },
+      message: `${(topics ?? []).length} topics, ${mappings.length} task links`,
+    };
+  } catch (error) {
+    return { success: false, error: extractErrorMessage(error) };
+  }
+}
 
 async function getTasksByTopic(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
   const topicName = args.topic_name;
