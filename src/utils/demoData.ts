@@ -24,7 +24,9 @@ export async function getOrCreateDefaultBoardId(userId: string): Promise<string>
     .select('*')
     .eq('user_id', userId)
     .eq('is_default', true)
-    .order('created_at', { ascending: false })
+    // OLDEST default -- the same board KanbanBoard and the MCP create_task path resolve to.
+    // Newest-first picked an empty duplicate for users with several defaults.
+    .order('created_at', { ascending: true })
     .limit(1)
     .maybeSingle();
 

@@ -490,6 +490,7 @@ const TaskGridView: React.FC<TaskGridViewProps> = ({ tasks, onTaskEdit, onTaskUp
           .select('id')
           .eq('user_id', user!.id)
           .eq('is_default', true)
+          .order('created_at', { ascending: true })
           .limit(1);
 
         let boardId = '';

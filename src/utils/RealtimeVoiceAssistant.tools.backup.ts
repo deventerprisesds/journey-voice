@@ -97,6 +97,8 @@ export async function createTask(
       .select('id, name')
       .eq('user_id', userId)
       .eq('is_default', true)
+      .order('created_at', { ascending: true })
+      .limit(1)
       .maybeSingle();
 
     if (error) {
@@ -112,6 +114,7 @@ export async function createTask(
         .from('boards')
         .select('id, name')
         .eq('user_id', userId)
+        .order('created_at', { ascending: true })
         .limit(1)
         .maybeSingle();
 
