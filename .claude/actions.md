@@ -501,3 +501,17 @@ more. Measured: 145/145 of dev@'s boards are `is_default=true`; the first (2025-
 2026-01-29; 49 same-second pairs (the view loads twice per visit — cause unconfirmed). Proposed to
 the owner: fix the lookup + delete dev@'s 143 empty boards. Not started.
 
+## ACT:board-default-lookup — stop the duplicate-board loop. Owner: *"the new option a"* (2026-10-15)
+
+| # | What | State | Evidence |
+|---|---|---|---|
+| 1 | Every single-row board read (11 client sites, 7 edge-fn sites) takes the OLDEST board: `.order('created_at', { ascending: true }).limit(1)` — the shape the MCP `create_task` path already used | **MERGED** (see PR) | `boardLookup.test.ts` 3/3; suite 182/182 |
+| 2 | `KanbanBoard` no longer creates a board inside its `catch`; a lane-less board gets lanes, not a second board; `Calendar` no longer creates on a read error; `demoData` resolves oldest (was newest) | **MERGED** | same |
+| 3 | Guards mutation-proved with `mutate.sh`: order removed (KanbanBoard) FIRED; create-in-catch reinstated FIRED; order removed (twilio edge fn) FIRED; sourceHygiene `.tsx` regex fix reverted FIRED | **DONE** | 4/4 FIRED, all restored to HEAD |
+| 4 | Data: deleted 145 empty boards (144 dev@, 1 demo `00000000-…0001`), never the oldest board, never a board a task points at, von.ellis@ excluded by name; 1,479 lanes cascaded | **DONE** | boards 149→4; tasks **446 unchanged**; 0 orphan tasks |
+| 5 | dev@'s 7-task board set `is_default=false` so the OLD live client stops looping before Lovable ships the fix. Reversible: `update boards set is_default=true where id='14e07332-94f3-493d-9644-849e6b642e74'` | **DONE** | 0 users with 2+ defaults |
+| 6 | Loop was still live at fix time: dev@ gained board #146 at 2026-10-15 16:56 UTC | observed | |
+
+**Client half NOT confirmed live** — journey's `src/` deploys via Lovable, outside Actions. Edge fns
+deploy on merge. The 7 tasks on dev@'s second board stay where they are (not moved — not asked).
+
