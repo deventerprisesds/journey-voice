@@ -4,7 +4,7 @@
 //             none of its stage directions survive into what a person receives.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { stripVoiceScript, renderBriefingBody, nextDays } from '../../supabase/functions/notification-delivery/notification-body.ts';
+import { stripVoiceScript, renderBriefingBody, renderBriefingHtml, nextDays } from '../../supabase/functions/notification-delivery/notification-body.ts';
 import { containsCallScript } from '../../supabase/functions/_shared/digest-content.ts';
 
 // Verbatim from the live 2026-09-08 send-unified-notification payload.
@@ -257,4 +257,56 @@ test('AC-T3 no window (custom call) -> one Today list; a failed calendar read st
   assert.ok(!/Meetings: none/.test(out), 'a failed read never claims there are no meetings');
   assert.match(out, /Next 7 days: nothing scheduled\./);
   assert.ok(!/This window/.test(out));
+});
+
+// ---------------------------------------------------------------------------
+// AC-H — the HTML email (owner, 2026-10-15: "It should be a rich clean email format").
+// ---------------------------------------------------------------------------
+const HTML_INPUT = {
+  callName: 'Morning Kickstart', context: REAL_SCRIPT, timezone: TZ, window: MORNING, dateLabel: 'Thursday, Oct 15',
+  meetings: [{ title: 'Haircut', start_time: '2026-10-15T15:00:00Z', end_time: '2026-10-15T16:00:00Z', location: 'Main St' }],
+  todayTasks: [
+    { title: 'Find a low-interest credit card', start_time: '2026-10-15T13:00:00Z', status: 'UP_NEXT' },
+    { title: 'Fix <script>alert(1)</script> & "quotes"', start_time: '2026-10-15T19:30:00Z', status: 'TODO' },
+  ],
+  upcomingLabel: 'Next 7 days',
+  upcomingMeetings: [{ title: 'Board review', start_time: '2026-10-16T12:00:00Z', end_time: '2026-10-16T13:00:00Z' }],
+  upcomingTasks: [{ title: 'Go to church', start_time: '2026-10-18T13:00:00Z', status: 'UP_NEXT' }],
+};
+
+test('AC-H1 HTML lists each section, tasks then a separate Meetings block, in order', () => {
+  const html = renderBriefingHtml(HTML_INPUT)!;
+  assert.ok(html.startsWith('<!doctype html>'));
+  const order = ['Morning Kickstart', 'This window', 'Rest of today', 'Tasks (2)', 'Meetings (1)', 'Haircut', 'Next 7 days', 'Friday, Oct 16', 'Board review', 'Sunday, Oct 18', 'Go to church'];
+  let at = -1;
+  for (const s of order) {
+    const i = html.indexOf(s, at + 1);
+    assert.ok(i > at, `"${s}" appears after the previous item`);
+    at = i;
+  }
+  // The meeting sits BETWEEN the two tasks in time, yet its block comes after both tasks.
+  assert.ok(html.indexOf('Haircut') > html.indexOf('Fix &lt;script&gt;'), 'meetings follow the tasks');
+  assert.match(html, /Main St/);
+});
+
+test('AC-H2 every user value is HTML-escaped; the voice script never leaks', () => {
+  const html = renderBriefingHtml(HTML_INPUT)!;
+  assert.ok(!html.includes('<script>'), 'a task title cannot inject markup');
+  assert.match(html, /Fix &lt;script&gt;alert\(1\)&lt;\/script&gt; &amp; &quot;quotes&quot;/);
+  assert.equal(containsCallScript(html), false);
+});
+
+test('AC-H3 summary counts today vs next 7 days; a failed calendar read shows the notice, never "Meetings: none."', () => {
+  const html = renderBriefingHtml(HTML_INPUT)!;
+  assert.match(html, />1<\/div><div[^>]*>Meetings today</);
+  assert.match(html, />2<\/div><div[^>]*>Tasks today</);
+  assert.match(html, />1<\/div><div[^>]*>Meetings next 7 days</);
+  const failed = renderBriefingHtml({ ...HTML_INPUT, meetingsError: 'PGRST204' })!;
+  assert.match(failed, /calendar could not be read/);
+  assert.ok(!/Meetings: none\./.test(failed));
+  assert.ok(!/Haircut/.test(failed), 'meetings from a failed read are not shown');
+});
+
+test('AC-H4 no timeline (legacy meetings-only caller) -> null, so the caller sends text only', () => {
+  assert.equal(renderBriefingHtml({ callName: 'X', meetings: [] }), null);
 });
