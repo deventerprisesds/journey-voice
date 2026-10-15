@@ -4,7 +4,7 @@
 //             none of its stage directions survive into what a person receives.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { stripVoiceScript, renderBriefingBody } from '../../supabase/functions/notification-delivery/notification-body.ts';
+import { stripVoiceScript, renderBriefingBody, restOfWorkWeek } from '../../supabase/functions/notification-delivery/notification-body.ts';
 import { containsCallScript } from '../../supabase/functions/_shared/digest-content.ts';
 
 // Verbatim from the live 2026-09-08 send-unified-notification payload.
@@ -159,7 +159,7 @@ const MEETINGS = [
 
 test('AC-M1 meetings are listed with local times, end times and location', () => {
   const out = renderBriefingBody({ callName: 'Morning Kickstart', context: REAL_SCRIPT, tasks: [], meetings: MEETINGS, timezone: 'America/New_York' });
-  assert.match(out, /Meetings for the rest of today \(3\):/);
+  assert.match(out, /Today's meetings \(3\):/);
   assert.match(out, /10:00\sAM–10:30\sAM — Client sync · Teams/);
   assert.match(out, /3:00\sPM–4:00\sPM — Dentist$/m);
   assert.match(out, /All day — Company holiday/);
@@ -168,7 +168,7 @@ test('AC-M1 meetings are listed with local times, end times and location', () =>
 
 test('AC-M2 a checked, empty calendar says so; an unchecked one prints no calendar section', () => {
   const empty = renderBriefingBody({ callName: 'Morning Kickstart', tasks: [], meetings: [] });
-  assert.match(empty, /No meetings on your calendar for the rest of today\./);
+  assert.match(empty, /No meetings on your calendar today\./);
   const unchecked = renderBriefingBody({ callName: 'Morning Kickstart', tasks: [] });
   assert.ok(!/meeting/i.test(unchecked), 'no calendar claim when the calendar was not read');
 });
@@ -177,4 +177,36 @@ test('AC-M3 a failed calendar read is SAID, never rendered as a free day', () =>
   const out = renderBriefingBody({ callName: 'Morning Kickstart', tasks: [], meetings: [], meetingsError: 'PGRST204' });
   assert.match(out, /calendar could not be read/);
   assert.ok(!/No meetings on your calendar/.test(out));
+  assert.ok(!/work week/i.test(out), 'no week claim on a failed read either');
+});
+
+// ---------------------------------------------------------------------------
+// AC-W — the rest of the work week (owner, 2026-10-15).
+// ---------------------------------------------------------------------------
+test('AC-W1 restOfWorkWeek: Mon-Thu -> tomorrow..Friday; Fri/Sat/Sun -> next Mon..Fri', () => {
+  assert.deepEqual(restOfWorkWeek('2026-10-12'), { start: '2026-10-13', end: '2026-10-16', label: 'Rest of the work week' }); // Mon
+  assert.deepEqual(restOfWorkWeek('2026-10-15'), { start: '2026-10-16', end: '2026-10-16', label: 'Rest of the work week' }); // Thu
+  assert.deepEqual(restOfWorkWeek('2026-10-16'), { start: '2026-10-19', end: '2026-10-23', label: 'Next work week' }); // Fri
+  assert.deepEqual(restOfWorkWeek('2026-10-17'), { start: '2026-10-19', end: '2026-10-23', label: 'Next work week' }); // Sat
+  assert.deepEqual(restOfWorkWeek('2026-10-18'), { start: '2026-10-19', end: '2026-10-23', label: 'Next work week' }); // Sun
+  assert.deepEqual(restOfWorkWeek('2026-10-29'), { start: '2026-10-30', end: '2026-10-30', label: 'Rest of the work week' }); // Thu, month edge
+});
+
+test('AC-W2 week meetings are grouped under local day headings, in order', () => {
+  const week = [
+    { title: 'Client sync', start_time: '2026-10-19T14:00:00Z', end_time: '2026-10-19T14:30:00Z', location: 'Teams' },
+    { title: 'Dentist', start_time: '2026-10-19T19:00:00Z', end_time: '2026-10-19T20:00:00Z' },
+    { title: 'Board review', start_time: '2026-10-21T15:00:00Z', end_time: '2026-10-21T16:00:00Z' },
+  ];
+  const out = renderBriefingBody({ callName: 'Morning Kickstart', tasks: [], meetings: [], weekMeetings: week, weekLabel: 'Next work week', timezone: 'America/New_York' });
+  assert.match(out, /No meetings on your calendar today\./);
+  assert.match(out, /Next work week \(3\):\n  Monday, Oct 19\n    10:00\sAM–10:30\sAM — Client sync · Teams\n    3:00\sPM–4:00\sPM — Dentist\n  Wednesday, Oct 21\n    11:00\sAM–12:00\sPM — Board review/);
+  assert.equal(containsCallScript(out), false);
+});
+
+test('AC-W3 an empty week says so; an unread week prints nothing', () => {
+  const empty = renderBriefingBody({ callName: 'Morning Kickstart', tasks: [], meetings: [], weekMeetings: [], weekLabel: 'Rest of the work week' });
+  assert.match(empty, /Rest of the work week: no meetings on your calendar\./);
+  const unread = renderBriefingBody({ callName: 'Morning Kickstart', tasks: [], meetings: [] });
+  assert.ok(!/work week/i.test(unread));
 });

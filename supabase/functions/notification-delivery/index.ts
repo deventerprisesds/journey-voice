@@ -8,7 +8,7 @@ import {
   summarizeDelivery,
 } from "../_shared/notification-channels.ts";
 import { renderScheduledCall, containsCallScript, CallScriptLeakError } from "../_shared/digest-content.ts";
-import { renderBriefingBody } from "./notification-body.ts";
+import { renderBriefingBody, restOfWorkWeek } from "./notification-body.ts";
 import { localDateToUtcBounds } from "../_shared/timezone.ts";
 
 // Notification types that become the phone's full-screen alarm (channel `calendar_events`).
@@ -297,28 +297,38 @@ serve(async (req) => {
             console.error('📧 briefing task fetch failed (sending without the list):', e);
           }
 
-          // THE REST OF TODAY'S MEETINGS (owner-requested 2026-10-15: "what my meeting/appointment
-          // schedule included"). Read from external_calendar_events -- the same table the meetings
-          // digest and the app read -- after a best-effort delta sync so an event added this morning
-          // is not missed (the only other syncs are nightly and on app open). A failed read is SAID
-          // in the email (meetingsError), never rendered as an empty calendar.
+          // TODAY'S MEETINGS + THE REST OF THE WORK WEEK (owner, 2026-10-15: "the message should
+          // show meetings for the day and a section for the rest of the work week"). Read from
+          // external_calendar_events -- the table the meetings digest and the app read -- after a
+          // best-effort delta sync so an event added this morning is not missed (the only other
+          // syncs are nightly and on app open). ONE read spanning both ranges, split locally. A
+          // failed read is SAID in the email (meetingsError), never rendered as an empty calendar.
           let briefingMeetings: any[] | undefined;
+          let briefingWeekMeetings: any[] | undefined;
+          let briefingWeekLabel: string | undefined;
           let briefingMeetingsError: string | null = null;
           try {
             const { error: syncErr } = await supabaseClient.functions.invoke('calendar-delta-sync', { body: { user_id: userId } });
             if (syncErr) console.error('📧 pre-briefing calendar sync failed (reading stored events):', syncErr);
             const localDay = new Intl.DateTimeFormat('en-CA', { timeZone: briefingTz }).format(new Date());
-            const { end: dayEnd } = localDateToUtcBounds(localDay, briefingTz);
+            const { start: dayStart, end: dayEnd } = localDateToUtcBounds(localDay, briefingTz);
+            const week = restOfWorkWeek(localDay);
+            const { start: weekStart } = localDateToUtcBounds(week.start, briefingTz);
+            const { end: weekEnd } = localDateToUtcBounds(week.end, briefingTz);
             const { data: evs, error: evErr } = await supabaseClient
               .from('external_calendar_events')
               .select('title, start_time, end_time, location, is_all_day, show_as')
               .eq('user_id', userId)
-              .gt('end_time', new Date().toISOString())
-              .lt('start_time', dayEnd)
+              .gt('end_time', dayStart)
+              .lt('start_time', weekEnd)
               .order('start_time', { ascending: true });
             if (evErr) throw evErr;
             // `free` blocks are availability markers, not appointments.
-            briefingMeetings = (evs ?? []).filter((e: any) => String(e?.show_as ?? '').toLowerCase() !== 'free');
+            const all = (evs ?? []).filter((e: any) => String(e?.show_as ?? '').toLowerCase() !== 'free');
+            const t = (iso: string) => new Date(iso).getTime();
+            briefingMeetings = all.filter((e: any) => t(e.start_time) < t(dayEnd));
+            briefingWeekMeetings = all.filter((e: any) => t(e.start_time) >= t(weekStart));
+            briefingWeekLabel = week.label;
           } catch (e) {
             console.error('📧 briefing meetings fetch failed:', e);
             briefingMeetingsError = e instanceof Error ? e.message : String((e as any)?.message ?? e);
@@ -329,6 +339,8 @@ serve(async (req) => {
             context: callConfig.context || '',
             tasks: briefingTasks,
             meetings: briefingMeetings,
+            weekMeetings: briefingWeekMeetings,
+            weekLabel: briefingWeekLabel,
             meetingsError: briefingMeetingsError,
             timezone: briefingTz,
           });
