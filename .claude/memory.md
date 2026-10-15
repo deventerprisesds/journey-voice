@@ -12,6 +12,16 @@ Last updated: 2026-10-15
 > distrust, never the sections. `actions.md` has no file-level stamp at all, deliberately, for
 > the same reason: its ACT entries each carry their own date.
 
+## Phone alarm (android-bridge-template) — traps (2026-10-15)
+- **Never `setSilent(true)` on the gate (full-screen) notification.** NotificationCompat implements it as a
+  GROUP_ALERT_SUMMARY group child, and Android then SUPPRESSES the fullScreenIntent — the alarm degrades to a
+  heads-up banner. The gate posts on channel `alarm_fullscreen` (HIGH importance, no sound); the ring is
+  AlarmSoundService's. Guarded by `GateNotificationSourceTest`.
+- **Which APK is on the phone is answerable from the alarm log** (`activity_log`, `android_alarm_trace`):
+  `GATE_TONE start` ⇒ ≥1.0.6; `ALARM_SOUND played=` ⇒ ≥1.0.7. Full-screen auto-open shows as
+  `ALARM_CONFIRM_LAUNCHED` within ~1s of `GATE→FULLSCREEN`; a gap of tens of seconds means it opened on a tap.
+- Alarm sound order: custom file → system-picked → bundled wav → system default (`AlarmSoundChoice`).
+
 ## Scheduled-call emails + calendar sync — traps (2026-10-15)
 - **`notification-delivery` was LIVE from an unmerged branch** (`claude/mobile-widget-web-bridge-debug-nsishi`, c529ff3 briefing + alarm changes). Before deploying any edge fn, compare the deployed bundle (MCP `get_edge_function`) to main — a deploy from main can silently roll back live behaviour.
 - **A `_shared/` change redeploys EVERY function** (deploy-supabase-functions.yml). Keep single-consumer helpers inside the function's own dir.

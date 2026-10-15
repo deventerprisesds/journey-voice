@@ -554,7 +554,9 @@ still the pre-v1.0.6 code. The owner disputes this; the APK version on the phone
 | 1 | Android: any-audio-file picker, copied to private storage, decode-probed | PR open | deventerprisesds/android-bridge-template#4, CI green run 38786739773 |
 | 2 | Android: one play order (file → picked → bundled → system) + `ALARM_SOUND played=` trace | PR open | same PR; mutation FIRED run 38786992685 (`customFileIsTriedFirstWhenPresent`) |
 | 3 | Journey Settings: "File" button + error toast (shows only on APKs with `openAlarmFilePicker`) | PR open | vite build OK; lint 27→27, tsc errors unchanged (2 pre-existing `testAlarmSound`) |
-| 4 | Journey Voice APK rebuild + owner installs + real alarm logs `ALARM_SOUND played=custom-file` | **NOT confirmed live** | — |
+| 4 | Journey Voice APK rebuild + owner installs + real alarm logs `ALARM_SOUND played=custom-file` | **NOT confirmed live** | v1.0.7 built (run 38792129314); alarm log 17:00 shows phone still on 1.0.6 (GATE_TONE yes, ALARM_SOUND no) |
+| 5 | REGRESSION reported 2026-10-15: alarm became a heads-up banner; full screen only on tap | fix in PR | deventerprisesds/android-bridge-template#5. Cause: v1.0.6 `setSilent(true)` on the gate notification → NotificationCompat GROUP_ALERT_SUMMARY → Android suppresses fullScreenIntent. Log: 16:30 (pre-1.0.6) full screen +0.3s; 16:45/17:00 (1.0.6) +43s/+36s on tap. Mutation FIRED run 38807499950 |
+| 6 | Rebuild Journey Voice + Huddle APKs with #5; owner confirms full screen opens without a banner | **NOT confirmed live** | — |
 
 ## ACT:iris-window-trigger — each journey window call also triggers Iris's window message (2026-10-15)
 Owner: *"i have tasks everyday and i do want a similar message for day in the morning and for each window as they pop up and to confirm prioritization ahead of scheduling the next day's build."*
