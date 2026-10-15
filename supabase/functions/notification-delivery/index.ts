@@ -1,14 +1,14 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import { GLOBAL_VERSION, FUNCTION_IDS, corsHeaders, createHealthResponse } from "../_shared/config.ts";
-import { buildCallContext, getTasksForWindow } from "../_shared/call-context-builder.ts";
+import { buildCallContext, getTasksForWindow, WINDOW_RANGES } from "../_shared/call-context-builder.ts";
 import {
   normalizeChannels,
   channelResultKey,
   summarizeDelivery,
 } from "../_shared/notification-channels.ts";
 import { renderScheduledCall, containsCallScript, CallScriptLeakError } from "../_shared/digest-content.ts";
-import { renderBriefingBody, restOfWorkWeek } from "./notification-body.ts";
+import { renderBriefingBody, nextDays } from "./notification-body.ts";
 import { localDateToUtcBounds } from "../_shared/timezone.ts";
 
 // Notification types that become the phone's full-screen alarm (channel `calendar_events`).
@@ -297,22 +297,22 @@ serve(async (req) => {
             console.error('📧 briefing task fetch failed (sending without the list):', e);
           }
 
-          // TODAY'S MEETINGS + THE REST OF THE WORK WEEK (owner, 2026-10-15: "the message should
-          // show meetings for the day and a section for the rest of the work week"). Read from
+          // TODAY'S MEETINGS + THE NEXT 7 DAYS (owner, 2026-10-15: "show the window, rest of the
+          // day, and then the next 7 days following (as available)"). Read from
           // external_calendar_events -- the table the meetings digest and the app read -- after a
           // best-effort delta sync so an event added this morning is not missed (the only other
           // syncs are nightly and on app open). ONE read spanning both ranges, split locally. A
           // failed read is SAID in the email (meetingsError), never rendered as an empty calendar.
           let briefingMeetings: any[] | undefined;
-          let briefingWeekMeetings: any[] | undefined;
-          let briefingWeekLabel: string | undefined;
+          let briefingUpcomingMeetings: any[] | undefined;
+          let briefingUpcomingLabel: string | undefined;
           let briefingMeetingsError: string | null = null;
           try {
             const { error: syncErr } = await supabaseClient.functions.invoke('calendar-delta-sync', { body: { user_id: userId } });
             if (syncErr) console.error('📧 pre-briefing calendar sync failed (reading stored events):', syncErr);
             const localDay = new Intl.DateTimeFormat('en-CA', { timeZone: briefingTz }).format(new Date());
             const { start: dayStart, end: dayEnd } = localDateToUtcBounds(localDay, briefingTz);
-            const week = restOfWorkWeek(localDay);
+            const week = nextDays(localDay, 7);
             const { start: weekStart } = localDateToUtcBounds(week.start, briefingTz);
             const { end: weekEnd } = localDateToUtcBounds(week.end, briefingTz);
             const { data: evs, error: evErr } = await supabaseClient
@@ -327,11 +327,42 @@ serve(async (req) => {
             const all = (evs ?? []).filter((e: any) => String(e?.show_as ?? '').toLowerCase() !== 'free');
             const t = (iso: string) => new Date(iso).getTime();
             briefingMeetings = all.filter((e: any) => t(e.start_time) < t(dayEnd));
-            briefingWeekMeetings = all.filter((e: any) => t(e.start_time) >= t(weekStart));
-            briefingWeekLabel = week.label;
+            briefingUpcomingMeetings = all.filter((e: any) => t(e.start_time) >= t(weekStart));
+            briefingUpcomingLabel = week.label;
           } catch (e) {
             console.error('📧 briefing meetings fetch failed:', e);
             briefingMeetingsError = e instanceof Error ? e.message : String((e as any)?.message ?? e);
+          }
+
+          // EVERY TASK SCHEDULED TODAY AND IN THE NEXT 7 DAYS (owner, 2026-10-15: "Where
+          // are the tasks scheduled for that day? they are missing from that day forward"). The
+          // window list above only covers this call's own window (06:00-09:00 for Morning
+          // Kickstart), so an 11-task day read "Nothing is scheduled". Separate try: a task-query
+          // failure must not hide the meetings, and vice versa.
+          let briefingTodayTasks: any[] | undefined;
+          let briefingUpcomingTasks: any[] | undefined;
+          try {
+            const localDay = new Intl.DateTimeFormat('en-CA', { timeZone: briefingTz }).format(new Date());
+            const { start: dayStart, end: dayEnd } = localDateToUtcBounds(localDay, briefingTz);
+            const week = nextDays(localDay, 7);
+            const { start: weekStart } = localDateToUtcBounds(week.start, briefingTz);
+            const { end: weekEnd } = localDateToUtcBounds(week.end, briefingTz);
+            const { data: ts, error: tErr } = await supabaseClient
+              .from('tasks')
+              .select('title, start_time, status, category')
+              .eq('user_id', userId)
+              .gte('start_time', dayStart)
+              .lt('start_time', weekEnd)
+              .neq('status', 'DONE')
+              .order('start_time', { ascending: true });
+            if (tErr) throw tErr;
+            const t = (iso: string) => new Date(iso).getTime();
+            briefingTodayTasks = (ts ?? []).filter((x: any) => t(x.start_time) < t(dayEnd));
+            briefingUpcomingTasks = (ts ?? []).filter((x: any) => t(x.start_time) >= t(weekStart));
+            if (!briefingUpcomingLabel) briefingUpcomingLabel = week.label;
+          } catch (e) {
+            // Non-fatal: the renderer falls back to the window list when tasks are undefined.
+            console.error('📧 briefing day/week task fetch failed (falling back to the window list):', e);
           }
 
           let briefingBody = renderBriefingBody({
@@ -339,8 +370,15 @@ serve(async (req) => {
             context: callConfig.context || '',
             tasks: briefingTasks,
             meetings: briefingMeetings,
-            weekMeetings: briefingWeekMeetings,
-            weekLabel: briefingWeekLabel,
+            upcomingMeetings: briefingUpcomingMeetings,
+            upcomingLabel: briefingUpcomingLabel,
+            todayTasks: briefingTodayTasks,
+            upcomingTasks: briefingUpcomingTasks,
+            // This call's own window in local hours (morning = 6-9, business_hours = 9-17, ...),
+            // from the same WINDOW_RANGES the phone path uses. Null for a call with no [WINDOW:x].
+            window: WINDOW_RANGES[briefingWindow]
+              ? { name: briefingWindow, ...WINDOW_RANGES[briefingWindow] }
+              : null,
             meetingsError: briefingMeetingsError,
             timezone: briefingTz,
           });
