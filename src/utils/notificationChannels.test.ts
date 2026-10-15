@@ -227,7 +227,8 @@ describe('AC-CH-3/AC-CH-4 — a partial fan-out is NEVER recorded as a success (
     // is a FALLBACK for a detected leak, never the normal path.
     const src = read(DELIVERY);
     assert.match(src, /getTasksForWindow\(/, 'the briefing must read the real scheduled tasks');
-    assert.match(src, /renderBriefingBody\(\{/, 'the normal path renders a briefing, not a sentence');
+    // (Called with an inline object or with `briefingInput`, the same object the HTML render reuses.)
+    assert.match(src, /renderBriefingBody\((\{|briefingInput\))/, 'the normal path renders a briefing, not a sentence');
     // THE ASSERTION THAT ACTUALLY BITES, added after mutate.sh reported the first two INERT.
     // Reinstating the defect — building the briefing and then sending the one-line render anyway —
     // left both greps above satisfied, because a renderer that is CALLED but whose output is
