@@ -515,3 +515,13 @@ the owner: fix the lookup + delete dev@'s 143 empty boards. Not started.
 **Client half NOT confirmed live** — journey's `src/` deploys via Lovable, outside Actions. Edge fns
 deploy on merge. The 7 tasks on dev@'s second board stay where they are (not moved — not asked).
 
+
+## ACT:kickstart-email-dupes — "no meeting schedule email; emails empty and duplicated" (2026-10-15)
+| # | Item | Status | Evidence |
+|---|---|---|---|
+| 1 | Calendar sync stored nothing since 09-13 (PGRST204 `attendees` column missing; migration 20260913140000 never applied) | applied live | post-apply delta sync: +8 / +2 events |
+| 2 | Kickstart ×3 / Business ×2 per day: `schedule_next_call` re-booked each duplicate | applied live (`schedule_next_call_dedupe`), 4 pending dupes deleted | rolled-back probe: 2 calls → same id, 1 row |
+| 3 | Email body: rest of today's meetings added to the briefing | merged #44 (275ecc4), deploy run 38775916287 | npm test 194/194; AC-M2/M3 mutations FIRED |
+| 4 | Iris 8am/8pm brief silent since 10-06 | huddle #73 (7b0656a) | see huddle actions |
+
+**NOT confirmed live by the owner yet** — next check is tomorrow's 8:00 ET email (expect ONE email with a meetings section).

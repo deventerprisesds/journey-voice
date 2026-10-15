@@ -12,6 +12,12 @@ Last updated: 2026-10-15
 > distrust, never the sections. `actions.md` has no file-level stamp at all, deliberately, for
 > the same reason: its ACT entries each carry their own date.
 
+## Scheduled-call emails + calendar sync — traps (2026-10-15)
+- **`notification-delivery` was LIVE from an unmerged branch** (`claude/mobile-widget-web-bridge-debug-nsishi`, c529ff3 briefing + alarm changes). Before deploying any edge fn, compare the deployed bundle (MCP `get_edge_function`) to main — a deploy from main can silently roll back live behaviour.
+- **A `_shared/` change redeploys EVERY function** (deploy-supabase-functions.yml). Keep single-consumer helpers inside the function's own dir.
+- **A migration in the repo is not a migration in the DB.** `20260913140000_calendar_attendee_capture` sat unapplied for a month; every `calendar-delta-sync` upsert failed (PGRST204) and `external_calendar_events` stayed empty. Check `supabase_migrations.schema_migrations` against `supabase/migrations/` when a feature "never works".
+- `schedule_next_call` is now idempotent per (user, call_id, scheduled_for) among pending rows.
+
 ## PR triage pass (2026-09-21) — 5 open PRs read-evidence-checked, 2 acted on
 Full per-PR evidence in `.claude/pr-triage-2026-09-21.md`. Method: content-grepped against
 `origin/main` (never `git log` ancestry alone — this repo's history has been rewritten) plus real
