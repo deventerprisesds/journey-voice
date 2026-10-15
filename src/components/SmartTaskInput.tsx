@@ -104,6 +104,7 @@ const SmartTaskInput: React.FC<SmartTaskInputProps> = ({
         .select('id')
         .eq('user_id', user.id)
         .eq('is_default', true)
+        .order('created_at', { ascending: true })
         .limit(1);
 
       if (!boards || boards.length === 0) {

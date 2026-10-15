@@ -58,6 +58,7 @@ serve(async (req) => {
       .select('id')
       .eq('user_id', userId)
       .eq('is_default', true)
+      .order('created_at', { ascending: true })
       .limit(1);
 
     if (boardsError) {
