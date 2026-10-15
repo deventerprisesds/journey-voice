@@ -525,3 +525,7 @@ deploy on merge. The 7 tasks on dev@'s second board stay where they are (not mov
 | 4 | Iris 8am/8pm brief silent since 10-06 | huddle #73 (7b0656a) | see huddle actions |
 
 **NOT confirmed live by the owner yet** — next check is tomorrow's 8:00 ET email (expect ONE email with a meetings section).
+| 5 | ALL emails 401'd after 15:00: main's send-unified-notification lacked `x-webhook-secret` (only on unmerged branch a0c87e7) | merged #46 (6d42c86), deploy run 38780447213 | live test 17:44 -> 401; after deploy, test 17:52 -> relay 200, delivered_at set; guard AC-AUTH-1 mutation FIRED |
+| 6 | Iris brief live test (morning edition, real send) | delivered | chat.pending_turns schedule-brief-morning-2026-10-15-manual-…: done; FCM push 1 success; owner screenshot 1:43 PM |
+
+**Live-tested 2026-10-15 ~1:50 PM ET; owner to confirm the 1:52 PM "Test-Morning Kickstart" email arrived.**
