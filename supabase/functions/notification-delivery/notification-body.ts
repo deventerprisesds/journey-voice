@@ -51,8 +51,9 @@ export interface BriefingInput {
   /**
    * EVERY task scheduled today / in the next 7 days (owner, 2026-10-15: "Where are the tasks
    * scheduled for that day? they are missing from that day forward"). When the caller passes these,
-   * the body renders three timelines -- THIS WINDOW, REST OF TODAY, NEXT 7 DAYS -- each merging
-   * meetings and tasks in time order. The old `tasks` list (call-window only) is then not shown.
+   * the body renders three timelines -- THIS WINDOW, REST OF TODAY, NEXT 7 DAYS -- each listing its
+   * tasks and then its meetings under their own heading (never interleaved, so meetings are not lost
+   * among tasks). The old `tasks` list (call-window only) is then not shown.
    */
   todayTasks?: BriefingTask[];
   upcomingTasks?: BriefingTask[];
@@ -171,13 +172,13 @@ export function renderBriefingBody(input: BriefingInput): string {
     const items = (ms: BriefingMeeting[] | undefined, ts: BriefingTask[] | undefined): Item[] => {
       const out: Item[] = [];
       for (const m of real(ms ?? [])) {
-        out.push({ at: new Date(m.start_time ?? 0).getTime() || 0, allDay: !!m.is_all_day, line: `${meetingLine(m)} (meeting)`, kind: 'meeting' });
+        out.push({ at: new Date(m.start_time ?? 0).getTime() || 0, allDay: !!m.is_all_day, line: meetingLine(m), kind: 'meeting' });
       }
       for (const t of ts ?? []) {
         if (String(t?.status ?? '').toUpperCase() === 'DONE') continue;
         const title = String(t?.title ?? '').trim() || '(untitled)';
         const time = formatTime(t?.start_time, tz);
-        out.push({ at: new Date(t?.start_time ?? 0).getTime() || 0, allDay: false, line: `${time ? `${time} — ` : ''}${title} (task)`, kind: 'task' });
+        out.push({ at: new Date(t?.start_time ?? 0).getTime() || 0, allDay: false, line: `${time ? `${time} — ` : ''}${title}`, kind: 'task' });
       }
       // All-day first, then by start time.
       return out.sort((a, b) => (a.allDay === b.allDay ? a.at - b.at : a.allDay ? -1 : 1));
@@ -187,6 +188,25 @@ export function renderBriefingBody(input: BriefingInput): string {
       const t = list.length - m;
       return `${m} meeting${m === 1 ? '' : 's'}, ${t} task${t === 1 ? '' : 's'}`;
     };
+    // Owner, 2026-10-15: "Meetings should be pulled out separately from the tasks or they will get
+    // lost. They can be shown after the tasks for a day but they need their own summary section."
+    // So every section lists its tasks, THEN its meetings under their own heading -- never interleaved.
+    // A today-section with no meetings says "Meetings: none." so an empty calendar is explicit; a
+    // day in the next 7 days omits the empty heading (the day header already carries the counts).
+    const block = (indent: string, list: Item[], sayNoMeetings: boolean) => {
+      const ts = list.filter((i) => i.kind === 'task');
+      const ms = list.filter((i) => i.kind === 'meeting');
+      if (ts.length > 0) {
+        parts.push(`${indent}Tasks (${ts.length}):`);
+        for (const i of ts) parts.push(`${indent}  ${i.line}`);
+      }
+      if (ms.length > 0) {
+        parts.push(`${indent}Meetings (${ms.length}):`);
+        for (const i of ms) parts.push(`${indent}  ${i.line}`);
+      } else if (sayNoMeetings) {
+        parts.push(`${indent}Meetings: none.`);
+      }
+    };
     const localHour = (at: number) =>
       Number(new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', timeZone: tz }).format(new Date(at))) % 24;
     const hourLabel = (h: number) => `${((h + 11) % 12) + 1} ${h < 12 ? 'AM' : 'PM'}`;
@@ -194,6 +214,8 @@ export function renderBriefingBody(input: BriefingInput): string {
     if (input.meetingsError) {
       parts.push('', 'Your calendar could not be read just now, so meetings may be missing below (tasks are complete).');
     }
+    // After a failed read "Meetings: none." would be a false claim; the notice above covers it.
+    const sayNone = !input.meetingsError;
 
     const today = items(input.meetingsError ? [] : input.meetings, input.todayTasks);
     const w = input.window;
@@ -203,19 +225,19 @@ export function renderBriefingBody(input: BriefingInput): string {
       const winName = w.name.replace(/_/g, ' ');
       if (inWin.length > 0) {
         parts.push('', `This window — ${winName}, ${hourLabel(w.start)}–${hourLabel(w.end)} (${counts(inWin)}):`);
-        for (const i of inWin) parts.push(`  ${i.line}`);
+        block('  ', inWin, sayNone);
       } else {
         parts.push('', `This window — ${winName}, ${hourLabel(w.start)}–${hourLabel(w.end)}: nothing scheduled.`);
       }
       if (rest.length > 0) {
         parts.push('', `Rest of today (${counts(rest)}):`);
-        for (const i of rest) parts.push(`  ${i.line}`);
+        block('  ', rest, sayNone);
       } else {
         parts.push('', 'Rest of today: nothing else scheduled.');
       }
     } else if (today.length > 0) {
       parts.push('', `Today (${counts(today)}):`);
-      for (const i of today) parts.push(`  ${i.line}`);
+      block('  ', today, sayNone);
     } else {
       parts.push('', 'Nothing on your calendar or task list today.');
     }
@@ -233,7 +255,7 @@ export function renderBriefingBody(input: BriefingInput): string {
       }
       for (const [day, list] of byDay) {
         parts.push(`  ${day}`);
-        for (const i of list) parts.push(`    ${i.line}`);
+        block('    ', list, false);
       }
     } else {
       parts.push('', `${label}: nothing scheduled.`);
