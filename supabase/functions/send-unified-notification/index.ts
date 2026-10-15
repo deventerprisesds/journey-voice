@@ -33,6 +33,11 @@ interface NotificationPayload {
   slackChannel?: string;
   /** Slack `ts` of a parent message, to reply IN-THREAD rather than as a new top-level post. */
   slackThreadTs?: string;
+  /**
+   * Optional rich HTML for the EMAIL channel (owner, 2026-10-15: "It should be a rich clean email
+   * format"). `body` stays the plain-text version and is still what Slack and push receive.
+   */
+  html?: string;
   notificationId?: string;
   userProfile?: {
     email?: string;
@@ -573,6 +578,7 @@ serve(async (req) => {
       slackWebhook,
       slackChannel,
       slackThreadTs,
+      html,
       notificationId,
       userProfile,
       outlookEvent,
@@ -883,6 +889,7 @@ serve(async (req) => {
         slackWebhook: slackWebhook || Deno.env.get('SLACK_WEBHOOK_URL') || '',
         slackChannel,
         slackThreadTs,
+        html,
         outlookEvent,
         googleEvent
       }, supabaseClient, notificationId);
@@ -975,6 +982,7 @@ interface UnifiedWebhookPayload {
   slackWebhook?: string;
   slackChannel?: string;
   slackThreadTs?: string;
+  html?: string;
   outlookEvent?: {
     title: string;
     startTime: string;
@@ -1144,13 +1152,38 @@ async function callUnifiedWebhook(
     // instead of comparing against "". Rolling back to an unauthenticated webhook still works:
     // an endpoint that ignores the header is unaffected by its presence.
     const proxyToken = Deno.env.get('JOURNEY_PROXY_TOKEN');
-    const response = await fetch(fullUrl, {
-      method: 'GET',
-      headers: {
-        'Accept': 'application/json',
-        ...(proxyToken ? { 'x-webhook-secret': proxyToken } : {}),
-      }
-    });
+    // A message carrying HTML goes as a JSON POST: the HTML briefing is far larger than a URL can
+    // safely hold, and /notify has always accepted POST ("the PREFERRED shape for new callers").
+    // Every other message keeps the GET contract exactly, so no existing path changes.
+    const response = payload.html
+      ? await fetch(webhookUrl, {
+          method: 'POST',
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+            ...(proxyToken ? { 'x-webhook-secret': proxyToken } : {}),
+          },
+          body: JSON.stringify({
+            userId: payload.userId,
+            title: payload.title,
+            body: payload.body,
+            html: payload.html,
+            channels: payload.channels,
+            userProfile: payload.userProfile,
+            taskData: payload.taskData,
+            ...(dynamicGoogleEvent ? { googleEvent: dynamicGoogleEvent } : {}),
+            ...(payload.slackWebhook ? { slackWebhook: payload.slackWebhook } : {}),
+            ...(payload.slackChannel ? { slackChannel: payload.slackChannel } : {}),
+            ...(payload.slackThreadTs ? { slackThreadTs: payload.slackThreadTs } : {}),
+          }),
+        })
+      : await fetch(fullUrl, {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/json',
+            ...(proxyToken ? { 'x-webhook-secret': proxyToken } : {}),
+          }
+        });
 
     const responseText = await response.text();
     let responseJson: any;

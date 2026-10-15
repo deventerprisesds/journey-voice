@@ -22,3 +22,13 @@ test('AC-AUTH-2 the secret never goes into the logged query string', () => {
   const src = readFileSync(SENDER, 'utf8');
   assert.doesNotMatch(src, /queryParams\.(append|set)\(['"](token|secret|x-webhook-secret)/i);
 });
+
+test('AC-HTML-RELAY a message carrying html goes to /notify as an authenticated JSON POST that includes it', () => {
+  const src = readFileSync(SENDER, 'utf8');
+  const post = src.slice(src.indexOf('payload.html\n      ? await fetch(webhookUrl'), src.indexOf(': await fetch(fullUrl'));
+  assert.ok(post.length > 0, 'the html branch exists');
+  assert.match(post, /method: 'POST'/);
+  assert.match(post, /'x-webhook-secret': proxyToken/, 'the POST branch is authenticated like the GET one');
+  assert.match(post, /html: payload\.html,/, 'the html is actually forwarded');
+  assert.match(src, /^\s+html,$/m, 'the request handler destructures html and passes it on');
+});

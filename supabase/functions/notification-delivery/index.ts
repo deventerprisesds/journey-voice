@@ -8,7 +8,7 @@ import {
   summarizeDelivery,
 } from "../_shared/notification-channels.ts";
 import { renderScheduledCall, containsCallScript, CallScriptLeakError } from "../_shared/digest-content.ts";
-import { renderBriefingBody, nextDays } from "./notification-body.ts";
+import { renderBriefingBody, renderBriefingHtml, nextDays } from "./notification-body.ts";
 import { localDateToUtcBounds } from "../_shared/timezone.ts";
 
 // Notification types that become the phone's full-screen alarm (channel `calendar_events`).
@@ -365,7 +365,7 @@ serve(async (req) => {
             console.error('📧 briefing day/week task fetch failed (falling back to the window list):', e);
           }
 
-          let briefingBody = renderBriefingBody({
+          const briefingInput = {
             callName: callConfig.call_name || callNotification.title,
             context: callConfig.context || '',
             tasks: briefingTasks,
@@ -381,7 +381,20 @@ serve(async (req) => {
               : null,
             meetingsError: briefingMeetingsError,
             timezone: briefingTz,
-          });
+          };
+          let briefingBody = renderBriefingBody(briefingInput);
+          // The same briefing as a rich HTML email (owner, 2026-10-15: "It should be a rich clean
+          // email format"). Drawn from the same timeline model as the text, so they cannot disagree.
+          // Null when there is no timeline; the plain-text body is always sent alongside it.
+          let briefingHtml: string | null = null;
+          try {
+            briefingHtml = renderBriefingHtml({
+              ...briefingInput,
+              dateLabel: new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: briefingTz }),
+            });
+          } catch (e) {
+            console.error('📧 HTML briefing render failed (sending plain text only):', e);
+          }
           // FAILS CLOSED, and this is the guard that must never be removed: if the stripper ever
           // misses and the voice script survives into a read channel, fall back to the bare
           // one-line render rather than mail the user "BRANCH 1... Greet: Hello Sir." A thin
@@ -415,6 +428,11 @@ serve(async (req) => {
               // guidance with the voice script stripped, and then lists the window's REAL tasks
               // with times, or says plainly that nothing is scheduled.
               body: briefingBody,
+              // Rich HTML for the EMAIL channel only (Slack keeps the text body). Dropped whenever
+              // the text fell back to the one-line render, so the two never disagree.
+              ...(briefingHtml && !containsCallScript(briefingHtml) && !containsCallScript(briefingBody)
+                ? { html: briefingHtml }
+                : {}),
               channels: unifiedChannels
             }
           });
