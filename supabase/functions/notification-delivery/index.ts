@@ -9,6 +9,7 @@ import {
 } from "../_shared/notification-channels.ts";
 import { renderScheduledCall, containsCallScript, CallScriptLeakError } from "../_shared/digest-content.ts";
 import { renderBriefingBody, renderBriefingHtml, nextDays } from "./notification-body.ts";
+import { irisWindowRequest } from "./iris-window.ts";
 import { localDateToUtcBounds } from "../_shared/timezone.ts";
 
 // Notification types that become the phone's full-screen alarm (channel `calendar_events`).
@@ -580,6 +581,34 @@ serve(async (req) => {
             })
             .eq('id', callNotification.id);
           delivered++;
+        }
+
+        // Iris's matching message for this WINDOW (owner, 2026-10-15: "a similar message ... for each
+        // window as they pop up"). In the background via waitUntil, so a slow or failed Huddle call can
+        // never delay or fail the email above; Huddle's per-window-per-day turn key makes a retry a no-op.
+        try {
+          const { data: prof } = await supabaseClient
+            .from('profiles').select('email').eq('user_id', userId).maybeSingle();
+          const irisReq = irisWindowRequest(
+            callConfig.call_id || '', callConfig.context || '', prof?.email,
+            userPrefs?.timezone || callConfig.timezone || 'America/New_York', WINDOW_RANGES,
+          );
+          const secret = (Deno.env.get('JOURNEY_PROXY_TOKEN') ?? '').trim();
+          if (irisReq && secret) {
+            const syncUrl = Deno.env.get('HUDDLE_SYNC_URL') ?? 'https://icy-flower-0f415200f.7.azurestaticapps.net/api/public/tasks-sync';
+            const briefUrl = syncUrl.replace(/\/api\/public\/tasks-sync$/, '/api/public/run-schedule-brief');
+            const p = fetch(briefUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'x-webhook-secret': secret },
+              body: JSON.stringify(irisReq),
+            })
+              .then(async (r) => console.log(`🗣️ Iris window brief (${irisReq.window?.name ?? 'morning'}): HTTP ${r.status} ${(await r.text()).slice(0, 200)}`))
+              .catch((e) => console.error('🗣️ Iris window brief failed:', e instanceof Error ? e.message : e));
+            const er = (globalThis as any).EdgeRuntime;
+            if (er?.waitUntil) er.waitUntil(p); else await p;
+          }
+        } catch (e) {
+          console.error('🗣️ Iris window brief skipped:', e instanceof Error ? e.message : e);
         }
 
         // Schedule the next occurrence for tomorrow (preserves comms_mode)
