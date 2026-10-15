@@ -5,7 +5,7 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
-import { Calendar, Mail, MessageSquare, Volume2, VolumeX, CheckCircle2, AlertCircle, Loader2, RefreshCw, Bell, BellOff, Smartphone, X, Settings } from "lucide-react";
+import { Calendar, Mail, MessageSquare, Volume2, VolumeX, CheckCircle2, AlertCircle, Loader2, RefreshCw, Bell, BellOff, Smartphone, X, Settings, FileAudio } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
@@ -330,9 +330,18 @@ const NotificationSettings = () => {
       const name = (e as CustomEvent<{ name: string }>).detail?.name;
       if (name) setAlarmSoundName(name);
     };
+    // Fired by the APK when an audio file can't be used (too big, not audio, unreadable).
+    const onSoundError = (e: Event) => {
+      const message = (e as CustomEvent<{ message: string }>).detail?.message;
+      toast({ title: "Couldn't use that sound", description: message || 'Try a different audio file', variant: 'destructive' });
+    };
     window.addEventListener('bridgeAlarmSoundSelected', onSoundSelected);
-    return () => window.removeEventListener('bridgeAlarmSoundSelected', onSoundSelected);
-  }, []);
+    window.addEventListener('bridgeAlarmSoundError', onSoundError);
+    return () => {
+      window.removeEventListener('bridgeAlarmSoundSelected', onSoundSelected);
+      window.removeEventListener('bridgeAlarmSoundError', onSoundError);
+    };
+  }, [toast]);
 
   useEffect(() => {
     const handleConnectionUpdate = () => {
@@ -631,6 +640,12 @@ const NotificationSettings = () => {
   const openAlarmSoundPicker = () => {
     if (!window.AndroidBridge?.openAlarmSoundPicker) return;
     window.AndroidBridge.openAlarmSoundPicker();
+  };
+
+  // Any audio file (mp3, m4a, wav…) from the phone. Needs an APK with openAlarmFilePicker.
+  const canPickAlarmFile = !!window.AndroidBridge?.openAlarmFilePicker;
+  const openAlarmFilePicker = () => {
+    window.AndroidBridge?.openAlarmFilePicker?.();
   };
 
   const sendTestCustomAlarm = () => {
@@ -1081,9 +1096,16 @@ const NotificationSettings = () => {
                   <span className="text-muted-foreground">Alarm sound:</span>
                   <span className="font-medium">{alarmSoundName}</span>
                 </div>
-                <Button variant="ghost" size="sm" onClick={openAlarmSoundPicker} className="h-7 w-7 p-0">
-                  <Settings className="h-4 w-4" />
-                </Button>
+                <div className="flex items-center gap-1">
+                  {canPickAlarmFile && (
+                    <Button variant="ghost" size="sm" onClick={openAlarmFilePicker} className="h-7 px-2" title="Choose an audio file">
+                      <FileAudio className="h-4 w-4 mr-1" />File
+                    </Button>
+                  )}
+                  <Button variant="ghost" size="sm" onClick={openAlarmSoundPicker} className="h-7 w-7 p-0" title="Choose from phone alarm sounds">
+                    <Settings className="h-4 w-4" />
+                  </Button>
+                </div>
               </div>
             )}
             {pushNotifications.isAndroidBridge && (

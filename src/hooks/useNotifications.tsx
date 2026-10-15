@@ -13,6 +13,7 @@ declare global {
       isBridgeApp: () => boolean;
       cancelAlarm?: (tag: string) => void;
       openAlarmSoundPicker?: () => void;
+      openAlarmFilePicker?: () => void;
       getAlarmSoundName?: () => string;
     };
   }
