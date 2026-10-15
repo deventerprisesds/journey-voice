@@ -2179,7 +2179,7 @@ interface WebSearchArgs {
  *   - get_tasks_by_topic needs one call per topic (~75 of them), and it throws away the error from
  *     .maybeSingle(), so a topic name that appears twice comes back as success with 0 tasks.
  *
- * SHAPE: { topics: [...task_topic_index rows], mappings: [{task_id, topic_id}] }. These are the
+ * SHAPE: { topics: [...task_topic_index rows], mappings: [{task_id, topic_id, created_at}] }. These are the
  * same two reads the Android widget makes (SupabaseTaskClient.getPriorityGroups and
  * getTasksForTopics). Task rows are deliberately NOT included: Huddle already has them in its own
  * mirror, and attaching them here would make the payload heavy.
@@ -2202,16 +2202,21 @@ async function getTaskTopics(supabase: any, userId: string): Promise<ExecuteTool
     // owner), NOT through `.in('topic_id', ids)`. The owner has 169 topics, so an id list would put
     // ~6KB into the request URL and grow with every topic; the join keeps the URL constant and does
     // the scoping in the database.
+    // `created_at` is returned (and ordered on) because a task linked to TWO topics must land under
+    // one, and the owner's Android widget shows it under its NEWEST link (it keeps the last row,
+    // and the table returns rows in insertion order). Measured 2026-10-15 on the one such task.
+    // Huddle picks the newest by this timestamp rather than by row order, so the answer is stable.
     const { data: rows, error: mappingsError } = await supabase
       .from('task_topic_mappings')
-      .select('task_id, topic_id, task_topic_index!inner(user_id)')
-      .eq('task_topic_index.user_id', userId);
+      .select('task_id, topic_id, created_at, task_topic_index!inner(user_id)')
+      .eq('task_topic_index.user_id', userId)
+      .order('created_at', { ascending: true });
     if (mappingsError) return { success: false, error: extractErrorMessage(mappingsError) };
     // ROW CEILING: PostgREST returns at most `db-max-rows` (Supabase default 1000) per read, and it
     // TRUNCATES SILENTLY. Measured 2026-10-15: 169 topics, 369 links for the heaviest user. If either
     // nears 1000, page with .range() rather than raising the server limit.
     // Drop the embedded join object: the caller asked for links, not owner records.
-    const mappings = (rows ?? []).map((r: any) => ({ task_id: r.task_id, topic_id: r.topic_id }));
+    const mappings = (rows ?? []).map((r: any) => ({ task_id: r.task_id, topic_id: r.topic_id, created_at: r.created_at }));
 
     return {
       success: true,
