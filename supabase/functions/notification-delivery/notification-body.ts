@@ -38,11 +38,16 @@ export interface BriefingInput {
   context?: string | null;
   tasks?: BriefingTask[];
   /**
-   * The rest of today's calendar. `undefined` = the caller did not look (section omitted);
-   * `[]` = looked and found nothing (said explicitly). Added 2026-10-15: the owner asked for his
-   * meeting/appointment schedule in this email, and the body carried tasks only.
+   * Today's WHOLE calendar (owner, 2026-10-15: "show meetings for the day"). `undefined` = the
+   * caller did not look (section omitted); `[]` = looked and found nothing (said explicitly).
    */
   meetings?: BriefingMeeting[];
+  /**
+   * The rest of the work week's calendar (owner, 2026-10-15: "and a section for the rest of the
+   * work week"). Same undefined/[] contract. `weekLabel` comes from `restOfWorkWeek`.
+   */
+  weekMeetings?: BriefingMeeting[];
+  weekLabel?: string;
   /** The calendar read failed. Said plainly, so a failed read is never mistaken for a free day. */
   meetingsError?: string | null;
   timezone?: string;
@@ -90,6 +95,24 @@ export function stripVoiceScript(context?: string | null): string {
   return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
+/**
+ * The local dates the "rest of the work week" section covers, as YYYY-MM-DD (inclusive).
+ * Mon-Thu: tomorrow through Friday. Fri/Sat/Sun: there is no rest of THIS week, so the coming
+ * Monday through Friday, labelled as next week. Pure date math on the local calendar date, so it
+ * cannot drift with DST.
+ */
+export function restOfWorkWeek(todayLocal: string): { start: string; end: string; label: string } {
+  const base = new Date(`${todayLocal}T12:00:00Z`);
+  const dow = base.getUTCDay(); // 0 = Sunday
+  const add = (n: number) => {
+    const d = new Date(base.getTime() + n * 86_400_000);
+    return d.toISOString().slice(0, 10);
+  };
+  if (dow >= 1 && dow <= 4) return { start: add(1), end: add(5 - dow), label: 'Rest of the work week' };
+  const toMonday = dow === 5 ? 3 : dow === 6 ? 2 : 1;
+  return { start: add(toMonday), end: add(toMonday + 4), label: 'Next work week' };
+}
+
 function formatTime(iso?: string | null, timezone = 'America/New_York'): string | null {
   if (!iso) return null;
   const d = new Date(iso);
@@ -123,25 +146,49 @@ export function renderBriefingBody(input: BriefingInput): string {
   const guidance = stripVoiceScript(input.context);
   if (guidance) parts.push('', guidance);
 
+  const meetingLine = (m: BriefingMeeting) => {
+    const title = String(m.title ?? '').trim() || '(untitled)';
+    const where = m.location && String(m.location).trim() ? ` · ${String(m.location).trim()}` : '';
+    let when = 'All day';
+    if (!m.is_all_day) {
+      const start = formatTime(m.start_time, tz);
+      const end = formatTime(m.end_time, tz);
+      when = start ? (end ? `${start}–${end}` : start) : 'Time not set';
+    }
+    return `${when} — ${title}${where}`;
+  };
+  const real = (list: BriefingMeeting[]) => list.filter((m) => m && (m.title || m.start_time));
+
   if (input.meetingsError) {
     parts.push('', 'Your calendar could not be read just now, so meetings may be missing from this email.');
-  } else if (input.meetings !== undefined) {
-    const meetings = input.meetings.filter((m) => m && (m.title || m.start_time));
-    if (meetings.length > 0) {
-      parts.push('', `Meetings for the rest of today (${meetings.length}):`);
-      for (const m of meetings) {
-        const title = String(m.title ?? '').trim() || '(untitled)';
-        const where = m.location && String(m.location).trim() ? ` · ${String(m.location).trim()}` : '';
-        let when = 'All day';
-        if (!m.is_all_day) {
-          const start = formatTime(m.start_time, tz);
-          const end = formatTime(m.end_time, tz);
-          when = start ? (end ? `${start}–${end}` : start) : 'Time not set';
-        }
-        parts.push(`  ${when} — ${title}${where}`);
+  } else {
+    if (input.meetings !== undefined) {
+      const today = real(input.meetings);
+      if (today.length > 0) {
+        parts.push('', `Today's meetings (${today.length}):`);
+        for (const m of today) parts.push(`  ${meetingLine(m)}`);
+      } else {
+        parts.push('', 'No meetings on your calendar today.');
       }
-    } else {
-      parts.push('', 'No meetings on your calendar for the rest of today.');
+    }
+    if (input.weekMeetings !== undefined) {
+      const label = input.weekLabel || 'Rest of the work week';
+      const week = real(input.weekMeetings);
+      if (week.length > 0) {
+        parts.push('', `${label} (${week.length}):`);
+        // Grouped under a local day heading, in calendar order.
+        let lastDay = '';
+        for (const m of week) {
+          const d = m.start_time ? new Date(m.start_time) : null;
+          const day = d && !Number.isNaN(d.getTime())
+            ? d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', timeZone: tz })
+            : 'Date not set';
+          if (day !== lastDay) { parts.push(`  ${day}`); lastDay = day; }
+          parts.push(`    ${meetingLine(m)}`);
+        }
+      } else {
+        parts.push('', `${label}: no meetings on your calendar.`);
+      }
     }
   }
 
