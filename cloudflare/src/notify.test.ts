@@ -457,3 +457,32 @@ test('AC-N10c scrubSecrets covers every Slack credential shape, not just the obs
   // Ordinary text is untouched — a scrub that mangles diagnostics gets turned off.
   assert.equal(scrubSecrets('channel_not_found'), 'channel_not_found');
 });
+
+// ---------------------------------------------------------------------------
+// AC-N-HTML — rich HTML email (owner, 2026-10-15: "It should be a rich clean email format").
+// Asserted on the REQUEST sent to Graph, since a 202 looks the same for Text and HTML.
+// ---------------------------------------------------------------------------
+test('AC-N-HTML an html field sends contentType HTML; without it email stays plain Text', async () => {
+  const real = globalThis.fetch;
+  const sent: any[] = [];
+  globalThis.fetch = (async (input: any, init: any) => {
+    const url = typeof input === 'string' ? input : input.url;
+    if (url.includes('/oauth2/v2.0/token')) {
+      return new Response(JSON.stringify({ access_token: 'tok' }), { status: 200 });
+    }
+    sent.push(JSON.parse(init.body));
+    return new Response('', { status: 202 });
+  }) as typeof fetch;
+  try {
+    const env = { ...baseEnv, AZURE_CLIENT_ID: 'c', AZURE_CLIENT_SECRET: 's', AZURE_TENANT_ID: 't' };
+    const base = { channels: ['email'], userProfile: { email: 'owner@x.io' }, title: 'Morning Kickstart', body: 'plain' };
+    const rich: any = await (await handleNotify(req({ ...base, html: '<p>rich</p>' }), env)).json();
+    const plain: any = await (await handleNotify(req(base), env)).json();
+    assert.equal(rich.results.email.status, 'sent');
+    assert.equal(plain.results.email.status, 'sent');
+    assert.deepEqual(sent[0].message.body, { contentType: 'HTML', content: '<p>rich</p>' });
+    assert.deepEqual(sent[1].message.body, { contentType: 'Text', content: 'plain' });
+  } finally {
+    globalThis.fetch = real;
+  }
+});

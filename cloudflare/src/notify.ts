@@ -89,6 +89,12 @@ export interface NotifyRequest {
   userId?: string;
   title?: string;
   body?: string;
+  /**
+   * Optional rich HTML for the EMAIL channel (owner, 2026-10-15: "It should be a rich clean email
+   * format"). POST only -- too large for a query string. When present, email is sent as HTML;
+   * `body` stays the plain text that Slack receives. Absent -> email is plain text exactly as before.
+   */
+  html?: string;
   channels?: unknown;
   userProfile?: { email?: string; phone?: string } | string | null;
   taskData?: unknown;
@@ -199,6 +205,7 @@ export async function sendEmail(
   to: string,
   subject: string,
   body: string,
+  html?: string,
 ): Promise<ChannelResult> {
   if (!graphConfigured(env)) {
     return { ok: false, status: 'not_configured', detail: 'Graph app credentials are not set on the Worker' };
@@ -215,7 +222,9 @@ export async function sendEmail(
       body: JSON.stringify({
         message: {
           subject: subject || '(no subject)',
-          body: { contentType: 'Text', content: body || '' },
+          body: html && html.trim()
+            ? { contentType: 'HTML', content: html }
+            : { contentType: 'Text', content: body || '' },
           toRecipients: [{ emailAddress: { address: to } }],
         },
         saveToSentItems: true,
@@ -453,7 +462,10 @@ export async function handleNotify(request: Request, env: NotifyEnv): Promise<Re
         detail: `"${ch}" was delivered by the n8n webhook and is NOT built here yet — nothing created it`,
       };
     } else if (ch === 'email') {
-      results[ch] = await sendEmail(env, profile.email ?? '', title, body);
+      results[ch] = await sendEmail(
+        env, profile.email ?? '', title, body,
+        typeof payload.html === 'string' ? payload.html : undefined,
+      );
     } else if (ch === 'slack') {
       results[ch] = await sendSlack(env, title, body, {
         webhook: payload.slackWebhook,
