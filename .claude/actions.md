@@ -477,3 +477,27 @@ Dashboard board still shows a lane headed "Life". Deleting them moves no task. I
 |---|---|---|---|
 | 4 | `.claude/memory.md` header read `Last updated: 2026-09-21` while carrying 2026-10-08 and 2026-10-12 sections. Stamped, with a note to trust per-section dates over the file-level one | **MERGED** | PR #37 |
 | 5 | Ledger commits verified to exist against `origin`, not a local tree: `git cat-file -t` returns `commit` for both `833d650` (#35) and `4576ea5` (#36) | **DONE** | `4576ea5` is `origin/main`'s tip |
+
+## ACT:empty-board-cleanup — boards of zero-task users deleted. DONE 2026-10-15.
+
+Owner, 2026-10-15: *"those users are from a different app i built. first, dropp all the ones that
+have 0 tasks"* then *"dont ever drop von.ellis@, go with option A"* — Option A = delete only the
+journey **boards** (lanes cascade) of zero-task users; never `auth.users`, never anything of
+`von.ellis@enterpriseds.io`.
+
+| # | What | State | Evidence |
+|---|---|---|---|
+| 1 | `delete from public.boards` where the owner has 0 tasks, no task points at the board, and the owner is not von.ellis@ | **DONE** | 28 boards / 23 users deleted (created 2026-02-07..2026-03-13); 120 lanes cascaded |
+| 2 | Post-state | **VERIFIED** | boards 176→148; tasks **446 unchanged**; von.ellis@ boards 1; only remaining zero-task user with a board is von.ellis@ |
+| 3 | Demo user `00000000-…0001` (14 tasks) **not** touched — fails the 0-task condition | **VERIFIED** | both boards present: "Test Board" (14 tasks) + "Personal Tasks" (0) |
+
+### Found while doing it — dev@enterpriseds.io has 145 boards (NOT actioned, awaiting owner)
+
+`KanbanBoard.tsx fetchBoardColumns` looks up the board with `.eq('is_default', true).maybeSingle()`.
+`maybeSingle()` THROWS on 2+ rows, and the `catch` calls `createDefaultBoardAndColumns()`, which
+inserts ANOTHER `is_default=true` board — so once two defaults exist, every board-view load adds
+more. Measured: 145/145 of dev@'s boards are `is_default=true`; the first (2025-09-25) holds 425 of
+432 tasks, one from 2026-02-03 holds 7, the other 143 are empty; the second board appeared
+2026-01-29; 49 same-second pairs (the view loads twice per visit — cause unconfirmed). Proposed to
+the owner: fix the lookup + delete dev@'s 143 empty boards. Not started.
+

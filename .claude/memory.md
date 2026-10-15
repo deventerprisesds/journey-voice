@@ -1,5 +1,5 @@
 # Project Memory — journey-voice
-Last updated: 2026-10-12
+Last updated: 2026-10-15
 
 > **MOVE THE DATE ABOVE IN THE SAME COMMIT THAT APPENDS A SECTION.** It read `2026-09-21` while
 > this file already carried sections dated 2026-10-08 and 2026-10-12 — three weeks of the header
@@ -648,3 +648,18 @@ writing category-into-status until #28/#31/#33. A half-retired design is what ca
 
 **So deleting the lanes now is FUTILE: the next board-create brings all eleven back.** Correct
 order is seeder-first, delete-second.
+
+## Boards — what they are and the duplicate-default runaway (2026-10-15)
+
+- A **board** = one `boards` row + its lanes in `columns`; `tasks.board_id` points at it.
+  `columns.board_id` and `tasks.board_id` are both `ON DELETE CASCADE` — deleting a board deletes
+  its tasks too, so any board delete must exclude boards a task points at.
+- Two seeders, both naming the board "Personal Tasks": DB trigger `on_profile_created` →
+  `create_default_board_for_user()` (4 lanes), and the client `KanbanBoard.createDefaultBoardAndColumns`
+  (11 lanes) whenever its lookup comes back empty OR errors.
+- **Runaway:** the lookup is `.eq('is_default',true).maybeSingle()`; 2+ defaults → error → catch
+  creates another default → permanent. dev@enterpriseds.io reached 145 (all default, 2 with tasks).
+- Many `auth.users` rows belong to the owner's OTHER app (courses, programs, class_schedules…) —
+  never delete auth users from journey cleanup; delete boards only.
+- 2026-10-15: deleted 28 empty boards of 23 zero-task users (owner-approved, von.ellis@ excluded).
+
