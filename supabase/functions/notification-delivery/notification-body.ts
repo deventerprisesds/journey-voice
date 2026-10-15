@@ -43,11 +43,25 @@ export interface BriefingInput {
    */
   meetings?: BriefingMeeting[];
   /**
-   * The rest of the work week's calendar (owner, 2026-10-15: "and a section for the rest of the
-   * work week"). Same undefined/[] contract. `weekLabel` comes from `restOfWorkWeek`.
+   * The calendar for the next 7 days AFTER today (owner, 2026-10-15: "then the next 7 days
+   * following (as available)"). Same undefined/[] contract. `upcomingLabel` comes from `nextDays`.
    */
-  weekMeetings?: BriefingMeeting[];
-  weekLabel?: string;
+  upcomingMeetings?: BriefingMeeting[];
+  upcomingLabel?: string;
+  /**
+   * EVERY task scheduled today / in the next 7 days (owner, 2026-10-15: "Where are the tasks
+   * scheduled for that day? they are missing from that day forward"). When the caller passes these,
+   * the body renders three timelines -- THIS WINDOW, REST OF TODAY, NEXT 7 DAYS -- each merging
+   * meetings and tasks in time order. The old `tasks` list (call-window only) is then not shown.
+   */
+  todayTasks?: BriefingTask[];
+  upcomingTasks?: BriefingTask[];
+  /**
+   * This call's own time window in LOCAL hours, e.g. morning = { name:'morning', start:6, end:9 }.
+   * Today's items starting inside it are listed first ("the window"); everything else today is
+   * "Rest of today". Omitted (a custom call with no [WINDOW:x]) -> today is one "Today" list.
+   */
+  window?: { name: string; start: number; end: number } | null;
   /** The calendar read failed. Said plainly, so a failed read is never mistaken for a free day. */
   meetingsError?: string | null;
   timezone?: string;
@@ -96,21 +110,13 @@ export function stripVoiceScript(context?: string | null): string {
 }
 
 /**
- * The local dates the "rest of the work week" section covers, as YYYY-MM-DD (inclusive).
- * Mon-Thu: tomorrow through Friday. Fri/Sat/Sun: there is no rest of THIS week, so the coming
- * Monday through Friday, labelled as next week. Pure date math on the local calendar date, so it
- * cannot drift with DST.
+ * The local dates of the "next 7 days" section, as YYYY-MM-DD (inclusive): tomorrow through
+ * today+7. Pure date math on the local calendar date, so it cannot drift with DST.
  */
-export function restOfWorkWeek(todayLocal: string): { start: string; end: string; label: string } {
+export function nextDays(todayLocal: string, count = 7): { start: string; end: string; label: string } {
   const base = new Date(`${todayLocal}T12:00:00Z`);
-  const dow = base.getUTCDay(); // 0 = Sunday
-  const add = (n: number) => {
-    const d = new Date(base.getTime() + n * 86_400_000);
-    return d.toISOString().slice(0, 10);
-  };
-  if (dow >= 1 && dow <= 4) return { start: add(1), end: add(5 - dow), label: 'Rest of the work week' };
-  const toMonday = dow === 5 ? 3 : dow === 6 ? 2 : 1;
-  return { start: add(toMonday), end: add(toMonday + 4), label: 'Next work week' };
+  const add = (n: number) => new Date(base.getTime() + n * 86_400_000).toISOString().slice(0, 10);
+  return { start: add(1), end: add(count), label: `Next ${count} days` };
 }
 
 function formatTime(iso?: string | null, timezone = 'America/New_York'): string | null {
@@ -159,6 +165,83 @@ export function renderBriefingBody(input: BriefingInput): string {
   };
   const real = (list: BriefingMeeting[]) => list.filter((m) => m && (m.title || m.start_time));
 
+  // ---- Timelines: THIS WINDOW, REST OF TODAY, NEXT 7 DAYS (used whenever the caller passes tasks) ----
+  if (input.todayTasks !== undefined || input.upcomingTasks !== undefined) {
+    type Item = { at: number; allDay: boolean; line: string; kind: 'meeting' | 'task' };
+    const items = (ms: BriefingMeeting[] | undefined, ts: BriefingTask[] | undefined): Item[] => {
+      const out: Item[] = [];
+      for (const m of real(ms ?? [])) {
+        out.push({ at: new Date(m.start_time ?? 0).getTime() || 0, allDay: !!m.is_all_day, line: `${meetingLine(m)} (meeting)`, kind: 'meeting' });
+      }
+      for (const t of ts ?? []) {
+        if (String(t?.status ?? '').toUpperCase() === 'DONE') continue;
+        const title = String(t?.title ?? '').trim() || '(untitled)';
+        const time = formatTime(t?.start_time, tz);
+        out.push({ at: new Date(t?.start_time ?? 0).getTime() || 0, allDay: false, line: `${time ? `${time} — ` : ''}${title} (task)`, kind: 'task' });
+      }
+      // All-day first, then by start time.
+      return out.sort((a, b) => (a.allDay === b.allDay ? a.at - b.at : a.allDay ? -1 : 1));
+    };
+    const counts = (list: Item[]) => {
+      const m = list.filter((i) => i.kind === 'meeting').length;
+      const t = list.length - m;
+      return `${m} meeting${m === 1 ? '' : 's'}, ${t} task${t === 1 ? '' : 's'}`;
+    };
+    const localHour = (at: number) =>
+      Number(new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', timeZone: tz }).format(new Date(at))) % 24;
+    const hourLabel = (h: number) => `${((h + 11) % 12) + 1} ${h < 12 ? 'AM' : 'PM'}`;
+
+    if (input.meetingsError) {
+      parts.push('', 'Your calendar could not be read just now, so meetings may be missing below (tasks are complete).');
+    }
+
+    const today = items(input.meetingsError ? [] : input.meetings, input.todayTasks);
+    const w = input.window;
+    if (w) {
+      const inWin = today.filter((i) => !i.allDay && localHour(i.at) >= w.start && localHour(i.at) < w.end);
+      const rest = today.filter((i) => !inWin.includes(i));
+      const winName = w.name.replace(/_/g, ' ');
+      if (inWin.length > 0) {
+        parts.push('', `This window — ${winName}, ${hourLabel(w.start)}–${hourLabel(w.end)} (${counts(inWin)}):`);
+        for (const i of inWin) parts.push(`  ${i.line}`);
+      } else {
+        parts.push('', `This window — ${winName}, ${hourLabel(w.start)}–${hourLabel(w.end)}: nothing scheduled.`);
+      }
+      if (rest.length > 0) {
+        parts.push('', `Rest of today (${counts(rest)}):`);
+        for (const i of rest) parts.push(`  ${i.line}`);
+      } else {
+        parts.push('', 'Rest of today: nothing else scheduled.');
+      }
+    } else if (today.length > 0) {
+      parts.push('', `Today (${counts(today)}):`);
+      for (const i of today) parts.push(`  ${i.line}`);
+    } else {
+      parts.push('', 'Nothing on your calendar or task list today.');
+    }
+
+    // Next 7 days: grouped under each item's own local day; days with nothing are skipped.
+    const label = input.upcomingLabel || 'Next 7 days';
+    const upcoming = items(input.meetingsError ? [] : input.upcomingMeetings, input.upcomingTasks);
+    if (upcoming.length > 0) {
+      parts.push('', `${label} (${counts(upcoming)}):`);
+      const byDay = new Map<string, Item[]>();
+      for (const i of upcoming) {
+        const key = new Date(i.at).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric', timeZone: tz });
+        if (!byDay.has(key)) byDay.set(key, []);
+        byDay.get(key)!.push(i);
+      }
+      for (const [day, list] of byDay) {
+        parts.push(`  ${day}`);
+        for (const i of list) parts.push(`    ${i.line}`);
+      }
+    } else {
+      parts.push('', `${label}: nothing scheduled.`);
+    }
+
+    return parts.join('\n').trim();
+  }
+
   if (input.meetingsError) {
     parts.push('', 'Your calendar could not be read just now, so meetings may be missing from this email.');
   } else {
@@ -171,9 +254,9 @@ export function renderBriefingBody(input: BriefingInput): string {
         parts.push('', 'No meetings on your calendar today.');
       }
     }
-    if (input.weekMeetings !== undefined) {
-      const label = input.weekLabel || 'Rest of the work week';
-      const week = real(input.weekMeetings);
+    if (input.upcomingMeetings !== undefined) {
+      const label = input.upcomingLabel || 'Next 7 days';
+      const week = real(input.upcomingMeetings);
       if (week.length > 0) {
         parts.push('', `${label} (${week.length}):`);
         // Grouped under a local day heading, in calendar order.

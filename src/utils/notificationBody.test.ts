@@ -4,7 +4,7 @@
 //             none of its stage directions survive into what a person receives.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { stripVoiceScript, renderBriefingBody, restOfWorkWeek } from '../../supabase/functions/notification-delivery/notification-body.ts';
+import { stripVoiceScript, renderBriefingBody, nextDays } from '../../supabase/functions/notification-delivery/notification-body.ts';
 import { containsCallScript } from '../../supabase/functions/_shared/digest-content.ts';
 
 // Verbatim from the live 2026-09-08 send-unified-notification payload.
@@ -181,32 +181,75 @@ test('AC-M3 a failed calendar read is SAID, never rendered as a free day', () =>
 });
 
 // ---------------------------------------------------------------------------
-// AC-W — the rest of the work week (owner, 2026-10-15).
+// AC-W — the next 7 days (owner, 2026-10-15: "show the window, rest of the day, and then the next
+// 7 days following (as available)").
 // ---------------------------------------------------------------------------
-test('AC-W1 restOfWorkWeek: Mon-Thu -> tomorrow..Friday; Fri/Sat/Sun -> next Mon..Fri', () => {
-  assert.deepEqual(restOfWorkWeek('2026-10-12'), { start: '2026-10-13', end: '2026-10-16', label: 'Rest of the work week' }); // Mon
-  assert.deepEqual(restOfWorkWeek('2026-10-15'), { start: '2026-10-16', end: '2026-10-16', label: 'Rest of the work week' }); // Thu
-  assert.deepEqual(restOfWorkWeek('2026-10-16'), { start: '2026-10-19', end: '2026-10-23', label: 'Next work week' }); // Fri
-  assert.deepEqual(restOfWorkWeek('2026-10-17'), { start: '2026-10-19', end: '2026-10-23', label: 'Next work week' }); // Sat
-  assert.deepEqual(restOfWorkWeek('2026-10-18'), { start: '2026-10-19', end: '2026-10-23', label: 'Next work week' }); // Sun
-  assert.deepEqual(restOfWorkWeek('2026-10-29'), { start: '2026-10-30', end: '2026-10-30', label: 'Rest of the work week' }); // Thu, month edge
+test('AC-W1 nextDays: tomorrow through today+7, across a month edge', () => {
+  assert.deepEqual(nextDays('2026-10-15'), { start: '2026-10-16', end: '2026-10-22', label: 'Next 7 days' });
+  assert.deepEqual(nextDays('2026-10-29'), { start: '2026-10-30', end: '2026-11-05', label: 'Next 7 days' });
 });
 
-test('AC-W2 week meetings are grouped under local day headings, in order', () => {
+test('AC-W2 meetings-only callers still get upcoming meetings grouped by day', () => {
   const week = [
     { title: 'Client sync', start_time: '2026-10-19T14:00:00Z', end_time: '2026-10-19T14:30:00Z', location: 'Teams' },
-    { title: 'Dentist', start_time: '2026-10-19T19:00:00Z', end_time: '2026-10-19T20:00:00Z' },
     { title: 'Board review', start_time: '2026-10-21T15:00:00Z', end_time: '2026-10-21T16:00:00Z' },
   ];
-  const out = renderBriefingBody({ callName: 'Morning Kickstart', tasks: [], meetings: [], weekMeetings: week, weekLabel: 'Next work week', timezone: 'America/New_York' });
-  assert.match(out, /No meetings on your calendar today\./);
-  assert.match(out, /Next work week \(3\):\n  Monday, Oct 19\n    10:00\sAM–10:30\sAM — Client sync · Teams\n    3:00\sPM–4:00\sPM — Dentist\n  Wednesday, Oct 21\n    11:00\sAM–12:00\sPM — Board review/);
+  const out = renderBriefingBody({ callName: 'Morning Kickstart', tasks: [], meetings: [], upcomingMeetings: week, upcomingLabel: 'Next 7 days', timezone: 'America/New_York' });
+  assert.match(out, /Next 7 days \(2\):\n  Monday, Oct 19\n    10:00\sAM–10:30\sAM — Client sync · Teams\n  Wednesday, Oct 21\n    11:00\sAM–12:00\sPM — Board review/);
   assert.equal(containsCallScript(out), false);
 });
 
-test('AC-W3 an empty week says so; an unread week prints nothing', () => {
-  const empty = renderBriefingBody({ callName: 'Morning Kickstart', tasks: [], meetings: [], weekMeetings: [], weekLabel: 'Rest of the work week' });
-  assert.match(empty, /Rest of the work week: no meetings on your calendar\./);
-  const unread = renderBriefingBody({ callName: 'Morning Kickstart', tasks: [], meetings: [] });
-  assert.ok(!/work week/i.test(unread));
+// ---------------------------------------------------------------------------
+// AC-T — THIS WINDOW, REST OF TODAY, NEXT 7 DAYS with tasks (owner, 2026-10-15: "Where are the tasks
+// scheduled for that day? they are missing from that day forward"). Live: 11 tasks were scheduled
+// today and the email said "Nothing is scheduled for this window".
+// ---------------------------------------------------------------------------
+const TZ = 'America/New_York';
+const MORNING = { name: 'morning', start: 6, end: 9 };
+test('AC-T1 window first, then the rest of today; meetings and tasks merged in time order; DONE excluded', () => {
+  const out = renderBriefingBody({
+    callName: 'Morning Kickstart', context: REAL_SCRIPT, timezone: TZ, tasks: [], window: MORNING,
+    meetings: [{ title: 'Haircut', start_time: '2026-10-15T15:00:00Z', end_time: '2026-10-15T16:00:00Z' }],
+    todayTasks: [
+      { title: 'Stretch', start_time: '2026-10-15T11:30:00Z', status: 'TODO' },                     // 7:30 AM -> window
+      { title: 'Find a low-interest credit card', start_time: '2026-10-15T13:00:00Z', status: 'UP_NEXT' }, // 9:00 AM -> rest
+      { title: 'Already finished', start_time: '2026-10-15T14:00:00Z', status: 'DONE' },
+      { title: 'Transfer Jotform Resume Tool Suite', start_time: '2026-10-15T19:30:00Z', status: 'TODO' },
+    ],
+    upcomingMeetings: [], upcomingTasks: [], upcomingLabel: 'Next 7 days',
+  });
+  assert.match(out, /This window — morning, 6 AM–9 AM \(0 meetings, 1 task\):\n  7:30\sAM — Stretch \(task\)/);
+  assert.match(out, /Rest of today \(1 meeting, 2 tasks\):\n  9:00\sAM — Find a low-interest credit card \(task\)\n  11:00\sAM–12:00\sPM — Haircut \(meeting\)\n  3:30\sPM — Transfer Jotform Resume Tool Suite \(task\)/);
+  assert.ok(!/Already finished/.test(out), 'DONE tasks are not listed');
+  assert.ok(out.indexOf('This window') < out.indexOf('Rest of today'), 'window comes first');
+  assert.equal(containsCallScript(out), false);
+});
+
+test('AC-T2 an empty window says so; the next 7 days group meetings and tasks under each day', () => {
+  const out = renderBriefingBody({
+    callName: 'Morning Kickstart', timezone: TZ, window: MORNING, meetings: [],
+    todayTasks: [{ title: 'Debug autowork', start_time: '2026-10-15T14:30:00Z', status: 'TODO' }],
+    upcomingLabel: 'Next 7 days',
+    upcomingMeetings: [{ title: 'Board review', start_time: '2026-10-16T15:00:00Z', end_time: '2026-10-16T16:00:00Z' }],
+    upcomingTasks: [
+      { title: 'Analyze the Trinnex job description', start_time: '2026-10-16T13:00:00Z', status: 'UP_NEXT' },
+      { title: 'Go to church', start_time: '2026-10-18T13:00:00Z', status: 'UP_NEXT' },
+    ],
+  });
+  assert.match(out, /This window — morning, 6 AM–9 AM: nothing scheduled\./);
+  assert.match(out, /Rest of today \(0 meetings, 1 task\):\n  10:30\sAM — Debug autowork \(task\)/);
+  assert.match(out, /Next 7 days \(1 meeting, 2 tasks\):\n  Friday, Oct 16\n    9:00\sAM — Analyze the Trinnex job description \(task\)\n    11:00\sAM–12:00\sPM — Board review \(meeting\)\n  Sunday, Oct 18\n    9:00\sAM — Go to church \(task\)/);
+  assert.ok(!/Saturday/.test(out), 'a day with nothing scheduled is skipped');
+});
+
+test('AC-T3 no window (custom call) -> one Today list; a failed calendar read still lists every task', () => {
+  const out = renderBriefingBody({
+    callName: 'Check-in', timezone: TZ, meetingsError: 'PGRST204', window: null,
+    todayTasks: [{ title: 'Pay rent', start_time: '2026-10-15T13:00:00Z', status: 'TODO' }],
+    upcomingTasks: [], upcomingLabel: 'Next 7 days',
+  });
+  assert.match(out, /calendar could not be read/);
+  assert.match(out, /Today \(0 meetings, 1 task\):\n  9:00\sAM — Pay rent \(task\)/);
+  assert.match(out, /Next 7 days: nothing scheduled\./);
+  assert.ok(!/This window/.test(out));
 });
