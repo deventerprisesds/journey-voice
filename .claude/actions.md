@@ -529,3 +529,7 @@ deploy on merge. The 7 tasks on dev@'s second board stay where they are (not mov
 | 6 | Iris brief live test (morning edition, real send) | delivered | chat.pending_turns schedule-brief-morning-2026-10-15-manual-…: done; FCM push 1 success; owner screenshot 1:43 PM |
 
 **Live-tested 2026-10-15 ~1:50 PM ET; owner to confirm the 1:52 PM "Test-Morning Kickstart" email arrived.**
+| 7 | Owner: "show meetings for the day and a section for the rest of the work week" | merged #49 (ad1a751), deploy run 38782253228 | live test 18:04 listed Haircut + Test Event 1; SUPERSEDED by row 8 |
+| 8 | Owner: "where are the tasks scheduled for that day?" + "show the window, rest of the day, and then the next 7 days (as available)" | merged #50 (b53fbca), deploy run 38786859013 success | live test 18:38 UTC: graph 202, delivered_at set; body = "This window — morning, 6 AM–9 AM: nothing scheduled" / "Rest of today (2 meetings, 11 tasks)" / "Next 7 days (0 meetings, 39 tasks)" by day; npm test 201/201; tomorrow's window_morning still 1 pending row after the test (dedupe held) |
+
+**Format live-tested 2026-10-15 2:38 PM ET; NOT yet confirmed by the owner in their inbox.** Iris meeting list still blocked on Huddle Graph Calendars.Read (Exchange RBAC steps, owner action — huddle ACT:schedule-brief-403).
