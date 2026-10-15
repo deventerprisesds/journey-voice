@@ -555,3 +555,13 @@ still the pre-v1.0.6 code. The owner disputes this; the APK version on the phone
 | 2 | Android: one play order (file → picked → bundled → system) + `ALARM_SOUND played=` trace | PR open | same PR; mutation FIRED run 38786992685 (`customFileIsTriedFirstWhenPresent`) |
 | 3 | Journey Settings: "File" button + error toast (shows only on APKs with `openAlarmFilePicker`) | PR open | vite build OK; lint 27→27, tsc errors unchanged (2 pre-existing `testAlarmSound`) |
 | 4 | Journey Voice APK rebuild + owner installs + real alarm logs `ALARM_SOUND played=custom-file` | **NOT confirmed live** | — |
+
+## ACT:iris-window-trigger — each journey window call also triggers Iris's window message (2026-10-15)
+Owner: *"i have tasks everyday and i do want a similar message for day in the morning and for each window as they pop up and to confirm prioritization ahead of scheduling the next day's build."*
+
+| # | Item | Status | Evidence |
+|---|---|---|---|
+| 1 | notification-delivery POSTs Huddle run-schedule-brief with the window (iris-window.ts) | merged #57 (1d2dcf2), functions run 38807029267 | npm test 269/269; AC-IW2/AC-IW3 FIRED |
+| 2 | Live test | PASSED (mechanism) | Test-Daily Wrap-up delivered 21:07:03 UTC; log `Iris window brief (after_work): HTTP 200 ... delivered:true`; Iris's reply recorded in huddle ACT:iris-day-and-window-briefs |
+
+Huddle side + evening priority check: see huddle-extension-app ACT:iris-day-and-window-briefs. **NOT yet confirmed by the owner.**
