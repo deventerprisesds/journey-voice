@@ -206,7 +206,7 @@ test('AC-W2 meetings-only callers still get upcoming meetings grouped by day', (
 // ---------------------------------------------------------------------------
 const TZ = 'America/New_York';
 const MORNING = { name: 'morning', start: 6, end: 9 };
-test('AC-T1 window first, then the rest of today; meetings and tasks merged in time order; DONE excluded', () => {
+test('AC-T1 window first, then the rest of today; tasks then meetings in their own section; DONE excluded', () => {
   const out = renderBriefingBody({
     callName: 'Morning Kickstart', context: REAL_SCRIPT, timezone: TZ, tasks: [], window: MORNING,
     meetings: [{ title: 'Haircut', start_time: '2026-10-15T15:00:00Z', end_time: '2026-10-15T16:00:00Z' }],
@@ -218,28 +218,32 @@ test('AC-T1 window first, then the rest of today; meetings and tasks merged in t
     ],
     upcomingMeetings: [], upcomingTasks: [], upcomingLabel: 'Next 7 days',
   });
-  assert.match(out, /This window — morning, 6 AM–9 AM \(0 meetings, 1 task\):\n  7:30\sAM — Stretch \(task\)/);
-  assert.match(out, /Rest of today \(1 meeting, 2 tasks\):\n  9:00\sAM — Find a low-interest credit card \(task\)\n  11:00\sAM–12:00\sPM — Haircut \(meeting\)\n  3:30\sPM — Transfer Jotform Resume Tool Suite \(task\)/);
+  assert.match(out, /This window — morning, 6 AM–9 AM \(0 meetings, 1 task\):\n  Tasks \(1\):\n    7:30\sAM — Stretch\n  Meetings: none\./);
+  // The 11 AM meeting sits BETWEEN the two tasks in time, but is listed after them under its own heading.
+  assert.match(out, /Rest of today \(1 meeting, 2 tasks\):\n  Tasks \(2\):\n    9:00\sAM — Find a low-interest credit card\n    3:30\sPM — Transfer Jotform Resume Tool Suite\n  Meetings \(1\):\n    11:00\sAM–12:00\sPM — Haircut/);
   assert.ok(!/Already finished/.test(out), 'DONE tasks are not listed');
   assert.ok(out.indexOf('This window') < out.indexOf('Rest of today'), 'window comes first');
   assert.equal(containsCallScript(out), false);
 });
 
-test('AC-T2 an empty window says so; the next 7 days group meetings and tasks under each day', () => {
+test('AC-T2 an empty window says so; each of the next 7 days lists tasks, then meetings', () => {
   const out = renderBriefingBody({
     callName: 'Morning Kickstart', timezone: TZ, window: MORNING, meetings: [],
     todayTasks: [{ title: 'Debug autowork', start_time: '2026-10-15T14:30:00Z', status: 'TODO' }],
     upcomingLabel: 'Next 7 days',
-    upcomingMeetings: [{ title: 'Board review', start_time: '2026-10-16T15:00:00Z', end_time: '2026-10-16T16:00:00Z' }],
+    upcomingMeetings: [{ title: 'Board review', start_time: '2026-10-16T12:00:00Z', end_time: '2026-10-16T13:00:00Z' }],
     upcomingTasks: [
       { title: 'Analyze the Trinnex job description', start_time: '2026-10-16T13:00:00Z', status: 'UP_NEXT' },
       { title: 'Go to church', start_time: '2026-10-18T13:00:00Z', status: 'UP_NEXT' },
     ],
   });
   assert.match(out, /This window — morning, 6 AM–9 AM: nothing scheduled\./);
-  assert.match(out, /Rest of today \(0 meetings, 1 task\):\n  10:30\sAM — Debug autowork \(task\)/);
-  assert.match(out, /Next 7 days \(1 meeting, 2 tasks\):\n  Friday, Oct 16\n    9:00\sAM — Analyze the Trinnex job description \(task\)\n    11:00\sAM–12:00\sPM — Board review \(meeting\)\n  Sunday, Oct 18\n    9:00\sAM — Go to church \(task\)/);
+  assert.match(out, /Rest of today \(0 meetings, 1 task\):\n  Tasks \(1\):\n    10:30\sAM — Debug autowork\n  Meetings: none\./);
+  // Board review (8 AM) is earlier than the 9 AM task, and still comes after it, under Meetings.
+  assert.match(out, /Next 7 days \(1 meeting, 2 tasks\):\n  Friday, Oct 16\n    Tasks \(1\):\n      9:00\sAM — Analyze the Trinnex job description\n    Meetings \(1\):\n      8:00\sAM–9:00\sAM — Board review\n  Sunday, Oct 18\n    Tasks \(1\):\n      9:00\sAM — Go to church$/);
   assert.ok(!/Saturday/.test(out), 'a day with nothing scheduled is skipped');
+  assert.ok(!/Sunday, Oct 18\n    Tasks \(1\):\n      9:00\sAM — Go to church\n    Meetings/.test(out), 'an upcoming day with no meetings has no empty Meetings heading');
+  assert.ok(!/\((task|meeting)\)/.test(out), 'no per-line kind suffixes; the headings carry it');
 });
 
 test('AC-T3 no window (custom call) -> one Today list; a failed calendar read still lists every task', () => {
@@ -249,7 +253,8 @@ test('AC-T3 no window (custom call) -> one Today list; a failed calendar read st
     upcomingTasks: [], upcomingLabel: 'Next 7 days',
   });
   assert.match(out, /calendar could not be read/);
-  assert.match(out, /Today \(0 meetings, 1 task\):\n  9:00\sAM — Pay rent \(task\)/);
+  assert.match(out, /Today \(0 meetings, 1 task\):\n  Tasks \(1\):\n    9:00\sAM — Pay rent/);
+  assert.ok(!/Meetings: none/.test(out), 'a failed read never claims there are no meetings');
   assert.match(out, /Next 7 days: nothing scheduled\./);
   assert.ok(!/This window/.test(out));
 });
