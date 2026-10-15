@@ -4,8 +4,8 @@
 //             none of its stage directions survive into what a person receives.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { stripVoiceScript, renderBriefingBody } from './notification-body.ts';
-import { containsCallScript } from './digest-content.ts';
+import { stripVoiceScript, renderBriefingBody } from '../../supabase/functions/notification-delivery/notification-body.ts';
+import { containsCallScript } from '../../supabase/functions/_shared/digest-content.ts';
 
 // Verbatim from the live 2026-09-08 send-unified-notification payload.
 const REAL_SCRIPT = `Time for your morning kickstart. [WINDOW:morning]

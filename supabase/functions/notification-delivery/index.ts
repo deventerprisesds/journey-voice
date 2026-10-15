@@ -8,7 +8,7 @@ import {
   summarizeDelivery,
 } from "../_shared/notification-channels.ts";
 import { renderScheduledCall, containsCallScript, CallScriptLeakError } from "../_shared/digest-content.ts";
-import { renderBriefingBody } from "../_shared/notification-body.ts";
+import { renderBriefingBody } from "./notification-body.ts";
 import { localDateToUtcBounds } from "../_shared/timezone.ts";
 
 // Notification types that become the phone's full-screen alarm (channel `calendar_events`).
