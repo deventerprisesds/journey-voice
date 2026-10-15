@@ -175,12 +175,19 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
     }
 
     try {
-      // Fetch user's default board with explicit user_id filter
+      // Fetch user's default board with explicit user_id filter.
+      // OLDEST default, limit 1 -- never a bare maybeSingle(). maybeSingle() THROWS when a user has
+      // 2+ default boards, and the catch below used to answer that by creating ANOTHER default
+      // board, so one duplicate became a permanent loop: dev@enterpriseds.io reached 145 boards
+      // (2026-10-15). Same shape as src/lib/mcp/tools/create-task.ts; enforced by
+      // src/utils/boardLookup.test.ts.
       const { data: boardData, error: boardError } = await supabase
         .from('boards')
         .select('*')
         .eq('user_id', user.id)
         .eq('is_default', true)
+        .order('created_at', { ascending: true })
+        .limit(1)
         .maybeSingle();
 
       if (boardError) {
@@ -215,8 +222,9 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
       console.log('Columns data:', columnsData);
 
       if (!columnsData || columnsData.length === 0) {
+        // Add lanes to THIS board -- creating a whole new board here was a second duplicate source.
         console.log('No columns found, creating default columns...');
-        const result = await createDefaultBoardAndColumns(user.id);
+        const result = await createDefaultBoardAndColumns(user.id, boardData);
         setBoard(result.board);
         setColumns(result.columns as Column[]);
         return;
@@ -225,15 +233,14 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
       setColumns(columnsData as Column[]);
       
     } catch (error) {
+      // A failed READ is not evidence the board is missing. Never create a board here -- this
+      // branch is what turned one duplicate default board into 145.
       console.error('Error in fetchBoardColumns:', error);
-      // In case of any error, try to create default board
-      try {
-        const result = await createDefaultBoardAndColumns(user.id);
-        setBoard(result.board);
-        setColumns(result.columns as Column[]);
-      } catch (createError) {
-        console.error('Error creating default board:', createError);
-      }
+      toast({
+        title: "Couldn't load your board",
+        description: 'Please refresh to try again.',
+        variant: 'destructive',
+      });
     } finally {
       setLoading(false);
     }
@@ -803,7 +810,8 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
     }
   }, [columns, tasks]); // Added tasks dependency to update arrows when tasks change
 
-  const createDefaultBoardAndColumns = async (userId: string) => {
+  // `existingBoard`: when given, only the lanes are created, on that board.
+  const createDefaultBoardAndColumns = async (userId: string, existingBoard?: any) => {
     console.log('Creating default board and columns for user:', userId);
     
     // Handle demo mode - use localStorage instead of Supabase
@@ -846,25 +854,29 @@ const KanbanBoard: React.FC<KanbanBoardProps> = ({ tasks, onTaskUpdate, onTaskEd
     }
     
     try {
-      // Create default board
-      const { data: boardData, error: boardError } = await supabase
-        .from('boards')
-        .insert({
-          name: 'Personal Tasks',
-          description: 'Your main task board',
-          user_id: userId,
-          is_default: true,
-          position: 0
-        })
-        .select()
-        .single();
+      let boardData = existingBoard;
+      if (!boardData) {
+        // Create default board
+        const { data: newBoard, error: boardError } = await supabase
+          .from('boards')
+          .insert({
+            name: 'Personal Tasks',
+            description: 'Your main task board',
+            user_id: userId,
+            is_default: true,
+            position: 0
+          })
+          .select()
+          .single();
 
-      if (boardError) {
-        console.error('Error creating board:', boardError);
-        throw boardError;
+        if (boardError) {
+          console.error('Error creating board:', boardError);
+          throw boardError;
+        }
+
+        boardData = newBoard;
+        console.log('Board created successfully:', boardData);
       }
-
-      console.log('Board created successfully:', boardData);
 
       // Create default columns with BACKLOG and LIFE columns in correct order
       const defaultColumns = [

@@ -1561,6 +1561,8 @@ export class RealtimeVoiceAssistant {
         .select('id, name')
         .eq('user_id', userId)
         .eq('is_default', true)
+        .order('created_at', { ascending: true })
+        .limit(1)
         .maybeSingle();
 
       if (error) {
@@ -1576,6 +1578,7 @@ export class RealtimeVoiceAssistant {
           .from('boards')
           .select('id, name')
           .eq('user_id', userId)
+          .order('created_at', { ascending: true })
           .limit(1)
           .maybeSingle();
 

@@ -87,6 +87,8 @@ const DailyScheduleView: React.FC<DailyScheduleViewProps> = ({
         .select('id')
         .eq('user_id', user.id)
         .eq('is_default', true)
+        .order('created_at', { ascending: true })
+        .limit(1)
         .single();
 
       if (data) {
@@ -97,6 +99,7 @@ const DailyScheduleView: React.FC<DailyScheduleViewProps> = ({
           .from('boards')
           .select('id')
           .eq('user_id', user.id)
+          .order('created_at', { ascending: true })
           .limit(1)
           .single();
         

@@ -662,4 +662,8 @@ order is seeder-first, delete-second.
 - Many `auth.users` rows belong to the owner's OTHER app (courses, programs, class_schedules…) —
   never delete auth users from journey cleanup; delete boards only.
 - 2026-10-15: deleted 28 empty boards of 23 zero-task users (owner-approved, von.ellis@ excluded).
+- **Fixed 2026-10-15 (ACT:board-default-lookup):** every single-row `boards` read now uses
+  `.order('created_at', { ascending: true }).limit(1)` — enforced by `src/utils/boardLookup.test.ts`,
+  which also forbids `KanbanBoard` creating a board inside a `catch`. Data: 4 boards remain estate-wide.
+- `sourceHygiene.test.ts`'s path regex used to read `Foo.tsx` as `Foo.ts` (alternation order); fixed.
 

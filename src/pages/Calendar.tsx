@@ -40,9 +40,13 @@ const Calendar: React.FC = () => {
         .from('boards')
         .select('id')
         .eq('is_default', true)
-        .single();
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle();
 
-      if (error) {
+      // A read ERROR is not "no board" -- creating one on error was a duplicate-board source.
+      if (error) throw error;
+      if (!data) {
         // Create default board if none exists
         const { data: newBoard, error: createError } = await supabase
           .from('boards')
