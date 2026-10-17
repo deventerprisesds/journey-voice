@@ -567,3 +567,8 @@ Owner: *"i have tasks everyday and i do want a similar message for day in the mo
 | 2 | Live test | PASSED (mechanism) | Test-Daily Wrap-up delivered 21:07:03 UTC; log `Iris window brief (after_work): HTTP 200 ... delivered:true`; Iris's reply recorded in huddle ACT:iris-day-and-window-briefs |
 
 Huddle side + evening priority check: see huddle-extension-app ACT:iris-day-and-window-briefs. **NOT yet confirmed by the owner.**
+
+## ACT:alarm-side-buttons-sound-settings (2026-10-17)
+Side buttons silence the alarm; gear on the alarm screen opens the sound pickers. Android side:
+deventerprisesds/android-bridge-template#6, Journey Voice v1.0.9 / Huddle v1.0.9 built. **NOT confirmed live.**
+Full ledger: android-bridge-template `.claude/actions.md`.
