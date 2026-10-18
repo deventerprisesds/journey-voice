@@ -1,4 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
+import { mergeStoredConfig } from '@/utils/mergeStoredConfig';
 import {
   DEFAULT_SCHEDULING_CONFIG,
   mergeSchedulingConfig,
@@ -201,9 +202,23 @@ export async function saveUserSchedulingConfig(
       ...restConfig
     } = config;
     
+    // MERGE into the stored config, never replace it. A page that saves only some fields (the Voice
+    // Assistant page sends just customAIInstructions) used to erase every other key — the 2026-09-13
+    // wipe of the owner's windows, categories and keyword rules. See utils/mergeStoredConfig.ts.
+    const { data: storedRow, error: readError } = await supabase
+      .from('user_scheduling_prefs')
+      .select('config')
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (readError) {
+      // Refuse rather than risk a wholesale overwrite on a read we could not complete.
+      console.error('Error reading scheduling config before save:', readError);
+      return false;
+    }
+
     const updateData: any = {
       user_id: userId,
-      config: restConfig as any,
+      config: mergeStoredConfig(storedRow?.config, restConfig as Record<string, unknown>) as any,
       updated_at: new Date().toISOString(),
     };
     
