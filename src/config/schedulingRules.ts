@@ -6,6 +6,8 @@
  * - useAutoScheduling and ItineraryEngine extractSchedulingContext
  */
 
+import { resolveKeywords } from '@/utils/resolveKeywords';
+
 export interface TimeWindow {
   start: number; // hour (0-23)
   end: number; // hour (0-23)
@@ -289,7 +291,8 @@ export function mergeSchedulingConfig(
       ...migratedCategoryMappings 
     },
     contextRules: {
-      keywords: { ...DEFAULT_SCHEDULING_CONFIG.contextRules.keywords, ...userConfig.contextRules?.keywords },
+      // Stored list replaces the defaults wholesale, as the nightly scheduler reads it (see resolveKeywords).
+      keywords: resolveKeywords(userConfig.contextRules?.keywords, DEFAULT_SCHEDULING_CONFIG.contextRules.keywords),
       priorityMappings: { ...DEFAULT_SCHEDULING_CONFIG.contextRules.priorityMappings, ...userConfig.contextRules?.priorityMappings },
     },
     // Use user instructions if provided and not empty, otherwise use default
