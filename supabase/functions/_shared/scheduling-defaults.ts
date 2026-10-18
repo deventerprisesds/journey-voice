@@ -198,3 +198,44 @@ export function validateTaskWindow(
   const valid = allowedWindows.includes(actualWindow);
   return { valid, actualWindow, allowedWindows };
 }
+
+
+/**
+ * The windows a task of `category` may use today, in preference order.
+ *
+ * A category is placed ONLY in the windows it lists. `flexible` means "any window open today", so a
+ * category listing it may use every active window (after its named ones). A category with no
+ * window open today gets [] and is simply not placed today.
+ *
+ * WHY (2026-10-18): this used to fall back to EVERY active window whenever none of a category's
+ * windows were open. A weekends-only category ("we will move ventures to weekends", the owner) would
+ * then have spread across the whole weekday — the opposite of the setting. The weekend side of the
+ * same fallback is why categories that relied on it now list `weekends` explicitly in the owner's row.
+ */
+export function getPreferredWindows(
+  category: string,
+  categoryMappings: Record<string, { defaultTimeWindow?: string[] }>,
+  activeWindowNames: string[],
+): string[] {
+  const listed = categoryMappings[category]?.defaultTimeWindow;
+  // An unknown/unmapped category keeps the old "anywhere today" behaviour — it has no rule to honour.
+  if (!listed || listed.length === 0) return [...activeWindowNames];
+  const out: string[] = [];
+  for (const w of listed) {
+    if (w !== 'flexible' && activeWindowNames.includes(w) && !out.includes(w)) out.push(w);
+  }
+  if (listed.includes('flexible')) {
+    for (const w of activeWindowNames) if (!out.includes(w)) out.push(w);
+  }
+  return out;
+}
+
+/**
+ * A keyword rule PREFERS its window; it does not confine the task to it. The keyword window leads,
+ * then the task's own category windows follow, so a full keyword window relaxes to the category
+ * rules instead of leaving the task unplaced (same contract the owner chose for caveats, AC-2).
+ * e.g. "exercise" -> morning, on a LIFE task [after_work, weekends] => [morning, after_work] weekdays.
+ */
+export function withKeywordWindow(keywordWindow: string, categoryWindows: string[]): string[] {
+  return [keywordWindow, ...categoryWindows.filter((w) => w !== keywordWindow)];
+}

@@ -7,6 +7,8 @@ import {
   activeCaveats,
   applyCaveats,
   validateTaskWindow,
+  getPreferredWindows,
+  withKeywordWindow,
   MAX_ASSIGNMENTS_PER_DAY,
   ASSIGNMENT_URGENT_HOURS,
   ASSIGNMENT_PRIORITY_DAYS,
@@ -194,27 +196,6 @@ function computeUsedMinutes(
   }
 
   return capacities;
-}
-
-/**
- * Determine the best window for a task based on its category and the user's categoryMappings.
- * Returns ordered list of preferred windows.
- */
-function getPreferredWindows(
-  category: string,
-  categoryMappings: Record<string, { defaultTimeWindow?: string[] }>,
-  activeWindowNames: string[]
-): string[] {
-  const mapping = categoryMappings[category];
-  if (!mapping?.defaultTimeWindow) return activeWindowNames; // fallback to any
-  
-  // Filter to only windows that are active today, preserving preference order
-  const preferred = mapping.defaultTimeWindow.filter(
-    (w: string) => w !== 'flexible' && activeWindowNames.includes(w)
-  );
-  
-  // If none of the preferred windows are active today, fall back to all active
-  return preferred.length > 0 ? preferred : activeWindowNames;
 }
 
 /**
@@ -1195,7 +1176,11 @@ serve(async (req) => {
             const keywordOverride = getKeywordWindowOverride(task.title, contextKeywords, activeWindowNames);
             let preferredWindows: string[];
             if (keywordOverride) {
-              preferredWindows = [keywordOverride.window];
+              // Keyword window FIRST, then the category's own windows (see withKeywordWindow).
+              preferredWindows = withKeywordWindow(
+                keywordOverride.window,
+                getPreferredWindows(task.category, categoryMappings, activeWindowNames),
+              );
               dayKeywordOverrides.push({
                 taskId: task.id, title: task.title, category: task.category,
                 matchedKeyword: keywordOverride.matchedKeyword,
