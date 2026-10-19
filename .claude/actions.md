@@ -572,3 +572,27 @@ Huddle side + evening priority check: see huddle-extension-app ACT:iris-day-and-
 Side buttons silence the alarm; gear on the alarm screen opens the sound pickers. Android side:
 deventerprisesds/android-bridge-template#6, Journey Voice v1.0.9 / Huddle v1.0.9 built. **NOT confirmed live.**
 Full ledger: android-bridge-template `.claude/actions.md`.
+
+## ACT:scheduling-config-restore (2026-10-19) — owner's September scheduling settings RESTORED
+**Asked:** owner: *"critical restore … make sure the app is showing the accurate settings I used in September"*,
+then the final decisions (windows as proposed; Sep 9–13 categories except Prof. education → evenings, Ventures →
+weekends, Education = Prof. education, Personal = Life; remove keywords bill/business/project/startup; exercise
+morning or after work).
+**Backup (row before the write):** `user_scheduling_prefs` owner `a3378f93…`, updated_at
+2026-09-13 16:12:41.80443Z, config = `{customAIInstructions}` ONLY (the 565-char default-style text, kept as is).
+**Written 2026-10-19 16:27:07Z** (`config || {…}`, guarded on the old updated_at):
+| item | value |
+|---|---|
+| timeWindows | morning 6–9 Mon–Fri · business_hours 9–17 Mon–Fri · after_work 17–19 Mon–Fri · evening 19–22 daily · flexible 9–22 daily · weekends 10–20 Sat/Sun |
+| CAREER | business_hours, weekends · 120m |
+| PROF_EDUCATION = EDUCATION | evening, weekends · 90m · maxPerDay 2 |
+| VENTURES | weekends · 120m |
+| LIFE = PERSONAL (status LIFE) | after_work, weekends · 60m |
+| keywords | 46 = code defaults minus bill/business/project/startup; study + assignment → evening/PROF_EDUCATION; exercise stays morning/LIFE and relaxes to LIFE's windows via `withKeywordWindow` (#59) |
+| workingHours / workloadBalance / priorityMappings | code defaults · caveats [] |
+**Readback (same session):** all of the above confirmed by SELECT; removed keywords absent; AI text length 565.
+**Code (this PR):** `src/utils/resolveKeywords.ts` — the app no longer spreads the 50 default keywords under the
+stored list, so a removed keyword stays removed on screen and on the next Save (nightly builder already read the
+stored list as-is). Tests R1–R5; R1 mutation FIRED. Zero impact on other users (only the system/test user stores
+keywords, full list).
+**Status:** written + read back. **NOT yet confirmed by the owner in the app / in a nightly run.**
