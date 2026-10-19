@@ -350,7 +350,7 @@ export function renderBriefingHtml(input: BriefingInput & { dateLabel?: string }
     `<div style="font-size:22px;font-weight:700;margin-top:4px;">${esc(name)}</div></td></tr>` +
     summary + notice + guide +
     model.sections.map(sectionHtml).join('') +
-    `<tr><td style="${font}padding:18px 28px 22px;font-size:12px;color:#9aa5b1;border-top:1px solid #edf0f3;">Sent by Journey</td></tr>` +
+    `<tr><td style="${font}padding:18px 28px 22px;font-size:12px;color:#9aa5b1;border-top:1px solid #edf0f3;">Sent by TaskOS</td></tr>` +
     `</table></td></tr></table></body></html>`;
 }
 
