@@ -12,6 +12,14 @@ Last updated: 2026-10-15
 > distrust, never the sections. `actions.md` has no file-level stamp at all, deliberately, for
 > the same reason: its ACT entries each carry their own date.
 
+## App name is TaskOS (2026-10-19) — labels only
+Owner chose **TaskOS**. Only what a person sees changes; `journey-voice.lovable.app`, repo names,
+`JOURNEY_PROXY_TOKEN`, Supabase project and the Android package stay. `Google.en-US-Journey-D` is a Google TTS
+voice name, not our brand — leave it. Email footer done (#60, live v591); Android app is "TaskOS" from v1.0.11.
+The Settings alarm-sound row is only rendered inside the Android app (needs `window.AndroidBridge`) — its absence
+in a phone BROWSER is expected. The web "File" button (merged 2026-10-15) was NOT on the owner's in-app page on
+2026-10-19, so the Lovable-published page lags `main`; the APK's Settings gear now offers "Audio file" itself.
+
 ## Phone alarm (android-bridge-template) — traps (2026-10-15)
 - **Never `setSilent(true)` on the gate (full-screen) notification.** NotificationCompat implements it as a
   GROUP_ALERT_SUMMARY group child, and Android then SUPPRESSES the fullScreenIntent — the alarm degrades to a

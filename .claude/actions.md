@@ -596,3 +596,14 @@ stored list, so a removed keyword stays removed on screen and on the next Save (
 stored list as-is). Tests R1–R5; R1 mutation FIRED. Zero impact on other users (only the system/test user stores
 keywords, full list).
 **Status:** written + read back. **NOT yet confirmed by the owner in the app / in a nightly run.**
+
+## ACT:rename-taskos — the app is called TaskOS everywhere the owner sees it (2026-10-19)
+Owner: "TaskOS. I don't need a new url or repo" / "staged B is fine, I don't need the url renamed or anything
+else that is strictly backend". Labels only; URL, repos, Supabase, secrets and the Android package stay.
+
+| # | Item | Status | Evidence |
+|---|---|---|---|
+| 1 | Web client says TaskOS | already done before this ACT | `src/` has no user-visible "Journey" on main 990b60d |
+| 2 | Email footer "Sent by Journey" → "Sent by TaskOS" | **deployed** | deventerprisesds/journey-voice#60 (990b60d); deploy run 39287074527 success; live `notification-delivery` v591 source contains "Sent by TaskOS" |
+| 3 | Android app name + widget → TaskOS | built | android-bridge-template f5e549a → TaskOS v1.0.11 (run 39288362792) |
+| 4 | Owner sees TaskOS on emails / launcher / widget | **NOT confirmed live** | — |
