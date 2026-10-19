@@ -557,3 +557,9 @@ hurt something upstream or downstream and that we know the original intent and c
 certainty."* A plan I had put forward twice as "recommended, reversible, nothing would move" was
 refuted by taking that demand seriously. The downstream half checked out; the upstream half did not,
 and no amount of re-reading my own reasoning would have found it.
+
+## 2026-10-19 — started a fix the moment a cause was found, before tracing why the code existed
+- **Claim/action:** found the post-check that removed the 8–10 PM task and began writing a fix in the same turn.
+- **Ground truth:** the check was a deliberate 2026-04-04 guardrail, linked to the owner's 2026-07-24 "common sense, not keywords" design (7eae8c2), and serves 4 callers (nightly builder, execute-tool auto_schedule, CalendarModule, useBatchScheduling). None of that was read before the edit.
+- **Source that would have settled it up front:** `git log --all -S "POST-VALIDATION 3"` + the 7eae8c2 memory section + `grep batch-calendar-scheduler`.
+- **Pattern:** cause found ≠ fix agreed. **Guard implied:** after a diagnosis, present cause + intent + callers + options and STOP for alignment before editing.

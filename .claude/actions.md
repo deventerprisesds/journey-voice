@@ -607,3 +607,16 @@ else that is strictly backend". Labels only; URL, repos, Supabase, secrets and t
 | 2 | Email footer "Sent by Journey" → "Sent by TaskOS" | **deployed** | deventerprisesds/journey-voice#60 (990b60d); deploy run 39287074527 success; live `notification-delivery` v591 source contains "Sent by TaskOS" |
 | 3 | Android app name + widget → TaskOS | built | android-bridge-template f5e549a → TaskOS v1.0.11 (run 39288362792) |
 | 4 | Owner sees TaskOS on emails / launcher / widget | **NOT confirmed live** | — |
+
+## ACT:empty-evening-2026-10-19 — "why was the evening and after work blocks empty" (diagnosis; fix AWAITING OWNER ALIGNMENT)
+Owner: *"why was the evening and after work blocks empty for the schedule that was built for today?"*, then
+*"you are moving too fast without getting alignment ... i dont trust that you have looked upstream and downstream"*.
+| # | Finding | Evidence |
+|---|---|---|
+| 1 | Today's schedule was built at 1:00 AM ET on the WIPED settings (restore landed 12:27 PM ET, after the build) — defaults: after_work 17–22, Ventures → after_work | `activity_log` nightly_schedule_built 05:01Z; `user_scheduling_prefs.updated_at` 16:27Z |
+| 2 | Builder filled after_work 5–10 PM on paper (DBA, Aha!, Slack AI, CTO Playbooks 2h = 300/300 min) | `activity_log` step PLACEMENT_2026-10-19 |
+| 3 | Exact-time step placed CTO Playbooks 8–10 PM; the post-check (`batch-calendar-scheduler` POST-VALIDATION 3, gpt-4o-mini, added by Lovable 2026-04-04 `6bf8ffc` "15-minute grid and guardrails") REMOVED it: "may be too late for focused work" | function log 2026-10-19T05:00:22Z |
+| 4 | Retry put it 8–10 AM (morning, not a Ventures window) → rejected → rolled to Tue 6:15–8:15 PM | logs 05:00:30Z; `tasks` row 9f56f32a |
+| 5 | Same 1 AM run: 9 post-check removals across the week, 8 of 9 "too late"-style for 8–9:30 PM slots, 1 haircut-at-lunch; 0 of the kinds it was built for (wrong day / venue closed) | function logs 05:00–05:01Z |
+| 6 | From tonight (restored settings) weekday 5–7 PM = Life only, 7–10 PM = Education/Prof-Ed only (3 open, max 2/day), Ventures weekends only → weekday evenings will be sparse for a DIFFERENT reason | `user_scheduling_prefs.config` |
+| 7 | Draft fix (narrow what the post-check may remove) written on `claude_schedule-sanity-timing`, NOT committed/deployed — owner asked for alignment first | local working tree |
