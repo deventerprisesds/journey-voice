@@ -165,6 +165,11 @@ file / the SDK source, not web search alone.)
 
 ## Scheduling config — traps worth more than the code (2026-08-26)
 
+- **(2026-10-19) Keywords: stored list is authoritative in BOTH places now.** The nightly builder reads
+  `config.contextRules.keywords` as stored; the app used to spread the 50 defaults UNDER it, so deleting a
+  default keyword could never stick. `resolveKeywords` (src/utils) fixed the app side. The owner's config was
+  restored 2026-10-19 after the 2026-09-13 wipe (ACT:scheduling-config-restore in actions.md).
+
 **`resolveConfig(userConfig)` takes `userConfig.timeWindows` WHOLESALE**, not key-by-key, so a shipped
 default is only ever a fallback for users who have never saved. Changing a default in
 `src/config/schedulingRules.ts` or `_shared/scheduling-defaults.ts` does NOTHING for an existing user.
