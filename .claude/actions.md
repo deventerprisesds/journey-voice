@@ -643,7 +643,7 @@ Owner: *"I'm fine with your recommendations for 1-3, but i want a list of what i
 | # | Item | Status | Evidence |
 |---|---|---|---|
 | 1 | Ship N1d (nexus outline draft gate) + N2 (nexus course-chat retrieval key) | in progress | INVENTORY-parked-work.md |
-| 2 | Ship E2 (push gate terminated rules slice) + E3 (feasibility screenshots rule) | in progress | " |
+| 2 | Ship E2 (push gate terminated rules slice) + E3 (feasibility screenshots rule) | E2 **merged** f507a58 (eds-claude-skills#123); E3 in progress | https://github.com/deventerpriseds-org/eds-claude-skills/pull/123 |
 | 3 | Rebuild N1a/b on top of nexus dfc492cc (10-15) | queued | " |
 | 4 | J1–J15: before/after loss report per feature BEFORE applying | in progress | docs/qc-evidence/RESTORE-J1-J15-diff.md |
 | 5 | Hard hook: an overwrite that removes/degrades must list what will no longer be in place | AC first (gate = Tier 1) | eds-claude-skills |
