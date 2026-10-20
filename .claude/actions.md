@@ -624,3 +624,13 @@ Owner: *"why was the evening and after work blocks empty for the schedule that w
 | 9 | There is NO 8 AM build. Only cron = `nightly-schedule-builder` `0 5 * * *` UTC (1 AM ET). The 8:00 "updated" stamps on Mon were Terry's Monday groom (assign/tag/rank); task times matched the 1 AM log slot-for-slot | `cron.job`; `activity_log` groom-summary push 12:00:25Z; function log 05:00:20Z |
 | 10 | Course items reach journey only from Google Sheets (EMBA, MIT, schedule) via a MANUAL "Sync" button (AssignmentSyncSettings). Last sync 2026-04-06; newest due date in `assignments` 2026-06-23; 0 items due today or later → nothing for nightly-assignment-sync to turn into evening tasks | `sync_logs`; `assignments` max(due_date) |
 | 11 | When items do arrive, they become PROF_EDUCATION tasks (now evening+weekends) capped at MAX_ASSIGNMENTS_PER_DAY=2 — the spreading mechanism exists; the data feed is what is stale | `nightly-assignment-sync`; `_shared/scheduling-defaults.ts:18` |
+
+## ACT:dba-evenings — DBA readings/assignments from Nexus, spread ahead of time (owner 2026-10-20) — PLAN AWAITING GO
+Owner: *"All readings and assignments are in nexus. focus on dba program. 2 a day limit is only for weekdays not weekends. there should be some logic to try to complete things ahead of time not alerted with little time to work with."*
+| # | Finding | Evidence |
+|---|---|---|
+| 1 | Canvas → Nexus only via the Nexus Chrome extension when a course is opened (0.7.1 refresh-on-open not yet owner-confirmed) | nexus-hub `.claude/actions.md` ACT:course-refresh-on-load |
+| 2 | Nexus → journey: NO link exists. journey's `nightly-assignment-sync` reads only journey's own `assignments` table (stale since 2026-04-06) | `nightly-assignment-sync/index.ts`; `sync_logs` |
+| 3 | DBA in Nexus = MGT-701/702/782: 10 assignments, all due ≤ 2026-10-12 or undated; readings = 16 Pages + 51 Files in undated modules, 1 linked to a session; upcoming sessions 10-26, 10-27, 11-09, 11-10 | nexus db-query runs 39477107857, 39477686066 |
+| 4 | Ahead-of-time today: assignment Tier A ≤48h (deadline-critical), Tier B 3–7d, Tier C >7d competes like any task → work is pushed only in the last week, hard only in the last 48h | `nightly-schedule-builder/index.ts:648-690,1076-1100` |
+| 5 | 2-a-day cap applies every day: `MAX_ASSIGNMENTS_PER_DAY=2` (Tier B/C) + PROF_EDUCATION `maxPerDay: 2` | `_shared/scheduling-defaults.ts:18,40`; owner config |
