@@ -637,3 +637,15 @@ Owner: *"All readings and assignments are in nexus. focus on dba program. 2 a da
 | 6 | **REGRESSION (measured):** the owner-approved Aug–Sep work lives ONLY on unmerged `origin/claude/huddle-journey-integration-xokgv1` (64 commits, ~7.7k lines in supabase/ + src/: `_shared/nexus.ts` Nexus reader, `assignment-cadence.ts`, weekend-aware cap 2 weekday / 4 weekend, nudges, task-dedup, meeting confirmation, overflow queue, 9am tz-aware due-tomorrow migration). LIVE `nightly-assignment-sync` v246 (deployed 2026-10-18) is main's version: reads stale journey `assignments`, zero Nexus calls | `git diff --stat origin/main...<branch>`; `get_edge_function nightly-assignment-sync` |
 | 7 | Nexus data: ingest DOES run on the extension's daily refresh (MGT-702 banked + Checkpoint 2 inserted 2026-10-20 18:48, due 2026-11-08); `capture_receipts.ingested_at` is not a freshness signal; DBA readings live in "Week Beginning <date>" page bodies; module_items frozen since 09-11; MGT-701 last captured 09-21, MGT-782 09-05 | `nexus-hub/docs/qc-evidence/RESEARCH-canvas-items-for-scheduling.md` |
 | 8 | No lead-time number was ever recorded; current = Apr-17 tiers (≤48h guaranteed, 2–7d sorted first, >7d no priority). Open owner questions from Aug–Sep: should >7d work get deadline priority; per-day cap | `docs/qc-evidence/RESEARCH-assignment-lead-time.md` |
+
+## ACT:parked-work-recovery (owner 2026-10-20)
+Owner: *"I'm fine with your recommendations for 1-3, but i want a list of what is left parked once done so i can say which to apply next. The j1-j15 updates should be surgical so that if there is anything that was added in the oct 15 overwrite that will be lost, i know what the difference will be before and after"*; *"I would never ask for an overwrite that would undo so much hard work. going forward any overwrite that will undo or degrade vs extend or add or enhance has to list what will no longer be in place... 'always' as a hard hook rule"*; *"wherever you pull the module dates needs to be consistent for what you would expect standard across courses"*.
+| # | Item | Status | Evidence |
+|---|---|---|---|
+| 1 | Ship N1d (nexus outline draft gate) + N2 (nexus course-chat retrieval key) | in progress | INVENTORY-parked-work.md |
+| 2 | Ship E2 (push gate terminated rules slice) + E3 (feasibility screenshots rule) | in progress | " |
+| 3 | Rebuild N1a/b on top of nexus dfc492cc (10-15) | queued | " |
+| 4 | J1–J15: before/after loss report per feature BEFORE applying | in progress | docs/qc-evidence/RESTORE-J1-J15-diff.md |
+| 5 | Hard hook: an overwrite that removes/degrades must list what will no longer be in place | AC first (gate = Tier 1) | eds-claude-skills |
+| 6 | Module/reading dates from ONE standard source rule across all courses | requirement recorded | — |
+| 7 | List of what remains parked after 1–3 | pending | — |
