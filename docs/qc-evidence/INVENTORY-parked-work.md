@@ -93,3 +93,104 @@ Not parked (0 unlanded code lines; squash-merged or ledger-only): `claude_schedu
 | H4 | `prevent-task-dupes` | 07-24 | cross-turn dedup in `create_huddle_task` | — | — | **on main** (`loadExistingOpenTitles`, huddle.functions.ts:1874); 9 residual lines are later rewrites | n/a |
 
 Merged, residual lines are later edits on main (OBSERVED: feature present on main, PRs merged): `claude_verify-inbound-email-watch` (PRs #82/#85/#87/#90/#93 merged), `claude_schedule-alerts` / `claude_schedule-brief-fix` / `claude_iris-brief-*` (`schedule-brief.server.ts` on main), `claude_priority-*`, `claude/nexus-*-tools` (56/563 and 5/633 residual), `claude_scheduler-one-user`. Companion change from journey PR #17 (`schedule_reminder` optional `task_id`) **is on main** (reminders.ts:35,129). Ledger/UAT-only branches (`verify/*`, `qa-progress`, `claude_ledger-*`, `claude_focus-uat`, `board-status-dropdown`, `tmp-appid`) carry no product code.
+
+**huddle-extension-app verdict (OBSERVED, re-fetched 2026-10-20, main @ 1ddb3e4):** one genuinely parked feature (H1, the agent knowledge library, PR #14, waiting on the owner's call). Everything else is either already on main, superseded, or one-off verifier/ledger material. **Bring-back risk for the repo as a whole: LOW** — no owner-approved feature is stranded here.
+
+---
+
+## 3. nexus-hub (deventerpriseds-org) — main @ e277f942 (2026-10-20)
+
+Re-fetched 2026-10-20. 45 branches ahead of main; most have 0 unlanded code lines (ledger/AC/verify-only, or squash-merged via PRs #53–#148). Six PRs are open: #150 (today, in flight — **not parked**, it is live work: the module-save outage fix), #149 and #136 (research docs only), and the three below that hold code.
+
+| # | Branch (PR) | Last | What it does (read from code + commit bodies) | Approval (quote) | Live? | Main now | Risk |
+|---|---|---|---|---|---|---|---|
+| N1 | `claude/nexus-course-backup-rag-kj5azd` **PR #127 OPEN**, commits after #125 merged (09-11 → 09-14), ~930 unlanded code lines, 16 files | 09-14 | **(a) Page-body capture gate:** the extension judged saved page BODIES by the page INDEX's coverage, threw away a partly-successful capture, and wrote a receipt counting pages *tried*, not *saved*. Adds a `partial` state (bank what arrived, `record_count` NULL). **(b) Page identity as an equivalence class:** one real page stored under a page id and a url is counted once (`pageVideos.ts` union-find). **(c) Import "Get transcript" uses the shared predicate** (stops a dead button on Kaltura/Zoom videos). **(d) Outline draft gate scope** (`outlineMapping.ts` `UNANSWERABLE_BY_ANY_SECTION` + option sets): stops refusing a draft over submission/course requirements and untaken "Option 1/2/3" alternatives | (a–c) branch actions.md: *"why are so many pages not saved?"* and *"fix everything you've pointed it and stop just saying you will"*. (d): *"this panel is architected, modeled and tested horribly. It is saying it cant create a draft for the silliest reasons … **fix immediately as it is blocking me.**"* | **No.** Ledger (d): "**Done, pushed, NOT deployed.**" PR body: "None of this has been seen in the owner's browser". SWA deploys from main (OBSERVED: main ledger line 825 "NOT LIVE: on `…kj5azd`; the SWA deploys from `main`") | **Partly redone for (a) only:** main's dfc492cc (10-15, PR #143) added a `coverageFor()` slug-bodies fallback, written from the owner's 09-21 MGT-701 capture (29 pages fetched, none banked). OBSERVED absent on main: the `partial` state, the receipt-count fix, the equivalence class (`pageIdentity` still single-key), `UNANSWERABLE_BY_ANY_SECTION`. `git merge-tree` = CONFLICT in `extension/orchestrator.js`, `one-scrape.test.mjs`, `manifest.json` (plus ledgers) | **MED.** (d) is self-contained in `outlineMapping.ts` with no conflicts and the owner called it blocking, so it's low on its own. (a) must be reconciled by hand with main's different fix of the same defect |
+| N2 | `claude/env-setup-agent-scenarios-0jmtoy` **PR #96 OPEN** (titled "Accuracy log…", body says "Net diff: one file, +10 lines") — but commits **9428ef9f + cfb663b6 were pushed onto it afterwards** | 09-08 | **A live retrieval bug fix hidden behind a docs PR.** The EMBA assistant chat scopes its pgvector search with `metadataFilter: {course_id}`. Commit body: measured over all 868 chunks, `topic_id` is on 868 and `course_id` on **0**, so "whenever the caller told the assistant which course the student meant, retrieval returned ZERO of that student's material, silently." Adds `courseMetadataFilter()` as the one home for the key, plus an 8-check guard test | **None found** (agent-found defect; no owner quote on the branch; main's actions.md and memory.md have **no mention** of it, OBSERVED by grep) | **No** | **Absent, and the bug is still live on main** (OBSERVED: `origin/main:api/src/functions/embaAssistantChat.ts:470` still `{ course_id: context.courseId }`; `knowledgeSearch.ts:139` uses the correct `topic_id`) | **LOW** — 174 lines, 5 files, API only. INFERRED the highest value-per-line item in this repo |
+| N3 | `claude/outline-attempts-override` **PR #82 OPEN** | 09-08 | Makes the outline retry ceiling (hard-coded 5) settable through an Azure app setting `MAX_OUTLINE_ATTEMPTS`, clamped to 1–10, so a UAT run can force the never-executed "repair / keep_all" discussion-gate branch. Includes a `verify-uat.yml` set/restore step | No owner quote. PR body: deploying it "puts unmerged code on the live API — an outward-facing action… **Raising it rather than taking it.**" | **No** (PR body: deployed SHA `3b86a2b` has `const MAX_OUTLINE_ATTEMPTS = 5`) | absent | **LOW–MED.** It's a test hook on a production path; `generateOutline.ts` has moved since 09-08 |
+| N4 | `claude/fix-turn-is-real` (no PR) | 09-08 | Bridge-probe workflow steps Q7.1–Q7.4, which assert a forwarded cross-app turn left real rows (pending_turns, rag_chunks) | n/a (probe) | CI only | absent; the sibling Q6 telemetry probe merged (#68/#69) | low, test-only |
+| N5 | `verify/assistant-batch-uat` (no PR) | 08-25 | Playwright checks for the assistant batch; commit title says "(not for merge)" | n/a | n/a | absent | discard (verifier artifact) |
+| N6 | `video-proof` (orphan, no common history) | 09-04 | Screenshots, an .srt and compare.json from one video-proof run | n/a | n/a | n/a | discard (evidence only) |
+
+Not parked (0 unlanded code lines, or ≤4 residual lines that are later rewrites of merged PRs): `claude/assignment-recapture-update` (#131 merged), `claude/d1-unknown-column-400` (#92), `claude/nexus-vector-search-route` (#95), `claude/nexus-write-preimage-log` (#94), `claude/optionb-merged*` (#111), `claude/uat-discussion-workflow` (#77), `claude/uat-token-owner-fence` (#93), `claude_schedule-program-id*` (#132/#133), `claude_parallel-test-runner` (#137), every `claude/ac-*`, `verifier/*` and `*-ledger` branch, `claude_canvas-scheduling-research` (#149, docs), `claude_sustained-extraction-research` (#136, docs).
+
+**nexus-hub verdict:** two owner-requested fixes are stranded in PR #127 (one of them, the draft gate, called "blocking" by the owner). One live bug fix (N2) is hidden behind a PR whose title and body describe something else.
+
+---
+
+## 4. android-bridge-template (deventerprisesds) — main @ f41e814 (2026-10-19)
+
+No open PRs. 14 branches ahead of main. **Nothing meaningful is parked.**
+
+| Branch (PR) | Last | What it is | Main now | Verdict |
+|---|---|---|---|---|
+| `claude_mut-volume-keys`, `claude_mut-silence-key`, `claude_mut-unlock-grace`, `claude_mut-echo-window`, `claude_mut-alarm-sound-order`, `claude_mut-gate-silent` | 10-15 → 10-19 | Each is a feature commit plus a top commit titled **"MUTATION (do not merge/throwaway)"**: a deliberately broken copy pushed so CI proves the alarm tests catch it | OBSERVED: the features underneath all merged via PRs #4–#9 (`claude/funny-faraday-k7z1an`, 10-15 → 10-19). With the mutation commit excluded, residual lines (8–22) are earlier drafts that #8/#9 later rewrote | **intentionally unmerged; safe to delete** |
+| `claude/alarm-sounds-source-ptnn0g` (PR #2 closed unmerged) | 07-26 | Huddle app config under id `cc6dd330…` | **superseded**: main carries a Huddle config under `8596e6c2…` | discard |
+| `claude/update-claude-md-docs-da8gc4` (PR #1 closed unmerged) | 07-21 | Premature alarm sound / double-dismiss / custom-sound fallback fixes | INFERRED superseded: the Oct alarm rewrite on main has an `autoStop`, a gate path and the sound fallback chain (`AlarmSoundService.kt`); 8 residual lines | discard |
+| `claude/deploy-fcm-supabase-prod-6jpp3q`, `claude/chat-notification-routing-a9vi93`, `claude/fcm-supabase-payload-mapping-fjecdx` (no PR) | 06-22 → 06-26 | June FCM/alarm fixes; deep-link routing | INFERRED superseded: main has `deepLink` intent routing (`MainActivity.kt:147`), a 60s tone cap (`GATE_TONE_MAX_MS`), the `task-reminders` channel | discard |
+
+**Bring-back risk: n/a.**
+
+---
+
+## 5. bridge-builder (deventerprisesds) — main @ 222ba67 (2026-06-27)
+
+The repo has been dormant since June. One PR ever (#1, merged).
+
+| Branch (PR) | Last | What it does | Approved? | Live? | Main now | Risk |
+|---|---|---|---|---|---|---|
+| `claude/app-load-caching-ieosfy` (no PR) | 06-29 | `web/src/main.tsx`: React Query `staleTime` 30s → 5 min, plus a `gcTime` (commit: "Matches the caching strategy set in journey-voice") | none found | no | absent (OBSERVED: main `staleTime: 30_000`) | low (6 lines) |
+| `claude/supabase-client-install-gouei1` (no PR) | 06-27 | Installs `@supabase/supabase-js` with empty client stubs in web + api | none found | no | absent | discard (scaffold; nothing uses it) |
+| `claude/new-session-mt737l` | 06-26 | — | — | — | PR #1 merged; 0 unlanded | n/a |
+
+---
+
+## 6. eds-claude-skills (deventerpriseds-org) — main @ 1a86d3e (2026-10-15)
+
+54 branches ahead of main; nearly all have 0 unlanded code lines, or small residuals from setup.sh rewrites (`claude_hdrslug-probe-*`, `claude_ledger-*`, `claude_verify-*`, `claude_gate-*` all merged via PRs #90–#119). **One PR is open (#23).** A 10-02 triage (main actions.md `ACT:open-pr-backlog-triage`) measured the rest by **"files main lacks"**, which misses changed CONTENT in files main already has, so the three below were re-checked by content.
+
+| # | Branch (PR) | Last | What it does | Approval | Live? | Main now | Risk |
+|---|---|---|---|---|---|---|---|
+| E1 | `claude/setup-registration-summary-1an4v1` **PR #23 OPEN** | 08-28 | ACT-12: `eds-perms-apply.py`, a single writer that re-applies `permissions.allow` / `autoMode.allow` to `launcher-settings.json` on every prompt (the launcher regenerates that file on each restart). Also fixes a defect where an unreadable settings file was overwritten with `{}`, destroying `permissions.hard_deny`. 58 checks, 26 mutations | none quoted. Main ledger 09-21: "Left **#23** (mid-session permission-repair gap, **still real**, but its `setup.sh` diff is ~39 versions stale) … OPEN for the owner's call" | no (PR: "NOT yet confirmed across a real container restart") | absent (OBSERVED: `eds-perms-apply` appears on main only in a triage note; setup.sh still merges the lists once, at build) | **HIGH** as a merge (setup.sh moved v19 → v68+); the idea must be re-derived against current setup.sh |
+| E2 | `claude_gate-marker-termination` (PR #92 **closed unmerged 10-02**) | 09-26 | Push gate: if the GLOBAL-RULES block in the rules file has no END marker (a truncated write), `sed` prints to end of file, so a stray `claude_` anywhere turns the branch rule on. The fix requires END to appear in the slice; adds 4 tests (T1–T4) | none (found by an independent verifier on PR #91) | no | **absent** (OBSERVED: `origin/main:scripts/eds-push-gate.sh:596` still pipes the open range straight into `grep -q 'claude_'`) | **LOW** (~20 lines in one function, plus tests) |
+| E3 | `claude_fanout-partition` (PR #93 **closed unmerged 10-02**) | 09-27 | Three things: (a) multi-agent-patterns: partition a fan-out by shared build output, not only by files owned; (b) **owner rule: "Always Provide screenshots for feasibility"** added to `verify-work.md`/`brief-checklist.md`; (c) wires `check-accuracy-themes.sh` as a preflight hook in setup.sh | (b) owner, 09-27: *"How can you possibly have access to hbr and or Kindle for testing? **Always Provide screenshots for feasibility.**"* | no | (a) and (b) **absent** (OBSERVED: no "build output" in multi-agent-patterns.md, no feasibility-screenshot rule in skills). (c) INFERRED superseded by #111/#112 (session-start theme surfacing) | (a)(b) **LOW** (prose in skills); (c) discard |
+| E4 | `claude/boost-app-setup-approach-4uruha` (PR #38 closed 10-02) | 09-03 | Two-layer setup: the build-time clone has no credential, so install at session start | owner's open decision per main tracker | — | **superseded** by #116 "Self-healing bootstrap…" (merged 10-08) | discard |
+| E5 | `claude/repo-access-check-corxal` (#14), `claude/update-claude-md-docs-da8gc4` (#2), `claude/new-session-eonf2r` (#1), `claude/deploy-wait-preference` (#5), `claude/eds-setup-postgres-connectors-nqujcn` (#37) | 07–09 | ac-writer agent; skills docs; wait-for-deploys skill; evidence | — | — | main ledger 09-21: "Closed #1, #2, #5, #14 as superseded … Closed #37 (main independently reached a *more* resolved version)" | discard |
+| E6 | `enforce-mandatory-skills`, `skills-merge-uat-into-verify`, `gate-require-memory`, `claude/eds-skills-setup-j8gy0e` (no PR) | 07-23/24 | July setup.sh edits | — | — | INFERRED superseded: `uat` is merged into `verify-work` on main; mandatory-skill enforcement lives in the Stop gate; setup.sh has been rewritten since | discard |
+
+---
+
+## SUMMARY — every parked feature, sorted by repo
+
+Labels: **O** = OBSERVED (read from git, the GitHub API or the live Supabase function source this pass); **I** = INFERRED.
+
+| Feature | Repo / branch | What it does | Approved? (quote) | Was live? | On main now? | Bring-back risk |
+|---|---|---|---|---|---|---|
+| J1 Scheduler de-fork, traits, weekend-evening protection, pinned appts, capacity guard | journey-voice / xokgv1 (PR #26 open; also in #17) | One shared window config; LLM trait classification; immovable appointments | "Agreed direction… make the working 80% → 100%" (O) | yes, overwritten 10-19 (O) | no (O) | HIGH |
+| J2 Overflow queue + morning nudge digest | journey-voice / xokgv1 | Overflowed high-impact tasks queued; one 8am digest | "you can build nudge as provided" (O) | yes, overwritten; table live (O) | no (O) | HIGH |
+| J3 External-meeting confirmation + slot release | journey-voice / xokgv1 | Confirm attendance, free slot if declined | memory "DONE, deployed, LIVE-verified" (O) | yes; `confirm-external-meeting` v125 orphaned (O) | no (O) | HIGH |
+| J4 dryRun harness | journey-voice / xokgv1 | Zero-write dry run of builder/parser | actions.md 08-11 request (O) | yes, overwritten (I) | no (O) | HIGH |
+| J5 Composite scoring + category maxPerDay + overdue escalation | journey-voice / xokgv1 | Switchable scoring model; PROF_ED ≤2/day | "build those two pieces… genuinely self-serve" (O) | yes, overwritten (O) | no (O) | HIGH |
+| J6 Task dedup + undo_dedup | journey-voice / xokgv1 | Normalized + semantic duplicate guard, Iris notice, undo | "are we missing a fuzzy dedup? **build one**" (O) | yes (v418), overwritten (O) | no; `task_dedup_log` live (O) | HIGH |
+| J7 Assignments read from Nexus (Azure) | journey-voice / xokgv1 | Nightly sync, list tool, Assignments page read live MIT course | "**yes** (approved plan)" / "nexus live no mirror needed" (O) | yes, overwritten (O, live v246 = main) | no (O) | HIGH |
+| J8 Weekend-aware per-day assignment cap + deadline-triage order | journey-voice / xokgv1 | One config-driven cap; deadline bands; recent-miss floor | "the plan looks good. go until deployed" (O) | cap yes, overwritten; miss-floor never (O) | no (O) | HIGH |
+| J9 Preserve task provenance | journey-voice / xokgv1 | Trigger merges `scheduling_context` | owner challenge → fix (O) | **still live in DB** (O) | SQL not on main (O) | LOW (record the migration) |
+| J10 TZ-aware notifications; 9am due-tomorrow | journey-voice / xokgv1 | No 4–5am pushes | bug-fix of owner report (I) | DB part still live (O); fn part overwritten (I) | no (O) | MED |
+| J11 Topic-index dedup | journey-voice / xokgv1 | classify-task-topic stops near-duplicates | none found | migration live (O); fn overwritten (I) | no (O) | MED |
+| J12 Deploy guard refusing stale refs + CI/test infra | journey-voice / xokgv1 | `assert-ref-contains-main`, checks.yml, drift check | "deploy workflow now REFUSES a stale ref (**owner request**)" (O) | CI only | no (O) — **its absence is how 10-19 overwrote J1–J11** | LOW–MED |
+| J13 Alarm Done/Doing/Backlog/Park via signed token | journey-voice / nsishi (PR #17 open) | HMAC action token, `alarm-action` fn | bug-fix; PR "code, already deployed" (O) | yes; **now broken** (live send-push mints no token) (O) | no (O) | MED |
+| J14 FCM dead-token prune | journey-voice / nsishi | Prune UNREGISTERED tokens | none quoted | prune absent live (O) | no (O) | LOW–MED |
+| J15 DB maintenance cron; unscheduled-task alarm cancel | journey-voice / nsishi | pg_cron vacuum; clear start alarms | — | live in DB (O) | SQL not on main (O) | LOW |
+| get_calendar_events tool | journey-voice / friendly-turing-mlr1bf | Expose synced calendar to Huddle briefs | none found | no (O) | no (O) | LOW |
+| React Query persistence | journey-voice / app-load-caching (PR #13 open) | Cache survives reloads | none found | no | no (O) | MED |
+| H1 Agent knowledge library | huddle-extension-app / lxia7z (PR #14 open) | Per-agent knowledge packs for 15 agents | **not approved**: "still needs the user's call" (O) | no | no (O) | MED |
+| N1a Page-body capture gate (partial state, honest receipt) | nexus-hub / kj5azd (PR #127 open) | Bank partly-successful page captures; count saved, not tried | "why are so many pages not saved?" / "fix everything you've pointed it" (O) | no (O, PR + ledger) | **partly redone** by dfc492cc 10-15 (slug fallback only); partial/receipt absent (O); conflicts in orchestrator.js (O) | MED |
+| N1b One real page = one equivalence class | nexus-hub / kj5azd | Page counted once across id/url rows | same request (O) | no | no (O) | LOW–MED |
+| N1d Outline draft gate stops refusing over non-content items | nexus-hub / kj5azd | `UNANSWERABLE_BY_ANY_SECTION` + option sets | "**fix immediately as it is blocking me**" (O) | no: "Done, pushed, NOT deployed" (O) | no (O) | **LOW** (one file, no conflict) |
+| N2 Course-scoped chat retrieval key fix | nexus-hub / env-setup-agent-scenarios-0jmtoy (behind docs PR #96) | Chat filters chunks by `topic_id` (on 868/868 rows) instead of `course_id` (on 0) | none (agent-found) | no | **no, and the bug is live** at `embaAssistantChat.ts:470` (O) | **LOW** |
+| N3 Overridable outline attempt ceiling | nexus-hub / outline-attempts-override (PR #82 open) | Test hook to reach the gate's repair branch | none; PR "raising it rather than taking it" (O) | no (O) | no (O) | LOW–MED |
+| QueryClient staleTime 5 min | bridge-builder / app-load-caching-ieosfy | Fewer refetches | none | no | no (O) | LOW |
+| E1 Permission-list re-applier (ACT-12) | eds-claude-skills / setup-registration-summary (PR #23 open) | Re-apply allow lists every prompt; never overwrite an unreadable file | none; ledger "still real… OPEN for the owner's call" (O) | no | no (O) | HIGH (stale setup.sh) |
+| E2 Push gate requires a terminated rules slice | eds-claude-skills / gate-marker-termination (PR #92 closed unmerged) | A truncated rules file can't switch the branch rule on | none (verifier finding) | no | no (O) | LOW |
+| E3 Feasibility studies ship screenshots + fan-out by build output | eds-claude-skills / fanout-partition (PR #93 closed unmerged) | Skill/prose rules | "**Always Provide screenshots for feasibility.**" (O) | n/a (prose) | no (O) | LOW |
+
+**Where the risk sits.** Almost all the HIGH-risk, owner-approved work is in **journey-voice** (J1–J12), and it was **live and then overwritten** by the 10-19 redeploy from main. Elsewhere, four items are small and cheap to bring back, and each is either owner-requested or fixes a live bug: **N1d** (owner: "blocking me"), **N2** (live bug), **E2** and **E3**. android-bridge-template and bridge-builder have nothing of consequence parked.
