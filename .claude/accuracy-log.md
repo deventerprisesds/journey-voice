@@ -557,3 +557,15 @@ hurt something upstream or downstream and that we know the original intent and c
 certainty."* A plan I had put forward twice as "recommended, reversible, nothing would move" was
 refuted by taking that demand seriously. The downstream half checked out; the upstream half did not,
 and no amount of re-reading my own reasoning would have found it.
+
+## 2026-10-19 — started a fix the moment a cause was found, before tracing why the code existed
+- **Claim/action:** found the post-check that removed the 8–10 PM task and began writing a fix in the same turn.
+- **Ground truth:** the check was a deliberate 2026-04-04 guardrail, linked to the owner's 2026-07-24 "common sense, not keywords" design (7eae8c2), and serves 4 callers (nightly builder, execute-tool auto_schedule, CalendarModule, useBatchScheduling). None of that was read before the edit.
+- **Source that would have settled it up front:** `git log --all -S "POST-VALIDATION 3"` + the 7eae8c2 memory section + `grep batch-calendar-scheduler`.
+- **Pattern:** cause found ≠ fix agreed. **Guard implied:** after a diagnosis, present cause + intent + callers + options and STOP for alignment before editing.
+
+## 2026-10-20 — "assignments captured but never made into rows" (15 vs 6) was a summing error
+- **Claim:** told the owner MGT-702 had 15 assignments captured but only 6 made into rows, MGT-701 14 vs 8.
+- **Ground truth:** those were SUMS of `record_count` over every repeated capture. Latest capture vs rows: MGT-701 6=6, MGT-702 5=5, MGT-782 1=1. Real gaps: MGT-701 modules 9 captured vs 5 rows; ungraded discussions have no table; MGT-701/782 not captured since September.
+- **Source that settles it:** `DISTINCT ON (canvas_course_id, kind) … ORDER BY captured_at DESC` on `content.capture_receipts`, joined to row counts.
+- **Pattern:** aggregated a ledger of repeated snapshots as if each row were new data. **Guard implied:** any count from a capture/receipt ledger must be taken from the LATEST snapshot per key, never summed.
