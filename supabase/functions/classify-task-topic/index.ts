@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { CATEGORY_WINDOW_MAPPING } from '../_shared/call-context-builder.ts';
+import { findMatchingTopic } from './topic-match.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -44,6 +45,11 @@ async function classifyTaskWithAI(
     : '(No existing topics)';
 
   const prompt = `You are a task organization assistant. Classify this task into a semantic topic.
+
+STRONGLY PREFER AN EXISTING TOPIC. Creating a near-duplicate of one that already exists (e.g. a
+separate "Career Development Tasks" when "Career Development" exists) fragments the user's board and
+is a failure. Only create a new topic when the task genuinely belongs to no listed topic — a broader
+existing topic is almost always the right answer. Do not invent a topic for a single task.
 
 EXISTING TOPICS FOR THIS USER:
 ${topicList}
@@ -153,11 +159,17 @@ serve(async (req) => {
       });
     }
 
-    // Get existing topics for this user
+    // Get existing topics for this user.
+    // LIVE ONLY: archived topics (no open tasks) and merged-away duplicates are excluded so they
+    // stop attracting new tasks and stop bloating the prompt. Measured 2026-08-25: 119 topics had
+    // accumulated for one user — 74 with zero open tasks — and stuffing all of them into every
+    // prompt made the model miss real matches, which spawned yet more near-duplicate topics.
     const { data: existingTopics, error: topicsError } = await supabase
       .from('task_topic_index')
       .select('id, topic_name, topic_summary, window_affinity, example_tasks, task_count')
       .eq('user_id', user_id)
+      .is('archived_at', null)
+      .is('merged_into', null)
       .order('task_count', { ascending: false });
 
     if (topicsError) {
@@ -198,11 +210,32 @@ serve(async (req) => {
 
     let topicId: string;
 
+    // Exact-then-normalized match against the LIVE topics, run for BOTH answers. The branch fix
+    // (1eda8f2) ran it only when the model said "existing"; a "new" answer such as
+    // "Career Development Tasks" while "Career Development" is live still forked a duplicate,
+    // because the unique constraint is on the exact name only. Restore step 5 closes that gap.
+    const liveMatch = findMatchingTopic(topics, classification.topic_name);
+    if (classification.action === 'new' && liveMatch) {
+      console.log(`[CLASSIFY-TOPIC] Model proposed new "${classification.topic_name}" but live "${liveMatch.topic_name}" matches — reusing it (duplicate avoided)`);
+      classification.action = 'existing';
+    }
+
     if (classification.action === 'existing') {
-      // Find the matching topic
-      const matchingTopic = topics.find(t => 
-        t.topic_name.toLowerCase() === classification.topic_name.toLowerCase()
-      );
+      // Find the matching topic.
+      //
+      // FRAGMENTATION GUARD (added 2026-08-25): this used to require an EXACT (case-insensitive)
+      // name match, and silently fell through to creating a NEW topic when the model answered
+      // "existing" with a slightly different string. That single line is the main reason one user
+      // accumulated 119 topics with clusters like "Career Development" / "Career Development Tasks" /
+      // "Career Coaching" / "Career Review Management" — the model MEANT the existing topic every
+      // time; the code just didn't recognise the name it gave back.
+      //
+      // Now: exact match first, then a normalized match (case/punctuation/stopword-insensitive), so
+      // an intended reuse is honoured instead of silently forking a duplicate.
+      const matchingTopic = liveMatch;
+      if (matchingTopic && matchingTopic.topic_name.toLowerCase() !== classification.topic_name.toLowerCase()) {
+        console.log(`[CLASSIFY-TOPIC] Fuzzy-matched "${classification.topic_name}" → existing "${matchingTopic.topic_name}" (duplicate avoided)`);
+      }
 
       if (matchingTopic) {
         topicId = matchingTopic.id;
@@ -230,6 +263,34 @@ serve(async (req) => {
     }
 
     if (classification.action === 'new') {
+      // REVIVE-BEFORE-CREATE: the live list excludes archived/merged topics, so the model can't see
+      // them and may "invent" a topic that already exists in archived form. Creating it again would
+      // both hit the (user_id, topic_name) unique constraint and re-fragment the board. Instead,
+      // un-archive the existing row (following merged_into to the canonical topic) and reuse it.
+      const { data: dormant } = await supabase
+        .from('task_topic_index')
+        .select('id, topic_name, task_count, example_tasks, merged_into')
+        .eq('user_id', user_id)
+        .or(`archived_at.not.is.null,merged_into.not.is.null`);
+
+      const dormantMatch: any = findMatchingTopic(dormant || [], classification.topic_name);
+
+      if (dormantMatch) {
+        // Follow the merge chain to the canonical topic, if this one was merged away.
+        const reviveId = dormantMatch.merged_into || dormantMatch.id;
+        await supabase
+          .from('task_topic_index')
+          .update({ archived_at: null, updated_at: new Date().toISOString() })
+          .eq('id', reviveId);
+
+        await supabase.from('task_topic_mappings').insert({ task_id, topic_id: reviveId });
+        console.log(`[CLASSIFY-TOPIC] Revived dormant topic "${dormantMatch.topic_name}" instead of creating a duplicate`);
+
+        return new Response(JSON.stringify({
+          success: true, topic_id: reviveId, topic_name: dormantMatch.topic_name, action: 'revived',
+        }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+
       // Get window affinity from category
       const windowAffinity = CATEGORY_WINDOW_MAPPING[category] || ['flexible'];
 
