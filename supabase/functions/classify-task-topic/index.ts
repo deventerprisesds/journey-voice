@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { CATEGORY_WINDOW_MAPPING } from '../_shared/call-context-builder.ts';
+import { findMatchingTopic } from './topic-match.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -34,41 +35,11 @@ interface ClassificationResult {
   topic_summary: string;
 }
 
-/**
- * FRAGMENTATION GUARD — normalize a topic name for duplicate detection.
- *
- * Lowercases, strips punctuation, drops filler words that the classifier tacks on inconsistently
- * ("tasks", "management", "projects", ...), and sorts the remaining tokens. So these all collapse
- * to the same key and are recognised as ONE topic instead of forking new rows:
- *   "Career Development" / "Career Development Tasks" / "Development Career"
- *   "Family Grooming Plans" / "Family Grooming Management" / "Family Grooming Tasks"
- * Deliberately conservative: it only collapses names that are the same words plus filler, never
- * merges genuinely different subjects (e.g. "Vehicle Maintenance" vs "Vehicle Rental" stay apart).
- */
-const TOPIC_FILLER_WORDS = new Set([
-  'task', 'tasks', 'management', 'managing', 'project', 'projects', 'plan', 'plans', 'planning',
-  'activities', 'activity', 'general', 'misc', 'miscellaneous', 'related', 'and', 'the', 'of', 'for',
-]);
-function normalizeTopicName(name: string): string {
-  const tokens = (name || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .split(/\s+/)
-    .filter(Boolean)
-    .filter((w) => !TOPIC_FILLER_WORDS.has(w));
-  // If filler was ALL there was, fall back to the raw words so we don't collapse to an empty key.
-  const base = tokens.length > 0
-    ? tokens
-    : (name || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean);
-  return [...base].sort().join(' ');
-}
-
 async function classifyTaskWithAI(
   taskTitle: string,
   taskCategory: string,
   existingTopics: Topic[]
 ): Promise<ClassificationResult> {
-  // (normalizeTopicName is defined at module scope — see the fragmentation guard below.)
   const topicList = existingTopics.length > 0
     ? existingTopics.map(t => `- "${t.topic_name}": ${t.topic_summary || 'No description'}`).join('\n')
     : '(No existing topics)';
@@ -239,6 +210,16 @@ serve(async (req) => {
 
     let topicId: string;
 
+    // Exact-then-normalized match against the LIVE topics, run for BOTH answers. The branch fix
+    // (1eda8f2) ran it only when the model said "existing"; a "new" answer such as
+    // "Career Development Tasks" while "Career Development" is live still forked a duplicate,
+    // because the unique constraint is on the exact name only. Restore step 5 closes that gap.
+    const liveMatch = findMatchingTopic(topics, classification.topic_name);
+    if (classification.action === 'new' && liveMatch) {
+      console.log(`[CLASSIFY-TOPIC] Model proposed new "${classification.topic_name}" but live "${liveMatch.topic_name}" matches — reusing it (duplicate avoided)`);
+      classification.action = 'existing';
+    }
+
     if (classification.action === 'existing') {
       // Find the matching topic.
       //
@@ -251,11 +232,7 @@ serve(async (req) => {
       //
       // Now: exact match first, then a normalized match (case/punctuation/stopword-insensitive), so
       // an intended reuse is honoured instead of silently forking a duplicate.
-      const matchingTopic = topics.find(t =>
-        t.topic_name.toLowerCase() === classification.topic_name.toLowerCase()
-      ) ?? topics.find(t =>
-        normalizeTopicName(t.topic_name) === normalizeTopicName(classification.topic_name)
-      );
+      const matchingTopic = liveMatch;
       if (matchingTopic && matchingTopic.topic_name.toLowerCase() !== classification.topic_name.toLowerCase()) {
         console.log(`[CLASSIFY-TOPIC] Fuzzy-matched "${classification.topic_name}" → existing "${matchingTopic.topic_name}" (duplicate avoided)`);
       }
@@ -296,10 +273,7 @@ serve(async (req) => {
         .eq('user_id', user_id)
         .or(`archived_at.not.is.null,merged_into.not.is.null`);
 
-      const dormantMatch = (dormant || []).find((t: any) =>
-        t.topic_name.toLowerCase() === classification.topic_name.toLowerCase() ||
-        normalizeTopicName(t.topic_name) === normalizeTopicName(classification.topic_name)
-      );
+      const dormantMatch: any = findMatchingTopic(dormant || [], classification.topic_name);
 
       if (dormantMatch) {
         // Follow the merge chain to the canonical topic, if this one was merged away.
