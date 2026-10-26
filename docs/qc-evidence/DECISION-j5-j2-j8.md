@@ -184,3 +184,56 @@ Separate, OBSERVED, not J2: on 2026-10-26 Huddle delivered **two** Iris morning 
 - Reversible: yes. Set the delivery hour, or the feature can be gated, with no data change.
 
 ---
+
+## §J8 — The recent-miss floor, checked against a year of your assignment instructions
+
+### J8.1 What it does, exactly (OBSERVED)
+
+J8 has two parts. You asked about the floor; the cap travels with it, so both are listed.
+
+| part | commit | what it does |
+|---|---|---|
+| **Coursework order (5 bands)** | `dce9f92`, `2a1883f` | Course assignments are ordered in 5 bands: **1** due within 14 days (soonest first) → **2** recently missed, ≤14 days late (most recent miss first) → **3** due more than 14 days out (soonest first) → **4** old backlog, >14 days late (oldest first) → **5** no date (branch `_shared/nexus.ts:380-452`). The band swap (2 ↔ 3) was owner-approved 2026-09-03 (`2a1883f`) |
+| **Recent-miss floor** | `dce1fbb` | Band 2 always holds **at least the 2 most recent distinct missed due DATES**, even when they are more than 14 days late (`resolveRecentCutoff`, `nexus.ts:353-378`; `DEFAULT_RECENT_FLOOR_COUNT = 2`, `:335`). It counts dates, not rows, so 3 assignments due the same day stay together. It can only **widen** band 2, never shrink it. Setting it to 0 turns it off (Settings field, `config.assignments.recentFloorCount`) |
+| **One per-day cap** | `dce9f92` | Builder, batch placer and smart scheduler all read one `resolveCategoryDailyCap()`. It uses the weekday value `maxPerDay`, with an optional weekend value `maxPerDayWeekend`; if there is no weekend value, the weekday value is used (`_shared/scheduling-defaults.ts:111-151`) |
+
+**Where the order matters** (OBSERVED, branch builder `:838-888`, `:1442-1447`, `:2121-2128`): the Tier A (±48h) and Tier B (2–7 days either side) split from main is unchanged and still **leads the whole day**. The bands decide the order **inside** each tier, and the order of assignments within the slots that score already gave them. They do not move an assignment ahead of non-coursework work. The floor's own docstring: *"This changes WHICH assignments lead the queue. It does NOT change how many are placed per day"* (`nexus.ts:330-334`).
+
+**Worked case from the record** (OBSERVED, `dce1fbb` message): MIT 8.1 was 2 days late, 7.1 9 days late, 6.1 16 days late. Once 8.1 and 7.1 are done, 6.1 is more than 14 days late, so it drops to band 4, which runs oldest first: *"the most recently missed assignment DEAD LAST behind five older ones."* With the floor, 6.1 stays in band 2 and leads the backlog.
+
+**Where it came from** (OBSERVED, branch `.claude/actions.md` "ACT: recent-miss floor — owner-proposed 2026-09-03"): your request, *"double check within the last 14 days or the last two ... active assignment dates ... so if a day has three or four assignments across courses they all get scored the same way."* Status then: "BUILT + PUSHED, deploy HELD". The same file later notes that `execute-tool` (the assignment list Iris reads) was redeployed with it on 09-03 20:59Z, so the **list order** briefly had the floor. The **builder** never ran it. Today: none of J8 is live (RESTORE §J8).
+
+**Today it would do nothing** (OBSERVED): your board has **0** open tasks linked to a course assignment (live count, 2026-10-26), so there is nothing to order. It starts to matter once Nexus intake (J7) creates assignment tasks again.
+
+### J8.2 Check against every expectation (E1–E14 from the research file)
+
+| # | expectation (owner words where they exist) | floor / J8 | why |
+|---|---|---|---|
+| E1 | Coursework comes from the course source, now Nexus (*"All readings and assignments are in nexus"*) | **compatible** | The floor orders whatever assignment tasks exist. It is source-agnostic. On its own it does nothing until J7 brings Nexus rows in |
+| E2 | Long-term view, refreshed (*"ensure you have a longterm view of them as they are refreshed"*) | **compatible** | The floor is computed over the **whole** assignment set every night ("Resolved across ALL THREE TIERS", builder `:873-877`), not over a window |
+| E3 | Max 2/day **weekdays only** (*"2 a day limit is only for weekdays not weekends"*) | floor: **compatible** (it does not change counts). **J8's cap: needs a tweak** | Your live config has `PROF_EDUCATION.maxPerDay = 2` and **no** `maxPerDayWeekend`. The resolver falls back to 2 on weekends (`scheduling-defaults.ts:147`), so after restore weekends are still capped at 2, against your instruction. Fix: set a weekend value. There is no "unlimited" setting (a 0 means "none allowed", `:123-124`), so use a number. The weekend window 10–20 holds at most 6 × 90-min blocks, so 6 means "no practical cap". The value is your call (research open question 3; 4 was seeded on 2026-08-29 and later wiped) |
+| E4 | Evenings on weekdays, daytime on weekends, never early morning; weekend evenings not auto-filled | **compatible** | The floor and the cap never touch windows. Window choice stays with category windows (`evening`, `weekends` in your config) and the 07-25 weekend-evening protection |
+| E5 | Never dropped for lateness (*"Dropping outstanding coursework because it is late is backwards"*) | **compatible, and it helps** | Nothing is removed. Without the floor the newest miss could sink to last place behind older misses; the floor keeps it near the front. (The separate 30-day skip in main's `nightly-assignment-sync` is a J7 matter, not the floor) |
+| E6 | Recently missed work goes ahead of far-future work | **compatible: this IS E6** | Band 2 (misses) sits above band 3 (far future), and the floor guarantees that band is never empty while misses exist. You proposed the floor on 2026-09-03 |
+| E7 | Due-soon bands at 48h and 7 days | **compatible** | Tier A (48h) and Tier B (7d) are unchanged and still lead. The 14-day bands only order work inside those tiers |
+| E8 | A "this weekend" view shows what is due that weekend | **compatible (n/a)** | Display rule; the floor does not touch views. Iris's list shows "most recent miss" as the band label |
+| E9 | Readings are real coursework | **compatible (neutral)** | The floor orders whatever has a due date. Readings first need dates (E10) and intake (open question 5) |
+| E10 | Inferred dates are marked as inferred | **compatible, one watch item** | The floor counts an **inferred** due date as a real "miss" the same as a published one. A reading whose estimated date passes could take one of the 2 floor slots. Not a conflict with any instruction. If unwanted, exclude inferred dates from the floor count |
+| E11 | One rule across courses, no per-course config (*"the config is not necessary in this case"*) | **compatible** | One user-level number (default 2), applied across all courses together. No per-course setting |
+| E12 | Finish ahead; don't be alerted with little time (*"some logic to try to complete things ahead of time"*) | **compatible, with a trade-off you already approved** | Band 1 (due within 14 days) still comes **before** the misses, so near-term work keeps priority. What the floor puts behind misses is work due **more than 14 days** out (band 3). That is the 09-03 swap you approved. The floor does not add lead time. E12 still needs its own rule (Tier C deadline privilege, research open questions 1, 2 and 6) |
+| E13 | Not hardcoded to DBA (*"dont want this hardcoaded to dba"*) | **compatible** | No program, course or title appears in the floor or the cap. The cap is by category (`PROF_EDUCATION`), the floor by due date |
+| E14 | Confirm priorities before the nightly build; 7-day brief | **compatible (n/a)** | The floor decides the order the build uses. It does not change when you are asked |
+
+### J8.3 Verdict for J8
+
+**The recent-miss floor contradicts none of your recorded instructions. It is your own 2026-09-03 request, and it is a no-op until course assignments are on the board again.** One tweak is needed in the cap that ships with J8: set a **weekend** value for `PROF_EDUCATION` (for example 6 = effectively uncapped in the 10–20 window). Otherwise weekends stay at 2, which contradicts *"2 a day limit is only for weekdays not weekends."* Optional: exclude inferred due dates from the floor count (E10). Reversible: yes. The floor is `recentFloorCount = 0` in Settings, and the weekend value is one field.
+
+---
+
+## Bottom line — the three decisions, restated
+
+| decision | options | recommendation |
+|---|---|---|
+| **J5** ranking | **(a)** restore composite as the default (your last choice, 2026-08-20); undated flagged tasks move from slots 7–11 to 19–25, overdue fresh tasks and money tasks rise to the top. **(b)** restore everything but leave priority order as the default, layering in the cap, the toggle and the Settings weights; ranking unchanged, so fresh deadlines stay behind every flag | **(a)**. It is the state you chose and is one toggle to undo. Pick (b) only if undated flags must stay on top |
+| **J2** 8am | They are different (exceptions + buttons, vs today's plan). **Keep both**, but limit the digest to the top 5 items with "+K more" (it ran at 23–41 lines/day), and optionally move it to 8:15 with the existing setting | Keep both, with the item cap |
+| **J8** floor | Turn it on as-is, plus set a weekend coursework cap (for example 6) so weekends are not held to 2 | Turn on + set the weekend value |
