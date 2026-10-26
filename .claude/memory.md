@@ -18,7 +18,7 @@ Feature status (fetched origin before writing; nothing here is owner-confirmed l
 | item | state | verification it actually had |
 |---|---|---|
 | N2 nexus course-chat retrieval key | merged nexus#154 (d6ecd4e); **API deploy succeeded** run 40373176069; NOT owner-confirmed | Tier 2: course-filter.test 8/8 under pinned tsc 5.8.3; mutate.sh FIRED on B2 + A2; premise re-measured live 2026-10-26 (880/880 chunks `topic_id`, 0 `course_id`) |
-| N1d nexus outline draft gate | merged nexus#152 (302ef28); web deploy run 40373135913 in progress | independent verifier record `docs/qc-evidence/VERIFY-outline-gate-scope-1.md` (nexus), 115-check suite, 5 mutations FIRED / 1 INERT (equivalent) |
+| N1d nexus outline draft gate | merged nexus#152 (302ef28); **web deploy succeeded** run 40373135913; NOT owner-confirmed | independent verifier record `docs/qc-evidence/VERIFY-outline-gate-scope-1.md` (nexus), 115-check suite, 5 mutations FIRED / 1 INERT (equivalent) |
 | E3 feasibility-screenshot rule + fan-out limit #4 | merged eds-claude-skills#124 (1ceb638) | Tier 3 (skill prose, no executable path); guards CI green; 7 related suites pass |
 | E2 push-gate terminated slice | merged earlier (f507a58) | — |
 | J1–J15 surgical restore | report only (RESTORE-J1-J15-diff.md), nothing applied; owner sees before/after first | — |
