@@ -13,8 +13,12 @@
   functions **auto-deploy on every push to `main`** (`deploy-supabase-functions.yml`, `on: push:
   branches:[main] paths: supabase/functions/**` — it deploys the CHANGED functions) — so the ship flow
   for an edge-fn fix is: merge it to `main` and the deploy fires itself. `workflow_dispatch` is also
-  available for a manual re-run against a working branch (input `function_name`, blank = changed, "all"
-  = force everything). `pg_net` is already enabled; async HTTP responses land in `net._http_response`.
+  available for a manual re-run (input `function_name`: a name = that one function, "all" = everything).
+  **A BLANK `function_name` on a dispatch deploys EVERY function, not "changed"** — a dispatch has no
+  `github.event.before`, so the range check falls through to `mode=all` (workflow lines ~88-93, read
+  2026-10-26; the input's own help text still says "changed" and is wrong). Dispatched from a branch
+  that lacks main's or another live branch's code, that silently overwrites every function — the
+  10-19 shape. Always name the function on a dispatch. `pg_net` is already enabled; async HTTP responses land in `net._http_response`.
   The vault is empty — don't rely on it.
 
 ## Huddle task-sync (this repo's outbound half)
