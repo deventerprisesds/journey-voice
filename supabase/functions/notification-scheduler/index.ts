@@ -6,6 +6,12 @@ import {
   WEEKLY_DIGEST_LOCAL_HOUR,
   WEEKLY_DIGEST_LOCAL_WEEKDAY,
 } from "../_shared/digest-content.ts";
+import {
+  isInQuietHours,
+  overdueRemindersAllowed,
+  generateOverdueReminders,
+  isTaskBackedEvent,
+} from "./reminder-rules.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -161,9 +167,10 @@ async function processUserNotifications(
   // NOTE: Due date and start time reminders are now handled by the database trigger
   // on the tasks table (schedule_task_reminders function) to prevent duplicates
 
-  // Process overdue reminders
-  if (prefs.overdue_reminders_enabled) {
-    const overdueReminders = generateOverdueReminders(tasks || [], prefs.user_id, now);
+  // Process overdue reminders — gated by quiet hours (previously fired at 5am ET, un-gated) and
+  // triggered on the USER's 9am, not the server's 9am-UTC. Both decisions live in ./reminder-rules.ts.
+  if (overdueRemindersAllowed(prefs, inQuietHours)) {
+    const overdueReminders = generateOverdueReminders(tasks || [], prefs.user_id, now, prefs.timezone);
     notifications.push(...overdueReminders);
   }
 
@@ -188,33 +195,6 @@ async function processUserNotifications(
   }
 
   return notifications;
-}
-
-function isInQuietHours(now: Date, prefs: NotificationPrefs): boolean {
-  const userTz = prefs.timezone || 'UTC';
-  const userTime = new Date(now.toLocaleString("en-US", {timeZone: userTz}));
-  
-  const quietStart = prefs.quiet_hours_start;
-  const quietEnd = prefs.quiet_hours_end;
-  
-  if (!quietStart || !quietEnd) return false;
-  
-  const currentHour = userTime.getHours();
-  const currentMinute = userTime.getMinutes();
-  const currentTime = currentHour * 60 + currentMinute;
-  
-  const [startHour, startMinute] = quietStart.split(':').map(Number);
-  const [endHour, endMinute] = quietEnd.split(':').map(Number);
-  
-  const startTime = startHour * 60 + startMinute;
-  const endTime = endHour * 60 + endMinute;
-  
-  // Handle overnight quiet hours (e.g., 22:00 to 08:00)
-  if (startTime > endTime) {
-    return currentTime >= startTime || currentTime < endTime;
-  } else {
-    return currentTime >= startTime && currentTime < endTime;
-  }
 }
 
 function getQuietHoursEnd(now: Date, preferences: NotificationPrefs): Date {
@@ -318,38 +298,6 @@ function generateStartTimeReminders(tasks: Task[], userId: string, now: Date): a
   return notifications;
 }
 
-function generateOverdueReminders(tasks: Task[], userId: string, now: Date): any[] {
-  const notifications: any[] = [];
-  const today = new Date(now);
-  today.setHours(0, 0, 0, 0);
-
-  for (const task of tasks) {
-    if (!task.due_date) continue;
-
-    const dueDate = new Date(task.due_date);
-    dueDate.setHours(0, 0, 0, 0);
-
-    // Task is overdue
-    if (dueDate < today) {
-      const daysOverdue = Math.floor((today.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24));
-      
-      // Send reminder every 3 days for overdue tasks, but only once per day to prevent spam
-      if (daysOverdue % 3 === 0 && now.getHours() === 9 && now.getMinutes() < 15) {
-        notifications.push({
-          user_id: userId,
-          task_id: task.id,
-          notification_type: 'overdue_reminder',
-          title: `Task Overdue (${daysOverdue} days)`,
-          body: `"${task.title}" was due ${daysOverdue} day${daysOverdue > 1 ? 's' : ''} ago`,
-          scheduled_for: new Date(now.getTime() + 5 * 60 * 1000).toISOString() // 5 minutes from now
-        });
-      }
-    }
-  }
-
-  return notifications;
-}
-
 function generateDailyDigest(tasks: Task[], userId: string, now: Date): any | null {
   const totalTasks = tasks.length;
   const urgentTasks = tasks.filter(t => t.priority === 'URGENT').length;
@@ -435,7 +383,27 @@ async function generateCalendarEventReminders(
 
   if (!events || events.length === 0) return notifications;
 
+  // Events that are just the calendar copy of a journey task (mirrored out to Outlook/Google) get
+  // NO calendar reminder: the task's own start reminder already alarms with its task id, so this
+  // one only produced a SECOND, task-less alarm (no Done/Doing) — and when both landed in the same
+  // delivery bucket they were batched into a task-less `messages` push. The link is recorded on
+  // either side: external_calendar_events.source_task_id, or tasks.external_event_id.
+  const taskBackedEventIds = new Set<string>();
+  const eventIds = events.map((e: any) => e.external_event_id).filter(Boolean);
+  if (eventIds.length > 0) {
+    const { data: linkedTasks } = await supabaseClient
+      .from('tasks')
+      .select('external_event_id')
+      .eq('user_id', prefs.user_id)
+      .in('external_event_id', eventIds);
+    for (const t of linkedTasks || []) if (t.external_event_id) taskBackedEventIds.add(t.external_event_id);
+  }
+
   for (const event of events) {
+    if (isTaskBackedEvent(event, taskBackedEventIds)) {
+      console.log(`Skipping calendar reminder for task-backed event ${event.external_event_id}`);
+      continue;
+    }
     // Calculate when the reminder should fire
     const eventStart = new Date(event.start_time);
     let scheduledFor = new Date(eventStart.getTime() - leadMinutes * 60 * 1000);
