@@ -25,10 +25,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Full history: the change detection below diffs github.event.before..github.sha, and a
-          # shallow clone does not contain `before` for a multi-commit push -- which would send
-          # every ordinary merge down the deploy-everything fallback.
+          # Full history, for two consumers:
+          # 1. the change detection below diffs github.event.before..github.sha, and a shallow
+          #    clone does not contain `before` for a multi-commit push -- which would send every
+          #    ordinary merge down the deploy-everything fallback;
+          # 2. the staleness guard below: `merge-base --is-ancestor` answers from a shallow
+          #    clone's TRUNCATED history without erroring, so it needs the real graph.
           fetch-depth: 0
+
+      - name: Refuse a ref that does not contain the base branch
+        # A deploy OVERWRITES the live function with whatever this ref holds, so deploying a
+        # branch that is behind `main` REVERTS every fix that landed on main since it forked.
+        # That is not hypothetical: on 2026-09-03 execute-tool was deployed from a branch
+        # missing 2fb90ac and re-broke explicit-time reschedules in production for ~2.5 hours.
+        # The prose rule already existed in two CLAUDE.md files and was still broken, so the
+        # check is mechanical now. Runs BEFORE the secret syncs so a refused deploy touches
+        # nothing at all.
+        run: |
+          git fetch --no-tags origin main
+          bash scripts/assert-ref-contains-main.sh origin/main HEAD
 
       - uses: supabase/setup-cli@v1
         with:
