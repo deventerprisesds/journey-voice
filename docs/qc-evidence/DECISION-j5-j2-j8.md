@@ -130,3 +130,57 @@ INFERRED: you ran composite as your **chosen default** from 2026-08-20 until mai
 - Reversible: yes, fully. One Settings toggle, or one config key.
 
 ---
+
+## §J2 — The 8am nudge digest (parked, J2) vs Iris's morning message (live, main #57)
+
+### J2.1 The two messages side by side (OBSERVED unless marked)
+
+| | **J2 nudge digest** (branch, not live) | **Iris morning message** (#57, live) |
+|---|---|---|
+| Question it answers | "What went **wrong** with tonight's plan, and what can I do about it?" | "What is **on** today, and later this week?" |
+| Who builds it | journey's nightly builder at 01:00, after placing the week (branch `nightly-schedule-builder/index.ts:2245-2315`, `_shared/nudges.ts`) | Huddle (`run-schedule-brief` → `schedule-brief-run.server.ts`), triggered by journey's 8am Morning Kickstart window call (main `notification-delivery/index.ts:585-610`, `iris-window.ts`) and also by Huddle's own 8am scheduler |
+| Time | Held to `config.nudges.deliverAtLocalHour`, default **8** local (`nudges.ts` `resolveDeliverHour`, builder `:325`). Only the nightly run sends it, not "Reschedule today" | 8:00 local (the Morning Kickstart window) |
+| Where it lands | **journey app chat** via `send-chat-message` with `sendPush:true` (main `notification-delivery/index.ts:632-660` handles `scheduled_chat`) + a phone push | **Huddle, Iris's 1:1** as a durable turn with `notify:"push"` (rides journey `send_push` → Android) |
+| Content | Title "N things worth a look", then one line per item: (a) **overflow**: "X is high-impact (factors) but couldn't fit DATE (no window capacity). You could bump Y (lower value) to make room today."; (b) **venue**: "X is scheduled at 7:30 PM, after most places close. Move it into business hours?" Each item carries buttons: Move / Bump / Leave it / Not now (snooze 7 days) | Spoken-style paragraph: "Hello Sir, just a reminder that today you have [meetings + classes with times and location], and on your task list you have [each scheduled task with time], and later in the week you have [day-by-day meetings/classes]" |
+| When it is silent | Nothing to flag → nothing sent. An identical undelivered digest is never re-sent (`planDigestDelivery`) | Never silent. Empty day → "nothing on the calendar"; failed read → says which source failed |
+| Is it running | No. Delivered 10 times, **2026-09-04 → 2026-09-13**, then stopped when main's builder replaced the branch's (live `scheduled_notifications`, `metadata.source='nudges'`, all 10 delivered) | Yes, daily |
+
+### J2.2 Real samples (OBSERVED)
+
+**J2 digest, 2026-09-13 08:00 ET** (journey `scheduled_notifications` id `02b4cfdf`, delivered 12:00:04Z). Title **"37 things worth a look"**:
+> 37 items on your schedule I'd flag:
+> • "Define Reusable Playbook Template for Nexus App" is high-impact (is_priority, overdue) but couldn't fit 2026-09-14 (no window capacity).
+> • "📚 Upload video for case- Summer Health" is high-impact (overdue) but couldn't fit 2026-09-14 (no window capacity).
+> • "Become a professional advisor for Claude Business" is high-impact (is_priority, overdue) but couldn't fit 2026-09-14 (no window capacity). …
+
+Digest sizes over its 10 live days: **min 1, max 41 items**. 23 / 28 / 30 / 32 / 41 / 37 on Sep 8–13. On Sep 10 and 12, every shown line suggested bumping the **same** task ("📚 Required Capstone Assignment 8.1…").
+
+**Iris morning message, 2026-10-26 08:00 ET** (Huddle `chat.pending_turns` id `schedule-brief-morning-2026-10-26`, read via the `azure-pg-query.yml` workflow, run 40389138000):
+> Hello Sir, just a reminder that today you have 7:00PM–10:00PM — MGT-782-W1 (202711) (class), followed by 7:00PM–10:00PM — MGT-782-W1 (202711) (meeting) on Zoom, and on your task list you have 9:00AM — Debug the scheduling selection for TaskOS, 10:00AM — Debug the WIP autowork in Huddle, … 5:00PM — Apply for the low-interest credit card …, 6:30PM — Get a haircut. And later in the week you have tomorrow at 10:00AM–11:30AM — EDS Team Sync on Microsoft Teams, tomorrow at 7:00PM–10:00PM — MGT-702-W1 …
+
+Also at ~8am today, two more journey items (live `scheduled_notifications`, 2026-10-26): the **Morning Kickstart** call/email at 12:00Z, and a **"Daily Task Summary"** push at 12:15Z reading "You have 88 active tasks".
+
+### J2.3 Overlap
+
+| overlap | how big | plain consequence |
+|---|---|---|
+| Same time (8:00) and both voiced as "Iris" | full | Two Iris messages arrive at 8am, one in journey chat and one in Huddle |
+| Both push to the phone | full | Two phone buzzes at 8am (plus Kickstart and the 8:15 summary) |
+| Same tasks mentioned | **small** | The brief lists tasks that **were placed**. Overflow items are, by definition, ones that were **not** placed, so they never appear in the brief. Only a **venue** item can appear in both: listed by time in the brief, with a "move it?" in the digest |
+| Same purpose | none | One reports the plan; the other lists the plan's exceptions and gives you buttons to fix them |
+
+### J2.4 Two facts that decide "valid" (OBSERVED; consequence INFERRED)
+
+1. **The digest's "high-impact" test lets almost everything through.** `classifyImpact` (branch `_shared/scheduling-defaults.ts:71-96`) marks a task high-impact if it has **any one** of: a money or communication word, the flag, an overdue date, due within 48h, or a score of 12+. Your board today has **42 overdue tasks out of 67**. So any task that does not fit qualifies, and the digest grows to dozens of lines. That matches the observed 23–41 items. As last delivered, it reads as a wall of "couldn't fit" lines, not a short nudge.
+2. **Stale rows are not a risk on restore.** 37 overflow rows from Sep 10–14 are still `open` in `task_overflow_queue` (live). But the branch builder deletes every open row at the start of each run (`nightly-schedule-builder/index.ts:1113`) before it queues a digest, so the first post-restore digest describes only that night's plan.
+
+Separate, OBSERVED, not J2: on 2026-10-26 Huddle delivered **two** Iris morning turns 6 seconds apart. One came from Huddle's own scheduler (id `schedule-brief-morning-2026-10-26-schedule-brief-u-a89e3652-…-2026102608`, 12:00:02Z), the other from journey's window trigger (id `schedule-brief-morning-2026-10-26`, 12:00:08Z), with near-identical text. `iris-window.ts:11` says the two share one turn key "so the owner gets ONE 8am message whichever fires first". The two ids differ, so that dedupe did not hold today. On Sunday 10-25 there was only one. This is a live #57 defect, independent of the J2 decision.
+
+### J2.5 Verdict for J2
+
+- **Different: yes** (OBSERVED). Different question, different app, different content. The only shared content is a venue-flagged task.
+- **Valid: yes in purpose, no in its last observed form** (INFERRED). An 8am list of "here is what didn't fit, tap to bump or snooze" is not something the Iris brief does. But at 23–41 lines a day it is noise.
+- **Keep both** (your rule), with one tweak before the J2 digest ships: limit what counts as an item. For example, show only the top N by score (N in Settings, seeded at 5) and add "+ K more in Daily Review". Or require **two** impact factors instead of one. Either is a small change inside `_shared/nudges.ts` / `classifyImpact`. The delivery hour is already a setting (`config.nudges.deliverAtLocalHour`). Moving it to, say, 8:15 would separate it from the Iris brief without code.
+- Reversible: yes. Set the delivery hour, or the feature can be gated, with no data change.
+
+---
