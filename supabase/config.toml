@@ -141,3 +141,9 @@ verify_jwt = false
 # cron's response.
 [functions.send-digests]
 verify_jwt = false
+
+# Called by the Android bridge's full-screen alarm buttons (Done/Doing) and its diagnostics, often
+# while the app is killed or signed out — so there is no Supabase JWT. Auth is the signed
+# single-task action token carried in the alarm push (see _shared/action-token.ts).
+[functions.alarm-action]
+verify_jwt = false
