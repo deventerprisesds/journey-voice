@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       function_name:
-        description: 'Function to deploy (leave blank for changed functions, "all" to force-deploy everything)'
+        description: 'Function to deploy, or "all" to force-deploy everything. Required: a blank dispatch fails (it has no push range, so it used to deploy everything)'
         required: false
         default: ''
       supabase_token:
@@ -85,6 +85,10 @@ jobs:
           elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "$INPUT" ]; then
             echo "mode=single" >> "$GITHUB_OUTPUT"
             echo "fn=$INPUT" >> "$GITHUB_OUTPUT"
+
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "::error::function_name is blank -- name a function or pass all. (A dispatch has no push range, so blank used to fall through to deploying EVERY function.)"
+            exit 1
 
           else
             # THE RANGE MUST MATCH THE PUSH, NOT THE LAST COMMIT.

@@ -26,6 +26,9 @@ on:
     branches:
       - main
       - 'claude/**'
+      # claude_<name> is the current Claude branch prefix (org rule, 2026-09-25); claude/ is the
+      # older form, kept so in-flight branches are still checked.
+      - 'claude_**'
   pull_request:
   workflow_dispatch:
 
