@@ -10,6 +10,7 @@
 //             and depends on it.)
 
 import { test } from 'node:test';
+import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import {
   OVERDUE_REMINDER_LOCAL_HOUR,
@@ -90,4 +91,15 @@ test('J13: an event that is a task mirror (either link side) is skipped; a real 
   assert.equal(isTaskBackedEvent({ source_task_id: null, external_event_id: 'evt-linked' }, linked), true);
   assert.equal(isTaskBackedEvent({ source_task_id: null, external_event_id: 'evt-meeting' }, linked), false);
   assert.equal(isTaskBackedEvent({ source_task_id: null, external_event_id: null }, linked), false);
+});
+
+// index.ts calls serve() on import, so its wiring cannot be exercised; assert it statically instead.
+// Each line below is the call site whose removal would reinstate the old behaviour.
+test('index.ts wiring: the scheduler actually calls the gated, timezone-aware rules', () => {
+  const src = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
+  assert.match(src, /if \(overdueRemindersAllowed\(prefs, inQuietHours\)\) \{/);
+  assert.match(src, /generateOverdueReminders\(tasks \|\| \[\], prefs\.user_id, now, prefs\.timezone\)/);
+  assert.match(src, /if \(isTaskBackedEvent\(event, taskBackedEventIds\)\) \{\s*\n[^\n]*\n\s*continue;/);
+  // (generateDueReminders, unused dead code from main, still reads now.getHours() === 9 -- untouched.)
+  assert.doesNotMatch(src, /now\.getHours\(\) === 9 && now\.getMinutes\(\) < 15/);
 });
