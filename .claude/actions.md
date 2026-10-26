@@ -654,11 +654,11 @@ Owner: *"I'm fine with your recommendations for 1-3, but i want a list of what i
 Owner: *"Option a surgical restore approved"*; *"I would need more details to determine if priority order is an improvement on composite or visa versa ... that may not require a whole replacement"*; *"keep both 8am if valid and different"*; *"I'm fine with turning on j8 as long as it doesn't contradict any other instructions I gave on assignments scheduling over the past year"*.
 | step | what | branch | status |
 |---|---|---|---|
-| 1 | J12 deploy guard + CI; blank dispatch must fail, not deploy all | `claude_restore-j12-deploy-guard` | PR https://github.com/deventerprisesds/journey-voice/pull/64 (9e2babf), 291/291, guard mutation FIRED; verifier running |
+| 1 | J12 deploy guard + CI; blank dispatch must fail, not deploy all | `claude_restore-j12-deploy-guard` | **merged** 569dbb8 (#64). Verifier PASS; its 2 findings fixed before merge (blank-dispatch behaviour test db6faa1, mutation FIRED; CLAUDE.md dispatch note 277449e). Deploys nothing. |
 | 2 | record live DB objects (J9/J15/J11/J2/J3/J6), renamed to applied versions; apply nothing | `claude_restore-db-records` | **merged** ae96cbb (https://github.com/deventerprisesds/journey-voice/pull/63); 7 files md5-match applied SQL; deploys nothing |
-| 3 | J13 alarm action token + J14 FCM prune (notification-delivery untouched) | `claude_restore-j13-alarm-actions` | PR https://github.com/deventerprisesds/journey-voice/pull/65 (dca92b1); deploys ALL 52 fns (_shared); 7 verify_jwt pins added; security verifier running |
-| 4 | J10 TZ-aware notification-scheduler | `claude_restore-j10-notify-timezone` | building |
-| 5 | J11 topic dedupe | `claude_restore-j11-topic-dedupe` | building |
+| 3 | J13 alarm action token + J14 FCM prune (notification-delivery untouched) | `claude_restore-j13-alarm-actions` | PR #65 **HELD**: verifier FAIL C2-SEC1 (unauthenticated FCM registration lets another device receive the owner's action tokens; send-push mints for any taskId). Token code itself CONFIRMED (15/15 probes). Security fix lane running. |
+| 4 | J10 TZ-aware notification-scheduler | `claude_restore-j10-notify-timezone` | PR https://github.com/deventerprisesds/journey-voice/pull/66 (11/11, 5/5 mutations FIRED); updating onto main, merge on green CI |
+| 5 | J11 topic dedupe | `claude_restore-j11-topic-dedupe` | PR https://github.com/deventerprisesds/journey-voice/pull/67 (6/6, 6/6 FIRED; includes gap fix 989095f); updating onto main, merge on green CI |
 | 6 | J6 dedup (flag OFF, undoDedup status fix) | — | after 1–5 |
 | 7 | J7 Nexus reads | — | after 6 |
 | 8 | J1/J4/J2/J3/J5/J8 scheduler stack | — | after 7; J5 = needs decision evidence (DECISION-j5-j2-j8.md); J2 = keep both if valid+different; J8 = on unless it contradicts history |
