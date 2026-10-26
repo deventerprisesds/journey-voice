@@ -607,3 +607,63 @@ else that is strictly backend". Labels only; URL, repos, Supabase, secrets and t
 | 2 | Email footer "Sent by Journey" → "Sent by TaskOS" | **deployed** | deventerprisesds/journey-voice#60 (990b60d); deploy run 39287074527 success; live `notification-delivery` v591 source contains "Sent by TaskOS" |
 | 3 | Android app name + widget → TaskOS | built | android-bridge-template f5e549a → TaskOS v1.0.11 (run 39288362792) |
 | 4 | Owner sees TaskOS on emails / launcher / widget | **NOT confirmed live** | — |
+
+## ACT:empty-evening-2026-10-19 — "why was the evening and after work blocks empty" (diagnosis; fix AWAITING OWNER ALIGNMENT)
+Owner: *"why was the evening and after work blocks empty for the schedule that was built for today?"*, then
+*"you are moving too fast without getting alignment ... i dont trust that you have looked upstream and downstream"*.
+| # | Finding | Evidence |
+|---|---|---|
+| 1 | Today's schedule was built at 1:00 AM ET on the WIPED settings (restore landed 12:27 PM ET, after the build) — defaults: after_work 17–22, Ventures → after_work | `activity_log` nightly_schedule_built 05:01Z; `user_scheduling_prefs.updated_at` 16:27Z |
+| 2 | Builder filled after_work 5–10 PM on paper (DBA, Aha!, Slack AI, CTO Playbooks 2h = 300/300 min) | `activity_log` step PLACEMENT_2026-10-19 |
+| 3 | Exact-time step placed CTO Playbooks 8–10 PM; the post-check (`batch-calendar-scheduler` POST-VALIDATION 3, gpt-4o-mini, added by Lovable 2026-04-04 `6bf8ffc` "15-minute grid and guardrails") REMOVED it: "may be too late for focused work" | function log 2026-10-19T05:00:22Z |
+| 4 | Retry put it 8–10 AM (morning, not a Ventures window) → rejected → rolled to Tue 6:15–8:15 PM | logs 05:00:30Z; `tasks` row 9f56f32a |
+| 5 | Same 1 AM run: 9 post-check removals across the week, 8 of 9 "too late"-style for 8–9:30 PM slots, 1 haircut-at-lunch; 0 of the kinds it was built for (wrong day / venue closed) | function logs 05:00–05:01Z |
+| 6 | From tonight (restored settings) weekday 5–7 PM = Life only, 7–10 PM = Education/Prof-Ed only (3 open, max 2/day), Ventures weekends only → weekday evenings will be sparse for a DIFFERENT reason | `user_scheduling_prefs.config` |
+| 7 | Draft fix (narrow what the post-check may remove) written on `claude_schedule-sanity-timing`, NOT committed/deployed — owner asked for alignment first | local working tree |
+| 8 | Owner ruling 2026-10-20: the post-check removing late business-type work and a lunchtime haircut is CORRECT. Draft "narrow it" fix DISCARDED (never committed) | owner message |
+| 9 | There is NO 8 AM build. Only cron = `nightly-schedule-builder` `0 5 * * *` UTC (1 AM ET). The 8:00 "updated" stamps on Mon were Terry's Monday groom (assign/tag/rank); task times matched the 1 AM log slot-for-slot | `cron.job`; `activity_log` groom-summary push 12:00:25Z; function log 05:00:20Z |
+| 10 | Course items reach journey only from Google Sheets (EMBA, MIT, schedule) via a MANUAL "Sync" button (AssignmentSyncSettings). Last sync 2026-04-06; newest due date in `assignments` 2026-06-23; 0 items due today or later → nothing for nightly-assignment-sync to turn into evening tasks | `sync_logs`; `assignments` max(due_date) |
+| 11 | When items do arrive, they become PROF_EDUCATION tasks (now evening+weekends) capped at MAX_ASSIGNMENTS_PER_DAY=2 — the spreading mechanism exists; the data feed is what is stale | `nightly-assignment-sync`; `_shared/scheduling-defaults.ts:18` |
+
+## ACT:dba-evenings — DBA readings/assignments from Nexus, spread ahead of time (owner 2026-10-20) — PLAN AWAITING GO
+Owner: *"All readings and assignments are in nexus. focus on dba program. 2 a day limit is only for weekdays not weekends. there should be some logic to try to complete things ahead of time not alerted with little time to work with."*
+| # | Finding | Evidence |
+|---|---|---|
+| 1 | Canvas → Nexus only via the Nexus Chrome extension when a course is opened (0.7.1 refresh-on-open not yet owner-confirmed) | nexus-hub `.claude/actions.md` ACT:course-refresh-on-load |
+| 2 | Nexus → journey: NO link exists. journey's `nightly-assignment-sync` reads only journey's own `assignments` table (stale since 2026-04-06) | `nightly-assignment-sync/index.ts`; `sync_logs` |
+| 3 | DBA in Nexus = MGT-701/702/782: 10 assignments, all due ≤ 2026-10-12 or undated; readings = 16 Pages + 51 Files in undated modules, 1 linked to a session; upcoming sessions 10-26, 10-27, 11-09, 11-10 | nexus db-query runs 39477107857, 39477686066 |
+| 4 | Ahead-of-time today: assignment Tier A ≤48h (deadline-critical), Tier B 3–7d, Tier C >7d competes like any task → work is pushed only in the last week, hard only in the last 48h | `nightly-schedule-builder/index.ts:648-690,1076-1100` |
+| 5 | 2-a-day cap applies every day: `MAX_ASSIGNMENTS_PER_DAY=2` (Tier B/C) + PROF_EDUCATION `maxPerDay: 2` | `_shared/scheduling-defaults.ts:18,40`; owner config |
+| 6 | **REGRESSION (measured):** the owner-approved Aug–Sep work lives ONLY on unmerged `origin/claude/huddle-journey-integration-xokgv1` (64 commits, ~7.7k lines in supabase/ + src/: `_shared/nexus.ts` Nexus reader, `assignment-cadence.ts`, weekend-aware cap 2 weekday / 4 weekend, nudges, task-dedup, meeting confirmation, overflow queue, 9am tz-aware due-tomorrow migration). LIVE `nightly-assignment-sync` v246 (deployed 2026-10-18) is main's version: reads stale journey `assignments`, zero Nexus calls | `git diff --stat origin/main...<branch>`; `get_edge_function nightly-assignment-sync` |
+| 7 | Nexus data: ingest DOES run on the extension's daily refresh (MGT-702 banked + Checkpoint 2 inserted 2026-10-20 18:48, due 2026-11-08); `capture_receipts.ingested_at` is not a freshness signal; DBA readings live in "Week Beginning <date>" page bodies; module_items frozen since 09-11; MGT-701 last captured 09-21, MGT-782 09-05 | `nexus-hub/docs/qc-evidence/RESEARCH-canvas-items-for-scheduling.md` |
+| 8 | No lead-time number was ever recorded; current = Apr-17 tiers (≤48h guaranteed, 2–7d sorted first, >7d no priority). Open owner questions from Aug–Sep: should >7d work get deadline priority; per-day cap | `docs/qc-evidence/RESEARCH-assignment-lead-time.md` |
+
+## ACT:parked-work-recovery (owner 2026-10-20)
+Owner: *"I'm fine with your recommendations for 1-3, but i want a list of what is left parked once done so i can say which to apply next. The j1-j15 updates should be surgical so that if there is anything that was added in the oct 15 overwrite that will be lost, i know what the difference will be before and after"*; *"I would never ask for an overwrite that would undo so much hard work. going forward any overwrite that will undo or degrade vs extend or add or enhance has to list what will no longer be in place... 'always' as a hard hook rule"*; *"wherever you pull the module dates needs to be consistent for what you would expect standard across courses"*.
+| # | Item | Status | Evidence |
+|---|---|---|---|
+| 1 | Ship N1d (nexus outline draft gate) + N2 (nexus course-chat retrieval key) | both **merged** 2026-10-26 (N1d 302ef28, N2 d6ecd4e); N2 API deploy **succeeded** (run 40373176069); N1d web deploy **succeeded** (run 40373135913); NOT confirmed live by owner. N2 premise re-measured today: 880/880 chunks `topic_id`, 0 `course_id` | https://github.com/deventerpriseds-org/nexus-hub/pull/152 , https://github.com/deventerpriseds-org/nexus-hub/pull/154 |
+| 2 | Ship E2 (push gate terminated rules slice) + E3 (feasibility screenshots rule) | E2 **merged** f507a58 (eds-claude-skills#123); E3 **merged** 1ceb638 (eds-claude-skills#124, guards green) | https://github.com/deventerpriseds-org/eds-claude-skills/pull/123 |
+| 3 | Rebuild N1a/b on top of nexus dfc492cc (10-15) | built: PR open https://github.com/deventerpriseds-org/nexus-hub/pull/155 (19a3ff3, ext 0.7.4); verify loop 1 FAIL (F1: body-less 200 pages dropped from expected total; all-empty wrote settled 0) → fixed bd6f755/5db56a1, 3/3 mutations FIRED, 225/225; verify loop 2 running | " |
+| 4 | J1–J15: before/after loss report per feature BEFORE applying | report COMPLETE (c66ac9c): 14 main changes at risk, 3 need hand-resolution; 8-step apply order, J12 first; presented to owner, nothing applied | docs/qc-evidence/RESTORE-J1-J15-diff.md |
+| 5 | Hard hook: an overwrite that removes/degrades must list what will no longer be in place | AC done: 84 ACs, eds-claude-skills 7275e52 (`AC-overwrite-loss-gate.md`); build lane running on `claude_overwrite-loss-gate` with the 3 recommended (reversible) defaults; Tier 1, so independent verifier before merge | eds-claude-skills |
+| 6 | Module/reading dates from ONE standard source rule across all courses | history research COMPLETE (0915a8c): no prior lead-time rule exists; DBA Pre-Work→Session N pairing is the natural reading deadline; open questions listed | docs/qc-evidence/RESEARCH-assignment-scheduling-history.md |
+| 7 | List of what remains parked after 1–3 | pending | — |
+
+## ACT:j-restore (owner 2026-10-26)
+Owner: *"Option a surgical restore approved"*; *"I would need more details to determine if priority order is an improvement on composite or visa versa ... that may not require a whole replacement"*; *"keep both 8am if valid and different"*; *"I'm fine with turning on j8 as long as it doesn't contradict any other instructions I gave on assignments scheduling over the past year"*.
+| step | what | branch | status |
+|---|---|---|---|
+| 1 | J12 deploy guard + CI; blank dispatch must fail, not deploy all | `claude_restore-j12-deploy-guard` | PR https://github.com/deventerprisesds/journey-voice/pull/64 (9e2babf), 291/291, guard mutation FIRED; verifier running |
+| 2 | record live DB objects (J9/J15/J11/J2/J3/J6), renamed to applied versions; apply nothing | `claude_restore-db-records` | **merged** ae96cbb (https://github.com/deventerprisesds/journey-voice/pull/63); 7 files md5-match applied SQL; deploys nothing |
+| 3 | J13 alarm action token + J14 FCM prune (notification-delivery untouched) | `claude_restore-j13-alarm-actions` | PR https://github.com/deventerprisesds/journey-voice/pull/65 (dca92b1); deploys ALL 52 fns (_shared); 7 verify_jwt pins added; security verifier running |
+| 4 | J10 TZ-aware notification-scheduler | `claude_restore-j10-notify-timezone` | building |
+| 5 | J11 topic dedupe | `claude_restore-j11-topic-dedupe` | building |
+| 6 | J6 dedup (flag OFF, undoDedup status fix) | — | after 1–5 |
+| 7 | J7 Nexus reads | — | after 6 |
+| 8 | J1/J4/J2/J3/J5/J8 scheduler stack | — | after 7; J5 = needs decision evidence (DECISION-j5-j2-j8.md); J2 = keep both if valid+different; J8 = on unless it contradicts history |
+
+## ACT:v2-outline-gate (owner 2026-10-26: "apply V2 next")
+Drafts still refuse over submission-mechanics / word-count rows the extractor typed `format_requirement` (R7, R19, R22 on the owner's own assignment; VERIFY-outline-gate-scope-1.md FINDING V2). Fix direction: classify by CONTENT in one shared function, not by the inconsistently-assigned type; never exclude `format_requirement` wholesale (R24 / B51 rows are genuinely section-answerable). Tier 1 (gate): AC lane running → `claude_outline-gate-by-content` (nexus-hub), docs/ac/AC-OUTLINE-GATE-BY-CONTENT.md.
+- 2026-10-26 FOUND (huddle, not yet worked): two near-identical Iris 8am messages sent 6s apart under two different ids on 10-26; the once-per-day dedupe did not hold. Evidence: DECISION-j5-j2-j8.md §J2 (azure-pg-query run 40389138000). Status: reported to owner, awaiting go.
+- 2026-10-26 J5/J2/J8 decision evidence COMPLETE (2d89400, docs/qc-evidence/DECISION-j5-j2-j8.md); presented to owner.

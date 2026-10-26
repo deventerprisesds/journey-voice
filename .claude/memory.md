@@ -12,6 +12,24 @@ Last updated: 2026-10-15
 > distrust, never the sections. `actions.md` has no file-level stamp at all, deliberately, for
 > the same reason: its ACT entries each carry their own date.
 
+## Active work — 2026-10-26: parked-work recovery (ACT:parked-work-recovery)
+
+Feature status (fetched origin before writing; nothing here is owner-confirmed live):
+| item | state | verification it actually had |
+|---|---|---|
+| N2 nexus course-chat retrieval key | merged nexus#154 (d6ecd4e); **API deploy succeeded** run 40373176069; NOT owner-confirmed | Tier 2: course-filter.test 8/8 under pinned tsc 5.8.3; mutate.sh FIRED on B2 + A2; premise re-measured live 2026-10-26 (880/880 chunks `topic_id`, 0 `course_id`) |
+| N1d nexus outline draft gate | merged nexus#152 (302ef28); **web deploy succeeded** run 40373135913; NOT owner-confirmed | independent verifier record `docs/qc-evidence/VERIFY-outline-gate-scope-1.md` (nexus), 115-check suite, 5 mutations FIRED / 1 INERT (equivalent) |
+| E3 feasibility-screenshot rule + fan-out limit #4 | merged eds-claude-skills#124 (1ceb638) | Tier 3 (skill prose, no executable path); guards CI green; 7 related suites pass |
+| E2 push-gate terminated slice | merged earlier (f507a58) | — |
+| J1–J15 surgical restore | report only (RESTORE-J1-J15-diff.md), nothing applied; owner sees before/after first | — |
+| N1a/b rebuild on dfc492cc | lane on nexus `claude_page-capture-partial` | pending |
+| overwrite-loss hard hook | AC lane (eds-claude-skills AC-overwrite-loss-gate.md); Tier 1 → verifier required after build | pending |
+
+Traps learned today:
+- nexus `scripts/lib/compile-api-module.mjs` calls `npx tsc`; with no root `node_modules` npx picks the global tsc **6.0.2**, which refuses command-line files when a tsconfig exists (TS5112). Run root `npm ci` first so it resolves tsc 5.8.3, as CI does.
+- `isolation: worktree` makes a worktree of the session cwd's repo, not the target repo — give lane agents their own clone in the scratchpad instead.
+- A "container restored" banner can be a false alarm: ListAgents showed all four lanes still running. Check ListAgents before re-spawning.
+
 ## App name is TaskOS (2026-10-19) — labels only
 Owner chose **TaskOS**. Only what a person sees changes; `journey-voice.lovable.app`, repo names,
 `JOURNEY_PROXY_TOKEN`, Supabase project and the Android package stay. `Google.en-US-Journey-D` is a Google TTS
