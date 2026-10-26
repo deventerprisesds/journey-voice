@@ -642,10 +642,10 @@ Owner: *"All readings and assignments are in nexus. focus on dba program. 2 a da
 Owner: *"I'm fine with your recommendations for 1-3, but i want a list of what is left parked once done so i can say which to apply next. The j1-j15 updates should be surgical so that if there is anything that was added in the oct 15 overwrite that will be lost, i know what the difference will be before and after"*; *"I would never ask for an overwrite that would undo so much hard work. going forward any overwrite that will undo or degrade vs extend or add or enhance has to list what will no longer be in place... 'always' as a hard hook rule"*; *"wherever you pull the module dates needs to be consistent for what you would expect standard across courses"*.
 | # | Item | Status | Evidence |
 |---|---|---|---|
-| 1 | Ship N1d (nexus outline draft gate) + N2 (nexus course-chat retrieval key) | in progress | INVENTORY-parked-work.md |
-| 2 | Ship E2 (push gate terminated rules slice) + E3 (feasibility screenshots rule) | E2 **merged** f507a58 (eds-claude-skills#123); E3 in progress | https://github.com/deventerpriseds-org/eds-claude-skills/pull/123 |
-| 3 | Rebuild N1a/b on top of nexus dfc492cc (10-15) | queued | " |
-| 4 | J1–J15: before/after loss report per feature BEFORE applying | in progress | docs/qc-evidence/RESTORE-J1-J15-diff.md |
-| 5 | Hard hook: an overwrite that removes/degrades must list what will no longer be in place | AC first (gate = Tier 1) | eds-claude-skills |
+| 1 | Ship N1d (nexus outline draft gate) + N2 (nexus course-chat retrieval key) | both **merged** 2026-10-26 (N1d 302ef28, N2 d6ecd4e); deploy runs in progress; NOT confirmed live by owner. N2 premise re-measured today: 880/880 chunks `topic_id`, 0 `course_id` | https://github.com/deventerpriseds-org/nexus-hub/pull/152 , https://github.com/deventerpriseds-org/nexus-hub/pull/154 |
+| 2 | Ship E2 (push gate terminated rules slice) + E3 (feasibility screenshots rule) | E2 **merged** f507a58 (eds-claude-skills#123); E3 PR open (fab4fe6), guards CI running | https://github.com/deventerpriseds-org/eds-claude-skills/pull/123 |
+| 3 | Rebuild N1a/b on top of nexus dfc492cc (10-15) | lane running (branch `claude_page-capture-partial`, PORT-N1ab.md) | " |
+| 4 | J1–J15: before/after loss report per feature BEFORE applying | J1–J5 written (75737e0); J6–J15 + summary lane running | docs/qc-evidence/RESTORE-J1-J15-diff.md |
+| 5 | Hard hook: an overwrite that removes/degrades must list what will no longer be in place | AC lane running (ac-writer); every PR body now carries the section by hand meanwhile | eds-claude-skills |
 | 6 | Module/reading dates from ONE standard source rule across all courses | requirement recorded | — |
 | 7 | List of what remains parked after 1–3 | pending | — |
