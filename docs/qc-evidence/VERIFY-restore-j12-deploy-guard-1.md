@@ -100,3 +100,35 @@ Not an equivalent mutation: the mutant is the same shell logic as main's step, a
 
 **Finding F2 (UNPROVEN guard):** the blank-dispatch refusal -- record section 7 item 1, the PR's one new behaviour -- is protected only by this verification's hand harness, not by any test in the repo. A later edit or a 3-way merge of the branch's `f13d7f7` deploy-loop hunk (the J4 candidate the record names) could drop it silently with `checks.yml` green.
 
+## C7 -- `checks.yml` passes on this branch's tree, and on main after merge: **CONFIRMED**
+
+`checks.yml` has no dependency-install step (checkout -> setup-node 22 -> `node --version` -> `npm test` -> `npm run check:symbols` -> `bash scripts/assert-ref-contains-main.test.sh`), and no `continue-on-error`. To mirror a fresh runner, each step ran in a clean `git worktree` with **no `node_modules`** (count `0`) under `env -i HOME=<empty dir> PATH=$PATH bash -e -c` (no global git identity; the guard test sets its own `user.email`/`user.name` inside each scratch repo, `scaffold()` lines 26-27).
+
+| tree | node --version | npm test | check:symbols | guard test |
+|---|---|---|---|---|
+| `9e2babf` (PR head) | rc 0 | rc 0, `# tests 291 / # fail 0` | rc 0, `0 NEW ... 1 known` | rc 0, `7 passed, 0 failed` |
+| `1f421a8` = `git merge-tree --write-tree origin/main 9e2babf` committed with parents `ae96cbb` + `9e2babf` (what main becomes) | rc 0 | rc 0, 291 / 0 fail | rc 0, `0 NEW ... 1 known` | rc 0, 7/0 |
+
+So main's current content (including PR #63's migrations) does not make the new CI red for an unrelated reason; later PRs start green. The guard-test step tests the script against throwaway repos, NOT against the PR's own ref, so C4's "HEAD now behind main" does not turn this PR's Checks red.
+
+Observations (not defects):
+- `check-edge-deploy-drift.yml` fires on `workflow_run: completed` with **no `conclusion == 'success'` filter**, so it also runs after a refused or blank-dispatch deploy. Under `workflow_run`, checkout takes the default branch, so it compares live against `main`. That is still a meaningful check, but a deploy refused by the new guard will be followed by a drift run whose result has nothing to do with that refusal. It reads `secrets.SUPERBASE_ACCESS_TOKEN`, the same (misspelled-but-real) name the deploy's "Resolve token" step uses. It pins Node **20** while `checks.yml` pins 22; the drift script was only exercised here under Node 22 (via its test). Not run live (no token in this session), as the record already says.
+
+## C8 -- all changed YAML parses: **CONFIRMED**
+
+`yaml.safe_load` on every `*.yml` in `git diff --name-only origin/main...9e2babf`: `check-edge-deploy-drift.yml` (jobs `drift`), `checks.yml` (`checks`), `deploy-supabase-functions.yml` (`deploy`), `read-widget-debug-log.yml` (`read-log`), `test-priorities-widget-query.yml` (`test-priorities-queries`) all PARSE. main's copies of the two widget workflows fail (`line 18, column 1` / `line 19, column 1`). `actionlint` is not installed, so GitHub-expression semantics were checked only by the C5 run-block harness, not by a linter.
+
+## Verdict
+
+| # | Claim | Result |
+|---|---|---|
+| C1 | no `supabase/` path; merge deploys nothing | CONFIRMED |
+| C2 | nothing main had is lost | CONFIRMED (plus F1: `CLAUDE.md:16` now describes the dispatch wrongly) |
+| C3 | 291/291, 0 new symbols, 7/7 | CONFIRMED |
+| C4 | guard refuses xokgv1, passes main and HEAD | CONFIRMED against the PR base `aeef3d3`; against current `origin/main` (`ae96cbb`) HEAD is refused (missing PR #63's 3 commits) -- the guard is right, the record's line is stale |
+| C5 | blank dispatch exits 1, the rest unchanged | CONFIRMED (9 cases) |
+| C6 | ancestry mutation FIRES; blank-refusal mutation caught? | M1 CONFIRMED (FIRED); M2 **UNPROVEN** -- INERT, non-equivalent, no test covers it (F2) |
+| C7 | `checks.yml` green on branch and on main-after-merge | CONFIRMED |
+| C8 | YAML parses | CONFIRMED |
+
+**PASS** with two findings, neither blocking the merge: F1 (CLAUDE.md drift) and F2 (the blank-dispatch refusal has no test).
