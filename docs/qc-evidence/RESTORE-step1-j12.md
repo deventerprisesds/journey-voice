@@ -84,4 +84,42 @@ Resolved by taking the baseline from `8fe3dc4` (the branch's own earlier version
   - `assert-ref-contains-main.sh origin/main origin/main` → **rc 0**, `✅ origin/main (aeef3d3) contains origin/main (aeef3d3)`.
   - `assert-ref-contains-main.sh origin/main HEAD` (this branch) → rc 0.
 
-(Sections 5–7 are appended below as the work proceeds.)
+- Mutation proof of the ported guard test (`mutate.sh`, anchor and replacement in files): the guard's predicate `if git merge-base --is-ancestor "$BASE_SHA" "$HEAD_SHA"; then` reversed to `"$HEAD_SHA" "$BASE_SHA"` → **`FIRED: 'stale branch -> exit 1' failed with the defect reinstated. The guard is real.`**, then `restored: scripts/assert-ref-contains-main.sh matches HEAD`. (A first attempt with the name `FAILED:AC-D1` came back UNDETERMINED, because that string is the failure token, not the check name. Re-run with the check's own name.)
+- The symbols guard's ratchet showed it can fail on this tree: with the branch-tip baseline it exited 1 on `buildCallContext` (C3).
+- YAML: every changed workflow parses with `yaml.safe_load` (`check-edge-deploy-drift.yml`, `checks.yml`, `deploy-supabase-functions.yml`, `read-widget-debug-log.yml`, `test-priorities-widget-query.yml`). main's copies of the two widget workflows do NOT parse: `could not find expected ':'` at line 18 / line 19. `actionlint` is not installed here.
+
+## 5. The blank-dispatch fix (new in this PR, not from the branch)
+
+`deploy-supabase-functions.yml` `workflow_dispatch` input `function_name` said blank = "changed functions". That was false. Evidence: the step's own `run:` block, pulled out with `yaml.safe_load` and run under `bash -e` with the `${{ }}` expressions filled in for each case:
+
+| case | `origin/main` (O) | this branch (O) |
+|---|---|---|
+| dispatch, blank | rc 0, `mode=all`, "Push range unavailable … deploying all" | **rc 1**, `::error::function_name is blank -- name a function or pass all. …` |
+| dispatch, `all` | `mode=all` | `mode=all` (unchanged) |
+| dispatch, `execute-tool` | `mode=single fn=execute-tool` | same (unchanged) |
+| push, empty `before` | `mode=all` | same (unchanged) |
+| push `990b60d^..990b60d` (#60) | — | `mode=list fns=notification-delivery`, which matches the real run `39287074527`'s log |
+| push `c11b1a2^..c11b1a2` (#59) | — | `mode=all` ("_shared changed"), unchanged |
+
+The change is 3 lines plus the help text. A blank dispatch still runs the steps before this one (the deploy guard, CLI setup, token resolution, and the `JOURNEY_PROXY_TOKEN` re-sync from the same org secret, which writes the same value), then fails before any deploy.
+
+Also changed: `checks.yml`'s push trigger gains `'claude_**'` next to the branch's `'claude/**'`. The branch predates the `claude_` prefix rule (2026-09-25). Without it, pushes to current-style branches get no Checks run until a PR exists.
+
+## 6. Diff against main (O)
+
+`git diff --stat origin/main...HEAD`: 18 files, +1556 / −196. `git diff --name-only origin/main...HEAD | grep '^supabase/'` returns nothing. `deploy-supabase-functions.yml` is triggered only by `paths: supabase/functions/**`, so **merging this PR deploys no edge function** (I, from the trigger block; high confidence). On merge, the only workflow that runs is `checks.yml` (push to main).
+
+## 7. What will no longer be in place
+
+Every behaviour of `main` that this PR changes:
+
+1. **A blank manual "Deploy Supabase Functions" no longer redeploys every function.** It now fails with "function_name is blank -- name a function or pass all". To deploy everything you now type `all`. (Intended; section 5.)
+2. **A Supabase deploy from a ref that does not contain `origin/main` no longer goes through.** It is refused before any secret sync or deploy, and the refusal lists the main commits it would have reverted. Push-triggered deploys from `main` always pass (a ref contains itself). In practice this affects only `workflow_dispatch` runs on a stale branch.
+3. **`npm test` is no longer the inline glob** `node --experimental-strip-types --test src/utils/*.test.ts supabase/functions/_shared/*.test.ts cloudflare/src/*.test.ts`. It is now `node scripts/run-tests.mjs`. That runs the same 23 files (286 tests), plus `scripts/check-edge-deploy-drift.test.mjs` and `scripts/undef-check.test.mjs` (291 total). It exits 2 if any root collects fewer files than its floor, where the glob passed on zero matches. Nothing main ran is dropped.
+4. **The two widget workflows no longer fail on every push.** On main they could not be parsed at all, so they never ran and showed as red, zero-duration runs. They now parse and stay `workflow_dispatch`-only. Their inline queries moved into `scripts/widget-*.py`. No working behaviour is lost, because the old files never ran.
+5. **New, not replacing anything:** `checks.yml` (tests + symbols guard + deploy-guard test) on pushes to `main`, `claude/**`, `claude_**` and on every PR. It can now turn a PR red. `check-edge-deploy-drift.yml` runs after every "Deploy Supabase Functions" run, read-only against `api.supabase.com` with the existing `SUPERBASE_ACCESS_TOKEN` secret, and can turn red if live ≠ committed. It has **not** been run live from here (no token in this session). Its first real run will be after the next deploy.
+6. Cosmetic: `scripts/assert-ref-contains-main.sh` mode 644 → 755 (both callers use `bash <path>`, so this changes nothing). The `fetch-depth: 0` comment now gives both reasons.
+
+**Kept, untouched:** `parse-edge-functions.yml`; `deploy-cloudflare.yml`; every file under `supabase/`, `src/`, `cloudflare/`; the deploy workflow's secret syncs, change detection and deploy steps (apart from item 1).
+
+**Not brought over from the branch's copy of `deploy-supabase-functions.yml`** (so their absence is not a regression; they were never on main): the `UAT_BYPASS_TOKEN` sync (J7), the `UNIFIED_WEBHOOK_URL` cutover (notify lane, excluded), and the per-function deploy loop with a summary (J4, `f13d7f7`).
