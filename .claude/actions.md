@@ -665,3 +665,5 @@ Owner: *"Option a surgical restore approved"*; *"I would need more details to de
 
 ## ACT:v2-outline-gate (owner 2026-10-26: "apply V2 next")
 Drafts still refuse over submission-mechanics / word-count rows the extractor typed `format_requirement` (R7, R19, R22 on the owner's own assignment; VERIFY-outline-gate-scope-1.md FINDING V2). Fix direction: classify by CONTENT in one shared function, not by the inconsistently-assigned type; never exclude `format_requirement` wholesale (R24 / B51 rows are genuinely section-answerable). Tier 1 (gate): AC lane running → `claude_outline-gate-by-content` (nexus-hub), docs/ac/AC-OUTLINE-GATE-BY-CONTENT.md.
+- 2026-10-26 FOUND (huddle, not yet worked): two near-identical Iris 8am messages sent 6s apart under two different ids on 10-26; the once-per-day dedupe did not hold. Evidence: DECISION-j5-j2-j8.md §J2 (azure-pg-query run 40389138000). Status: reported to owner, awaiting go.
+- 2026-10-26 J5/J2/J8 decision evidence COMPLETE (2d89400, docs/qc-evidence/DECISION-j5-j2-j8.md); presented to owner.
