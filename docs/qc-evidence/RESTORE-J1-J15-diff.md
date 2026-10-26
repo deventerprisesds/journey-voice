@@ -360,3 +360,52 @@ Each branch code commit was simulated onto main alone (`git merge-tree --write-t
 | Already runs both live (cron jobs + trigger), but neither is in main's repo | Nothing new at runtime; the repo describes the live DB again | main's `20261015180000_schedule_next_call_dedupe.sql` (if the migrations folder is taken whole) | Add both files to main renamed to their applied versions (`20261008125356_…`, `20261008142455_…`). Do not re-apply. |
 
 **Live now (O):** live in the DB; no edge-function part.
+
+---
+
+## Summary — what the Oct 15/18/19 main work would lose under each approach
+
+**The two approaches, in one line each:**
+- **NAIVE** = for each file a feature touches, take the branch's copy (`git checkout <branch> -- <file>`). Every main change in that file since `0459770` disappears.
+- **SURGICAL** = a 3-way merge (or cherry-picks) of the branch's own edits onto main, with the September notify/Slack/briefing commits left out (section 0.1). Main's changes survive except where a conflict hunk is resolved the wrong way.
+
+### Every main-side change at risk (O unless marked)
+
+| # | file | what main's change does (date, sha) | J that touches the file | kept by 3-way merge? |
+|---|---|---|---|---|
+| 1 | `supabase/functions/smart-calendar-scheduler/index.ts` | stops writing a CATEGORY into `tasks.status` (10-08, `99289a4`, #31) | J1, J8 | **only if resolved by hand**: 1 conflict hunk; take the branch's trait block **minus** `suggestedStatus = …defaultStatus` |
+| 2 | `src/components/TaskCreationModal.tsx` | new/imported tasks get `UP_NEXT`/`BACKLOG`, not a category (10-08, `fba5a34`, #28) | J7 | Y (auto) |
+| 3 | `src/utils/assignmentFetching.ts` | three `status: 'PROF_EDUCATION'` → `'BACKLOG'` (10-08, `751904b`, #33) | J7 | Y (auto) |
+| 4 | `.github/workflows/parse-edge-functions.yml` | bundle-parse check on every PR (10-08, `e919cb7`) | J12 (workflows) | Y — lost only if the workflows folder is taken whole |
+| 5 | `supabase/functions/execute-tool/index.ts` | `get_task_topics` for Huddle's priorities widget (10-15, `4dec778`, #42/#47/#52); oldest default board in `createTask`/`parseAndCreateTasks` (10-15, `ec65855`, #43) | J1, J4, J6, J7, J8 | Y (auto; merged tree holds both sides) |
+| 6 | `src/utils/assignmentSync.ts`, `supabase/functions/nightly-assignment-sync/index.ts` | oldest default board + `limit(1)`, ending the duplicate-board runaway (10-15, `ec65855`, #43) | J7, J8 | Y (auto) |
+| 7 | `supabase/functions/notification-delivery/index.ts` | Oct 15 HTML briefing: meetings, rest-of-today + next 7 days, Iris window message (#44 `275ecc4`, #55 `93aede9` and others, 10-15); also already contains J13's alarm hunks | J13 | **Y only if the September notify lane is excluded**; otherwise 4 conflict hunks. Naive: −132 lines |
+| 8 | `package.json` | `test` also runs `cloudflare/src/*.test.ts` (10-15, `93aede9`, #55) | J12 | conflict, 1 hunk; the branch side (`run-tests.mjs`) also covers `cloudflare/src`, so taking it loses nothing |
+| 9 | `scripts/assert-ref-contains-main.sh` | same guard text, used by `deploy-cloudflare.yml` (10-15, `93aede9`) | J12 | add/add, identical text; keep mode 755 |
+| 10 | `supabase/migrations/20261015180000_schedule_next_call_dedupe.sql` | one scheduled-call email instead of three (10-15, `275ecc4`, #44) | J15 (migrations folder) | Y — lost only if the migrations folder is taken whole |
+| 11 | `supabase/functions/nightly-schedule-builder/index.ts` | a category goes only into its listed windows; a keyword window leads the category windows; `getPreferredWindows` moved to `_shared` (10-18, `c11b1a2`, #59) | J1, J2, J4, J5, J7, J8 | **only if resolved by hand**: 2 conflict hunks; keep main's `getPreferredWindows` import (the branch's code still calls it) and take the branch's `resolveWindowPlan` block |
+| 12 | `supabase/functions/_shared/scheduling-defaults.ts` | shared `getPreferredWindows()` + `withKeywordWindow()` (10-18, `c11b1a2`) | J1, J2, J8 | Y (auto) |
+| 13 | `src/services/schedulingService.ts` | a settings save MERGES into the stored config and refuses on a failed read (10-18, `c11b1a2`) | J8 | conflict, 1 hunk; **either side saves safely** (the branch carries its own patch save); never drop both |
+| 14 | `src/config/schedulingRules.ts` | a removed keyword stays removed (10-19, `4fadd05`, #61) | J1, J5, J8 | Y (auto). Naive: the owner's removed keywords come back and are written back on the next Save |
+
+**Not a file, but lost behaviour to watch (O from the live DB; consequence I):**
+- `task_dedup_log` holds 4 not-yet-undone `skipped` rows whose saved `status` is a category ('VENTURES' ×2, 'LIFE' ×2). J6's `undo_dedup` would re-insert them as-is, re-creating #28/#31's bug on those rows. Patch `undoDedup` to re-derive `status`.
+- The owner's `user_scheduling_prefs.config` has no `dedup` and no `scoringModel` key. After restore, J6's guard stays OFF and J5's scoring silently becomes **composite** (its default). Both should be stated to the owner.
+- Branch migration file names do not match the versions applied live (J9). Rename each to its applied version when it lands on main, or a migration push will try to re-run them.
+
+**Totals (O):** in a 3-way merge with the notify lane excluded, the main changes that need a human are rows 1, 11 and 13 (and the trivial rows 8/9). Every other main change survives automatically. Under the naive approach, rows 1–3, 5, 6, 11, 13 and 14 are lost outright, and 4/7/10 are lost if a whole folder or the notify file is copied.
+
+### Recommended apply order
+
+Each step is its own PR onto main. Each is checked before the next with J12's drift check and, for scheduler steps, J4's dryRun.
+
+| step | what | why this position |
+|---|---|---|
+| 1 | **J12** — deploy guard in `deploy-supabase-functions.yml`, `checks.yml`, `run-tests.mjs`, `undef-check`, `check-edge-deploy-drift`, `60e7565` (the two always-red workflows). Resolve `package.json` to the branch side; keep `parse-edge-functions.yml` | Gives every later step a test gate and a committed-vs-deployed check. Note (J12): it does NOT stop a deploy from main; it stops a stale branch from deploying |
+| 2 | **J9, J15, J11's schema, J2/J3/J6 table migrations** — add the files to main renamed to their applied versions; apply nothing | Zero runtime change; the repo describes the live DB again |
+| 3 | **J13 + J14** — `action-token.ts`, `alarm-action`, `send-push-notification`, `manage-push-subscription`, `config.toml`; leave `notification-delivery` alone | Fixes measurable live breakage (alarm Done/Doing has not reached `alarm-action` since 10-14); no conflicts |
+| 4 | **J10** (`notification-scheduler`, together with J13's calendar-alarm skip) | Stops today's 5am overdue push; no conflicts |
+| 5 | **J11** (`classify-task-topic`) | Stops topic fragmentation (38 → 95 live topics since August); no conflicts |
+| 6 | **J6** (dedup) with the `undoDedup` status fix; flag left OFF until the owner says | Execute-tool auto-merges; behaviour unchanged until enabled |
+| 7 | **J7** (Nexus reads/writes); confirm `UAT_BYPASS_TOKEN` is set first | Large, client + server; must keep #28/#33/#43 (rows 2, 3, 6) |
+| 8 | **J1 → J4 → J2/J3 → J5 → J8** (scheduler stack), resolving rows 1, 11 and 13 by hand, then a dryRun of the nightly build before deploy. Ask the owner about composite-by-default (J5), the held recent-miss floor (J8) and the 8am double message (J2 vs #57) | All six touch `nightly-schedule-builder`; this is where every hand-resolved conflict lives |
