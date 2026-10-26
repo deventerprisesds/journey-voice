@@ -147,3 +147,29 @@ verify_jwt = false
 # single-task action token carried in the alarm push (see _shared/action-token.ts).
 [functions.alarm-action]
 verify_jwt = false
+
+# PINNED TO LIVE (2026-10-26, restore step 3). These seven run with verify_jwt = false on the live
+# project (read with list_edge_functions) but had no entry here, so the CLI's default (JWT required)
+# would flip them to true on the next deploy-all -- and adding any _shared/ file triggers a
+# deploy-all. Pinning keeps live auth unchanged. Whether each SHOULD require a JWT is a separate
+# question; this entry only stops a deploy from changing it silently.
+[functions.classify-task-topic]
+verify_jwt = false
+
+[functions.huddle-task-sync]
+verify_jwt = false
+
+[functions.nightly-assignment-sync]
+verify_jwt = false
+
+[functions.run-scheduled-ceremonies]
+verify_jwt = false
+
+[functions.send-android-calendar-event]
+verify_jwt = false
+
+[functions.test-google-calendar]
+verify_jwt = false
+
+[functions.test-outlook-calendar]
+verify_jwt = false
