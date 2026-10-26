@@ -6,7 +6,7 @@
 # SUPERSEDED-BY: nothing -- current
 # EVIDENCE:   sources cited inline (sha, file:line, table+row id, transcript line)
 
-Status: IN PROGRESS (sweep log appended as each source finishes)
+Status: COMPLETE 2026-10-26 (S1–S7 swept; S8 synthesis at bottom)
 
 ## Sweep log
 
@@ -107,3 +107,70 @@ Refs read: huddle-extension-app `origin/main` `1ddb3e4`; nexus-hub `origin/main`
   - **Freshness:** `actions.md` "ACT:canvas-refresh-on-open — 2026-10-15/16" quotes the owner: *"when i open a course a fresh fetch needs to happen with the token/link we already established"*. Open items recorded: *"(a) cadence is once/day … (b) schedule DATES are not refreshed (extractSchedule is a destructive replace; separate decision)"*. This bears on the owner's *"longterm view of them as they are refreshed"*: class-session dates, the anchor for reading dates, are not refreshed by the module refresh.
   - **Scope:** `actions.md` "ACT:class-schedule-calendar-sync" quotes the owner on 2026-10-15: *"i am only focusing on anything DBA and going forward, EMBA is the past."* Class sessions are pushed to Outlook directly through Graph (built 2026-10-15, not yet owner-confirmed).
   - `accuracy-log.md` ~L613 cites journey `SCHEDULING_RULES.md` rule 11, *"Rebuild, not append"*: the nightly build clears and rebuilds the horizon. INFERRED consequence: any "finish ahead" placement must survive a nightly rebuild, which means it has to be a rule, not a one-time placement.
+
+---
+
+## Synthesis
+
+Read the columns this way. "First stated" is the earliest record found, with its source. **Owner** means the owner's own words. **Lovable** means a Lovable plan or commit (the Lovable chat itself is not in git). **Agent** means a Claude ledger recording an approval without quoting the owner. "Still applies?" is my reading of the record, not a ruling. Where it rests on inference it says so.
+
+| # | expectation | first stated (date, source) | later restated / changed | still applies? |
+|---|---|---|---|---|
+| E1 | Coursework is pulled from the course spreadsheets (EMBA + MIT Google Sheets, the "Excel"), and each item becomes a task | 2025-10-07, Lovable `9fb4536`/`5b3bb79` (S1) | 2026-02-17 plan: still "imports from Google Sheets" (S2). 2026-08-17: sheets still the course baseline (nexus `memory.md:2775`, S7). 2026-08-28: intake repointed to Nexus on the unmerged branch (S4). **2026-10-20 owner: *"All readings and assignments are in nexus."*** | **Superseded.** The source is now Nexus. OBSERVED: main's `nightly-assignment-sync` still reads the frozen Supabase copy (lead-time research C1). |
+| E2 | How far ahead to pull work: EMBA = everything due by the next class weekend; MIT = due within 14 days | 2025-10-07, Lovable `7cf463f`/`73d842c` (S1) | 2026-02-17 plan: default "This week + next week" (S2). 2026-03-27: 14 days (`f82c939`, S3). 2026-04-06 (Lovable paraphrasing the owner): *"The existing weekend / 14-day filters are the wrong behavior for assignment management"* → import ALL future work (`e18bb9b`/`91df60b`, S3). **2026-10-20 owner: *"you need to ensure you have a longterm view of them as they are refreshed"*** | **Changed.** No narrow import window. Hold the long-term view and keep it refreshed. |
+| E3 | At most 2 coursework items per day | 2025-10-07, Lovable `7cf463f` `maxPerDay: 2` (S1) | 2026-04-17 Lovable acceptance gate: *"Tier B/C ≤2/day distributed across 7-day horizon"* (S3). 2026-08-20: actually enforced for the first time (`c5de8f4`; it had been *"dead config"*, S4). 2026-08-29 (Agent, branch): weekend-aware, `maxPerDayWeekend: 4` seeded. **2026-10-20 owner: *"2 a day limit is only for weekdays not weekends."*** | **Applies, weekdays only.** OBSERVED 2026-10-26: live config `PROF_EDUCATION` = `{"maxPerDay":2,…}` with **no weekend value** (S5), and main has no `maxPerDayWeekend` code. So live still caps weekends at 2. |
+| E4 | Coursework goes in the after-work/evening windows on weekdays and in daytime on weekends, never early morning | 2025-10-07, Lovable (`after_work`, 90 min, S1). 2026-04-03 Lovable `SCHEDULING_RULES.md`: *"Study / homework / reading → after_work or weekends, not early morning"* (S4) | 2026-07-25: weekend EVENINGS valid but not auto-filled (`9d122f7`). 2026-08-26: *"The owner settled … after_work should not include Saturday"* (`e389201`). Branch memory: "evenings+weekends". **2026-10-20 owner: *"none of the readings and assignments … arent being spreadf out through the evenings"*** | **Applies.** OBSERVED: live config window = `["evening","weekends"]` (S5). Weekday 19–22 and Sat/Sun 10–20 per `WINDOW_RANGES` (S6 summary). |
+| E5 | Coursework stays eligible until done; nothing is dropped because it is late | 2026-03-31, Lovable `SCHEDULING_RULES.md:45-49` (S3) | 2026-04-06 Lovable plan: overdue items *"fade from the schedule, causing you to forget to submit them"* → 7-day grace period (`824f37a`). 2026-08-28 (Agent, branch): *"Dropping outstanding coursework because it is late is backwards"* | **Applies.** OBSERVED conflict: main still skips items more than 30 days past due (`nightly-assignment-sync`, S3). |
+| E6 | Recently missed work goes first, ahead of far-future work | 2026-04-06, Lovable: `[OVERDUE-ASSIGNMENT]` in *"earliest available morning slot"* (S3) | 2026-04-17: tiers (A ≤48h, B 2–7d, C beyond). 2026-09-03 owner-final bands: *"upcoming soon, future, overdue<=14d, old backlog"*, with bands 2 and 3 then swapped. 2026-09-03 recent-miss floor (built, not deployed). Lead-time research Step 2c. | **Applies as an ORDER, not a lead time.** OBSERVED: the bands exist only on the unmerged branch, not on main. |
+| E7 | Due-soon urgency bands of 48h and 7 days | 2026-03-27, Lovable `8493c32` (7-day band, S3) | 2026-04-17 constants 2 / 48h / 7d *"unchanged from prior approvals"* (`de58e84`). The approvals behind them are not in any record. | **On main today.** INFERRED: they do not satisfy E12, because they only start prioritising work 7 days out and only guarantee placement 48h out. |
+| E8 | A "this weekend" view shows what is DUE that weekend, not stale items | 2026-02-09 00:10Z, **owner**: *"What due dates fall into this weekend? Why are you showing items from February 3rd?"* (S5) | none | Display expectation, still reasonable. Not a scheduling rule. |
+| E9 | Readings are real coursework and must be extracted | 2026-02-20 12:21Z, **owner**: *"update Nexus to support lecture , reading and case extraction"* (S5) | **2026-10-20 owner: *"to say there were never any assignments, includinng disucssions and readings is false"*** | **Applies.** OBSERVED gap: readings live in Nexus modules (Pages/Files) with no due date, and branch intake keeps only `points > 0` assignment rows (S4). |
+| E10 | An item with no date gets an INFERRED date from the course's own rhythm, marked as inferred and never overwriting a published date | 2026-09-03, branch `assignment-cadence.ts`. The owner supplied the expected dates (*"AC-2c: infers the owner-stated dates 7.1 -> 2026-08-25 and 8.1 -> 2026-09-01"*, S4) | **2026-10-20 owner: *"readings have to have dates created logically/strategically given the life of the course and/or module dates they come from"*** | **Applies, extended to readings.** The only dating mechanism (weekly cadence from `N.M` titles) is MIT-shaped and is not on main. |
+| E11 | Course structure is inferred from each course's own layout, with no per-course config | 2026-08-31, **owner** (nexus `actions.md` ACT-CANVAS-RESCUE): *"the config is not necessary in this case"* (S7) | **2026-10-20 owner: *"wherever you pull the module dates needs to be consistent for what y9ou would expect standard across courses"*** | **Applies.** One inference rule, consistent across courses. |
+| E12 | Finish things ahead of time; don't be alerted with little time to work | **2026-10-20 18:41Z, owner**: *"there should be some logic to try to complete things ahead of time not alerted with little time to work with"* (S6) | none. **No earlier record of a lead-time number in any source swept (S1–S7).** | **NEW requirement.** Unmet: nothing alerts earlier than the day before due (lead-time research Step 3). |
+| E13 | Program-agnostic. DBA is the starting focus and EMBA is past | 2026-10-15, **owner** (nexus ACT:class-schedule-calendar-sync): *"i am only focusing on anything DBA and going forward, EMBA is the past."* (S7) | **2026-10-20 owner: *"focus on dba program"*** and *"dont want this hardcoaded to dba, that is just the starting program going forward"* | **Applies.** |
+| E14 | Confirm priorities BEFORE the nightly build, and brief the next 7 days | 2026-10-15, **owner**: *"…to confirm prioritization ahead of scheduling thenext day's build"*, and the briefing shows *"the window, rest of the day, and then the next 7 days following (as available )"* (S6) | none | **Applies** (general, not coursework-specific). This is the only standing "ahead" alert. |
+
+### Lead time: how far ahead to schedule, and when to alert
+- **OBSERVED: no lead-time number was ever recorded.** The figures in the record are LOOK-AHEAD horizons or URGENCY bands, never "start N days before due":
+  - next class weekend (EMBA) and 14 days (MIT), Oct 2025
+  - this week + next week, Feb 2026
+  - the 7-day build horizon, Mar 2026
+  - 48h / 7d tiers, Apr 2026
+  - the 14-day "soon" band, Sep 2026
+- **OBSERVED: alerts are generic.** The day before at 09:00, 15 minutes before due, and at due (2026-02-04 trigger, Lovable). Nothing fires earlier than one day before.
+- **OBSERVED: lead time is a side effect.** Work gets placed as early as the 2/day cap and free evenings allow, inside a 7-day rebuilt horizon, and items more than 7 days out get no deadline privilege (Tier C).
+- **INFERRED** (confidence medium; the Lovable April chat and the Aug–Sep transcripts are not on disk): E12 is new. It is not a lost earlier decision, because every surviving ledger records approvals in detail and none mentions a lead time. Only the owner can confirm that.
+
+### Reading dating
+- **OBSERVED: the only pre-October rule naming readings is about time of day**, not date: *"Study / homework / reading → after_work or weekends"* (2026-04-03).
+- **OBSERVED: the course data itself pairs each reading with a class session.** Module names include *"Pre-Work - Session 2"* → *"Session 2, Jan 10"*, and items include *"Read before Session 2"* (S7).
+- **OBSERVED precedent for dating undated work:** inferred dates must be deterministic, never overwrite a published date, and be visibly marked as inferred (E10).
+- **INFERRED** (a candidate rule, not a decision): a reading's working deadline would be the start of the session its module precedes. Its tasks would then be spread across the evenings before that session.
+- **OBSERVED gap:** class-session dates are not refreshed by the module refresh (nexus `actions.md` canvas-refresh-on-open, open item b).
+
+### Weekday vs weekend caps
+- Oct 2025 → Aug 2026: 2/day every day (configured, but only enforced from 2026-08-20).
+- 2026-08-29 (branch, Agent-recorded approval): weekend cap 4. INFERRED to have been overwritten by later main deploys (lead-time research C1).
+- 2026-10-20 owner: the 2/day limit is weekdays only.
+- OBSERVED 2026-10-26: live config has no weekend value.
+- Weekend EVENINGS are protected from auto-fill (2026-07-25), so weekend coursework lands in 10:00–20:00.
+
+### Spreading coursework across evenings
+- The 2/day cap has existed since Oct 2025, and in Apr 2026 the stated intent was *"distributed across 7-day horizon"*.
+- INFERRED arithmetic: the live weekday window `evening` is 19–22, i.e. 180 minutes, and the default estimate is 90 minutes. So 2 items fill an evening exactly, and any 180-minute item takes a whole evening.
+- OBSERVED: an overflow case was noted on 2026-08-26 and is still open: *"Friday puts 270 min of research into a 180 min evening"*.
+- The owner's 2026-10-20 complaint (E4) is that this spreading is not happening for readings and assignments known in the courses. That fits E1 (main reads a stale source) and E9 (readings carry no dates).
+
+### OPEN QUESTIONS (history silent or contradictory)
+1. **Lead time.** How many days before due should coursework be scheduled to START? A fixed number, or scaled by effort (estimates are 45/90/180 min)? Silent in every source.
+2. **Early alert.** What should alert, and when (for example, "N days before due and still not scheduled or done")? History has only the day-before 09:00 reminder.
+3. **Weekend cap value.** 4 (seeded 2026-08-29), some other number, or uncapped? The owner said the limit is weekday-only but gave no weekend number.
+4. **Reading anchor.** Is a reading due at the START of the session its "Pre-Work" module precedes? What about readings inside a session module, or in courses without Pre-Work modules? E11 requires one rule across courses.
+5. **Zero-point items.** Branch intake keeps only `points > 0`, which excludes journals, and readings are Pages/Files rather than assignments. E9 says readings count. How do ungraded items enter?
+6. **Tier C.** Should work due more than 7 days out get deadline privilege over priority-board work? Explicitly left "Needs a user decision" on 2026-08-29 and never answered. This is the main lever for E12.
+7. **Coursework window.** Code history says `after_work` (17–19); live config says `evening` (19–22) plus weekends; the owner says "evenings". Is 17–19 on weekdays allowed for coursework?
+8. **30-day overdue cutoff.** Main skips items more than 30 days late. That contradicts E5 (*"Dropping outstanding coursework because it is late is backwards"*).
+9. **Session-date refresh.** Session dates (the reading anchor) are not refreshed when a course is reopened. Should they be?
+10. **Unrecoverable history.** The April 2026 Lovable approvals behind *"unchanged from prior approvals"* (2 / 48h / 7d) and the Aug–Sep Claude sessions (`session_01XHMRHWh75yD6YyB3XPEcwi`, `session_01KDVos2br9AZJMcf6LdkWXy`) are not on disk. Was a lead-time number agreed in any of those conversations?
+11. **Not swept here.** Huddle chat (Azure `RAG_AI_Agents` `chat.pending_turns`, `public.rag_chunks`, Aug–Oct 2026) may hold owner coursework-timing remarks made to Iris or another agent. It was outside S5's journey-DB scope.
