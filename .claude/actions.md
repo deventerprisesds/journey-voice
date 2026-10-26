@@ -662,3 +662,6 @@ Owner: *"Option a surgical restore approved"*; *"I would need more details to de
 | 6 | J6 dedup (flag OFF, undoDedup status fix) | — | after 1–5 |
 | 7 | J7 Nexus reads | — | after 6 |
 | 8 | J1/J4/J2/J3/J5/J8 scheduler stack | — | after 7; J5 = needs decision evidence (DECISION-j5-j2-j8.md); J2 = keep both if valid+different; J8 = on unless it contradicts history |
+
+## ACT:v2-outline-gate (owner 2026-10-26: "apply V2 next")
+Drafts still refuse over submission-mechanics / word-count rows the extractor typed `format_requirement` (R7, R19, R22 on the owner's own assignment; VERIFY-outline-gate-scope-1.md FINDING V2). Fix direction: classify by CONTENT in one shared function, not by the inconsistently-assigned type; never exclude `format_requirement` wholesale (R24 / B51 rows are genuinely section-answerable). Tier 1 (gate): AC lane running → `claude_outline-gate-by-content` (nexus-hub), docs/ac/AC-OUTLINE-GATE-BY-CONTENT.md.
