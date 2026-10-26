@@ -654,9 +654,9 @@ Owner: *"I'm fine with your recommendations for 1-3, but i want a list of what i
 Owner: *"Option a surgical restore approved"*; *"I would need more details to determine if priority order is an improvement on composite or visa versa ... that may not require a whole replacement"*; *"keep both 8am if valid and different"*; *"I'm fine with turning on j8 as long as it doesn't contradict any other instructions I gave on assignments scheduling over the past year"*.
 | step | what | branch | status |
 |---|---|---|---|
-| 1 | J12 deploy guard + CI; blank dispatch must fail, not deploy all | `claude_restore-j12-deploy-guard` | building |
-| 2 | record live DB objects (J9/J15/J11/J2/J3/J6), renamed to applied versions; apply nothing | `claude_restore-db-records` | building |
-| 3 | J13 alarm action token + J14 FCM prune (notification-delivery untouched) | `claude_restore-j13-alarm-actions` | building |
+| 1 | J12 deploy guard + CI; blank dispatch must fail, not deploy all | `claude_restore-j12-deploy-guard` | PR https://github.com/deventerprisesds/journey-voice/pull/64 (9e2babf), 291/291, guard mutation FIRED; verifier running |
+| 2 | record live DB objects (J9/J15/J11/J2/J3/J6), renamed to applied versions; apply nothing | `claude_restore-db-records` | **merged** ae96cbb (https://github.com/deventerprisesds/journey-voice/pull/63); 7 files md5-match applied SQL; deploys nothing |
+| 3 | J13 alarm action token + J14 FCM prune (notification-delivery untouched) | `claude_restore-j13-alarm-actions` | PR https://github.com/deventerprisesds/journey-voice/pull/65 (dca92b1); deploys ALL 52 fns (_shared); 7 verify_jwt pins added; security verifier running |
 | 4 | J10 TZ-aware notification-scheduler | `claude_restore-j10-notify-timezone` | building |
 | 5 | J11 topic dedupe | `claude_restore-j11-topic-dedupe` | building |
 | 6 | J6 dedup (flag OFF, undoDedup status fix) | — | after 1–5 |
