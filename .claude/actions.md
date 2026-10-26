@@ -646,6 +646,6 @@ Owner: *"I'm fine with your recommendations for 1-3, but i want a list of what i
 | 2 | Ship E2 (push gate terminated rules slice) + E3 (feasibility screenshots rule) | E2 **merged** f507a58 (eds-claude-skills#123); E3 **merged** 1ceb638 (eds-claude-skills#124, guards green) | https://github.com/deventerpriseds-org/eds-claude-skills/pull/123 |
 | 3 | Rebuild N1a/b on top of nexus dfc492cc (10-15) | lane running (branch `claude_page-capture-partial`, PORT-N1ab.md) | " |
 | 4 | J1–J15: before/after loss report per feature BEFORE applying | J1–J5 written (75737e0); J6–J15 + summary lane running | docs/qc-evidence/RESTORE-J1-J15-diff.md |
-| 5 | Hard hook: an overwrite that removes/degrades must list what will no longer be in place | AC lane running (ac-writer); every PR body now carries the section by hand meanwhile | eds-claude-skills |
-| 6 | Module/reading dates from ONE standard source rule across all courses | requirement recorded | — |
+| 5 | Hard hook: an overwrite that removes/degrades must list what will no longer be in place | AC done: 84 ACs, eds-claude-skills 7275e52 (`AC-overwrite-loss-gate.md`); build lane running on `claude_overwrite-loss-gate` with the 3 recommended (reversible) defaults; Tier 1, so independent verifier before merge | eds-claude-skills |
+| 6 | Module/reading dates from ONE standard source rule across all courses | history research COMPLETE (0915a8c): no prior lead-time rule exists; DBA Pre-Work→Session N pairing is the natural reading deadline; open questions listed | docs/qc-evidence/RESEARCH-assignment-scheduling-history.md |
 | 7 | List of what remains parked after 1–3 | pending | — |
