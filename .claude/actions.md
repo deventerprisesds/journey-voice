@@ -649,3 +649,16 @@ Owner: *"I'm fine with your recommendations for 1-3, but i want a list of what i
 | 5 | Hard hook: an overwrite that removes/degrades must list what will no longer be in place | AC done: 84 ACs, eds-claude-skills 7275e52 (`AC-overwrite-loss-gate.md`); build lane running on `claude_overwrite-loss-gate` with the 3 recommended (reversible) defaults; Tier 1, so independent verifier before merge | eds-claude-skills |
 | 6 | Module/reading dates from ONE standard source rule across all courses | history research COMPLETE (0915a8c): no prior lead-time rule exists; DBA Pre-Work→Session N pairing is the natural reading deadline; open questions listed | docs/qc-evidence/RESEARCH-assignment-scheduling-history.md |
 | 7 | List of what remains parked after 1–3 | pending | — |
+
+## ACT:j-restore (owner 2026-10-26)
+Owner: *"Option a surgical restore approved"*; *"I would need more details to determine if priority order is an improvement on composite or visa versa ... that may not require a whole replacement"*; *"keep both 8am if valid and different"*; *"I'm fine with turning on j8 as long as it doesn't contradict any other instructions I gave on assignments scheduling over the past year"*.
+| step | what | branch | status |
+|---|---|---|---|
+| 1 | J12 deploy guard + CI; blank dispatch must fail, not deploy all | `claude_restore-j12-deploy-guard` | building |
+| 2 | record live DB objects (J9/J15/J11/J2/J3/J6), renamed to applied versions; apply nothing | `claude_restore-db-records` | building |
+| 3 | J13 alarm action token + J14 FCM prune (notification-delivery untouched) | `claude_restore-j13-alarm-actions` | building |
+| 4 | J10 TZ-aware notification-scheduler | `claude_restore-j10-notify-timezone` | building |
+| 5 | J11 topic dedupe | `claude_restore-j11-topic-dedupe` | building |
+| 6 | J6 dedup (flag OFF, undoDedup status fix) | — | after 1–5 |
+| 7 | J7 Nexus reads | — | after 6 |
+| 8 | J1/J4/J2/J3/J5/J8 scheduler stack | — | after 7; J5 = needs decision evidence (DECISION-j5-j2-j8.md); J2 = keep both if valid+different; J8 = on unless it contradicts history |
