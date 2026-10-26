@@ -70,5 +70,22 @@ they are untouched. A `supabase db push` from main would already see these as un
 client file or existing migration is modified, and the database was not touched.
 
 ```
-DIFFSTAT_PLACEHOLDER
+# as of the first commit on this branch (this doc's own line count grows in the follow-up commit)
+ docs/qc-evidence/RESTORE-step2-db-records.md                                 |  74 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ supabase/migrations/20260726051049_task_overflow_queue.sql                   |  47 +++++++++++++++++++++++++++++++++++++++++++++++
+ supabase/migrations/20260726112200_external_event_attendance.sql             |  43 +++++++++++++++++++++++++++++++++++++++++++
+ supabase/migrations/20260820155525_task_dedup_log.sql                        |  36 ++++++++++++++++++++++++++++++++++++
+ supabase/migrations/20260826022400_topic_index_dedup_and_lifecycle.sql       |  36 ++++++++++++++++++++++++++++++++++++
+ supabase/migrations/20260828025806_preserve_task_provenance.sql              | 107 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ supabase/migrations/20261008125356_db_maintenance_cron.sql                   |  36 ++++++++++++++++++++++++++++++++++++
+ supabase/migrations/20261008142455_unscheduled_task_cancels_start_alarms.sql |  90 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 8 files changed, 469 insertions(+)
+A	docs/qc-evidence/RESTORE-step2-db-records.md
+A	supabase/migrations/20260726051049_task_overflow_queue.sql
+A	supabase/migrations/20260726112200_external_event_attendance.sql
+A	supabase/migrations/20260820155525_task_dedup_log.sql
+A	supabase/migrations/20260826022400_topic_index_dedup_and_lifecycle.sql
+A	supabase/migrations/20260828025806_preserve_task_provenance.sql
+A	supabase/migrations/20261008125356_db_maintenance_cron.sql
+A	supabase/migrations/20261008142455_unscheduled_task_cancels_start_alarms.sql
 ```
