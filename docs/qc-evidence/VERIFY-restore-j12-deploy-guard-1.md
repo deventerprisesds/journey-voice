@@ -37,3 +37,45 @@ No working behaviour existed to lose: main's copies of both widget workflows fai
 
 Step order in the new deploy workflow: checkout (26) -> guard (36) -> setup-cli (48) -> Resolve token (52) -> secret sync (61), so the guard's "runs BEFORE the secret syncs" comment is true.
 
+## C3 -- `npm test` 291/291, `check:symbols` 0 new, guard test 7/7: **CONFIRMED**
+
+Node v22.22.0, this branch's tree.
+- `npm test` -> rc 0; `[run-tests] collected 25 test file(s)`; `# tests 291 / # pass 291 / # fail 0`. The 25 include `cloudflare/src/notify.test.ts` and `cloudflare/src/slack-events.test.ts` (main's glob root) plus `scripts/check-edge-deploy-drift.test.mjs` and `scripts/undef-check.test.mjs`.
+- main's old glob on the same tree, run by hand: `# tests 286 / # pass 286 / # fail 0`. 286 + 5 new = 291, so nothing main ran was dropped.
+- `npm run check:symbols` -> rc 0; `undef-check: 85 file(s) checked, 0 NEW undefined symbol(s), 1 known, 0 not analysable` (the known one is `send-chat-message/index.ts:buildCallContext`, per record C3).
+- `bash scripts/assert-ref-contains-main.test.sh` -> rc 0; `assert-ref-contains-main: 7 passed, 0 failed`.
+
+## C4 -- guard refuses xokgv1, passes origin/main and HEAD: **CONFIRMED at the PR base; HEAD is now REFUSED against current main (expected, not a defect)**
+
+Full clone (`git rev-parse --is-shallow-repository` -> `false`).
+
+| base | ref | rc |
+|---|---|---|
+| `origin/main` (`ae96cbb`) | `origin/claude/huddle-journey-integration-xokgv1` | **1** (`REFUSING TO DEPLOY ... is missing 67 commit(s)`) |
+| `origin/main` (`ae96cbb`) | `origin/main` | **0** (`origin/main (ae96cbb) contains origin/main (ae96cbb)`) |
+| `origin/main` (`ae96cbb`) | `HEAD` (this branch) | **1** -- `HEAD is missing 3 commit(s)`: `ae96cbb`, `b742cf4`, `590ce54` (PR #63) |
+| `aeef3d3` (PR base) | `HEAD` | **0** (`HEAD (d74b6e9) contains aeef3d3`) |
+| `aeef3d3` | xokgv1 | 1 |
+
+Interpretation: the record's "HEAD -> rc 0" was true when written. main has since gained PR #63, so the branch no longer contains main and the guard correctly refuses it -- that is the guard working. Practical effect: a manual dispatch of the deploy from this branch is now refused until main is merged in. It matters for C7 only if `checks.yml` runs the guard against the PR's own ref (checked there).
+
+## C5 -- blank dispatch exits 1; `all`, named function, push range unchanged: **CONFIRMED**
+
+Method: `yaml.safe_load` each version (main = `git show origin/main:...`, branch = working tree), take the step with `id: changed`, substitute the four `${{ }}` expressions, assert none remain, run under `bash -e -c` (GitHub's default `run` shell) with `GITHUB_OUTPUT` pointed at a temp file, in this full clone so `git cat-file`/`git diff` resolve.
+
+| case | main | branch |
+|---|---|---|
+| dispatch, blank | rc 0 `mode=all` ("Push range unavailable ... deploying all") | **rc 1**, no output, `::error::function_name is blank -- name a function or pass all.` |
+| dispatch `all` | rc 0 `mode=all` | rc 0 `mode=all` |
+| dispatch `execute-tool` | rc 0 `mode=single fn=execute-tool` | same |
+| push, empty `before` | rc 0 `mode=all` | same |
+| push, all-zeros `before` | rc 0 `mode=all` | same |
+| push, unreachable `before` | rc 0 `mode=all` | same |
+| push `990b60d^..990b60d` (#60) | rc 0 `mode=list fns=notification-delivery` | same |
+| push `c11b1a2^..c11b1a2` (#59) | rc 0 `mode=all` (`_shared changed`) | same |
+| push `b742cf4^..b742cf4` (docs-only) | rc 0 `mode=none` | same |
+
+Every non-blank case is byte-identical between the two versions.
+
+**Finding F1 (doc drift, not in the record's list):** `CLAUDE.md:16` on this branch (and main) still says the dispatch takes ``function_name`, blank = changed, "all" = force everything`` and offers it "for a manual re-run against a working branch". After this PR both halves are wrong: blank now fails, and a working branch that does not contain main is refused by the guard. The failure is safe (fails before any deploy), but the next agent that follows CLAUDE.md will hit a red run. The PR does not touch `CLAUDE.md`, and record section 7 does not mention it.
+
