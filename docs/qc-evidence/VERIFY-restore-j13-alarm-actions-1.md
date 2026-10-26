@@ -11,6 +11,11 @@ Verifier started 2026-10-26 19:38 UTC, budget 50 min. Labels: O = observed, I = 
 |---|---|---|---|
 | C1 | only the stated files change; port == `git diff 0459770 nsishi` | **CONFIRMED** | see C1 |
 | C2 | token security (scoping, constant-time, expiry, forgery, key, logging, allow-list) | **CONFIRMED for the token + alarm-action code**, with **one REFUTED end-to-end property (C2-SEC1)** | see C2 |
+| C3 | J14 prune only on 404+UNREGISTERED; dedupe only same token / other users | **UNPROVEN** (partial) | see C3 |
+| C4 | 7 pinned verify_jwt=false match live; no deploy-all auth flip | **NOT REACHED** | budget |
+| C5 | live send-push / manage-push == main; new == main + ported hunks | **NOT REACHED** (C1 proves new == main + nsishi hunks; live side not read) | budget |
+| C6 | npm test 293/293, action-token 7/7, 4 mutations | **NOT REACHED** | `npm ci` hit its background time limit; suite not run |
+| C7 | deploy-all blast radius beyond the 3 intended | **NOT REACHED** | budget |
 
 ## C1 — scope of the port (O)
 - `git diff --name-only origin/main...HEAD` = exactly 7 paths: the record, `config.toml`, `_shared/action-token{,.test}.ts`, `alarm-action/index.ts`, `manage-push-subscription/index.ts`, `send-push-notification/index.ts`.
@@ -42,3 +47,14 @@ Observations (facts, not defects): (a) `status` is `String()`-coerced, so `["don
 O (read): `send-push-notification` and `manage-push-subscription` are both `verify_jwt = false` (config.toml L48/L90), and neither checks a caller identity in code — `userId` comes from the request body. `manage-push-subscription` `subscribe_fcm` upserts `{user_id: <body.userId>, endpoint: "fcm:<userId>", fcm_token: <body.fcmToken>}` `onConflict user_id,endpoint`, i.e. it **overwrites** the user's journey FCM token.
 I (chain, not executed live): anyone holding the APK (to get a valid FCM token for this Firebase project) and the victim's user uuid can (1) POST `subscribe_fcm` with their own token and the victim's `userId`, then (2) receive every alarm push the scheduler sends that user. **Before this PR** that leaks titles/bodies. **With this PR** each of those pushes also carries a 7-day `actionToken` for that task, so the attacker can mark tasks DONE / BACKLOG / PARK, clear their schedule and delete their queued notifications with no login. They can also call `send-push-notification` themselves with `{userId, data:{taskId}}` to mint a token for any of that user's task ids (send-push does not check the task belongs to `userId`; alarm-action then scopes it correctly). The weakness (unauthenticated registration) is PRE-EXISTING; J13 raises it from read to write. The new J14 dedupe adds a second unauthenticated primitive: anyone who knows a device's FCM token can POST `subscribe_fcm` with any `userId` and delete every OTHER user's row for that token.
 Severity (I): medium for a single-user estate (it needs the APK + the owner's uuid), but this is the exact property the PR describes as its security boundary. Not fixed here, per the brief.
+
+## C3 — J14 prune and dedupe (partial; budget hit at 20:35 UTC, the 50-min budget ended 20:28)
+O (read-only SELECT on `activity_log`, `fcm_send_failed`, all time): the live error shapes, tested with the PR's two regexes (`\(404\)` AND `UNREGISTERED|NotRegistered`):
+- `FCM send failed (404) … "message":"NotRegistered" … "errorCode":"UNREGISTERED"` — 958 rows, last 2026-10-08 → **matches** (would be pruned).
+- `FCM send failed (404) … "Requested entity was not found." … "errorCode":"UNREGISTERED"` — 1 row → **matches**.
+- `error sending request for url (https://oauth2.googleapis.com/token) … tls handshake eof` (network) → no match.
+- `FCM token error: {"error":"invalid_grant" …}` (credential) → no match.
+- `channel is not defined` → no match.
+So against the REAL error strings, only the 404+UNREGISTERED class is pruned. 0 rows in the last 7 days, which agrees with the record.
+NOT REACHED: running send-push's real handler against stubbed 500/429/network/404-without-UNREGISTERED responses, the web-payload-has-no-token check, and running manage-push's dedupe against a mock table. Reading the dedupe code: `.delete().eq('fcm_token', fcmToken).neq('user_id', userId)` = same token, other users only (by reading, not executed). See C2-SEC1 for the dedupe being callable without auth.
+Side observation: the record says "fcm_send_failed in the last 7 days: 0". True, but there were **356 in the last 30 days** (mostly UNREGISTERED, up to 2026-10-08), so "nothing to prune today" depends on those rows' tokens already being gone. Not checked.
