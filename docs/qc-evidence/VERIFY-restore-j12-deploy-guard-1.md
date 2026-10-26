@@ -79,3 +79,24 @@ Every non-blank case is byte-identical between the two versions.
 
 **Finding F1 (doc drift, not in the record's list):** `CLAUDE.md:16` on this branch (and main) still says the dispatch takes ``function_name`, blank = changed, "all" = force everything`` and offers it "for a manual re-run against a working branch". After this PR both halves are wrong: blank now fails, and a working branch that does not contain main is refused by the guard. The failure is safe (fails before any deploy), but the next agent that follows CLAUDE.md will hit a red run. The PR does not touch `CLAUDE.md`, and record section 7 does not mention it.
 
+## C6 -- mutation proof: guard predicate **CONFIRMED (FIRED)**; blank-dispatch refusal **UNPROVEN (INERT)**
+
+Both runs with `/usr/local/bin/mutate.sh`, anchor and replacement written to files, file clean before each.
+
+**M1 -- reverse the ancestry check** in `scripts/assert-ref-contains-main.sh:51`.
+anchor `if git merge-base --is-ancestor "$BASE_SHA" "$HEAD_SHA"; then` -> replacement `... "$HEAD_SHA" "$BASE_SHA"; then`; test `bash scripts/assert-ref-contains-main.test.sh`; must-fail = the check's own name `stale branch -> exit 1`.
+```
+FIRED: 'stale branch -> exit 1' failed with the defect reinstated. The guard is real.
+restored: scripts/assert-ref-contains-main.sh matches HEAD
+tree clean: 'stale branch -> exit 1' passes again on the restored tree (build output regenerated)
+```
+
+**M2 -- delete the blank-dispatch refusal** (the 4-line `elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then ... exit 1` block, asserted to occur exactly once) in `deploy-supabase-functions.yml`, replaced with nothing. Test = everything `checks.yml` runs: `npm test`, `npm run check:symbols`, `bash scripts/assert-ref-contains-main.test.sh` (wrapper prints `FAILED:blank-dispatch-suite` if any of the three fails).
+```
+The mutation DID apply and the suite exited 0, so this is a real result: the guard protects nothing.
+restored: .github/workflows/deploy-supabase-functions.yml matches HEAD
+```
+Not an equivalent mutation: the mutant is the same shell logic as main's step, and C5 measured main's blank dispatch as `rc 0 mode=all` versus this branch's `rc 1`. So the behaviour change is real and **no test catches its removal**. `grep -rln 'deploy-supabase-functions|function_name is blank' scripts/ .github/workflows/checks.yml` -> nothing; no test reads the workflow file at all.
+
+**Finding F2 (UNPROVEN guard):** the blank-dispatch refusal -- record section 7 item 1, the PR's one new behaviour -- is protected only by this verification's hand harness, not by any test in the repo. A later edit or a 3-way merge of the branch's `f13d7f7` deploy-loop hunk (the J4 candidate the record names) could drop it silently with `checks.yml` green.
+
