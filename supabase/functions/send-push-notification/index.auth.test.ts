@@ -7,7 +7,7 @@
 // EVIDENCE: docs/qc-evidence/RESTORE-step3-j13-j14-security.md
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ENV, setDb, loadHandler, post, captureConsole, type Db } from '../../../docs/qc-evidence/probes/harness.ts';
+import { ENV, setDb, loadHandler, post, captureConsole, jwtUsers, ops, type Db } from '../../../docs/qc-evidence/probes/harness.ts';
 import { verifyActionToken } from '../_shared/action-token.ts';
 
 const X = '11111111-1111-4111-8111-111111111111';
@@ -89,4 +89,52 @@ test('no / non-uuid taskId: no token and no task read (unchanged)', async () => 
     const r = await send({ userId: X, title: 't', body: 'b', data: { type: 'reminder', taskId } });
     assert.equal(r.body.delivered, 2); assert.equal(r.fcm[0].actionToken, undefined);
   }
+});
+
+// ── Fix 3: who may cause a token to be minted (the push itself is never refused) ─────────────────
+const JWT_X = 'user-jwt-of-x', JWT_Y = 'user-jwt-of-y';
+const ANON = 'public-anon-key';
+const alarmForX = { userId: X, title: 't', body: 'b', channel: 'calendar_events', data: { type: 'alarm', taskId: A } };
+
+test('caller = signed-in owner (user JWT resolving to userId): token minted', async () => {
+  jwtUsers[JWT_X] = X; jwtUsers[JWT_Y] = Y; setDb(freshDb());
+  const r = await send(alarmForX, { authorization: `Bearer ${JWT_X}`, apikey: ANON });
+  assert.equal(r.body.delivered, 2);
+  const v = await verifyActionToken(r.fcm[0].actionToken, { secret: ENV.SUPABASE_SERVICE_ROLE_KEY });
+  assert.ok(v); assert.equal(v!.userId, X); assert.equal(v!.taskId, A);
+});
+
+test('caller = anon key / no bearer / garbage / forged service key: push delivered, NO token', async () => {
+  jwtUsers[JWT_X] = X; jwtUsers[JWT_Y] = Y;
+  const cases: Record<string, string>[] = [
+    { authorization: `Bearer ${ANON}`, apikey: ANON },
+    {},
+    { authorization: 'Bearer' },
+    { authorization: 'Basic abc' },
+    { authorization: `Bearer ${ENV.SUPABASE_SERVICE_ROLE_KEY}x` },
+    { authorization: `Bearer ${ENV.SUPABASE_SERVICE_ROLE_KEY.slice(0, -1)}` },
+    { apikey: ENV.SUPABASE_SERVICE_ROLE_KEY }, // the key in apikey, not as the bearer
+  ];
+  for (const h of cases) {
+    setDb(freshDb());
+    const r = await send(alarmForX, h);
+    assert.equal(r.status, 200); assert.equal(r.body.delivered, 2, 'delivery is not blocked ' + JSON.stringify(h));
+    assert.equal(r.fcm[0].actionToken, undefined, 'no token for ' + JSON.stringify(h));
+    assert.equal(r.fcm[0].actionUrl, undefined);
+    assert.match(r.log, /action token not minted: caller is neither service role nor this user/);
+    assert.ok(!ops.some(o => o.table === 'tasks'), 'refused before the task is even read');
+  }
+});
+
+test("caller = ANOTHER user's valid JWT: push delivered, NO token (cannot mint for X's task)", async () => {
+  jwtUsers[JWT_X] = X; jwtUsers[JWT_Y] = Y; setDb(freshDb());
+  const r = await send(alarmForX, { authorization: `Bearer ${JWT_Y}`, apikey: ANON });
+  assert.equal(r.body.delivered, 2); assert.equal(r.fcm[0].actionToken, undefined);
+});
+
+test("caller = owner's JWT but another user's task: NO token (both checks hold)", async () => {
+  jwtUsers[JWT_X] = X; setDb(freshDb());
+  const r = await send({ ...alarmForX, data: { type: 'alarm', taskId: B } }, { authorization: `Bearer ${JWT_X}` });
+  assert.equal(r.body.delivered, 2); assert.equal(r.fcm[0].actionToken, undefined);
+  assert.match(r.log, /task does not belong to userId/);
 });

@@ -2,7 +2,7 @@ import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import webpush from "npm:web-push@3.6.7";
 import { mintActionToken, isUuid } from "../_shared/action-token.ts";
-import { taskBelongsTo } from "../_shared/push-auth.ts";
+import { taskBelongsTo, mintCaller } from "../_shared/push-auth.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -251,11 +251,15 @@ serve(async (req) => {
     // Phone alarm buttons (Done/Doing) authenticate with a signed single-task token carried in the
     // push itself, so they work when the app is killed, the session expired, or the user signed out.
     // FCM only (never the web payload) and never logged. A mint failure must not block delivery.
-    // A token is minted only for a task that belongs to `userId` (both come from the request body;
-    // C2-SEC1): otherwise the push still goes out, just without Done/Doing buttons.
+    // A token is minted only when (1) the CALLER is a server (service-role key) or the push's own
+    // signed-in user, and (2) the task belongs to `userId` (both come from the request body; C2-SEC1).
+    // Otherwise the push still goes out, just without Done/Doing buttons. The push itself stays open
+    // to every caller because browsers send it too (docs/qc-evidence/RESTORE-step3-j13-j14-security.md).
     if (isUuid(data?.taskId)) {
       try {
-        if (!(await taskBelongsTo(supabaseClient, data!.taskId!, userId))) {
+        if ((await mintCaller(req, supabaseClient, userId, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '')) === 'none') {
+          console.warn('[send-push-notification] action token not minted: caller is neither service role nor this user');
+        } else if (!(await taskBelongsTo(supabaseClient, data!.taskId!, userId))) {
           console.warn('[send-push-notification] action token not minted: task does not belong to userId');
         } else {
           fcmData.actionToken = await mintActionToken(userId, data!.taskId!);

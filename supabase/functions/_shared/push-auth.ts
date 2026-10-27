@@ -22,3 +22,48 @@ export async function taskBelongsTo(client: Client, taskId: unknown, userId: unk
     return false;
   }
 }
+
+/** The bearer credential of a request, or '' when there is none. */
+export function bearerToken(req: Request): string {
+  const m = /^Bearer\s+(\S+)\s*$/i.exec((req.headers.get("authorization") ?? "").trim());
+  return m ? m[1] : "";
+}
+
+/**
+ * Constant-time string equality: both sides are hashed to 32 bytes first, so neither the
+ * position of the first difference nor the secret's length shows up in the timing.
+ */
+export async function constantTimeEqual(a: string, b: string): Promise<boolean> {
+  const enc = new TextEncoder();
+  const [x, y] = (await Promise.all([
+    crypto.subtle.digest("SHA-256", enc.encode(a)),
+    crypto.subtle.digest("SHA-256", enc.encode(b)),
+  ])).map((d) => new Uint8Array(d));
+  let diff = 0;
+  for (let i = 0; i < x.length; i++) diff |= x[i] ^ y[i];
+  return diff === 0;
+}
+
+export type MintCaller = "service_role" | "owner_jwt" | "none";
+
+/**
+ * Who may cause an action token to be minted for `userId`:
+ *  - "service_role": the bearer is SUPABASE_SERVICE_ROLE_KEY (every server caller: scheduler,
+ *    notification-delivery, send-unified-notification, send-chat-message, execute-tool);
+ *  - "owner_jwt": the bearer is a user access token that auth.getUser() resolves to exactly `userId`
+ *    (the signed-in web app pushing about its own task);
+ *  - "none": anything else (no bearer, the anon key, another user's JWT, a forged JWT).
+ */
+export async function mintCaller(req: Request, client: Client, userId: unknown, serviceKey: string): Promise<MintCaller> {
+  const tok = bearerToken(req);
+  if (!tok) return "none";
+  if (serviceKey && await constantTimeEqual(tok, serviceKey)) return "service_role";
+  if (typeof userId !== "string" || !userId || !client?.auth?.getUser) return "none";
+  try {
+    const { data, error } = await client.auth.getUser(tok);
+    const id = data?.user?.id;
+    return !error && typeof id === "string" && id === userId ? "owner_jwt" : "none";
+  } catch {
+    return "none";
+  }
+}
