@@ -385,3 +385,92 @@ other undated DBA item, Residency participation, is already on the board as DONE
 3. **DBA tasks are labelled "EMBA".** The 3 existing DBA tasks carry `scheduling_context.source =
    'EMBA'`, because the sync labels everything that is not MIT as EMBA (§1). Harmless to placement;
    wrong in the UI ("📚 EMBA" badge in FocusView).
+
+## C: what happens on a Nexus refresh, step by step, on real items
+
+**The flag surface already exists (O), so nothing new is invented.** The flag reuses:
+- **The Iris chat message + phone push.** It is a `public.scheduled_notifications` row with
+  `notification_type = 'scheduled_chat'`, delivered by `notification-delivery` (main l.632-690 →
+  `send-chat-message`, `sendPush: true`). The same row shape is written by the agent tool in
+  `execute-tool` main l.2067-2130.
+- **The task's own `scheduling_context` jsonb.** It already carries `origin: 'nexus-azure'` and
+  `course_id` on the DBA tasks, and would hold a short change history so the card is traceable.
+- **The owner's reply.** He answers in the Iris chat ("yes, update it"), and Iris applies it with the
+  existing `update_task` tool (`execute-tool` main l.347). No new button or screen is needed.
+- **One digest message per sync run, never one message per change.** This is the same rule the
+  parked J2 nudge digest (`_shared/nudges.ts`, "ONE scheduled_chat digest per day") was built on.
+  When J2 lands, this folds into that digest instead of sending its own.
+
+**What the flag looks like (Iris chat, with a push "Iris: 2 course updates from Nexus"):**
+```
+Nexus refreshed your DBA courses overnight. 2 changes:
+• MGT-782 Research Proposal — due date moved Fri Oct 30 → Tue Nov 3 (11:59 pm).
+  [C-rec: I've updated the task.]   [C2: your task still says Oct 30. Want me to change it?]
+• MGT-702 Checkpoint 2 - Details — Nexus now shows it as SUBMITTED.
+  Your task is still open. Mark it done?
+```
+
+**A rule for both options:** the sync never reopens or changes a task the owner marked DONE. Today
+the DBA "Introductions" task is DONE in journey while Nexus still says `active`. Neither option
+touches it, and neither flags it.
+
+### Example 1: a due date moves (Research Proposal, MGT-782; a hypothetical change on a real item)
+
+Starting state: Nexus due Fri Oct 30, 11:59 pm. The journey task exists with the same due date, and
+the nightly build has placed it in a Thu Oct 29, 7–9 pm slot. The instructor extends the deadline to
+Tue Nov 3, and the owner's next Nexus course refresh picks that up.
+
+| step | C-rec (auto-update due date/title, flag status) | C2 (flag everything, change nothing) |
+|---|---|---|
+| 1. nightly sync reads Nexus | sees due Nov 3 ≠ task Oct 30 | same |
+| 2. task due date | **set to Tue Nov 3, 11:59 pm ET** | **stays Fri Oct 30** |
+| 3. existing slot (Thu Oct 29) | still before the new deadline, so **kept**. A slot only moves when the new due date is EARLIER than the slot: then the slot is cleared (`is_scheduled=false`) and the nightly build re-places it | untouched |
+| 4. trace | `scheduling_context.nexus_changes += {field:'due_date', from:'10-30', to:'11-03', at:<run>}` | same entry, marked `pending` |
+| 5. flag | digest line, informational: "due date moved Oct 30 → Nov 3. I've updated the task." | digest line, a question: "…your task still says Oct 30. Want me to change it?" |
+| 6. if the owner says nothing | task is correct (Nov 3) | task keeps the **wrong** date and the scheduler keeps planning against Oct 30. Re-flagged on every later run until answered (or once only; that is a sub-choice) |
+
+**The opposite case, which is why C-rec moves the slot only when it must:** if the deadline moved
+EARLIER, Oct 30 → Oct 28, the Thu Oct 29 slot would now fall after the deadline. Under C-rec the slot
+is cleared and the next nightly build places the work before Oct 28. Under C2 the task keeps a slot
+after its real deadline until the owner answers.
+
+### Example 2: Nexus marks an item submitted (Checkpoint 2 - Details, MGT-702)
+
+Starting state: the task is open, due Sun Nov 8. The owner submits on Canvas Nov 7, and the next
+course refresh brings `status = submitted`.
+
+| step | C-rec | C2 |
+|---|---|---|
+| 1. sync | sees `submitted`, task not DONE | same |
+| 2. task | **unchanged** (still open) | unchanged |
+| 3. flag | "Nexus now shows it as SUBMITTED. Mark it done?" | identical |
+| 4. owner says yes | Iris runs `update_task` → DONE | identical |
+
+**C-rec and C2 behave the same for status.** C-rec flags status changes on purpose: nothing should
+leave the board without the owner seeing it, and Nexus status is not reliable for every course
+(MGT-701 shows `active` on work he finished).
+
+### Example 3: a title changes (Residency 4, MGT-782; hypothetical)
+
+The instructor renames "Residency 4 - present ideas and insights from the readings" to "Residency 4
+Presentation".
+
+| | C-rec | C2 |
+|---|---|---|
+| task title | becomes `📚 Residency 4 Presentation`. The `📚` prefix is kept, the link (`assignment_id`) is unchanged, so no duplicate is created | stays the old title |
+| flag | digest line, informational | digest line, a question |
+
+### Something neither option can see (I, medium)
+
+An item **removed** in Canvas. The Nexus refresh re-links and PATCHes rows; nothing I read in
+`extension/background.js` deletes an assignment row, so the old row simply stays. Neither option gets
+a removal signal. If the owner wants one, it has to come from Nexus (for example, rows missing from
+the latest capture). That is not part of J7.
+
+### The C choice in one line each
+- **C-rec:** due date and title follow Nexus automatically, with an informational line in the daily
+  Iris digest; a submitted/graded status is only flagged. The board stays current without action;
+  the owner sees every change.
+- **C2:** every change is a question in the daily Iris digest, and the task keeps the old value until
+  he answers. Nothing changes without consent, but an unanswered flag leaves the scheduler planning
+  against a stale deadline.
