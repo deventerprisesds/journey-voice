@@ -83,7 +83,7 @@ No other repo calls it directly (O: grep of `/home/user/*` — Huddle goes throu
   - drop `id === userId` from the owner-JWT check, caught by the handler test ("ANOTHER user's valid JWT") and the unit test ("mintCaller");
   - `constantTimeEqual` → `return true`, caught by the handler test ("caller = anon key") and the unit test ("constantTimeEqual").
 
-### Fix 2 — registration: NOT enforced (left for the owner)
+### Fix 2 — registration: NOT enforced (left for the owner) — SUPERSEDED 2026-10-27 by "Fix 2 — Option A" below
 (a) is **NO**. android-bridge-template `FcmRegistrar.kt:33-34` registers with `Authorization: Bearer <anon key>`. If `subscribe_fcm` required a user JWT matching `body.userId`, this caller would get **401**. It is the native path that re-registers a token Firebase rotates while the app is closed (`onNewToken`, `BridgeFirebaseService.kt:187`) and on every launch (`MainActivity.kt:123`). The cost would be that a rotated token is unknown to the server until the WebView next opens signed in, and alarms in between go to a dead token. That is the 2026-10-05 → 10-08 silent-alarm shape `FcmRegistrar.kt:11-14` was written to stop. So neither `subscribe_fcm` nor the J14 cross-user dedupe was changed, and `verify_jwt` stays false.
 Pinned by `docs/qc-evidence/probes/push-auth.probe.test.ts` (O: 2 pass + 1 todo):
 - own-user subscribe (anon key, as the APK sends it) is accepted;
@@ -112,3 +112,71 @@ Reversible: all four are code-only and revertible. A needs an APK build to take 
 - J14's dedupe still lets anyone who knows a device's FCM token delete other users' rows for it.
 - send-push itself is still callable by anyone with any `userId` and arbitrary title/body (push spam to a user's devices; pre-existing). It is not gated, because browsers call it.
 - Related, not in scope: `execute-tool` is also `verify_jwt = false` with `userId` from the body (`register_push_token`, `send_push`), so it is a second registration route. Not changed.
+
+---
+
+## Fix 2 — registration: Option A (owner, 2026-10-27: "Phone registration ... approved with your recommendation ... options A")
+
+### What changed
+**App — android-bridge-template, branch `claude_fcm-register-with-session`** (`6a11b68` code, `894154e` build trigger + ledger):
+- `FcmRegistrar.kt` now sends `Authorization: Bearer <supabase_access_token>` (the stored login) and keeps `apikey: <anon>`. The anon key is never the bearer.
+- On a 401 it refreshes ONCE through `SupabaseTaskClient.refreshAccessToken`, then retries ONCE with the new token. That is the existing refresh path with its 30s concurrency guard, made `internal` (it was `private`). No second refresh mechanism was written.
+- Signed out (no access token): nothing is sent. One log line: `FCM_REGISTER native skipped: no session token (signed out)`.
+- Huddle APK: no change in behaviour. Its web side never stores `supabase_url`/`supabase_anon_key`/`supabase_user_id`, so `register()` still returns at the first missing key (O: journey's `src/App.tsx:63-67` / `src/hooks/useAuth.tsx:161-165` are the only writers of those keys).
+- Tests (O): `app/src/test/java/com/bridgetemplate/util/FcmRegistrarAuthTest.kt`, 9 JVM tests of the pure helpers `registrationBearer` / `postWithSessionRetry`. Android CI (`./gradlew testDebugUnitTest assembleDebug`) **success** on `6a11b68` (run 40551301622) and `894154e` (run 40554062191). This container has no Android SDK, so Gradle was not run locally.
+
+**Server — journey-voice, this branch** (`62c53ce`, `64d2af7`):
+- `_shared/push-auth.ts` `callerIsUser(req, client, userId)` returns true only when `auth.getUser(bearer)` resolves to exactly `userId`. It reuses `mintCaller` with no service-role branch.
+- `manage-push-subscription` `subscribe_fcm`: `callerIsUser` must be true, otherwise **401 before any write**. The J14 cross-user dedupe sits inside the same branch after the gate, so it only runs for a verified owner. `verify_jwt` stays `false`. `subscribe` / `unsubscribe` (browser web-push) are unchanged; see "Still in place".
+- `execute-tool` `register_push_token`: it needs `mintCaller != 'none'`, otherwise **401 before the tool runs**. This **deliberately differs from manage-push**: it also accepts the service-role key. Its only caller is huddle-proxy (`supabase/functions/huddle-proxy/index.ts:198-208`), which checks `JOURNEY_PROXY_TOKEN` (`:128`), resolves the user server-side, and calls with `Bearer <service-role key>`. Requiring a user JWT there would break Huddle's phone registration. The gate covers this one tool only.
+- Web callers still pass (O, read): `src/utils/bridgeFcmRegistration.ts:41` (started from `src/App.tsx` with `session.user.id`) and `src/hooks/useNotifications.tsx:82` (`userId: user.id`) call `supabase.functions.invoke`, which sends the session access token (supabase-js 2.110.0, see STEP 1). They send their own id, so they pass. `useNotifications.tsx:408/432` are `subscribe`/`unsubscribe`, which are not gated.
+- Harness (`docs/qc-evidence/probes/harness.ts`): a `_shared` module that imports supabase-js from esm.sh (`call-context-builder.ts`, pulled in by execute-tool) now gets a stubbed copy. Modules without a remote import are used as before.
+
+### Tests (O)
+- `supabase/functions/manage-push-subscription/index.auth.test.ts` (7):
+  - own JWT accepted;
+  - another user's JWT → 401, no write;
+  - anon key → 401, no write;
+  - no bearer → 401, no write;
+  - service-role key / forged JWT / JWT only in `apikey` / no `Bearer` prefix → 401;
+  - dedupe refuses without a matching JWT (the other user's row survives, no delete issued);
+  - dedupe still runs for the verified owner.
+- `supabase/functions/execute-tool/index.register-auth.test.ts` (4):
+  - service role registers;
+  - own JWT registers;
+  - other JWT / anon / no bearer / forged → 401, nothing written;
+  - the gate does not refuse other tools.
+- `_shared/push-auth.test.ts`: +1 (`callerIsUser`).
+- Probe `push-auth.probe.test.ts`: the KNOWN GAP is now a real assertion (cross-user → 401, both rows untouched). The `todo` is removed. 3 pass, 0 todo.
+- `npm test` **324/324** (312 before + 12).
+
+### Mutations (O, `mutate.sh`, anchors in files; every one restored = HEAD, tree clean)
+| mutation | caught by | outcome |
+|---|---|---|
+| manage-push gate → `if (false)` | "ANOTHER user's valid JWT is refused with 401" | FIRED |
+| same | "J14 dedupe: refused without a matching JWT" | FIRED |
+| `callerIsUser` → `return true` | unit "callerIsUser: only this user's own JWT" | FIRED |
+| same | handler "the anon key as bearer is refused with 401" | FIRED |
+| execute-tool gate → `if (false)` | "another user's JWT, the anon key, no bearer -> 401" | FIRED |
+| execute-tool gate without `toolName === 'register_push_token'` | "the gate is scoped to register_push_token" | FIRED |
+| execute-tool gate with `''` for the service key | "service-role caller (huddle-proxy) registers the device" | FIRED |
+| Kotlin `registrationBearer` falls back to the anon key (throwaway branch `claude_fcm-mutprobe-bearer`, CI) | `FcmRegistrarAuthTest` | PENDING (CI run in progress) |
+
+### APK version, and the ORDER (this is the part that can silence alarms)
+- New app: **TaskOS (journey) 1.0.13**. The android-bridge-template branch bumps `_buildTriggeredAt` in `configs/54beaa01-…/bridge.config.json`. When that branch is merged to `main`, `build-apk.yml` builds and signs `taskos-v1.0.13.apk` (`_buildNumber` 12 + 1; `versionCode` = the run number, above 162, so it installs over 1.0.12). It uploads the APK to the bridge-apks blob and writes `_apkDownloadUrl` back into the config.
+- **Order:**
+  1. Merge android-bridge-template `claude_fcm-register-with-session`.
+  2. The owner installs 1.0.13 and opens it once while signed in.
+  3. Confirm a `fcm_token_registered` activity_log row with `source: native` after the install.
+  4. **Only then** merge PR #65 (this branch) and let the edge functions deploy.
+- If #65 deploys first, every app older than 1.0.13 gets 401 on background re-registration (`onNewToken`, launch). A token Firebase rotates while the app is closed then stays unknown to the server, and alarms go to a dead token. That is the 2026-10-05 → 10-08 silent-alarm shape. The WebView's own registration (user JWT) still works whenever the app is opened signed in.
+
+## What will no longer be in place
+- A registration that does not carry the matching user's login is refused. `subscribe_fcm` needs that user's own JWT. `register_push_token` needs that user's JWT or the service-role key (huddle-proxy).
+- The Android app versions before 1.0.13 can no longer re-register in the background. Their native registrar sends the anon key and now gets 401. Only the WebView path, while open and signed in, registers them.
+- J14's cross-user dedupe can no longer be triggered by an unverified caller.
+
+## Still in place after Option A (observed, not changed)
+- A rotation while the stored session token is expired and the refresh token is also dead (long signed-out or revoked session) fails until the next signed-in app open. That is Option A's stated cost.
+- `manage-push-subscription` `subscribe` / `unsubscribe` (browser web-push) still trust `body.userId`. `unsubscribe` deletes **all** of that user's `push_subscriptions` rows, FCM included. Not in this brief's scope.
+- `execute-tool` as a whole is still `verify_jwt = false` with `userId` from the body for every other tool (`send_push`, task reads/writes). Only `register_push_token` is gated here.
