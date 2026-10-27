@@ -160,7 +160,7 @@ Reversible: all four are code-only and revertible. A needs an APK build to take 
 | execute-tool gate → `if (false)` | "another user's JWT, the anon key, no bearer -> 401" | FIRED |
 | execute-tool gate without `toolName === 'register_push_token'` | "the gate is scoped to register_push_token" | FIRED |
 | execute-tool gate with `''` for the service key | "service-role caller (huddle-proxy) registers the device" | FIRED |
-| Kotlin `registrationBearer` falls back to the anon key (throwaway branch `claude_fcm-mutprobe-bearer`, CI) | `FcmRegistrarAuthTest` | PENDING (CI run in progress) |
+| Kotlin `registrationBearer` falls back to the anon key (throwaway branch `claude_fcm-mutprobe-bearer`, CI) | `FcmRegistrarAuthTest` | **FIRED**: run 40572046149 compiled, then 5 of the 9 FcmRegistrarAuthTest tests failed ("anon key is never used as the bearer", "no session token means no bearer", "signed out sends nothing", "failed refresh does not retry", "anon key as stored token sends nothing"); 82 tests run in total. Branch deleted after the run |
 
 ### APK version, and the ORDER (this is the part that can silence alarms)
 - New app: **TaskOS (journey) 1.0.13**. The android-bridge-template branch bumps `_buildTriggeredAt` in `configs/54beaa01-…/bridge.config.json`. When that branch is merged to `main`, `build-apk.yml` builds and signs `taskos-v1.0.13.apk` (`_buildNumber` 12 + 1; `versionCode` = the run number, above 162, so it installs over 1.0.12). It uploads the APK to the bridge-apks blob and writes `_apkDownloadUrl` back into the config.
