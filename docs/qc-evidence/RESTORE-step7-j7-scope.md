@@ -308,3 +308,80 @@ journey instead:
 Earlier history of those two files, for context only: `3f7e8d0`, `73d6b2a`, `778be2e`, `91df60b`.
 On main, both functions still write journey's frozen `public.assignments` (`sync-google-sheets/index.ts:251-289`,
 `sync-mit-sheets/index.ts:235-273`). Nothing in this restore changes that.
+
+## B: which DBA items become journey tasks, worked on live data (2026-10-27)
+
+**Sources (O):**
+- Nexus: every DBA assignment row, from nexus-hub `db-query.yml` run 40575147553 (job 122439464760), times converted to US Eastern.
+- journey: `public.tasks` for user `a3378f93-…`, read with a Supabase SELECT.
+
+**Same person on both sides (O):** every DBA row in Nexus belongs to owner `a3378f93-d655-4913-b2fa-ca5b1d8020f1` = `dev@enterpriseds.io`. That is journey's main user (438 tasks). So J7's "journey user id = Nexus owner" assumption holds.
+
+**Rules applied to both options:**
+- course set = all DBA courses (A2);
+- open = status NOT in (submitted, graded, completed), the corrected rule;
+- an item already linked to a journey task is skipped, exactly as the sync does today;
+- main's 30-day overdue cutoff applies (on 10-27 it drops anything due before Sep 27).
+
+### Every DBA item, and what happens to it
+
+| course | item | due (ET) | Nexus status | journey today | B1 (every open item) | B2 (dated only) |
+|---|---|---|---|---|---|---|
+| MGT-701 | Introductions | Wed Sep 9, 11:59 pm | active | **task exists, DONE** (made 09-07 by the branch's Nexus sync while it was live) | skip (linked) | skip (linked) |
+| MGT-701 | Doctoral Student Best Practices | Fri Oct 2, 11:59 pm | active | — | **new, 25 days overdue** | **new, 25 days overdue** |
+| MGT-701 | Research Interests & Our Program | Fri Oct 2, 11:59 pm | active | — | new, overdue | new, overdue |
+| MGT-701 | Finding Balance & Development As A Researcher | Fri Oct 2, 11:59 pm | active | — | new, overdue | new, overdue |
+| MGT-701 | Managing Time & Projects | Fri Oct 2, 11:59 pm | active | — | new, overdue | new, overdue |
+| MGT-701 | Final Grade (0 pts) | no date | active | — | **new, undated** | not imported |
+| MGT-702 | Discussion Board 1 | Sun Sep 6 | **submitted** | task exists, DONE | not open | not open |
+| MGT-702 | Discussion Board 2 | Sun Sep 27 | **submitted** | — | not open | not open |
+| MGT-702 | Slide Deck for Seminar 2 Presentations (0 pts) | Tue Oct 6, 7:00 pm | active | — | **new, 21 days overdue** | **new, 21 days overdue** |
+| MGT-702 | Checkpoint 1 - Introduction | Sun Oct 11 | **submitted** | — | not open | not open |
+| MGT-702 | **Checkpoint 2 - Details** | **Sun Nov 8, 11:59 pm** | active | — | **new, upcoming** | **new, upcoming** |
+| MGT-782 | **Research Proposal** | **Fri Oct 30, 11:59 pm** | active | — | **new, upcoming (3 days)** | **new, upcoming** |
+| MGT-782 | **Residency 4 - present ideas and insights from the readings** | **Mon Nov 9, 7:00 pm** | active | — | **new, upcoming** | **new, upcoming** |
+| MGT-782 | **Research Paper** | **Wed Dec 9, 11:59 pm** | active | — | **new, upcoming** | **new, upcoming** |
+| MGT-782 | Residency participation (40 pts) | no date | active | task exists, DONE | skip (linked) | skip (linked) |
+
+### What the board gains
+
+**B2 (dated only): 9 new cards.**
+```
+OVERDUE  📚 Doctoral Student Best Practices                 MGT-701  was due Oct 2
+OVERDUE  📚 Research Interests & Our Program                MGT-701  was due Oct 2
+OVERDUE  📚 Finding Balance & Development As A Researcher   MGT-701  was due Oct 2
+OVERDUE  📚 Managing Time & Projects                        MGT-701  was due Oct 2
+OVERDUE  📚 Slide Deck for Seminar 2 Presentations          MGT-702  was due Oct 6
+UPCOMING 📚 Research Proposal                               MGT-782  due Fri Oct 30
+UPCOMING 📚 Checkpoint 2 - Details                          MGT-702  due Sun Nov 8
+UPCOMING 📚 Residency 4 - present ideas … readings          MGT-782  due Mon Nov 9
+UPCOMING 📚 Research Paper                                  MGT-782  due Wed Dec 9
+```
+
+**B1 (every open item, undated too): 10 new cards** = the same 9 plus
+```
+NO DATE  📚 Final Grade                                     MGT-701  (a Canvas gradebook total, not work)
+```
+
+**The difference between B1 and B2 today is exactly one card, and it is not real work.** The only
+other undated DBA item, Residency participation, is already on the board as DONE.
+
+### Three things the examples expose (O), whichever option is chosen
+
+1. **5 of the 9 B2 cards are probably already done.** Nexus still says `active` for the four
+   MGT-701 items and the Slide Deck, but Nexus status is not tracking submissions for these. Proof
+   (O): MGT-701 "Introductions" is `active` in Nexus while the owner marked its journey task DONE.
+   Only MGT-702's DB1/DB2/Checkpoint 1 came through as `submitted`. Main's builder never
+   auto-archives assignment-linked tasks (`nightly-schedule-builder` main l.592-603: "stay visible as
+   overdue"), so these 5 would sit as overdue until the owner clears them. **A sub-choice for the
+   owner:** import past-due items (5 overdue cards), or import only items due from today on (4 cards).
+2. **Due dates land up to a day late.** Canvas stores "11:59 pm ET" as early morning UTC of the next
+   day (Checkpoint 2 = `2026-11-09T04:59:59Z`). The sync keeps only the UTC **date** and appends
+   `T23:59:59Z` (06b0eba `nightly-assignment-sync` l.285-287; **main has the identical line**, l.200).
+   So Checkpoint 2 becomes Mon Nov 9, 6:59 pm ET instead of Sun Nov 8, 11:59 pm.
+   **Already visible in live data (O):** the existing "Introductions" task holds
+   `2026-09-10 23:59:59+00` while Nexus holds `2026-09-10 03:59:59Z` (Sep 9, 11:59 pm ET).
+   This is a real fix any restore should include: convert to the user's timezone before taking the date.
+3. **DBA tasks are labelled "EMBA".** The 3 existing DBA tasks carry `scheduling_context.source =
+   'EMBA'`, because the sync labels everything that is not MIT as EMBA (§1). Harmless to placement;
+   wrong in the UI ("📚 EMBA" badge in FocusView).
