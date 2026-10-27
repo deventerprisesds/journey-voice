@@ -22,16 +22,12 @@ on:
         description: 'Space-separated function slugs. Blank = every function in supabase/functions.'
         required: false
         default: ''
-      capture:
-        description: 'TEMPORARY (removed before merge): slug whose raw /body to print as gzip+base64.'
-        required: false
-        default: ''
   workflow_run:
     workflows: ['Deploy Supabase Functions']
     types: [completed]
 
 permissions:
-  contents: write  # TEMPORARY for fixture capture; revert to read
+  contents: read
 
 jobs:
   drift:
@@ -42,21 +38,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-
-      - name: TEMPORARY capture raw body fixture
-        if: ${{ inputs.capture != '' }}
-        env:
-          T: ${{ secrets.SUPERBASE_ACCESS_TOKEN }}
-          SLUG: ${{ inputs.capture }}
-        run: |
-          curl -sS -D headers.txt -H "Authorization: Bearer $T" "https://api.supabase.com/v1/projects/wwxgajrtmslzklnyplah/functions/$SLUG/body" -o body.bin
-          grep -i '^content-type' headers.txt || true
-          wc -c body.bin; sha256sum body.bin; head -c 8 body.bin | od -c | head -2
-          mkdir -p scripts/fixtures/eszip && cp body.bin "scripts/fixtures/eszip/$SLUG.eszip"
-          git config user.name 'fixture-capture'; git config user.email 'noreply@anthropic.com'
-          git add "scripts/fixtures/eszip/$SLUG.eszip"
-          git commit -m "test fixture: raw /body of live $SLUG (captured by run ${{ github.run_id }})"
-          git push origin HEAD:${{ github.ref_name }}
 
       - name: Diff deployed source against this ref
         env:
