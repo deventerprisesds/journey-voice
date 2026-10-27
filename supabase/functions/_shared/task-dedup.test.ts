@@ -136,7 +136,7 @@ test('ambiguous items are never dropped or collapsed: two near-but-distinct both
 // runDedup, and the undo payload fix. See docs/qc-evidence/RESTORE-step6-j6.md.
 // =============================================================================
 import { readFileSync } from 'node:fs';
-import { runDedup, restorePayloadFromLog, WORKFLOW_STATUSES } from './task-dedup.ts';
+import { runDedup, restorePayloadFromLog, undoDedupSkips, UNDO_GUARD_OFF_MESSAGE, WORKFLOW_STATUSES } from './task-dedup.ts';
 import { WORKFLOW_STATUSES as CLIENT_WORKFLOW_STATUSES } from '../../../src/utils/workflowStatus.ts';
 
 // Minimal chainable stand-in for the supabase client: records which tables were read and
@@ -241,13 +241,13 @@ test('edge WORKFLOW_STATUSES is identical to the client source src/utils/workflo
   assert.deepEqual([...WORKFLOW_STATUSES], [...CLIENT_WORKFLOW_STATUSES]);
 });
 
-test('execute-tool wiring: undoDedup inserts restorePayloadFromLog(row.candidate), not the raw payload', () => {
+test('execute-tool wiring: undoDedup delegates to the gated shared undoDedupSkips', () => {
   const src = readFileSync(new URL('../execute-tool/index.ts', import.meta.url), 'utf8');
   const start = src.indexOf('async function undoDedup(');
   assert.ok(start > 0, 'undoDedup exists');
   const body = src.slice(start, src.indexOf('\n}\n', start));
-  assert.match(body, /const payload: any = restorePayloadFromLog\(row\.candidate\);/);
-  assert.doesNotMatch(body, /\.\.\.\(row\.candidate/);
+  assert.match(body, /return await undoDedupSkips\(supabase, userId, args\);/);
+  assert.doesNotMatch(body, /from\('tasks'\)|from\('task_dedup_log'\)/, 'no direct row access left in execute-tool undo');
   assert.match(src, /case 'undo_dedup':\s*\n\s*return await undoDedup\(supabase, userId, args\);/);
   // main's work the 3-way merge had to keep
   assert.match(src, /case 'get_task_topics':/);
@@ -264,4 +264,56 @@ test('execute-tool wiring: undoDedup inserts restorePayloadFromLog(row.candidate
   assert.ok(pcSkip > 0, 'parseAndCreateTasks has the skip branch');
   const pcCont = pc.indexOf('continue; // do NOT insert', pcSkip);
   assert.ok(pcCont > 0 && pcCont < pc.indexOf(".from('tasks')", pcSkip), 'parseAndCreateTasks continues before inserting a skipped duplicate');
+});
+
+// Recording fake for the undo path: counts every insert/update and which tables were read.
+function undoFake(opts: { config: unknown; logRows: any[] }) {
+  const calls = { reads: [] as string[], inserts: [] as any[], updates: [] as any[] };
+  const from = (table: string) => {
+    calls.reads.push(table);
+    const b: any = {
+      select: () => b, eq: () => b, is: () => b, order: () => b,
+      limit: async () => ({ data: opts.logRows, error: null }),
+      maybeSingle: async () => ({ data: { config: opts.config }, error: null }),
+      insert: (rows: any[]) => {
+        calls.inserts.push(...rows);
+        const created = { ...rows[0], id: `new-${calls.inserts.length}` };
+        return { select: () => ({ single: async () => ({ data: created, error: null }) }) };
+      },
+      update: (patch: any) => { calls.updates.push({ table, patch }); return { eq: async () => ({ error: null }) }; },
+    };
+    return b;
+  };
+  return { supabase: { from }, calls };
+}
+
+// The 4 live not-yet-undone August skips, by shape.
+const AUGUST_SKIPS = [
+  { id: 'l1', created_at: '2026-08-25T10:00:00.000Z', candidate: { id: 'x1', title: 'Pitch deck', status: 'VENTURES' } },
+  { id: 'l2', created_at: '2026-08-25T10:00:01.000Z', candidate: { id: 'x2', title: 'Investor list', status: 'VENTURES' } },
+];
+
+test('undo_dedup gate: flag OFF => guard-off result, no log read, no insert, no log update', async () => {
+  for (const config of [OWNER_CONFIG_SHAPE, undefined, null, { dedup: { enabled: false } }]) {
+    const { supabase, calls } = undoFake({ config, logRows: AUGUST_SKIPS });
+    const r = await undoDedupSkips(supabase, 'u1', { all: true });
+    assert.equal(r.success, true);
+    assert.deepEqual(r.result, { restored: [], dedupEnabled: false });
+    assert.equal(r.message, UNDO_GUARD_OFF_MESSAGE);
+    assert.match(r.message!, /guard is off/);
+    assert.deepEqual(calls.reads, ['user_scheduling_prefs'], 'only the config is read');
+    assert.equal(calls.inserts.length, 0, 'no task inserted');
+    assert.equal(calls.updates.length, 0, 'no task_dedup_log row updated');
+  }
+});
+
+test('undo_dedup gate: flag ON => existing undo path restores and marks the log rows', async () => {
+  const { supabase, calls } = undoFake({ config: { ...OWNER_CONFIG_SHAPE, dedup: { enabled: true } }, logRows: AUGUST_SKIPS });
+  const r = await undoDedupSkips(supabase, 'u1', {});
+  assert.equal(r.success, true);
+  assert.deepEqual(r.result, { restored: ['Pitch deck', 'Investor list'] });
+  assert.equal(calls.inserts.length, 2);
+  assert.ok(calls.inserts.every((t) => t.status === 'BACKLOG' && !('id' in t)), 'category status re-derived, old id dropped');
+  assert.equal(calls.updates.length, 2);
+  assert.ok(calls.updates.every((u) => u.table === 'task_dedup_log' && u.patch.undone_at && u.patch.created_task_id));
 });

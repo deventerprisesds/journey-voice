@@ -419,3 +419,80 @@ export function restorePayloadFromLog(candidate: unknown): Record<string, unknow
   }
   return payload;
 }
+
+// =============================================================================
+// UNDO (the `undo_dedup` tool). Moved here from execute-tool so it is unit-testable.
+// GATED on the same flag as the guard: while config.dedup.enabled !== true it reads no log rows,
+// inserts nothing and updates nothing. Rationale: with the guard off there is nothing new to undo,
+// and the only rows left are old (August 2026) skips — those can be undone after turning the guard on.
+// =============================================================================
+
+export interface UndoDedupResult {
+  success: boolean;
+  result?: { restored: string[]; dedupEnabled?: boolean };
+  message?: string;
+  error?: string;
+}
+
+export const UNDO_GUARD_OFF_MESSAGE = "The duplicate-detection guard is off, so there is nothing to undo — no tasks were restored.";
+
+export async function undoDedupSkips(
+  supabase: any,
+  userId: string,
+  args: any,
+  config?: unknown,               // user_scheduling_prefs.config if the caller already has it
+): Promise<UndoDedupResult> {
+  let rawConfig = config;
+  if (rawConfig === undefined) {
+    const { data } = await supabase
+      .from('user_scheduling_prefs')
+      .select('config')
+      .eq('user_id', userId)
+      .maybeSingle();
+    rawConfig = data?.config;
+  }
+  if (!resolveDedupConfig(rawConfig).enabled) {
+    return { success: true, result: { restored: [], dedupEnabled: false }, message: UNDO_GUARD_OFF_MESSAGE };
+  }
+
+  let q = supabase
+    .from('task_dedup_log')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('action', 'skipped')
+    .is('undone_at', null)
+    .order('created_at', { ascending: false });
+  if (args?.log_id) q = q.eq('id', args.log_id);
+  const { data: rows, error } = await q.limit(50);
+  if (error) throw error;
+  if (!rows || rows.length === 0) {
+    return { success: true, result: { restored: [] }, message: "There's nothing to undo — I haven't skipped any duplicate tasks recently." };
+  }
+
+  let toRestore = rows;
+  if (!args?.log_id && !args?.all) {
+    const newest = new Date(rows[0].created_at).getTime();
+    toRestore = rows.filter((r: any) => Math.abs(new Date(r.created_at).getTime() - newest) <= 5000);
+  }
+
+  const restored: string[] = [];
+  for (const row of toRestore) {
+    // Re-derives status when the saved one is a category (pre-#28/#31 rows), drops the old id.
+    const payload: any = restorePayloadFromLog(row.candidate);
+    const { data: created, error: insErr } = await supabase.from('tasks').insert([payload]).select().single();
+    if (insErr) { console.error('[UNDO_DEDUP] re-insert failed:', insErr); continue; }
+    await supabase.from('task_dedup_log').update({ undone_at: new Date().toISOString(), created_task_id: created.id }).eq('id', row.id);
+    restored.push(created.title);
+  }
+
+  if (restored.length === 0) {
+    return { success: false, error: "I found the skipped task(s) but couldn't restore them. Please try again." };
+  }
+  return {
+    success: true,
+    result: { restored },
+    message: restored.length === 1
+      ? `Done — I added "${restored[0]}" back to your board.`
+      : `Done — I added these back to your board: ${restored.map((t) => `"${t}"`).join(', ')}.`
+  };
+}
