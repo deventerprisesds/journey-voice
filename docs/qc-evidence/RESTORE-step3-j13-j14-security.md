@@ -62,3 +62,53 @@ No other repo calls it directly (O: grep of `/home/user/*` — Huddle goes throu
 - Mutations (O, `mutate.sh`, anchors in files under the scratchpad):
   - handler: `if (!(await taskBelongsTo(…)))` → `if (false)` → **FIRED** ("another user's task"), restored = HEAD, tree clean.
   - module: the `user_id === userId` return → `return true;` → **FIRED** ("true only for the owning user"), restored = HEAD, tree clean.
+
+### Fix 3 — mint only for a server caller or the push's own signed-in user (commit `5755ccb`)
+(b) found browser callers (user JWT) as well as server callers (service-role key), so per the brief the **push itself is not gated**. Only token MINTING is.
+- `_shared/push-auth.ts` `mintCaller(req, client, userId, serviceKey)`:
+  - `service_role` when the `Authorization: Bearer` value equals `SUPABASE_SERVICE_ROLE_KEY`. The comparison is constant-time: both sides are SHA-256'd, then XOR-compared over 32 bytes, so neither the first differing byte nor the key length shows in timing.
+  - `owner_jwt` when `auth.getUser(bearer)` resolves to exactly `userId`.
+  - `none` otherwise: no bearer, the anon key, another user's JWT, a forged/expired JWT, the key sent only in `apikey`, a `getUser` error, or an unset service key.
+- `send-push-notification/index.ts`: `mintCaller === 'none'` → no token, and the log line `action token not minted: caller is neither service role nor this user`. The caller check runs before the task read, so an unauthorised caller costs no DB read. Then fix 1's ownership check runs. A token needs **both**.
+- What it breaks (I, from the caller table): **nothing found.** All six server callers send the service-role key. The three browser callers that pass a real `taskId` (`SmartTaskInput.tsx:148`, `taskScheduling.ts:166`, `RealtimeVoiceAssistant.ts:1709`) send the signed-in user's JWT for that user's own `userId`, so they still get tokens. One assumption: hosted `SUPABASE_SERVICE_ROLE_KEY` is the same value in every function's environment. Callers and callee read the same env var, so I expect it is; this is not checked live. If it ever differed, server pushes would still be delivered, just without buttons. That is the same fallback as before J13.
+- Tests (O): 4 more handler tests in `index.auth.test.ts` and 3 more unit tests in `push-auth.test.ts`:
+  - owner JWT → token for (X, A);
+  - 7 bad caller shapes → delivered 2/2, no token, no task read;
+  - another user's valid JWT → no token;
+  - owner JWT plus another user's task → no token.
+
+  `npm test` **312/312**.
+- Mutations (O, `mutate.sh`), all **FIRED**, each restored = HEAD with a clean tree:
+  - handler gate → `if (false)` ("caller = anon key");
+  - drop `id === userId` from the owner-JWT check, caught by the handler test ("ANOTHER user's valid JWT") and the unit test ("mintCaller");
+  - `constantTimeEqual` → `return true`, caught by the handler test ("caller = anon key") and the unit test ("constantTimeEqual").
+
+### Fix 2 — registration: NOT enforced (left for the owner)
+(a) is **NO**. android-bridge-template `FcmRegistrar.kt:33-34` registers with `Authorization: Bearer <anon key>`. If `subscribe_fcm` required a user JWT matching `body.userId`, this caller would get **401**. It is the native path that re-registers a token Firebase rotates while the app is closed (`onNewToken`, `BridgeFirebaseService.kt:187`) and on every launch (`MainActivity.kt:123`). The cost would be that a rotated token is unknown to the server until the WebView next opens signed in, and alarms in between go to a dead token. That is the 2026-10-05 → 10-08 silent-alarm shape `FcmRegistrar.kt:11-14` was written to stop. So neither `subscribe_fcm` nor the J14 cross-user dedupe was changed, and `verify_jwt` stays false.
+Pinned by `docs/qc-evidence/probes/push-auth.probe.test.ts` (O: 2 pass + 1 todo):
+- own-user subscribe (anon key, as the APK sends it) is accepted;
+- **KNOWN GAP**: a cross-user subscribe is accepted, takes over the owner's FCM row, and the dedupe deletes other users' rows for that token;
+- `todo`: "cross-user refused with 401".
+
+**The fork: how should device registration prove who is registering?**
+
+| Option | What actually happens | Cost / what you lose | What it makes easy later | What it makes hard later |
+|---|---|---|---|---|
+| **A. Android sends the user's access token** (recommended) | `FcmRegistrar.kt` sends `EncryptedPrefs "supabase_access_token"` (already stored; `SupabaseTaskClient.kt:43` uses it) instead of the anon key. The function then verifies with `auth.getUser` and requires `user.id === userId` for `subscribe_fcm` and the dedupe, and refuses with 401 otherwise | An APK release first, and enforcement only after it ships. A rotation while the stored JWT is expired fails until the next app open, so that window comes back for expired sessions only | Closes C2-SEC1 completely. Matches the web callers | Needs a refresh-token path in native code to fully cover background rotation |
+| B. Enforce now, accept the native break | Server-side change only | Background token rotations stop registering until the WebView opens. Risks the 10-05 silent-alarm shape | Simplest code | Real alarm misses in the meantime |
+| C. Soft gate: refuse only when it conflicts | Anon-key callers may register only if no other user already holds that `fcm_token` and the user has no FCM row with a different token. The dedupe runs only for a verified-JWT caller | No APK change | Narrows takeover of an existing device, but a first-time or unverified takeover is still possible | Two rules to reason about. Not a real closure |
+| D. Leave as is | Nothing | The gap stays. Tokens reaching a hijacked device can change tasks for 7 days | — | — |
+
+Cause → effect: pick A, so the APK proves identity, so a stranger's device can no longer join the owner's id, so alarm tokens reach only the owner's phones. Pick B, so the same holds, but native re-registration 401s, so rotated tokens go dead until the next open, so alarms can be missed. Pick C, so obvious takeovers are refused, but a fresh unverified registration still lands.
+Reversible: all four are code-only and revertible. A needs an APK build to take effect, and the server half must not ship before the APK, or it becomes B.
+
+## What will no longer be in place (once merged and deployed)
+- send-push-notification will no longer mint an action token for a task whose `user_id` is not the push's `userId`. That push is still delivered, without Done/Doing buttons.
+- send-push-notification will no longer mint an action token for a caller that is neither the service-role key nor the push's own signed-in user. Pushes from such callers (none found today) arrive without buttons.
+- So an unauthenticated caller can no longer mint a token on demand for any task (POST send-push `{userId, data:{taskId}}`).
+
+## Still in place (not changed here)
+- **An unauthenticated caller can still register a device under another user's id** (`subscribe_fcm`) and receive that user's alarm pushes, with their tokens, from the scheduler. See Fix 2 / the owner's fork.
+- J14's dedupe still lets anyone who knows a device's FCM token delete other users' rows for it.
+- send-push itself is still callable by anyone with any `userId` and arbitrary title/body (push spam to a user's devices; pre-existing). It is not gated, because browsers call it.
+- Related, not in scope: `execute-tool` is also `verify_jwt = false` with `userId` from the body (`register_push_token`, `send_push`), so it is a second registration route. Not changed.
