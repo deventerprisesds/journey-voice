@@ -4,6 +4,7 @@ import { normalizeDueDate, normalizeDateTime, getTodayInTimezone, formatInTimezo
 import { getToolDefinitions } from "../_shared/tool-definitions.ts";
 import { getTopicGroupsManual, WINDOW_RANGES, CATEGORY_WINDOW_MAPPING } from "../_shared/call-context-builder.ts";
 import { resolveConfig, validateTaskWindow, activeCaveats } from "../_shared/scheduling-defaults.ts";
+import { mintCaller } from "../_shared/push-auth.ts";
 
 // ── Rollback Flag for shared topic ranking ──────────────────────────
 const USE_SHARED_TOPICS = true;
@@ -2884,6 +2885,18 @@ serve(async (req) => {
         error: 'toolName and userId are required' 
       }), {
         status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+
+    // Device registration is the one tool here that hands a user's alarm pushes to a device, so it
+    // needs a caller that proves itself (owner-approved Option A, 2026-10-27): the service-role key
+    // (huddle-proxy, after its own JOURNEY_PROXY_TOKEN check, resolves the user server-side) or the
+    // user's own login. The anon key / another user's JWT / no bearer -> 401.
+    if (toolName === 'register_push_token' && (await mintCaller(req, supabase, userId, SUPABASE_SERVICE_KEY)) === 'none') {
+      console.warn('[EXECUTE-TOOL] register_push_token refused: caller is neither service role nor this user');
+      return new Response(JSON.stringify({ success: false, error: 'unauthorized' }), {
+        status: 401,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
     }

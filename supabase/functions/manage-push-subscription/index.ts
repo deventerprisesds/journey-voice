@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+import { callerIsUser } from "../_shared/push-auth.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -19,6 +20,8 @@ interface RequestBody {
   subscription?: PushSubscription;
   fcmToken?: string;
   userId: string;
+  /** Who registered: 'settings' (NotificationSettings), 'web' (app-shell hook), 'native' (Android). */
+  source?: string;
 }
 
 serve(async (req) => {
@@ -33,7 +36,7 @@ serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
-    const { action, subscription, fcmToken, userId }: RequestBody = await req.json();
+    const { action, subscription, fcmToken, userId, source }: RequestBody = await req.json();
 
     // Validate userId is provided
     if (!userId) {
@@ -51,6 +54,15 @@ serve(async (req) => {
 
     // Android bridge: store FCM token for native notification routing
     if (action === 'subscribe_fcm') {
+      // Registration must carry the login of the user it registers (owner-approved Option A,
+      // 2026-10-27). Without this, anyone with the APK and a user id could point that user's alarms
+      // (and their 7-day action tokens) at their own phone, and the dedupe below would let them
+      // delete other users' rows for a token they know. verify_jwt stays false; checked here.
+      if (!(await callerIsUser(req, supabaseClient, userId))) {
+        console.warn('[manage-push-subscription] subscribe_fcm refused: bearer is not this user\'s login');
+        return new Response(JSON.stringify({ error: 'unauthorized' }),
+          { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
       if (!fcmToken) {
         return new Response(JSON.stringify({ error: 'fcmToken required' }),
           { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
@@ -71,6 +83,23 @@ serve(async (req) => {
         return new Response(JSON.stringify({ error: 'Failed to store FCM token', details: upsertError.message }),
           { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
       }
+      // One device, one owner. Sign-out deliberately does NOT unregister the device (alarms and their
+      // Done buttons keep working signed out), so if a DIFFERENT account later registers this same
+      // device token, drop the previous owner's rows — otherwise their alarms keep arriving here.
+      const { error: dedupeError } = await supabaseClient
+        .from('push_subscriptions')
+        .delete()
+        .eq('fcm_token', fcmToken)
+        .neq('user_id', userId);
+      if (dedupeError) {
+        console.warn('[manage-push-subscription] device-owner dedupe failed (non-blocking):', dedupeError.message);
+      }
+      // Leave a trace: a registration used to be invisible, so "the phone never registered its new
+      // token after a reinstall" took a database dig to find. Never log the full token.
+      supabaseClient.from('activity_log').insert({
+        user_id: userId, activity_type: 'fcm_token_registered', status: 'completed',
+        metadata: { token_prefix: fcmToken.substring(0, 20), token_tail: fcmToken.slice(-6), source: source ?? 'settings' }
+      }).then(() => {}, () => {});
       console.log('[manage-push-subscription] FCM token stored for user:', userId);
       return new Response(JSON.stringify({ success: true, message: 'FCM token saved' }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
