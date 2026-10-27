@@ -56,6 +56,27 @@ esbuild and vite are there for the package's Vite plugin, at BUILD time. The edg
 
 **Is `mcp` used?** It is an external MCP server (`.lovable/mcp/manifest.json` → `/functions/v1/mcp`, name `taskos-mcp`). No code in journey-voice or huddle-extension-app calls it (grep of both repos, read-only). `function_edge_logs` show **0 requests to `/functions/v1/mcp` in the last 24 h** (the log window is capped at 24 h). The live v168 is untouched by this change.
 
-## 3. The fix
+## 3. The fix (commit 1184f8d)
 
-(see step 3 below — filled in as it lands)
+- **`scripts/deploy-all-functions.sh`** (new) makes one `supabase functions deploy <slug> --project-ref …` call per folder. The slug set is the same one the CLI's bulk deploy uses: `supabase/functions/*/index.ts` with slug `^[A-Za-z][A-Za-z0-9_-]*$`, so `_shared`, dot-dirs and folders with no `index.ts` are skipped. It deliberately runs WITHOUT `set -e`, so a failure is recorded and the loop carries on. The reason recorded is the last meaningful line of that call's output (e.g. the 413 text). At the end it prints a `deployed / FAILED / excluded` table to the log and to `$GITHUB_STEP_SUMMARY`, then exits 1 if anything failed. If it finds zero functions it exits 2, because an empty loop must not look like a clean deploy. An exclusion that names a non-existent folder prints a warning.
+- **"Deploy all functions" step** now calls that script, with `DEPLOY_ALL_EXCLUDE` defaulting to `mcp: <reason>`. Each skipped function prints `::warning::SKIPPED mcp (excluded from all-mode): …` and gets its own `excluded` row. It is never silent.
+- **Unchanged:** `mode=single`, `mode=list`, J12's blank-dispatch refusal (`deploy-dispatch-mode.test.mjs` D1–D3 still pass), the main-ancestry guard, and the secret sync. `check-edge-deploy-drift.yml` still runs on `workflow_run: completed` of this workflow. It fires whether the job ends green or red, and the job's name is unchanged.
+
+## 4. Tests and mutations
+
+`scripts/deploy-all-functions.test.mjs` takes the REAL step's `run:` block from the workflow file. It runs it under `bash -e`, as GitHub does, with a stub `supabase` first on PATH. The stub records every call and exits 1 with a 413 line for any slug in `STUB_FAIL`. 11 checks, all passing. `npm test`: 329 pass / 0 fail, and the new file is collected by `scripts/run-tests.mjs` under the `scripts` root.
+
+| mutation (via `mutate.sh`, anchors from files) | check that must fail | outcome |
+|---|---|---|
+| M1 step reverted to the single bulk `supabase functions deploy --project-ref …` | A1 each function is deployed by its OWN call | **FIRED** |
+| M2 final `exit 1` removed | A4 the step exits NON-ZERO | **FIRED** |
+| M3 `set -uo pipefail` → `set -euo pipefail` (stop at the first failure) | A2 a failure does not stop the functions after it | **FIRED** |
+| M4 default exclusion renamed `mcp` → `xmcp` | A8 by default mcp is excluded | **FIRED** |
+| M5 zero-functions `exit 2` removed | A11 finding zero functions is a failure | **FIRED** |
+| M6 `rc=${PIPESTATUS[0]}` → `rc=$?` | A4 | INERT, and **behaviourally equivalent**: under `pipefail`, `$?` of `supabase … \| tee` already carries supabase's non-zero exit. Not a guard gap. |
+| M7 `rc=${PIPESTATUS[0]}` → `rc=0` (ignore the deploy's exit status) | A3 the summary names the failed function | **FIRED** |
+
+## 5. Not changed, and still true after this lands
+
+- `mcp` deployed by name (`function_name: mcp`) will still 413 until its bundle shrinks. That needs an upstream change: `@lovable.dev/mcp-js` moving `esbuild`/`vite` out of its runtime `dependencies`/`peerDependencies`, or a different bundling path. Server-side bundling with `--use-api` is one candidate, **untested here**. The live v168 from 2026-07-09 keeps serving until then.
+- `mode=list` still stops at the first failure (bash `-e` loop), as the brief asked. A list-mode failure is at least visible, because the failing function is the one being named. Run 37798480006 (10-08) is that shape.
