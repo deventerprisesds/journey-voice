@@ -121,6 +121,7 @@ Reversible: all four are code-only and revertible. A needs an APK build to take 
 **App — android-bridge-template, branch `claude_fcm-register-with-session`** (`6a11b68` code, `894154e` build trigger + ledger):
 - `FcmRegistrar.kt` now sends `Authorization: Bearer <supabase_access_token>` (the stored login) and keeps `apikey: <anon>`. The anon key is never the bearer.
 - On a 401 it refreshes ONCE through `SupabaseTaskClient.refreshAccessToken`, then retries ONCE with the new token. That is the existing refresh path with its 30s concurrency guard, made `internal` (it was `private`). No second refresh mechanism was written.
+  - **SUPERSEDED in loop 2 (448793c):** the native refresh was REMOVED. See "Loop 2 fixes", fix 4.
 - Signed out (no access token): nothing is sent. One log line: `FCM_REGISTER native skipped: no session token (signed out)`.
 - Huddle APK: no change in behaviour. Its web side never stores `supabase_url`/`supabase_anon_key`/`supabase_user_id`, so `register()` still returns at the first missing key (O: journey's `src/App.tsx:63-67` / `src/hooks/useAuth.tsx:161-165` are the only writers of those keys).
 - Tests (O): `app/src/test/java/com/bridgetemplate/util/FcmRegistrarAuthTest.kt`, 9 JVM tests of the pure helpers `registrationBearer` / `postWithSessionRetry`. Android CI (`./gradlew testDebugUnitTest assembleDebug`) **success** on `6a11b68` (run 40551301622) and `894154e` (run 40554062191). This container has no Android SDK, so Gradle was not run locally.
@@ -177,6 +178,179 @@ Reversible: all four are code-only and revertible. A needs an APK build to take 
 - J14's cross-user dedupe can no longer be triggered by an unverified caller.
 
 ## Still in place after Option A (observed, not changed)
+
+*Superseded by "Loop 2 fixes" below. Each item there says which of these bullets it closes.*
 - A rotation while the stored session token is expired and the refresh token is also dead (long signed-out or revoked session) fails until the next signed-in app open. That is Option A's stated cost.
 - `manage-push-subscription` `subscribe` / `unsubscribe` (browser web-push) still trust `body.userId`. `unsubscribe` deletes **all** of that user's `push_subscriptions` rows, FCM included. Not in this brief's scope.
 - `execute-tool` as a whole is still `verify_jwt = false` with `userId` from the body for every other tool (`send_push`, task reads/writes). Only `register_push_token` is gated here.
+
+---
+
+## Loop 2 fixes (VERIFY-phone-registration-a-1 = FAIL; parent brief 2026-10-27)
+
+Verify loop 1 found two more routes that register a device for any user without that user's login (BYPASS1, BYPASS2), a dedupe residual, and a refresh-token risk. Heads after this loop:
+- journey-voice `claude_restore-j13-alarm-actions`: see the final commit of this section;
+- android-bridge-template `claude_fcm-register-with-session`: **448793c**;
+- huddle-extension-app `claude_fcm-register-with-session`: **c043f1f**.
+
+Nothing is merged. Nothing is applied to the live database.
+
+### Fix 1 — BYPASS2: `public.push_subscriptions` was open to every role (migration written, NOT applied)
+**Gap (O, live read 2026-10-27, project `wwxgajrtmslzklnyplah`):**
+- The table has one policy, `"Service role full access"`, with `roles={public} cmd=ALL qual=true check=true`.
+- `anon` and `authenticated` both hold `DELETE, INSERT, REFERENCES, SELECT, TRIGGER, TRUNCATE, UPDATE`.
+- RLS is on (`force=false`).
+- No view or SQL function references the table.
+
+**Every direct client use, grep 2026-10-27:**
+
+| repo | use | works under the new policy? |
+|---|---|---|
+| journey-voice | `src/hooks/useBridgeDiagnostics.ts:66`: `select('endpoint').eq('user_id', user.id)` | yes, owner SELECT |
+| journey-voice | `src/integrations/supabase/types.ts` | type only |
+| journey-voice | edge functions `manage-push-subscription`, `send-push-notification`, `send-android-calendar-event`, `execute-tool`: service-role client | yes, service role |
+| huddle-extension-app | none (its `chat.push_subscriptions` is a different table in Huddle's Azure Postgres) | n/a |
+| android-bridge-template | none (registers only through manage-push-subscription) | n/a |
+
+No client inserts, updates or deletes the table directly, so the new policy is tighter than "own rows": authenticated users get **SELECT on their own rows only**.
+
+**Migration** `supabase/migrations/20261027210000_push_subscriptions_rls_lockdown.sql`. Exact SQL to apply:
+
+```sql
+DROP POLICY IF EXISTS "Service role full access" ON public.push_subscriptions;
+
+CREATE POLICY "push_subscriptions_service_role_all"
+  ON public.push_subscriptions FOR ALL TO service_role
+  USING (true) WITH CHECK (true);
+
+CREATE POLICY "push_subscriptions_owner_select"
+  ON public.push_subscriptions FOR SELECT TO authenticated
+  USING (user_id = (SELECT auth.uid()));
+
+REVOKE ALL ON TABLE public.push_subscriptions FROM anon;
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE public.push_subscriptions FROM authenticated;
+GRANT SELECT ON TABLE public.push_subscriptions TO authenticated;
+
+ALTER TABLE public.push_subscriptions ENABLE ROW LEVEL SECURITY;
+```
+
+**Read-only checks to run after applying:**
+
+```sql
+select policyname, roles, cmd, qual, with_check from pg_policies
+  where schemaname='public' and tablename='push_subscriptions';
+-- expect exactly: push_subscriptions_owner_select {authenticated} SELECT; push_subscriptions_service_role_all {service_role} ALL
+
+select grantee, string_agg(privilege_type, ',' order by privilege_type) from information_schema.role_table_grants
+  where table_schema='public' and table_name='push_subscriptions' group by grantee;
+-- expect: anon absent; authenticated SELECT only
+
+begin; set local role anon; select count(*) from public.push_subscriptions; rollback;
+-- expect: permission denied
+```
+
+**Tests (O):** `supabase/functions/manage-push-subscription/table-rls.test.ts` (5). It replays every migration touching the table, in filename order, and asserts:
+- the detector sees the 2026-02-04 policy as open (this guards against a parser that sees nothing);
+- no permissive `true` USING/WITH CHECK policy remains for `public`/`anon`/`authenticated`;
+- the only client policy is `SELECT TO authenticated USING (user_id = (SELECT auth.uid()))`;
+- `anon` has no privileges, and `authenticated` has no INSERT/UPDATE/DELETE/TRUNCATE;
+- the service role keeps full access.
+
+**Mutations (O, `mutate.sh` on the migration file):**
+- drop `TO service_role` → FIRED ("no permissive qual=true…");
+- delete `REVOKE ALL … FROM anon` → FIRED ("grants: anon has nothing…");
+- keep TRUNCATE for authenticated → FIRED (same test);
+- owner policy `USING (true)` → FIRED ("no permissive qual=true…").
+
+The SQL was not executed anywhere: no dry run, no rolled-back transaction. Its syntax is checked only by reading it and by the parser in this test.
+
+### Fix 2 — BYPASS1: Huddle's journey-tool server functions trusted a body-supplied caller (huddle-extension-app `c043f1f`)
+**Gap (O, verifier):** `invokeJourneyToolDebug` (`proxy.functions.ts`) and `registerBridgeFcmToken` (`huddle.functions.ts`) passed `data.caller` (`entra_email` from the POST body) to huddle-proxy. huddle-proxy maps it to a journey user and calls execute-tool with the service-role key, so any caller could register a device for any user.
+
+**Fix:**
+- New `src/features/huddle/lib/journey/verified-caller.server.ts` with `verifiedJourneyCaller(idToken)`. It uses the existing `verifyEntraIdToken` (`src/lib/entra-verify.server.ts`, the same check `profile.functions.ts` / `workspace.functions.ts` use) and returns `{entra_object_id: oid, entra_email: email}`, or null when the token is missing, invalid, or has no email.
+- Both server functions now delegate to `…Impl` bodies that refuse without a verified caller, so the proxy is never called. The body `caller` is accepted for compatibility and ignored.
+- The client (`HuddleView.tsx`) sends `getToken()` (the same MSAL helper `useWorkspaceSync` uses).
+- `invokeJourneyToolDebug` has no client caller in `src/` (O, grep), but it is still a reachable server function, so it is gated too.
+
+**Tests (O):** `scripts/journey-verified-caller.test.ts` (`npm run test:journey-verified-caller`), 12/12:
+- verified token → its own identity;
+- missing/short/forged token → null; no email → null;
+- `registerBridgeFcmToken` with no token, or a forged token, plus body caller = victim → refused, proxy never called;
+- a verified caller registers for itself, and the body caller is ignored;
+- the debug function with `register_push_token` and no token → refused; a forged token → refused; verified → runs as itself;
+- two source-wiring checks: both handlers delegate to the Impl and never read `data.caller`.
+
+`tsc --noEmit -p .` exit 0, with all 4 changed files in the program; `test:router` 20/20.
+
+**Mutations (O):** all FIRED, restored = HEAD:
+- the email check removed (VC-4);
+- `registerBridgeFcmTokenImpl` returns ok when unverified (RB-1);
+- the debug Impl invokes with the body caller when unverified (DB-1);
+- a verifier exception yields a caller (VC-3);
+- registration sends the body caller (RB-3);
+- the handler bypasses the Impl and sends `data.caller` (W-2).
+
+**Not fixed (O, grep of huddle-extension-app @c043f1f):** the turn path also takes `caller` from the body. `huddle.functions.ts:201` is the input schema, and `data.caller` reaches `invokeJourneyTool` at `:720`, `:1594`, `:2875`, `:3083` and `:3796`.
+- `register_push_token` is not advertised to the model (execute-tool comment), so device registration cannot be reached that way. Inference: not exercised.
+- Agent tools CAN act on whichever journey user the body names.
+- This brief covered the two registration routes only, so that broader gap is open.
+
+### Fix 3 — dedupe residual (journey-voice)
+The J14 dedupe (`delete … where fcm_token = <token> and user_id <> <caller>`) runs only after `callerIsUser` has verified the caller. By definition it deletes rows the caller does not own, for the exact token that verified caller is registering. That is the "one device, one owner" rule: the token comes from the device's Firebase install.
+
+Why that is safe once Fix 1 is applied (O, grep):
+- After Fix 1, only the service role and each row's owner can read a full FCM token.
+- No other table stores one. `activity_log` gets `token_prefix` (20 chars) and `token_tail` (6). `useBridgeDiagnostics` logs a 20-char prefix. Android logs only HTTP codes.
+- The full token exists only on the device (`AndroidBridge.getFcmToken()`) and in `push_subscriptions`.
+- So to delete user B's row, verified user A must already hold B's device's full token, which means holding B's device. What A gets is that B's phone stops receiving B's pushes and starts receiving A's. That is the same thing that happens when A signs into B's phone, which is the case J14 exists for.
+
+**Before Fix 1 is applied** the token is readable by anon, so the residual is real until the migration lands.
+
+Pinned by two new handler tests (O):
+- "J14 dedupe scope: …": only the other user's row for that exact token is removed. That user's other rows and the caller's other rows survive. The delete filter is exactly `[eq fcm_token <token>, neq user_id <caller>]`.
+- "J14 dedupe: an empty-string token is refused before any write".
+
+**Mutations:** drop `.eq('fcm_token', …)` → FIRED; `.neq('user_id', '__nobody__')` → FIRED.
+
+### Fix 4 — refresh-token risk (android-bridge-template `448793c`)
+**Auth settings:** not readable from this session. GoTrue config is not exposed through SQL, and there is no MCP tool for it. Inference: Supabase's defaults are refresh-token rotation ON with a 10s reuse interval. **Not confirmed for this project.**
+
+**The risk (I):** native code refreshes, so the web view's stored refresh token is now used. If the web view refreshes with it outside the reuse interval, GoTrue treats it as reuse and can revoke the session (SIGNED_OUT).
+
+**Fix (no native refresh in the registration path):**
+- `FcmRegistrar` sends the handed-over access token only while its `exp` is at least 60s away. It reads `exp` with `jwtExpSeconds`, which decodes the payload only; the server still verifies the signature.
+- In every other case the device token is stored as `fcm_pending_registration` and nothing is sent: expired, absent, unreadable, or no `exp`; and also after a non-2xx response or a network failure.
+- `JavascriptBridge.secureStore` calls `FcmRegistrar.onSessionHandoff` when the web view stores `supabase_user_id`. That is the last key of its session handoff in journey `App.tsx:63-67` and `useAuth.tsx:161-165`, so the fresh access token is already stored. The pending token is then registered.
+- The web view also registers the token itself on every signed-in open (`bridgeFcmRegistration.ts`).
+- `SupabaseTaskClient.refreshAccessToken` is `private` again (byte-identical to main).
+
+**Tests (O):** `FcmRegistrarAuthTest.kt`, 7 tests:
+- unexpired → sent;
+- expired / exactly at expiry → not sent;
+- under 60s left → not sent, exactly 60s → sent;
+- no token / anon key / unreadable / no `exp` → not sent;
+- `jwtExpSeconds` reads `exp`.
+
+Android CI (compile + unit tests) **success** on 448793c (run 40580243961).
+
+**Mutation (O, CI):** `registrationBearer` ignoring expiry was pushed as a fast-forward of the existing probe branch `claude_fcm-mutprobe-bearer` (`4f7cd6d`, tree = 448793c + the mutation; no new branch, no force push) → **FIRED**: run 40581185190 compiled, 80 tests ran, and 2 failed, exactly the expiry tests ("expired session token is not sent (deferred, no refresh)", "token about to expire is not sent").
+
+**Widget path: the SAME defect, NOT changed (reported for the owner).**
+- `SupabaseTaskClient` refreshes natively on any 401 (`doRefreshAccessToken`, `/auth/v1/token?grant_type=refresh_token`) and stores the rotated refresh token only in EncryptedPrefs. The web view keeps the used one.
+- That is the same reuse shape. Its own KDoc already records a 409 / SIGNED_OUT cascade from concurrent refreshes.
+- Changing it means widgets stop updating once the 1h access token expires, until the app is opened. That changes what the owner sees every day, so it is a decision for the owner, not part of this fix.
+
+### What will no longer be in place (loop 2, once merged / applied)
+- Clients can no longer read other users' push rows: anon reads nothing; a signed-in user reads only their own (after the migration is applied).
+- Clients can no longer insert, update, delete or truncate `push_subscriptions` directly. Every registration goes through the login-checked edge functions.
+- Huddle's debug journey-tool server function and the Huddle app's phone registration require a signed-in caller (verified Entra ID token), and they act only as that caller. A body-supplied email is ignored.
+- Background re-registration with an expired session token no longer refreshes natively. It waits for the next app open (sign-in handoff). Until then, a token Firebase rotated while the app was closed and the session had expired gets no pushes.
+
+### Still open after loop 2 (observed)
+- **The migration is not applied.** Until it is, BYPASS2 and the dedupe residual stay live.
+- Other Huddle server functions still take `caller` from the body (Fix 2, "Not fixed").
+- The widget native refresh (Fix 4, widget path).
+- `manage-push-subscription` `subscribe` / `unsubscribe` still trust `body.userId`. `unsubscribe` deletes all of that user's rows.
+- The rest of `execute-tool` is still `verify_jwt = false` with `userId` from the body.
+- The probe branch `claude_fcm-mutprobe-bearer` (now at 4f7cd6d) still exists. The proxy refuses deletes, so the owner deletes it by hand, and it must never be merged.
