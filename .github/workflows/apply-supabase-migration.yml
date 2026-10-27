@@ -1,0 +1,92 @@
+# WHAT:       Applies ONE committed file from supabase/migrations/ to the live journey Supabase project
+#             (wwxgajrtmslzklnyplah) and records it in supabase_migrations.schema_migrations.
+# WHY:        Schema changes were applied with the Supabase MCP `apply_migration`, which on 2026-10-27
+#             began pausing every write for an approval request that never reached the owner (5 timeouts,
+#             nothing applied). This runs the same SQL through the Supabase Management API with the token
+#             the function deploys already use (secret SUPERBASE_ACCESS_TOKEN) — no new secret.
+# SUPERSEDES: nothing. SUPERSEDED-BY: nothing -- current.
+# EVIDENCE:   .claude/actions.md ACT:alarm-feedback row 2 (apply_migration timeouts).
+#
+# Safety: only a path under supabase/migrations/*.sql at the given ref is accepted; a version already in
+# schema_migrations is skipped (the run says so) unless `force` is set; the SQL and the bookkeeping row
+# run in ONE transaction, so a failed migration leaves no half-applied state and no false record.
+name: Apply Supabase migration
+
+on:
+  workflow_dispatch:
+    inputs:
+      migration:
+        description: 'Path of ONE migration file, e.g. supabase/migrations/20261027160000_alarm_feedback_task_snapshot.sql'
+        required: true
+      ref:
+        description: 'Branch or SHA that holds the file (default: main)'
+        required: false
+        default: 'main'
+      force:
+        description: 'Re-apply even if the version is already recorded (true/false)'
+        required: false
+        default: 'false'
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    env:
+      PROJECT_REF: wwxgajrtmslzklnyplah
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPERBASE_ACCESS_TOKEN }}
+      MIGRATION: ${{ github.event.inputs.migration }}
+      FORCE: ${{ github.event.inputs.force }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref }}
+
+      - name: Validate input
+        run: |
+          set -euo pipefail
+          [ -n "$SUPABASE_ACCESS_TOKEN" ] || { echo "SUPERBASE_ACCESS_TOKEN secret is empty"; exit 1; }
+          case "$MIGRATION" in
+            supabase/migrations/*.sql) ;;
+            *) echo "Refused: '$MIGRATION' is not supabase/migrations/*.sql"; exit 1 ;;
+          esac
+          case "$MIGRATION" in *..*) echo "Refused: '..' in path"; exit 1 ;; esac
+          [ -f "$MIGRATION" ] || { echo "Not found at ref ${{ github.event.inputs.ref }}: $MIGRATION"; exit 1; }
+          base=$(basename "$MIGRATION" .sql)
+          version=${base%%_*}; name=${base#*_}
+          [[ "$version" =~ ^[0-9]{14}$ ]] || { echo "Refused: file name must start with a 14-digit version"; exit 1; }
+          [[ "$name" =~ ^[a-z0-9_]+$ ]] || { echo "Refused: name part must be [a-z0-9_]"; exit 1; }
+          echo "VERSION=$version" >> "$GITHUB_ENV"; echo "NAME=$name" >> "$GITHUB_ENV"
+          echo "Migration $version ($name) from ref ${{ github.event.inputs.ref }} @ $(git rev-parse --short HEAD)"
+
+      - name: Skip if already applied
+        run: |
+          set -euo pipefail
+          q=$(jq -n --arg v "$VERSION" '{query: ("select count(*)::int as n from supabase_migrations.schema_migrations where version = " + ($v|@json|sub("\"";"'"'"'";"g")))}')
+          r=$(curl -sS -X POST "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+                -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" -H "Content-Type: application/json" -d "$q")
+          echo "lookup: $r"
+          n=$(echo "$r" | jq -r '.[0].n // empty')
+          [ -n "$n" ] || { echo "Lookup failed"; exit 1; }
+          if [ "$n" != "0" ] && [ "$FORCE" != "true" ]; then
+            echo "SKIP=1" >> "$GITHUB_ENV"; echo "Version $VERSION is already applied — skipping (force=true to re-run)."
+          fi
+
+      - name: Apply in one transaction
+        if: env.SKIP != '1'
+        run: |
+          set -euo pipefail
+          body=$(jq -n --rawfile s "$MIGRATION" --arg v "$VERSION" --arg n "$NAME" '{query:
+            ("begin;\n" + $s + "\n;\ninsert into supabase_migrations.schema_migrations (version, name, statements, created_by) values ("
+             + ($v|@json|sub("\"";"'"'"'";"g")) + ", " + ($n|@json|sub("\"";"'"'"'";"g"))
+             + ", array[]::text[], '"'"'github-actions:apply-supabase-migration'"'"') on conflict (version) do nothing;\ncommit;")}')
+          code=$(curl -sS -o resp.json -w '%{http_code}' -X POST \
+                   "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+                   -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" -H "Content-Type: application/json" -d "$body")
+          echo "HTTP $code"; cat resp.json; echo
+          [ "${code:0:1}" = "2" ] || { echo "Migration FAILED — nothing recorded (transaction)"; exit 1; }
+
+      - name: Confirm recorded
+        run: |
+          set -euo pipefail
+          q=$(jq -n --arg v "$VERSION" '{query: ("select version, name, created_by from supabase_migrations.schema_migrations where version = " + ($v|@json|sub("\"";"'"'"'";"g")))}')
+          curl -sS -X POST "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" -H "Content-Type: application/json" -d "$q"; echo
