@@ -50,3 +50,15 @@ No other repo calls it directly (O: grep of `/home/user/*` — Huddle goes throu
 ### What that decides (per the brief)
 - Registration (fix 2): a caller (Android native) does NOT send a user JWT → **do not enforce**; write up and leave to the owner (section "Left for the owner").
 - send-push (fix 3): not every caller is server-side → **do not gate the whole push**; gate only token MINTING (section "STEP 2").
+
+---
+
+## STEP 2 — what was changed
+
+### Fix 1 — mint only for the push user's own task (commit `49d5fb2`)
+- `supabase/functions/_shared/push-auth.ts` `taskBelongsTo(client, taskId, userId)`: one read, `tasks.select('user_id').eq('id', taskId).maybeSingle()` with send-push's existing service client; true only when the row exists and `user_id === userId`. Missing row, read error, thrown error, or a non-string input → false.
+- `send-push-notification/index.ts`: when `data.taskId` is a uuid, the token is minted only if `taskBelongsTo` is true. Otherwise the push is **still delivered**, without `actionToken` / `actionUrl`, and logs `action token not minted: task does not belong to userId` (no token, no ids).
+- Tests (O): `supabase/functions/send-push-notification/index.auth.test.ts` runs the REAL handler through the probe harness, with a real RSA key for send-push's own FCM JWT signing and `fetch` stubbed: own task → token verifies as exactly (X, A), not in the web payload, not logged; another user's task → delivered 2/2, no token; missing task → no token; no/blank/non-uuid taskId → no token. `supabase/functions/_shared/push-auth.test.ts`: 2 unit tests. `npm test` **305/305** (299 before + 6).
+- Mutations (O, `mutate.sh`, anchors in files under the scratchpad):
+  - handler: `if (!(await taskBelongsTo(…)))` → `if (false)` → **FIRED** ("another user's task"), restored = HEAD, tree clean.
+  - module: the `user_id === userId` return → `return true;` → **FIRED** ("true only for the owning user"), restored = HEAD, tree clean.
