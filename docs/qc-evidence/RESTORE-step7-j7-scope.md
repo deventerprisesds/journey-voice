@@ -265,3 +265,46 @@ Phase 1 complete. Phase 2 **not run**, per the brief's redesign stop condition (
 and 7). Nothing was deployed. No Nexus or journey data was written; the two queries were SELECT-only.
 `npm ci` in the clone was stopped at the 400 s tool limit (the proxy refused some registry hosts).
 It was not retried, because no code was built.
+
+---
+
+# FOLLOW-UP 2026-10-27, after the owner's answers
+
+Owner answers (relayed by the coordinator, 2026-10-27):
+- **A = A2**: mark EMBA and MIT inactive in Nexus and read the active programs; the A1 config pin is the override.
+- **D = do not restore the sheet syncs**, but leave a note in case a non-Canvas course needs them.
+- **B and C**: the owner wants concrete examples before deciding (sections below).
+
+## Parked: sheet syncs (D)
+
+**What they did (O, commit `06b0eba`, 2026-09-03, on `claude/huddle-journey-integration-xokgv1`):**
+`supabase/functions/sync-google-sheets/index.ts` (EMBA sheet) and `supabase/functions/sync-mit-sheets/index.ts`
+(MIT sheet) stopped writing journey's `public.assignments`. Instead they read the owner's Nexus rows
+once per sync and then `POST`/`PATCH`ed Nexus `content.assignments`, matching an existing row by
+program + `sheet_row_number`. `sync-mit-sheets` stamps `program_id = MIT_PROGRAM_ID` (l.252, 260, 299).
+The write client lives in the same commit's `_shared/nexus.ts` hunk: `uatToken`, `nexusRequest`,
+`createNexusAssignment`, `updateNexusAssignment` (06b0eba `nexus.ts:80-151`). It authenticates with
+`X-UAT-Token`. The same commit's `.github/workflows/deploy-supabase-functions.yml` step "Sync
+UAT_BYPASS_TOKEN to Supabase edge secrets" copies org secret `UAT_TOKEN` into edge secret
+`UAT_BYPASS_TOKEN`. If the secret is absent, the syncs refuse to write and say so.
+
+**Why it is not restored:**
+1. The two sheets hold EMBA and MIT data ("EMBA is the past"; MIT is also past). Writing them into
+   Nexus would push old-program rows into the source of truth.
+2. Canvas courses (all three DBA courses) already reach Nexus through nexus-hub's own capture and
+   refresh. journey does not need to write anything.
+3. The writes need `UAT_BYPASS_TOKEN`, a UAT-named token that can write as any owner. Not restoring
+   them keeps journey's Nexus link read-only, with no secret.
+
+**When to revisit:** a future course that is **not on Canvas** and whose assignments live in a
+Google Sheet. Then the sheet is the only source, and something has to put its rows into Nexus.
+Prefer adding a sheet importer on the **nexus-hub** side, which owns writes. If it is done from
+journey instead:
+- cherry-pick from **`06b0eba`** only the `sync-google-sheets` / `sync-mit-sheets` hunks, the
+  `_shared/nexus.ts` write-client hunk (l.80-151) and the deploy-workflow token step;
+- replace `MIT_PROGRAM_ID` with the target program's id from Nexus;
+- confirm `UAT_TOKEN` exists as an org secret before deploying.
+
+Earlier history of those two files, for context only: `3f7e8d0`, `73d6b2a`, `778be2e`, `91df60b`.
+On main, both functions still write journey's frozen `public.assignments` (`sync-google-sheets/index.ts:251-289`,
+`sync-mit-sheets/index.ts:235-273`). Nothing in this restore changes that.
