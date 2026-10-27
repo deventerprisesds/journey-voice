@@ -64,17 +64,24 @@ Compared `config.toml` with live `list_edge_functions` (O, 2026-10-27, 127 live 
 Added the same 7-pin block, using step 3's exact text and leaving out its `alarm-action` pin, because that function is not on main. Re-check after the edit: **0 mismatches across all 51**. `tomllib` parses the file. **Merge-order note:** if step 3 merges first, this block will conflict with step 3's at the end of `config.toml`. Resolve by taking step 3's side, or drop `40ce8e1`. Never keep both, because duplicate `[functions.X]` tables are invalid TOML.
 Pre-existing and unchanged: `[functions.realtime-voice-assistant]` is in `config.toml` with no directory. Main's 10-19 deploy-all ran with it.
 
+## Step 6.6 — `undo_dedup` gated behind the flag (commit `e0d0f46`, coordinator-directed)
+
+- The undo logic moved verbatim from execute-tool into `_shared/task-dedup.ts` as `undoDedupSkips(supabase, userId, args, config?)`, so it can be tested with a fake client. Its messages and its restore/mark-undone behaviour are unchanged. execute-tool's `undoDedup` now only delegates (inside its try/catch).
+- New first step: `resolveDedupConfig(user_scheduling_prefs.config).enabled`. When that is not `true`, it returns `{success:true, result:{restored:[], dedupEnabled:false}, message: UNDO_GUARD_OFF_MESSAGE}` before reading `task_dedup_log`. Nothing is inserted or updated.
+- Tests: **flag OFF** (the owner's real key set, `undefined`, `null`, `enabled:false`): only `user_scheduling_prefs` is read, 0 inserts, 0 log updates, and the guard-off message is returned. **Flag ON**: the existing path restores both rows of the newest batch with `status` re-derived to `BACKLOG` and the old id dropped, and marks both log rows with `undone_at` + `created_task_id`.
+
 ## Proof
 
-**`npm test`**: 325/325 pass (main baseline 309; +16 = the 10 original dedup tests, which never ran on main because the file was absent, + 6 new). `npm run check:symbols`: 0 new undefined symbols.
+**`npm test`**: 327/327 pass after step 6.6 (main baseline 309; +18 = the 10 original dedup tests, which never ran on main because the file was absent, + 8 new). Before 6.6: 325/325. `npm run check:symbols`: 0 new undefined symbols.
 **New tests** (`_shared/task-dedup.test.ts`, all via `runDedup` or the pure helper):
 - flag ON (`dedup.enabled: true`): "Make Klarna payments" is skipped by **signature** against "Make payments to Klarna". "Schedule a dentist visit" is skipped by **semantic** match (cos 0.95) against "Book dentist appointment". "Water the plants" is created. One embeddings call.
 - flag OFF: the owner's real config key set, `undefined`, `null`, `{dedup:{}}`, `enabled:"true"`, `enabled:1` → `enabled:false`. Every candidate is created. **0** embeddings calls. Open tasks are not even read.
 - undo payload: `VENTURES` undated → `BACKLOG`; `LIFE` + `due_date` → `UP_NEXT`; `CAREER` + `start_time` → `UP_NEXT`; `EDUCATION`/`PERSONAL`/empty/null/number → `BACKLOG`; the old `id` is dropped; `category` is kept. Valid `DOING` is kept.
 - `_shared` WORKFLOW_STATUSES == `src/utils/workflowStatus.ts`.
-- execute-tool wiring: `undoDedup` inserts `restorePayloadFromLog(row.candidate)`; `undo_dedup` is dispatched; `get_task_topics` is present; 3 oldest-board lookups; both create paths call `runDedup`; a skipped duplicate returns (createTask) or `continue`s (parseAndCreateTasks) before the insert.
+- undo gate: flag OFF → no log read, no insert, no log update, the guard-off message; flag ON → the existing undo path (step 6.6).
+- execute-tool wiring: `undoDedup` delegates to the gated `undoDedupSkips` and touches no rows itself; `undo_dedup` is dispatched; `get_task_topics` is present; 3 oldest-board lookups; both create paths call `runDedup`; a skipped duplicate returns (createTask) or `continue`s (parseAndCreateTasks) before the insert.
 
-**`deno check`** (deno 2.5.6, scratchpad import map `denocheck/` because the proxy blocks deno.land/esm.sh): `_shared/task-dedup.ts` + `_shared/tool-definitions.ts` rc=0. `execute-tool/index.ts` rc=1 with **17 errors, the identical message set main's own file produces** (diffed, O). None of them is new; live v506 runs main's file, so deploys do not type-check. `deno test --no-check --allow-read task-dedup.test.ts`: 16/16.
+**`deno check`** (deno 2.5.6, scratchpad import map `denocheck/` because the proxy blocks deno.land/esm.sh): `_shared/task-dedup.ts` + `_shared/tool-definitions.ts` rc=0. `execute-tool/index.ts` rc=1 with **17 errors, the identical message set main's own file produces** (diffed, O; re-run after 6.6: still 17, the same errors, with one union's member order printed differently). None of them is new; live v506 runs main's file, so deploys do not type-check. `deno test --no-check --allow-read task-dedup.test.ts`: 16/16.
 
 **Mutation proof** (`mutate.sh`, anchors/replacements in files under scratchpad `mut/j6/`, test cmd `node --experimental-strip-types --test supabase/functions/_shared/task-dedup.test.ts`):
 
@@ -85,14 +92,17 @@ Pre-existing and unchanged: `[functions.realtime-voice-assistant]` is in `config
 | M3 | undo keeps a category status | undo payload: a category status | FIRED |
 | M4 | undo ignores the date (always BACKLOG) | undo payload: a category status | FIRED |
 | M5 | `VENTURES` added to the edge workflow list | edge WORKFLOW_STATUSES is identical | FIRED |
-| M6 | `undoDedup` inserts the raw candidate (the branch's code) | execute-tool wiring | FIRED |
+| M6 | `undoDedup` inserts the raw candidate (the branch's code); re-anchored after 6.6 to `undoDedupSkips` as M6b | undo_dedup gate: flag ON | FIRED |
 | M7 | parseAndCreateTasks no longer `continue`s on a skip | execute-tool wiring | FIRED |
 | M8 | createTask no longer calls `runDedup` | execute-tool wiring | FIRED |
 | M9 | semantic high band disabled | runDedup flag ON | FIRED |
 | M10 | signature no longer order-independent | runDedup flag ON | FIRED |
 | M11 | createTask skip branch disabled | execute-tool wiring | FIRED |
+| M12 | undo flag gate deleted | undo_dedup gate: flag OFF | FIRED |
+| M13 | undo flag gate short-circuited (`if (false)`) | undo_dedup gate: flag OFF | FIRED |
+| M14 | execute-tool `undoDedup` no longer delegates to `undoDedupSkips` | execute-tool wiring | FIRED |
 
-11/11 FIRED. The tree was clean after the runs.
+Full re-run after step 6.6 against the current code: **14/14 FIRED** (M1–M5, M6b, M7–M14). The tree was clean after the runs.
 
 **Live vs new** (Supabase MCP `get_edge_function execute-tool`, read-only, 2026-10-27): live is **v506**, `verify_jwt false`. Its bundle holds `execute-tool/index.ts`, `_shared/{timezone,tool-definitions,call-context-builder,scheduling-defaults}.ts`. Live vs `origin/main`: **0 differing lines in all 5**. Live vs this branch: `index.ts` 137 lines, `tool-definitions.ts` 13 lines (the `undo_dedup` definition), and `task-dedup.ts` is new. These are exactly the J6 hunks above.
 
@@ -109,7 +119,7 @@ The other 48 redeploy byte-for-byte what main holds. Any function whose live cop
 - **Not restored with J6:** J4's `dryRun` preview in `parse_and_create_tasks` (step 8). J6's own `dryRun` guards were stripped, so there is no dry-run dedup preview until J4 lands. When J4 is restored, its 3-way merge must put `if (!dryRun)` back on the two `dedupEntries.push` lines and the `finalizeDedup` call.
 - **The branch's verbatim `undoDedup` is not in place:** it re-inserted the saved payload as-is. Now a category status becomes `UP_NEXT`/`BACKLOG`.
 - **Live today, unchanged by this:** the duplicate creations still happen. The guard is OFF.
-- **New exposure while OFF:** `undo_dedup` does not check the flag. If a model calls it, it restores the newest un-undone batch from `task_dedup_log`. Today that is the August skips (4 rows: `VENTURES` ×2, `LIFE` ×2). They would land in `BACKLOG`/`UP_NEXT`, not in a category lane. This is the branch's behaviour, kept; gating undo behind the flag is a one-line change if the owner wants it.
+- **Undo is unavailable while the guard is off.** `undo_dedup` checks the same `config.dedup.enabled` flag. While the flag is off it returns "The duplicate-detection guard is off, so there is nothing to undo — no tasks were restored." and reads, inserts and updates no task or log rows. The old August skips (4 rows: `VENTURES` ×2, `LIFE` ×2) can only be undone after the guard is turned on. They then land in `BACKLOG`/`UP_NEXT`, never in a category lane. (The branch's `undoDedup` ignored the flag; that is no longer the case.)
 
 ## How the owner turns it on and confirms it
 
