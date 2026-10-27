@@ -1,5 +1,5 @@
 # Project Memory — journey-voice
-Last updated: 2026-10-15
+Last updated: 2026-10-27
 
 > **MOVE THE DATE ABOVE IN THE SAME COMMIT THAT APPENDS A SECTION.** It read `2026-09-21` while
 > this file already carried sections dated 2026-10-08 and 2026-10-12 — three weeks of the header
@@ -11,6 +11,26 @@ Last updated: 2026-10-15
 > convenience and is structurally the most likely thing here to be stale — so it is the one to
 > distrust, never the sections. `actions.md` has no file-level stamp at all, deliberately, for
 > the same reason: its ACT entries each carry their own date.
+
+## Active work — 2026-10-27: recovery continued (ACT:parked-work-recovery)
+
+Feature status (fetched origin before writing; nothing here is owner-confirmed live):
+| item | state | verification it actually had |
+|---|---|---|
+| N1a/b nexus page capture | merged nexus#155 (65d2fed); ext zip packaged; **web deploy succeeded** run 40572316817 | verify loops 1–5, loop 5 PASS; 5/5 mutations FIRED; owner must install ext 0.7.4 + capture MGT-701/702 |
+| J6 task dedup (flag OFF) | merged journey#70 (d5c19e2); all-mode deploy FAILED at `mcp` (27 MB → 413) after 24 fns incl. execute-tool; twilio-realtime-bridge deployed by name (run 40575603493) | Tier 2: 327/327, 14/14 mutations FIRED; undo_dedup gated behind flag |
+| Iris double 8am | merged huddle#107 (746c4cc); **deploy succeeded** run 40576999533 | 21/21 + existing suites; 5/5 mutations FIRED; live check = one Iris message next weekday 8am |
+| #8 verifier-round prevention | merged eds-claude-skills#126 (43101b1) | guards green; D9 5/5 mutations FIRED |
+| V2 outline gate by content | nexus#157 open; verify loop 1 FAIL (C3 over-match, C9, C6 flaky B114) | fix lane running |
+| Phone reg A | app branch + journey#65 held; verify loop 1 FAIL (push_subscriptions RLS open to anon — LIVE, pre-existing; Huddle debug fn unauthenticated; refresh-token reuse risk) | fix lane running; ship order verify → RLS migration → APK 1.0.13 → owner installs → #65 |
+| Deploy all-mode per function | lane `claude_deploy-all-per-function` | pending |
+| J7 Nexus intake | scope report only (RESTORE-step7-j7-scope.md a3ea767); owner: A=A2 (now re-opened: hides EMBA/MIT in Nexus web), D=not restored + parked note; B/C examples delivered | awaiting owner |
+| Overwrite-loss gate | eds-claude-skills#125, guards red (P10 pin, bare citation); builder batch running | — |
+
+Traps learned today:
+- **All-mode edge deploy has been broken since at least 10-18**: one bulk `supabase functions deploy` stops at `mcp` (27 MB bundle, 413) and silently skips every function after it alphabetically. Before merging anything that touches `_shared`, read the last all-mode run's conclusion.
+- A Stop-gate check read the local clone without fetching and called a real merge "non-existent" — answer merge state from `origin` after a fetch.
+- Canvas "11:59 pm ET" deadlines are stored as next-day UTC; the J7 sync (and main) keep only the UTC date, so due dates land a day late.
 
 ## Active work — 2026-10-26: parked-work recovery (ACT:parked-work-recovery)
 
