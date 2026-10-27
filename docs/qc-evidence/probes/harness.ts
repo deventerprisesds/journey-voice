@@ -91,10 +91,33 @@ export function setDb(db: Db) { current = db; ops.length = 0; }
 (globalThis as any).__mkClient = () => makeClient(current);
 (globalThis as any).__webpush = { sent: [] as any[], setVapidDetails() {}, async sendNotification(sub: any, payload: string) { (globalThis as any).__webpush.sent.push({ sub, payload }); } };
 
+const SHARED_DIR = resolve(ROOT, 'supabase/functions/_shared');
+const REMOTE_CREATE_CLIENT = /^import \{ createClient \} from ["']https:\/\/esm\.sh\/@supabase\/supabase-js@[^"']+["'];?$/m;
+const sharedMemo = new Map<string, string>();
+/**
+ * File URL for a `_shared/<f>` module. A shared module with no remote import is used as is (unchanged
+ * behaviour). One that imports supabase-js from esm.sh (e.g. call-context-builder.ts, pulled in by
+ * execute-tool) gets a stubbed copy, with its own `./x.ts` imports resolved the same way.
+ * EXTENDED 2026-10-27 (Option A registration tests) so execute-tool's handler can load.
+ */
+function sharedUrl(f: string): string {
+  const hit = sharedMemo.get(f); if (hit) return hit;
+  const abs = resolve(SHARED_DIR, f);
+  const src = readFileSync(abs, 'utf8');
+  if (!/^import .* from ["'](https|npm):/m.test(src)) { const u = pathToFileURL(abs).href; sharedMemo.set(f, u); return u; }
+  const out = src
+    .replace(REMOTE_CREATE_CLIENT, 'const createClient = (..._a: any[]) => (globalThis as any).__mkClient();')
+    .replace(/(from\s+)["']\.\/([\w.-]+\.ts)["']/g, (_m, pre, g) => pre + JSON.stringify(sharedUrl(g)));
+  if (/^import .* from ["'](https|npm):/m.test(out)) throw new Error('unstubbed remote import left in _shared/' + f);
+  const dir = resolve(tmpdir(), 'verify65-handlers', 'shared'); mkdirSync(dir, { recursive: true });
+  const file = resolve(dir, `${f.replace(/\.ts$/, '')}-${Date.now()}-${Math.random().toString(36).slice(2)}.ts`);
+  writeFileSync(file, out);
+  const u = pathToFileURL(file).href; sharedMemo.set(f, u); return u;
+}
+
 /** Load an edge function's index.ts with its remote imports stubbed; returns its serve() handler. */
 export async function loadHandler(fn: string): Promise<(req: Request) => Promise<Response>> {
   const src = readFileSync(resolve(ROOT, 'supabase/functions', fn, 'index.ts'), 'utf8');
-  const sharedUrl = (f: string) => pathToFileURL(resolve(ROOT, 'supabase/functions/_shared', f)).href;
   let out = src
     .replace(/^import \{ serve \} from "https:\/\/deno\.land\/std@[^"]+\/http\/server\.ts";$/m, 'const serve = (h: any) => { (globalThis as any).__handler = h; };')
     .replace(/^import \{ createClient \} from "https:\/\/esm\.sh\/@supabase\/supabase-js@[^"]+";$/m, 'const createClient = (..._a: any[]) => (globalThis as any).__mkClient();')
