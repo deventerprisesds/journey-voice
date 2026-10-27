@@ -22,6 +22,10 @@ on:
         description: 'Space-separated function slugs. Blank = every function in supabase/functions.'
         required: false
         default: ''
+      capture:
+        description: 'TEMPORARY (removed before merge): slug whose raw /body to print as gzip+base64.'
+        required: false
+        default: ''
   workflow_run:
     workflows: ['Deploy Supabase Functions']
     types: [completed]
@@ -38,6 +42,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+
+      - name: TEMPORARY capture raw body fixture
+        if: ${{ inputs.capture != '' }}
+        env:
+          T: ${{ secrets.SUPERBASE_ACCESS_TOKEN }}
+          SLUG: ${{ inputs.capture }}
+        run: |
+          curl -sS -D headers.txt -H "Authorization: Bearer $T" "https://api.supabase.com/v1/projects/wwxgajrtmslzklnyplah/functions/$SLUG/body" -o body.bin
+          grep -i '^content-type' headers.txt || true
+          wc -c body.bin; sha256sum body.bin; head -c 8 body.bin | od -c | head -2
+          echo '----- FIXTURE BEGIN -----'; gzip -9c body.bin | base64 -w0; echo; echo '----- FIXTURE END -----'
 
       - name: Diff deployed source against this ref
         env:
