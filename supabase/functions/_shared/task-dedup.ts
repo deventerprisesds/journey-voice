@@ -344,28 +344,45 @@ export async function finalizeDedup(
   try {
     const skipped = entries.filter((e) => e.action === 'skipped');
     const flagged = entries.filter((e) => e.action === 'flagged');
-    const parts: string[] = [];
-    for (const e of skipped) {
-      parts.push(`• Skipped "${e.candidate.title}" — looks like "${e.matched_title}"`);
-    }
-    for (const e of flagged) {
-      parts.push(`• Flagged "${e.candidate.title}" as a possible duplicate of "${e.matched_title}" (kept it)`);
-    }
+
+    // Full, untruncated detail lines (this becomes an Iris CHAT message, not just a push body).
+    const lines: string[] = [];
+    for (const e of skipped) lines.push(`• I skipped "${e.candidate.title}" — it looks like your existing "${e.matched_title}".`);
+    for (const e of flagged) lines.push(`• I kept "${e.candidate.title}" but flagged it as a possible duplicate of "${e.matched_title}".`);
+
+    const intro = skipped.length && flagged.length
+      ? `Heads up — while adding tasks I caught some likely duplicates:`
+      : skipped.length
+        ? `Heads up — I skipped ${skipped.length} new task${skipped.length > 1 ? 's' : ''} that looked like duplicate${skipped.length > 1 ? 's' : ''}:`
+        : `Heads up — I flagged ${flagged.length} new task${flagged.length > 1 ? 's' : ''} as possible duplicate${flagged.length > 1 ? 's' : ''}:`;
+    const undoHint = skipped.length
+      ? `\n\nIf I got any of these wrong, just reply "undo" and I'll add ${skipped.length > 1 ? 'them' : 'it'} back.`
+      : `\n\nReply "undo" if you'd rather I not flag ${flagged.length > 1 ? 'them' : 'it'}.`;
+    const message = `${intro}\n\n${lines.join('\n')}${undoHint}`;
+
     const title = skipped.length && flagged.length
-      ? `Skipped ${skipped.length} + flagged ${flagged.length} duplicate task${entries.length > 1 ? 's' : ''}`
+      ? `Caught ${entries.length} possible duplicate task${entries.length > 1 ? 's' : ''}`
       : skipped.length
         ? `Skipped ${skipped.length} duplicate task${skipped.length > 1 ? 's' : ''}`
         : `Flagged ${flagged.length} possible duplicate${flagged.length > 1 ? 's' : ''}`;
-    const body = `${parts.join('\n')}\nReview or undo in your task history.`;
 
+    // Route as a 'scheduled_chat' notice: notification-delivery posts `metadata.message` as an Iris
+    // message into the user's chat AND sends a push that OPENS that chat on tap (openCommsConsole).
+    // This reuses the existing chat/push infra — no new deep-link plumbing. metadata.dedup carries a
+    // machine-readable summary for the undo flow.
     await supabase.from('scheduled_notifications').insert({
       user_id: userId,
-      notification_type: 'dedup_notice',
+      notification_type: 'scheduled_chat',
       scheduled_for: new Date().toISOString(),
       title,
-      body,
+      body: message,
+      metadata: {
+        message,
+        source: 'dedup',
+        dedup: entries.map((e) => ({ action: e.action, title: e.candidate.title, matched: e.matched_title, method: e.method })),
+      },
     });
   } catch (err) {
-    console.error('[dedup] failed to queue dedup notification:', err);
+    console.error('[dedup] failed to queue dedup chat notification:', err);
   }
 }
