@@ -254,4 +254,14 @@ test('execute-tool wiring: undoDedup inserts restorePayloadFromLog(row.candidate
   assert.equal((src.match(/\.order\('created_at', \{ ascending: true \}\)/g) || []).length, 3);
   // both creation paths call the guard
   assert.equal((src.match(/await runDedup\(\{ supabase, userId, candidates:/g) || []).length, 2);
+
+  // a skipped duplicate never reaches the insert: createTask returns, parseAndCreateTasks continues
+  const ct = src.slice(src.indexOf('async function createTask('), src.indexOf('async function', src.indexOf('async function createTask(') + 10));
+  const ctSkip = ct.indexOf('if (dedup.enabled && outcome && !outcome.create) {');
+  assert.ok(ctSkip > 0 && ct.indexOf('return {', ctSkip) < ct.indexOf(".from('tasks')", ctSkip), 'createTask returns before inserting a skipped duplicate');
+  const pc = src.slice(src.indexOf('async function parseAndCreateTasks('), start);
+  const pcSkip = pc.indexOf('if (dedupOutcome && !dedupOutcome.create) {');
+  assert.ok(pcSkip > 0, 'parseAndCreateTasks has the skip branch');
+  const pcCont = pc.indexOf('continue; // do NOT insert', pcSkip);
+  assert.ok(pcCont > 0 && pcCont < pc.indexOf(".from('tasks')", pcSkip), 'parseAndCreateTasks continues before inserting a skipped duplicate');
 });
