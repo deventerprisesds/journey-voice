@@ -17,6 +17,11 @@
 //     401 {ok:false, reason:"bad_token"|"expired"}  — phone falls back or shows "couldn't mark"
 //     400 bad request · 500 transient (phone retries)
 //   { op: "trace", token, lines: [{msg, ts?}] }   — diagnostics while signed out; ≤20 lines
+//   { op: "feedback", token, feedbackId, rating?: "up"|"down", note?, feedbackAt?, alarm?: {...} }
+//     The owner's opinion of how the alarmed item was scheduled, from the alarm screen's Feedback
+//     panel. Needs a rating or a note. Stored as an activity_log row (activity_type "alarm_feedback");
+//     a DB trigger adds a snapshot of the task as scheduled right now. feedbackId makes a retry a
+//     no-op. 200 {ok:true, saved:true, duplicate} · 400 bad request · 401 bad_token · 500 transient.
 //
 // Never log the token.
 
@@ -34,6 +39,23 @@ const MAX_TRACE_LINES = 20;
 const MAX_TRACE_CHARS = 500;
 const STATUSES = new Set(["DOING", "DONE", "BACKLOG", "PARK"]);
 const PARKING_LOT_TAG = "parking-lot"; // exact lowercase — every filter (journey builder, Huddle) matches it verbatim
+const RATINGS = new Set(["up", "down"]);
+const MAX_FEEDBACK_NOTE_CHARS = 2000;
+const MAX_FEEDBACK_FIELD_CHARS = 300;
+const FEEDBACK_ALARM_FIELDS = ["tag", "title", "body", "channel", "deepLink", "app", "apkVersion", "scheduledFor"];
+
+/** Short strings only, from a fixed list — the phone's copy of what the alarm showed. */
+function feedbackAlarmFields(alarm: unknown): Record<string, string | number> {
+  const out: Record<string, string | number> = {};
+  if (!alarm || typeof alarm !== "object") return out;
+  for (const k of FEEDBACK_ALARM_FIELDS) {
+    const v = (alarm as Record<string, unknown>)[k];
+    if (typeof v === "string" && v.length > 0) out[k] = v.slice(0, MAX_FEEDBACK_FIELD_CHARS);
+  }
+  const firedAt = (alarm as Record<string, unknown>).firedAt;
+  if (typeof firedAt === "number" && Number.isFinite(firedAt)) out.firedAt = firedAt;
+  return out;
+}
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -160,6 +182,46 @@ serve(async (req) => {
       }).then(() => {}, () => {});
 
       return json({ ok: true, matched, changed });
+    }
+
+    if (body?.op === "feedback") {
+      const feedbackId = typeof body.feedbackId === "string" ? body.feedbackId.trim().slice(0, 64) : "";
+      if (!feedbackId) return json({ ok: false, reason: "bad_feedback_id" }, 400);
+      const rating = body.rating === undefined || body.rating === null ? null : String(body.rating).toLowerCase();
+      if (rating !== null && !RATINGS.has(rating)) return json({ ok: false, reason: "bad_rating" }, 400);
+      const note = typeof body.note === "string" ? body.note.trim().slice(0, MAX_FEEDBACK_NOTE_CHARS) : "";
+      if (rating === null && !note) return json({ ok: false, reason: "empty_feedback" }, 400);
+
+      // Feedback can wait in the phone's retry queue for days, so accept a recently expired token: it
+      // still proves which user and task the alarm was for, and it can only add a note about that task.
+      const claims = await verifyActionToken(body.token, { graceSec: TRACE_GRACE_SEC });
+      if (!claims) return json({ ok: false, reason: "bad_token" }, 401);
+
+      const { data: existing, error: dupErr } = await supabase
+        .from("activity_log")
+        .select("id")
+        .eq("user_id", claims.userId)
+        .eq("activity_type", "alarm_feedback")
+        .eq("metadata->>feedbackId", feedbackId); // an array, not maybeSingle: a past race leaving 2 rows must not 500 forever
+      if (dupErr) return json({ ok: false, reason: "db", detail: dupErr.message }, 500);
+      if (Array.isArray(existing) && existing.length > 0) return json({ ok: true, saved: true, duplicate: true });
+
+      const { error: insErr } = await supabase.from("activity_log").insert({
+        user_id: claims.userId,
+        activity_type: "alarm_feedback",
+        status: "completed",
+        metadata: {
+          feedbackId,
+          rating,
+          note: note || null,
+          taskId: claims.taskId,
+          feedbackAt: Number.isFinite(body.feedbackAt) ? body.feedbackAt : null,
+          alarm: feedbackAlarmFields(body.alarm),
+          via: "action_token",
+        },
+      });
+      if (insErr) return json({ ok: false, reason: "db", detail: insErr.message }, 500);
+      return json({ ok: true, saved: true, duplicate: false });
     }
 
     return json({ ok: false, reason: "bad_op" }, 400);

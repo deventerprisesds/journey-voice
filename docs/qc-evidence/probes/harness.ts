@@ -26,7 +26,9 @@ export const ops: { table: string; kind: string; filters: [string, string, any][
 
 function match(r: Row, f: [string, string, any][]) {
   return f.every(([op, c, v]) => {
-    const x = r[c];
+    // PostgREST JSON path `col->>key` (text), as used by alarm-action's feedback dedupe.
+    const [col, key] = c.split('->>');
+    const x = key === undefined ? r[c] : (r[col] && r[col][key] !== undefined && r[col][key] !== null ? String(r[col][key]) : undefined);
     if (op === 'eq') return x !== null && x !== undefined && x === v;
     if (op === 'neq') return x !== null && x !== undefined && x !== v; // SQL: NULL <> v is not true
     if (op === 'is') return v === null ? x === null || x === undefined : x === v;
