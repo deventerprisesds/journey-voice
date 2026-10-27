@@ -4,6 +4,9 @@
 //       manage-push's dedupe are untested because they are serve() handlers. This runs the real code.
 // SUPERSEDES: nothing. SUPERSEDED-BY: nothing -- current.
 // EVIDENCE: docs/qc-evidence/VERIFY-restore-j13-alarm-actions-1.md (C2, C3).
+// EXTENDED 2026-10-27 (RESTORE-step3-j13-j14-security.md): every `../_shared/*.ts` import is rewritten
+//       (not only action-token.ts), `post()` takes request headers, and the stub client has
+//       `auth.getUser(jwt)` backed by `jwtUsers` so caller-identity checks can be exercised.
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -33,8 +36,18 @@ function match(r: Row, f: [string, string, any][]) {
   });
 }
 
+/** jwt -> user id. `auth.getUser(jwt)` resolves only tokens listed here; anything else is an invalid JWT. */
+export const jwtUsers: Record<string, string> = {};
+
 export function makeClient(db: Db) {
   return {
+    auth: {
+      async getUser(jwt?: string) {
+        ops.push({ table: 'auth', kind: 'getUser', filters: [] });
+        const id = jwt ? jwtUsers[jwt] : undefined;
+        return id ? { data: { user: { id } }, error: null } : { data: { user: null }, error: { message: 'invalid JWT' } };
+      },
+    },
     from(table: string) {
       db[table] ??= [];
       const st: { kind: string; filters: [string, string, any][]; payload?: any; single?: boolean; upsertOn?: string } = { kind: 'select', filters: [] };
@@ -81,12 +94,12 @@ export function setDb(db: Db) { current = db; ops.length = 0; }
 /** Load an edge function's index.ts with its remote imports stubbed; returns its serve() handler. */
 export async function loadHandler(fn: string): Promise<(req: Request) => Promise<Response>> {
   const src = readFileSync(resolve(ROOT, 'supabase/functions', fn, 'index.ts'), 'utf8');
-  const shared = pathToFileURL(resolve(ROOT, 'supabase/functions/_shared/action-token.ts')).href;
+  const sharedUrl = (f: string) => pathToFileURL(resolve(ROOT, 'supabase/functions/_shared', f)).href;
   let out = src
     .replace(/^import \{ serve \} from "https:\/\/deno\.land\/std@[^"]+\/http\/server\.ts";$/m, 'const serve = (h: any) => { (globalThis as any).__handler = h; };')
     .replace(/^import \{ createClient \} from "https:\/\/esm\.sh\/@supabase\/supabase-js@[^"]+";$/m, 'const createClient = (..._a: any[]) => (globalThis as any).__mkClient();')
     .replace(/^import webpush from "npm:web-push@[^"]+";$/m, 'const webpush = (globalThis as any).__webpush;')
-    .replace(/"\.\.\/_shared\/action-token\.ts"/, JSON.stringify(shared));
+    .replace(/"\.\.\/_shared\/([\w.-]+\.ts)"/g, (_m, f) => JSON.stringify(sharedUrl(f)));
   if (/^import .* from "(https|npm):/m.test(out)) throw new Error('unstubbed remote import left in ' + fn);
   if (!out.includes('globalThis as any).__handler')) throw new Error('serve() stub not applied in ' + fn);
   const dir = resolve(tmpdir(), 'verify65-handlers'); mkdirSync(dir, { recursive: true });
@@ -96,7 +109,7 @@ export async function loadHandler(fn: string): Promise<(req: Request) => Promise
   return (globalThis as any).__handler;
 }
 
-export const post = (body: unknown) => new Request('https://x/functions/v1/f', { method: 'POST', headers: { 'content-type': 'application/json' }, body: typeof body === 'string' ? body : JSON.stringify(body) });
+export const post = (body: unknown, headers: Record<string, string> = {}) => new Request('https://x/functions/v1/f', { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: typeof body === 'string' ? body : JSON.stringify(body) });
 
 /** Capture everything written to console while fn runs. */
 export async function captureConsole<T>(fn: () => Promise<T>): Promise<{ value: T; text: string }> {
