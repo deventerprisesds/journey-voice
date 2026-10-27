@@ -88,3 +88,30 @@ test('J14 dedupe: still runs for the verified owner (one device, one owner)', as
   assert.equal(db.push_subscriptions.find(s => s.user_id === X)!.fcm_token, 'shared-phone');
   assert.equal(db.push_subscriptions.some(s => s.user_id === Z), false);
 });
+
+test('J14 dedupe scope: a verified owner deletes ONLY other users\' rows for that exact token -- never another token, never their own other rows', async () => {
+  const db: Db = {
+    push_subscriptions: [
+      { id: 'x1', user_id: X, endpoint: `fcm:${X}`, fcm_token: 'owner-phone', p256dh_key: '', auth_key: '' },
+      { id: 'xw', user_id: X, endpoint: 'https://web.push/x', fcm_token: null, p256dh_key: 'p', auth_key: 'a' },
+      { id: 'z1', user_id: Z, endpoint: `fcm:${Z}`, fcm_token: 'shared-phone', p256dh_key: '', auth_key: '' },
+      { id: 'z2', user_id: Z, endpoint: `fcm:app:huddle:z-other`, fcm_token: 'z-other-phone', p256dh_key: '', auth_key: '' },
+      { id: 'zw', user_id: Z, endpoint: 'https://web.push/z', fcm_token: null, p256dh_key: 'p', auth_key: 'a' },
+    ],
+    activity_log: [],
+  };
+  setDb(db);
+  const r = await call({ action: 'subscribe_fcm', fcmToken: 'shared-phone', userId: X }, bearer('jwt-of-x'));
+  assert.equal(r.status, 200);
+  assert.deepEqual(db.push_subscriptions.map(s => s.id).sort(), ['xw', 'x1', 'z2', 'zw'].sort(), 'only z1 (same token, other user) is removed');
+  const del = ops.filter(o => o.table === 'push_subscriptions' && o.kind === 'delete');
+  assert.equal(del.length, 1);
+  assert.deepEqual(del[0].filters, [['eq', 'fcm_token', 'shared-phone'], ['neq', 'user_id', X]]);
+});
+
+test('J14 dedupe: an empty-string token is refused before any write (cannot match every NULL-less row)', async () => {
+  const db = freshDb(); setDb(db);
+  const r = await call({ action: 'subscribe_fcm', fcmToken: '', userId: X }, bearer('jwt-of-x'));
+  assert.equal(r.status, 400);
+  assert.deepEqual(writes(), []);
+});
