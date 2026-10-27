@@ -353,8 +353,8 @@ export async function finalizeDedup(
     const intro = skipped.length && flagged.length
       ? `Heads up — while adding tasks I caught some likely duplicates:`
       : skipped.length
-        ? `Heads up — I skipped ${skipped.length} new task${skipped.length > 1 ? 's' : ''} that looked like duplicate${skipped.length > 1 ? 's' : ''}:`
-        : `Heads up — I flagged ${flagged.length} new task${flagged.length > 1 ? 's' : ''} as possible duplicate${flagged.length > 1 ? 's' : ''}:`;
+        ? `Heads up — I skipped ${skipped.length > 1 ? `${skipped.length} new tasks that looked like duplicates` : `a new task that looked like a duplicate`}:`
+        : `Heads up — I flagged ${flagged.length > 1 ? `${flagged.length} new tasks as possible duplicates` : `a new task as a possible duplicate`}:`;
     const undoHint = skipped.length
       ? `\n\nIf I got any of these wrong, just reply "undo" and I'll add ${skipped.length > 1 ? 'them' : 'it'} back.`
       : `\n\nReply "undo" if you'd rather I not flag ${flagged.length > 1 ? 'them' : 'it'}.`;
