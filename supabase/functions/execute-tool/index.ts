@@ -4,6 +4,7 @@ import { normalizeDueDate, normalizeDateTime, getTodayInTimezone, formatInTimezo
 import { getToolDefinitions } from "../_shared/tool-definitions.ts";
 import { getTopicGroupsManual, WINDOW_RANGES, CATEGORY_WINDOW_MAPPING } from "../_shared/call-context-builder.ts";
 import { resolveConfig, validateTaskWindow, activeCaveats } from "../_shared/scheduling-defaults.ts";
+import { runDedup, finalizeDedup, undoDedupSkips, type DedupLogEntry } from "../_shared/task-dedup.ts";
 
 // ── Rollback Flag for shared topic ranking ──────────────────────────
 const USE_SHARED_TOPICS = true;
@@ -368,6 +369,9 @@ async function executeToolCall(
       
       case 'parse_and_create_tasks':
         return await parseAndCreateTasks(supabase, userId, args, context?.timezone);
+
+      case 'undo_dedup':
+        return await undoDedup(supabase, userId, args);
 
       // ============ COMMUNICATION TOOLS ============
       case 'send_email':
@@ -877,7 +881,7 @@ async function createTask(supabase: any, userId: string, args: any): Promise<Exe
 
     if (!board) return { success: false, error: "No board found for user" };
 
-    const taskData = {
+    const taskData: any = {
       title: args.title,
       description: args.description || null,
       priority: args.priority?.toUpperCase() || 'MEDIUM',
@@ -887,6 +891,25 @@ async function createTask(supabase: any, userId: string, args: any): Promise<Exe
       user_id: userId
     };
 
+    // Creation-time dedup guard (no-op unless config.dedup.enabled). Single-candidate batch.
+    const dedup = await runDedup({ supabase, userId, candidates: [taskData.title] });
+    const outcome = dedup.outcomes[0];
+    if (dedup.enabled && outcome && !outcome.create) {
+      const d = outcome.decision;
+      await finalizeDedup(supabase, { userId, boardId: board.id, source: 'create_task', entries: [{
+        action: 'skipped', candidate: taskData, matched_task_id: d.matchedTaskId,
+        matched_title: d.matchedTitle, method: d.method, similarity: d.similarity,
+      }] });
+      return {
+        success: true,
+        result: { task: null, skipped: true, duplicateOf: d.matchedTitle },
+        message: `Skipped creating "${taskData.title}" — it looks like a duplicate of "${d.matchedTitle}". Undo from your task history if that's wrong.`
+      };
+    }
+    if (dedup.enabled && outcome && outcome.extraTags.length) {
+      taskData.tags = Array.from(new Set([...(taskData.tags || []), ...outcome.extraTags]));
+    }
+
     const { data, error } = await supabase
       .from('tasks')
       .insert([taskData])
@@ -895,8 +918,17 @@ async function createTask(supabase: any, userId: string, args: any): Promise<Exe
 
     if (error) throw error;
 
-    return { 
-      success: true, 
+    if (dedup.enabled && outcome && outcome.extraTags.length) {
+      const d = outcome.decision;
+      await finalizeDedup(supabase, { userId, boardId: board.id, source: 'create_task', entries: [{
+        action: 'flagged', candidate: taskData, matched_task_id: d.matchedTaskId,
+        matched_title: d.matchedTitle, method: d.method, similarity: d.similarity,
+        created_task_id: data.id,
+      }] });
+    }
+
+    return {
+      success: true,
       result: { task: data },
       message: `Created task "${data.title}" with ${data.priority} priority`
     };
@@ -1445,9 +1477,17 @@ async function parseAndCreateTasks(
       return { success: false, error: "No tasks could be parsed from the input. Please try rephrasing." };
     }
 
+    // Creation-time dedup guard (no-op unless config.dedup.enabled). Runs over the WHOLE parsed batch
+    // at once, so it catches duplicates against existing open tasks AND within this same batch.
+    const dedupRun = await runDedup({ supabase, userId, candidates: tasks.map((t: any) => t.title || '') });
+    const dedupEntries: DedupLogEntry[] = [];               // written via finalizeDedup
+    const dedupPreview: any[] = [];                          // always surfaced in the response
+    let dedupSkippedCount = 0;
+
     // 5. Create tasks in database with normalized dates
     const createdTasks: any[] = [];
-    for (const task of tasks) {
+    for (let ti = 0; ti < tasks.length; ti++) {
+      const task = tasks[ti];
       const isPriority = task.intent === 'priority';
 
       // Normalize due_date to end-of-day in user's timezone.
@@ -1497,6 +1537,21 @@ async function parseAndCreateTasks(
         user_id: userId
       };
 
+      // Dedup decision for this candidate (index-aligned with the parsed batch).
+      const dedupOutcome = dedupRun.enabled ? dedupRun.outcomes[ti] : null;
+      if (dedupOutcome && !dedupOutcome.create) {
+        const d = dedupOutcome.decision;
+        dedupSkippedCount++;
+        dedupPreview.push({ title: task.title, action: 'skipped', matched: d.matchedTitle, method: d.method, similarity: d.similarity });
+        console.log(`[PARSE_AND_CREATE] Skipped duplicate "${task.title}" (~ "${d.matchedTitle}", ${d.method})`);
+        dedupEntries.push({ action: 'skipped', candidate: taskData, matched_task_id: d.matchedTaskId, matched_title: d.matchedTitle, method: d.method, similarity: d.similarity });
+        continue; // do NOT insert
+      }
+      if (dedupOutcome && dedupOutcome.extraTags.length) {
+        (taskData as any).tags = Array.from(new Set([...((taskData as any).tags || []), ...dedupOutcome.extraTags]));
+        dedupPreview.push({ title: task.title, action: 'flagged', matched: dedupOutcome.decision.matchedTitle, method: dedupOutcome.decision.method, similarity: dedupOutcome.decision.similarity });
+      }
+
       const { data, error } = await supabase
         .from('tasks')
         .insert([taskData])
@@ -1506,6 +1561,12 @@ async function parseAndCreateTasks(
       if (data) {
         createdTasks.push(data);
         console.log(`[PARSE_AND_CREATE] Created task: ${data.title} (${data.id}) is_priority=${isPriority} at ${new Date().toISOString()}`);
+
+        // Flagged (ambiguous) task WAS created — record it so the user can review/undo the flag.
+        if (dedupOutcome && dedupOutcome.extraTags.length) {
+          const d = dedupOutcome.decision;
+          dedupEntries.push({ action: 'flagged', candidate: taskData, matched_task_id: d.matchedTaskId, matched_title: d.matchedTitle, method: d.method, similarity: d.similarity, created_task_id: data.id });
+        }
 
         // Wire priority board mapping when intent === "priority"
         if (isPriority) {
@@ -1578,7 +1639,20 @@ async function parseAndCreateTasks(
       }
     }
 
+    // Persist dedup audit rows + queue the single batch notification.
+    if (dedupEntries.length) {
+      await finalizeDedup(supabase, { userId, boardId: board.id, source: 'parse_and_create_tasks', entries: dedupEntries });
+    }
+
     if (createdTasks.length === 0) {
+      // All parsed tasks were skipped as duplicates — that's a success, not a failure.
+      if (dedupSkippedCount > 0) {
+        return {
+          success: true,
+          result: { tasks: [], skippedDuplicates: dedupPreview },
+          message: `All ${dedupSkippedCount} task${dedupSkippedCount > 1 ? 's' : ''} already exist — skipped as duplicates. Undo from your task history if that's wrong.`
+        };
+      }
       return { success: false, error: "Failed to create any tasks" };
     }
 
@@ -1721,7 +1795,10 @@ async function parseAndCreateTasks(
           due_date: t.due_date,
           start_time: t.start_time,
           is_scheduled: t.is_scheduled
-        }))
+        })),
+        // Dedup summary (empty unless the guard is enabled and acted). Always surfaced so callers/UI
+        // can show what was skipped/flagged.
+        ...(dedupPreview.length ? { dedupedDuplicates: dedupPreview } : {})
       },
       message,
       extractedFacts: { 
@@ -1732,6 +1809,19 @@ async function parseAndCreateTasks(
     };
   } catch (error) {
     console.error('[PARSE_AND_CREATE] Error:', error);
+    return { success: false, error: extractErrorMessage(error) };
+  }
+}
+
+// Restore task(s) the dedup guard skipped, from the task_dedup_log payload (bypasses the guard).
+// Default: undo the most-recent batch (rows sharing a near-identical created_at). Pass {all:true} to
+// restore every un-undone skip, or {log_id} to restore one specific event.
+async function undoDedup(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
+  try {
+    // Logic lives in _shared/task-dedup.ts (undoDedupSkips) so it is unit-testable; it is GATED on
+    // the same config.dedup.enabled flag as the guard and touches no rows while the guard is off.
+    return await undoDedupSkips(supabase, userId, args);
+  } catch (error) {
     return { success: false, error: extractErrorMessage(error) };
   }
 }
