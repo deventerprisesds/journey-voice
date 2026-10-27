@@ -6,7 +6,7 @@
 // EVIDENCE: docs/qc-evidence/RESTORE-step3-j13-j14-security.md
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { taskBelongsTo, bearerToken, constantTimeEqual, mintCaller } from './push-auth.ts';
+import { taskBelongsTo, bearerToken, constantTimeEqual, mintCaller, callerIsUser } from './push-auth.ts';
 
 const X = '11111111-1111-4111-8111-111111111111';
 const Y = '22222222-2222-4222-8222-222222222222';
@@ -80,4 +80,18 @@ test('mintCaller: service role, owner JWT, everything else none', async () => {
   assert.equal(await mintCaller(req({ authorization: 'Bearer jx' }), {}, X, SK), 'none');
   // An unset service key must never make "Bearer <anything>" count as service role.
   assert.equal(await mintCaller(req({ authorization: 'Bearer x' }), c, X, ''), 'none');
+});
+
+test('callerIsUser: only this user\'s own JWT -- never the service role, anon key or another user', async () => {
+  const c = authClient({ jx: X, jy: Y });
+  assert.equal(await callerIsUser(req({ authorization: 'Bearer jx' }), c, X), true);
+  assert.equal(await callerIsUser(req({ authorization: 'Bearer jy' }), c, X), false);
+  assert.equal(await callerIsUser(req({ authorization: 'Bearer anon' }), c, X), false);
+  assert.equal(await callerIsUser(req({}), c, X), false);
+  assert.equal(await callerIsUser(req({ apikey: 'jx' }), c, X), false);
+  assert.equal(await callerIsUser(req({ authorization: 'Bearer jx' }), c, ''), false);
+  assert.equal(await callerIsUser(req({ authorization: 'Bearer jx' }), authClient({ jx: X }, true), X), false);
+  // The service-role key is not a registration credential: callerIsUser has no service-role branch,
+  // and getUser does not resolve the key to a user.
+  assert.equal(await callerIsUser(req({ authorization: `Bearer ${SK}` }), c, X), false);
 });

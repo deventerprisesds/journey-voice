@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+import { callerIsUser } from "../_shared/push-auth.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -53,6 +54,15 @@ serve(async (req) => {
 
     // Android bridge: store FCM token for native notification routing
     if (action === 'subscribe_fcm') {
+      // Registration must carry the login of the user it registers (owner-approved Option A,
+      // 2026-10-27). Without this, anyone with the APK and a user id could point that user's alarms
+      // (and their 7-day action tokens) at their own phone, and the dedupe below would let them
+      // delete other users' rows for a token they know. verify_jwt stays false; checked here.
+      if (!(await callerIsUser(req, supabaseClient, userId))) {
+        console.warn('[manage-push-subscription] subscribe_fcm refused: bearer is not this user\'s login');
+        return new Response(JSON.stringify({ error: 'unauthorized' }),
+          { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
       if (!fcmToken) {
         return new Response(JSON.stringify({ error: 'fcmToken required' }),
           { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });

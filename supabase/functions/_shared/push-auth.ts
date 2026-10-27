@@ -67,3 +67,14 @@ export async function mintCaller(req: Request, client: Client, userId: unknown, 
     return "none";
   }
 }
+
+/**
+ * Device REGISTRATION (owner-approved Option A, 2026-10-27): true only when the request's bearer is a
+ * user access token that `auth.getUser()` resolves to exactly `userId`. Unlike `mintCaller`, the
+ * service-role key does NOT count here — nothing server-side registers through manage-push, and the
+ * only legitimate callers (web app, Android native registrar >= 1.0.13) hold the user's own login.
+ * No bearer, the anon key, another user's JWT, a forged/expired JWT, or a getUser error -> false.
+ */
+export async function callerIsUser(req: Request, client: Client, userId: unknown): Promise<boolean> {
+  return (await mintCaller(req, client, userId, "")) === "owner_jwt";
+}

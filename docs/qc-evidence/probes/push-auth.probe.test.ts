@@ -1,21 +1,24 @@
 // WHAT: probes of manage-push-subscription `subscribe_fcm` (REAL handler, remote imports stubbed),
-//       pinning what registration does TODAY. Registration auth was NOT enforced (see the record).
-// WHY:  C2-SEC1: subscribe_fcm trusts body.userId. Enforcing a JWT would break the Android native
-//       registrar (FcmRegistrar.kt:34 sends the anon key), so the owner decides. These probes make the
-//       open gap explicit instead of silent; the `todo` is the test to turn on once it is enforced.
+//       pinning who may register a phone.
+// WHY:  C2-SEC1: subscribe_fcm trusted body.userId. The owner chose Option A (2026-10-27): the Android
+//       native registrar sends the user's session token from APK 1.0.13, and the server refuses any
+//       registration whose bearer is not that user's login. The former KNOWN GAP probe is now a real
+//       assertion; the `todo` is gone. Handler tests: supabase/functions/manage-push-subscription/index.auth.test.ts.
 // SUPERSEDES: nothing. SUPERSEDED-BY: nothing -- current.
 // EVIDENCE: docs/qc-evidence/RESTORE-step3-j13-j14-security.md ("Left for the owner").
 // RUN: node --experimental-strip-types --test docs/qc-evidence/probes/push-auth.probe.test.ts
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { setDb, loadHandler, post, type Db } from './harness.ts';
+import { setDb, loadHandler, post, jwtUsers, type Db } from './harness.ts';
 
 const X = '11111111-1111-4111-8111-111111111111'; // owner
 const Z = '33333333-3333-4333-8333-333333333333'; // attacker
 const ANON = { authorization: 'Bearer public-anon-key', apikey: 'public-anon-key' };
+const OWNER_JWT = { authorization: 'Bearer probe-jwt-x', apikey: 'public-anon-key' };
+const ATTACKER_JWT = { authorization: 'Bearer probe-jwt-z', apikey: 'public-anon-key' };
 
 let handler: (r: Request) => Promise<Response>;
-test.before(async () => { handler = await loadHandler('manage-push-subscription'); });
+test.before(async () => { jwtUsers['probe-jwt-x'] = X; jwtUsers['probe-jwt-z'] = Z; handler = await loadHandler('manage-push-subscription'); });
 const call = async (body: unknown, h = ANON) => { const r = await handler(post(body, h)); return { status: r.status, body: await r.json() }; };
 
 const freshDb = (): Db => ({
@@ -26,19 +29,26 @@ const freshDb = (): Db => ({
   activity_log: [],
 });
 
-test('own-user subscribe_fcm (as the Android native registrar sends it, anon key) is accepted', async () => {
+test('own-user subscribe_fcm with the user\'s own JWT (Android native >= 1.0.13, web app) is accepted', async () => {
   const db = freshDb(); setDb(db);
-  const r = await call({ action: 'subscribe_fcm', fcmToken: 'owner-phone-rotated', userId: X, source: 'native' });
+  const r = await call({ action: 'subscribe_fcm', fcmToken: 'owner-phone-rotated', userId: X, source: 'native' }, OWNER_JWT);
   assert.equal(r.status, 200);
   assert.equal(db.push_subscriptions.find(s => s.user_id === X)!.fcm_token, 'owner-phone-rotated');
 });
 
-test('KNOWN GAP (owner decision): cross-user subscribe_fcm is ACCEPTED and takes over the owner\'s FCM row', async () => {
+test('subscribe_fcm with only the anon key (as the Android native registrar sent it before 1.0.13) is refused with 401', async () => {
   const db = freshDb(); setDb(db);
-  const r = await call({ action: 'subscribe_fcm', fcmToken: 'attacker-phone', userId: X });
-  assert.equal(r.status, 200, 'still accepted: registration auth is not enforced');
-  assert.equal(db.push_subscriptions.find(s => s.user_id === X)!.fcm_token, 'attacker-phone', "owner's journey FCM row now points at the attacker's device");
-  assert.equal(db.push_subscriptions.some(s => s.user_id === Z), false, "J14 dedupe deleted the attacker's own row -- and would delete ANY other user's row for a token the caller knows");
+  const r = await call({ action: 'subscribe_fcm', fcmToken: 'owner-phone-rotated', userId: X, source: 'native' });
+  assert.equal(r.status, 401);
+  assert.equal(db.push_subscriptions.find(s => s.user_id === X)!.fcm_token, 'owner-phone');
 });
 
-test.todo('cross-user subscribe_fcm is refused with 401 (turn on when the owner picks an enforcement option)');
+test('cross-user subscribe_fcm is refused with 401: the owner\'s FCM row and the other user\'s row are untouched', async () => {
+  for (const h of [ANON, ATTACKER_JWT]) {
+    const db = freshDb(); setDb(db);
+    const r = await call({ action: 'subscribe_fcm', fcmToken: 'attacker-phone', userId: X }, h);
+    assert.equal(r.status, 401);
+    assert.equal(db.push_subscriptions.find(s => s.user_id === X)!.fcm_token, 'owner-phone', "owner's FCM row still points at the owner's device");
+    assert.equal(db.push_subscriptions.some(s => s.user_id === Z), true, "J14 dedupe did not run for an unverified caller");
+  }
+});
