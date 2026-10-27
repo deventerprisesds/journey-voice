@@ -115,3 +115,46 @@ test('J14 dedupe: an empty-string token is refused before any write (cannot matc
   assert.equal(r.status, 400);
   assert.deepEqual(writes(), []);
 });
+
+const webSub = (endpoint: string) => ({ endpoint, keys: { p256dh: 'p256', auth: 'authk' } });
+
+test('subscribe (web push): the user\'s own JWT is accepted and stores the endpoint', async () => {
+  const db = freshDb(); setDb(db);
+  const r = await call({ action: 'subscribe', subscription: webSub('https://web.push/x-browser'), userId: X }, bearer('jwt-of-x'));
+  assert.equal(r.status, 200);
+  assert.equal(db.push_subscriptions.some(s => s.user_id === X && s.endpoint === 'https://web.push/x-browser'), true);
+});
+
+test('subscribe (web push): another user\'s JWT, the anon key, or no bearer -> 401, nothing written', async () => {
+  for (const h of [bearer('jwt-of-z'), bearer(ANON_KEY), { apikey: ANON_KEY }, bearer(ENV.SUPABASE_SERVICE_ROLE_KEY)]) {
+    const db = freshDb(); setDb(db);
+    const r = await call({ action: 'subscribe', subscription: webSub('https://web.push/attacker-browser'), userId: X }, h);
+    assert.equal(r.status, 401, JSON.stringify(h));
+    assert.deepEqual(writes(), [], JSON.stringify(h));
+    assert.equal(db.push_subscriptions.some(s => s.endpoint === 'https://web.push/attacker-browser'), false);
+  }
+});
+
+test('unsubscribe: the user\'s own JWT removes only their own rows', async () => {
+  const db = freshDb(); setDb(db);
+  const r = await call({ action: 'unsubscribe', userId: X }, bearer('jwt-of-x'));
+  assert.equal(r.status, 200);
+  assert.equal(db.push_subscriptions.some(s => s.user_id === X), false);
+  assert.equal(db.push_subscriptions.some(s => s.user_id === Z), true);
+});
+
+test('unsubscribe: another user\'s JWT, the anon key, or no bearer -> 401, the victim\'s rows survive', async () => {
+  for (const h of [bearer('jwt-of-z'), bearer(ANON_KEY), { apikey: ANON_KEY }, bearer(ENV.SUPABASE_SERVICE_ROLE_KEY)]) {
+    const db = freshDb(); setDb(db);
+    const r = await call({ action: 'unsubscribe', userId: X }, h);
+    assert.equal(r.status, 401, JSON.stringify(h));
+    assert.deepEqual(writes(), [], JSON.stringify(h));
+    assert.equal(db.push_subscriptions.find(s => s.user_id === X)!.fcm_token, 'owner-phone');
+  }
+});
+
+test('unknown action without a matching JWT -> 401 (the check runs before action dispatch)', async () => {
+  const db = freshDb(); setDb(db);
+  const r = await call({ action: 'something_else', userId: X }, bearer(ANON_KEY));
+  assert.equal(r.status, 401);
+});

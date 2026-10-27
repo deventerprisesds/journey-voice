@@ -52,17 +52,20 @@ serve(async (req) => {
 
     console.log(`[manage-push-subscription] Processing ${action} request for user:`, userId);
 
+    // EVERY action must carry the login of the user it acts for (owner-approved Option A, 2026-10-27;
+    // verify loops 1-2). Without this, anyone with the anon key could: subscribe_fcm -> point the user's
+    // alarms (and their 7-day action tokens) at their own phone, and use the J14 dedupe to delete other
+    // users' rows; subscribe -> receive the user's notification text on their own browser; unsubscribe ->
+    // wipe all of the user's devices (silences alarms). verify_jwt stays false; checked here, before any
+    // read or write.
+    if (!(await callerIsUser(req, supabaseClient, userId))) {
+      console.warn(`[manage-push-subscription] ${action} refused: bearer is not this user's login`);
+      return new Response(JSON.stringify({ error: 'unauthorized' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
     // Android bridge: store FCM token for native notification routing
     if (action === 'subscribe_fcm') {
-      // Registration must carry the login of the user it registers (owner-approved Option A,
-      // 2026-10-27). Without this, anyone with the APK and a user id could point that user's alarms
-      // (and their 7-day action tokens) at their own phone, and the dedupe below would let them
-      // delete other users' rows for a token they know. verify_jwt stays false; checked here.
-      if (!(await callerIsUser(req, supabaseClient, userId))) {
-        console.warn('[manage-push-subscription] subscribe_fcm refused: bearer is not this user\'s login');
-        return new Response(JSON.stringify({ error: 'unauthorized' }),
-          { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-      }
       if (!fcmToken) {
         return new Response(JSON.stringify({ error: 'fcmToken required' }),
           { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
