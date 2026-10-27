@@ -474,3 +474,53 @@ the latest capture). That is not part of J7.
 - **C2:** every change is a question in the daily Iris digest, and the task keeps the old value until
   he answers. Nothing changes without consent, but an unanswered flag leaves the scheduler planning
   against a stale deadline.
+
+## A2 blast radius: what changes if EMBA and MIT get `programs.is_active = false` (nothing written)
+
+**Swept (O):**
+- nexus-hub `origin/main` `ce98d2f`: `src/`, `api/`, `extension/`;
+- huddle-extension-app `origin/main` `ebf801b`: `src/`;
+- journey-voice `origin/main` and the J7 branch.
+
+The search was for `is_active` and any "active program" filter.
+
+### Every reader, and what happens
+
+| app | reader (file:line) | what it does with `is_active` | effect when EMBA and MIT are inactive |
+|---|---|---|---|
+| **Nexus web** | `src/lib/programs/picker.ts:94` `optionsFor` (used by `src/hooks/usePrograms.ts:72`) | drops inactive programs from the program list | EMBA and MIT **disappear from the header program picker** (`AppLayout.tsx:29, 67`) |
+| **Nexus web** | `src/components/layout/AppLayout.tsx` (the write-back effect after `pickCurrent`) | if the stored selection names a program not in the list, it is rewritten to the first active one | a stored "emba" or "mit" selection is **forced to DBA** |
+| **Nexus web** | Topics, Assignments (`Assignments.tsx:412-422, 541`), Dashboard (`:79-93`), Schedule (`:251-264`), Import (`:222-239`) | all filter by `localStorage.selectedProgram` | since the picker can no longer select EMBA or MIT, **their courses, topics, materials, assignments and schedule can no longer be reached in the Nexus web app.** The data is not deleted; switching the programs back on restores it (I, high: every page keys off the one stored selection) |
+| **Nexus web** | `Import.tsx:223, 239`, `settings/DataSourceManager.tsx:51`, `settings/FieldMappingDialog.tsx:75` | pickers list active programs only | cannot import into, or map a data source to, EMBA or MIT |
+| **Nexus web** | `settings/ProgramManager.tsx:603` | shows an "Inactive" badge | Settings still lists both and can switch them back on, so the change is reversible from the UI |
+| **Nexus extension** | `extension/background.js:59` `listPrograms` | drops inactive programs | EMBA and MIT vanish from the "Save in Nexus" program list. **Risk (I, medium):** `resolveProgramId` (l.66-70) falls back to the last-used, then the first program when a site's saved program is gone. So opening an old EMBA or MIT Canvas course could file a capture under **DBA** |
+| **Nexus API** | `api/src/functions/d1.ts:313` | `is_active` is only an allowed filter and writable column; no server path filters on it | none |
+| **Huddle** | `src/features/huddle/lib/nexus/nexus.server.ts:699-702` `get_nexus_courses` | returns **all** programs and courses, no filter | none. Agents still see EMBA and MIT, and its description still says "The owner's EMBA programs" (stale wording, not a behaviour change) |
+| **journey** (main and branch) | none. journey's `Assignments.tsx:57` reads journey's own Supabase `programs`, not Nexus | — | none until J7 starts reading active programs from Nexus |
+
+### Said plainly
+
+**A2 as specified would hide all EMBA and MIT content from the Nexus web app.** That covers past
+courses, readings, materials and the assignment history, because the program picker is the only way
+into those pages and it shows active programs only. Nothing is deleted, and it can be switched back
+in Settings → Programs. It also risks the extension filing an old-course capture under DBA. Huddle
+and Nexus's server side are unaffected.
+
+### This makes A2 a fork again: the same goal without hiding anything
+
+| Option | What actually happens | Cost / what you lose | What it makes easy later | What it makes hard later |
+|---|---|---|---|---|
+| **A2 as asked**: `is_active=false` on EMBA, MIT | journey schedules only DBA; Nexus hides EMBA and MIT everywhere in its UI | old-program browsing in Nexus; extension misfile risk | one switch per program, and every app agrees | looking anything up in EMBA or MIT means switching it back on first |
+| **A2-col**: new Nexus column, e.g. `programs.schedule_in_journey` (or `is_current`), read only by journey | journey schedules only programs flagged on; Nexus UI unchanged | a small nexus-hub migration, plus adding the column to `d1.ts`'s filters/writable list (the same two-list edit `d1.ts:316-330` warns about) | the next program = tick one box in Nexus; nothing else changes | one more field to keep accurate |
+| **A1-program**: journey config `assignments.activePrograms = ['DBA']` | journey schedules only DBA; Nexus untouched | the "current program" lives in journey settings, not Nexus | no Nexus change at all; fastest | the next program needs a journey setting change; other apps cannot read it |
+
+The cause-and-effect chain for each:
+- **A2:** flip `is_active` → the Nexus picker drops the program → the pages filtered by that program become unreachable → old content is hidden until it is switched back.
+- **A2-col:** add a column → journey reads only flagged programs → Nexus's picker ignores the column → nothing in Nexus changes.
+- **A1-program:** journey setting → the sync filters to those program codes → Nexus is never touched.
+
+**Recommendation: A2-col.** It keeps the owner's intent ("EMBA is the past" recorded in Nexus,
+program-agnostic, the next program = one flag) without hiding his old coursework. The A1 pin stays as
+the override, as he asked.
+**Reversibility:** all three are reversible. A2 is the only one with a visible side effect while it
+is on.
