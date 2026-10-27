@@ -18,6 +18,9 @@
 --             docs/qc-evidence/RESTORE-step3-j13-j14-security.md ("Loop 2 fixes").
 
 DROP POLICY IF EXISTS "Service role full access" ON public.push_subscriptions;
+-- Re-runnable: drop this migration's own policies too, so a second apply does not fail on CREATE POLICY.
+DROP POLICY IF EXISTS "push_subscriptions_service_role_all" ON public.push_subscriptions;
+DROP POLICY IF EXISTS "push_subscriptions_owner_select" ON public.push_subscriptions;
 
 -- Edge functions (service-role key). service_role has BYPASSRLS already; the policy states the intent.
 CREATE POLICY "push_subscriptions_service_role_all"

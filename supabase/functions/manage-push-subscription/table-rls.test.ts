@@ -104,3 +104,14 @@ test('push_subscriptions RLS: the service role keeps full access for the edge fu
   assert.ok(policies.some(p => p.cmd === 'ALL' && p.roles.includes('service_role')));
   for (const p of ['SELECT', 'INSERT', 'UPDATE', 'DELETE']) assert.equal(grants.service_role.has(p), true, p);
 });
+
+test('push_subscriptions RLS migration is re-runnable: every CREATE POLICY is preceded by a DROP POLICY IF EXISTS of the same name', () => {
+  const f = '20261027210000_push_subscriptions_rls_lockdown.sql';
+  const sql = stripComments(readFileSync(resolve(MIG, f), 'utf8'));
+  const created = [...sql.matchAll(/CREATE\s+POLICY\s+"([^"]+)"/gi)].map(m => [m[1], m.index!] as const);
+  assert.ok(created.length >= 2);
+  for (const [name, at] of created) {
+    const drop = new RegExp(`DROP\\s+POLICY\\s+IF\\s+EXISTS\\s+"${name}"\\s+ON\\s+public\\.push_subscriptions`, 'i').exec(sql);
+    assert.ok(drop && drop.index < at, `no DROP POLICY IF EXISTS "${name}" before its CREATE`);
+  }
+});
