@@ -607,3 +607,15 @@ else that is strictly backend". Labels only; URL, repos, Supabase, secrets and t
 | 2 | Email footer "Sent by Journey" → "Sent by TaskOS" | **deployed** | deventerprisesds/journey-voice#60 (990b60d); deploy run 39287074527 success; live `notification-delivery` v591 source contains "Sent by TaskOS" |
 | 3 | Android app name + widget → TaskOS | built | android-bridge-template f5e549a → TaskOS v1.0.11 (run 39288362792) |
 | 4 | Owner sees TaskOS on emails / launcher / widget | **NOT confirmed live** | — |
+
+## ACT:deploy-all-per-function — all-mode no longer silently skips everything after a failure (2026-10-27)
+Defect: the bulk deploy stopped at mcp's 413 (runs 39159443758, 40575132776). Tier 2.
+
+| # | Item | Status | Evidence |
+|---|---|---|---|
+| 1 | Per-function all-mode with summary + fail-at-end | implemented on `claude_deploy-all-per-function` | `scripts/deploy-all-functions.sh`; test A1–A11 pass; `npm test` 329/0 |
+| 2 | Root-cause mcp 27 MB | done | `docs/qc-evidence/FIX-deploy-all-per-function.md` §2 (deno info 94 MB; build-tool binaries via mcp-js deps) |
+| 3 | mcp excluded from all-mode with printed reason, deployable by name | implemented | test A8/A9 |
+| 4 | Mutations | 6 FIRED, 1 behaviourally equivalent | evidence file §4 |
+| 5 | PR opened, not merged | open | (PR link in branch history) |
+| 6 | Seen working in a real all-mode run | **NOT confirmed** | needs the first `_shared` change after merge |
