@@ -24,6 +24,7 @@ import { spawn } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
+import { brotliCompressSync } from 'node:zlib';
 import { buildEszip } from './eszip.mjs';
 
 const SCRIPT = new URL('./check-edge-deploy-drift.mjs', import.meta.url).pathname;
@@ -186,6 +187,11 @@ check('E10 a deployed local module absent from the tree is DRIFT',
     { specifier: 'demo-fn/index.ts', source: 'x', sourceMap: map('demo-fn/index.ts', LOCAL) },
     { specifier: '_shared/gone.ts', source: 'y', sourceMap: map('_shared/gone.ts', 'export const gone = 1;\n') },
   ])), 1);
+
+// Supabase's runtime can wrap a bundle as "EZBR" + brotli(eszip). Not seen live yet, so this
+// pins the decode against a wrapper built here from the REAL bundle.
+check('E11 an EZBR (brotli-wrapped) copy of the real bundle is unwrapped and matches',
+  await run(pingTree(), Buffer.concat([Buffer.from('EZBR'), brotliCompressSync(REAL)]), 200, 'ping'), 0);
 
 console.log('');
 if (failures) {
