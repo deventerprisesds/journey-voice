@@ -6,6 +6,21 @@ the technical findings) and `.claude/accuracy-log.md` (wrong-first-answers).
 
 ---
 
+## ACT:alarm-feedback — log satisfaction with alarmed items (thumbs up/down + note)
+
+**Asked (2026-10-27, owner):** a feedback button on the full-screen alarm exposing 👍/👎 and a text box,
+"saved over time", to track how good or bad items were scheduled and what to see instead.
+
+| # | Item | Status | Evidence |
+|---|---|---|---|
+| 1 | `alarm-action` op "feedback" (token-scoped, idempotent on feedbackId, refuses empty/junk) | committed `13bdd67`, branch `claude/charming-fermi-00wrlr` (stacked on #65) | `docs/qc-evidence/probes/alarm-feedback.probe.test.ts` 6/6; 3 guards mutation FIRED |
+| 2 | Trigger `trg_snapshot_alarm_feedback_task` (freezes task schedule into the row) | **NOT applied live** — `apply_migration` approval prompt timed out twice | `supabase/migrations/20261027160000_alarm_feedback_task_snapshot.sql` |
+| 3 | Phone side (panel + queue) | android-bridge-template ACT:alarm-feedback | — |
+| 4 | Owner confirms on a real alarm | **NOT confirmed live** | — |
+
+Read it back: `select created_at, metadata->>'rating', metadata->>'note', metadata->'task'->>'start_time'
+from activity_log where activity_type='alarm_feedback' order by created_at desc;`
+
 ## ACT-jv-2: PR triage pass — 5 open PRs
 
 **Asked (2026-09-21, owner):** "go ahead with the triage pass" (across all repos with open PRs).
