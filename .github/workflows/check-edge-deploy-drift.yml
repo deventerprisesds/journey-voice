@@ -31,7 +31,7 @@ on:
     types: [completed]
 
 permissions:
-  contents: read
+  contents: write  # TEMPORARY for fixture capture; revert to read
 
 jobs:
   drift:
@@ -52,7 +52,11 @@ jobs:
           curl -sS -D headers.txt -H "Authorization: Bearer $T" "https://api.supabase.com/v1/projects/wwxgajrtmslzklnyplah/functions/$SLUG/body" -o body.bin
           grep -i '^content-type' headers.txt || true
           wc -c body.bin; sha256sum body.bin; head -c 8 body.bin | od -c | head -2
-          echo '----- FIXTURE BEGIN -----'; gzip -9c body.bin | base64 -w0; echo; echo '----- FIXTURE END -----'
+          mkdir -p scripts/fixtures/eszip && cp body.bin "scripts/fixtures/eszip/$SLUG.eszip"
+          git config user.name 'fixture-capture'; git config user.email 'noreply@anthropic.com'
+          git add "scripts/fixtures/eszip/$SLUG.eszip"
+          git commit -m "test fixture: raw /body of live $SLUG (captured by run ${{ github.run_id }})"
+          git push origin HEAD:${{ github.ref_name }}
 
       - name: Diff deployed source against this ref
         env:
