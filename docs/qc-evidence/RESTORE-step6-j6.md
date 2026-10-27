@@ -33,3 +33,24 @@ Main's work kept, proven by grep on the result (O):
 - The only `-` lines in `git diff origin/main -- execute-tool/index.ts` are `const taskData = {` (→ `: any`), two trailing-whitespace lines of a `return {`, `for (const task of tasks) {` (→ indexed loop), and `}))` (→ `})),` + the `dedupedDuplicates` field). No main logic removed.
 
 Index safety (O, read): after the loop, scheduling indexes `unscheduledTasks` (built from `createdTasks`), never the parsed `tasks` array, so a skipped candidate cannot shift another task's slot.
+
+## Step 6.2 — port `0800e59` (Iris chat notice + `undo_dedup` tool), verbatim
+
+Auto-merged with no conflict (O): `_shared/tool-definitions.ts` gains the `undo_dedup` definition after `parse_and_create_tasks`'s neighbour; execute-tool gains `case 'undo_dedup'` and `undoDedup()`; `task-dedup.ts` switches the batch notice to a `scheduled_chat` row. Main's `notification-delivery/index.ts` still routes `notification_type === 'scheduled_chat'` (lines 143 and 632), so the notice has a consumer (O, grep).
+
+## Step 6.3 — port `895f02c` (notice copy), verbatim
+
+`task-dedup.ts` 2 lines. The commit's `.claude/memory.md` hunk (branch ledger) is not taken.
+
+## Step 6.4 — `undoDedup` re-derives status (beyond a verbatim restore; required by the spec)
+
+The branch's `undoDedup` re-inserted `row.candidate` as-is. Live `task_dedup_log` has 4 not-yet-undone `skipped` rows whose `candidate.status` is a category (`VENTURES` ×2, `LIFE` ×2; spec, O 2026-10-26). `task_status` still contains those four category names, so Postgres would ACCEPT the insert and the task would land in a non-workflow lane — the #28/#31 bug.
+
+- New pure `restorePayloadFromLog(candidate)` in `_shared/task-dedup.ts`: drops `id`; keeps `status` only if it is one of the 9 workflow lanes; otherwise sets `UP_NEXT` when `start_time` or `due_date` is set, else `BACKLOG` (journey's own new-task rule, `defaultStatusForNewTask` in `src/utils/workflowStatus.ts`). `category` is left alone.
+- `undoDedup` now calls it (the only change in that function).
+- The 9-lane list is restated in `_shared` because edge functions cannot import `src/`; a test asserts it equals `src/utils/workflowStatus.ts`'s `WORKFLOW_STATUSES`.
+- Choice taken (reversible, flagged): a VALID workflow status in the payload (e.g. a caller's explicit `DOING`) is kept rather than overwritten, since that is what the original create would have written. To always re-derive instead, drop the `WORKFLOW_SET.has(status)` branch.
+
+## Flag state — ships OFF (O, from code)
+
+`resolveDedupConfig` (task-dedup.ts line 73): `enabled: d.enabled === true`. Absent `dedup`, `dedup: {}`, `enabled: "true"`, `enabled: 1` → OFF. `runDedup` returns a passthrough (every candidate `create:true`, no tags) before reading open tasks or calling embeddings. The owner's config has no `dedup` key (spec, O 2026-10-26), so after deploy nothing changes. This lane did NOT write his config.

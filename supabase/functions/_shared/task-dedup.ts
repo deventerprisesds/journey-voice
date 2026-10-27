@@ -386,3 +386,36 @@ export async function finalizeDedup(
     console.error('[dedup] failed to queue dedup chat notification:', err);
   }
 }
+
+// =============================================================================
+// UNDO: turn a saved task_dedup_log.candidate back into an insertable task row.
+//
+// WHY: the candidate is the would-be task payload captured at skip time. Rows written before
+// journey #28/#31 carry a CATEGORY in `status` (live, 2026-10-26: 4 not-yet-undone `skipped`
+// rows with status 'VENTURES' x2 and 'LIFE' x2). `task_status` is an enum that still contains
+// LIFE/CAREER/PROF_EDUCATION/VENTURES for historical reasons, so Postgres ACCEPTS those values
+// and the restored task lands in a lane that is not a workflow position. Re-inserting the
+// payload as-is would re-create that bug. So: keep `status` only if it is a real workflow lane,
+// otherwise re-derive it with journey's own new-task rule (dated -> UP_NEXT, else BACKLOG).
+//
+// WORKFLOW_STATUSES mirrors src/utils/workflowStatus.ts (the client-side source). Edge
+// functions cannot import from src/, so the list is restated here; task-dedup.test.ts asserts
+// the two lists are identical so they cannot drift apart.
+// =============================================================================
+
+export const WORKFLOW_STATUSES: readonly string[] = [
+  'BACKLOG', 'TODO', 'PLANNING', 'READY', 'UP_NEXT', 'DOING', 'IN_REVIEW', 'BLOCKED', 'DONE',
+];
+const WORKFLOW_SET: ReadonlySet<string> = new Set(WORKFLOW_STATUSES);
+
+/** Build the row undo_dedup inserts from a task_dedup_log.candidate payload. Pure. */
+export function restorePayloadFromLog(candidate: unknown): Record<string, unknown> {
+  const payload: Record<string, unknown> = { ...((candidate && typeof candidate === 'object') ? candidate as Record<string, unknown> : {}) };
+  delete payload.id; // never reuse an id
+  const status = payload.status;
+  if (!(typeof status === 'string' && WORKFLOW_SET.has(status))) {
+    const dated = !!(payload.start_time || payload.due_date);
+    payload.status = dated ? 'UP_NEXT' : 'BACKLOG';
+  }
+  return payload;
+}

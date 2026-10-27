@@ -4,7 +4,7 @@ import { normalizeDueDate, normalizeDateTime, getTodayInTimezone, formatInTimezo
 import { getToolDefinitions } from "../_shared/tool-definitions.ts";
 import { getTopicGroupsManual, WINDOW_RANGES, CATEGORY_WINDOW_MAPPING } from "../_shared/call-context-builder.ts";
 import { resolveConfig, validateTaskWindow, activeCaveats } from "../_shared/scheduling-defaults.ts";
-import { runDedup, finalizeDedup, type DedupLogEntry } from "../_shared/task-dedup.ts";
+import { runDedup, finalizeDedup, restorePayloadFromLog, type DedupLogEntry } from "../_shared/task-dedup.ts";
 
 // ── Rollback Flag for shared topic ranking ──────────────────────────
 const USE_SHARED_TOPICS = true;
@@ -1840,8 +1840,8 @@ async function undoDedup(supabase: any, userId: string, args: any): Promise<Exec
 
     const restored: string[] = [];
     for (const row of toRestore) {
-      const payload: any = { ...(row.candidate || {}) };
-      delete payload.id; // never reuse an id
+      // Re-derives status when the saved one is a category (pre-#28/#31 rows), drops the old id.
+      const payload: any = restorePayloadFromLog(row.candidate);
       const { data: created, error: insErr } = await supabase.from('tasks').insert([payload]).select().single();
       if (insErr) { console.error('[UNDO_DEDUP] re-insert failed:', insErr); continue; }
       await supabase.from('task_dedup_log').update({ undone_at: new Date().toISOString(), created_task_id: created.id }).eq('id', row.id);

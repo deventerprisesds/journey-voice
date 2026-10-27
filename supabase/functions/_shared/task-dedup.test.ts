@@ -130,3 +130,128 @@ test('ambiguous items are never dropped or collapsed: two near-but-distinct both
   assert.equal(plan[0].decision, 'possible');
   assert.ok(plan[1].decision === 'possible' || plan[1].decision === 'duplicate');
 });
+
+// =============================================================================
+// Restore step 6 (J6 onto main, 2026-10-27): the guard behind its flag, end to end through
+// runDedup, and the undo payload fix. See docs/qc-evidence/RESTORE-step6-j6.md.
+// =============================================================================
+import { readFileSync } from 'node:fs';
+import { runDedup, restorePayloadFromLog, WORKFLOW_STATUSES } from './task-dedup.ts';
+import { WORKFLOW_STATUSES as CLIENT_WORKFLOW_STATUSES } from '../../../src/utils/workflowStatus.ts';
+
+// Minimal chainable stand-in for the supabase client: records which tables were read and
+// returns canned rows. Every builder method returns the builder; awaiting it yields {data}.
+function fakeSupabase(opts: { config: unknown; openTasks: OpenTaskLite[] }) {
+  const reads: string[] = [];
+  const from = (table: string) => {
+    reads.push(table);
+    const result = table === 'user_scheduling_prefs'
+      ? { data: { config: opts.config }, error: null }
+      : { data: opts.openTasks, error: null };
+    const b: any = {
+      select: () => b, eq: () => b, neq: () => b, is: () => b,
+      maybeSingle: async () => result,
+      then: (res: any, rej: any) => Promise.resolve(result).then(res, rej),
+    };
+    return b;
+  };
+  return { from, reads };
+}
+
+// The owner's live user_scheduling_prefs.config key set (read-only SELECT, 2026-10-26): no `dedup`.
+const OWNER_CONFIG_SHAPE = {
+  caveats: [], timezone: 'America/New_York', timeWindows: {}, contextRules: {},
+  workingHours: {}, workloadBalance: {}, categoryMappings: {}, customAIInstructions: '',
+};
+
+test('runDedup flag ON: normalized (signature) AND semantic decisions both act', async () => {
+  const open: OpenTaskLite[] = [
+    { id: 't-klarna', title: 'Make payments to Klarna' },
+    { id: 't-dentist', title: 'Book dentist appointment' },
+  ];
+  const sb = fakeSupabase({ config: { ...OWNER_CONFIG_SHAPE, dedup: { enabled: true } }, openTasks: open });
+  let embedCalls = 0;
+  const embed = async (titles: string[]) => {
+    embedCalls++;
+    const m: Record<string, number[]> = {
+      'Make payments to Klarna': [1, 0, 0],
+      'Book dentist appointment': [0, 1, 0],
+      'Schedule a dentist visit': [0, 0.95, Math.sqrt(1 - 0.95 * 0.95)], // cos 0.95 vs dentist
+      'Water the plants': [0, 0, 1],
+    };
+    return titles.map((t) => m[t] ?? [0, 0, 1]);
+  };
+  const r = await runDedup({
+    supabase: sb, userId: 'u1', embed,
+    candidates: ['Make Klarna payments', 'Schedule a dentist visit', 'Water the plants'],
+  });
+  assert.equal(r.enabled, true);
+  assert.deepEqual(sb.reads, ['user_scheduling_prefs', 'tasks']);
+  const [k, d, w] = r.outcomes;
+  assert.equal(k.create, false);
+  assert.equal(k.decision.method, 'signature');
+  assert.equal(k.decision.matchedTaskId, 't-klarna');
+  assert.equal(d.create, false);
+  assert.equal(d.decision.method, 'semantic');
+  assert.equal(d.decision.matchedTaskId, 't-dentist');
+  assert.equal(w.create, true);
+  assert.deepEqual(w.extraTags, []);
+  assert.equal(embedCalls, 1);
+});
+
+test('runDedup flag OFF (the owner\'s real config has no dedup key): pure no-op', async () => {
+  for (const config of [OWNER_CONFIG_SHAPE, undefined, null, { dedup: {} }, { dedup: { enabled: 'true' } }, { dedup: { enabled: 1 } }]) {
+    const sb = fakeSupabase({ config, openTasks: [{ id: 't1', title: 'Make payments to Klarna' }] });
+    let embedCalls = 0;
+    const r = await runDedup({
+      supabase: sb, userId: 'u1', candidates: ['Make Klarna payments', 'Make Klarna payments'],
+      embed: async (t) => { embedCalls++; return t.map(() => [1, 0, 0]); },
+    });
+    assert.equal(r.enabled, false, `config ${JSON.stringify(config)} must leave the guard OFF`);
+    assert.ok(r.outcomes.every((o) => o.create && o.extraTags.length === 0));
+    assert.equal(embedCalls, 0, 'no embeddings call while OFF');
+    assert.deepEqual(sb.reads, ['user_scheduling_prefs'], 'open tasks are not even read while OFF');
+  }
+});
+
+test('undo payload: a category status from a pre-#28 log row is re-derived, never kept', () => {
+  // Shapes of the 4 live not-yet-undone skipped rows: status VENTURES x2, LIFE x2.
+  const undated = restorePayloadFromLog({ id: 'old-id', title: 'Pitch deck', status: 'VENTURES', category: 'VENTURES', board_id: 'b1', user_id: 'u1' });
+  assert.equal(undated.status, 'BACKLOG');
+  assert.equal(undated.category, 'VENTURES', 'the CATEGORY field itself is untouched');
+  assert.equal('id' in undated, false, 'never reuse the old id');
+  assert.equal(undated.title, 'Pitch deck');
+  const dated = restorePayloadFromLog({ title: 'Groceries', status: 'LIFE', due_date: '2026-10-28T03:59:59Z' });
+  assert.equal(dated.status, 'UP_NEXT');
+  const started = restorePayloadFromLog({ title: 'Call', status: 'CAREER', start_time: '2026-10-28T14:00:00Z' });
+  assert.equal(started.status, 'UP_NEXT');
+  for (const cat of ['LIFE', 'CAREER', 'PROF_EDUCATION', 'VENTURES', 'EDUCATION', 'PERSONAL', '', null, undefined, 42]) {
+    const p = restorePayloadFromLog({ title: 'x', status: cat });
+    assert.ok(p.status === 'BACKLOG', `status ${String(cat)} must become a workflow lane, got ${String(p.status)}`);
+  }
+});
+
+test('undo payload: a real workflow status the creator chose is kept', () => {
+  assert.equal(restorePayloadFromLog({ title: 'x', status: 'DOING' }).status, 'DOING');
+  assert.equal(restorePayloadFromLog({ title: 'x', status: 'BACKLOG', due_date: '2026-10-28' }).status, 'BACKLOG');
+  assert.deepEqual(restorePayloadFromLog(null), { status: 'BACKLOG' });
+});
+
+test('edge WORKFLOW_STATUSES is identical to the client source src/utils/workflowStatus.ts', () => {
+  assert.deepEqual([...WORKFLOW_STATUSES], [...CLIENT_WORKFLOW_STATUSES]);
+});
+
+test('execute-tool wiring: undoDedup inserts restorePayloadFromLog(row.candidate), not the raw payload', () => {
+  const src = readFileSync(new URL('../execute-tool/index.ts', import.meta.url), 'utf8');
+  const start = src.indexOf('async function undoDedup(');
+  assert.ok(start > 0, 'undoDedup exists');
+  const body = src.slice(start, src.indexOf('\n}\n', start));
+  assert.match(body, /const payload: any = restorePayloadFromLog\(row\.candidate\);/);
+  assert.doesNotMatch(body, /\.\.\.\(row\.candidate/);
+  assert.match(src, /case 'undo_dedup':\s*\n\s*return await undoDedup\(supabase, userId, args\);/);
+  // main's work the 3-way merge had to keep
+  assert.match(src, /case 'get_task_topics':/);
+  assert.equal((src.match(/\.order\('created_at', \{ ascending: true \}\)/g) || []).length, 3);
+  // both creation paths call the guard
+  assert.equal((src.match(/await runDedup\(\{ supabase, userId, candidates:/g) || []).length, 2);
+});
