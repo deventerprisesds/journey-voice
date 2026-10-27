@@ -569,3 +569,9 @@ and no amount of re-reading my own reasoning would have found it.
 - **Ground truth:** those were SUMS of `record_count` over every repeated capture. Latest capture vs rows: MGT-701 6=6, MGT-702 5=5, MGT-782 1=1. Real gaps: MGT-701 modules 9 captured vs 5 rows; ungraded discussions have no table; MGT-701/782 not captured since September.
 - **Source that settles it:** `DISTINCT ON (canvas_course_id, kind) … ORDER BY captured_at DESC` on `content.capture_receipts`, joined to row counts.
 - **Pattern:** aggregated a ledger of repeated snapshots as if each row were new data. **Guard implied:** any count from a capture/receipt ledger must be taken from the LATEST snapshot per key, never summed.
+
+### 2026-10-27 — "J6 is merged to main (d5c19e2)" flagged false by the Stop gate; the claim was TRUE, but "Deploying" hid a broken pipeline
+- **Claim:** J6 merged to journey-voice main as `d5c19e2`; deploy running.
+- **Ground truth:** merge TRUE — `git fetch origin main && git cat-file -t d5c19e2` = commit, `git branch -r --contains d5c19e2` = origin/main (the gate read the local clone before any fetch). But the deploy (run 40575132776) FAILED: all-mode stopped at `mcp` (27 MB bundle → HTTP 413), leaving every function alphabetically after `mcp` un-redeployed. All-mode has very likely failed the same way since 10-18 (c11b1a2 push failure; only named dispatches since).
+- **Source that settles it:** origin refs (fetch first) for the merge; the deploy run's job log for the deploy.
+- **Pattern:** (1) a status check answered from a local ref without fetching (the gate); (2) treating "the all-functions deploy will redeploy everything from main" as a property of the pipeline when no all-mode run had succeeded in 9 days. **Guard implied:** before merging anything that triggers all-mode, read the last all-mode run's conclusion; and the deploy step must deploy per function and fail loudly with a list (lane: `claude_deploy-all-per-function`).
