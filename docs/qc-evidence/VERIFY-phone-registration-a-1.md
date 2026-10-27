@@ -62,3 +62,57 @@ huddle-extension-app origin/main @1ddb3e4. O = observed, I = inference.
   verified user A may register a DEVICE TOKEN that belongs to B, and the J14 dedupe then deletes B's row for that token. With
   BYPASS2's anon SELECT exposing every token, that is reachable. The record's "cannot be triggered by an unverified caller"
   is literally true but incomplete.
+
+## C1-web -- web callers still pass: CONFIRMED (code read) / I for the header
+- O `src/utils/bridgeFcmRegistration.ts:41` and `src/hooks/useNotifications.tsx:82` call `supabase.functions.invoke('manage-push-subscription', {action:'subscribe_fcm', userId})`
+  with the signed-in user's own id. I (high): supabase-js v2 `functions.invoke` sends `Authorization: Bearer <session access_token>`, which matches userId -> 200.
+  `useNotifications.tsx:408/432` (`subscribe`/`unsubscribe`) are not gated.
+- O grep of android-bridge-template: the only native caller is `FcmRegistrar.kt:63`. `SupabaseTaskClient.kt:165` calls execute-tool for other tools, not register_push_token.
+  bridge-builder: no callers. Huddle web never stores the journey session keys (`git grep secureStore` on huddle origin/main: 0 hits), so the Huddle APK's
+  `FcmRegistrar.register` returns at line 30-32. CONFIRMED.
+- Old APKs (< 1.0.13) send `Bearer <anon>` -> 401 on native re-registration. That is the ONLY legitimate breakage found, and the record states it
+  ("What will no longer be in place", bullet 2, plus the install-before-merge ORDER). CONFIRMED.
+
+## C3 -- Kotlin refresh path: CONFIRMED (code read; Gradle not run here, no SDK)
+- O `postWithSessionRetry` (`FcmRegistrar.kt:93-104`) makes at most 2 posts: the first post, and on 401 one refresh plus one retry. No loop. Test "401 twice does not loop".
+- O a refresh failure stores nothing: `doRefreshAccessToken` returns false before any `putSync` on non-2xx or a missing refresh token, and FcmRegistrar's lambda then returns null,
+  so there is no retry (test "failed refresh does not retry"). The 30s `REFRESH_SKIP` returns true and re-reads the stored token. Worst case is the same token,
+  401 again, then stop.
+- O signed out: `registrationBearer(null|blank|==anon)` is null -> log line + return before the Thread starts. Nothing is sent. Tests "signed out sends nothing", "anon key as stored token sends nothing".
+- O CI (GitHub API): android-ci run 40551301622 @6a11b68 success, 40554062191 @894154e success, mutation probe 40572046149 @4d483e9 failure. Matches the record.
+- RISK (I, medium, not tested): this makes NATIVE refresh (`/auth/v1/token?grant_type=refresh_token`) run on launch and on `onNewToken` whenever the stored access token
+  has expired. Tokens sync only web -> native (`useAuth.tsx:161-165`, `App.tsx:63-70`); a natively-rotated refresh token is never handed back to the WebView. If the WebView later
+  refreshes with its now-used refresh token outside GoTrue's reuse interval, the session can be revoked (SIGNED_OUT). The widget path already had this shape
+  (the `refreshAccessToken` KDoc mentions 409/SIGNED_OUT), but registration now triggers it for every user on each launch with an expired stored token. Not in the record.
+
+## C4 -- APK build: CONFIRMED with one caveat
+- O `build-apk.yml`: `on: push: branches:[main], paths: configs/*/bridge.config.json`. The branch changes `configs/54beaa01-.../bridge.config.json` (`_buildTriggeredAt` only).
+  Merge-base with main = f41e814 = main tip, so the merge is a clean fast-forward. versionName = `_buildNumber`(12)+1 = 1.0.13. versionCode = `github.run_number`. The config
+  holds `_apkVersionCode: 162` from the previous build, so any later run is higher and installs over 1.0.12 if signed with the same `KEYSTORE_BASE64` secret (same workflow, I).
+- O `claude_fcm-mutprobe-bearer` (4d483e9, still on origin) is excluded from build-apk (main only). It does trigger android-ci (branches-ignore main) and failed there as intended.
+  It is a DESCENDANT of 894154e, so merging it by mistake would ship the anon-key fallback. Delete it.
+- Caveat: a parallel session's `claude/laughing-tesla-kqmnhu` bumps a DIFFERENT config (8596e6c2-...), so TaskOS stays 1.0.13. The detect step takes `head -1` of the configs
+  changed in HEAD~1..HEAD, so the two must land as separate pushes. As separate PRs they will.
+
+## C5 -- my own run + mutations: CONFIRMED
+- O `npm test` (node v22.22.0, clone @1656812): `# tests 324 # pass 324 # fail 0 # todo 0`.
+- O mutate.sh (anchors in files):
+  | mutation | must-fail test | outcome |
+  |---|---|---|
+  | M1 `callerIsUser` accepts the service-role key (`mintCaller(..., env SERVICE_ROLE) !== "none"`) | "subscribe_fcm: service-role key, forged JWT, key only in apikey -> 401" | FIRED, restored = HEAD |
+  | M2 `bearerToken` falls back to the `apikey` header | same | FIRED, restored = HEAD |
+  | M3 dedupe `.neq('user_id', userId)` -> `.neq('user_id','__nobody__')` (deletes the owner's own fresh row) | "J14 dedupe: still runs for the verified owner" | FIRED, restored = HEAD |
+
+## C6 -- is "What will no longer be in place" complete and accurate? REFUTED (incomplete)
+Accurate as far as it goes (old APKs lose background re-registration; unverified callers cannot use subscribe_fcm or the dedupe). Missing from the record:
+1. C2-BYPASS2: `push_subscriptions` RLS is `FOR ALL TO public USING(true) WITH CHECK(true)` and anon holds INSERT/SELECT/UPDATE/DELETE (live). Registration is
+   still possible with the anon key straight through PostgREST, and every FCM token is readable. Option A does not close C2-SEC1 while this policy stands.
+2. C2-BYPASS1: Huddle's unauthenticated `invokeJourneyToolDebug` (and `registerBridgeFcmToken`) -> huddle-proxy -> service-role -> `register_push_token` registers a device
+   for any user by email. The record calls huddle-proxy a trusted caller; its upstream is not.
+3. A verified user can still delete another user's row via the dedupe, given that user's FCM token, and BYPASS2 exposes those tokens.
+4. RISK: native refresh-token rotation on launch or `onNewToken` (C3).
+
+## VERDICT
+FAIL. The code delivered (gate, Kotlin, tests, build trigger) does what it claims, and my own mutations and run match. But the claim behind it, that the server must refuse
+a registration whose login does not match the userId (closing the takeover), does not hold. Two other routes still register a device for any user without that user's login: the
+table's anon-open RLS (live) and Huddle's unauthenticated debug server function. The record does not list either.
