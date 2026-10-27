@@ -140,10 +140,16 @@ jobs:
 
       - name: Deploy all functions
         if: steps.changed.outputs.mode == 'all'
+        # ONE CALL PER FUNCTION, NOT ONE BULK CALL. The bulk `supabase functions deploy` stops at the
+        # first failure. In runs 39159443758 (10-18) and 40575132776 (10-27) it hit mcp's 413 and
+        # never attempted any function after `mcp` alphabetically. The script keeps going, prints a
+        # deployed / failed / excluded table, and fails the job at the END if anything failed.
+        # Exclusions are "slug: reason" lines. An excluded function is still deployable by name.
+        # (`${VAR-default}` keeps the default unless the variable is SET, so the test can override it.)
         run: |
-          echo "Deploying all functions to wwxgajrtmslzklnyplah..."
-          supabase functions deploy --project-ref wwxgajrtmslzklnyplah
-          echo "✅ All functions deployed"
+          DEPLOY_ALL_EXCLUDE="${DEPLOY_ALL_EXCLUDE-mcp: bundles to 27 MB and Supabase rejects it with HTTP 413. Its npm graph is ~94 MB of build-tool binaries (esbuild, and rolldown and lightningcss via the vite peer) that @lovable.dev/mcp-js declares as its own deps. Deploy it by name. See docs/qc-evidence/FIX-deploy-all-per-function.md}"
+          export DEPLOY_ALL_EXCLUDE
+          bash scripts/deploy-all-functions.sh wwxgajrtmslzklnyplah
 
       - name: Deploy single function
         if: steps.changed.outputs.mode == 'single'
