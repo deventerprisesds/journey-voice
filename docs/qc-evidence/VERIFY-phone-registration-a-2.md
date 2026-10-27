@@ -47,3 +47,82 @@ migration applied **verbatim with `psql -f`**.
 - I: local Postgres is not the live project; the live table could carry extra grants the repo does not
   show. The migration's `REVOKE ALL … FROM anon` covers anon whatever it holds; a post-apply `pg_policies`
   + `has_table_privilege` read on live is the confirming step after it ships.
+
+## (b) BYPASS1 — Huddle `registerBridgeFcmToken` / `invokeJourneyToolDebug` need a verified Entra token (huddle c043f1f)
+**Verdict: CONFIRMED for both server fns. The goal is REOPENED elsewhere — see "Still open" below.**
+- O: both handlers now delegate to `verified-caller.server.ts`; `verifiedJourneyCaller` returns null for a
+  missing/short/non-string token, a token whose verify throws, or one without oid/email; then
+  `{ok:false, error:"unauthorized"}` and the proxy is never called. Body `caller` is parsed and ignored.
+- O: the verifier behind it is `src/lib/entra-verify.server.ts` `verifyEntraIdToken` = jose `jwtVerify`
+  against the tenant JWKS with `audience: clientId` and `issuer` → signature, aud, iss and `exp` checked.
+  Forged / expired / wrong-audience tokens throw → null.
+- O: `bun scripts/journey-verified-caller.test.ts` → **12 passed, 0 failed** (no token + body victim,
+  forged token, body caller ignored, wiring W-1/W-2).
+- O MUTATION M1 (`mutate.sh`, anchor in file): replaced the `if (!caller) return {ok:false…}` gate in
+  `registerBridgeFcmTokenImpl` with a call through to `register_push_token` → **FIRED** on
+  `RB-1: no idToken`; restored = HEAD.
+- O: callers — the only client caller is `HuddleView.tsx:1236-1240` (sends `getToken()`).
+  `invokeJourneyToolDebug` has NO client caller in `src/` (grep), so making it require a token breaks nothing.
+- I (not run on a device): inside the Android Huddle web view `getToken()` is MSAL `acquireTokenSilent`
+  (`src/lib/entra-auth.ts:391-428`) of the already-signed-in Huddle web app, so a signed-in user has an ID
+  token. **Residual (minor, availability):** `done = true` is set BEFORE `getToken()`; if `getToken()`
+  returns null once (silent-acquire hiccup), registration is skipped for the rest of that page session
+  with no retry and no log. Not a security defect.
+- I: huddle-proxy forwards ANY `toolName` (`huddle-proxy/index.ts:154-206`), so any Huddle server fn that
+  passes a body `caller` into `invokeJourneyTool` is a potential route. The agent path
+  (`huddle.functions.ts:4634`, `caller: data.caller ?? {}`) dispatches `c.name` from the model's tool call;
+  `register_push_token` appears in no tool DEFINITION in journey (`grep` finds only the execute-tool
+  `case` :410 and the gate :2896), so it is not offered to agents. Not proven unreachable (dispatch does
+  not re-check `c.name` against the offered set in the lines read); low likelihood.
+
+## (c) dedupe residual (journey 2ebd641)
+**Verdict: CONFIRMED.** O: `manage-push-subscription/index.ts:56-93` — gate (`callerIsUser`) first, then
+`fcmToken` required, upsert, then dedupe `.eq('fcm_token', fcmToken).neq('user_id', userId)`.
+O MUTATION M2: removed `.neq('user_id', userId)` → **FIRED** on
+`J14 dedupe scope: a verified owner deletes ONLY other users' rows…`; restored = HEAD.
+Tests at `index.auth.test.ts:73-112` include the empty-string-token refusal. Covered by the 331/331 run.
+
+## (d) Android FcmRegistrar — no native refresh (android 448793c, head 61c1903)
+**Verdict: CONFIRMED.**
+- O: `register()` sends only when `supabase_user_id` is present AND `registrationBearer` returns a token:
+  non-empty, ≠ anon key, readable `exp`, ≥ 60 s left (`FcmRegistrar.kt:35-46, 110-114`). Otherwise the
+  token is written to `EncryptedPrefs[fcm_pending_registration]` and nothing is sent.
+- O: pending is lost? No — it is in EncryptedPrefs (disk), so it survives process death / app kill; also
+  re-written on HTTP non-2xx and on exception; removed only on 2xx and only if unchanged.
+- O: no infinite retry — the only re-send trigger is `onSessionHandoff`, called from
+  `JavascriptBridge.secureStore` when key == `supabase_user_id` and value is non-blank; one attempt per handoff.
+- O: handoff order — journey `src/App.tsx:65` stores `supabase_access_token` BEFORE `:67` `supabase_user_id`
+  (same in `useAuth.tsx:163/165`), so the fresh token is in place when the send fires. Sign-out (`App.tsx:69-71`)
+  stores `''` → the blank check means nothing is sent signed out.
+- O: CI run 40580243961 on 448793c → `check` success. Mutation run 40581185190 (4f7cd6d, expiry ignored)
+  → `80 tests completed, 2 failed`: "expired session token is not sent" and "token about to expire is not
+  sent". Head 61c1903 is a ledger-only commit after 448793c (not separately CI'd; I did not diff it).
+- Note: `claude_fcm-mutprobe-bearer` on origin now holds a SECOND throwaway mutation commit (4f7cd6d);
+  it must never be merged and still needs a manual delete.
+
+## (e) record + C1/C4 re-check
+- C1 O: web callers unchanged in shape (`App.tsx` handoff, supabase-js invoke sends the session JWT);
+  Huddle path now sends an Entra token (above). C4 not re-run this loop (no APK change since loop 1 beyond
+  448793c; NOT REACHED for a fresh build).
+- NOT REACHED (budget): huddle `npm run test:router` and `npx tsc --noEmit` (clone has no node_modules).
+
+## Still open — does any of it reopen "register a device for ANOTHER user"?
+**YES, one item does: `manage-push-subscription` action `subscribe` (web push) still trusts `body.userId`
+with no login check** (`index.ts:107-130`; function is `verify_jwt=false`, uses the service-role key, so
+the RLS migration does NOT cover it). Anyone with the public anon key can POST
+`{action:"subscribe", userId:<victim>, subscription:{endpoint:<their own browser's push endpoint>, keys…}}`.
+`send-push-notification` then sends the victim's notifications (title + body of reminders/alarms/messages,
+`webPayload`) to that endpoint (`:320-332`) — i.e. the attacker's phone browser receives the victim's
+pushes. What it does NOT get: the alarm action token (FCM-only, `:262`). So: the alarm-button takeover is
+closed; **notification-content delivery to another person's device is still open.** Inference from code;
+not exercised live (would write to prod).
+Also open, integrity not confidentiality: `unsubscribe` with `body.userId` deletes ALL of that user's rows
+incl. FCM (`:164-168`) → anyone can silence another user's phone alarms until the next re-registration.
+`execute-tool` other tools trusting body `userId` do not register a device (only `register_push_token`
+does, and it is gated); huddle.functions body-caller sites reach journey tools but not `register_push_token`
+by any offered definition (see (b)).
+
+## VERDICT: FAIL (narrowly)
+Every loop-2 fix verifies: (a) CONFIRMED, (b) CONFIRMED, (c) CONFIRMED, (d) CONFIRMED, C5 331/331, 2 own
+mutations FIRED. FAIL because the goal is still reachable through web-push `subscribe` (another person's
+device receives the victim's notifications) and `unsubscribe` can wipe another user's phone registration.
