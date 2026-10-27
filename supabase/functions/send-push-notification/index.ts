@@ -32,6 +32,10 @@ interface NotificationRequest {
     // retry an undelivered push; collapseKey = a newer push replaces an older undelivered one.
     ttl?: number | string;
     collapseKey?: string;
+    // Opt-in: "true" makes the Android bridge keep the notification when tapped — only Dismiss or a
+    // swipe clears it. Huddle sets it on new-email alerts (2026-10-27: "the push should stick until I
+    // dismiss"). Omitted → unchanged (tap clears, as before).
+    sticky?: boolean | string;
     messageData?: {
       id: string;
       role: string;
@@ -242,6 +246,7 @@ serve(async (req) => {
       channel: channel ?? 'task-reminders',
       deepLink: data?.deepLink ?? '/',
       tag: data?.tag ?? data?.notificationId ?? 'fcm',
+      ...(data?.sticky === true || data?.sticky === 'true' ? { sticky: 'true' } : {}),
     };
 
     const results = await Promise.allSettled(
