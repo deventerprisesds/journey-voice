@@ -14,7 +14,7 @@ the technical findings) and `.claude/accuracy-log.md` (wrong-first-answers).
 | # | Item | Status | Evidence |
 |---|---|---|---|
 | 1 | `alarm-action` op "feedback" (token-scoped, idempotent on feedbackId, refuses empty/junk) | committed `13bdd67`, branch `claude/charming-fermi-00wrlr` (stacked on #65) | `docs/qc-evidence/probes/alarm-feedback.probe.test.ts` 6/6 (21/21 all probes, local node run); 3 guards mutation FIRED via mutate.sh; PR CI runs 40583221133 + 40583165300 `success` on 0a2a60e |
-| 2 | Trigger `trg_snapshot_alarm_feedback_task` (freezes task schedule into the row) | **NOT applied live** — `apply_migration` approval prompt timed out twice | `supabase/migrations/20261027160000_alarm_feedback_task_snapshot.sql` |
+| 2 | Trigger `trg_snapshot_alarm_feedback_task` (freezes task schedule into the row) | **applied live 2026-10-28** via new `apply-supabase-migration.yml` (#73, owner: "use a github workflow") after `apply_migration`/`execute_sql` approval prompts timed out 5x | run 40591181239 success; `schema_migrations` row `20261027160000 … github-actions:apply-supabase-migration`; rolled-back probe insert returned a 14-key `task` snapshot (title + start_time of a real task); 0 `alarm_feedback` rows left |
 | 3 | Phone side (panel + queue) | android-bridge-template ACT:alarm-feedback | — |
 | 4 | Owner confirms on a real alarm | **NOT confirmed live** | — |
 
