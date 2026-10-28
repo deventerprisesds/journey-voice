@@ -9,7 +9,7 @@
 Labels: **OBSERVED (O)** = read from code/git/live DB in this pass, cited. **INFERRED (I)** = reasoning from those facts.
 Fact-finding only. No production code, no deploy, no DB writes.
 
-Status: IN PROGRESS (sections appended as completed)
+Status: COMPLETE 2026-10-28 (sections 1-5)
 
 ---
 
@@ -136,3 +136,107 @@ Every row: **exactly one block per day, never two blocks of the same task, never
 ### 4b. Section 4 verdict
 - **OBSERVED:** the parked code has **no** finish-ahead, lead-time or session-splitting logic. Restoring J1–J8 would give correct intake (after J7 fixes), weekday/weekend caps and better ORDER, but each assignment would still be one 90-min block placed ≤7 days out.
 - **INFERRED:** spreading must be NEW code. The smallest place for it is the builder's assignment tier pass, because that is where far-due assignment tasks are already enumerated across the whole horizon (`:651-686`).
+
+---
+
+## 5. The fix plan (smallest change set) — PLAN ONLY, nothing built
+
+### 5.0 The shape, in one picture
+```
+TODAY:  builder 05:00Z ─► nightly-assignment-sync ─► journey public.assignments (frozen 04-06) ─► 0 tasks
+                         builder places each task ONCE, 1×90 min, deadline push only ≤7d / guaranteed ≤48h
+
+FIX:    builder 05:00Z ─► nightly-assignment-sync ─► Nexus content.assignments (via nexus-hub-api, read-only)
+                              │  P1: create/refresh dated DBA tasks (TZ-correct due, title/due refresh, submitted = flag)
+                              ▼
+                         builder ─► P3: for each open assignment task, plan N work sessions between today and
+                                    the finish-by date, cap 2/weekday & 6/weekend day (P2), place the next 7 days
+                                    ─► P4: if the sessions do not fit, ONE Iris digest line today, not the day before
+```
+Owner decisions honoured (no re-asking): current course = has open items dated today+ (no Nexus write); dated items only, due today+; refresh updates due + title, flags submitted/graded, never auto-closes, never touches a DONE task; J5 composite and J8 floor + weekend cap 6 (ride the scheduler restore, compatible with P3 — §5.6); UTC-day-late fix; E3 weekday cap 2, E4 evenings 19–22 weekdays / 10–20 weekends, weekend evenings not auto-filled, E5 never drop for lateness, E12 finish ahead, E13 not hardcoded to DBA.
+
+### P1 — Intake reads Nexus (fixes "not pointing to the correct tables")
+**Files:** `supabase/functions/nightly-assignment-sync/index.ts`; new `supabase/functions/_shared/nexus-read.ts` (≈60 lines: the READ half of branch `_shared/nexus.ts:338-341` only — `GET {NEXUS_API_URL}/api/d1/assignments?owner=<uuid>`, no token, no write client); `supabase/config.toml` only if a new env default is needed.
+**What changes:**
+1. Replace `.from('assignments')` (`:116-119`) with the Nexus read. Keep main's board lookup (#43 oldest-board `limit(1)`, `:44-52`) and the preload/index (`:55-101`).
+2. Open = status NOT IN (`submitted`,`graded`,`completed`) (DBA uses `submitted`).
+3. Current course = a course with ≥1 open item whose due ≥ local today (owner 10-28). No program literal, no course pin, no `MIT_PROGRAM_ID`, no `points>0`, no cadence inference.
+4. Import only items with a due date ≥ local today (owner B2 + from-today). Today that is **3 cards**: Research Proposal (Oct 30), Checkpoint 2 (Nov 8), Research Paper (Dec 9).
+5. Due date = `normalizeDueDate(nexusDue, tz)` — **already exists** in `_shared/timezone.ts` (live bundle) and is unused here. Replaces `toISOString().split('T')[0] + 'T23:59:59Z'` (`:155-156`, `:199-200`). Checkpoint 2 becomes Sun Nov 8 23:59 ET (`2026-11-09T04:59:59Z`), not Mon Nov 9 18:59 ET. (Note: `normalizeDueDate` forces 23:59 local; an item due at 19:00 ET would move to 23:59 — use the exact Nexus instant when it has a time, i.e. `new Date(nexusDue).toISOString()`; see AC-P1-4.)
+6. Refresh (owner C-rec): for an already-linked task (`assignment_id` = Nexus id) that is NOT DONE: update `due_date` and `title` (`📚 ` + Nexus title) when they differ, and append `{at, field, from, to}` to `scheduling_context.nexus_changes`. If Nexus status becomes submitted/graded: set `scheduling_context.nexus_status`, do NOT change `status`.
+7. One digest per run: if any change/flag happened, insert ONE `scheduled_notifications` row (`notification_type='scheduled_chat'`, existing delivery path, `notification-delivery` main l.632-690) listing the changes. Zero changes → no row.
+8. `scheduling_context.source` = the Nexus course code (e.g. `MGT-782`), `origin:'nexus-azure'`, `course_id`.
+9. Nexus unreachable → log + `activity_log` `status:'failed'`, create/update nothing, builder continues (non-fatal, as today `:329-335`).
+**No longer in place:** the nightly sync stops reading journey `public.assignments` (EMBA/MIT, frozen 04-06). The 30-day skip becomes moot (from-today rule). The web client (`TaskCreationModal`, `Assignments.tsx`, `assignmentSync/Fetching.ts`) and `execute-tool list_pending_assignments` still read the frozen table — **left as is** in this change (client ships only via Lovable; `list_pending_assignments` → Nexus is a follow-on row). Sheet syncs untouched (owner D).
+**Test:** unit (`deno test`) on the pure mapper with the 15 live DBA rows from run 40767365758 as a fixture; then live: invoke `nightly-assignment-sync` for the owner and read `public.tasks`.
+**Acceptance criteria:**
+- AC-P1-1: Given Nexus holds the owner's 3 open DBA items dated today+ (run 40767365758), when the sync runs, then exactly 3 new `PROF_EDUCATION` tasks exist with `assignment_id` = the Nexus ids `aafbf80f…`, `a3c3684e…`, `6616bef3…`.
+- AC-P1-2: Given MGT-701's 4 Oct-2 items and MGT-702 Slide Deck (past due, `active`), when the sync runs, then no task is created for any of them.
+- AC-P1-3: Given undated items (Final Grade, discussion forum slide deck, Residency participation), when the sync runs, then no task is created for them.
+- AC-P1-4: Given Checkpoint 2 has Nexus due `2026-11-09T04:59:59Z`, when its task is created, then `tasks.due_date` = `2026-11-09T04:59:59Z` (Sun Nov 8 23:59 ET), not `2026-11-09T23:59:59Z`.
+- AC-P1-5: Given a linked, not-DONE task and Nexus moves its due date, when the sync runs, then the task's `due_date` equals the new Nexus instant and `scheduling_context.nexus_changes` has one entry with from/to.
+- AC-P1-6: Given a linked task the owner marked DONE and Nexus still says `active` or changes its date, when the sync runs, then the task row is byte-identical before and after.
+- AC-P1-7: Given Nexus marks a linked open task `submitted`, when the sync runs, then `tasks.status` is unchanged and `scheduling_context.nexus_status = 'submitted'`.
+- AC-P1-8: Given a run with ≥1 change or flag, then exactly 1 `scheduled_chat` row is created for that run; given a run with 0 changes, then 0 rows.
+- AC-P1-9: Given the sync runs twice in a row with no Nexus change, then the second run creates 0 tasks and updates 0 rows (idempotent).
+- AC-P1-10: Given a program/course string "DBA" appears nowhere in the new code (grep), when a non-DBA course gets an open item dated today+, then it is imported the same way (E13).
+- AC-P1-11: Given `NEXUS_API_URL` returns 5xx, when the builder runs, then the sync reports failure, writes no task, and the builder still completes.
+
+### P2 — Weekday cap 2, weekend cap 6, read from config (owner E3 + J8 decision)
+**Files:** `_shared/scheduling-defaults.ts` (a small `resolveCategoryDailyCap(config, category, isWeekend)` — the J8 shape, so the later J8 restore is a no-op merge, not a fork); `nightly-schedule-builder/index.ts` (the `dailyAssignmentCount` check uses it instead of `MAX_ASSIGNMENTS_PER_DAY`); owner config row: `categoryMappings.PROF_EDUCATION.maxPerDayWeekend = 6` (a data write, done at ship time, reversible).
+**No longer in place:** the constant 2/day on weekends.
+**ACs:**
+- AC-P2-1: Given PROF_EDUCATION `maxPerDay 2`, `maxPerDayWeekend 6`, when the builder runs with ≥8 coursework sessions eligible, then no weekday holds >2 coursework blocks and no Sat/Sun holds >6.
+- AC-P2-2: Given no `maxPerDayWeekend` key, when the builder runs, then weekends use `maxPerDay` (same as today).
+- AC-P2-3: Given weekend coursework, then no coursework block starts in the weekend 19–22 window (07-25 protection intact) and none before 10:00.
+
+### P3 — Work-session spreading (the new behaviour: "a little at a time until done")
+**Files:** new `supabase/functions/_shared/work-sessions.ts` (pure planner, unit-tested); `nightly-schedule-builder/index.ts` (assignment tier pass `:648-860` calls the planner; placement reuses the existing slot finder and `accumulatedBusySlots`).
+**What changes (rule):** for each open assignment task with a due date: `remaining = estimate_total − minutes of its DONE sessions`; `N = ceil(remaining / sessionLen)`; `finishBy = due − bufferDays` (evening before); spread the N sessions **as evenly as possible across available coursework slots from today to finishBy**, earliest-feasible first when slots are scarce, honouring P2 caps and windows; place those that fall in the 7-day horizon; recompute every night (rebuild model, RESEARCH S7 rule 11) so a missed session re-spreads instead of piling up.
+**How a session is represented — this is fork F1 below.** Recommended: session tasks (`📚 Research Paper — session 2 of 5`, same `assignment_id`, `scheduling_context.session_of = <parent task id>`, tag `work-session`), so each has its own calendar block, alarm and Done button and DONE sessions are the progress measure.
+**No longer in place:** Tier A's "one cap-bypassed block in the last 48 h" as the only guarantee for coursework (it stays as the fallback for a session that still has not fit); Tier C's "no deadline privilege beyond 7 days" for assignment work (sessions are planned back from the due date regardless of distance — this answers RESEARCH open question 6).
+**ACs:**
+- AC-P3-1: Given Research Paper due Wed Dec 9 23:59, estimate 300 min, session 90, buffer 1, when the builder runs on Oct 29, then 4 sessions are planned, all on or before Tue Dec 8, and no two on the same day.
+- AC-P3-2: Given Checkpoint 2 due Sun Nov 8 and Research Paper due Dec 9 both open, when the builder runs, then the 7-day horizon contains ≥1 session of each (both progress, not one-then-the-other).
+- AC-P3-3: Given a planned session's day passes with that session not DONE, when the next build runs, then remaining sessions are re-spread over the remaining days (N unchanged, none placed on a past day).
+- AC-P3-4: Given the owner marks the parent assignment task DONE, when the next build runs, then no further sessions are placed and un-started future sessions are removed from the calendar.
+- AC-P3-5: Given Research Proposal due Fri Oct 30 23:59 with 2 sessions needed on Wed Oct 28 night, when the builder runs, then sessions land Thu Oct 29 (and Fri Oct 30 only if Thu is full), never after the due instant.
+- AC-P3-6: Given a session block, then it lies inside PROF_EDUCATION windows (weekday `evening` 19–22, weekend `weekends` 10–20) and respects P2 caps.
+- AC-P3-7: Given non-coursework priority tasks compete for the same evening, then a session already required to meet finishBy is placed before them, and a session not yet required may yield (spread, not hog).
+- AC-P3-8: Given the planner is a pure function, then `deno test _shared/work-sessions.test.ts` covers AC-P3-1/3/5 with fixed dates and passes; mutation (remove the "no two on the same day" check) makes it FAIL (mutate.sh).
+
+### P4 — Early warning instead of a last-minute surprise (E12)
+**Files:** builder (after P3) appends to the existing one-per-run `scheduled_chat` path (shared with P1's digest).
+**ACs:**
+- AC-P4-1: Given an assignment whose N sessions cannot all be placed before finishBy, when the builder runs, then one Iris digest line names the item, sessions needed vs free slots and the due date, on that run — not only at 48 h.
+- AC-P4-2: Given every session fits, then no warning is sent.
+- AC-P4-3: Given 3 such items in one run, then 1 message (3 lines), not 3 messages.
+
+### 5.5 Test approach (all pieces)
+1. Pure units first (mapper P1, cap resolver P2, planner P3) with the live fixtures above — zero writes.
+2. Main has no builder dryRun (J4 is parked). Either bring J4's `dryRun` flag first (RESTORE step 8 lists it; cherry-pick-clean commits `d113cc6`, `ce1cd3a`) or verify on the live tables after deploy by SQL (`tasks` start/end, `task_schedule_history`). Recommended: J4 dryRun first — it is the only way to see a full build without moving the owner's calendar.
+3. After merge/deploy (edge fns auto-deploy on push to main): run `nightly-assignment-sync` once for the owner, then the builder, then read: 3 linked DBA tasks, sessions across the next 7 days, caps honoured, digest row count. Status stays "implemented, NOT confirmed live" until the owner sees sessions on his calendar.
+
+### 5.6 What this does NOT do / interactions
+- J5 composite and J8 band order + recent-miss floor: still the planned scheduler restore (RESTORE step 8). Compatible: they order candidates; P3 decides how many sessions and by when. P2 uses J8's resolver shape so that merge is clean.
+- Readings and undated items: out (owner: dated only). The undated `discussion forum slide deck` stays off the board until it has a date.
+- `list_pending_assignments` (Iris) and the web Assignments page still read the frozen table → one-line row for a follow-on.
+- Residency 4 vanished from Nexus between 10-27 and 10-28 (§1c) — nothing to import; worth one question to the owner whether it was intentional (not a fork, just a fact check).
+
+### 5.7 Genuine owner forks (each with a recommended default)
+
+| Fork | What actually happens | Cost / what you lose | Makes easy later | Makes hard later |
+|---|---|---|---|---|
+| **F1a session TASKS** (recommended) | each work session is its own card/calendar block (`📚 Research Paper — session 2 of 5`) | more cards on the board (and in Huddle's mirror) — mitigated by a `work-session` tag/filter | progress = DONE sessions; alarms + Done buttons per session already work; calendar shows the plan 7 days out | cleanup if you change the estimate (sessions re-plan nightly) |
+| F1b one task, "next session" slot | the assignment keeps one card; its slot moves to the next planned evening each night | the calendar shows only the next session, never the plan; no way to record "did 1 h, not done" | a clean board | progress tracking needs a new field later |
+
+Cause→effect: pick F1a → each evening's block is a real task → marking it Done reduces remaining effort → the planner re-spreads what is left. Pick F1b → one block at a time → the system cannot tell partial work from no work → it keeps assuming the full effort remains. **Reversible:** both (code-only; F1a's session cards can be deleted).
+
+| Fork | Recommended default | Why |
+|---|---|---|
+| F2 Finish-by buffer (days before due) | **1 day** (done by the evening before) | Due times are 23:59; a same-day last session is the "little time to work with" the owner rejected. Configurable `config.assignments.finishBufferDays` |
+| F3 Session length | **90 min** (= today's `estimatedDuration`; 2 fill a 19–22 evening exactly) | No new number; matches the 2/weekday cap arithmetic (RESEARCH synthesis) |
+| F4 Total effort when Nexus has none (`level_of_effort` empty on every row) | **180 min** (2 sessions) default per assignment, owner/Iris can set any task's `estimate_minutes`; Iris asks once per new assignment in the P1 digest | Nexus gives no effort; a per-title guess would be a hardcode. 90 (today) cannot spread at all |
+| F5 Earliest start for far-due work | **no limit** (spread from today) vs e.g. 21 days before due | With 3 items today, no limit gives Research Paper ~1 session/week now and denser later; a cap would recreate the "surprise" |
+
+Everything else in §5 has a safe reversible default and is not a fork.
