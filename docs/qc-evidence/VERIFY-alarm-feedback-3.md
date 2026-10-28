@@ -42,3 +42,31 @@ Since loop 1's a58a658 the branch changed only .claude/actions.md and .claude/me
 - L1: the case pattern's `*` matches `/`, and `[ -f ]` follows a committed symlink, so a file in a subfolder or a symlink to another file in the checkout is accepted. Content still has to be committed at a ref, by someone who can already dispatch.
 - L2: `ref` can be any branch or SHA, so unreviewed SQL from an unmerged branch can go straight to production (this was done for the snapshot trigger from the feature branch). This is by design, and it bypasses review.
 - L3: the "Confirm recorded" step only prints and never asserts the row exists; the token is job-level env, so the checkout action (pinned to tag v4, not a SHA) can also read it. A migration file containing its own `commit;` or `begin;` would break the single-transaction guarantee. Nothing checks for that.
+
+### Reduced re-check of A1-A5, A7-A11, D1, D4, crash-proof save, snapshot trigger, mutations (at 309f905 and 783c5ba)
+- A1 CONFIRMED: activity_alarm_confirm.xml has btn_feedback beside btn_dismiss in alarm_buttons; feedback_panel holds feedback_header, btn_feedback_up/down, feedback_note maxLength 1500, Save & dismiss, Back, "Save, keep alarm".
+- A2 CONFIRMED: openFeedback calls silenceRing, captures alarmFeedbackContext and the DISMISS intent for that tag, hides alarm_buttons and shows the panel.
+- A3 CHANGED BY DESIGN at 783c5ba: a same-tag repeat no longer gets auto-silenced (see D8). The draft is kept: bind() touches neither feedback_panel nor feedback_note and skips EXTRA_OPEN_FEEDBACK while feedbackFor != null.
+- A4 + crash-proof save CONFIRMED: canSaveFeedback gate; `runCatching { enqueue }`; on failure "Couldn't save — try again" is shown and it returns BEFORE closeFeedback (the draft stays); dismiss sends the captured DISMISS, and the finish is gated on the same tag plus bindGen.
+- A5 CONFIRMED: AlarmOverlayWindow.kt:70-84 is unchanged since loop 1 (silenceRing, dismiss, startActivity with EXTRA_OPEN_FEEDBACK).
+- A7 / D4 CONFIRMED: AlarmFeedbackContract.kt:166 endpoint 401 or 400 bad_op -> fallback; :168 408/429/5xx/-1 retry; :171 401 or JWT_INSERT 403 -> retryOrGiveUp; :172 else GIVE_UP; FEEDBACK_MAX_ATTEMPTS 100 (:28).
+- A8 CONFIRMED: SupabaseTaskClient.kt is unchanged since loop 1 (not in `diff --stat 1937986..309f905`); insertAlarmFeedback at :246 with the activity_type=eq.alarm_feedback + metadata->>feedbackId dedupe at :255-256.
+- A9 CONFIRMED: AlarmFeedbackContractTest has 24 @Test (19 in loop 1, plus the 10 KB fit, the RLS 403, the taskId cap and others). The activity, worker and HTTP code are still not unit-tested.
+- A10 CONFIRMED: Android CI on 309f905 (40738865164 push, 40738876688 PR) and on 783c5ba (40739749089 push, 40739752906 PR): all completed/success.
+- A11 CONFIRMED: 5ee83fd exists (GitHub API: 1 file AlarmFeedbackContract.kt, +1/-1, "MUTATION (throwaway...)"); the guarding test `a server that predates op feedback with no login...` is still at AlarmFeedbackContractTest.kt:87. The eef1003 guard test `worst-case emoji alarm...` is still at :112, and the RLS-403 test at :102. Loop 2's caveat stands: the size test checks the estimate, not the real serialized size.
+- D1 CONFIRMED: feedback_header is set from feedbackFor.title (take 80) in openFeedback.
+- Snapshot trigger live CONFIRMED (read-only query 17:55 UTC): schema_migrations 20261027160000:alarm_feedback_task_snapshot; trg_snapshot_alarm_feedback_task tgenabled O; 0 alarm_feedback rows so far (no feedback has reached the server yet, so the end-to-end path is unexercised live).
+
+## Summary
+| Claim | Verdict |
+|---|---|
+| D7 fix (confirmed ring) | CONFIRMED |
+| D8 (gate re-fire silenced by open panel, 309f905) | REFUTED at 309f905 -> fixed at 783c5ba, CONFIRMED by reading the code |
+| D6 rotation | CONFIRMED (uiMode/fontScale/locale still recreate) |
+| A6 taskId cap | CONFIRMED |
+| Merge 309f905 | CONFIRMED |
+| Migration workflow security | CONFIRMED, L1-L3 low |
+| S1-S6 | CONFIRMED |
+| A1, A2, A4, A5, A7-A11, D1, D4, crash-proof save, trigger live | CONFIRMED |
+| A3 | changed by design (repeat now rings over the panel) |
+Finished 2026-10-28 ~17:56 UTC, inside the 30-minute budget.
