@@ -25,3 +25,20 @@ AlarmFeedbackContract.kt alarmFeedbackContext: `taskId = (cleanField(taskId) ?: 
 
 ### S5 probe suite: CONFIRMED
 `node --experimental-strip-types --test docs/qc-evidence/probes/*.probe.test.ts` in this worktree: tests 21, pass 21, fail 0.
+
+### S1-S4, S6 (journey claude/charming-fermi-00wrlr head 202a154): CONFIRMED
+Since loop 1's a58a658 the branch changed only .claude/actions.md and .claude/memory.md (diff --stat a58a658..202a154).
+- S1: index.ts:187-224, user_id = claims.userId, metadata.taskId = claims.taskId; no read of body.taskId.
+- S2: dedupe select by user_id + activity_type + `metadata->>feedbackId` as an array (two rows from an old race do not 500), any match -> 200 duplicate:true. Still no unique index, so two concurrent first sends can both insert (a duplicate, not a loss).
+- S3: bad_feedback_id / bad_rating / empty_feedback 400 before the token check; bad_token 401; graceSec TRACE_GRACE_SEC = 30 days (:37); note trim + slice 2000; alarm fields allow-listed and sliced to 300.
+- S4: migration file unchanged from loop 1 (BEFORE INSERT, WHEN activity_type='alarm_feedback', inner EXCEPTION WHEN OTHERS -> null, UUID regex, task read only `where t.user_id = new.user_id`). Applied live per loop 2. Minor: on the logged-in fallback route a client could put its own `metadata.task` in the row, and it survives when the taskId does not match. Only the owner can write their own rows (RLS), so they can only mislabel their own feedback.
+- S6: Checks 40727536760 (push) and 40727544099 (pull_request) plus Parse Edge Functions 40727544075, head_sha 202a154, all completed/success.
+
+### Security: apply-supabase-migration.yml (workflows folder) on main 270db82: CONFIRMED no shell or SQL injection; 3 low findings
+- Inputs reach `run:` only as env (MIGRATION, FORCE, SRC_REF), always double-quoted; `inputs.ref` is otherwise used only as the checkout action's `with: ref` (an action input, not a shell). Only workflow_dispatch (needs write access).
+- Path guard: must match `supabase/migrations/*.sql`, `..` refused, must exist. VERSION must be 14 digits and NAME `[a-z0-9_]+` before they reach the env file or SQL, so the `@json|sub` single-quote quoting cannot be escaped and the env file cannot be injected.
+- Transaction: `begin;` + file + `;` + schema_migrations insert `on conflict do nothing` + `commit;` in one query; on an SQL error Postgres stops the multi-statement string, so nothing is applied or recorded. HTTP non-2xx -> step fails.
+- Secret: SUPERBASE_ACCESS_TOKEN is used only in the Authorization header and is never echoed; the printed responses are query results.
+- L1: the case pattern's `*` matches `/`, and `[ -f ]` follows a committed symlink, so a file in a subfolder or a symlink to another file in the checkout is accepted. Content still has to be committed at a ref, by someone who can already dispatch.
+- L2: `ref` can be any branch or SHA, so unreviewed SQL from an unmerged branch can go straight to production (this was done for the snapshot trigger from the feature branch). This is by design, and it bypasses review.
+- L3: the "Confirm recorded" step only prints and never asserts the row exists; the token is job-level env, so the checkout action (pinned to tag v4, not a SHA) can also read it. A migration file containing its own `commit;` or `begin;` would break the single-transaction guarantee. Nothing checks for that.
