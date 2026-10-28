@@ -73,3 +73,37 @@ Written incrementally, one verdict per commit.
   throwing, so `bridgeFcmRegistration.ts:41` marks the token `done` even on a 401 (no retry until next app
   open), and `useNotifications.tsx:82` sets `subscription` even on a 401. Only bites if the session token is
   missing/expired at that instant (then getSession refreshes; anon-key fallback → 401).
+
+## Mutations (own, `mutate.sh`, anchors in files, test cmd `npm test`) — 4/4 FIRED, each restored = HEAD, tree clean
+- M1 `manage-push-subscription/index.ts:61` gate narrowed to `action === 'subscribe_fcm' && !callerIsUser(...)`
+  → **FIRED** `unsubscribe: another user`.
+- M2 `_shared/push-auth.ts:79` `callerIsUser` admits the service-role key and any non-"none" caller
+  → **FIRED** `subscribe (web push): another user`.
+- M3 unsubscribe delete filter `.eq('user_id', userId)` → `.neq('user_id', '')` (delete everyone)
+  → **FIRED** `unsubscribe: the user's own JWT removes only their own rows`.
+- M4 migration: delete `DROP POLICY IF EXISTS "push_subscriptions_owner_select"` → **FIRED**
+  `push_subscriptions RLS migration is re-runnable`.
+
+## Budget reached — NOT REACHED this loop
+Wall clock 19:22 UTC against a 16:50 start (45-min budget). Most of that time went in gaps between tool
+calls, not test runs. Per the brief, everything below is **NOT REACHED** (not verified, not refuted):
+- Huddle `0098e0b` registration retry (`bridge-fcm-register.ts`): code read, `npx tsc --noEmit -p .`,
+  `npm run test:router` (20), `test:journey-verified-caller` (12), `test:bridge-fcm-register` (12).
+- (b) Huddle verified caller re-check at reduced depth; (c)/(d) diff re-read at huddle/android heads;
+  Android CI runs 40580243961 / 40581185190.
+- **The explicit YES/NO question**: can any remaining route (huddle.functions.ts:201 → invokeJourneyTool
+  :720/:1594/:2875/:3083/:3796; unauthenticated execute-tool `register_push_token`; any direct write to
+  `push_subscriptions`) register or delete another user's devices? **Undecided.** Note from the evidence
+  already gathered: `push_subscriptions` is still open on LIVE (loop 2 read live `pg_policies`; this loop
+  did not apply the migration), so until it ships the anon-key table route is still a YES on the live
+  project, whatever the edge functions do.
+- Residual surfaced, not chased: the J14 dedupe lets a VERIFIED user who knows another user's exact FCM
+  token delete that user's row for it by registering the token as their own (`index.ts:92-96`). It needs the
+  victim's token. It is the documented "dedupe residual" and was not re-scoped here.
+
+## Verdict (loop 3, partial)
+**What was reached passes; the loop as a whole is INCOMPLETE.** CONFIRMED: C5 (337/337, probe files 3/3 and
+15/15), (a) migration re-runnable (applied 3x locally) and locking down correctly, R1 gate on every
+manage-push action (8 own bypass probes plus the supabase-js 2.110.0 source read), 4/4 mutations FIRED.
+REFUTED: none. NOT REACHED: the Huddle retry fix, the (b)-(d) re-checks, Android CI, and the cross-user
+route YES/NO.
