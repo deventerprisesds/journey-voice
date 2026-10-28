@@ -348,6 +348,13 @@ async function executeToolCall(
       case 'update_task':
         return await updateTask(supabase, args);
 
+      // Internal: the owner deleting one of their OWN tasks from Huddle's board (a card's "Delete"
+      // action, behind a confirm). Same effect as journey's own TaskDetailModal delete; the
+      // notify_huddle_task_sync trigger then removes the Huddle mirror row. Scoped to userId so a
+      // caller can only ever delete their own row. Not advertised to LLMs — agents never delete.
+      case 'delete_task':
+        return await deleteTask(supabase, userId, args);
+
       case 'batch_update_tasks':
         return await batchUpdateTasks(supabase, userId, args);
 
@@ -934,6 +941,23 @@ async function createTask(supabase: any, userId: string, args: any): Promise<Exe
     };
   } catch (error) {
     return { success: false, error: extractErrorMessage(error) };
+  }
+}
+
+async function deleteTask(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
+  if (!args.task_id) return { success: false, error: "Task ID is required" };
+  try {
+    const { data, error } = await supabase
+      .from('tasks')
+      .delete()
+      .eq('id', String(args.task_id))
+      .eq('user_id', userId)
+      .select('id, title');
+    if (error) throw error;
+    if (!data || data.length === 0) return { success: false, error: "Task not found" };
+    return { success: true, message: `Deleted task: ${data[0].title}`, data: { id: data[0].id, title: data[0].title } };
+  } catch (error: any) {
+    return { success: false, error: `Failed to delete task: ${error.message}` };
   }
 }
 
