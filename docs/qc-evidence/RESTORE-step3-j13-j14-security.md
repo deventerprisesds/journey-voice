@@ -473,3 +473,74 @@ ALTER TABLE public.push_subscriptions ENABLE ROW LEVEL SECURITY;
 - The widget path's native refresh (owner decision).
 - The rest of `execute-tool` is unauthenticated.
 - The probe branch `claude_fcm-mutprobe-bearer` (4f7cd6d) is for the owner to delete.
+
+---
+
+## Loop 4 fix (VERIFY-phone-registration-a-3 = FAIL on one route; all loop-3 fixes CONFIRMED)
+
+Heads:
+- huddle-extension-app `claude_fcm-register-with-session`: **a233cff** (fa9f3ad is the fix, a233cff removes one redundant check);
+- journey-voice: this record commit;
+- android-bridge-template: 61c1903, unchanged.
+
+Nothing is merged, and the probe branch was not touched.
+
+### The route (O, verifier loop 3)
+1. `runRealtimeTool` (`voice/realtime.functions.ts:182-214`) takes the tool `name` and the `caller` from the POST body, with no login check.
+2. `executeRealtimeTool` (`voice/realtime-tools.server.ts`) sends any name that is not a Huddle-native tool straight to `invokeJourneyTool({toolName: name, caller})`. It never checks whether the model was offered that tool.
+3. huddle-proxy forwards to execute-tool with the service-role key.
+4. execute-tool's `register_push_token` accepts the service role, so the victim's row gets the attacker's phone token.
+
+The text path already checked the name against the offered set (`huddle.functions.ts:4621`, `journeyNames.has(c.name)`). The Lovable path only ever wraps offered definitions (`:6177`, `cached.defs`).
+
+### Fix (huddle-extension-app)
+- `journey/proxy.functions.ts` gains `isOfferedJourneyTool(name)`. It is true only for a name in `fetchJourneyToolDefinitionsForHuddle()`, the single list that both the text path (`ensureJourneyTools` → `journeyNames`) and the voice toolset (`buildRealtimeToolset`) offer to the model. That list is cached for 60s, so this adds no network call within the TTL. If the catalog can't be fetched, the call throws and the executor's `catch` returns an error, so it fails closed.
+- `NEVER_MODEL_INVOKED = {register_push_token}`. These names are dropped from that offered list, so neither the text path nor voice can ever offer them, even if journey's catalog someday lists them.
+- In `executeRealtimeTool`'s fallthrough:
+  - a name in `NEVER_MODEL_INVOKED` → `{"error":"Tool not available on the voice path: …"}`;
+  - a name that is not offered → `{"error":"Tool not offered on the voice path: …"}`;
+  - in both cases nothing is forwarded to journey.
+- **Not done, per the brief:** no Entra login check was added to `runRealtimeTool` or any other server function. That broader change waits for the owner.
+
+### Tests (O)
+`scripts/voice-offered-tools.test.ts` (`npm run test:voice-offered-tools`), 5/5. It runs the real executor against a stubbed journey `/tools` catalog that even lists `register_push_token`:
+- VO-1: `register_push_token` → refused, nothing forwarded (the verifier's R2 case);
+- VO-2: a journey name that was never offered → refused, nothing forwarded;
+- VO-3: an offered journey tool (`create_task`) still forwards under its own name;
+- VO-4: `isOfferedJourneyTool` is true for an offered tool and false for `register_push_token` and for an unknown name;
+- VO-5: the offered list drops `register_push_token`.
+
+The verifier's scratch case, `verify-rega3/r2/r2.test.ts`, run against this clone:
+- **The original file:** `SyntaxError: Export named 'isOfferedJourneyTool' not found`. Its `mock.module` replaces the whole proxy module without the new exports, so it cannot load. That failure says nothing about the fix.
+- **The adapted copy** (`/tmp/claude-0/-home-user/f93a6466-3dfd-5e65-a8de-e415ffea7464/scratchpad/regA-r2/r2.test.ts`): the same mock plus the two new exports with their real behaviour, and the expectation changed to "refused". Result: 1 pass, `forwarded: []`, output `Tool not available on the voice path: register_push_token`.
+
+Other Huddle checks:
+- `scripts/voice-toolset-hidden.test.ts` (`test:voice-tools`) 36/36;
+- `tsc --noEmit -p .` exit 0;
+- `test:router` 20/20;
+- `test:journey-verified-caller` 12/12;
+- `test:bridge-fcm-register` 12/12.
+
+### Mutations (O, `mutate.sh`, anchors in files)
+
+| mutation | must-fail test | outcome |
+|---|---|---|
+| v1 executor offered-check → `if (false)` | VO-2 | FIRED |
+| v2 executor by-name refusal → `if (false)` | VO-1 | FIRED, but on the error **message** only: with v2 the offered-list layer still refuses `register_push_token`, because the two layers back each other up |
+| v3 `isOfferedJourneyTool`'s own `NEVER_MODEL_INVOKED` check removed | VO-4 | **INERT**, because it was redundant: the offered list already drops that name. The check was **removed** in a233cff, not left in as an unproven guard |
+| v4 offered list stops dropping `NEVER_MODEL_INVOKED` | VO-5 | FIRED |
+| v5 `isOfferedJourneyTool` → `return true` | VO-2 | FIRED |
+| v6 `isOfferedJourneyTool` → `return false` (over-blocking) | VO-3 | FIRED |
+
+Side effect, recorded rather than fixed: `voice-toolset-hidden.test.ts` detects a native tool missing from `NATIVE` by seeing its name sent to journey. With this fix, such a tool is refused ("not offered") instead of being proxied, so the bug now fails closed. Two of that test's three dispatch rows still catch it through their "reaches journey via …" assertion; `confirm_task_intent`'s row would no longer catch it.
+
+### What will no longer be in place (loop 4, once merged)
+- The voice path can no longer invoke journey tools the model wasn't offered. A browser-supplied tool name outside the offered catalog is refused before anything reaches huddle-proxy.
+- `register_push_token` cannot be invoked through any model tool path (voice, text or Lovable), and is never offered. The Huddle app's own device registration still works through `registerBridgeFcmToken`, which needs a verified Entra ID token.
+
+### Still open (unchanged)
+- `runRealtimeTool` and the text turn still take `caller` from the request body, so OFFERED journey tools run as whichever user the body names. This is broader Entra login for Huddle server functions, waiting for the owner.
+- The migration is not applied.
+- The widget's own token refresh (owner decision).
+- The rest of `execute-tool` is unauthenticated.
+- The probe branch `claude_fcm-mutprobe-bearer` (4f7cd6d) is for the owner to delete.
