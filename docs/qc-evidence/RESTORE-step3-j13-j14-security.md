@@ -216,6 +216,8 @@ No client inserts, updates or deletes the table directly, so the new policy is t
 
 **Migration** `supabase/migrations/20261027210000_push_subscriptions_rls_lockdown.sql`. Exact SQL to apply:
 
+*SUPERSEDED in loop 3: the migration now also drops its own two policies first, so it can be re-run. The SQL to apply is in "Loop 3 fixes".*
+
 ```sql
 DROP POLICY IF EXISTS "Service role full access" ON public.push_subscriptions;
 
@@ -354,3 +356,120 @@ Android CI (compile + unit tests) **success** on 448793c (run 40580243961).
 - `manage-push-subscription` `subscribe` / `unsubscribe` still trust `body.userId`. `unsubscribe` deletes all of that user's rows.
 - The rest of `execute-tool` is still `verify_jwt = false` with `userId` from the body.
 - The probe branch `claude_fcm-mutprobe-bearer` (now at 4f7cd6d) still exists. The proxy refuses deletes, so the owner deletes it by hand, and it must never be merged.
+
+---
+
+## Loop 3 fixes (VERIFY-phone-registration-a-2 = FAIL on one narrow point; all four loop-2 fixes CONFIRMED)
+
+Heads:
+- journey-voice `claude_restore-j13-alarm-actions`: this section's commit, on top of e64431f;
+- android-bridge-template `claude_fcm-register-with-session`: 61c1903, unchanged this loop;
+- huddle-extension-app `claude_fcm-register-with-session`: **0098e0b**.
+
+Nothing is merged, nothing is applied to the database, and the probe branch was not touched.
+
+### Fix 1 — web-push `subscribe` / `unsubscribe` trusted `body.userId` (journey `35e3d89`)
+**Gap (O, verifier loop 2):** with the anon key, anyone could:
+- `subscribe` their own browser endpoint under a victim, and so receive the victim's reminder and alarm text through send-push-notification;
+- `unsubscribe` a victim, which deletes all of their rows and silences their alarms.
+
+**Fix:** one `callerIsUser` check now runs before action dispatch in `manage-push-subscription`, so it covers `subscribe_fcm`, `subscribe`, `unsubscribe` and any unknown action. A caller that is not this user's login gets 401 before any read or write. The old per-action check inside `subscribe_fcm` was removed, since the shared one covers it.
+
+**Legitimate callers (O, grep of journey-voice `src/`, huddle-extension-app and android-bridge-template):**
+
+| caller | action | what it sends |
+|---|---|---|
+| `useNotifications.tsx:408` (`syncSubscriptionWithBackend`) | `subscribe` | runs only when signed in (`if (!user) return false`), `userId: user.id`, via `supabase.functions.invoke` (session JWT) |
+| `useNotifications.tsx:432` (`removeSubscriptionFromBackend`) | `unsubscribe` | same |
+| `useNotifications.tsx:82`, `bridgeFcmRegistration.ts:41` | `subscribe_fcm` | session JWT, own id |
+| Android `FcmRegistrar.kt` (from 1.0.13) | `subscribe_fcm` | session access token |
+
+Huddle does not call `manage-push-subscription`.
+
+**Tests (O):** 5 new handler tests, in `index.auth.test.ts`:
+- `subscribe` with own JWT stores the endpoint;
+- `subscribe` with another user's JWT, the anon key, no bearer, or the service-role key → 401, nothing written;
+- `unsubscribe` with own JWT removes only the caller's own rows;
+- `unsubscribe` with another user's JWT, the anon key, no bearer, or the service-role key → 401, the victim's rows survive;
+- an unknown action without a matching JWT → 401.
+
+**Mutations (O, `mutate.sh`), all FIRED, restored = HEAD:**
+- check replaced with `if (false)`: FIRED on "subscribe (web push): another user's JWT…", on "unsubscribe: another user's JWT…", and on "subscribe_fcm: ANOTHER user's valid JWT…";
+- check scoped back to `action === 'subscribe_fcm' && …` (the loop-1/2 shape): FIRED on the subscribe test and on the unsubscribe test.
+
+### Fix 2 — migration re-runnable (journey `e64431f`)
+**Gap (O, verifier):** a second apply failed at the first `CREATE POLICY`.
+
+**Fix:** `DROP POLICY IF EXISTS "push_subscriptions_service_role_all"` and `DROP POLICY IF EXISTS "push_subscriptions_owner_select"` now come before the creates. GRANT, REVOKE and `ENABLE ROW LEVEL SECURITY` are already safe to repeat.
+
+**Test:** `table-rls.test.ts` +1, "…migration is re-runnable: every CREATE POLICY is preceded by a DROP POLICY IF EXISTS of the same name". The other 5 stay green.
+
+**Mutations:** delete either new DROP line → FIRED (2/2).
+
+**Exact SQL to apply** (the migration without comments; this supersedes the loop-2 block):
+
+```sql
+DROP POLICY IF EXISTS "Service role full access" ON public.push_subscriptions;
+DROP POLICY IF EXISTS "push_subscriptions_service_role_all" ON public.push_subscriptions;
+DROP POLICY IF EXISTS "push_subscriptions_owner_select" ON public.push_subscriptions;
+CREATE POLICY "push_subscriptions_service_role_all"
+  ON public.push_subscriptions FOR ALL TO service_role
+  USING (true) WITH CHECK (true);
+CREATE POLICY "push_subscriptions_owner_select"
+  ON public.push_subscriptions FOR SELECT TO authenticated
+  USING (user_id = (SELECT auth.uid()));
+REVOKE ALL ON TABLE public.push_subscriptions FROM anon;
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLE public.push_subscriptions FROM authenticated;
+GRANT SELECT ON TABLE public.push_subscriptions TO authenticated;
+ALTER TABLE public.push_subscriptions ENABLE ROW LEVEL SECURITY;
+```
+
+### Fix 3 — Huddle app registration skipped silently for the session (huddle `0098e0b`)
+**Gap (O, verifier):** `HuddleView.tsx` set `done = true` before `getToken()`. A single null Entra ID token (MSAL not ready yet) therefore skipped registration for the rest of the page session, with no log.
+
+**Fix:**
+- The loop moved to `src/features/huddle/lib/push/bridge-fcm-register.ts`, called from the HuddleView effect.
+- It keeps the same 1.5s cadence and is bounded at 6 attempts in total. The effect cleanup cancels it.
+- `done` is set only when the server answers ok.
+- Each of these is logged (`console.info "[bridge-fcm] …"`) and retried: no FCM token yet; no ID token yet; a refused send; a thrown send.
+- When the attempts run out it logs "giving up until the next page load".
+
+**Tests (O):** `scripts/bridge-fcm-register.test.ts` (`npm run test:bridge-fcm-register`), 12/12:
+- a null ID token is logged, not marked done, and retried; the retry sends;
+- done after an ok send;
+- a refused send is retried; a thrown send is retried;
+- it waits for the bridge's FCM token;
+- bounded, with a log at the end;
+- cleanup cancels, and a late retry sends nothing;
+- wiring check on HuddleView.
+
+**Mutations (O), 6 of 6 FIRED:**
+- `done = true` before the ID token (L-2);
+- silent return on a null ID token (L-1);
+- a refused send treated as ok (L-4);
+- unbounded retry (L-9);
+- cleanup not stopping (L-11);
+- HuddleView sending without `idToken` (W-1).
+
+### Fix 4 — Huddle checks the verifier could not run (O, this clone; node v22.22.0, bun 1.4.2; `npm ci` from `package-lock.json`)
+- `npx tsc --noEmit -p .` → **exit 0**, no output. All 5 changed or new source files are in the program (`--listFilesOnly`).
+- `npm run test:router` → **20 passed, 0 failed**.
+- `npm run test:journey-verified-caller` → 12/12.
+- `npm run test:bridge-fcm-register` → 12/12.
+
+### journey-voice test totals
+- `npm test` **337/337**, up from 331 (+5 handler tests, +1 migration test).
+- Probe file 3/3, 0 todo.
+
+### What will no longer be in place (loop 3, once merged)
+- Anonymous web-push `subscribe` / `unsubscribe` for another user stops working. Those actions need that user's own login, and get 401 otherwise.
+- A browser cannot register itself under another user to receive that user's notification text.
+- Nobody but the user can wipe that user's device registrations.
+- The Huddle app no longer gives up on phone registration after one missed ID token. It retries, logs each skip, and gives up (with a log line) only after 6 attempts in one page session.
+
+### Still open after loop 3 (unchanged from loop 2)
+- The migration is not applied.
+- Other Huddle server functions still pass a body-supplied caller (`huddle.functions.ts:201` → `invokeJourneyTool` at `:720`, `:1594`, `:2875`, `:3083`, `:3796`).
+- The widget path's native refresh (owner decision).
+- The rest of `execute-tool` is unauthenticated.
+- The probe branch `claude_fcm-mutprobe-bearer` (4f7cd6d) is for the owner to delete.
