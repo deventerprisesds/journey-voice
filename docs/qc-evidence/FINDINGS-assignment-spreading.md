@@ -61,3 +61,26 @@ Table **`content.assignments`** (`nexus-hub sql/nexus_hub/002_app_tables.sql:108
 - **OBSERVED:** TaskOS main and live point at the **wrong store**: journey Supabase `public.assignments` (frozen 2026-04-06, EMBA/MIT) instead of Nexus `content.assignments` (live Canvas + manual DBA rows). The owner's hypothesis — *"not pointing to the correct tables in nexus from taskos"* — is confirmed, and is stronger than suspected: TaskOS points at **no** Nexus table at all.
 - **OBSERVED:** consequently, **zero** of the 3 dated upcoming DBA deliverables (Research Proposal Oct 30, Checkpoint 2 Nov 8, Research Paper Dec 9) have ever been created as tasks by the sync.
 - **INFERRED (high):** the 3 DBA tasks that do exist (Introductions, Residency participation, DB1 — all DONE; plus `origin:'nexus-azure'` EMBA-labelled ones) were created by the parked branch's Nexus sync during the window it was deployed (early Sep), then main's redeploy (10-19 / 10-26) put the Supabase reader back. See RESTORE §0.4.
+
+---
+
+## 2. What is on the board now (journey `public.tasks`, owner `a3378f93-…`, read 2026-10-28 ~21:00Z)
+
+### 2a. OBSERVED
+Query: tasks where `assignment_id IS NOT NULL` OR title matches `dba|mgt|782|702|701|checkpoint|proposal|research paper|residency|seminar|discussion|slide deck|doctoral`, plus all open `PROF_EDUCATION`/`EDUCATION` tasks.
+- **Open tasks linked to a course assignment (`assignment_id` not null): 1** — `📚 Upload video for case- GROW` (EMBA, BLOCKED, due 2026-01-18, created 2026-09-07 by the branch sync while it was live). Nothing DBA.
+- **Open DBA-related task: 1, created by hand today** — `Work on DBA paper for 782` (id `595bbae9…`), `PROF_EDUCATION`, BACKLOG, **due 2026-10-31 03:59:59Z = Fri Oct 30 23:59 ET**, `estimate_minutes 60`, **one** block `2026-10-30 00:30–01:30Z` = **Thu Oct 29 8:30–9:30 pm ET**, `assignment_id NULL`, created `2026-10-28 19:07Z`. INFERRED: this is the owner (or Iris for him) manually creating the Research Proposal work after being surprised by it — the exact symptom reported.
+- Other open PROF_EDUCATION tasks are undated self-development items (`Start AI certification course` Wed Oct 28 7–8 pm ET; `Find sample enterprise AI consultants…` Thu Oct 29 7:15–8:15 pm ET).
+
+### 2b. Board vs Nexus — what is missing (owner rules: dated items only, from today on, current course = has open items dated today+)
+
+| Nexus item (content.assignments) | due (ET) | on board? |
+|---|---|---|
+| MGT-782 Research Proposal | Fri Oct 30 23:59 | **MISSING as an assignment task.** Only the hand-made `Work on DBA paper for 782` (not linked, 1 h, 1 block) |
+| MGT-702 Checkpoint 2 - Details | Sun Nov 8 23:59 | **MISSING** |
+| MGT-782 Research Paper | Wed Dec 9 23:59 | **MISSING** |
+| MGT-782 Residency 4 (per 10-27 query: Mon Nov 9 19:00) | — | **MISSING**, and also no longer returned by today's Nexus query (§1c; being confirmed) |
+| MGT-702 discussion forum slide deck | undated | out of scope (dated-only rule) |
+| MGT-701 ×4 Oct 2, MGT-702 Slide Deck Oct 6 | past | out of scope (from-today rule; owner chose the 4-card set) |
+
+Under the owner's 10-28 rules the board should hold **3 dated cards today (4 if Residency 4 still exists)**; it holds **0** linked ones.
