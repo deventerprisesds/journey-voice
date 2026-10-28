@@ -1,0 +1,14 @@
+# VERIFY-alarm-feedback-3
+
+WHAT: loop-3 independent verification of the alarm Feedback fix (android-bridge-template claude/charming-fermi-00wrlr head 309f905 = 0dd513c fixes + merge of main; journey-voice claude/charming-fermi-00wrlr + main 270db82 workflow).
+WHY: loop 2 (VERIFY-alarm-feedback-2.md) REFUTED the ring suppression (D7) and found D6; this loop re-checks the fix.
+SUPERSEDES: nothing (loops 1 and 2 stay as their records). SUPERSEDED-BY: nothing (current).
+EVIDENCE: android refs fetched into this worktree (refs/abt/fermi = 309f9054), `git diff 799736f 309f905`, file reads at 309f905, probe suite, GitHub Actions API. Started 2026-10-28 17:48 UTC.
+
+## Claims
+
+### D7 fix: ring suppression removed: CONFIRMED for the confirmed ring; RESIDUAL D8 (low) on the gate re-fire
+- 0dd513c removes `feedbackOpenTag` (companion var, the set in openFeedback, the clear in closeFeedback, onDestroy) and the `return true` skip in NotificationEngine.fire. `git grep feedbackOpenTag` at 309f905: no hits anywhere in app/.
+- Confirmed branch (NotificationEngine.kt:92-125 at 309f905): setConfirmed(false), overlay (if permitted), `startForegroundService(AlarmSoundService)`, return true. It never routes to AlarmConfirmActivity, so nothing in the activity can intercept it. The D7 scenario (confirm from the shade while the panel is open) now rings.
+- silenceRing (AlarmConfirmActivity.kt:329) = `stopService(AlarmSoundService)` + trace only. AlarmSoundService.onDestroy only unregisters, stops playback and removes its foreground notification. Repeat state lives in AlarmManager (AlarmRepeater.schedule) and the confirmed flag in prefs; neither is touched. So silenceRing never cancels a repeat or the gate notification.
+- RESIDUAL D8 (low): onNewIntent :83 `if (feedbackFor?.tag == tag) silenceRing(this, tag)` still silences a ring BECAUSE the panel is open, for the gate (unconfirmed) path. NotificationEngine.kt:216-246 starts the gate tone (startForegroundService, GATE_TONE_MAX_MS 60 s) and then the FSI / `live.startActivity(confirmIntent)` (NEW_TASK|CLEAR_TOP, singleTask) delivers to onNewIntent of the existing instance, which stops the tone at once. Scenario: panel open for T, owner taps Snooze on T's gate notification in the shade (CalendarAlarmReceiver stops the sound, cancels the notification, schedules a 10-min gate re-fire with maxTimes 1, and does not finish the activity), phone goes to sleep (a noHistory activity survives sleep, per loop 2). 10 min later the re-fire turns the screen on and its tone stops within milliseconds: an owner who is not looking hears nothing, and maxTimes 1 means no further ring. With the screen on and the owner typing this is the intended A3 behavior (like a tap). Not proven on a device; derived from the code order plus Android's singleTask delivery.
