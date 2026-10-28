@@ -1,0 +1,64 @@
+THE GAP THIS FIX FILLS — the green-light path does not cover an ANSWERED gate
+  PASS  isGreenLight("produce") is FALSE
+  PASS  isGreenLight("quick") is FALSE
+
+A RECENT verdict answers for the user instead of re-asking
+  PASS  produce, 1 minute ago
+  PASS  quick, 1 minute ago
+  PASS  produce, right now
+  PASS  produce, 1ms inside the window
+  PASS  produce, exactly at the window edge
+
+A STALE verdict does NOT — the gate asks again, which is the point of a window
+  PASS  produce, 1ms past the window
+  PASS  produce, a day ago
+  PASS  quick, a day ago
+
+CANCEL IS NEVER REMEMBERED — parking one ask must not silence a later genuine one
+  PASS  "cancel" one second ago
+  PASS  "unrelated" one second ago
+  PASS  asRememberedVerdict('cancel')
+  PASS  asRememberedVerdict('produce')
+  PASS  asRememberedVerdict('quick')
+
+Unusable input means ASK NORMALLY, never a silent suppression
+  PASS  no verdict at all
+  PASS  undefined verdict
+  PASS  empty string verdict
+  PASS  a verdict with no timestamp
+  PASS  a verdict with an undefined timestamp
+  PASS  a NaN timestamp
+  PASS  an Infinity timestamp
+  PASS  a timestamp in the FUTURE
+  PASS  a wildly future timestamp
+  PASS  a non-string verdict
+  PASS  an object verdict
+
+The window is a real, positive, tunable duration
+  PASS  VERDICT_MEMORY_MS is a positive finite number
+  PASS  well inside the store's 2h pending expiry
+  PASS  long enough to cover a continuous sitting (>= 5 min)
+
+THE REPORTED SEQUENCE, end to end
+  PASS  a minute after answering 'produce', the next deep ask is NOT re-asked
+  PASS  ...and an hour later it IS asked again
+
+STRUCTURAL — a verdict memory must not read back as an outstanding ask
+  PASS  both getPendingDeepConfirm queries exist
+  PASS  and BOTH filter resolved_at IS NULL
+  PASS  a new ask reopens the row (resolved_at=NULL on conflict)
+
+STRUCTURAL — produce/quick REMEMBER, cancel still DELETES
+  PASS  the produce branch records a verdict
+  PASS  the quick branch records a verdict
+  PASS  the cancel branch still CLEARS (a park must not be remembered)
+  PASS  no verdict branch clears instead of recording
+  PASS  recordDeepConfirmVerdict is typed to the two remembered verdicts only
+
+STRUCTURAL — the fresh-ask path never holds; it only records an offer that was shown
+  PASS  the turn writes a pending exactly once
+  PASS  and that write is an OFFER, never a held ask
+  PASS  the offer is recorded only after appendProduceOffer reports it landed
+  PASS  the canned produce-vs-quick ask is no longer returned by the turn
+
+ALL PASS

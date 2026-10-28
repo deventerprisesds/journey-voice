@@ -1,0 +1,27 @@
+=== MENTION TURNS ===
+  PASS handoff (primary tess + @cole) — got [tess-sutton, cole-blake]
+  PASS handoff (cole also in supporting, no dup) — got [tess-sutton, cole-blake]
+  PASS bare @cole (adjacency tess dropped) — got [cole-blake]
+  PASS bare @cole w/ mispick — <=2 and cole present — [tess-sutton, cole-blake]
+  PASS mixed (sam + named finn + @tess) — got [sam-trent, finn-reid, tess-sutton]
+=== NORMAL TURNS (no @mention) ===
+  PASS multi-lane (sam + named finn + tess survive solo) — got [sam-trent, finn-reid, tess-sutton]
+  PASS single-lane adjacency cut when solo — soloApplied=true winners=[finn-reid]
+  PASS solo OFF keeps adjacency — got [finn-reid, sam-trent]
+  PASS mention cap <=4 — [sam-trent, finn-reid, tess-sutton, iris-chase]
+=== MULTI-LANE LISTS (brain-dump) ===
+  PASS 4-lane list keeps all 4 owners — got [cole-blake, finn-reid, tess-sutton, faith-hartley]
+  PASS 5-lane list keeps 5 — [cole-blake, finn-reid, tess-sutton, faith-hartley, sam-trent]
+  PASS casual two-domain stays solo — soloApplied=false winners=[finn-reid, sam-trent]
+  PASS two lanes same owner → once — got [finn-reid]
+  PASS adjacency dropped, cap not raised on normal turn — [finn-reid]
+=== MULTI-LANE DETECTION + FAN-OUT (not forced solo) ===
+  PASS countLaneLabels(4-lane list) === 4 — got 4
+  PASS countLaneLabels(single topic) < 2 — got 0
+  PASS multi-lane list fans out (solo off, cap raised by laneCount) — got [cole-blake, finn-reid, tess-sutton, faith-hartley]
+  PASS single-topic stays solo (no pile-on) — soloApplied=true winners=[finn-reid]
+=== LANE→OWNER RESOLUTION (real roster) ===
+  PASS 4 exact lane owners resolve (cole/finn/elle/ezra) — resolved [cole-blake, elle-rowan, finn-reid, ezra-miles]
+  PASS single-topic → no forced lane owners — got []
+
+==================== 20 passed, 0 failed ====================

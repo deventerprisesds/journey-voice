@@ -1,0 +1,96 @@
+THE MEASURED CASE — the owner's three actual go-aheads
+  PASS  'Go for it'
+  PASS  'Okay knock it out' — the one that fell through before
+  PASS  'go ahead'
+
+Other unambiguous go-aheads
+  PASS  "yeah have at it"
+  PASS  "sure, take it on"
+  PASS  "make it happen"
+  PASS  "please proceed"
+  PASS  "carry on"
+  PASS  "crack on with that"
+  PASS  "run with it"
+  PASS  "I said go"
+  PASS  "just do it"
+  PASS  "get started"
+  PASS  "give it a shot"
+  PASS  "full steam ahead"
+
+NOT a go-ahead — a negation or deferral REVERSES one
+  PASS  "don't do it yet"
+  PASS  "do not proceed"
+  PASS  "not yet — go for it after I review"
+  PASS  "hold off, I'll decide tomorrow"
+  PASS  "wait, go ahead only if Finn agrees"
+  PASS  "no need to proceed"
+  PASS  "before you go ahead, check the budget"
+  PASS  "rather than go for it, give me the quick version"
+
+NOT a go-ahead — a QUESTION is asking, not authorising
+  PASS  "should I just do it?"
+  PASS  "do you want to go ahead?"
+  PASS  "can you proceed?"
+
+NOT a go-ahead — 'go' as an ordinary word must never read as consent
+  PASS  "where did the go-to-market plan go?"
+  PASS  "the go-to-market deck needs work"
+  PASS  "I'm going to the office"
+  PASS  "what's our go/no-go date"
+  PASS  "tell me about the pricing model"
+  PASS  ""
+  PASS  "   "
+
+hasGreenLit reads only the RECENT tail of the user's own lines
+  PASS  a go-ahead in the last line
+  PASS  a go-ahead five lines back is stale — it was about something else
+  PASS  a go-ahead exactly at the lookback edge still counts
+  PASS  no go-ahead anywhere
+  PASS  empty history
+  PASS  blank lines are ignored, not counted against the lookback
+  PASS  undefined-safe
+
+classifyConfirmReply now honours a go-ahead anywhere in the line
+  PASS  'Okay knock it out' — returned 'unrelated' before this fix
+  PASS  'Go for it' (was already caught by the ^go anchor)
+  PASS  'yeah have at it'
+  PASS  'alright, run with it'
+
+...without breaking the other three verdicts
+  PASS  cancel still wins over everything
+  PASS  an explicit cancel
+  PASS  quick still beats the green light
+  PASS  'give me the short version'
+  PASS  an unrelated message stays unrelated
+  PASS  a question is not a go-ahead
+
+The ask itself: reworded, and NOT the same literal from every agent
+  PASS  more than one distinct phrasing across the roster
+  PASS  stable per agent — an agent that rephrases every turn reads MORE robotic
+  PASS  the old copy is gone
+  PASS  variant 0 offers produce
+  PASS  variant 0 offers quick
+  PASS  variant 0 offers cancel
+  PASS  variant 0's own words round-trip: "produce"
+  PASS  variant 0's own words round-trip: "quick"
+  PASS  variant 0's own words round-trip: "cancel"
+  PASS  variant 1 offers produce
+  PASS  variant 1 offers quick
+  PASS  variant 1 offers cancel
+  PASS  variant 1's own words round-trip: "produce"
+  PASS  variant 1's own words round-trip: "quick"
+  PASS  variant 1's own words round-trip: "cancel"
+  PASS  variant 2 offers produce
+  PASS  variant 2 offers quick
+  PASS  variant 2 offers cancel
+  PASS  variant 2's own words round-trip: "produce"
+  PASS  variant 2's own words round-trip: "quick"
+  PASS  variant 2's own words round-trip: "cancel"
+  PASS  variant 3 offers produce
+  PASS  variant 3 offers quick
+  PASS  variant 3 offers cancel
+  PASS  variant 3's own words round-trip: "produce"
+  PASS  variant 3's own words round-trip: "quick"
+  PASS  variant 3's own words round-trip: "cancel"
+
+ALL PASS
