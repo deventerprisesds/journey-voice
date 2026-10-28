@@ -107,3 +107,51 @@ calls, not test runs. Per the brief, everything below is **NOT REACHED** (not ve
 manage-push action (8 own bypass probes plus the supabase-js 2.110.0 source read), 4/4 mutations FIRED.
 REFUTED: none. NOT REACHED: the Huddle retry fix, the (b)-(d) re-checks, Android CI, and the cross-user
 route YES/NO.
+
+---
+# Loop 3 continuation (coordinator-directed, fresh 40-min budget from 19:26 UTC) — the NOT REACHED items
+
+## (R2) Can any remaining route register a device for ANOTHER user, assuming the migration is APPLIED?
+**Verdict: YES (REFUTED: the goal "no route registers a device for another user" does not hold).**
+The path is the Huddle VOICE tool executor. It is not one of the five text-path call sites the builder listed:
+1. `huddle-extension-app/src/features/huddle/lib/voice/realtime.functions.ts:182-214` `runRealtimeTool` =
+   `createServerFn({method:"POST"})`, client-callable, **no auth**. Its input validator takes `name`
+   (any string), `args`, `agentId` (must be any valid agent id), and `caller` **straight from the body**
+   (`r.caller && typeof r.caller === "object" ? r.caller : {}`). No Entra token is read. The only global
+   middleware is `src/start.ts:5` `errorMiddleware`, which handles errors, not auth.
+2. → `voice/realtime-tools.server.ts:458` `executeRealtimeTool(name, args, ctx)`. `register_push_token`
+   is not in `NATIVE` (:493), so it reaches `if (!NATIVE.has(name))` (:~820). That branch calls
+   `invokeJourneyTool({ toolName: name, args, caller: ctx.caller ?? {} })`, and the comment there says it
+   routes "to the journey catalog directly". **Unlike the text agent path, it never checks `name`
+   against the offered set** (the text path at `huddle.functions.ts:4621` does: `journeyNames.has(c.name)`,
+   built from the journey definitions minus `HIDDEN_FROM_HUDDLE`).
+3. → `journey/proxy.functions.ts:107` `invokeJourneyTool` POSTs `/tool` to huddle-proxy using Huddle's
+   server-held `JOURNEY_PROXY_TOKEN`.
+4. → journey `supabase/functions/huddle-proxy/index.ts:154-206` passes any `toolName` through.
+   `resolveUserId` (:92-125) maps `caller.entra_email` to a user id via the alias table, then
+   `profiles.email` (case-insensitive). **Knowing the victim's email is enough.** It then calls
+   execute-tool with `Authorization: Bearer ${SUPABASE_SERVICE_KEY}` (:198-206).
+5. → `execute-tool/index.ts:2896`. The `register_push_token` gate lets `service_role` through **by design**
+   ("huddle-proxy … resolves the user server-side"), so → `:410` → `registerPushToken` (:2041-2064) upserts
+   `push_subscriptions {user_id: <victim>, fcm_token: <attacker's token>}` with the service-role client.
+   **RLS and the new migration do not apply; service_role bypasses them.** If `args.app` is omitted, the
+   endpoint is `fcm:<token>` (journey-native pushes, which include task-start alarms). With `app:"huddle"`
+   it is `fcm:app:huddle:<token>` (Huddle reminders, alarms and reply pushes).
+- So: one anonymous POST to the deployed SWA `/_serverFn/<runRealtimeTool id>` with
+  `{name:"register_push_token", args:{fcm_token:"<attacker phone>"}, agentId:"<any agent>",
+  caller:{entra_email:"<victim>"}}` adds the attacker's phone to the victim's push/alarm targets. This is the
+  same shape as loop 1's BYPASS1 (`invokeJourneyToolDebug`), reached through a different server fn.
+- O: this is a static trace of the source at huddle 0098e0b and journey c18739d. **I did not call it live.**
+- **Delete another user's devices: NO route found.** Under service-role clients, the only deletes on
+  `push_subscriptions` are: manage-push unsubscribe (now gated); the J14 dedupe (gated; needs the victim's
+  exact token, the documented residual); send-push-notification :305/:338 (prunes rows whose delivery
+  returned 404/410, i.e. not caller-chosen). `registerPushToken` only upserts under the resolved user.
+  `grep push_subscriptions supabase/functions` (non-test) lists no other writer.
+- Other text-path call sites listed in the brief (`huddle.functions.ts:720/1594/2875/3083/3796/3957/5211/5338`,
+  `7616`): every one has a **literal** `toolName` (`update_task`, `quick_create_task`,
+  `parse_and_create_tasks`, `send_push`), so none can be `register_push_token`. Those using body `caller`
+  still act as a body-chosen user for task tools; that is outside this claim (registration).
+  `:4634` / `:6176` dispatch `c.name` / `def.name` only from journey `/definitions` (`journeyNames` / `cached.defs`).
+  `register_push_token` is `case`-only in execute-tool ("Not advertised to LLMs", :409), so it cannot be offered there.
+- Implied fix: route `runRealtimeTool` through the verified caller as well, and/or allow-list the voice
+  fallthrough to the offered toolset. Recorded as a finding, not designed here.
