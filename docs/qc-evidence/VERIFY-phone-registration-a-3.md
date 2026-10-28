@@ -155,3 +155,70 @@ The path is the Huddle VOICE tool executor. It is not one of the five text-path 
   `register_push_token` is `case`-only in execute-tool ("Not advertised to LLMs", :409), so it cannot be offered there.
 - Implied fix: route `runRealtimeTool` through the verified caller as well, and/or allow-list the voice
   fallthrough to the offered toolset. Recorded as a finding, not designed here.
+- O (executable, R2 Huddle half): a scratch bun test (not committed; `verify-rega3/r2/r2.test.ts`) imports the
+  REAL `executeRealtimeTool` and stubs only `journey/proxy.functions`. It calls
+  `executeRealtimeTool("register_push_token", {fcm_token:"ATTACKER-PHONE-TOKEN"}, {agentId:"terry-locke",
+  caller:{entra_email:"victim@example.com"}})` → **1 pass**. The stub received exactly
+  `{"toolName":"register_push_token","args":{"fcm_token":"ATTACKER-PHONE-TOKEN"},"caller":{"entra_email":"victim@example.com"},…}`.
+  Journey half: the repo's own `execute-tool/index.register-auth.test.ts` "service-role caller (huddle-proxy)
+  registers the device" (passes in the 337) shows the service-role bearer gets through the gate.
+
+## (R3) Huddle registration retry (huddle 0098e0b, `lib/push/bridge-fcm-register.ts` + `HuddleView.tsx:1219-1244`)
+**Verdict: CONFIRMED.**
+- O (code): `done` is set only on `r?.ok` (:61-64). Each of these is logged and retried while `n + 1 < max`
+  (default 6 attempts, 1.5 s apart): a missing FCM token (:49), a null or thrown ID token (:50-57), a
+  refused send (:66), a thrown send (:67-68). After the last attempt it logs "giving up until the next page
+  load" (:37). Cleanup sets `stopped` and cancels the pending timer (:73-76), and every step re-checks
+  `stopped` after an await. HuddleView imports the module lazily, guards with `unmounted`, sends
+  `getToken()` (MSAL) as `idToken`, and returns `registerBridgeFcmToken`'s `{ok,error}`.
+  `registerBridgeFcmTokenImpl` returns `{ok:false,"unauthorized"}` on no or unverified token, and `{ok: !!r.ok}`
+  otherwise (verified-caller.server.ts), so the client's `r.ok` is the server's verdict.
+- O (suites, fresh `npm ci` in the clone, 597 packages): `npx tsc --noEmit -p .` rc=0; `npm run test:router`
+  **20 passed, 0 failed**; `test:journey-verified-caller` **12 passed, 0 failed**; `test:bridge-fcm-register`
+  **12 passed, 0 failed**. (A first attempt that symlinked /home/user's node_modules was missing `jose`,
+  `@azure/msal-browser` and `ai`, so tsc rc=2 and router errored. That was an environment defect,
+  discarded.)
+- O (own mutations, `mutate.sh`, anchors in files): M5 a refused send marks done (`done = true; return;`)
+  → **FIRED** `L-4: a refused send is retried, not marked done`. M6 a null ID token marks done
+  (restores the loop-2 defect) → **FIRED** `L-1: a null ID token is LOGGED as a skip and NOT marked done`.
+  Both restored = HEAD.
+- I (minor, availability): the retry window is about 7.5 s in total. If MSAL silent-acquire takes longer
+  than that, registration waits until the next page load (it is logged now, not silent).
+
+## (b) Huddle verified caller, reduced depth (0098e0b)
+**Verdict: CONFIRMED for the two server fns it covers.** `registerBridgeFcmToken` (huddle.functions.ts:8016-8022)
+and `invokeJourneyToolDebug` (proxy.functions.ts:215-220) both delegate to `verified-caller.server.ts`.
+`verifiedJourneyCaller` returns null for a non-string token or one under 20 chars, a verify throw, or a
+missing oid/email. The body caller is never read. Suite 12/12 (above). **It does NOT cover `runRealtimeTool`**
+(see R2).
+
+## (c) dedupe pinned to exact token + other users only
+**Verdict: CONFIRMED.** `index.ts:92-96` is unchanged since loop 2: `.eq('fcm_token', fcmToken).neq('user_id',
+userId)`, run only after the :61 gate. The repo test "J14 dedupe scope" (filters
+`[['eq','fcm_token',…],['neq','user_id',X]]`, deletes only z1) passes in the 337.
+
+## (d) Android FcmRegistrar (61c1903), reduced depth + CI
+**Verdict: CONFIRMED.**
+- O: `FcmRegistrar.kt:35-67`: no refresh call. The bearer is `registrationBearer(stored access token, anon,
+  now)`, which returns null unless the token is a JWT with enough `exp` remaining. If there is no user or
+  bearer, the token goes to `PENDING_KEY` in EncryptedPrefs and the attempt is logged as deferred. If the
+  HTTP status is not 2xx, or the call fails, the token is put back in pending. Pending is cleared only on
+  2xx and only if unchanged. `onSessionHandoff` (:70-73) re-registers the pending token.
+  `JavascriptBridge.kt:94` fires it on `secureStore('supabase_user_id')`. The web side stores
+  `supabase_access_token` BEFORE `supabase_user_id` (`useAuth.tsx:163-165`, `App.tsx:65-67`), so the handoff
+  sees the new token.
+- O (GitHub API): run 40581718162 "Android CI (compile + unit tests)" @ **61c1903** = completed/**success**;
+  40580243961 @ 448793c (same code; 61c1903 only changes `.claude/actions.md`) = success. 40581185190 is on
+  `claude_fcm-mutprobe-bearer` @ 4f7cd6d. The commit is "MUTATION PROBE … registrationBearer ignoring token
+  expiry -- FcmRegistrarAuthTest must fail", and the run concluded **failure** in step "Unit tests + debug
+  compile". That is the expected FIRED for that probe, not a defect on the PR branch.
+
+## FINAL VERDICT — loop 3 (both passes)
+**FAIL.** All the claimed fixes are CONFIRMED: C5 337/337; (a) migration applied 3x locally; R1 manage-push gate
+on every action (8 own bypass probes); R3 Huddle retry (tsc 0, router 20/20, verified-caller 12/12,
+bridge-fcm-register 12/12); (b), (c), (d) plus Android CI success @ 61c1903; mutations M1-M6 all FIRED.
+**But the explicit question is answered YES.** Even with the migration applied, an anonymous POST to Huddle's
+`runRealtimeTool` server fn with `name:"register_push_token"` and a body `caller.entra_email` registers an
+attacker-chosen FCM token on the victim's account. The chain is huddle-proxy (resolves by email) →
+execute-tool (service role passes the gate) → `registerPushToken` (service-role upsert), which points the
+victim's pushes and alarms at the attacker's phone. Delete-another-user's-devices: NO route found.
