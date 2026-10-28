@@ -35,6 +35,7 @@ jobs:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPERBASE_ACCESS_TOKEN }}
       MIGRATION: ${{ github.event.inputs.migration }}
       FORCE: ${{ github.event.inputs.force }}
+      SRC_REF: ${{ github.event.inputs.ref }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -49,13 +50,13 @@ jobs:
             *) echo "Refused: '$MIGRATION' is not supabase/migrations/*.sql"; exit 1 ;;
           esac
           case "$MIGRATION" in *..*) echo "Refused: '..' in path"; exit 1 ;; esac
-          [ -f "$MIGRATION" ] || { echo "Not found at ref ${{ github.event.inputs.ref }}: $MIGRATION"; exit 1; }
+          [ -f "$MIGRATION" ] || { echo "Not found at ref $SRC_REF: $MIGRATION"; exit 1; }
           base=$(basename "$MIGRATION" .sql)
           version=${base%%_*}; name=${base#*_}
           [[ "$version" =~ ^[0-9]{14}$ ]] || { echo "Refused: file name must start with a 14-digit version"; exit 1; }
           [[ "$name" =~ ^[a-z0-9_]+$ ]] || { echo "Refused: name part must be [a-z0-9_]"; exit 1; }
           echo "VERSION=$version" >> "$GITHUB_ENV"; echo "NAME=$name" >> "$GITHUB_ENV"
-          echo "Migration $version ($name) from ref ${{ github.event.inputs.ref }} @ $(git rev-parse --short HEAD)"
+          echo "Migration $version ($name) from ref $SRC_REF @ $(git rev-parse --short HEAD)"
 
       - name: Skip if already applied
         run: |
