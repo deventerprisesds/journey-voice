@@ -54,7 +54,7 @@ Table **`content.assignments`** (`nexus-hub sql/nexus_hub/002_app_tables.sql:108
 | MGT-782 | Residency participation | — | active | 40 | |
 
 - **`level_of_effort` is empty on every DBA row** (and every row returned), so main's sync estimate logic (`nightly-assignment-sync/index.ts:184-190`) would always fall to the 90-min default.
-- **"Residency 4 - present ideas and insights from the readings" (Nov 9 per J7 scope doc, job 122439464760 on 10-27) is NOT in today's result** (filter: due ≥ now−35d, or undated and created in the last 120 d). Follow-up query dispatched to confirm whether it was deleted or re-dated — see §1d.
+- **"Residency 4 - present ideas and insights from the readings" (Nov 9 per J7 scope doc, job 122439464760 on 10-27) no longer exists in Nexus.** Follow-up run **40767834525** (job 123096683409): `title ILIKE '%residency 4%'` across ALL users → 0 rows; `'%research proposal%'` → 1 row (owner, Oct 30, unchanged). INFERRED: deleted or retitled in Nexus after 10-27 (not determinable from here). Same run: `content.class_schedules` has the DBA sessions **MGT-782 Mon Nov 9 19:00 ET** and **MGT-702 Tue Nov 10 19:00 ET** (and Oct 26/27) — the residency itself is still scheduled.
 - `programs.is_active = t` for DBA, EMBA and MIT alike (O, same run) — consistent with the owner's 10-28 ruling that "current" = has open items dated today+, not a Nexus flag.
 
 ### 1d. Section 1 verdict
@@ -83,4 +83,56 @@ Query: tasks where `assignment_id IS NOT NULL` OR title matches `dba|mgt|782|702
 | MGT-702 discussion forum slide deck | undated | out of scope (dated-only rule) |
 | MGT-701 ×4 Oct 2, MGT-702 Slide Deck Oct 6 | past | out of scope (from-today rule; owner chose the 4-card set) |
 
-Under the owner's 10-28 rules the board should hold **3 dated cards today (4 if Residency 4 still exists)**; it holds **0** linked ones.
+Under the owner's 10-28 rules the board should hold **3 dated cards today** (Residency 4 is gone from Nexus, §1c); it holds **0** linked ones.
+
+---
+
+## 3. How the scheduler treats a task due weeks away — main AND live
+
+Live = main: `nightly-schedule-builder` v308 and `smart-calendar-scheduler` v579 were redeployed 2026-10-26 22:44Z from main (RESTORE §0.4 found them byte-identical to main at 10-20; not re-diffed this pass — I). The only scheduling cron is the builder at 05:00 UTC (§1b).
+
+### 3a. OBSERVED — the data model allows exactly ONE block per task
+- A task's placement is `tasks.start_time` / `tasks.end_time` (one pair) + `is_scheduled`. There is **no work-session / sub-block table**: live `information_schema` search for slot|block|session|schedul|placement|subtask yields only `task_schedule_history` (a log of placements), `tasks_with_schedule` (view), `shadow_run_schedule`, `class_schedules`, notifications and prefs.
+- Builder: once a task is placed it goes into `scheduledTaskIds` (`nightly-schedule-builder/index.ts:840, 1391, 1499`) and is excluded from every later day (`:963` `.filter(id => !scheduledTaskIds.has(id))`). So **one assignment = one block of `estimate_minutes`, once, per nightly build.**
+- Every night STEP 1.1 "rebuild, not append" clears all non-DONE placements in the next 7 days (`:407-430`) and re-places from scratch. A block that was not finished is rolled over (STEP 1, history action `rollover`) and placed again — still one block.
+- `estimate_minutes` exists and IS used as the block length (`:710`, `:808` `task.estimate_minutes || categoryMappings[...].estimatedDuration || 60`), but **never as a total-effort budget**: there is no field for "minutes done so far" or "minutes remaining", and nothing divides effort across days. Live `user_scheduling_prefs` PROF_EDUCATION `estimatedDuration 90`, `maxPerDay 2` (RESEARCH S5). Nexus `level_of_effort` is empty on every DBA row (§1c), so intake would set 90 for everything.
+
+### 3b. OBSERVED — when a far-due assignment gets any deadline privilege
+- Tiers (`:648-686`, constants `_shared/scheduling-defaults.ts:19-20` `ASSIGNMENT_URGENT_HOURS = 48`, `ASSIGNMENT_PRIORITY_DAYS = 7`): **A** = due within ±48 h → pre-placed, cap-bypassed, into a mini-horizon "today → due" (`:701-790`); **B** = 2–7 days out (or ≤7 d late) → sorted ahead of everything; **C** = >7 days out → *"no longer auto-jumps priority-board work"* (`:1076-1079`), competes on `is_priority → priority_rank → score`. The horizon is a rolling **7 days** (`:697-698`).
+- `isDueSoon` +5 at 48 h, +3 at 3–7 days (`:1016-1024`) — no positive term for anything further out.
+- Coursework per-day cap = `MAX_ASSIGNMENTS_PER_DAY = 2` constant (`scheduling-defaults.ts:18`), every day including weekends (RESTORE J5/J8).
+- **Consequence (I, high, follows directly from the above):** an assignment due in 3 weeks gets no deadline push until 7 days out, and only a guaranteed slot inside the last 48 h — and even then it is ONE 90-min block. A 6-hour paper is therefore "scheduled" as 90 minutes, two days before it is due.
+
+### 3c. OBSERVED — live proof on real coursework (`task_schedule_history`, owner, read 2026-10-28)
+
+| task | due | est | placements (ET) | pattern |
+|---|---|---|---|---|
+| 📚 Discussion Board 1 (MGT-702) | Sep 7 | 90 | 09-05 14:30, 09-06 10:00, 09-07 09:00, 09-08 09:00, 09-09 09:00 | first placed **2 days before due**; one block a day, rolled over 4× |
+| 📚 Introductions (MGT-701) | Sep 10 | 90 | 09-07 10:30 … 09-26 18:30 (11 placements, one/day) | first placed 3 days before due (task created 09-07); rolled over 11× |
+| 📚 Required Capstone 8.1 (MIT) | Sep 1 | 90 | 08-27 → 09-17, 14 placements, one/day | same single block, pushed 13× |
+| Work on DBA paper for 782 (hand-made 10-28) | Oct 30 23:59 | 60 | 1 block, Thu Oct 29 20:30–21:30 (0 history rows yet) | **one hour, the night before the day it is due** |
+
+Every row: **exactly one block per day, never two blocks of the same task, never placed earlier than the 48h/7d tiers**. "Rollover" repeats the same block, it does not add sessions.
+
+### 3d. Section 3 verdict
+- **OBSERVED:** neither main nor live ever splits an assignment into multiple work sessions; there is no session table and no remaining-effort field. Far-due work is placed at most once per night, and gets deadline privilege only 7 days (sort) / 48 h (guaranteed) out.
+- **OBSERVED:** the hand-made Research Proposal task is the exact failure: 1 h, the night before.
+- **INFERRED:** even with intake fixed (§1), the owner would still be "surprised" — the scheduler has no notion of "work a little at a time until done". Fixing intake alone is necessary but not sufficient.
+
+---
+
+## 4. What the parked restore code already has for spreading
+
+### 4a. OBSERVED
+- Sweep of **every** remote branch (`git branch -r`, excluding eds-wip) under `supabase/functions` and `src` for `finish.?ahead | days.?before.?due | lead.?days | start.?by | work.?ahead | sessionMinutes | splitTask | spread…assign` → **0 hits** on any branch. The only "Lead Time" hit is `NotificationSettings.tsx:830` (notification lead time, not scheduling). Also 0 hits for `work.?session | sessionsNeeded | remaining_minutes | progress_minutes` on xokgv1 and nsishi.
+- What the parked stack DOES have that bears on this (from RESTORE §J1–J8 and DECISION §J8, not re-derived):
+  - **J5** composite scoring + builder actually enforces category `maxPerDay` (`c5de8f4`), recent-overdue escalation. Ranking only.
+  - **J8** one `resolveCategoryDailyCap()` with optional `maxPerDayWeekend` (`_shared/scheduling-defaults.ts:111-151` on branch) used by builder + batch + smart scheduler; 5-band coursework order + recent-miss floor (`_shared/nexus.ts:242-452`). Order and count only. Tier A/B/C thresholds are unchanged on the branch.
+  - **J7** Nexus reader `GET {NEXUS_API_URL}/api/d1/assignments?owner=…` (`_shared/nexus.ts:338-341`), `courseworkOrder`; inserts once, never updates (J7 scope verdict row 5); `points>0` filter drops 2 of the 3 dated DBA items (NULL points).
+  - **J4** dryRun of the full nightly build with zero writes — the test harness any spreading change needs.
+  - **J1** `maxDailyHours` guard (opt-in) and the 180-min-evening capacity note (RESEARCH S4 `e389201`).
+- **Did any of it run live?** J7's Nexus sync + execute-tool ran briefly in early Sep (tasks with `origin:'nexus-azure'` created 2026-09-07 05:00Z, §2a/3c). Builder J5/J8 never ran live (RESTORE §J5, §J8 "Live now"). Nothing that spreads work exists to have run.
+
+### 4b. Section 4 verdict
+- **OBSERVED:** the parked code has **no** finish-ahead, lead-time or session-splitting logic. Restoring J1–J8 would give correct intake (after J7 fixes), weekday/weekend caps and better ORDER, but each assignment would still be one 90-min block placed ≤7 days out.
+- **INFERRED:** spreading must be NEW code. The smallest place for it is the builder's assignment tier pass, because that is where far-due assignment tasks are already enumerated across the whole horizon (`:651-686`).
