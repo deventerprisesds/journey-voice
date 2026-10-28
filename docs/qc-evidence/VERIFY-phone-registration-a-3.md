@@ -15,3 +15,22 @@ Written incrementally, one verdict per commit.
   the 5 new subscribe/unsubscribe/unknown-action tests and the "migration is re-runnable" test.
 - O: `docs/qc-evidence/probes/push-auth.probe.test.ts` → 3/3 pass; `alarm-action.probe.test.ts` → 15/15 pass.
 - **CONFIRMED.**
+
+## (a) `push_subscriptions` lockdown migration, re-runnable version (journey e64431f)
+**Verdict: CONFIRMED (re-runnable; closes the anon/other-user table route once applied; NOT applied by this loop).**
+- Route: throwaway local Postgres 16.15 (port 55433, not committed, not live) with Supabase-shaped roles
+  (`anon`, `authenticated`, `service_role BYPASSRLS`, `auth.uid()` from `request.jwt.claims.sub`, default ALL
+  grants on public tables), table built from the repo's own `20260204173114_…` + `20260621000000_…`, two rows
+  (u1, u2). Before: one policy `Service role full access | {public} | ALL` (= the loop-1 live shape).
+- O: `20261027210000_push_subscriptions_rls_lockdown.sql` applied verbatim with `psql -v ON_ERROR_STOP=1 -f`
+  **twice** → both `rc=0` (first apply: NOTICE "does not exist, skipping" for the two new names; second apply:
+  NOTICE for the old name, all three DROPs then both CREATEs succeed). A **third** apply as one transaction
+  (`psql -1`) → `rc=0`. Policy count after all three = 2.
+- O (after): `push_subscriptions_owner_select | {authenticated} | SELECT | (user_id = (SELECT auth.uid()))`;
+  `push_subscriptions_service_role_all | {service_role} | ALL | true | true`; grants authenticated=SELECT,
+  anon=none, service_role=all; `relrowsecurity = t`.
+- O (behaviour): anon SELECT / INSERT-for-u1 / DELETE / TRUNCATE → `permission denied`; u2 (JWT sub) sees 1
+  row = its own; u2 INSERT-for-u1 / UPDATE / DELETE / TRUNCATE → `permission denied`; service_role
+  INSERT / UPDATE / DELETE → ok.
+- I: local PG is not the live project; the confirming step after ship is a live `pg_policies` +
+  `has_table_privilege` read.
