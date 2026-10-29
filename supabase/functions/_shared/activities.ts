@@ -96,8 +96,18 @@ export function toMinutes(hhmm: string): number {
   const [h, m] = hhmm.split(':').map(Number);
   return h * 60 + m;
 }
-export function fromMinutes(min: number): string {
+export function minutesToHHMM(min: number): string {
   return `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
+}
+
+/**
+ * Parse a clock time the owner or an agent gave ("9:30", "09:30", "09:30:00") into HH:mm, or null
+ * when it is not a valid 24-hour time. Callers must REJECT null rather than fall back to "now".
+ */
+export function parseClockTime(input: unknown): string | null {
+  const m = /^(\d{1,2}):([0-5]\d)(?::[0-5]\d)?$/.exec(String(input ?? '').trim());
+  if (!m || Number(m[1]) > 23) return null;
+  return `${m[1].padStart(2, '0')}:${m[2]}`;
 }
 
 /** Day of week of a LOCAL calendar date. Pure date math — no timezone needed for a date-only value. */
@@ -160,9 +170,12 @@ export function expandActivitiesForDate(
   }
 
   for (const a of todays.filter((x) => x.mode === 'floating')) {
-    const pref = toMinutes(a.start!);
-    const lo = a.earliest && HHMM.test(a.earliest) ? toMinutes(a.earliest) : pref;
-    const hi = (a.latest && HHMM.test(a.latest) ? toMinutes(a.latest) : pref + a.durationMin) - a.durationMin;
+    const rawPref = toMinutes(a.start!);
+    const lo = a.earliest && HHMM.test(a.earliest) ? toMinutes(a.earliest) : rawPref;
+    const hi = Math.max(lo, (a.latest && HHMM.test(a.latest) ? toMinutes(a.latest) : rawPref + a.durationMin) - a.durationMin);
+    // Every candidate stays inside [lo, hi] — a preferred start outside its own range is pulled to
+    // the nearest edge, so a floating block can never be placed outside the range it declares.
+    const pref = Math.min(hi, Math.max(lo, rawPref));
     // Try the preferred start first, then nearest-first outward in 15-minute steps.
     const candidates = [pref];
     for (let step = 15; pref - step >= lo || pref + step <= hi; step += 15) {
@@ -171,12 +184,12 @@ export function expandActivitiesForDate(
     }
     let chosen: Span | null = null;
     for (const m of candidates) {
-      const startMs = toMs(fromMinutes(m));
+      const startMs = toMs(minutesToHHMM(m));
       const span = { startMs, endMs: startMs + a.durationMin * 60000 };
       if (!busySpans.some((b) => overlaps(b, span)) && !placed.some((p) => overlaps(p, span))) { chosen = span; break; }
     }
     const conflict = !chosen;
-    if (!chosen) { const s = toMs(a.start!); chosen = { startMs: s, endMs: s + a.durationMin * 60000 }; }
+    if (!chosen) { const s = toMs(minutesToHHMM(pref)); chosen = { startMs: s, endMs: s + a.durationMin * 60000 }; }
     placed.push({ activityId: a.id, name: a.name, locked: false, ...chosen, conflict: conflict || undefined,
       start_time: new Date(chosen.startMs).toISOString(), end_time: new Date(chosen.endMs).toISOString() });
   }
@@ -267,7 +280,7 @@ export function normalizeActivity(input: any, now: Date = new Date()): { activit
       if (input?.[k] !== undefined && !(typeof input[k] === 'string' && HHMM.test(input[k]))) return { error: `${k} must be HH:mm` };
     }
     a.earliest = input?.earliest ?? a.start;
-    a.latest = input?.latest ?? (a.start ? fromMinutes(toMinutes(a.start) + durationMin) : undefined);
+    a.latest = input?.latest ?? (a.start ? minutesToHHMM(toMinutes(a.start) + durationMin) : undefined);
     if (a.earliest && a.latest && toMinutes(a.latest) - toMinutes(a.earliest) < durationMin) {
       return { error: 'the earliest-latest range is shorter than the activity' };
     }
@@ -275,7 +288,9 @@ export function normalizeActivity(input: any, now: Date = new Date()): { activit
   if (typeof input?.parent_window === 'string' || typeof input?.parentWindow === 'string') a.parentWindow = input.parent_window ?? input.parentWindow;
   const aliases = (Array.isArray(input?.aliases) ? input.aliases : []).map((s: any) => String(s).toLowerCase().trim()).filter(Boolean);
   a.aliases = [...new Set([name.toLowerCase(), ...aliases])];
-  if (input?.pushes_schedule === true || input?.pushesSchedule === true) a.pushesSchedule = true;
+  // snake_case (a tool update) wins over the stored camelCase value, so `pushes_schedule: false` clears it.
+  const pushes = input?.pushes_schedule ?? input?.pushesSchedule;
+  if (pushes === true) a.pushesSchedule = true;
   if (Array.isArray(input?.skipDates)) a.skipDates = input.skipDates.filter((d: any) => typeof d === 'string' && YMD.test(d));
   return { activity: a };
 }

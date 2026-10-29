@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { normalizeDueDate, normalizeDateTime, getTodayInTimezone, formatInTimezone, localDateToUtcBounds } from "../_shared/timezone.ts";
-import { activityBusySlots, resolveActivities, normalizeActivity, matchActivity, planPush, type PushItem } from "../_shared/activities.ts";
+import { activityBusySlots, resolveActivities, normalizeActivity, matchActivity, planPush, toMinutes, minutesToHHMM, parseClockTime, type PushItem } from "../_shared/activities.ts";
 import { getToolDefinitions } from "../_shared/tool-definitions.ts";
 import { getTopicGroupsManual, WINDOW_RANGES, CATEGORY_WINDOW_MAPPING } from "../_shared/call-context-builder.ts";
 import { resolveConfig, validateTaskWindow, activeCaveats } from "../_shared/scheduling-defaults.ts";
@@ -1388,15 +1388,22 @@ async function clearSchedulingCaveat(supabase: any, userId: string, args: any): 
 // ============================================================================
 
 async function readActivityPrefs(supabase: any, userId: string): Promise<{ config: any; timezone: string; activities: any[] }> {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('user_scheduling_prefs').select('config, timezone').eq('user_id', userId).maybeSingle();
+  // A failed read must NEVER continue with {}: every write below saves the config plus activities, so
+  // an empty config would erase timeWindows, categoryMappings, caveats and contextRules — the
+  // 2026-09-13 wipe that mergeStoredConfig exists to prevent on the client. Refuse instead.
+  if (error) throw new Error(`Could not read scheduling settings, so nothing was changed: ${error.message}`);
   const config = data?.config ?? {};
   return { config, timezone: data?.timezone || config.timezone || 'America/New_York', activities: resolveActivities(config) };
 }
 
-async function writeActivityConfig(supabase: any, userId: string, config: any, activities: any[], extra: Record<string, unknown> = {}) {
-  // One-off activities whose date has passed are dropped on every write, so the list cannot grow forever.
-  const today = getTodayInTimezone(config?.timezone || 'America/New_York');
+async function writeActivityConfig(supabase: any, userId: string, config: any, activities: any[], timezone: string, extra: Record<string, unknown> = {}) {
+  // One-off activities whose date has passed are dropped on every write, so the list cannot grow
+  // forever. "Past" is judged in the owner's RESOLVED timezone (the column first) — config.timezone
+  // is often absent, and a New York fallback deletes a Los Angeles owner's evening block the
+  // moment it is written.
+  const today = getTodayInTimezone(timezone);
   const kept = activities.filter((a: any) => !(a.kind === 'one_off' && typeof a.date === 'string' && a.date < today));
   const next = { ...config, activities: kept, ...extra };
   const { error } = await supabase
@@ -1423,12 +1430,12 @@ function describeActivity(a: any): string {
 
 async function addActivity(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
   try {
-    const { config, activities } = await readActivityPrefs(supabase, userId);
+    const { config, timezone, activities } = await readActivityPrefs(supabase, userId);
     const { activity, error } = normalizeActivity(args);
     if (!activity) return { success: false, error: error || 'invalid activity' };
     const clash = activities.find((a: any) => a.name.toLowerCase() === activity.name.toLowerCase());
     if (clash) return { success: false, error: `You already have an activity called "${clash.name}" (${describeActivity(clash)}). Use update_activity to change it.` };
-    await writeActivityConfig(supabase, userId, config, [...activities, activity]);
+    await writeActivityConfig(supabase, userId, config, [...activities, activity], timezone);
     return {
       success: true,
       result: { activity },
@@ -1454,7 +1461,7 @@ async function listActivities(supabase: any, userId: string): Promise<ExecuteToo
 
 async function updateActivity(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
   try {
-    const { config, activities } = await readActivityPrefs(supabase, userId);
+    const { config, timezone, activities } = await readActivityPrefs(supabase, userId);
     const current = findActivity(activities, args);
     if (!current) return { success: false, error: 'No matching activity. Call list_activities to see what exists.' };
     // Merge the change over the stored activity, then re-validate the whole thing.
@@ -1465,9 +1472,19 @@ async function updateActivity(supabase: any, userId: string, args: any): Promise
       if (k === 'name') continue; // `name` identifies the activity; renaming uses new_name
       merged[k] = v;
     }
+    // Moving a flexible activity's preferred start without naming a new range moves the range with
+    // it ("lunch at 1 instead") — otherwise the old 11:30-13:30 range would be kept and the block
+    // would sit outside its own range.
+    if (current.mode === 'floating' && typeof args?.start === 'string' && current.start
+        && args.earliest === undefined && args.latest === undefined && parseClockTime(args.start)) {
+      const delta = toMinutes(parseClockTime(args.start)!) - toMinutes(current.start);
+      const shift = (t?: string) => (t ? minutesToHHMM(Math.min(23 * 60 + 59, Math.max(0, toMinutes(t) + delta))) : t);
+      merged.earliest = shift(current.earliest);
+      merged.latest = shift(current.latest);
+    }
     const { activity, error } = normalizeActivity({ ...merged, id: current.id, createdAt: current.createdAt });
     if (!activity) return { success: false, error: error || 'invalid activity' };
-    await writeActivityConfig(supabase, userId, config, activities.map((a: any) => (a.id === current.id ? activity : a)));
+    await writeActivityConfig(supabase, userId, config, activities.map((a: any) => (a.id === current.id ? activity : a)), timezone);
     return { success: true, result: { activity }, message: `Updated: ${describeActivity(activity)}.` };
   } catch (e) {
     return { success: false, error: extractErrorMessage(e) };
@@ -1476,10 +1493,10 @@ async function updateActivity(supabase: any, userId: string, args: any): Promise
 
 async function removeActivity(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
   try {
-    const { config, activities } = await readActivityPrefs(supabase, userId);
+    const { config, timezone, activities } = await readActivityPrefs(supabase, userId);
     const current = findActivity(activities, args);
     if (!current) return { success: false, error: 'No matching activity. Call list_activities to see what exists.' };
-    await writeActivityConfig(supabase, userId, config, activities.filter((a: any) => a.id !== current.id));
+    await writeActivityConfig(supabase, userId, config, activities.filter((a: any) => a.id !== current.id), timezone);
     return { success: true, result: { removed: current }, message: `Removed ${current.name}. That time is open for tasks again from the next scheduling pass.` };
   } catch (e) {
     return { success: false, error: extractErrorMessage(e) };
@@ -1493,7 +1510,7 @@ async function skipActivity(supabase: any, userId: string, args: any): Promise<E
     if (!current) return { success: false, error: 'No matching activity. Call list_activities to see what exists.' };
     const date = typeof args?.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(args.date) ? args.date : getTodayInTimezone(timezone);
     const skipDates = [...new Set([...(current.skipDates || []), date])].filter((d: string) => d >= getTodayInTimezone(timezone));
-    await writeActivityConfig(supabase, userId, config, activities.map((a: any) => (a.id === current.id ? { ...a, skipDates } : a)));
+    await writeActivityConfig(supabase, userId, config, activities.map((a: any) => (a.id === current.id ? { ...a, skipDates } : a)), timezone);
     return { success: true, result: { activity_id: current.id, date }, message: `Skipping ${current.name} on ${date}. That time is open for tasks.` };
   } catch (e) {
     return { success: false, error: extractErrorMessage(e) };
@@ -1518,8 +1535,11 @@ async function startActivity(supabase: any, userId: string, args: any): Promise<
 
     const today = getTodayInTimezone(tz);
     let startHHMM: string;
-    if (typeof args?.start_time === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(args.start_time)) {
-      startHHMM = args.start_time;
+    if (args?.start_time !== undefined && args?.start_time !== null && args?.start_time !== '') {
+      // Accept 9:30 / 09:30 / 09:30:00; anything else is an error, never a silent "now".
+      const parsed = parseClockTime(args.start_time);
+      if (!parsed) return { success: false, error: `start_time must be HH:mm (24-hour), got "${args.start_time}"` };
+      startHHMM = parsed;
     } else {
       // Now, rounded down to 5 minutes, in the owner's timezone.
       const parts = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date());
@@ -1587,19 +1607,22 @@ async function startActivity(supabase: any, userId: string, args: any): Promise<
         .map((id) => ({ id, start_time: original.get(id)?.start_time, end_time: original.get(id)?.end_time })),
     };
 
+    // Save the block AND the undo record FIRST. If a task update below fails partway, the undo record
+    // already holds every original time, so undo_activity_start can still restore the whole day.
+    await writeActivityConfig(supabase, userId, config, withInstance, tz, { lastActivityStart: undo });
+
     for (const m of plan.moves.filter((x) => x.kind === 'task')) {
       const { error } = await supabase.from('tasks')
         .update({ start_time: new Date(m.startMs).toISOString(), end_time: new Date(m.endMs).toISOString(), is_scheduled: true })
         .eq('id', m.id).eq('user_id', userId);
-      if (error) throw error;
+      if (error) throw new Error(`${error.message} — some tasks may have moved; say "undo" to restore the day`);
     }
     for (const o of plan.overflow.filter((x) => x.kind === 'task')) {
       const { error } = await supabase.from('tasks')
         .update({ start_time: null, end_time: null, is_scheduled: false })
         .eq('id', o.id).eq('user_id', userId);
-      if (error) throw error;
+      if (error) throw new Error(`${error.message} — some tasks may have moved; say "undo" to restore the day`);
     }
-    await writeActivityConfig(supabase, userId, config, withInstance, { lastActivityStart: undo });
 
     const fmt = (ms: number) => new Date(ms).toLocaleTimeString('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit' });
     const lines = [
@@ -1621,7 +1644,7 @@ async function startActivity(supabase: any, userId: string, args: any): Promise<
 
 async function undoActivityStart(supabase: any, userId: string): Promise<ExecuteToolResponse> {
   try {
-    const { config, activities } = await readActivityPrefs(supabase, userId);
+    const { config, timezone, activities } = await readActivityPrefs(supabase, userId);
     const last = config?.lastActivityStart;
     if (!last?.instanceId) return { success: false, error: 'There is no recent activity start to undo.' };
     for (const t of last.tasks || []) {
@@ -1630,7 +1653,7 @@ async function undoActivityStart(supabase: any, userId: string): Promise<Execute
         .eq('id', t.id).eq('user_id', userId);
       if (error) throw error;
     }
-    await writeActivityConfig(supabase, userId, config, activities.filter((a: any) => a.id !== last.instanceId), { lastActivityStart: null });
+    await writeActivityConfig(supabase, userId, config, activities.filter((a: any) => a.id !== last.instanceId), timezone, { lastActivityStart: null });
     return { success: true, result: { restored: (last.tasks || []).length }, message: `Undone — ${(last.tasks || []).length} task(s) are back where they were and the block is removed.` };
   } catch (e) {
     return { success: false, error: extractErrorMessage(e) };

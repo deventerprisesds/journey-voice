@@ -11,6 +11,7 @@ import { useToast } from '@/hooks/use-toast';
 import {
   loadUserSchedulingConfig,
   saveUserSchedulingConfig,
+  clearSchedulingConfigCache,
 } from '@/services/schedulingService';
 import { DEFAULT_SCHEDULING_CONFIG, type SchedulingConfig, type SchedulingCaveat } from '@/config/schedulingRules';
 import { Clock, Calendar, TrendingUp, Tag, Key, Target, Plus, X, FileText, Globe, Timer } from 'lucide-react';
@@ -24,6 +25,10 @@ const SchedulingSettings: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [config, setConfig] = useState<SchedulingConfig>(DEFAULT_SCHEDULING_CONFIG);
+  // Activities are also changed by agents ("church Sundays at 10", "headed to the gym"). Only send
+  // them when they were edited on THIS page, so saving another setting never overwrites an agent's
+  // change made while the page was open.
+  const [activitiesEdited, setActivitiesEdited] = useState(false);
 
   useEffect(() => {
     if (user?.id) {
@@ -35,8 +40,11 @@ const SchedulingSettings: React.FC = () => {
     if (!user?.id) return;
     setLoading(true);
     try {
+      // Read fresh, not the session cache: an agent may have changed activities since it was filled.
+      clearSchedulingConfigCache();
       const loadedConfig = await loadUserSchedulingConfig(user.id);
       setConfig(loadedConfig);
+      setActivitiesEdited(false);
     } catch (error) {
       console.error('Failed to load scheduling config:', error);
       toast({
@@ -53,7 +61,11 @@ const SchedulingSettings: React.FC = () => {
     if (!user?.id) return;
     setSaving(true);
     try {
-      const success = await saveUserSchedulingConfig(user.id, config);
+      const success = await saveUserSchedulingConfig(
+        user.id,
+        activitiesEdited ? config : { ...config, activities: undefined },
+      );
+      if (success) setActivitiesEdited(false);
       if (success) {
         toast({
           title: 'Saved',
@@ -346,7 +358,10 @@ const SchedulingSettings: React.FC = () => {
       </Card>
 
       {/* Activities — reserved time inside the windows above (lunch, gym, church, 1:1s); never tasks */}
-      <ActivitiesSettings config={config} onChange={(activities) => setConfig({ ...config, activities })} />
+      <ActivitiesSettings
+        config={config}
+        onChange={(activities) => { setConfig({ ...config, activities }); setActivitiesEdited(true); }}
+      />
 
       {/* Workload Balance */}
       <Card>

@@ -1420,8 +1420,10 @@ serve(async (req) => {
               const sMs = new Date(s.start_time).getTime();
               return sMs >= new Date(dayBounds.start).getTime() && sMs < new Date(dayBounds.end).getTime();
             });
+            // Activities take capacity here too, so the retry does not over-count free time.
+            const retryActivityBlocks = activityBusySlots(config, dayBounds.start, dayBounds.end, timezone);
             const retryCaps = computeUsedMinutes(
-              dayBusyForRetry.map(s => ({ start_time: s.start_time, end_time: s.end_time })),
+              [...dayBusyForRetry, ...retryActivityBlocks].map(s => ({ start_time: s.start_time, end_time: s.end_time })),
               activeWindows,
               targetISO,
               timezone,
