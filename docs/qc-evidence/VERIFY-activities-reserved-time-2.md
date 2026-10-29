@@ -80,3 +80,35 @@ Non-vacuity (mutations applied with sed, restored with `git checkout --`, `git s
 Locked-block code (activities.ts:164-169) unchanged in the diff. Loop-1 test "C6 locked 10:00 activity lands at 10:00
 local either side of US DST changes" passes in the 17/17 re-run above. The 03:00-on-DST-day probe from loop 1
 (pre-existing zonedTimeToUtc, not in this diff) is unchanged.
+
+## Claim 1 -- busy-time readers include activities: placement CONFIRMED; one display-only reader still misses them (REFUTED at LOW severity under a strict "every reader" reading)
+- smart-calendar-scheduler: `activityPickerSlots` (index.ts:618-625) built only when `userId` is truthy, from
+  `loadedUserConfig ?? {}` (declared :187, loaded :188-204) and `timezone` (request param, :173), over
+  [searchStartDate, +maxSearchDays+1 days] (:591-603, :618). `pickerBusySlots` feeds BOTH
+  `getAllBusySlotsForDay` calls (:712 slot finder, :739 overlap re-check). Those are the only placement path:
+  the only success `new Response` with `scheduledSlot` is :787 inside the day loop (:661); :837 is reached with
+  `scheduledSlot = null` (:810), :825/:854 are failure responses. Import :5.
+  Note: a failed config read (:197 `if (!configError && configData)`) leaves loadedUserConfig undefined ->
+  `{}` -> resolveActivities seed (Lunch). Fails toward reserving lunch -- safe direction.
+- Callers of smart-calendar-scheduler all pass userId: taskScheduling.ts:110 (`task.user_id`, tz `userConfig.timezone`,
+  which loadUserSchedulingConfig fills from the column, schedulingService.ts:130/139), TaskCreationModal.tsx ~:569/~:1049,
+  CalendarModule.tsx ~:226, RealtimeVoiceAssistant.ts ~:2068, ai-task-parser/index.ts:586-603 (`userId`).
+- ItineraryEngine chain: ItineraryEngine.ts:345-358 invokes ai-task-parser with `userId: user.id` + browser tz;
+  ai-task-parser forwards `userId` to smart-calendar-scheduler (:586-603, single mode) and to
+  batch-calendar-scheduler (:401-413, preview/batch mode). Placement for SmartTaskInput is therefore covered. CONFIRMED.
+- Client getCalendarAvailability (taskScheduling.ts:245-275): reads prefs `config, timezone`, tz column-first,
+  adds `activityBusySlots(...)` as `type:'activity'` busy slots. Consumer CalendarModule.tsx:125. CONFIRMED.
+  Inconsistency (LOW): no prefs row -> `[]` (no seed Lunch), while every edge scheduler applies the seed for a
+  missing config. A prefs read error is ignored -> `[]` (display/conflict only; safe).
+- nightly reshuffle (nightly-schedule-builder/index.ts:1423-1430): `activityBusySlots(config, dayBounds..., timezone)`
+  joins the retry capacity. Scope checked by brace depth: line 1424 is inside the per-day loop (:865-:1593) and
+  the per-user loop (:286-:1795) where `config` (:289), `timezone` (:288), `targetISO` (:869) are declared.
+  CONFIRMED. (Retry expands floating blocks without `dayEvents`, so lunch may be counted on top of an event --
+  capacity UNDER-estimate, conservative.)
+- RE-SWEEP: every edge index.ts that reads start_time AND busy/availability: batch(2 refs), execute-tool(3),
+  smart(3), nightly(3) include activities; calendar-integration-manager, calendar-delta-sync, twilio-voice-handler,
+  send-unified-notification, notification-delivery are sync/notification code, not placement; ai-task-parser
+  delegates (above). Client: schedulingService.getAvailableTimeSlots (:497) has no caller in src.
+- STILL MISSED (LOW, display-only): ItineraryEngine.ts:304-341 builds `busySlots` from calendar connections + tasks
+  only and returns it (:387) to SmartTaskInput.tsx:74 -> EditableTaskSuggestion.tsx:56 `hasConflict`. If the owner
+  edits a suggestion onto Lunch, no conflict warning shows. The suggested slot itself avoids activities.
