@@ -61,3 +61,40 @@ Mirrored execute-tool updateActivity merge (index.ts updateActivity) + real norm
 - Minor: `pushes_schedule: false` cannot clear a stored `pushesSchedule: true` (activities.ts:278 ORs the
   camel key). update_activity's schema does not expose pushes_schedule, so this is reachable only if the
   model sends an unlisted arg.
+
+## Claim 4 -- startActivity is correct: REFUTED (on two sub-points), rest confirmed
+Read: supabase/functions/execute-tool/index.ts startActivity / undoActivityStart / readActivityPrefs / writeActivityConfig.
+- "now" tz: Intl en-GB `hourCycle:'h23'` parts in the owner's tz, rounded down to 5 min -> CONFIRMED by reading.
+- `start_time` given: interpreted as local today via normalizeDateTime -> zonedTimeToUtc -> CONFIRMED for normal
+  hours. DEFECT: the regex `/^([01]\d|2[0-3]):[0-5]\d$/` rejects "9:30" and "09:30:00"; a rejected value
+  SILENTLY falls back to NOW instead of returning an error (the agent asked for 9:30, gets now).
+- User scoping: every tasks/events/prefs query and every update carries `.eq('user_id', userId)` -> CONFIRMED.
+- Undo record: built in memory from the ORIGINAL task rows before any write, covering moved AND overflowed
+  tasks -> CONFIRMED. But it is PERSISTED last (`writeActivityConfig(..., { lastActivityStart: undo })` runs
+  after both update loops). If any task update throws mid-loop, or the final upsert fails, earlier moves stay
+  committed with no undo record and no block -> "captures BEFORE writing" holds in memory only, not durably. REFUTED as a durability guarantee.
+- undoActivityStart restores start/end/is_scheduled per saved task (user-scoped) and removes the instance ->
+  CONFIRMED by reading. Only the most recent start is undoable (lastActivityStart is overwritten); undo also
+  overwrites any manual edit made to those tasks after the start.
+- DEFECT (non-ET users): readActivityPrefs prefers the `timezone` COLUMN, but writeActivityConfig prunes
+  past one-offs using `config.timezone || 'America/New_York'` (index.ts:1399). The client saves timezone to the
+  column and strips it from config (schedulingService.ts:188-203). Mirror test: LA user starting gym at
+  21:30 PDT (00:30 EDT next day) -> the just-created instance (date 2026-10-28) is pruned on the same write
+  ("kept? false"). Tasks are still moved; the reply says the block is reserved; the block is not stored.
+  Not reachable for an America/New_York owner.
+- limitFor: a legacy string `defaultTimeWindow` (the client still wraps strings "for backward compatibility",
+  schedulingRules.ts:287-289) makes `listed.map` throw; the call fails before any write (safe failure).
+
+## Claim 5 -- writing activities can never erase other config keys: REFUTED
+- Client path: CONFIRMED safe. mergeSchedulingConfig (schedulingRules.ts:319) returns `activities: undefined`
+  when never saved; saveUserSchedulingConfig merges via mergeStoredConfig, which skips undefined keys
+  (mergeStoredConfig.ts:25-27); ActivitiesSettings only calls onChange on an edit (ActivitiesSettings.tsx:39,45,85).
+  So a Settings save never writes `activities: []` for a never-saved owner.
+- Edge path: readActivityPrefs (execute-tool/index.ts:1391-1393) IGNORES the read `error`; on a failed read
+  `data` is null so `config = {}`, and writeActivityConfig then upserts `{ ...{}, activities }` (:1401-1404).
+  Mirror test: keys written after a failed read = `activities` only -> timeWindows, categoryMappings, caveats,
+  contextRules erased. This is the 2026-09-13 wipe shape that mergeStoredConfig.ts:3-7 exists to prevent;
+  the client refuses on a read error (schedulingService.ts:213-217), the edge writer does not.
+- Lost-update races (both directions, no version check): the client's loadUserSchedulingConfig is cached per
+  user (schedulingService.ts ~107-110), and SchedulingSettings saves the whole loaded object including
+  `activities`, so a Settings save after an agent add/start/skip silently reverts the agent's change.

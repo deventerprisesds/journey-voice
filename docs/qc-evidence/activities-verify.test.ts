@@ -180,3 +180,35 @@ test('C7 PROBE: pushes_schedule:false cannot turn off stored pushesSchedule:true
   const r = updateLikeTool(gym, { name: 'Gym', pushes_schedule: false });
   console.log('gym pushesSchedule after pushes_schedule:false ->', r.activity?.pushesSchedule);
 });
+
+// ---- Claim 4/5 mirrors of execute-tool readActivityPrefs/writeActivityConfig (index.ts:1390-1406) ----
+import { resolveActivities } from '../../supabase/functions/_shared/activities.ts';
+const todayIn = (tz: string, now: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(now);
+async function readPrefsMirror(sb: any) {
+  const { data } = await sb.read();
+  const config = data?.config ?? {};
+  return { config, timezone: data?.timezone || config.timezone || 'America/New_York', activities: resolveActivities(config) };
+}
+function writeMirror(config: any, activities: any[], now: Date) {
+  const today = todayIn(config?.timezone || 'America/New_York', now);
+  const kept = activities.filter((a: any) => !(a.kind === 'one_off' && typeof a.date === 'string' && a.date < today));
+  return { ...config, activities: kept };
+}
+
+test('C5 PROBE: a failed prefs read (error ignored) makes the next write replace the whole config', async () => {
+  const sb = { read: async () => ({ data: null, error: { message: 'transient' } }) };
+  const { config, activities } = await readPrefsMirror(sb);
+  const written = writeMirror(config, [...activities, { id: 'x', name: 'Church', kind: 'recurring', days: [0], start: '10:00', durationMin: 60 }], new Date());
+  console.log('keys written after failed read:', Object.keys(written).join(','));
+  assert.deepEqual(Object.keys(written), ['activities']);
+});
+
+test('C4 PROBE: LA user (tz in column, not config) starting gym at 21:30 local -- instance pruned on write', async () => {
+  const now = new Date('2026-10-29T04:30:00Z'); // 21:30 PDT Oct 28 = 00:30 EDT Oct 29
+  const sb = { read: async () => ({ data: { config: { timeWindows: {} }, timezone: 'America/Los_Angeles' }, error: null }) };
+  const { config, timezone } = await readPrefsMirror(sb);
+  const instance = { id: 'adhoc_gym', name: 'Gym', kind: 'one_off', mode: 'locked', date: todayIn(timezone, now), start: '21:30', durationMin: 120 };
+  const written = writeMirror(config, [instance], now);
+  console.log('instance date', instance.date, 'kept?', written.activities.some((a: any) => a.id === 'adhoc_gym'));
+  assert.equal(written.activities.some((a: any) => a.id === 'adhoc_gym'), false);
+});
