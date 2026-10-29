@@ -180,6 +180,15 @@ describe('P3 work-session planner', () => {
     assert.equal(p.warnings[0].fit, 0);
   });
 
+  it('AC-P3-5c a due time inside the window (Fri 9 pm ET): no session ends after due − 1 h; what cannot fit is reported, not dropped', () => {
+    const due9pm = parent({ id: 'p-9', title: '📚 Slides', assignment_id: 'slides', due_date: '2026-10-31T01:00:00.000Z', estimate_minutes: 90 });
+    const p = run({ parents: [due9pm], now: new Date('2026-10-30T05:00:00Z'), days: days('2026-10-30', 10) });
+    for (const c of p.creates) assert.ok(Date.parse(c.placement.end!) <= Date.parse('2026-10-31T00:00:00Z'), c.placement.end!);
+    assert.equal(p.creates.length, 0); // 19:00–20:30 would end after 20:00
+    assert.equal(p.assignments[0].unplaced, 1);
+    assert.equal(p.warnings.length, 1);
+  });
+
   it('AC-P3-6 every block is inside the coursework windows (weekday 19–22, weekend 10–20) and the caps hold', () => {
     const many = [PAPER, CP2, parent({ id: 'p-x', title: '📚 Big Project', assignment_id: 'x', estimate_minutes: 900, due_date: '2026-11-20T04:59:59Z' })];
     const p = run({ parents: many });
