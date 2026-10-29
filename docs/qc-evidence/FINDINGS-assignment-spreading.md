@@ -240,3 +240,22 @@ Cause→effect: pick F1a → each evening's block is a real task → marking it 
 | F5 Earliest start for far-due work | **no limit** (spread from today) vs e.g. 21 days before due | With 3 items today, no limit gives Research Paper ~1 session/week now and denser later; a cap would recreate the "surprise" |
 
 Everything else in §5 has a safe reversible default and is not a fork.
+
+---
+
+## Build log (P1, P2, dry-run)
+
+Owner-approved 2026-10-28 (top priority). Branch `claude_assignment-spreading`. Labels as above (O / I).
+
+### Correction to §1c / §5.6 (owner, 2026-10-29)
+**Residency 4 is a scheduled CLASS SESSION, not an assignment.** Its disappearance from `content.assignments` between 10-27 and 10-28 was a **correction in Nexus, not data loss**; the session itself is still in `content.class_schedules` (MGT-782 Mon Nov 9 19:00 ET). The intake reads only `content.assignments` and never `class_schedules` (O, `_shared/nexus-read.ts`). The only residency-shaped row left in assignments, `Residency participation` (MGT-782, 40 pts), is **undated**, so the dated-only rule already excludes it (test AC-P1-3). No title pattern was added (it would be a hardcode).
+
+### P1 — intake reads Nexus (commit: see git log, "P1")
+- **Read path (O):** `_shared/nexus-read.ts` → `GET {NEXUS_API_URL|https://nexus-hub-api.azurewebsites.net}/api/d1/assignments?owner=<uuid>`. nexus-hub `api/src/lib/auth.ts` `resolveOwner` step 4 accepts the unverified `?owner=` for reads; `api/src/functions/d1.ts` `handleGet` returns `{ rows }` from `SELECT * FROM content.assignments` plus `attachCourses` (`courses: {id,name,code}`). **No token, no secret, no new org secret.** `NEXUS_API_URL` is optional (public host default).
+- **Decision logic (O):** `_shared/assignment-intake.ts` (pure). Create gate: Nexus status not submitted/graded/completed, has a due date, local due date ≥ local today, course current (≥1 open item dated today+). Due = Nexus instant exactly (`new Date(due).toISOString()`). Status `UP_NEXT` (dated, #28/#33). Oldest default board (#43). Legacy same-title unlinked card → linked, not duplicated.
+- **Refresh (O):** linked, not-DONE task → title + due_date follow Nexus; submitted/graded → tag `nexus-<status>` + `scheduling_context.nexus_status`, **status never changed**; DONE (status DONE or completed_at set) → untouched, and the UPDATE itself is guarded `.neq('status','DONE').is('completed_at',null)` against a race.
+- **Why the flag is a TAG (O):** `nightly-schedule-builder` replaces `scheduling_context` wholesale on every placement (main :835, :1380, :1490). A flag kept only there is wiped nightly → re-flagged → a nightly repeat message. The builder never writes `tags` (grep), and Huddle's board shows tags as chips. Test AC-P1-7b reproduces the wipe and proves no second flag / no second message. `scheduling_context.nexus_changes` is best-effort history for the same reason (J9 on the parked branch fixes the wipe).
+- **One message per run (O):** one `scheduled_notifications` row, `notification_type='scheduled_chat'`, `metadata.message` — the exact shape `_shared/task-dedup.ts` uses, delivered by `notification-delivery` (:632-690) as an Iris chat + push. Built from writes that actually succeeded. **Sent when the owner's quiet hours end** (`notification_prefs` 22:00–06:00 ET live): the sync runs at 05:00 UTC = 1 am ET and the scheduled_chat path does not apply quiet hours itself, so "now" would ring the phone at 1 am (test AC-P1-8b).
+- **Nexus down (O):** `ok:false` → no task read/write, `activity_log status:'failed'`, HTTP 502; the builder's STEP 0 already treats a non-OK response as a non-fatal warning (main :329-335).
+- **Dry run (O):** body `{ userId, dryRun: true }` → reads Nexus, boards, tasks; returns `would_create` / `would_update` / `excluded` / `digest` preview; **no insert, no update, no activity_log, no notification.**
+- Tests: `_shared/assignment-intake.test.ts` 24 named tests (AC-P1-1..13, DRY-1, READ-1). `npm test` 329 → 353, 0 fail. `deno check` (remote imports stubbed; deno.land is proxy-blocked here) clean; `undef-check` 0 new.
