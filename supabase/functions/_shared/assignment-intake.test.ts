@@ -251,7 +251,9 @@ describe('P1 Nexus read helper', () => {
   });
 
   it('AC-P1-11 a 5xx / throw / malformed body is ok:false with no rows (the sync then writes nothing)', async () => {
-    assert.deepEqual((await fetchNexusAssignments(OWNER, { fetchImpl: ok({ error: 'x' }, 503) })).ok, false);
+    const fiveXX = await fetchNexusAssignments(OWNER, { fetchImpl: ok({ rows: DBA_ROWS }, 503) });
+    assert.equal(fiveXX.ok, false);
+    assert.equal(fiveXX.rows.length, 0, 'a 5xx body is never trusted, even if it parses');
     const thrown = await fetchNexusAssignments(OWNER, { fetchImpl: async () => { throw new Error('ECONNRESET'); } });
     assert.equal(thrown.ok, false);
     assert.equal(thrown.rows.length, 0);
