@@ -21,7 +21,9 @@ import {
   Video,
   BookOpen,
   CheckCircle2,
+  Lock,
 } from 'lucide-react';
+import { activityBusySlots } from '../../supabase/functions/_shared/activities.ts';
 import { cn } from '@/lib/utils';
 import { humanizeCalendarId } from '@/lib/calendarUtils';
 import { Task, ExternalCalendarEvent } from '@/types/task';
@@ -257,6 +259,25 @@ const AgendaTab: React.FC<AgendaTabProps> = ({ tasks, historyTasks, weekDays, ex
         map[dayKey].unscheduled.push(extItem as any);
       }
     });
+
+    // Activities (lunch, gym, church, 1:1s…) — reserved time from config, never task rows. Expanded
+    // with the same shared function the schedulers use, so what is shown is what was reserved.
+    const rangeStart = weekDays[0].toISOString();
+    const rangeEnd = addDays(weekDays[6], 1).toISOString();
+    activityBusySlots(config, rangeStart, rangeEnd, userTimezone, externalEvents as any).forEach((b, i) => {
+      const dayKey = getDateInTimezone(b.start_time, userTimezone);
+      if (!map[dayKey]) return;
+      const window = getTimeWindowForTask(b.start_time, parseISO(dayKey));
+      const item = { ...b, id: `${b.activityId}-${i}`, _isActivity: true as const };
+      (window && map[dayKey][window] ? map[dayKey][window] : map[dayKey].unscheduled).push(item as any);
+    });
+
+    // Show each window in time order, now that three kinds of item share it.
+    for (const day of Object.values(map)) {
+      for (const list of Object.values(day)) {
+        list.sort((a: any, b: any) => (a.start_time ? Date.parse(a.start_time) : Infinity) - (b.start_time ? Date.parse(b.start_time) : Infinity));
+      }
+    }
     return map;
   }, [tasks, historyTasks, weekDays, externalEvents, userTimezone, config, todayStr]);
 
@@ -308,6 +329,25 @@ const AgendaTab: React.FC<AgendaTabProps> = ({ tasks, historyTasks, weekDays, ex
                         </div>
                         <div className="px-2 pb-2 space-y-1">
                           {windowItems.map((item: any) => {
+                            if (item._isActivity) {
+                              return (
+                                <div
+                                  key={`act-${item.id}`}
+                                  className="rounded px-2 py-1.5 border-l-2 border-dashed border-l-violet-400 bg-violet-50/50 dark:bg-violet-950/20"
+                                >
+                                  <div className="flex items-center gap-1.5">
+                                    {item.locked ? <Lock className="h-3 w-3 text-muted-foreground flex-shrink-0" /> : <Clock className="h-3 w-3 text-muted-foreground flex-shrink-0" />}
+                                    <span className="text-xs text-muted-foreground flex-shrink-0">
+                                      {formatTimeInTimezone(item.start_time, userTimezone)} – {formatTimeInTimezone(item.end_time, userTimezone)}
+                                    </span>
+                                    <span className="text-xs font-medium truncate">{item.name}</span>
+                                    {item.conflict && (
+                                      <Badge variant="outline" className="text-[10px] px-1 py-0">overlaps a meeting</Badge>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            }
                             if (item._isExternal) {
                               // External event card
                               const conn = item.calendar_connections;

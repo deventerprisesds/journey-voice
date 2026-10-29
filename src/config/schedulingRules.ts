@@ -7,6 +7,10 @@
  */
 
 import { resolveKeywords } from '@/utils/resolveKeywords';
+// Activities are IMPORTED from the edge-function module, not mirrored: one implementation for the
+// schedulers, the Settings screen and the calendar view, so the three cannot disagree.
+import type { Activity } from '../../supabase/functions/_shared/activities.ts';
+export type { Activity };
 
 export interface TimeWindow {
   start: number; // hour (0-23)
@@ -69,6 +73,13 @@ export interface SchedulingConfig {
    * supabase/functions/_shared/scheduling-defaults.ts (SchedulingCaveat / activeCaveats / applyCaveats).
    */
   caveats?: SchedulingCaveat[];
+  /**
+   * Recurring / one-off / on-demand ACTIVITIES (lunch, gym, church, haircut, 1:1s) — reserved time
+   * that is never a task. UNDEFINED means "never saved", and the shared seed (lunch + gym) applies;
+   * an empty array means the owner removed them all. Never default this to [].
+   * Contract: supabase/functions/_shared/activities.ts.
+   */
+  activities?: Activity[];
 }
 
 // Default configuration blending all existing rules
@@ -303,5 +314,8 @@ export function mergeSchedulingConfig(
     // config object explicitly, so any key it forgets is silently dropped on the next save — which
     // would wipe the owner's active caveats the moment they touched any other setting.
     caveats: Array.isArray(userConfig.caveats) ? userConfig.caveats : [],
+    // Same pass-through rule — but UNDEFINED when never saved, so the seed keeps applying and a save
+    // of an unrelated setting never writes an empty list that would erase lunch.
+    activities: Array.isArray(userConfig.activities) ? userConfig.activities : undefined,
   };
 }

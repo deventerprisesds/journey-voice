@@ -15,6 +15,7 @@ import {
 import { DEFAULT_SCHEDULING_CONFIG, type SchedulingConfig, type SchedulingCaveat } from '@/config/schedulingRules';
 import { Clock, Calendar, TrendingUp, Tag, Key, Target, Plus, X, FileText, Globe, Timer } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
+import ActivitiesSettings from '@/components/ActivitiesSettings';
 import { TIMEZONE_OPTIONS, getBrowserTimezone, formatTimezoneWithOffset } from '@/lib/timezone';
 
 const SchedulingSettings: React.FC = () => {
@@ -343,6 +344,9 @@ const SchedulingSettings: React.FC = () => {
           ))}
         </CardContent>
       </Card>
+
+      {/* Activities — reserved time inside the windows above (lunch, gym, church, 1:1s); never tasks */}
+      <ActivitiesSettings config={config} onChange={(activities) => setConfig({ ...config, activities })} />
 
       {/* Workload Balance */}
       <Card>
