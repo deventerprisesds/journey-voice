@@ -12,7 +12,13 @@ Last updated: 2026-10-27
 > distrust, never the sections. `actions.md` has no file-level stamp at all, deliberately, for
 > the same reason: its ACT entries each carry their own date.
 
-## Activities — reserved time that is NOT a task (2026-10-29, branch claude/sleepy-bardeen-kty0n2, NOT merged)
+## Activities — reserved time that is NOT a task (2026-10-29, MERGED #76 `ab9834b`, edge fns DEPLOYED; owner not yet confirmed live)
+
+- **undef-check trap:** its import regex `import\s+([^;]*?)\s+from` stops at the FIRST "from", so an
+  imported name starting with `from` (e.g. `fromMinutes`) makes it misread the whole import line and
+  report every name in it as undefined. Hence `minutesToHHMM`.
+- **Every settings writer must REFUSE on a failed read** (`readActivityPrefs`, `readCaveats`): writers
+  save `{...config, key}`, so `{}` after a read error wipes timeWindows/categoryMappings/caveats/activities.
 
 - **Contract:** `supabase/functions/_shared/activities.ts`. Stored at `user_scheduling_prefs.config.activities`.
   `undefined` = never saved → seed applies (Lunch floating 11:30–13:30 weekdays, length =
