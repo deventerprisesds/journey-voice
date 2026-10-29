@@ -6,6 +6,30 @@ the technical findings) and `.claude/accuracy-log.md` (wrong-first-answers).
 
 ---
 
+## ACT:activities — recurring activities (lunch, gym, church, haircut, 1:1s) + "headed to the gym" push
+
+**Asked (2026-10-27/29, owner):** sub-windows inside the time windows for repeatable activities
+(standup, direct-report 1:1, peer 1:1, LinkedIn writing, research, lunch), locked or not; a gym slot
+that pushes the day when the owner tells Iris/Flex "I'm headed to the gym"; and (2026-10-29) "a
+recurring activities concept so that things like church, gym, haircut, lunch get the same treatment
+instead of treated like a regular task when i tell the AI about them". Storage: owner chose option A
+(reserved blocks from config, never task rows).
+
+**Status: IMPLEMENTED on branch `claude/sleepy-bardeen-kty0n2`, mechanism verified offline, NOT merged,
+NOT confirmed live.**
+
+Evidence:
+- `5b5605c` shared model `supabase/functions/_shared/activities.ts` + 17 tests
+  (`src/utils/activities.test.ts`); mutate.sh FIRED on the push wall-hop and floating-lunch guards.
+- `dd70feb` wired into nightly-schedule-builder (capacity), batch-calendar-scheduler (busy list +
+  hard post-AI overlap rejection), smart-calendar-scheduler, execute-tool find_open_slots; tools
+  add/list/update/remove/skip_activity, start_activity (push), undo_activity_start.
+- Settings card `src/components/ActivitiesSettings.tsx`; week view draws activity blocks.
+- Open: Phase 2 "research/LinkedIn blocks attract matching tasks" not built; ceremony_schedule is
+  not read through (owner's saved list is empty, so nothing would change today).
+
+---
+
 ## ACT-jv-2: PR triage pass — 5 open PRs
 
 **Asked (2026-09-21, owner):** "go ahead with the triage pass" (across all repos with open PRs).

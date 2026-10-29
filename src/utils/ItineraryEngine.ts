@@ -1,4 +1,5 @@
 import { supabase } from '@/integrations/supabase/client';
+import { activityBusySlots } from '../../supabase/functions/_shared/activities.ts';
 import { Task } from '@/types/task';
 import {
   loadUserSchedulingConfig,
@@ -342,6 +343,20 @@ export class ItineraryEngine {
 
       // Use the working ai-task-parser (same as chat/voice)
       const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+      // Activities (lunch, church, 1:1s…) are reserved time. The parser's scheduler already avoids
+      // them when it SUGGESTS a slot; adding them here makes the editable suggestion's conflict
+      // warning fire if the owner then moves it onto one.
+      const { data: prefs } = await supabase
+        .from('user_scheduling_prefs')
+        .select('config, timezone')
+        .eq('user_id', user.id)
+        .maybeSingle();
+      const activityTz = (prefs as any)?.timezone || (prefs as any)?.config?.timezone || timezone;
+      busySlots.push(
+        ...activityBusySlots((prefs as any)?.config ?? {}, startDate.toISOString(), endDate.toISOString(), activityTz)
+          .map((b) => ({ start: b.start_time, end: b.end_time, title: b.name, type: 'activity' })),
+      );
       const { data, error } = await supabase.functions.invoke('ai-task-parser', {
         body: {
           text: taskText,

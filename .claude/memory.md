@@ -12,6 +12,25 @@ Last updated: 2026-10-27
 > distrust, never the sections. `actions.md` has no file-level stamp at all, deliberately, for
 > the same reason: its ACT entries each carry their own date.
 
+## Activities — reserved time that is NOT a task (2026-10-29, branch claude/sleepy-bardeen-kty0n2, NOT merged)
+
+- **Contract:** `supabase/functions/_shared/activities.ts`. Stored at `user_scheduling_prefs.config.activities`.
+  `undefined` = never saved → seed applies (Lunch floating 11:30–13:30 weekdays, length =
+  `workingHours.breakMinutes`; Gym on-demand 120 min, pushes the day). `[]` = owner removed all. Never
+  default it to `[]` (client `mergeSchedulingConfig` carries it as `undefined` when absent for this reason).
+- **Busy time had exactly two sources before this** (scheduled `tasks` + `external_calendar_events`);
+  activities are the third, expanded by `activityBusySlots()` in all four readers: nightly capacity,
+  batch busy list AND its hard post-AI overlap rejection (`OVERLAPS_ACTIVITY`), smart scheduler prompt,
+  execute-tool `findOpenSlots` (so `move_task_to_day` too). A fifth reader must call the same function.
+- **The app imports the edge module directly** (`../../supabase/functions/_shared/activities.ts`;
+  `allowImportingTsExtensions` is on) — no client mirror to drift.
+- **start_activity (gym push):** writes the block as a `one_off` activity for today, shifts displaced
+  tasks via `planPush` (meetings + locked activities never move → conflicts), unschedules what passes
+  its category's latest window end, saves `config.lastActivityStart` for `undo_activity_start`.
+  Past one-offs are pruned on every write.
+- **deno.land is denied by this sandbox's egress** — `deno check` cannot run here; CI's
+  `parse-edge-functions.yml` uses `deno fmt --check` (parse only) for the same reason.
+
 ## Edge deploy all-mode: one call per function; `mcp` excluded (2026-10-27, branch claude_deploy-all-per-function, NOT merged)
 - **The trap:** all-mode (any `_shared` change, or dispatch `all`) used to be ONE bulk `supabase functions deploy`.
   It stops at the first failure. `mcp` bundles to 27 MB → HTTP 413, so runs 39159443758 (10-18) and 40575132776

@@ -15,6 +15,7 @@ import {
   ASSIGNMENT_PRIORITY_DAYS,
 } from "../_shared/scheduling-defaults.ts";
 import { getTodayInTimezone, localDateToUtcBounds } from "../_shared/timezone.ts";
+import { activityBusySlots } from "../_shared/activities.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -912,10 +913,18 @@ serve(async (req) => {
           // Use dayBounds for proper timezone-aware filtering instead of UTC string prefix match
           const dayBusySlots = accumulatedBusySlots.filter(s => s.start_time >= dayBounds.start && s.start_time < dayBounds.end);
 
+          // Recurring activities (lunch, church, 1:1s…) are reserved time, not tasks — they take
+          // capacity exactly like a calendar event. Floating ones are placed around the day's events.
+          const dayActivityBlocks = activityBusySlots(config, dayBounds.start, dayBounds.end, timezone, dayEvents || []);
+          if (dayActivityBlocks.length) {
+            console.log(`    🧘 Activities reserved: ${dayActivityBlocks.map(b => b.name).join(', ')}`);
+          }
+
           const allScheduledItems = [
             ...(dayScheduled || []),
             ...(dayEvents || []).map(e => ({ ...e, estimate_minutes: undefined })),
             ...dayBusySlots.map(s => ({ ...s, estimate_minutes: undefined })),
+            ...dayActivityBlocks.map(b => ({ start_time: b.start_time, end_time: b.end_time, estimate_minutes: undefined })),
           ];
 
           const windowCapacities = computeUsedMinutes(allScheduledItems, activeWindows, targetISO, timezone);
@@ -1420,8 +1429,10 @@ serve(async (req) => {
               const sMs = new Date(s.start_time).getTime();
               return sMs >= new Date(dayBounds.start).getTime() && sMs < new Date(dayBounds.end).getTime();
             });
+            // Activities take capacity here too, so the retry does not over-count free time.
+            const retryActivityBlocks = activityBusySlots(config, dayBounds.start, dayBounds.end, timezone);
             const retryCaps = computeUsedMinutes(
-              dayBusyForRetry.map(s => ({ start_time: s.start_time, end_time: s.end_time })),
+              [...dayBusyForRetry, ...retryActivityBlocks].map(s => ({ start_time: s.start_time, end_time: s.end_time })),
               activeWindows,
               targetISO,
               timezone,
