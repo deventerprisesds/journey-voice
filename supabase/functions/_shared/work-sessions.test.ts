@@ -204,6 +204,14 @@ describe('P3 work-session planner', () => {
     }
   });
 
+  it('AC-P3-6b the per-day cap from Settings binds even when the window has room (cap 1/1 → one block a day)', () => {
+    const cap1 = { categoryMappings: { PROF_EDUCATION: { maxPerDay: 1, maxPerDayWeekend: 1, defaultTimeWindow: ['evening', 'weekends'] } } };
+    const p = run({ parents: [CP2, PAPER, PROPOSAL], days: days('2026-10-29', 60, {}, cap1) });
+    const perDay: Record<string, number> = {};
+    for (const c of p.creates) perDay[c.placement.date] = (perDay[c.placement.date] ?? 0) + 1;
+    assert.ok(Object.values(perDay).every((n) => n <= 1), JSON.stringify(perDay));
+  });
+
   it('AC-P3-7 only the 7-day horizon gets calendar blocks; later sessions carry a planned date only', () => {
     const p = run();
     const later = p.creates.filter((c) => c.placement.date > '2026-11-04');
