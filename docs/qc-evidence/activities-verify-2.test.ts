@@ -212,3 +212,40 @@ test('C7 update unrelated field keeps a stored pushesSchedule:true', async () =>
   assert.equal(a.pushesSchedule, true);
   assert.equal(a.durationMin, 45);
 });
+
+// ---- Claim 7: expandActivitiesForDate clamps a floating block into [earliest, latest-duration] ----
+import { expandActivitiesForDate as expand, minutesToHHMM as mh } from '../../supabase/functions/_shared/activities.ts';
+import { zonedTimeToUtc } from '../../supabase/functions/_shared/timezone.ts';
+test('C7 expand: floating block never starts outside [lo, hi] (random sweep)', () => {
+  let seed = 7; const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+  const localMin = (iso: string, tz: string) => {
+    const p = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(iso));
+    return Number(p.find((x) => x.type === 'hour')!.value) * 60 + Number(p.find((x) => x.type === 'minute')!.value);
+  };
+  let n = 0, conflicts = 0, outOfRangePrefs = 0;
+  for (let i = 0; i < 3000; i++) {
+    const tz = ['America/New_York', 'America/Los_Angeles', 'UTC'][i % 3];
+    const date = ['2026-10-28', '2026-03-09', '2026-11-02'][i % 3];
+    const dur = 15 * (1 + Math.floor(rnd() * 8));
+    const lo = 15 * Math.floor(rnd() * 60) + 300;
+    const hiEnd = Math.min(1439, lo + dur + 15 * Math.floor(rnd() * 12));
+    const start = 15 * Math.floor(rnd() * 90);
+    if (start < lo || start > hiEnd - dur) outOfRangePrefs++;
+    const busy: any[] = [];
+    for (let k = 0; k < Math.floor(rnd() * 4); k++) {
+      const bs = lo + 15 * Math.floor(rnd() * 20) - 60; const be = bs + 15 * (1 + Math.floor(rnd() * 6));
+      if (bs < 0 || be > 1439) continue;
+      busy.push({ start_time: new Date(zonedTimeToUtc(date, mh(bs), tz)).toISOString(), end_time: new Date(zonedTimeToUtc(date, mh(be), tz)).toISOString() });
+    }
+    const a: any = { id: 'f', name: 'F', kind: 'recurring', mode: 'floating', start: mh(start), earliest: mh(lo), latest: mh(hiEnd), durationMin: dur, days: [0,1,2,3,4,5,6], enabled: true };
+    const blocks = expand([a], date, tz, busy);
+    assert.equal(blocks.length, 1);
+    const s = localMin(blocks[0].start_time, tz);
+    const hi = Math.max(lo, hiEnd - dur);
+    assert.ok(s >= lo && s <= hi, `i=${i} start ${mh(s)} not in [${mh(lo)}, ${mh(hi)}] pref=${mh(start)} tz=${tz} date=${date}`);
+    if (blocks[0].conflict) { conflicts++; assert.equal(s, Math.min(hi, Math.max(lo, start)), 'conflict sits at clamped pref'); }
+    else assert.ok(!busy.some((b) => Date.parse(b.start_time) < Date.parse(blocks[0].end_time) && Date.parse(blocks[0].start_time) < Date.parse(b.end_time)), 'non-conflict block avoids busy');
+    n++;
+  }
+  console.log(`# expand sweep n=${n} outOfRangePrefs=${outOfRangePrefs} conflicts=${conflicts}`);
+});
