@@ -344,6 +344,58 @@ const SchedulingSettings: React.FC = () => {
         </CardContent>
       </Card>
 
+      {/* Coursework work sessions (P3) */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Target className="h-5 w-5" />
+            <CardTitle>Coursework Work Sessions</CardTitle>
+          </div>
+          <CardDescription>
+            Each dated assignment becomes "session 1 of N" cards, spread from today until it is finished ahead of the due date.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id="assignment-sessions-enabled"
+              checked={(config.assignmentSessions ?? DEFAULT_SCHEDULING_CONFIG.assignmentSessions!).enabled}
+              onCheckedChange={(v) => setConfig({
+                ...config,
+                assignmentSessions: { ...(config.assignmentSessions ?? DEFAULT_SCHEDULING_CONFIG.assignmentSessions!), enabled: v === true },
+              })}
+            />
+            <Label htmlFor="assignment-sessions-enabled" className="text-sm">Spread assignments into work sessions</Label>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {([
+              ['finishBufferDays', 'Finish this many days before due', 0, 30],
+              ['sessionMinutes', 'Session length (minutes)', 15, 240],
+              ['defaultEffortMinutes', 'Effort when Nexus has none (minutes)', 15, 2400],
+              ['lateBufferHours', 'If already inside that window: stop this many hours before due', 0, 24],
+            ] as const).map(([key, label, min, max]) => {
+              const sess = config.assignmentSessions ?? DEFAULT_SCHEDULING_CONFIG.assignmentSessions!;
+              return (
+                <div key={key} className="space-y-2">
+                  <Label className="text-sm">{label}</Label>
+                  <Input
+                    type="number"
+                    min={min}
+                    max={max}
+                    value={sess[key]}
+                    onChange={(e) => {
+                      const n = parseInt(e.target.value);
+                      if (Number.isNaN(n)) return;
+                      setConfig({ ...config, assignmentSessions: { ...sess, [key]: n } });
+                    }}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Workload Balance */}
       <Card>
         <CardHeader>

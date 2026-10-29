@@ -73,6 +73,18 @@ export interface SchedulingConfig {
    * supabase/functions/_shared/scheduling-defaults.ts (SchedulingCaveat / activeCaveats / applyCaveats).
    */
   caveats?: SchedulingCaveat[];
+  /**
+   * Coursework WORK SESSIONS (P3, owner 2026-10-29): every dated assignment is split into
+   * session cards of `sessionMinutes`, spread from today to `finishBufferDays` before its due date.
+   * Backend contract: supabase/functions/_shared/work-sessions.ts (resolveSessionConfig).
+   */
+  assignmentSessions?: {
+    enabled: boolean;
+    finishBufferDays: number;     // finish this many days before the due date (owner: 7)
+    sessionMinutes: number;       // length of one work session (owner: 90)
+    defaultEffortMinutes: number; // total effort when Nexus gives none (owner: 180)
+    lateBufferHours: number;      // already inside the window: last session ends this long before due
+  };
 }
 
 // Default configuration blending all existing rules
@@ -120,6 +132,14 @@ export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
     projectToTaskRatio: 0.6,
     oneOffTaskRatio: 0.3,
     bufferRatio: 0.1,
+  },
+  // Seeds only — every value is changeable in Settings → Scheduling → Coursework work sessions.
+  assignmentSessions: {
+    enabled: true,
+    finishBufferDays: 7,
+    sessionMinutes: 90,
+    defaultEffortMinutes: 180,
+    lateBufferHours: 1,
   },
   categoryMappings: {
     CAREER: {
@@ -310,5 +330,7 @@ export function mergeSchedulingConfig(
     // config object explicitly, so any key it forgets is silently dropped on the next save — which
     // would wipe the owner's active caveats the moment they touched any other setting.
     caveats: Array.isArray(userConfig.caveats) ? userConfig.caveats : [],
+    // Carried for the same reason as caveats: a key this function forgets is dropped on the next save.
+    assignmentSessions: { ...DEFAULT_SCHEDULING_CONFIG.assignmentSessions!, ...(userConfig.assignmentSessions ?? {}) },
   };
 }
