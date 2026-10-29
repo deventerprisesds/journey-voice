@@ -15,8 +15,14 @@ recurring activities concept so that things like church, gym, haircut, lunch get
 instead of treated like a regular task when i tell the AI about them". Storage: owner chose option A
 (reserved blocks from config, never task rows).
 
-**Status: IMPLEMENTED on branch `claude/sleepy-bardeen-kty0n2`, mechanism verified offline, NOT merged,
-NOT confirmed live.**
+**Status: MERGED + DEPLOYED 2026-10-29 (PR #76 → main `ab9834b`), NOT yet confirmed by the owner live.**
+Deploy run 40891523934: 50 deployed / 0 failed. Deployed source read back via get_edge_function:
+execute-tool v516, batch-calendar-scheduler v503, smart-calendar-scheduler v583, nightly-schedule-builder
+v312 all contain the activities code + `_shared/activities.ts`. The CLIENT half (Settings card, week view)
+ships via Lovable publish — not observable from a session; owner may need to hit Publish.
+Verified by two independent verifier loops (loop 1 REFUTED 4 claims incl. a config-wipe → fixed in
+`8295739`; loop 2 CONFIRMED all, one LOW display gap → fixed `55f0672`; follow-ups `5f16912`).
+Evidence branches: `claude_verify-activities-reserved-time-1`, `-2`.
 
 Evidence:
 - `5b5605c` shared model `supabase/functions/_shared/activities.ts` + 17 tests
