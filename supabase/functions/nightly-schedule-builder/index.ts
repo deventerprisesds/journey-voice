@@ -15,6 +15,7 @@ import {
   ASSIGNMENT_PRIORITY_DAYS,
 } from "../_shared/scheduling-defaults.ts";
 import { getTodayInTimezone, localDateToUtcBounds } from "../_shared/timezone.ts";
+import { runWorkSessionPass } from "../_shared/work-session-pass.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -419,6 +420,7 @@ serve(async (req) => {
             .eq('user_id', userId)
             .eq('is_scheduled', true)
             .not('status', 'eq', 'DONE')
+            .not('tags', 'cs', '{work-session}') // P3: the session pass owns these (keeps hand-moved ones)
             .gte('start_time', now.toISOString())
             .lt('start_time', horizonEnd.toISOString());
 
@@ -458,6 +460,7 @@ serve(async (req) => {
             .eq('user_id', userId)
             .eq('is_scheduled', true)
             .not('status', 'eq', 'DONE')
+            .not('tags', 'cs', '{work-session}') // P3: the session pass owns these
             .gte('start_time', todayStartIso)
             .lt('start_time', todayEndIso);
 
@@ -646,6 +649,34 @@ serve(async (req) => {
         }
 
         // ==========================================
+        // PASS 0: ASSIGNMENT WORK SESSIONS (P3/P4)
+        // Every open, dated assignment is planned as "session N of M" cards spread from today to its
+        // finish-by date (Settings → assignmentSessions; default 7 days before due), inside the
+        // coursework windows and the per-day cap. Runs BEFORE every other pass so required coursework
+        // is placed first; the parents and their sessions are then left out of the passes below.
+        // Single-day mode only reads (no re-plan), so "add a task for today" never moves sessions.
+        // A failure here is non-fatal: the builder falls back to its old one-block behaviour for
+        // assignments, but session cards are still kept out of the other passes.
+        // ==========================================
+        let sessionManagedIds = new Set<string>();
+        let sessionPass: Awaited<ReturnType<typeof runWorkSessionPass>> | null = null;
+        try {
+          sessionPass = await runWorkSessionPass(supabase, {
+            userId, timezone, userConfig: config, now, mode: singleDay ? 'dry' : 'apply', horizonDays: 7,
+            beforeRetime: (ts) => deleteAppOriginatedEvents(supabase, userId, ts),
+          });
+          sessionManagedIds = new Set(sessionPass.managedIds);
+          console.log(`  🧩 Work sessions: managed=${sessionPass.managedIds.length} created=${sessionPass.written.created} ` +
+            `retimed=${sessionPass.written.retimed} unscheduled=${sessionPass.written.unscheduled} ` +
+            `warning=${sessionPass.written.warningQueued}`);
+        } catch (sessErr) {
+          console.warn(`  ⚠️ Work-session pass failed (non-fatal):`, sessErr);
+          const { data: sessRows } = await supabase.from('tasks').select('id')
+            .eq('user_id', userId).like('assignment_id', '%::session-%');
+          sessionManagedIds = new Set((sessRows || []).map((r: any) => r.id));
+        }
+
+        // ==========================================
         // ASSIGNMENT TIER CLASSIFICATION (cross-horizon)
         // Split assignment-linked candidates into Tier A (≤48h, deadline-critical),
         // Tier B (3-7d or overdue ≤7d, due ASC), Tier C (>7d or overdue >7d, due DESC).
@@ -670,6 +701,7 @@ serve(async (req) => {
 
         for (const t of (allAssignmentTasks || [])) {
           if (!t.due_date) continue;
+          if (sessionManagedIds.has(t.id)) continue; // planned as work sessions in PASS 0
           const dueMs = new Date(t.due_date).getTime();
           const delta = dueMs - nowMs;
           if (delta <= urgentMs && delta >= -urgentMs) {
@@ -694,6 +726,11 @@ serve(async (req) => {
         const accumulatedBusySlots: Array<{ start_time: string; end_time: string }> = [];
         const dailyAssignmentCount: Record<string, number> = {}; // targetISO → assignment count placed
         const tierAResults = { categoryPlaced: 0, flexiblePlaced: 0, deferred: 0 };
+        // PASS 0's session blocks already use coursework capacity and calendar time.
+        for (const [day, n] of Object.entries(sessionPass?.placementsByDate ?? {})) {
+          dailyAssignmentCount[day] = (dailyAssignmentCount[day] || 0) + n;
+        }
+        if (!singleDay) accumulatedBusySlots.push(...(sessionPass?.placedBlocks ?? []));
 
         // Rolling 7-day horizon (or 1 day in single-day mode)
         const totalDays = singleDay ? 1 : 7;
@@ -961,7 +998,7 @@ serve(async (req) => {
 
           const readyIds = (readyUpNextTasks || []).map((t: any) => t.id);
           const allCandidateIds = [...new Set([...mappedIds, ...readyIds])]
-            .filter(id => !scheduledTaskIds.has(id)); // Exclude already-scheduled
+            .filter(id => !scheduledTaskIds.has(id) && !sessionManagedIds.has(id)); // Exclude already-scheduled + PASS 0's
 
           if (allCandidateIds.length === 0) {
             console.log(`    ℹ️ No candidates remaining for ${targetISO}`);
@@ -1782,6 +1819,7 @@ serve(async (req) => {
             topUpPlaced,
             dailyAssignmentCount,
           },
+          workSessions: sessionPass?.summary ?? null,
         };
 
       } catch (userError) {

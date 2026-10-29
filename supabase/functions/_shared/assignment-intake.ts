@@ -51,6 +51,8 @@ export interface PlannedCreate {
   assignmentId: string;
   courseCode: string | null;
   insert: Record<string, unknown>;
+  /** Nexus gave no effort, so the Settings default was used — the digest asks the owner once (P3). */
+  effortDefaulted?: boolean;
 }
 
 export interface PlannedUpdate {
@@ -83,6 +85,8 @@ export interface PlanInput {
   boardId: string | null; // oldest default board (#43); null = cannot create
   userId: string;
   nowISO: string;
+  /** Total effort when Nexus has none (Settings assignmentSessions.defaultEffortMinutes; owner: 180). */
+  defaultEffortMinutes?: number;
 }
 
 const lower = (s: unknown) => String(s ?? '').trim().toLowerCase();
@@ -117,10 +121,14 @@ export function currentCourseKeys(rows: NexusAssignmentRow[], todayISO: string, 
   return out;
 }
 
-/** Same mapping main used (nightly-assignment-sync 184-190): 45 / 90 / 180, default 90. */
-export function estimateFromEffort(loe: string | null | undefined): number {
+/**
+ * Main's mapping (nightly-assignment-sync 184-190): low 45 / medium 90 / high 180. With NO effort from
+ * Nexus (every DBA row today) the owner's default applies — 180 min total (2026-10-29), from Settings.
+ */
+export const DEFAULT_EFFORT_MINUTES = 180;
+export function estimateFromEffort(loe: string | null | undefined, fallback = DEFAULT_EFFORT_MINUTES): number {
   const v = lower(loe);
-  if (!v) return 90;
+  if (!v) return fallback;
   if (v.includes('low') || v.includes('small')) return 45;
   if (v.includes('high') || v.includes('large')) return 180;
   return 90;
@@ -221,6 +229,7 @@ export function planAssignmentSync(input: PlanInput): SyncPlan {
     plan.creates.push({
       assignmentId: r.id,
       courseCode: code,
+      effortDefaulted: !lower(r.level_of_effort),
       insert: {
         title,
         description,
@@ -229,7 +238,7 @@ export function planAssignmentSync(input: PlanInput): SyncPlan {
         // #28/#33: status is a workflow lane, never a category. Dated → UP_NEXT (every import is dated).
         status: 'UP_NEXT',
         due_date: due,
-        estimate_minutes: estimateFromEffort(r.level_of_effort),
+        estimate_minutes: estimateFromEffort(r.level_of_effort, input.defaultEffortMinutes ?? DEFAULT_EFFORT_MINUTES),
         is_scheduled: false,
         board_id: boardId,
         user_id: userId,
@@ -316,11 +325,19 @@ export function formatDue(iso: string | null, tz: string): string {
 export function buildSyncDigest(
   applied: { creates: PlannedCreate[]; updates: PlannedUpdate[] },
   tz: string,
+  sessionMinutes = 90,
 ): { title: string; message: string; lineCount: number } | null {
   const lines: string[] = [];
   const tagOf = (code: string | null) => (code ? ` (${code})` : '');
+  const hours = (m: number) => (m % 60 === 0 ? `${m / 60} h` : `${(m / 60).toFixed(1)} h`);
   for (const c of applied.creates) {
-    lines.push(`• New: ${c.insert.title}${tagOf(c.courseCode)} — due ${formatDue(c.insert.due_date as string, tz)}`);
+    const est = Number(c.insert.estimate_minutes) || 0;
+    // Owner 2026-10-29: "Iris asks once per assignment to correct it" — the card is created once, so
+    // this line is sent once; later runs only refresh.
+    const ask = c.effortDefaulted && est
+      ? ` Nexus has no effort for it, so I've assumed ${hours(est)} (${Math.ceil(est / sessionMinutes)} × ${sessionMinutes}-min sessions) — tell me if it needs more or less.`
+      : '';
+    lines.push(`• New: ${c.insert.title}${tagOf(c.courseCode)} — due ${formatDue(c.insert.due_date as string, tz)}.${ask}`);
   }
   for (const u of applied.updates) {
     for (const ch of u.changes) {
