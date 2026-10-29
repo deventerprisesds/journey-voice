@@ -347,3 +347,103 @@ Owner-approved 2026-10-28 (top priority). Branch `claude_assignment-spreading`. 
 (`excluded` is 0 above because only the 3 dated rows were fed in; on the full 566 the planner's create gate excludes the 42 undated + 518 past-due + 3 submitted, matching the SQL totals; the 59 DONE-linked tasks are `untouched_done`.)
 **Would update / flag:** none (no linked open task). **Messages:** one Iris `scheduled_chat`, delivered at 06:00 ET (quiet-hours end) when written by the 1 am run.
 **Note for the owner (I):** the hand-made `Work on DBA paper for 782` (no Nexus link, different title) stays; after deploy the board will also hold `📚 Research Proposal`. One can be deleted by hand.
+
+---
+
+## Build log (P3 work sessions, P4 early warning) — branch `claude_assignment-sessions` (from main 62e8ae6, after #77)
+
+### Owner decisions applied (2026-10-29)
+- **Sessions are their own cards** (fork F1a): `📚 <assignment> — session N of M`, each with its own calendar block (so the existing `start_time_reminder` alarm path and Done button apply) and linked to the parent assignment card. Finished sessions count toward the total.
+- **Finish-by = 7 days before due** ("I like to finish one week ahead not one day"). Session 90 min. Effort 180 min when Nexus has none, and Iris asks once per assignment to correct it (in the "New:" line of the intake message, sent once because the card is created once). Spread starts today. All values are Settings fields (`config.assignmentSessions`, seeded) and can be changed.
+- Sessions sit inside the P2 caps (weekday 2, weekend 6) and the coursework windows (weekday `evening` 19–22, weekend `weekends` 10–20, via the builder's own getActiveWindows rule and getPreferredWindows).
+- **Re-spread nightly:** remaining = effort − minutes of DONE sessions. Missed sessions are re-placed on the same card (stable key, never duplicated). A session that already has a planned date keeps it while it still fits. **A session the owner marked DONE or moved by hand is never moved.**
+- **Already inside the window** (finish-by past, due not): sessions are spread from today up to the due date minus `lateBufferHours` (1 h), and the P4 warning is sent that day. Nothing is placed after the due date, and nothing is dropped silently: a shortfall is counted, tagged and reported.
+- **P4:** one Iris message on the day the remaining sessions stop fitting (transition-based: parent tag `sessions-at-risk`, so no nightly repeats). It is appended to that night's intake digest when one is queued, so there is still one message per night.
+
+### How a session is identified (O + reasoning)
+`tasks` has no parent column. The builder replaces `scheduling_context` on placement (main :835/:1380/:1490), and nothing but the intake writes `assignment_id` (grep). So a session row's `assignment_id` = `<nexusAssignmentId>::session-<k>`. That makes it idempotent and stable, the intake's exact-id lookup never mistakes it for the assignment, and the builder's existing `assignment_id IS NOT NULL` coursework rules (daily-cap reconciliation) count sessions as coursework. Tag `work-session` for filtering. `due_date` is null on sessions so due-date reminders are not multiplied; the parent keeps the deadline.
+
+### Files
+- `_shared/work-sessions.ts`: pure planner + P4 lines + dry-run view.
+- `_shared/work-session-pass.ts`: I/O. **dry** reads only, **apply** writes. Every update is guarded `.neq('status','DONE').is('completed_at',null)`; app-originated calendar copies of moved sessions are deleted with the builder's own `deleteAppOriginatedEvents`. Busy = real calendar events (`source_task_id` null) + blocks the builder's STEP 1.1 will not clear.
+- `nightly-schedule-builder`: **PASS 0** runs before the tiers. STEP 1.1 (both modes) leaves `work-session` cards to it. Managed parents and sessions are skipped by the tiers and the daily candidates. The coursework tally and busy slots are seeded from PASS 0. Single-day mode only reads. A PASS 0 failure is non-fatal (falls back to old one-block behaviour, but session cards are still kept out).
+- `nightly-assignment-sync`: `dryRun:true` now also returns `sessions` (the PASS 0 plan, with the not-yet-created cards as parents). Effort default and session length come from Settings.
+- Settings: "Coursework Work Sessions" card (enable, finish-by days, session minutes, default effort, late buffer); `src/config/schedulingRules.ts` seed + type + merge pass-through (a key the merge forgets is dropped on save).
+
+### Not done / what changes
+- **No longer in place:** Tier A's single cap-bypassed block in the last 48 h as the only coursework guarantee, and Tier C's "no deadline privilege beyond 7 days", **for every open dated assignment with a future due date**. Those are now planned as sessions from today. Past-due open assignments still go through the old tiers.
+- Huddle mirrors every journey task, so session cards appear on Huddle's board too (tag `work-session`). Whether Huddle auto-work should skip them is a Huddle-side follow-on (row).
+
+### DRY RUN against LIVE data (P3) — 2026-10-29 14:15Z, read-only
+**How (O):** live rows read read-only: owner calendar (`external_calendar_events`, non-task-backed, now → Dec 9: 9 events incl. MGT-782 class Mon Nov 9 7–10 pm and MGT-702 Tue Nov 10 7–10 pm), owner `timeWindows` + `PROF_EDUCATION` mapping, Nexus's 3 dated rows. The real `runWorkSessionPass` ran in `dry` mode over an in-memory client that **throws on any insert/update**, with the 3 P1 cards as not-yet-created parents (they do not exist yet; #77's first real run is tonight's 05:00 UTC build). Three scenarios:
+```
+
+=== NOW (Thu Oct 29 10:15 am ET), weekend cap 6 ===
+📚 Research Proposal | due 2026-10-30 | finish-by 2026-10-23 (ALREADY PAST → late window to 2026-10-30) | effort 180 min → 2 sessions | unplaced 0
+   session 1: 2026-10-29  Thu, Oct 29, 7:00 PM – 8:30 PM
+   session 2: 2026-10-30  Fri, Oct 30, 7:00 PM – 8:30 PM
+📚 Checkpoint 2 - Details | due 2026-11-08 | finish-by 2026-11-01 | effort 180 min → 2 sessions | unplaced 0
+   session 1: 2026-10-29  Thu, Oct 29, 8:30 PM – 10:00 PM
+   session 2: 2026-10-31  Sat, Oct 31, 10:00 AM – 11:30 AM
+📚 Research Paper | due 2026-12-09 | finish-by 2026-12-02 | effort 180 min → 2 sessions | unplaced 0
+   session 1: 2026-10-30  Fri, Oct 30, 8:30 PM – 10:00 PM
+   session 2: 2026-11-17  (planned date; calendar block added when within 7 days)
+P4 warnings: 
+  • ⚠️ 📚 Research Proposal is due Fri, Oct 30 — already inside your one-week finish window. I've put 2 of 2 sessions before it.
+would create 6 session cards; blocks by day {"2026-10-29":2,"2026-10-30":2,"2026-10-31":1}
+
+=== TONIGHT'S BUILD (Fri Oct 30 1:00 am ET), weekend cap 6 ===
+📚 Research Proposal | due 2026-10-30 | finish-by 2026-10-23 (ALREADY PAST → late window to 2026-10-30) | effort 180 min → 2 sessions | unplaced 0
+   session 1: 2026-10-30  Fri, Oct 30, 7:00 PM – 8:30 PM
+   session 2: 2026-10-30  Fri, Oct 30, 8:30 PM – 10:00 PM
+📚 Checkpoint 2 - Details | due 2026-11-08 | finish-by 2026-11-01 | effort 180 min → 2 sessions | unplaced 0
+   session 1: 2026-10-31  Sat, Oct 31, 10:00 AM – 11:30 AM
+   session 2: 2026-11-01  Sun, Nov 1, 10:00 AM – 11:30 AM
+📚 Research Paper | due 2026-12-09 | finish-by 2026-12-02 | effort 180 min → 2 sessions | unplaced 0
+   session 1: 2026-10-31  Sat, Oct 31, 11:30 AM – 1:00 PM
+   session 2: 2026-11-17  (planned date; calendar block added when within 7 days)
+P4 warnings: 
+  • ⚠️ 📚 Research Proposal is due Fri, Oct 30 — already inside your one-week finish window. I've put 2 of 2 sessions before it.
+would create 6 session cards; blocks by day {"2026-10-30":2,"2026-10-31":2,"2026-11-01":1}
+
+=== TONIGHT'S BUILD, owner row as saved today (no weekend key → weekend cap 2) ===
+📚 Research Proposal | due 2026-10-30 | finish-by 2026-10-23 (ALREADY PAST → late window to 2026-10-30) | effort 180 min → 2 sessions | unplaced 0
+   session 1: 2026-10-30  Fri, Oct 30, 7:00 PM – 8:30 PM
+   session 2: 2026-10-30  Fri, Oct 30, 8:30 PM – 10:00 PM
+📚 Checkpoint 2 - Details | due 2026-11-08 | finish-by 2026-11-01 | effort 180 min → 2 sessions | unplaced 0
+   session 1: 2026-10-31  Sat, Oct 31, 10:00 AM – 11:30 AM
+   session 2: 2026-11-01  Sun, Nov 1, 10:00 AM – 11:30 AM
+📚 Research Paper | due 2026-12-09 | finish-by 2026-12-02 | effort 180 min → 2 sessions | unplaced 0
+   session 1: 2026-10-31  Sat, Oct 31, 11:30 AM – 1:00 PM
+   session 2: 2026-11-17  (planned date; calendar block added when within 7 days)
+P4 warnings: 
+  • ⚠️ 📚 Research Proposal is due Fri, Oct 30 — already inside your one-week finish window. I've put 2 of 2 sessions before it.
+would create 6 session cards; blocks by day {"2026-10-30":2,"2026-10-31":2,"2026-11-01":1}
+```
+**Reading it (I):** tonight's run is the second block. Research Proposal is already inside its week window, so both sessions land Fri 7–10 pm before the 11:59 pm deadline, and the owner is warned. Checkpoint 2 is done by Sun Nov 1 (finish-by). Research Paper starts Sat and has its second session Nov 17, long before Dec 2. The weekend cap does not change tonight's plan (the third block shows the owner's row as saved today). The hand-made `Work on DBA paper for 782` card is an ordinary task: the builder will place it after PASS 0 as before.
+
+### Tests + mutation proofs (P3/P4)
+`npm test` 392 → **394, 0 fail** on this branch: `work-sessions.test.ts` 24 (AC-P3-0..14 incl. 5b/5c/6b, AC-P4-1..4), `work-session-pass.test.ts` 9 (PASS-1..5, WIRE-1..4), `assignment-intake.test.ts` +1 (AC-P3-14). P1's dry run now shows `estimate_minutes 180` (owner default) on the 3 cards.
+
+| # | defect reinstated | named test | outcome |
+|---|---|---|---|
+| s2 | late item gets no window to due | AC-P3-5 | FIRED |
+| s2b | "never after due − 1 h" limit removed | AC-P3-5c | FIRED |
+| s3 | DONE sessions treated as open | AC-P3-9 | FIRED |
+| s4 | hand-moved sessions not pinned | AC-P3-10 | FIRED |
+| s5 | idempotence check removed | AC-P3-3b | FIRED |
+| s6 | open sessions not reused → duplicates | AC-P3-3 | FIRED |
+| s7 | DONE/submitted parent still planned | AC-P3-4 | FIRED |
+| s8 | warning repeats nightly | AC-P4-4 | FIRED |
+| s9 | shortfall not treated as at-risk | AC-P4-1 | FIRED |
+| s10 | blocks beyond the 7-day horizon | AC-P3-7 | FIRED |
+| s11 | per-day cap ignored | AC-P3-6b | FIRED (INERT against AC-P3-6: a 19–22 evening holds exactly 2 × 90 min, the same as the cap, so AC-P3-6b with cap 1 was added) |
+| s21 | spreading replaced by "first feasible day" | AC-P3-1b | FIRED |
+| s1 / s1b | either "skip a day already used" check removed | AC-P3-8 | **INERT, equivalent**: the two checks back each other up, and the even-spacing picks are distinct by construction (s21 proves the spacing itself) |
+| s12 | dry mode writes | PASS-1 | FIRED |
+| s13 | retime not guarded against DONE | PASS-2 | FIRED |
+| s14 | task-backed calendar copies count as busy | PASS-3 | FIRED |
+| s15 | warning sent as a second message | PASS-4 | FIRED |
+| s16 | builder STEP 1.1 clears session cards | WIRE-1 | FIRED |
+| s17 / s20 | builder re-places managed tasks (daily candidates / tiers) | WIRE-2 | FIRED |
+| s18 / s19 | default effort 90 / no "assumed" ask | AC-P3-14 | FIRED |
