@@ -267,3 +267,83 @@ Owner-approved 2026-10-28 (top priority). Branch `claude_assignment-spreading`. 
 - **Live effect (O, read 2026-10-29):** the owner's saved `PROF_EDUCATION` row is `{maxPerDay 2, evening+weekends, 90 min}` with **no** `maxPerDayWeekend`, so after deploy weekends still cap at 2 (AC-P2-2) until `maxPerDayWeekend: 6` is written to that row (Settings field, or one reversible data write at ship time). The seed only applies to users with no saved row.
 - **Not changed (O):** `smart-calendar-scheduler` (:648-658) and `batch-calendar-scheduler` still read `maxPerDay` alone; J8 restore wires them.
 - Deno check of the builder: identical 19 pre-existing implicit-any errors before and after (stub artefacts), 0 new.
+
+### Mutation proofs (P1 + P2) — `mutate.sh`, anchors in files, exact test names
+| # | file | defect reinstated | named test | outcome |
+|---|---|---|---|---|
+| m1 | assignment-intake.ts | create gate ignores "due today or later" | AC-P1-2 | FIRED |
+| m2 | assignment-intake.ts | undated items not excluded | AC-P1-3 | FIRED |
+| m3 | assignment-intake.ts | DONE tasks refreshed like open ones | AC-P1-6 | FIRED |
+| m4 | assignment-intake.ts | due = UTC day + `T23:59:59Z` (the old bug) | AC-P1-4 | FIRED |
+| m5 | assignment-intake.ts | submitted flag also sets `status: DONE` | AC-P1-7 | FIRED |
+| m6 | assignment-intake.ts | "already flagged" read from scheduling_context (builder wipes it) | AC-P1-7b | FIRED |
+| m7 | assignment-intake.ts | current-course gate removed | AC-P1-10 | **INERT — behaviourally equivalent**: any item passing "open + dated today+" makes its own course current, so the explicit gate is redundant by construction. Kept as the owner's rule written in code; NOT claimed as a proven guard. |
+| m8 | assignment-intake.ts | digest sent with zero lines | AC-P1-8 | FIRED |
+| m9 | assignment-intake.ts | quiet hours ignored (1 am push) | AC-P1-8b | FIRED |
+| m10 | nexus-read.ts | 5xx body trusted | AC-P1-11 | FIRED |
+| m11 | assignment-intake.ts | due compared as strings, not instants | AC-P1-9 | FIRED |
+| m15 | assignment-intake.ts | same-title legacy card duplicated | AC-P1-12 | FIRED |
+| m12 | nightly-schedule-builder | pass-1 cap back to the constant | AC-P2-1b | FIRED |
+| m16 | nightly-schedule-builder | top-up day cap back to the constant | AC-P2-1b | FIRED |
+| m13 | scheduling-defaults.ts | resolver ignores the weekend value | AC-P2-1 | FIRED |
+| m14 | scheduling-defaults.ts | weekend seed 6 removed | AC-P2-2b | FIRED |
+
+### DRY RUN against LIVE data (P1) — 2026-10-29, read-only, nothing written
+**How (O):** this session cannot reach `nexus-hub-api.azurewebsites.net` (egress proxy `CONNECT 403`), so the HTTP leg was not exercised from here. The API's `GET /api/d1/assignments` is `SELECT * FROM content.assignments WHERE user_id=$owner` + the courses embed (nexus-hub `d1.ts` handleGet / attachCourses), so the same rows were read with a read-only `SELECT` through the nexus-pg connector and fed to the planner in-process (`planAssignmentSync` + `describePlan`, the exact code the `dryRun:true` request runs). journey side read-only via Supabase MCP: oldest default board `88616650-…`, 430 owner tasks, 59 linked (all DONE, none linked to the 3 dated ids), 0 unlinked same-title open cards.
+**Nexus totals (O, SQL):** 566 owner rows = 3 open & dated today+ · 42 open undated · 518 open past-due · 3 submitted. Current courses = MGT-702, MGT-782 (EMBA, MIT and the unassigned rows have no open item dated today+).
+**Would create (exact output):**
+```
+{
+  "scanned": 3,
+  "current_courses": [
+    "MGT-702",
+    "MGT-782"
+  ],
+  "would_create": [
+    {
+      "assignment_id": "aafbf80f-512a-4ea8-892b-0d9c9548c09e",
+      "title": "📚 Research Proposal",
+      "course": "MGT-782",
+      "due_date": "2026-10-31T03:59:59.000Z",
+      "due_local": "Fri, Oct 30, 11:59 PM",
+      "status": "UP_NEXT",
+      "estimate_minutes": 90
+    },
+    {
+      "assignment_id": "a3c3684e-0dce-4a76-9552-08e59608a428",
+      "title": "📚 Checkpoint 2 - Details",
+      "course": "MGT-702",
+      "due_date": "2026-11-09T04:59:59.000Z",
+      "due_local": "Sun, Nov 8, 11:59 PM",
+      "status": "UP_NEXT",
+      "estimate_minutes": 90
+    },
+    {
+      "assignment_id": "6616bef3-cddb-49b1-b619-d83e660951f8",
+      "title": "📚 Research Paper",
+      "course": "MGT-782",
+      "due_date": "2026-12-10T04:59:59.000Z",
+      "due_local": "Wed, Dec 9, 11:59 PM",
+      "status": "UP_NEXT",
+      "estimate_minutes": 90
+    }
+  ],
+  "would_update": [],
+  "untouched_done": 0,
+  "excluded": {
+    "closed": 0,
+    "undated": 0,
+    "pastDue": 0,
+    "nonCurrentCourse": 0,
+    "noBoard": 0
+  },
+  "digest": {
+    "title": "Coursework update: 3 assignments",
+    "message": "Coursework update from Nexus:\n\n• New: 📚 Research Proposal (MGT-782) — due Fri, Oct 30, 11:59 PM\n• New: 📚 Checkpoint 2 - Details (MGT-702) — due Sun, Nov 8, 11:59 PM\n• New: 📚 Research Paper (MGT-782) — due Wed, Dec 9, 11:59 PM",
+    "lineCount": 3
+  }
+}
+```
+(`excluded` is 0 above because only the 3 dated rows were fed in; on the full 566 the planner's create gate excludes the 42 undated + 518 past-due + 3 submitted, matching the SQL totals; the 59 DONE-linked tasks are `untouched_done`.)
+**Would update / flag:** none (no linked open task). **Messages:** one Iris `scheduled_chat`, delivered at 06:00 ET (quiet-hours end) when written by the 1 am run.
+**Note for the owner (I):** the hand-made `Work on DBA paper for 782` (no Nexus link, different title) stays; after deploy the board will also hold `📚 Research Proposal`. One can be deleted by hand.

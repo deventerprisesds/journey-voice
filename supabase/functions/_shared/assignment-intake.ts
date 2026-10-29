@@ -241,6 +241,8 @@ export function planAssignmentSync(input: PlanInput): SyncPlan {
       },
     });
   }
+  // Deadline order, so the digest and the dry run read soonest-first.
+  plan.creates.sort((a, b) => Date.parse(a.insert.due_date as string) - Date.parse(b.insert.due_date as string));
   return plan;
 }
 
