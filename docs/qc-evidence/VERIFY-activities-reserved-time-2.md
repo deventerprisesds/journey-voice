@@ -127,3 +127,27 @@ local either side of US DST changes" passes in the 17/17 re-run above. The 03:00
   owner's explicit edit). `handleReset` (:89-95) puts DEFAULT activities in page state without marking edited;
   a later card edit would then save seed+edit over the stored list. Outside 5b: `caveats` are still sent whole
   (schedulingRules.ts:318), so a Settings save reverts an agent caveat change made while the page was open.
+
+## Claim 8 -- anything else unsafe about merging: no blocker found; three things the merger must know
+- Parse: `node --experimental-strip-types --check` on execute-tool, smart-calendar-scheduler, nightly-schedule-builder,
+  batch-calendar-scheduler index.ts and _shared/activities.ts -> all OK. `deno check` not run (deno.land blocked), so
+  types are unverified -- not counted as a failure.
+- MAIN HAS MOVED. `git fetch` at ~14:15Z: origin/main = 62e8ae6 (PR #77 assignment-spreading), which is NOT an
+  ancestor of 8295739 -- the branch is no longer a fast-forward. #77 touches files this PR also touches:
+  SchedulingSettings.tsx, schedulingRules.ts, scheduling-defaults.ts, timezone.ts, nightly-schedule-builder/index.ts.
+  `git merge-tree --write-tree origin/main origin/claude/sleepy-bardeen-kty0n2` -> clean tree 47231f3, no conflicts.
+  On that merged tree (extracted with git archive): `npm test` 381/381 pass; `check:symbols` 98 files, 0 NEW;
+  my two harnesses 55/55 (incl. both sweeps); nightly index.ts parses; merged schedulingRules.ts:326 still passes
+  `activities` through; SchedulingSettings keeps `activitiesEdited`; nightly keeps both activity capacity sites (:918, :1433).
+  So the merge is textually and test-clean, but the PR must be re-merged on top of 62e8ae6, not fast-forwarded.
+- DEPLOY SCOPE IS "ALL FUNCTIONS". This PR changes `supabase/functions/_shared/activities.ts`; the deploy workflow
+  (.github/workflows/deploy-supabase-functions.yml:114-127) deploys EVERY function when any `_shared/` path changes.
+  Merging redeploys the whole edge estate from main, not just the four activity functions.
+- CLIENT BUNDLE NOT BUILT. This PR is the first to import `supabase/functions/_shared/activities.ts` into
+  NON-test client code (src/utils/taskScheduling.ts:6, src/components/WeeklyAgendaView.tsx:26; on origin/main only
+  *.test.ts files import from _shared). tsconfig.app.json:3 has `allowImportingTsExtensions`, and activities.ts /
+  _shared/timezone.ts contain no `Deno.` and no remote imports, so I expect `vite build` to succeed, but I could not
+  run it: `npm install` is blocked (proxy rejects europe-west1-npm.pkg.dev). UNPROVEN -- run `npm run build` in CI
+  before merging.
+- Carried from loop 1, still true: a never-saved owner gets the seed Lunch as a hard reject the moment this deploys
+  (owner-approved); readCaveats pre-existing wipe shape now also covers `activities` (see claim 5 residual).
