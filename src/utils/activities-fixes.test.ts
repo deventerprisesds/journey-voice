@@ -48,3 +48,8 @@ test('start_time is normalized or rejected — never a silent fallback', () => {
   assert.equal(parseClockTime('noon'), null);
   assert.equal(parseClockTime('9.30'), null);
 });
+
+test('an unpadded start like 9:30 is normalized on add/update, garbage still rejected', () => {
+  assert.equal(normalizeActivity({ name: 'Church', days: [0], start: '9:30', duration_min: 60 }).activity?.start, '09:30');
+  assert.match(normalizeActivity({ name: 'Church', days: [0], start: '9.30', duration_min: 60 }).error!, /start/);
+});
