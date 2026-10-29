@@ -259,3 +259,11 @@ Owner-approved 2026-10-28 (top priority). Branch `claude_assignment-spreading`. 
 - **Nexus down (O):** `ok:false` → no task read/write, `activity_log status:'failed'`, HTTP 502; the builder's STEP 0 already treats a non-OK response as a non-fatal warning (main :329-335).
 - **Dry run (O):** body `{ userId, dryRun: true }` → reads Nexus, boards, tasks; returns `would_create` / `would_update` / `excluded` / `digest` preview; **no insert, no update, no activity_log, no notification.**
 - Tests: `_shared/assignment-intake.test.ts` 24 named tests (AC-P1-1..13, DRY-1, READ-1). `npm test` 329 → 353, 0 fail. `deno check` (remote imports stubbed; deno.land is proxy-blocked here) clean; `undef-check` 0 new.
+
+### P2 — coursework caps from Settings (weekday 2, weekend 6)
+- **Resolver (O):** `resolveCategoryDailyCap` + `isWeekendInTimezone` + `CategoryMapping.maxPerDayWeekend` copied **verbatim** from parked J8 (`claude/huddle-journey-integration-xokgv1` `_shared/scheduling-defaults.ts` 95-151), so the later J8 restore is a no-op merge for these lines. The one deliberate difference: the seed is **6** (owner 10-28), not J8's 4 — `DEFAULT_CATEGORY_MAPPINGS.PROF_EDUCATION.maxPerDayWeekend: 6` and `src/config/schedulingRules.ts` (one-line conflict at J8 restore time; take 6).
+- **Builder (O):** the three cap sites J8 wired (pass-1 B/C cap, top-up day cap, top-up per-task cap) now call the resolver with `dayOfWeek ∈ {0,6}`; no comparison against the bare constant remains (test AC-P2-1b). Tier A still bypasses the cap (unchanged).
+- **Settings UI (O):** "Max Per Day (weekends)" field beside "Max Per Day" (J8 text). Client ships only via Lovable.
+- **Live effect (O, read 2026-10-29):** the owner's saved `PROF_EDUCATION` row is `{maxPerDay 2, evening+weekends, 90 min}` with **no** `maxPerDayWeekend`, so after deploy weekends still cap at 2 (AC-P2-2) until `maxPerDayWeekend: 6` is written to that row (Settings field, or one reversible data write at ship time). The seed only applies to users with no saved row.
+- **Not changed (O):** `smart-calendar-scheduler` (:648-658) and `batch-calendar-scheduler` still read `maxPerDay` alone; J8 restore wires them.
+- Deno check of the builder: identical 19 pre-existing implicit-any errors before and after (stub artefacts), 0 new.
