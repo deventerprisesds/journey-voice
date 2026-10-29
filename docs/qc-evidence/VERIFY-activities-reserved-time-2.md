@@ -151,3 +151,16 @@ local either side of US DST changes" passes in the 17/17 re-run above. The 03:00
   before merging.
 - Carried from loop 1, still true: a never-saved owner gets the seed Lunch as a hard reject the moment this deploys
   (owner-approved); readCaveats pre-existing wipe shape now also covers `activities` (see claim 5 residual).
+
+## Summary (loop 2, 8295739) -- finished 14:19Z, inside the 35-minute budget
+| # | Claim | Verdict |
+|---|---|---|
+| 1 | busy-time readers include activities | Placement CONFIRMED (smart :618-625 -> :712/:739; client getCalendarAvailability; nightly retry; ItineraryEngine->ai-task-parser chain). Strict "every reader": REFUTED, LOW -- ItineraryEngine busySlots -> EditableTaskSuggestion conflict flag still omits activities (display only) |
+| 2 | batch hard-rejects overlaps | CONFIRMED (file unchanged) |
+| 3 | planPush safe | CONFIRMED (3124-case sweep, 0 failures) |
+| 4 | startActivity | CONFIRMED (write-first, parseClockTime, LA 21:30 kept) |
+| 5 | no config wipe | CONFIRMED for every activity write path (pre-existing readCaveats wipe shape remains, outside the claim) |
+| 5b | Settings cannot revert agent change | CONFIRMED by reading |
+| 6 | DST 10:00 | CONFIRMED |
+| 7 | updates update (+range move, clamp, pushes_schedule) | CONFIRMED |
+| 8 | safe to merge | No blocker. Must re-merge on 62e8ae6 (clean, 381/381); deploy = ALL functions; client `vite build` UNPROVEN (npm blocked) |
