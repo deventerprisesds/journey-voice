@@ -70,3 +70,13 @@ Non-vacuity (mutations applied with sed, restored with `git checkout --`, `git s
   not a silent wrong value.
 - `pushes_schedule:false` over stored `pushesSchedule:true` -> cleared (activities.ts:292-293, snake first);
   an unrelated update (duration_min:45) keeps `pushesSchedule:true` and sets durationMin 45.
+- expandActivitiesForDate clamp (activities.ts:172-178): `hi = max(lo, latest-dur)`, `pref = min(hi, max(lo, rawPref))`;
+  candidates only `pref±step` guarded by `<= hi` / `>= lo` (:180-183); the conflict fallback now uses the
+  clamped `pref` (:192). Harness sweep (3000 random floating activities, NY/LA/UTC, 2804 with a preferred start
+  OUTSIDE its range, 489 conflicts): every block starts inside [lo, hi] local; every conflict block sits at the
+  clamped pref; every non-conflict block avoids all busy spans. Mutation `pref = rawPref` -> sweep FAILS; restored.
+
+## Claim 6 -- DST: CONFIRMED (re-check)
+Locked-block code (activities.ts:164-169) unchanged in the diff. Loop-1 test "C6 locked 10:00 activity lands at 10:00
+local either side of US DST changes" passes in the 17/17 re-run above. The 03:00-on-DST-day probe from loop 1
+(pre-existing zonedTimeToUtc, not in this diff) is unchanged.
