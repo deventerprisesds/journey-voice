@@ -28,3 +28,36 @@ Baseline: `npm test` -> 346 tests, 346 pass, 0 fail. `deno check` not run (deno.
   `acceptedSlots.push` (:672) / `scheduledTasks.push` (:674). The results loop (:564-) is the only
   push site; no branch reaches the push without passing the check. Slots built at :182 from
   `activityBusySlots(userConfig, ...)`; a null config resolves to the seed (activities.ts:86-88).
+
+## Claim 3 -- planPush is safe: CONFIRMED (on every adversarial input tried)
+Run: `node --experimental-strip-types --test docs/qc-evidence/activities-verify.test.ts` -> 15/15 pass.
+Invariant checker (never moves/overflows an immovable; duration kept; no placed item overlaps the block,
+any immovable, or another placed item; end <= limitMs; order kept) held for:
+back-to-back meetings after the block (hops to 14:00); item in progress at block start (moves whole to
+block end); items exactly touching the block (untouched); zero-gap chain (a,b,c moved, d overflows at
+limit); block past end of day (overflow); wall overlapping the block (conflict, not moved); a pre-existing
+task/meeting overlap after the block; and a seeded random sweep: 3124 valid cases, 936 with moves, 0 failures.
+Checker proven non-vacuous: mutating activities.ts:337 `start = hit.endMs` -> `hit.endMs - 60000` made
+3 tests fail (1, 7, 8); file restored with `git checkout` (git status clean for activities.ts).
+Note (not a defect of the claim): items with `limitMs` NaN would never overflow -- see claim 4 limitFor.
+
+## Claim 6 -- DST: CONFIRMED for the 10:00 case
+Locked 10:00 activity expanded on 2026-03-07/08/09 and 2026-10-31/11-01/11-02 in America/New_York,
+America/Los_Angeles, America/Phoenix: every block starts 10:00 local on the right local date.
+Probe (outside the claim, pre-existing `zonedTimeToUtc` in _shared/timezone.ts:63-82, not in this diff):
+a locked 03:00 activity on 2026-03-08 NY expands to 2026-03-08T08:00Z = 04:00 local (one hour late).
+The single-pass offset is wrong for local times inside the first |offset| hours of a DST-change day.
+
+## Claim 7 -- updates actually update: CONFIRMED for the snake/camel question, with an adjacent defect
+Mirrored execute-tool updateActivity merge (index.ts updateActivity) + real normalizeActivity:
+- `duration_min: 45` over stored `durationMin: 90` -> 45 (activities.ts:239 reads snake first).
+- `start: '11:15', days: [6]` -> applied (same key names as storage).
+- `every_n_weeks: 1` over stored `everyNWeeks: 2` -> biweekly cleared (activities.ts:254 snake first).
+- ADJACENT DEFECT: updating floating Lunch `start: '15:00'` keeps stored earliest 11:30 / latest 13:30
+  (activities.ts:269-270 take `input.earliest ?? a.start`, and the merged object still carries the old
+  earliest/latest). Result stored {start 15:00, earliest 11:30, latest 13:30}; expand places it 15:00-16:00,
+  outside its own range, no conflict flag. Also activities.ts:168-171 only bounds `pref+step` by `hi`;
+  `pref-step` candidates are never checked against `hi`.
+- Minor: `pushes_schedule: false` cannot clear a stored `pushesSchedule: true` (activities.ts:278 ORs the
+  camel key). update_activity's schema does not expose pushes_schedule, so this is reachable only if the
+  model sends an unlisted arg.
