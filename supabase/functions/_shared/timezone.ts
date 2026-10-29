@@ -188,6 +188,18 @@ export function getTodayInTimezone(tz: string): string {
 }
 
 /**
+ * The LOCAL calendar date (YYYY-MM-DD) of an instant in `tz`, or null for an unparseable input.
+ * `getTodayInTimezone` is this for `new Date()`; this one takes the instant, so callers comparing a
+ * stored timestamp against "today" never fall back to `toISOString().split('T')[0]` (the UTC date,
+ * which is a day late for any evening deadline west of UTC).
+ */
+export function localDateOf(isoDateTime: string, tz: string): string | null {
+  const date = new Date(isoDateTime);
+  if (isNaN(date.getTime())) return null;
+  return new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(date);
+}
+
+/**
  * Check if an ISO datetime falls on a specific date in the given timezone.
  * 
  * @param isoDateTime - ISO datetime string

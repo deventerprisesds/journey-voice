@@ -1,302 +1,188 @@
+// WHAT:       Nightly assignment intake: reads the owner's coursework from Nexus `content.assignments`
+//             (read-only, via nexus-hub-api) and creates / refreshes the matching journey tasks.
+//             `{ dryRun: true }` returns exactly what it WOULD create, update and flag, writing nothing.
+// WHY:        It used to read journey's own `public.assignments`, frozen on 2026-04-06: every night it
+//             scanned 469 dead EMBA/MIT rows and created 0 tasks (activity_log 2026-10-28:
+//             created 0, skipped 469), so none of the owner's dated DBA deliverables ever reached the
+//             board. It also rewrote due dates to the UTC calendar day at 23:59Z (a day late for any
+//             evening deadline in ET).
+// SUPERSEDES: main 9c81e5f's version of this file (Supabase `public.assignments` reader, MIT_PROGRAM_ID
+//             literal, 30-day skip). The decision logic moved to `_shared/assignment-intake.ts`.
+// SUPERSEDED-BY: nothing -- current.
+// EVIDENCE:   docs/qc-evidence/FINDINGS-assignment-spreading.md §1, §5 P1; build log in the same file.
+//
+// Triggered by nightly-schedule-builder STEP 0 (cron 05:00 UTC), the FocusView manual button and the
+// end of both sheet syncs — all unchanged. Request body: { userId, timezone?, dryRun? }.
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { getTodayInTimezone } from "../_shared/timezone.ts";
+import { fetchNexusAssignments, nexusApiBase } from "../_shared/nexus-read.ts";
+import {
+  planAssignmentSync, buildSyncDigest, describePlan, digestSendAt,
+  type ExistingTask, type PlannedCreate, type PlannedUpdate,
+} from "../_shared/assignment-intake.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
 const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
 serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
-  }
+  if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
 
   try {
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
-    const { userId, timezone: tzInput } = await req.json();
+    const { userId, timezone: tzInput, dryRun: dryRunInput } = await req.json();
     const timezone = tzInput || 'America/New_York';
+    const dryRun = dryRunInput === true;
+    if (!userId) return json({ error: 'userId required' }, 400);
 
-    if (!userId) {
-      return new Response(JSON.stringify({ error: 'userId required' }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
-    const now = new Date();
-    // Timezone-aware "today" so the 30-day archive cutoff matches the user's local day
+    const nowISO = new Date().toISOString();
     const todayISO = getTodayInTimezone(timezone);
-    const [ty, tm, td] = todayISO.split('-').map(Number);
-    const todayLocalAsUtc = new Date(Date.UTC(ty, tm - 1, td));
-    const thirtyDaysAgo = new Date(todayLocalAsUtc.getTime() - 30 * 24 * 60 * 60 * 1000)
-      .toISOString().split('T')[0];
+    console.log(`[ASSIGNMENT_SYNC] user=${userId} tz=${timezone} today=${todayISO} dryRun=${dryRun} nexus=${nexusApiBase()}`);
 
-    console.log(`[ASSIGNMENT_SYNC] Starting for user ${userId} (${timezone}), today=${todayISO}, archive cutoff=${thirtyDaysAgo}`);
-
-    // ============================================================
-    // BATCH PRELOAD — one query per source instead of per-assignment
-    // ============================================================
-
-    // 1. Default board (one query, used for all inserts)
-    const { data: boards } = await supabase
-      .from('boards')
-      .select('id')
-      .eq('user_id', userId)
-      .eq('is_default', true)
-      .order('created_at', { ascending: true })
-      .limit(1);
-    const board = boards?.[0];
-
-    // 2. Preload ALL existing tasks for this user (single query)
-    //    We only need: id, title, status, completed_at, assignment_id
-    //    PostgREST default limit is 1000 — paginate if needed
-    const allTasks: Array<{
-      id: string;
-      title: string;
-      status: string;
-      completed_at: string | null;
-      assignment_id: string | null;
-    }> = [];
-
-    let offset = 0;
-    const PAGE = 1000;
-    while (true) {
-      const { data: page, error: pageErr } = await supabase
-        .from('tasks')
-        .select('id, title, status, completed_at, assignment_id')
-        .eq('user_id', userId)
-        .range(offset, offset + PAGE - 1);
-      if (pageErr) {
-        console.error('[ASSIGNMENT_SYNC] Error loading tasks page:', pageErr);
-        break;
-      }
-      if (!page || page.length === 0) break;
-      allTasks.push(...page);
-      if (page.length < PAGE) break;
-      offset += PAGE;
-    }
-
-    console.log(`[ASSIGNMENT_SYNC] Preloaded ${allTasks.length} existing tasks`);
-
-    // 3. Build in-memory indexes for O(1) lookups
-    const tasksByAssignmentId = new Map<string, typeof allTasks[number]>();
-    const activeTasksByTitle = new Map<string, typeof allTasks[number]>();
-    for (const t of allTasks) {
-      if (t.assignment_id) {
-        tasksByAssignmentId.set(t.assignment_id, t);
-      }
-      // Legacy match candidates: assignment_id NULL, not done, not completed
-      if (!t.assignment_id && t.completed_at == null && t.status !== 'DONE') {
-        // Index by both raw and emoji-prefixed title
-        if (!activeTasksByTitle.has(t.title)) {
-          activeTasksByTitle.set(t.title, t);
-        }
-      }
-    }
-
-    const created: string[] = [];
-    const skipped: string[] = [];
-    const repaired: string[] = [];
-    const skippedOld: Array<{ id: string; title: string; due_date: string }> = [];
-    const noBoardSkipped: string[] = [];
-
-    // ============================================================
-    // PROCESS ASSIGNMENTS — single query covers both EMBA and MIT
-    // (program_id discriminates; `assignments_mit` was merged into
-    //  `assignments` in April 2026)
-    // ============================================================
-    const MIT_PROGRAM_ID = '4793d933-86ca-4fd5-9b4d-e7a593a513a6';
-
-    async function syncAssignments() {
-      const { data: assignments, error } = await supabase
-        .from('assignments')
-        .select('id, title, due_date, description, category, priority, level_of_effort, status, assignment_url, program_id')
-        .eq('user_id', userId)
-        .not('status', 'in', '("completed","graded")');
-
-      if (error) {
-        console.error(`[ASSIGNMENT_SYNC] Error fetching assignments:`, error);
-        return;
-      }
-      if (!assignments || assignments.length === 0) {
-        console.log(`[ASSIGNMENT_SYNC] No assignments to process`);
-        return;
-      }
-
-      const embaCount = assignments.filter((a) => a.program_id !== MIT_PROGRAM_ID).length;
-      const mitCount = assignments.length - embaCount;
-      console.log(`[ASSIGNMENT_SYNC] Found ${assignments.length} assignments (EMBA=${embaCount}, MIT=${mitCount})`);
-
-      const repairs: Array<{ taskId: string; assignmentId: string; due_date: string | null; source: string }> = [];
-      const inserts: Array<Record<string, unknown>> = [];
-
-      for (const assignment of assignments) {
-        const source = assignment.program_id === MIT_PROGRAM_ID ? 'MIT' : 'EMBA';
-
-        // Layer 1: assignment_id match
-        if (tasksByAssignmentId.has(assignment.id)) {
-          skipped.push(assignment.id);
-          continue;
-        }
-
-        // Layer 2 + 3: legacy title match (raw OR emoji-prefixed)
-        const legacy =
-          activeTasksByTitle.get(assignment.title) ||
-          activeTasksByTitle.get(`📚 ${assignment.title}`);
-
-        if (legacy) {
-          repairs.push({
-            taskId: legacy.id,
-            assignmentId: assignment.id,
-            due_date: assignment.due_date
-              ? new Date(assignment.due_date).toISOString().split('T')[0] + 'T23:59:59Z'
-              : null,
-            source,
-          });
-          tasksByAssignmentId.set(assignment.id, legacy);
-          activeTasksByTitle.delete(assignment.title);
-          activeTasksByTitle.delete(`📚 ${assignment.title}`);
-          repaired.push(legacy.id);
-          skipped.push(assignment.id);
-          continue;
-        }
-
-        // Skip very old past-due assignments (>30 days, anchored to local today)
-        if (assignment.due_date && assignment.due_date < thirtyDaysAgo) {
-          skippedOld.push({
-            id: assignment.id,
-            title: assignment.title,
-            due_date: assignment.due_date,
-          });
-          skipped.push(assignment.id);
-          continue;
-        }
-
-        if (!board) {
-          noBoardSkipped.push(assignment.id);
-          continue;
-        }
-
-        // Determine estimate from level_of_effort
-        let estimateMinutes = 90;
-        if (assignment.level_of_effort) {
-          const loe = assignment.level_of_effort.toLowerCase();
-          if (loe.includes('low') || loe.includes('small')) estimateMinutes = 45;
-          else if (loe.includes('high') || loe.includes('large')) estimateMinutes = 180;
-          else if (loe.includes('medium')) estimateMinutes = 90;
-        }
-
-        inserts.push({
-          title: `📚 ${assignment.title}`,
-          description: assignment.description || `Assignment from ${source}. Due: ${assignment.due_date}`,
-          category: 'PROF_EDUCATION',
-          priority: assignment.priority?.toUpperCase() || 'HIGH',
-          status: 'TODO',
-          due_date: assignment.due_date
-            ? new Date(assignment.due_date).toISOString().split('T')[0] + 'T23:59:59Z'
-            : null,
-          estimate_minutes: estimateMinutes,
-          is_scheduled: false,
-          board_id: board.id,
-          user_id: userId,
-          assignment_id: assignment.id,
-          scheduling_context: { source },
+    // ---- 1. Nexus (read-only). A failed read means: write NOTHING, report failure. ----
+    const nexus = await fetchNexusAssignments(userId);
+    if (!nexus.ok) {
+      console.error(`[ASSIGNMENT_SYNC] Nexus read failed (${nexus.status ?? 'no status'}): ${nexus.error}`);
+      if (!dryRun) {
+        await supabase.from('activity_log').insert({
+          user_id: userId, activity_type: 'nightly_assignment_sync', status: 'failed',
+          metadata: { source: 'nexus', error: nexus.error ?? null, http_status: nexus.status ?? null },
         });
       }
+      return json({ success: false, dryRun, error: `Nexus read failed: ${nexus.error}` }, 502);
+    }
 
-      // ----- BULK REPAIR (chunked updates) -----
-      const REPAIR_CHUNK = 50;
-      for (let i = 0; i < repairs.length; i += REPAIR_CHUNK) {
-        const chunk = repairs.slice(i, i + REPAIR_CHUNK);
-        await Promise.all(chunk.map((r) =>
-          supabase
-            .from('tasks')
-            .update({
-              assignment_id: r.assignmentId,
-              due_date: r.due_date,
-              scheduling_context: { source: r.source },
-              updated_at: now.toISOString(),
-            })
-            .eq('id', r.taskId)
-        ));
+    // ---- 2. Oldest default board (#43: never create one on a failed read) ----
+    const { data: boards } = await supabase
+      .from('boards').select('id')
+      .eq('user_id', userId).eq('is_default', true)
+      .order('created_at', { ascending: true }).limit(1);
+    const boardId: string | null = boards?.[0]?.id ?? null;
+
+    // ---- 3. Existing tasks (paginated; PostgREST caps a page at 1000) ----
+    const tasks: ExistingTask[] = [];
+    const PAGE = 1000;
+    for (let offset = 0; ; offset += PAGE) {
+      const { data: page, error } = await supabase
+        .from('tasks')
+        .select('id, title, status, completed_at, assignment_id, due_date, tags, scheduling_context')
+        .eq('user_id', userId)
+        .range(offset, offset + PAGE - 1);
+      if (error) {
+        // A partial task list could make a linked card look missing and duplicate it. Stop.
+        console.error('[ASSIGNMENT_SYNC] Error loading tasks:', error);
+        return json({ success: false, dryRun, error: `task read failed: ${error.message}` }, 500);
       }
+      if (!page?.length) break;
+      tasks.push(...(page as ExistingTask[]));
+      if (page.length < PAGE) break;
+    }
 
-      // ----- BULK INSERT (chunked) -----
-      const INSERT_CHUNK = 100;
-      for (let i = 0; i < inserts.length; i += INSERT_CHUNK) {
-        const chunk = inserts.slice(i, i + INSERT_CHUNK);
-        const { data: newRows, error: insertErr } = await supabase
-          .from('tasks')
-          .insert(chunk)
-          .select('id, assignment_id');
+    // ---- 4. Plan (pure) ----
+    const plan = planAssignmentSync({ rows: nexus.rows, tasks, todayISO, timezone, boardId, userId, nowISO });
+    console.log(`[ASSIGNMENT_SYNC] nexus_rows=${plan.scanned} current=${plan.currentCourses.join(',') || '-'} ` +
+      `creates=${plan.creates.length} updates=${plan.updates.length} done_untouched=${plan.untouchedDone.length} ` +
+      `excluded=${JSON.stringify(plan.excluded)}`);
+    if (!boardId && plan.excluded.noBoard) {
+      console.error(`[ASSIGNMENT_SYNC] No default board for ${userId} — ${plan.excluded.noBoard} assignment(s) could not be created`);
+    }
 
-        if (insertErr) {
-          console.error(`[ASSIGNMENT_SYNC] Bulk insert error (chunk ${i}):`, insertErr);
-        } else if (newRows) {
-          for (const row of newRows) {
-            created.push(row.id);
-            if (row.assignment_id) tasksByAssignmentId.set(row.assignment_id, row as any);
-          }
-        }
+    if (dryRun) {
+      return json({ success: true, dryRun: true, today: todayISO, timezone, ...describePlan(plan, timezone) });
+    }
+
+    // ---- 5. Apply ----
+    const appliedCreates: PlannedCreate[] = [];
+    const created: string[] = [];
+    const INSERT_CHUNK = 100;
+    for (let i = 0; i < plan.creates.length; i += INSERT_CHUNK) {
+      const chunk = plan.creates.slice(i, i + INSERT_CHUNK);
+      const { data: rows, error } = await supabase.from('tasks').insert(chunk.map((c) => c.insert)).select('id, assignment_id');
+      if (error) { console.error(`[ASSIGNMENT_SYNC] insert error (chunk ${i}):`, error); continue; }
+      for (const row of rows ?? []) {
+        created.push(row.id);
+        const c = chunk.find((x) => x.assignmentId === row.assignment_id);
+        if (c) appliedCreates.push(c);
       }
-
-      console.log(`[ASSIGNMENT_SYNC] scanned=${assignments.length}, inserts=${inserts.length}, repairs=${repairs.length}, skipped_old=${skippedOld.length}`);
     }
 
-    await syncAssignments();
-
-    if (!board) {
-      console.error(`[ASSIGNMENT_SYNC] ⚠️ No default board for user ${userId} — ${noBoardSkipped.length} assignments could not be promoted`);
+    const appliedUpdates: PlannedUpdate[] = [];
+    for (const u of plan.updates) {
+      // Guarded on the row still being open: if the owner marks it DONE between our read and this
+      // write, the write matches nothing (owner rule: never touch a DONE task).
+      const { data, error } = await supabase.from('tasks')
+        .update(u.patch).eq('id', u.taskId).neq('status', 'DONE').is('completed_at', null).select('id');
+      if (error) { console.error(`[ASSIGNMENT_SYNC] update error ${u.taskId}:`, error); continue; }
+      if (data?.length) appliedUpdates.push(u);
     }
 
-    const totalProcessed = created.length + repaired.length + skipped.length;
-    const skipRate = totalProcessed > 0 ? skipped.length / totalProcessed : 0;
-    if (skipRate > 0.9 && totalProcessed > 10) {
-      console.warn(`[ASSIGNMENT_SYNC] ⚠️ HIGH SKIP RATE: ${(skipRate * 100).toFixed(0)}% (${skipped.length}/${totalProcessed}).`);
+    // ---- 6. At most ONE Iris message per run, through the existing scheduled_chat path ----
+    // notification-delivery posts metadata.message as an Iris chat message + push (same shape as
+    // _shared/task-dedup.ts's notice). Built from what was actually written, so it never claims a
+    // change that failed.
+    const digest = buildSyncDigest({ creates: appliedCreates, updates: appliedUpdates }, timezone);
+    let digestQueued = false;
+    if (digest) {
+      const { data: prefs } = await supabase.from('notification_prefs')
+        .select('quiet_hours_start, quiet_hours_end').eq('user_id', userId).maybeSingle();
+      const sendAt = digestSendAt(new Date(nowISO), timezone, prefs?.quiet_hours_start, prefs?.quiet_hours_end);
+      const { error } = await supabase.from('scheduled_notifications').insert({
+        user_id: userId,
+        notification_type: 'scheduled_chat',
+        scheduled_for: sendAt,
+        title: digest.title,
+        body: digest.message,
+        metadata: {
+          message: digest.message,
+          source: 'assignment_sync',
+          assignment_sync: {
+            created: appliedCreates.map((c) => c.assignmentId),
+            updated: appliedUpdates.map((u) => ({ task_id: u.taskId, changes: u.changes, flag: u.flag })),
+          },
+        },
+      });
+      if (error) console.error('[ASSIGNMENT_SYNC] digest queue failed:', error);
+      else digestQueued = true;
     }
 
-    // Log activity
     await supabase.from('activity_log').insert({
       user_id: userId,
       activity_type: 'nightly_assignment_sync',
       status: 'completed',
       metadata: {
+        source: 'nexus',
+        nexus_rows: plan.scanned,
+        current_courses: plan.currentCourses,
         created_count: created.length,
-        repaired_count: repaired.length,
-        skipped_count: skipped.length,
-        skipped_old_count: skippedOld.length,
-        no_board_skipped_count: noBoardSkipped.length,
+        updated_count: appliedUpdates.length,
+        flagged_count: appliedUpdates.filter((u) => u.flag).length,
+        done_untouched_count: plan.untouchedDone.length,
+        excluded: plan.excluded,
+        digest_queued: digestQueued,
         created_ids: created,
-        repaired_ids: repaired,
+        updated_ids: appliedUpdates.map((u) => u.taskId),
       },
     });
 
-    return new Response(JSON.stringify({
+    return json({
       success: true,
+      dryRun: false,
       created_count: created.length,
-      repaired_count: repaired.length,
-      skipped_count: skipped.length,
-      skipped_old_count: skippedOld.length,
-      no_board_skipped_count: noBoardSkipped.length,
+      updated_count: appliedUpdates.length,
       created,
-      repaired,
-      skipped_old: skippedOld,
-      no_board_skipped: noBoardSkipped,
-    }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      updated: appliedUpdates.map((u) => ({ task_id: u.taskId, changes: u.changes, flag: u.flag })),
+      excluded: plan.excluded,
+      digest_queued: digestQueued,
     });
-
   } catch (error) {
     console.error('[ASSIGNMENT_SYNC] Fatal error:', error);
-    return new Response(JSON.stringify({
-      error: error instanceof Error ? error.message : 'Unknown error',
-    }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return json({ error: error instanceof Error ? error.message : 'Unknown error' }, 500);
   }
 });

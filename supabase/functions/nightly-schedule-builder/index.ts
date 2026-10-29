@@ -9,6 +9,7 @@ import {
   validateTaskWindow,
   getPreferredWindows,
   withKeywordWindow,
+  resolveCategoryDailyCap,
   MAX_ASSIGNMENTS_PER_DAY,
   ASSIGNMENT_URGENT_HOURS,
   ASSIGNMENT_PRIORITY_DAYS,
@@ -1167,15 +1168,23 @@ serve(async (req) => {
             const isAssignment = !!(task as any).assignment_id;
             const tier = isAssignment ? (assignmentTier[task.id] || 'C') : null;
             const placedAssignmentsToday = dailyAssignmentCount[targetISO] || 0;
+            // P2 (J8 shape): the cap comes from the user's Settings — weekday maxPerDay, weekend
+            // maxPerDayWeekend (falls back to maxPerDay) — never the bare constant.
+            const assignmentCapToday = resolveCategoryDailyCap(
+              config,
+              task.category,
+              targetDayOfWeek === 0 || targetDayOfWeek === 6,
+              { fallback: MAX_ASSIGNMENTS_PER_DAY },
+            );
 
-            // Pass 1B/1C cap: Tier B/C assignments are limited to MAX_ASSIGNMENTS_PER_DAY/day.
+            // Pass 1B/1C cap: Tier B/C assignments are limited to the resolved cap/day.
             // Tier A bypasses the cap (deadline-critical, pre-placed in Pass 1A).
-            if (isAssignment && tier !== 'A' && placedAssignmentsToday >= MAX_ASSIGNMENTS_PER_DAY) {
+            if (isAssignment && tier !== 'A' && placedAssignmentsToday >= assignmentCapToday) {
               deferredAssignmentsToday.push({ id: task.id, tier: tier as 'B' | 'C' });
               dayRejections.push({
                 taskId: task.id, title: task.title, category: task.category,
                 score: task.score, duration,
-                reason: `assignment_cap_${MAX_ASSIGNMENTS_PER_DAY}_per_day`,
+                reason: `assignment_cap_${assignmentCapToday}_per_day`,
                 tier,
               });
               continue;
@@ -1607,9 +1616,18 @@ serve(async (req) => {
             const [tY, tM, tD] = todayISO.split('-').map(Number);
             const dt = new Date(tY, tM - 1, tD + dOff);
             const isoDay = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
-            if ((dailyAssignmentCount[isoDay] || 0) >= MAX_ASSIGNMENTS_PER_DAY) continue;
-
             const dow = dt.getDay();
+            // Same config-driven, weekend-aware cap as the main pass. Resolved per
+            // CATEGORY off the queue head, so a non-assignment category with its own
+            // maxPerDay is honoured here too rather than assuming PROF_EDUCATION.
+            const topUpCap = resolveCategoryDailyCap(
+              config,
+              topUpQueue[0]?.category,
+              dow === 0 || dow === 6,
+              { fallback: MAX_ASSIGNMENTS_PER_DAY },
+            );
+            if ((dailyAssignmentCount[isoDay] || 0) >= topUpCap) continue;
+
             const active = getActiveWindows(timeWindows, dow);
             const activeNames = Object.keys(active);
             if (activeNames.length === 0) continue;
@@ -1630,8 +1648,11 @@ serve(async (req) => {
             let caps = computeUsedMinutes(items, active, isoDay, timezone);
 
             for (let i = 0; i < topUpQueue.length; i++) {
-              if ((dailyAssignmentCount[isoDay] || 0) >= MAX_ASSIGNMENTS_PER_DAY) break;
               const task = topUpQueue[i];
+              // Re-resolve per task: the queue mixes categories, and the cap is per-category.
+              if ((dailyAssignmentCount[isoDay] || 0) >= resolveCategoryDailyCap(
+                    config, task.category, dow === 0 || dow === 6,
+                    { fallback: MAX_ASSIGNMENTS_PER_DAY })) break;
               const duration = task.estimate_minutes || categoryMappings[task.category]?.estimatedDuration || 60;
               const preferred = getPreferredWindows(task.category, categoryMappings, activeNames);
               const fits = preferred.some(w => (caps[w]?.remainingMinutes || 0) >= duration);

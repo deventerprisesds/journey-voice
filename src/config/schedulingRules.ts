@@ -54,7 +54,11 @@ export interface SchedulingConfig {
       defaultTimeWindow: string[]; // Array of allowed time windows
       defaultStatus: string;
       estimatedDuration: number; // minutes
-      maxPerDay?: number; // Optional max tasks per day for this category
+      maxPerDay?: number; // Optional max tasks per day for this category (weekdays)
+      // Optional SEPARATE weekend allowance. maxPerDay was sized for a weekday evening but
+      // was being applied to Saturday/Sunday too, where the `weekends` window is 10:00–20:00.
+      // Absent → falls back to maxPerDay, so existing saved configs behave exactly as before.
+      maxPerDayWeekend?: number;
     };
   };
   contextRules: {
@@ -138,7 +142,10 @@ export const DEFAULT_SCHEDULING_CONFIG: SchedulingConfig = {
       defaultTimeWindow: ['after_work', 'weekends'],
       defaultStatus: 'PROF_EDUCATION',
       estimatedDuration: 90,
-      maxPerDay: 2
+      maxPerDay: 2,
+      // Seed only — changeable in Settings → Scheduling. Owner 2026-10-28: weekday 2, weekend 6
+      // (the weekends window is 10:00–20:00 and a study block is 90m, so six fit).
+      maxPerDayWeekend: 6
     },
     EDUCATION: {
       defaultTimeWindow: ['flexible'],
