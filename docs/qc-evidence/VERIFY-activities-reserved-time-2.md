@@ -112,3 +112,18 @@ local either side of US DST changes" passes in the 17/17 re-run above. The 03:00
 - STILL MISSED (LOW, display-only): ItineraryEngine.ts:304-341 builds `busySlots` from calendar connections + tasks
   only and returns it (:387) to SmartTaskInput.tsx:74 -> EditableTaskSuggestion.tsx:56 `hasConflict`. If the owner
   edits a suggestion onto Lunch, no conflict warning shows. The suggested slot itself avoids activities.
+
+## Claim 5b -- the Settings page cannot revert an agent's activity change: CONFIRMED (by reading; no browser run)
+- SchedulingSettings.tsx:44 `clearSchedulingConfigCache()` (schedulingService.ts:559-562 nulls cachedConfig/cachedUserId)
+  before `loadUserSchedulingConfig` (:45), then `setActivitiesEdited(false)` (:47).
+- Save (:64-67) sends `{ ...config, activities: undefined }` unless `activitiesEdited`. The ONLY setter of
+  `activitiesEdited=true` is the ActivitiesSettings onChange (:363); ActivitiesSettings calls onChange only from
+  user handlers (ActivitiesSettings.tsx:39 edit, :45 add, :85 remove; no useEffect calls it).
+- saveUserSchedulingConfig re-reads the STORED row (schedulingService.ts:206-216, refuses on read error) and
+  `mergeStoredConfig` (mergeStoredConfig.ts:24-30) skips `undefined` keys -> stored `activities` kept.
+  `lastActivityStart` is never carried by mergeSchedulingConfig (schedulingRules.ts:295-329), so it is never sent
+  and the stored undo record survives a Settings save.
+- Residual (LOW): if the owner edits the Activities card while an agent changes activities, last writer wins (the
+  owner's explicit edit). `handleReset` (:89-95) puts DEFAULT activities in page state without marking edited;
+  a later card edit would then save seed+edit over the stored list. Outside 5b: `caveats` are still sent whole
+  (schedulingRules.ts:318), so a Settings save reverts an agent caveat change made while the page was open.
