@@ -1289,8 +1289,11 @@ async function scheduleTask(supabase: any, args: any, timezone?: string): Promis
 const CAVEAT_WINDOWS = ['morning', 'business_hours', 'after_work', 'evening', 'flexible', 'weekends'];
 
 async function readCaveats(supabase: any, userId: string): Promise<{ config: any; caveats: any[] }> {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('user_scheduling_prefs').select('config').eq('user_id', userId).maybeSingle();
+  // Same rule as readActivityPrefs: writeCaveats saves `{...config, caveats}`, so continuing with {}
+  // after a failed read would erase timeWindows, categoryMappings and activities. Refuse instead.
+  if (error) throw new Error(`Could not read scheduling settings, so nothing was changed: ${error.message}`);
   const config = data?.config ?? {};
   return { config, caveats: Array.isArray(config.caveats) ? config.caveats : [] };
 }
@@ -1564,6 +1567,9 @@ async function startActivity(supabase: any, userId: string, args: any): Promise<
         .eq('user_id', userId).eq('is_all_day', false)
         .gte('end_time', bounds.start).lt('start_time', bounds.end),
     ]);
+    // A failed read here would plan the push against an empty day and move tasks blind. Refuse.
+    if (tasksRes.error) throw new Error(`Could not read today's tasks, so nothing was moved: ${tasksRes.error.message}`);
+    if (eventsRes.error) throw new Error(`Could not read today's calendar, so nothing was moved: ${eventsRes.error.message}`);
     const events = eventsRes.data || [];
     // Today's activity blocks WITH the new one included, so floating ones (lunch) already slide around it.
     const withInstance = [...activities, instance];

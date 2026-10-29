@@ -251,7 +251,9 @@ export function normalizeActivity(input: any, now: Date = new Date()): { activit
   const mode: ActivityMode = input?.mode === 'floating' ? 'floating' : 'locked';
   const durationMin = Math.round(Number(input?.duration_min ?? input?.durationMin ?? 60));
   if (!(durationMin >= 5 && durationMin <= 12 * 60)) return { error: 'duration must be between 5 and 720 minutes' };
-  const start = input?.start ?? input?.start_time;
+  // "9:30" and "09:30:00" are normalized the same way start_activity does; anything else is rejected.
+  const rawStart = input?.start ?? input?.start_time;
+  const start = rawStart === undefined || rawStart === null ? rawStart : (parseClockTime(rawStart) ?? rawStart);
   if (kind !== 'on_demand' && !(typeof start === 'string' && HHMM.test(start))) {
     return { error: 'start (HH:mm, 24-hour) is required for a scheduled activity' };
   }
