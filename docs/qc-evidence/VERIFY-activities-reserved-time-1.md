@@ -98,3 +98,26 @@ Read: supabase/functions/execute-tool/index.ts startActivity / undoActivityStart
 - Lost-update races (both directions, no version check): the client's loadUserSchedulingConfig is cached per
   user (schedulingService.ts ~107-110), and SchedulingSettings saves the whole loaded object including
   `activities`, so a Settings save after an agent add/start/skip silently reverts the agent's change.
+
+## Claim 8 -- anything else that makes this unsafe to merge: REFUTED (issues found; see list)
+Merge auto-deploys execute-tool, batch-calendar-scheduler, nightly-schedule-builder, smart-calendar-scheduler.
+- Parse check: `node --experimental-strip-types --check` on all four index.ts + tool-definitions.ts printed no
+  errors. Identifiers used in new code are in scope (nightly `config`/`timezone` declared at :288-289 inside
+  the per-user loop opened at :286 that still encloses :917; batch `userConfig` :71, `eventsResult` :150).
+  `deno check` not run (deno.land blocked) -- types unverified.
+- HIGH: edge config wipe on a failed read (claim 5).
+- MEDIUM: smart-calendar-scheduler + client paths ignore activities for actual placement (claim 1), so the
+  owner's "every scheduler plans around them" is not met for TaskCreationModal / Kanban / auto-scheduling /
+  ai-task-parser single-task placement.
+- MEDIUM: start_activity is non-atomic; undo is persisted last (claim 4).
+- LOW/conditional: non-ET timezone prunes the just-created gym block (claim 4); `start_time` "9:30" silently
+  becomes "now"; floating update keeps a stale earliest/latest range (claim 7).
+- smart-calendar-scheduler defaults `timezone='UTC'` (:173) when a caller omits it; activities then expand
+  in UTC in the AI prompt (prompt-only impact).
+- Behaviour change on deploy for a never-saved owner: the seed Lunch (weekdays, floating 11:30-13:30, length
+  = workingHours.breakMinutes or 60) immediately becomes a hard reject in batch-calendar-scheduler and
+  reduces nightly capacity. Owner-approved per the brief, but it is live the moment this merges.
+
+## Regression baseline
+NOT RUN against a live URL: the PR is unmerged/undeployed and the brief forbids calling deployed functions.
+`npm test` on the branch: 346/346 pass (re-run 13:20Z, 12 activity tests among them).
