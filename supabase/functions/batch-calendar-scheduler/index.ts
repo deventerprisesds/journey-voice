@@ -3,6 +3,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { normalizeDateTime, getTodayInTimezone, getTzOffsetMinutesAt, localDateToUtcBounds } from "../_shared/timezone.ts";
 import { DEFAULT_TIME_WINDOWS, DEFAULT_CATEGORY_MAPPINGS, resolveConfig, validateTaskWindow } from "../_shared/scheduling-defaults.ts";
+import { activityBusySlots } from "../_shared/activities.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -176,9 +177,21 @@ serve(async (req) => {
       _startMs: new Date(e.start_time).getTime(),
       _endMs: new Date(e.end_time).getTime(),
     }));
-    const existingBusySlots = [...existingTaskSlots, ...existingEventSlots];
+    // Recurring activities (lunch, church, 1:1s…) — reserved time from config, never task rows.
+    // Expanded for every local day in the busy window; floating ones avoid the calendar events.
+    const existingActivitySlots = activityBusySlots(userConfig, busyStartIso, busyEndIso, timezone, eventsResult.data || [])
+      .map((b, i) => ({
+        id: `activity:${b.activityId}:${i}`,
+        title: b.name,
+        start_time: b.start_time,
+        end_time: b.end_time,
+        _source: 'activity' as const,
+        _startMs: new Date(b.start_time).getTime(),
+        _endMs: new Date(b.end_time).getTime(),
+      }));
+    const existingBusySlots = [...existingTaskSlots, ...existingEventSlots, ...existingActivitySlots];
 
-    console.log(`📊 Found ${existingBusySlots.length} existing busy slots (${existingTaskSlots.length} tasks, ${existingEventSlots.length} events)`);
+    console.log(`📊 Found ${existingBusySlots.length} existing busy slots (${existingTaskSlots.length} tasks, ${existingEventSlots.length} events, ${existingActivitySlots.length} activities)`);
 
     // Build category mappings from user config (authoritative), falling back to shared defaults
     const { timeWindows: resolvedTimeWindows, categoryMappings: resolvedCategoryMappings } = resolveConfig(userConfig);
@@ -643,8 +656,21 @@ IMPORTANT: Return ONLY the JSON array, no other text. All times MUST include tim
         continue;
       }
 
+      // Recurring activities (lunch, church, 1:1s…) are reserved time — same hard rule as a meeting.
+      const activityOverlap = existingActivitySlots.find(s => slotStartMs < s._endMs && slotEndMs > s._startMs);
+      if (activityOverlap) {
+        console.warn(`🚫 OVERLAPS_ACTIVITY: "${originalTask.title}" [${normalizedStart} - ${normalizedEnd}] overlaps activity "${activityOverlap.title}" — REJECTED`);
+        rejectedTasks.push({
+          taskId: originalTask.id,
+          taskIndex: result.taskIndex,
+          reason: `overlaps_activity: "${activityOverlap.title}"`,
+          reasoning: result.reasoning,
+        });
+        continue;
+      }
+
       acceptedSlots.push({ start: slotStartMs, end: slotEndMs });
-      
+
       scheduledTasks.push({
         taskId: originalTask?.id,
         taskIndex: result.taskIndex,

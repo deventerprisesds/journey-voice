@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { normalizeDueDate, normalizeDateTime, getTodayInTimezone, formatInTimezone } from "../_shared/timezone.ts";
+import { normalizeDueDate, normalizeDateTime, getTodayInTimezone, formatInTimezone, localDateToUtcBounds } from "../_shared/timezone.ts";
+import { activityBusySlots, resolveActivities, normalizeActivity, matchActivity, planPush, type PushItem } from "../_shared/activities.ts";
 import { getToolDefinitions } from "../_shared/tool-definitions.ts";
 import { getTopicGroupsManual, WINDOW_RANGES, CATEGORY_WINDOW_MAPPING } from "../_shared/call-context-builder.ts";
 import { resolveConfig, validateTaskWindow, activeCaveats } from "../_shared/scheduling-defaults.ts";
@@ -373,6 +374,21 @@ async function executeToolCall(
         return await listSchedulingCaveats(supabase, userId);
       case 'clear_scheduling_caveat':
         return await clearSchedulingCaveat(supabase, userId, args);
+
+      case 'add_activity':
+        return await addActivity(supabase, userId, args);
+      case 'list_activities':
+        return await listActivities(supabase, userId);
+      case 'update_activity':
+        return await updateActivity(supabase, userId, args);
+      case 'remove_activity':
+        return await removeActivity(supabase, userId, args);
+      case 'skip_activity':
+        return await skipActivity(supabase, userId, args);
+      case 'start_activity':
+        return await startActivity(supabase, userId, args);
+      case 'undo_activity_start':
+        return await undoActivityStart(supabase, userId);
       
       case 'parse_and_create_tasks':
         return await parseAndCreateTasks(supabase, userId, args, context?.timezone);
@@ -1362,6 +1378,262 @@ async function clearSchedulingCaveat(supabase: any, userId: string, args: any): 
     return { success: true, data: { cleared: 1, remaining: kept.length }, message: 'Caveat cleared. Scheduling returns to your normal rules on the next build.' };
   } catch (e) {
     return { success: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+// ============================================================================
+// ACTIVITIES — recurring/one-off/on-demand blocks of the owner's time (lunch, gym, church, haircut,
+// 1:1s) that are NOT tasks. Stored in user_scheduling_prefs.config.activities and expanded at read
+// time by _shared/activities.ts, which every scheduler uses as busy time.
+// ============================================================================
+
+async function readActivityPrefs(supabase: any, userId: string): Promise<{ config: any; timezone: string; activities: any[] }> {
+  const { data } = await supabase
+    .from('user_scheduling_prefs').select('config, timezone').eq('user_id', userId).maybeSingle();
+  const config = data?.config ?? {};
+  return { config, timezone: data?.timezone || config.timezone || 'America/New_York', activities: resolveActivities(config) };
+}
+
+async function writeActivityConfig(supabase: any, userId: string, config: any, activities: any[], extra: Record<string, unknown> = {}) {
+  // One-off activities whose date has passed are dropped on every write, so the list cannot grow forever.
+  const today = getTodayInTimezone(config?.timezone || 'America/New_York');
+  const kept = activities.filter((a: any) => !(a.kind === 'one_off' && typeof a.date === 'string' && a.date < today));
+  const next = { ...config, activities: kept, ...extra };
+  const { error } = await supabase
+    .from('user_scheduling_prefs')
+    .upsert({ user_id: userId, config: next }, { onConflict: 'user_id' });
+  if (error) throw error;
+}
+
+/** Resolve an activity by id or by name/alias the owner used. */
+function findActivity(activities: any[], args: any): any | null {
+  if (args?.activity_id) return activities.find((a: any) => a.id === args.activity_id) ?? null;
+  const name = String(args?.name ?? args?.activity ?? '').trim();
+  if (!name) return null;
+  return activities.find((a: any) => a.name.toLowerCase() === name.toLowerCase()) ?? matchActivity(activities, name);
+}
+
+function describeActivity(a: any): string {
+  const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  if (a.kind === 'on_demand') return `${a.name} (on demand, ${a.durationMin} min${a.pushesSchedule ? ', pushes your day' : ''})`;
+  const when = a.kind === 'one_off' ? a.date : `${(a.days || []).map((d: number) => DOW[d]).join('/')}${a.everyNWeeks > 1 ? ` every ${a.everyNWeeks} weeks` : ''}`;
+  const time = a.mode === 'floating' ? `around ${a.start} (${a.earliest}-${a.latest})` : `at ${a.start}`;
+  return `${a.name} ${when} ${time}, ${a.durationMin} min${a.enabled === false ? ' [paused]' : ''}`;
+}
+
+async function addActivity(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
+  try {
+    const { config, activities } = await readActivityPrefs(supabase, userId);
+    const { activity, error } = normalizeActivity(args);
+    if (!activity) return { success: false, error: error || 'invalid activity' };
+    const clash = activities.find((a: any) => a.name.toLowerCase() === activity.name.toLowerCase());
+    if (clash) return { success: false, error: `You already have an activity called "${clash.name}" (${describeActivity(clash)}). Use update_activity to change it.` };
+    await writeActivityConfig(supabase, userId, config, [...activities, activity]);
+    return {
+      success: true,
+      result: { activity },
+      message: `Added ${describeActivity(activity)}. It is reserved time — tasks will be scheduled around it, and it will not appear on your task board.`,
+    };
+  } catch (e) {
+    return { success: false, error: extractErrorMessage(e) };
+  }
+}
+
+async function listActivities(supabase: any, userId: string): Promise<ExecuteToolResponse> {
+  try {
+    const { activities } = await readActivityPrefs(supabase, userId);
+    return {
+      success: true,
+      result: { activities },
+      message: activities.length ? activities.map(describeActivity).join('\n') : 'No activities are set up.',
+    };
+  } catch (e) {
+    return { success: false, error: extractErrorMessage(e) };
+  }
+}
+
+async function updateActivity(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
+  try {
+    const { config, activities } = await readActivityPrefs(supabase, userId);
+    const current = findActivity(activities, args);
+    if (!current) return { success: false, error: 'No matching activity. Call list_activities to see what exists.' };
+    // Merge the change over the stored activity, then re-validate the whole thing.
+    const merged = { ...current };
+    for (const [k, v] of Object.entries(args || {})) {
+      if (v === undefined || k === 'activity_id' || k === 'activity') continue;
+      if (k === 'new_name') { merged.name = v; continue; }
+      if (k === 'name') continue; // `name` identifies the activity; renaming uses new_name
+      merged[k] = v;
+    }
+    const { activity, error } = normalizeActivity({ ...merged, id: current.id, createdAt: current.createdAt });
+    if (!activity) return { success: false, error: error || 'invalid activity' };
+    await writeActivityConfig(supabase, userId, config, activities.map((a: any) => (a.id === current.id ? activity : a)));
+    return { success: true, result: { activity }, message: `Updated: ${describeActivity(activity)}.` };
+  } catch (e) {
+    return { success: false, error: extractErrorMessage(e) };
+  }
+}
+
+async function removeActivity(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
+  try {
+    const { config, activities } = await readActivityPrefs(supabase, userId);
+    const current = findActivity(activities, args);
+    if (!current) return { success: false, error: 'No matching activity. Call list_activities to see what exists.' };
+    await writeActivityConfig(supabase, userId, config, activities.filter((a: any) => a.id !== current.id));
+    return { success: true, result: { removed: current }, message: `Removed ${current.name}. That time is open for tasks again from the next scheduling pass.` };
+  } catch (e) {
+    return { success: false, error: extractErrorMessage(e) };
+  }
+}
+
+async function skipActivity(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
+  try {
+    const { config, timezone, activities } = await readActivityPrefs(supabase, userId);
+    const current = findActivity(activities, args);
+    if (!current) return { success: false, error: 'No matching activity. Call list_activities to see what exists.' };
+    const date = typeof args?.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(args.date) ? args.date : getTodayInTimezone(timezone);
+    const skipDates = [...new Set([...(current.skipDates || []), date])].filter((d: string) => d >= getTodayInTimezone(timezone));
+    await writeActivityConfig(supabase, userId, config, activities.map((a: any) => (a.id === current.id ? { ...a, skipDates } : a)));
+    return { success: true, result: { activity_id: current.id, date }, message: `Skipping ${current.name} on ${date}. That time is open for tasks.` };
+  } catch (e) {
+    return { success: false, error: extractErrorMessage(e) };
+  }
+}
+
+/**
+ * "I'm headed to the gym": reserve the activity starting now (or at start_time) and push everything it
+ * displaces later in the day, in order. Meetings and locked activities never move — overlaps with them
+ * are returned as conflicts for the agent to raise. Work that no longer fits its window today is
+ * unscheduled so the next build re-places it. The previous times are saved so undo_activity_start can
+ * restore the day exactly.
+ */
+async function startActivity(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
+  try {
+    const { config, timezone: tz, activities } = await readActivityPrefs(supabase, userId);
+    const base = findActivity(activities, args);
+    const name = base?.name || String(args?.name ?? args?.activity ?? '').trim();
+    if (!name) return { success: false, error: 'Which activity? Pass name (e.g. "gym").' };
+    const durationMin = Math.round(Number(args?.duration_min ?? base?.durationMin ?? 60));
+    if (!(durationMin >= 5 && durationMin <= 720)) return { success: false, error: 'duration must be between 5 and 720 minutes' };
+
+    const today = getTodayInTimezone(tz);
+    let startHHMM: string;
+    if (typeof args?.start_time === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(args.start_time)) {
+      startHHMM = args.start_time;
+    } else {
+      // Now, rounded down to 5 minutes, in the owner's timezone.
+      const parts = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date());
+      const h = Number(parts.find((p) => p.type === 'hour')?.value ?? 0);
+      const m = Number(parts.find((p) => p.type === 'minute')?.value ?? 0);
+      startHHMM = `${String(h).padStart(2, '0')}:${String(m - (m % 5)).padStart(2, '0')}`;
+    }
+    const instance = {
+      id: `adhoc_${(base?.id || name.toLowerCase().replace(/[^a-z0-9]+/g, '_'))}_${today}_${startHHMM.replace(':', '')}`,
+      name, kind: 'one_off', mode: 'locked', date: today, start: startHHMM, durationMin,
+      aliases: base?.aliases, enabled: true, createdAt: new Date().toISOString(), adHocOf: base?.id ?? null,
+    };
+    const blockStartMs = new Date(normalizeDateTime(`${today}T${startHHMM}`, tz)!).getTime();
+    const blockEndMs = blockStartMs + durationMin * 60000;
+
+    const bounds = localDateToUtcBounds(today, tz);
+    const [tasksRes, eventsRes] = await Promise.all([
+      supabase.from('tasks').select('id, title, start_time, end_time, category, status')
+        .eq('user_id', userId).eq('is_scheduled', true).neq('status', 'DONE')
+        .gte('start_time', bounds.start).lt('start_time', bounds.end),
+      supabase.from('external_calendar_events').select('id, title, start_time, end_time')
+        .eq('user_id', userId).eq('is_all_day', false)
+        .gte('end_time', bounds.start).lt('start_time', bounds.end),
+    ]);
+    const events = eventsRes.data || [];
+    // Today's activity blocks WITH the new one included, so floating ones (lunch) already slide around it.
+    const withInstance = [...activities, instance];
+    const blocks = activityBusySlots({ ...config, activities: withInstance }, bounds.start, bounds.end, tz, events)
+      .filter((b) => b.activityId !== instance.id);
+
+    // A task may run until the end of the latest window its category allows today (else 22:00).
+    const { timeWindows, categoryMappings } = resolveConfig(config);
+    const dow = new Date(`${today}T12:00:00Z`).getUTCDay();
+    const limitFor = (category: string | null): number => {
+      const listed: string[] = categoryMappings?.[category || '']?.defaultTimeWindow || ['flexible'];
+      const ends = listed
+        .map((w) => (w === 'flexible' ? timeWindows.flexible : timeWindows[w]))
+        .filter((w: any) => w && (!w.days || w.days.includes(dow)))
+        .map((w: any) => w.end);
+      const endHour = ends.length ? Math.max(...ends) : 22;
+      return new Date(normalizeDateTime(`${today}T${String(endHour).padStart(2, '0')}:00`, tz)!).getTime();
+    };
+
+    const items: PushItem[] = [
+      ...(tasksRes.data || []).filter((t: any) => t.start_time && t.end_time).map((t: any) => ({
+        id: t.id, title: t.title, kind: 'task' as const, movable: true,
+        startMs: new Date(t.start_time).getTime(), endMs: new Date(t.end_time).getTime(), limitMs: limitFor(t.category),
+      })),
+      ...events.map((e: any) => ({
+        id: e.id, title: e.title || 'Calendar event', kind: 'event' as const, movable: false,
+        startMs: new Date(e.start_time).getTime(), endMs: new Date(e.end_time).getTime(), limitMs: 0,
+      })),
+      ...blocks.map((b, i) => ({
+        id: `activity:${b.activityId}:${i}`, title: b.name, kind: 'activity' as const, movable: false,
+        startMs: new Date(b.start_time).getTime(), endMs: new Date(b.end_time).getTime(), limitMs: 0,
+      })),
+    ];
+    const plan = planPush(items, blockStartMs, blockEndMs);
+
+    const original = new Map((tasksRes.data || []).map((t: any) => [t.id, t]));
+    const undo = {
+      instanceId: instance.id,
+      at: new Date().toISOString(),
+      tasks: [...plan.moves.filter((m) => m.kind === 'task').map((m) => m.id), ...plan.overflow.filter((o) => o.kind === 'task').map((o) => o.id)]
+        .map((id) => ({ id, start_time: original.get(id)?.start_time, end_time: original.get(id)?.end_time })),
+    };
+
+    for (const m of plan.moves.filter((x) => x.kind === 'task')) {
+      const { error } = await supabase.from('tasks')
+        .update({ start_time: new Date(m.startMs).toISOString(), end_time: new Date(m.endMs).toISOString(), is_scheduled: true })
+        .eq('id', m.id).eq('user_id', userId);
+      if (error) throw error;
+    }
+    for (const o of plan.overflow.filter((x) => x.kind === 'task')) {
+      const { error } = await supabase.from('tasks')
+        .update({ start_time: null, end_time: null, is_scheduled: false })
+        .eq('id', o.id).eq('user_id', userId);
+      if (error) throw error;
+    }
+    await writeActivityConfig(supabase, userId, config, withInstance, { lastActivityStart: undo });
+
+    const fmt = (ms: number) => new Date(ms).toLocaleTimeString('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit' });
+    const lines = [
+      `${name} reserved ${fmt(blockStartMs)}–${fmt(blockEndMs)}.`,
+      plan.moves.length ? `Moved: ${plan.moves.map((m) => `${m.title} → ${fmt(m.startMs)}`).join('; ')}.` : 'Nothing needed to move.',
+      plan.overflow.length ? `No longer fits today, so it goes back to be rescheduled: ${plan.overflow.map((o) => o.title).join('; ')}.` : '',
+      plan.conflicts.length ? `CONFLICT — these can't move and overlap ${name}: ${plan.conflicts.map((c) => `${c.title} at ${fmt(c.startMs)}`).join('; ')}. Ask the user whether to skip them or shorten ${name}.` : '',
+      'Say "undo" to put the day back exactly as it was.',
+    ].filter(Boolean);
+    return {
+      success: true,
+      result: { activity: instance, moves: plan.moves, overflow: plan.overflow, conflicts: plan.conflicts },
+      message: lines.join(' '),
+    };
+  } catch (e) {
+    return { success: false, error: extractErrorMessage(e) };
+  }
+}
+
+async function undoActivityStart(supabase: any, userId: string): Promise<ExecuteToolResponse> {
+  try {
+    const { config, activities } = await readActivityPrefs(supabase, userId);
+    const last = config?.lastActivityStart;
+    if (!last?.instanceId) return { success: false, error: 'There is no recent activity start to undo.' };
+    for (const t of last.tasks || []) {
+      const { error } = await supabase.from('tasks')
+        .update({ start_time: t.start_time ?? null, end_time: t.end_time ?? null, is_scheduled: !!t.start_time })
+        .eq('id', t.id).eq('user_id', userId);
+      if (error) throw error;
+    }
+    await writeActivityConfig(supabase, userId, config, activities.filter((a: any) => a.id !== last.instanceId), { lastActivityStart: null });
+    return { success: true, result: { restored: (last.tasks || []).length }, message: `Undone — ${(last.tasks || []).length} task(s) are back where they were and the block is removed.` };
+  } catch (e) {
+    return { success: false, error: extractErrorMessage(e) };
   }
 }
 
@@ -2874,6 +3146,12 @@ async function findOpenSlots(supabase: any, userId: string, args: any, timezone?
     }
     for (const e of (eventsRes.data || [])) {
       occupied.push({ start: itineraryHourFromIso(e.start_time, tz), end: itineraryHourFromIso(e.end_time, tz) });
+    }
+    // Recurring activities (lunch, church, 1:1s…) are reserved time, not open slots.
+    const { data: prefsRow } = await supabase.from('user_scheduling_prefs').select('config').eq('user_id', userId).maybeSingle();
+    const bounds = localDateToUtcBounds(date, tz);
+    for (const b of activityBusySlots(prefsRow?.config ?? {}, bounds.start, bounds.end, tz, eventsRes.data || [])) {
+      occupied.push({ start: itineraryHourFromIso(b.start_time, tz), end: itineraryHourFromIso(b.end_time, tz) });
     }
     occupied.sort((a, b) => a.start - b.start);
     const range = args.window ? itineraryWindowRange(args.window) : { start: isWeekend ? 9 : 6, end: 23 };

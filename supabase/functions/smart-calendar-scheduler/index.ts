@@ -2,6 +2,7 @@ import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { validateTaskWindow } from "../_shared/scheduling-defaults.ts";
+import { activityBusySlots } from "../_shared/activities.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -364,9 +365,15 @@ serve(async (req) => {
           .gte('start_time', new Date().toISOString())
           .lte('end_time', futureDate.toISOString());
         
+        // Recurring activities (lunch, church, 1:1s…) — reserved time from config, never task rows.
+        const activitySlots = activityBusySlots(
+          loadedUserConfig, new Date().toISOString(), futureDate.toISOString(), timezone, calendarEvents || [],
+        ).map((b) => ({ title: b.name, start_time: b.start_time, end_time: b.end_time }));
+
         const allBusySlots = [
           ...(scheduledTasks || []),
-          ...(calendarEvents || [])
+          ...(calendarEvents || []),
+          ...activitySlots,
         ];
         
         console.log(`📅 Loaded ${allBusySlots.length} busy slots for AI context`);
