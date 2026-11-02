@@ -176,6 +176,106 @@ export function getToolDefinitions(): ToolDefinition[] {
         required: []
       }
     },
+    // ── ACTIVITIES ───────────────────────────────────────────────
+    // Reserved time that is NOT a task: lunch, gym, church, haircut, standup, 1:1s. Stored in the
+    // scheduling config (never as task rows) and avoided by every scheduler. _shared/activities.ts.
+    {
+      type: "function",
+      name: "add_activity",
+      description: "Reserve a block of the user's time for something they DO rather than work to complete — gym, lunch, church, a haircut appointment, morning standup, a direct-report or peer 1:1, school pickup, LinkedIn writing time. Activities are never tasks: they do not go on the task board, are never auto-worked, and every scheduler plans tasks around them. Use kind 'recurring' with days for repeating ones ('church Sundays 10am', '1:1 with Sam every other Tuesday at 2'), 'one_off' with date for a single appointment ('haircut Thursday at 11'), 'on_demand' for something with no fixed time that the user starts when they go (gym). mode 'locked' = fixed time; 'floating' = may slide between earliest and latest to fit around meetings (lunch). Ask for a time only if a scheduled activity has none.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Short name the user will recognize, e.g. 'Church', '1:1 with Sam', 'Lunch'" },
+          kind: { type: "string", enum: ["recurring", "one_off", "on_demand"] },
+          mode: { type: "string", enum: ["locked", "floating"], description: "Default locked" },
+          start: { type: "string", description: "HH:mm 24-hour start (preferred start if floating). Required unless on_demand." },
+          duration_min: { type: "number", description: "Length in minutes" },
+          days: { type: "array", items: { type: "number" }, description: "recurring: days of week, 0=Sun 1=Mon … 6=Sat" },
+          every_n_weeks: { type: "number", description: "recurring: 2 = every other week. Omit for weekly." },
+          anchor_date: { type: "string", description: "YYYY-MM-DD of the first occurrence, for every_n_weeks > 1" },
+          date: { type: "string", description: "one_off: YYYY-MM-DD" },
+          earliest: { type: "string", description: "floating: HH:mm earliest start of the range" },
+          latest: { type: "string", description: "floating: HH:mm by which it must end" },
+          parent_window: { type: "string", description: "Which time window it sits inside: morning, business_hours, after_work, evening, weekends" },
+          aliases: { type: "array", items: { type: "string" }, description: "Other words the user uses for it, e.g. ['workout','lift'] for gym" },
+          pushes_schedule: { type: "boolean", description: "on_demand: starting it pushes the rest of the day later (true for gym)" }
+        },
+        required: ["name", "duration_min"]
+      }
+    },
+    {
+      type: "function",
+      name: "list_activities",
+      description: "List the user's activities (recurring, one-off and on-demand reserved time) with their days and times.",
+      parameters: { type: "object", properties: {}, required: [] }
+    },
+    {
+      type: "function",
+      name: "update_activity",
+      description: "Change an existing activity — its time, days, length, or pause it (enabled false). Identify it by name (or activity_id from list_activities). To rename, pass new_name.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "The activity's current name (or an alias)" },
+          activity_id: { type: "string" },
+          new_name: { type: "string" },
+          start: { type: "string", description: "HH:mm 24-hour" },
+          duration_min: { type: "number" },
+          days: { type: "array", items: { type: "number" } },
+          every_n_weeks: { type: "number" },
+          mode: { type: "string", enum: ["locked", "floating"] },
+          earliest: { type: "string" },
+          latest: { type: "string" },
+          enabled: { type: "boolean", description: "false pauses it without deleting" }
+        },
+        required: []
+      }
+    },
+    {
+      type: "function",
+      name: "remove_activity",
+      description: "Delete an activity permanently. For a single day off use skip_activity; to pause use update_activity with enabled false.",
+      parameters: {
+        type: "object",
+        properties: { name: { type: "string" }, activity_id: { type: "string" } },
+        required: []
+      }
+    },
+    {
+      type: "function",
+      name: "skip_activity",
+      description: "Skip one occurrence of an activity ('skip lunch today', 'no church this Sunday') so that time opens up for tasks. Defaults to today.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          activity_id: { type: "string" },
+          date: { type: "string", description: "YYYY-MM-DD; defaults to today" }
+        },
+        required: []
+      }
+    },
+    {
+      type: "function",
+      name: "start_activity",
+      description: "The user is going to do an activity NOW (or at a stated time today) — 'I'm headed to the gym', 'going to lunch', 'stepping out for a haircut'. Reserves the block and PUSHES the rest of today later in order, because they will not be working on what was scheduled then. Meetings and locked activities never move; any that overlap come back as conflicts — ask the user whether to skip them or shorten the activity. Work that no longer fits its time window today is returned to be rescheduled. Act immediately; do not ask first. Tell the user what moved, and that they can say undo.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "The activity, e.g. 'gym' — matched against the user's activities and their aliases" },
+          duration_min: { type: "number", description: "Override the activity's usual length (gym defaults to 120)" },
+          start_time: { type: "string", description: "HH:mm 24-hour, today. Omit for now." }
+        },
+        required: ["name"]
+      }
+    },
+    {
+      type: "function",
+      name: "undo_activity_start",
+      description: "Undo the most recent start_activity: put every moved task back where it was and remove the block.",
+      parameters: { type: "object", properties: {}, required: [] }
+    },
     // ── ITINERARY TOOLS (used by Daily Review chat) ──────────────
     {
       type: "function",
@@ -259,7 +359,7 @@ export function getToolDefinitions(): ToolDefinition[] {
     {
       type: "function",
       name: "quick_create_task",
-      description: "Create a single task quickly with optional scheduling. Use for 'I need to call John today', 'add an item to email the prof'. Prefer parse_and_create_tasks for multi-task or vague NL.",
+      description: "Create a single task quickly with optional scheduling. Use for 'I need to call John today', 'add an item to email the prof'. Prefer parse_and_create_tasks for multi-task or vague NL. NOT for activities: time the user spends being somewhere or doing a routine at a time (gym, lunch, church, a haircut appointment, a standup or 1:1, school pickup) is an ACTIVITY — use add_activity, or start_activity when they are going now. A task is work to get done (e.g. 'book a haircut' is a task; 'haircut Thursday at 11' is an activity).",
       parameters: {
         type: "object",
         properties: {
@@ -283,7 +383,7 @@ export function getToolDefinitions(): ToolDefinition[] {
         properties: {
           text: { 
             type: "string", 
-            description: "Natural language task description. Can include multiple tasks, dates, priorities. Example: 'I need to get a haircut, work on the Nexus application, and meet with my MBA partner'" 
+            description: "Natural language task description. Can include multiple tasks, dates, priorities. Example: 'I need to book a haircut, work on the Nexus application, and prep for my MBA partner meeting'. Leave OUT activities at a time (gym, lunch, church, an appointment, a standup or 1:1) — those go to add_activity, not here."
           },
           target_date: { 
             type: "string", 
