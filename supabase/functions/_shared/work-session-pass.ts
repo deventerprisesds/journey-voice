@@ -17,6 +17,7 @@
 import { localDateOf, localDateToUtcBounds } from './timezone.ts';
 import { digestSendAt } from './assignment-intake.ts';
 import { resolveConfig, resolveCategoryDailyCap, MAX_ASSIGNMENTS_PER_DAY } from './scheduling-defaults.ts';
+import { activityBusySlots } from './activities.ts';
 import {
   planWorkSessions, courseworkWindowsFor, resolveSessionConfig, isSessionTask, buildSessionWarningLines,
   describeSessionPlan, type ParentTask, type SessionTask, type DayAvailability, type SessionPlan,
@@ -117,9 +118,15 @@ export async function runWorkSessionPass(supabase: any, opts: SessionPassOptions
     busyByDate.set(date, list);
     return date;
   };
+  const realEvents: Array<{ start_time: string; end_time: string }> = [];
   for (const e of (events ?? []) as any[]) {
     if (e.source_task_id) continue; // a task's own calendar copy, not an obstacle (the task is re-placed)
-    if (e.start_time) addBusy(e.start_time, e.end_time);
+    if (e.start_time) { addBusy(e.start_time, e.end_time); realEvents.push(e); }
+  }
+  // Activities (lunch, gym, church, 1:1s) are reserved time in every scheduler, so a session never
+  // lands on one. Same reader and same busy input as the builder's day loop (activityBusySlots).
+  for (const b of activityBusySlots(userConfig, rangeStart, rangeEnd, tz, realEvents)) {
+    addBusy(b.start_time, b.end_time);
   }
   for (const t of (scheduled ?? []) as any[]) {
     if (!t.start_time || isSessionTask(t)) continue; // sessions: the planner decides

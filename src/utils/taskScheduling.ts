@@ -2,6 +2,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { Task } from "@/types/task";
 import { toast } from "sonner";
 import { loadUserSchedulingConfig } from "@/services/schedulingService";
+import { getDefaultTimezone } from "@/lib/date";
+import { activityBusySlots } from "../../supabase/functions/_shared/activities.ts";
 // A status suggestion from the scheduler edge fn must be a real WORKFLOW lane, never a
 // category. `smart-calendar-scheduler` used to return `mapping.defaultStatus` (= 'VENTURES',
 // 'EDUCATION', …) and this file wrote it straight to tasks.status — the source of the 11
@@ -240,6 +242,18 @@ export async function getCalendarAvailability(startDate: string, endDate: string
       .gte('start_time', startDate)
       .lte('end_time', endDate);
 
+    // Activities (lunch, church, 1:1s…) — reserved time from config, never task rows. Same shared
+    // expansion every scheduler uses.
+    const { data: prefs } = await supabase
+      .from('user_scheduling_prefs')
+      .select('config, timezone')
+      .eq('user_id', user.id)
+      .maybeSingle();
+    const tz = (prefs as any)?.timezone || (prefs as any)?.config?.timezone || getDefaultTimezone();
+    const activityBlocks = prefs
+      ? activityBusySlots((prefs as any).config ?? {}, startDate, endDate, tz, externalEvents || [])
+      : [];
+
     const busySlots = [
       ...(tasks || []).map(task => ({
         start: task.start_time,
@@ -252,6 +266,12 @@ export async function getCalendarAvailability(startDate: string, endDate: string
         end: event.end_time,
         type: 'external',
         title: event.title
+      })),
+      ...activityBlocks.map(b => ({
+        start: b.start_time,
+        end: b.end_time,
+        type: 'activity',
+        title: b.name
       }))
     ];
 

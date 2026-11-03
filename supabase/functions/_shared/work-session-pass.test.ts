@@ -92,6 +92,18 @@ describe('P3 session pass (I/O)', () => {
     assert.ok(!r2.plan!.creates.some((c) => c.placement.date === '2026-10-30'), 'a real event blocks Fri evening');
   });
 
+  it('PASS-3b an Activity (reserved time, not a task) blocks a session the same way a real event does', async () => {
+    const tasks = [{ ...PAPER, due_date: '2026-11-08T04:59:59Z' }];
+    const free = await runWorkSessionPass(fake({ tasks }), { userId: 'u', timezone: TZ, userConfig: CONFIG, now: NOW, mode: 'dry' });
+    assert.ok(free.plan!.creates.some((c) => c.placement.date === '2026-10-30'), 'baseline: Fri evening is used');
+    const friClass = { id: 'fri-class', name: 'Friday class', kind: 'recurring', mode: 'locked', start: '19:00',
+      durationMin: 180, days: [5], enabled: true };
+    const withActivity = { ...CONFIG, activities: [friClass] };
+    const r = await runWorkSessionPass(fake({ tasks }), { userId: 'u', timezone: TZ, userConfig: withActivity, now: NOW, mode: 'dry' });
+    assert.ok(!r.plan!.creates.some((c) => c.placement.date === '2026-10-30'), 'Fri 7–10 pm activity blocks Fri evening');
+    assert.equal(r.plan!.creates.length, 2, 'sessions move to other days, none dropped');
+  });
+
   it('PASS-4 (AC-P4-3/AC-P1-8) one message per night: the warning is appended to the queued intake digest', async () => {
     const late = { ...PAPER, id: 'p-late', title: '📚 Research Proposal', assignment_id: 'prop', due_date: '2026-10-31T03:59:59Z' };
     const sb = fake({

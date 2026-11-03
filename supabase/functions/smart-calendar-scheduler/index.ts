@@ -2,6 +2,7 @@ import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { validateTaskWindow } from "../_shared/scheduling-defaults.ts";
+import { activityBusySlots } from "../_shared/activities.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -364,9 +365,15 @@ serve(async (req) => {
           .gte('start_time', new Date().toISOString())
           .lte('end_time', futureDate.toISOString());
         
+        // Recurring activities (lunch, church, 1:1s…) — reserved time from config, never task rows.
+        const activitySlots = activityBusySlots(
+          loadedUserConfig, new Date().toISOString(), futureDate.toISOString(), timezone, calendarEvents || [],
+        ).map((b) => ({ title: b.name, start_time: b.start_time, end_time: b.end_time }));
+
         const allBusySlots = [
           ...(scheduledTasks || []),
-          ...(calendarEvents || [])
+          ...(calendarEvents || []),
+          ...activitySlots,
         ];
         
         console.log(`📅 Loaded ${allBusySlots.length} busy slots for AI context`);
@@ -605,6 +612,19 @@ Return ONLY valid JSON (no markdown):
       willSearchFrom: targetDate ? `only ${targetDate}` : 'next available slot from current moment'
     });
 
+    // Recurring activities (lunch, church, 1:1s…) are reserved time. They join the external busy
+    // slots the slot picker below avoids — not only the AI prompt above — so a task placed here can
+    // never land on one. Only for a known user: the seed must not apply to an anonymous call.
+    const horizonEnd = new Date(searchStartDate.getTime() + (maxSearchDays + 1) * 24 * 60 * 60 * 1000);
+    const activityPickerSlots = userId
+      ? activityBusySlots(
+          loadedUserConfig ?? {}, searchStartDate.toISOString(), horizonEnd.toISOString(), timezone,
+          (busySlots || []).map((s: any) => ({ start_time: s.start, end_time: s.end })),
+        ).map((b) => ({ start: b.start_time, end: b.end_time }))
+      : [];
+    const pickerBusySlots = [...(busySlots || []), ...activityPickerSlots];
+    if (activityPickerSlots.length) console.log(`🧘 ${activityPickerSlots.length} activity block(s) reserved in the search horizon`);
+
     // Calculate max search date (don't schedule past due date if provided)
     const dueDateObj = dueDate ? new Date(dueDate) : null;
     
@@ -689,7 +709,7 @@ for (let dayOffset = 0; dayOffset < maxSearchDays; dayOffset++) {
       }
 
       // Get all busy slots for this day (in UTC)
-      const dayBusySlots = getAllBusySlotsForDay(dayStartUTC, dayEndUTC, existingTasks, busySlots);
+      const dayBusySlots = getAllBusySlotsForDay(dayStartUTC, dayEndUTC, existingTasks, pickerBusySlots);
       
       // Build preferred start time in UTC if specified
       let preferredStartUTC: Date | null = null;
@@ -716,7 +736,7 @@ for (let dayOffset = 0; dayOffset < maxSearchDays; dayOffset++) {
         
         // 🔍 Check if this slot overlaps with any existing busy slot
         const slotEnd = addMinutes(slot.start, estimatedDuration);
-        const allBusySlots = getAllBusySlotsForDay(dayStartUTC, dayEndUTC, existingTasks, busySlots);
+        const allBusySlots = getAllBusySlotsForDay(dayStartUTC, dayEndUTC, existingTasks, pickerBusySlots);
         const hasOverlap = allBusySlots.some(busy => {
           return slot.start < busy.end && slotEnd > busy.start;
         });
