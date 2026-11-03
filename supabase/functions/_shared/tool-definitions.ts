@@ -514,6 +514,40 @@ export function getToolDefinitions(): ToolDefinition[] {
     },
     {
       type: "function",
+      name: "update_calendar_event",
+      description: "Move, retime or rename an EXISTING event on the user's Outlook or Google calendar (e.g. 'move my 3pm with Dana to 4', 'make tomorrow's study block 90 minutes'). Identify the event by event_id, or by match_title and/or match_start (its CURRENT start time). If several events match, the tool returns candidates instead of changing anything: ask the user which one and call again with its event_id. Moving the start without an end keeps the event's length. If the event is a meeting the user organizes, the calendar provider may send the update to attendees.",
+      parameters: {
+        type: "object",
+        properties: {
+          event_id: { type: "string", description: "Provider event id, if known (from a calendar read or a previous candidates list)" },
+          match_title: { type: "string", description: "Words from the event's title, e.g. 'Dana' or 'study block'" },
+          match_start: { type: "string", description: "The event's CURRENT start time, ISO 8601 with offset" },
+          new_start_time: { type: "string", description: "New start time, ISO 8601 with offset" },
+          new_end_time: { type: "string", description: "New end time, ISO 8601 with offset (optional)" },
+          duration_minutes: { type: "number", description: "New length in minutes, if changing the length without an explicit end" },
+          new_title: { type: "string", description: "New title, only if the user asked to rename it" },
+          calendar: { type: "string", enum: ["outlook", "google"], description: "Only needed with an event_id the calendar list has not shown yet" }
+        }
+      }
+    },
+    {
+      type: "function",
+      name: "delete_calendar_event",
+      description: "Delete (cancel) an EXISTING event from the user's Outlook or Google calendar. ONLY use this when the user has explicitly asked, in their own words, to delete, cancel or remove that specific event. Never delete to resolve a conflict, tidy up, or because it seems unneeded; ask instead. Set user_requested to true only when the user's request was explicit; without it nothing is deleted and the tool returns the event so you can confirm with the user. If several events match, nothing is deleted and candidates are returned: ask the user which one. Deleting a meeting the user organizes may send a cancellation to attendees.",
+      parameters: {
+        type: "object",
+        properties: {
+          event_id: { type: "string", description: "Provider event id, if known (from a calendar read or a previous candidates list)" },
+          match_title: { type: "string", description: "Words from the event's title, e.g. 'study block'" },
+          match_start: { type: "string", description: "The event's CURRENT start time, ISO 8601 with offset" },
+          user_requested: { type: "boolean", description: "true ONLY if the user explicitly asked to delete/cancel this event" },
+          calendar: { type: "string", enum: ["outlook", "google"], description: "Only needed with an event_id the calendar list has not shown yet" }
+        },
+        required: ["user_requested"]
+      }
+    },
+    {
+      type: "function",
       name: "initiate_phone_call",
       description: "Schedule a callback - useful for 'call me back in X minutes' requests.",
       parameters: {

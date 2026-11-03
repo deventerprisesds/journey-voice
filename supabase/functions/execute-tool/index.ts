@@ -6,6 +6,7 @@ import { getToolDefinitions } from "../_shared/tool-definitions.ts";
 import { getTopicGroupsManual, WINDOW_RANGES, CATEGORY_WINDOW_MAPPING } from "../_shared/call-context-builder.ts";
 import { resolveConfig, validateTaskWindow, activeCaveats } from "../_shared/scheduling-defaults.ts";
 import { runDedup, finalizeDedup, undoDedupSkips, type DedupLogEntry } from "../_shared/task-dedup.ts";
+import { matchCalendarEvents, buildEventPatch, deleteGate, normalizeProvider, type CalendarEventRow, type MatchResult } from "../_shared/calendar-event-edit.ts";
 
 // ── Rollback Flag for shared topic ranking ──────────────────────────
 const USE_SHARED_TOPICS = true;
@@ -413,6 +414,13 @@ async function executeToolCall(
       case 'Google_Event':
         return await createGoogleEvent(supabase, userId, args, context.userProfile);
       
+      // ADDITIVE (BUILD-calendar-edit): move/retime/rename and delete an EXISTING event.
+      case 'update_calendar_event':
+        return await updateCalendarEvent(supabase, userId, args);
+
+      case 'delete_calendar_event':
+        return await deleteCalendarEvent(supabase, userId, args);
+
       case 'create_calendar_event':
         return await createCalendarEvent(supabase, userId, args, context.userProfile);
       
@@ -2358,6 +2366,162 @@ async function createCalendarEvent(supabase: any, userId: string, args: any, use
     return createGoogleEvent(supabase, userId, { ...args, start_time: startTime, end_time: endTime }, userProfile);
   } else {
     return createOutlookEvent(supabase, userId, { ...args, start_time: startTime, end_time: endTime }, userProfile);
+  }
+}
+
+// ============================================================================
+// CALENDAR EDIT / DELETE (ADDITIVE, BUILD-calendar-edit)
+// Find an existing event in public.external_calendar_events (scoped to THIS user), then hand the
+// provider call to send-unified-notification's `calendarEventEdit` branch, which reuses the create
+// path's per-user token lookup + refresh. On success the local row is updated/removed so reads
+// reflect the change before the next delta sync.
+// ============================================================================
+
+async function loadCalendarCandidates(supabase: any, userId: string, args: any): Promise<CalendarEventRow[]> {
+  let q = supabase
+    .from('external_calendar_events')
+    .select('external_event_id, title, start_time, end_time, connection_id, is_recurring, is_all_day, calendar_connections(provider)')
+    .eq('user_id', userId);
+  const eventId = typeof args.event_id === 'string' ? args.event_id.trim() : '';
+  const startMs = args.match_start ? Date.parse(args.match_start) : NaN;
+  if (eventId) {
+    q = q.eq('external_event_id', eventId);
+  } else if (!Number.isNaN(startMs)) {
+    const day = 24 * 60 * 60 * 1000;
+    q = q.gte('start_time', new Date(startMs - day).toISOString()).lte('start_time', new Date(startMs + day).toISOString());
+  } else {
+    const now = Date.now();
+    q = q.gte('start_time', new Date(now - 24 * 60 * 60 * 1000).toISOString())
+      .lte('start_time', new Date(now + 30 * 24 * 60 * 60 * 1000).toISOString());
+  }
+  const { data, error } = await q.order('start_time', { ascending: true }).limit(200);
+  if (error) throw new Error(`Could not read calendar events: ${error.message}`);
+  return (data || []).map((r: any) => ({
+    external_event_id: r.external_event_id,
+    title: r.title,
+    start_time: r.start_time,
+    end_time: r.end_time,
+    connection_id: r.connection_id,
+    is_recurring: r.is_recurring,
+    is_all_day: r.is_all_day,
+    provider: Array.isArray(r.calendar_connections) ? r.calendar_connections[0]?.provider : r.calendar_connections?.provider,
+  }));
+}
+
+/** Resolve the one event the user means, or a response explaining why we can't (none / ambiguous). */
+async function resolveCalendarEvent(
+  supabase: any, userId: string, args: any,
+): Promise<{ match: MatchResult; event?: CalendarEventRow; provider?: 'outlook' | 'google'; reply?: ExecuteToolResponse }> {
+  const rows = await loadCalendarCandidates(supabase, userId, args);
+  let match = matchCalendarEvents(rows, { event_id: args.event_id, match_title: args.match_title, match_start: args.match_start });
+
+  // A provider id the local mirror has not synced yet (e.g. created moments ago): usable when the
+  // agent also names the calendar, since the per-user token can only reach this user's calendar.
+  if (match.status === 'none' && args.event_id && normalizeProvider(args.calendar)) {
+    match = { status: 'unique', event: { external_event_id: String(args.event_id).trim(), title: '', start_time: '', end_time: '', provider: args.calendar } };
+  }
+
+  const preview = (r: CalendarEventRow) => ({
+    event_id: r.external_event_id, title: r.title, start_time: r.start_time, end_time: r.end_time,
+    calendar: normalizeProvider(r.provider) ?? r.provider ?? null, is_recurring: !!r.is_recurring,
+  });
+
+  if (match.status === 'invalid') {
+    return { match, reply: { success: false, error: match.reason } };
+  }
+  if (match.status === 'none') {
+    return { match, reply: { success: false, error: 'No matching calendar event found. Ask the user which event they mean (title and current time), or read their calendar first.' } };
+  }
+  if (match.status === 'ambiguous') {
+    return {
+      match,
+      reply: {
+        success: false,
+        error: 'ambiguous_event_match',
+        message: `${match.candidates.length} events match. Ask the user which one they mean; do not pick one yourself.`,
+        result: { candidates: match.candidates.slice(0, 10).map(preview) },
+      },
+    };
+  }
+  const provider = normalizeProvider(match.event.provider) ?? normalizeProvider(args.calendar);
+  if (!provider) {
+    return { match, reply: { success: false, error: 'Could not tell whether this event is on Outlook or Google. Pass calendar: "outlook" or "google".' } };
+  }
+  return { match, event: match.event, provider };
+}
+
+async function invokeCalendarEdit(supabase: any, userId: string, edit: Record<string, unknown>) {
+  const { data, error } = await supabase.functions.invoke('send-unified-notification', {
+    body: { userId, channels: [], calendarEventEdit: edit },
+  });
+  if (error) throw error;
+  return data || { success: false, error: 'Empty response from calendar service' };
+}
+
+async function updateCalendarEvent(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
+  try {
+    const r = await resolveCalendarEvent(supabase, userId, args);
+    if (r.reply) return r.reply;
+    const event = r.event!;
+    const built = buildEventPatch(args, { start_time: event.start_time, end_time: event.end_time });
+    if (!built.ok) return { success: false, error: built.error };
+
+    const data = await invokeCalendarEdit(supabase, userId, {
+      op: 'update', provider: r.provider, eventId: event.external_event_id, patch: built.patch,
+    });
+    if (!data.success) return { success: false, error: data.error || 'Failed to update the calendar event' };
+
+    const rowUpdate: Record<string, string> = { last_synced_at: new Date().toISOString(), updated_at: new Date().toISOString() };
+    if (built.patch.title) rowUpdate.title = built.patch.title;
+    if (built.patch.startISO) rowUpdate.start_time = built.patch.startISO;
+    if (built.patch.endISO) rowUpdate.end_time = built.patch.endISO;
+    await supabase.from('external_calendar_events').update(rowUpdate)
+      .eq('user_id', userId).eq('external_event_id', event.external_event_id)
+      .then(() => {}, () => {});
+
+    const newTitle = built.patch.title || event.title || 'Event';
+    const when = built.patch.startISO ? ` to ${new Date(built.patch.startISO).toISOString()}` : '';
+    return {
+      success: true,
+      message: `Updated "${newTitle}"${when} on ${r.provider === 'outlook' ? 'Outlook' : 'Google Calendar'}.`,
+      result: { event_id: event.external_event_id, calendar: r.provider, previous: { title: event.title, start_time: event.start_time, end_time: event.end_time }, updated: built.patch, ...(data.details || {}) },
+    };
+  } catch (error) {
+    return { success: false, error: extractErrorMessage(error) };
+  }
+}
+
+async function deleteCalendarEvent(supabase: any, userId: string, args: any): Promise<ExecuteToolResponse> {
+  try {
+    const r = await resolveCalendarEvent(supabase, userId, args);
+    if (r.reply) return r.reply;
+    const event = r.event!;
+    const gate = deleteGate(args, r.match);
+    if (!gate.allowed) {
+      return {
+        success: false,
+        error: 'confirmation_required',
+        message: `Not deleted. Only delete when the user explicitly asked to remove this event; confirm "${event.title || event.external_event_id}" with them, then call again with user_requested: true.`,
+        result: { event_id: event.external_event_id, title: event.title, start_time: event.start_time, calendar: r.provider },
+      };
+    }
+
+    const data = await invokeCalendarEdit(supabase, userId, {
+      op: 'delete', provider: r.provider, eventId: event.external_event_id,
+    });
+    if (!data.success) return { success: false, error: data.error || 'Failed to delete the calendar event' };
+
+    await supabase.from('external_calendar_events').delete()
+      .eq('user_id', userId).eq('external_event_id', event.external_event_id)
+      .then(() => {}, () => {});
+
+    return {
+      success: true,
+      message: `Deleted "${event.title || 'event'}" from ${r.provider === 'outlook' ? 'Outlook' : 'Google Calendar'}.`,
+      result: { event_id: event.external_event_id, calendar: r.provider, deleted: { title: event.title, start_time: event.start_time, end_time: event.end_time } },
+    };
+  } catch (error) {
+    return { success: false, error: extractErrorMessage(error) };
   }
 }
 

@@ -6,6 +6,11 @@ import {
   summarizeDelivery,
   isFullDelivery,
 } from "../_shared/notification-channels.ts";
+import {
+  normalizeProvider,
+  performCalendarEdit,
+  type EventPatch,
+} from "../_shared/calendar-event-edit.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -54,6 +59,18 @@ interface NotificationPayload {
     startTime: string;
     endTime: string;
     reminder: string;
+  };
+  /**
+   * ADDITIVE (2026-11-03, BUILD-calendar-edit): edit or delete an EXISTING event. When present the
+   * request is handled by the calendar-edit branch and returns early; it never reaches the channel
+   * fan-out below, and a payload WITHOUT this field behaves exactly as before. It lives here, not in
+   * a new function, so it uses the SAME per-user token lookup + refresh the create path uses.
+   */
+  calendarEventEdit?: {
+    op: 'update' | 'delete';
+    provider: string;
+    eventId: string;
+    patch?: EventPatch;
   };
 }
 
@@ -549,6 +566,62 @@ async function createGoogleEventDirect(
   }
 }
 
+/**
+ * ADDITIVE (BUILD-calendar-edit): update or delete an EXISTING Outlook/Google event for THIS user.
+ * Uses exactly the create path's token functions -- getOutlookConnectionForUser /
+ * getGoogleConnectionForUser (user_id-scoped calendar_connections + decrypt_token) and the same
+ * 5-minute-buffer refresh -- so there is one token implementation, not two. The provider HTTP call
+ * itself is the pure, unit-tested `performCalendarEdit` in _shared/calendar-event-edit.ts.
+ */
+async function editCalendarEventDirect(
+  supabaseClient: any,
+  userId: string,
+  edit: NonNullable<NotificationPayload['calendarEventEdit']>,
+): Promise<ChannelResult & { status?: number }> {
+  const provider = normalizeProvider(edit.provider);
+  if (!provider) return { success: false, error: `Unsupported calendar provider "${edit.provider}".` };
+  if (!edit.eventId) return { success: false, error: 'eventId is required.' };
+  if (edit.op !== 'update' && edit.op !== 'delete') return { success: false, error: `Unknown op "${edit.op}".` };
+
+  const label = provider === 'outlook' ? 'Outlook' : 'Google';
+  const connection = provider === 'outlook'
+    ? await getOutlookConnectionForUser(supabaseClient, userId)
+    : await getGoogleConnectionForUser(supabaseClient, userId);
+  if (!connection) {
+    return { success: false, error: `No active ${label} calendar connection. Reconnect ${label} in Calendar settings.` };
+  }
+
+  let accessToken = connection.access_token;
+  const expiresAt = new Date(connection.expires_at);
+  if (expiresAt.getTime() - 5 * 60 * 1000 < Date.now()) {
+    if (!connection.refresh_token) {
+      return { success: false, error: `${label} token expired and no refresh token available. Please reconnect ${label}.` };
+    }
+    const refreshed = provider === 'outlook'
+      ? await refreshOutlookToken(supabaseClient, connection.id, connection.refresh_token, userId)
+      : await refreshGoogleToken(supabaseClient, connection.id, connection.refresh_token, userId);
+    if (!refreshed) {
+      return { success: false, error: `Failed to refresh the expired ${label} token. Please reconnect ${label}.` };
+    }
+    accessToken = refreshed.access_token;
+  }
+
+  const r = await performCalendarEdit({
+    provider,
+    op: edit.op,
+    eventId: edit.eventId,
+    accessToken,
+    patch: edit.patch,
+  });
+  console.log(`[CalendarEdit] ${label} ${edit.op} ${edit.eventId}: ${r.success ? 'ok' : r.error}`);
+  return {
+    success: r.success,
+    status: r.status,
+    error: r.error,
+    details: r.success ? { ...(r.details ?? {}), account: connection.provider_account_email } : undefined,
+  };
+}
+
 // ============== END DIRECT OUTLOOK INTEGRATION ==============
 
 serve(async (req) => {
@@ -582,8 +655,31 @@ serve(async (req) => {
       notificationId,
       userProfile,
       outlookEvent,
-      googleEvent
+      googleEvent,
+      calendarEventEdit
     }: NotificationPayload = await req.json();
+
+    // ADDITIVE (BUILD-calendar-edit): an edit/delete request is answered here and returns early,
+    // before any channel processing. A payload without `calendarEventEdit` skips this block.
+    if (calendarEventEdit) {
+      if (!userId) {
+        return new Response(JSON.stringify({ success: false, error: 'userId is required' }), {
+          status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+      const edited = await editCalendarEventDirect(supabaseClient, userId, calendarEventEdit);
+      supabaseClient.from('activity_log').insert({
+        user_id: userId,
+        activity_type: calendarEventEdit.op === 'delete' ? 'calendar_event_deleted' : 'calendar_event_updated',
+        session_id: calendarEventEdit.eventId || 'unknown',
+        status: edited.success ? 'completed' : 'failed',
+        stage: `${calendarEventEdit.provider}_event_${calendarEventEdit.op}`,
+        metadata: { event_id: calendarEventEdit.eventId, patch: calendarEventEdit.patch ?? null, error: edited.error ?? null },
+      }).then(() => {}).catch(() => {});
+      return new Response(JSON.stringify(edited), {
+        status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
 
     // ONE canonical channel vocabulary (see _shared/notification-channels.ts).
     // Callers historically disagreed on case: every caller but notification-delivery's
