@@ -21,6 +21,8 @@ import {
   planAssignmentSync, buildSyncDigest, describePlan, digestSendAt,
   type ExistingTask, type PlannedCreate, type PlannedUpdate,
 } from "../_shared/assignment-intake.ts";
+import { resolveSessionConfig } from "../_shared/work-sessions.ts";
+import { runWorkSessionPass } from "../_shared/work-session-pass.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -85,8 +87,15 @@ serve(async (req) => {
       if (page.length < PAGE) break;
     }
 
-    // ---- 4. Plan (pure) ----
-    const plan = planAssignmentSync({ rows: nexus.rows, tasks, todayISO, timezone, boardId, userId, nowISO });
+    // ---- 4. Plan (pure). Effort default + session length come from Settings (assignmentSessions). ----
+    const { data: prefRow } = await supabase.from('user_scheduling_prefs')
+      .select('config').eq('user_id', userId).maybeSingle();
+    const userConfig = prefRow?.config ?? {};
+    const sessionCfg = resolveSessionConfig(userConfig);
+    const plan = planAssignmentSync({
+      rows: nexus.rows, tasks, todayISO, timezone, boardId, userId, nowISO,
+      defaultEffortMinutes: sessionCfg.defaultEffortMinutes,
+    });
     console.log(`[ASSIGNMENT_SYNC] nexus_rows=${plan.scanned} current=${plan.currentCourses.join(',') || '-'} ` +
       `creates=${plan.creates.length} updates=${plan.updates.length} done_untouched=${plan.untouchedDone.length} ` +
       `excluded=${JSON.stringify(plan.excluded)}`);
@@ -95,7 +104,22 @@ serve(async (req) => {
     }
 
     if (dryRun) {
-      return json({ success: true, dryRun: true, today: todayISO, timezone, ...describePlan(plan, timezone) });
+      // P3 preview: the session plan tonight's builder would make, with the cards above treated as if
+      // they existed. Read-only (mode 'dry'); a failure here never hides the intake preview.
+      let sessions: unknown = null;
+      try {
+        const extraParents = plan.creates.map((c) => ({
+          id: `new:${c.assignmentId}`, title: String(c.insert.title), status: String(c.insert.status), completed_at: null,
+          assignment_id: c.assignmentId, due_date: String(c.insert.due_date), estimate_minutes: Number(c.insert.estimate_minutes),
+          tags: [], board_id: boardId, priority: String(c.insert.priority), category: String(c.insert.category),
+        }));
+        sessions = (await runWorkSessionPass(supabase, {
+          userId, timezone, userConfig, now: new Date(nowISO), mode: 'dry', extraParents,
+        })).summary;
+      } catch (e) {
+        sessions = { error: e instanceof Error ? e.message : String(e) };
+      }
+      return json({ success: true, dryRun: true, today: todayISO, timezone, ...describePlan(plan, timezone), sessions });
     }
 
     // ---- 5. Apply ----
@@ -127,7 +151,7 @@ serve(async (req) => {
     // notification-delivery posts metadata.message as an Iris chat message + push (same shape as
     // _shared/task-dedup.ts's notice). Built from what was actually written, so it never claims a
     // change that failed.
-    const digest = buildSyncDigest({ creates: appliedCreates, updates: appliedUpdates }, timezone);
+    const digest = buildSyncDigest({ creates: appliedCreates, updates: appliedUpdates }, timezone, sessionCfg.sessionMinutes);
     let digestQueued = false;
     if (digest) {
       const { data: prefs } = await supabase.from('notification_prefs')

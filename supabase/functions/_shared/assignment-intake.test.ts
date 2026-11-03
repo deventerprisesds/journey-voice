@@ -224,6 +224,16 @@ describe('P1 Nexus intake planner', () => {
     assert.equal(digestSendAt(new Date('2026-10-29T05:00:00Z'), TZ, null, null), '2026-10-29T05:00:00.000Z');
   });
 
+  it('AC-P3-14 no Nexus effort → 180-min default (owner) and the new-card line asks once to correct it', () => {
+    const plan = planAssignmentSync(base());
+    for (const c of plan.creates) assert.equal(c.insert.estimate_minutes, 180);
+    const d = buildSyncDigest(plan, TZ)!;
+    assert.match(d.message, /Research Paper.*assumed 3 h \(2 × 90-min sessions\)/);
+    const withEffort = planAssignmentSync(base({ rows: [{ ...DBA_ROWS[11], level_of_effort: 'high' }] }));
+    assert.doesNotMatch(buildSyncDigest(withEffort, TZ)!.message, /assumed/);
+    assert.equal(planAssignmentSync(base({ defaultEffortMinutes: 240 })).creates[0].insert.estimate_minutes, 240);
+  });
+
   it('DRY-1 describePlan lists exactly what would be created, with local due times', () => {
     const d = describePlan(planAssignmentSync(base()), TZ);
     assert.deepEqual(d.would_create.map((c) => `${c.title} | ${c.due_local}`), [
