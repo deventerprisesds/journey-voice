@@ -663,5 +663,5 @@ never removed; keep everything editable in Settings; shared category list "a go 
 | 3 | 3 SDLC visuals + ops deck + ops diagrams → JOB | waiting on JOB enum value | owner ruling 2026-11-03 |
 | 4 | Acceptance criteria | in progress (independent ac-writer) | `docs/qc-evidence/AC-job-category.md`, deventerprisesds/journey-voice#80 |
 | 5 | Build: JOB enum + mappings, classifier rules, keyword lane gate, shared category list, Huddle display | not started | — |
-| 6 | Owner: "Work on my SDLC app" = JOB or VENTURES? | **asked, open** | — |
+| 6 | Owner: "Work on my SDLC app" = JOB or VENTURES? | **ruled: JOB by default**; owner may re-file a single task by hand | owner 2026-11-03 |
 | 7 | Owner sees JOB working in the app | **NOT confirmed** | — |
