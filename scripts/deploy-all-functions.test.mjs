@@ -97,7 +97,7 @@ console.log('deploy-all-functions (mode=all):');
 // The scenario from the brief: no exclusion, and the stub rejects mcp exactly as Supabase does.
 const f = run({ functionsDir: fx, fail: 'mcp', exclude: '' });
 check('A1 each function is deployed by its OWN call (one slug per `functions deploy`)',
-  f.calls.length === FNS.length && f.calls.every((c, i) => c === `functions deploy ${FNS[i]} --project-ref wwxgajrtmslzklnyplah`),
+  f.calls.length === FNS.length && f.calls.every((c, i) => c === `functions deploy ${FNS[i]} --project-ref wwxgajrtmslzklnyplah --yes`),
   JSON.stringify(f.calls));
 check('A2 a failure does not stop the functions after it (nightly, zeta still deployed after mcp failed)',
   f.deployedSlugs.includes('nightly') && f.deployedSlugs.includes('zeta')
@@ -136,6 +136,15 @@ check('A10 on the real tree every function folder except mcp is deployed, one ca
 const none = run({ functionsDir: empty, exclude: '' });
 check('A11 finding zero functions is a failure, not a silent green', none.code !== 0 && none.calls.length === 0,
   `exit ${none.code}\n${none.out}`);
+
+// Run 41687535826 (2026-11-03, #78): a newer supabase CLI asks "Confirmation required" before a
+// write and, with no terminal, changes nothing and exits 1. Every CLI write in the workflow and
+// in this script must pass --yes, or the whole deploy silently stops at the first one.
+const writeCalls = [...lines, ...readFileSync(join(REPO, 'scripts/deploy-all-functions.sh'), 'utf8').split('\n')]
+  .filter((l) => !/^\s*#/.test(l) && /\bsupabase (secrets set|functions deploy)\b/.test(l) && !/`supabase/.test(l));
+check('A12 every supabase write call passes --yes (the CLI cannot prompt in CI)',
+  writeCalls.length >= 4 && writeCalls.every((l) => /\s--yes\b/.test(l)),
+  writeCalls.filter((l) => !/\s--yes\b/.test(l)).join('\n') || `only ${writeCalls.length} calls found`);
 
 rmSync(work, { recursive: true, force: true });
 console.log(failures ? `\n${failures} FAILED` : '\nall deploy-all checks passed');
