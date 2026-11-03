@@ -649,3 +649,19 @@ Defect: the bulk deploy stopped at mcp's 413 (runs 39159443758, 40575132776). Ti
 | 4 | Mutations | 6 FIRED, 1 behaviourally equivalent | evidence file §4 |
 | 5 | PR opened, not merged | open | (PR link in branch history) |
 | 6 | Seen working in a real all-mode run | **NOT confirmed** | needs the first `_shared` change after merge |
+
+## ACT:job-category — a JOB lane for employer work, separate from CAREER (2026-11-03)
+Owner accepted a role at Trinnex. Rulings: JOB = employer work (business hours by default, editable in Settings);
+CAREER = next-role only; client work and own apps = VENTURES; Esri GIS / Power BI / SDLC / ops decks = JOB;
+NO employment start date ("a moot point, stop applying that logic"); keywords EXTENDED (lane gates the window),
+never removed; keep everything editable in Settings; shared category list "a go if no risk".
+
+| # | Item | Status | Evidence |
+|---|---|---|---|
+| 1 | VENTURES windows weekends → evening + weekends (owner directive) | **live config written + read back** | `user_scheduling_prefs` row a3378f93…: `["evening","weekends"]`; not yet seen in a nightly run |
+| 2 | Re-sort CAREER tasks: 19 → VENTURES, 2 → PROF_EDUCATION, 1 → LIFE | **written + read back** (CAREER 60 → 38) | undo SQL kept in session scratchpad; ids listed there |
+| 3 | 3 SDLC visuals + ops deck + ops diagrams → JOB | waiting on JOB enum value | owner ruling 2026-11-03 |
+| 4 | Acceptance criteria | in progress (independent ac-writer) | `docs/qc-evidence/AC-job-category.md`, deventerprisesds/journey-voice#80 |
+| 5 | Build: JOB enum + mappings, classifier rules, keyword lane gate, shared category list, Huddle display | not started | — |
+| 6 | Owner: "Work on my SDLC app" = JOB or VENTURES? | **asked, open** | — |
+| 7 | Owner sees JOB working in the app | **NOT confirmed** | — |

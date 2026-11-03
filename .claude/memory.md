@@ -744,3 +744,11 @@ order is seeder-first, delete-second.
   change that sends new body fields (an old Huddle route ignores `window` and would run an hour-derived
   edition, e.g. 5pm -> the EVENING edition, pre-empting the 8pm brief).
 - The live email relay (Cloudflare worker /notify) is now on main (#55); never deploy it from a side branch.
+
+## Hardening 2026-11-03 — keyword rules ignored their own lane field
+`contextRules.keywords` is `{keyword: [timeWindow, lane]}` and Settings edits both, but
+`nightly-schedule-builder` (`getKeywordWindowOverride`) and `dailyReviewPipeline` QC read ONLY `mapping[0]`, by
+plain substring, and put that window FIRST for every category. So "Work on Nexus application" (VENTURES) is pulled to
+business_hours by the "work" keyword, and because jsonb stores keys shortest-first, "work" is tested before
+"workout"/"homework". Owner's direction: EXTEND (lane gates the window), never remove keywords. Also: do not
+reintroduce an employment start date into the JOB design — owner ruled it moot.
