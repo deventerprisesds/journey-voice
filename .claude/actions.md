@@ -661,7 +661,8 @@ never removed; keep everything editable in Settings; shared category list "a go 
 | 1 | VENTURES windows weekends → evening + weekends (owner directive) | **live config written + read back** | `user_scheduling_prefs` row a3378f93…: `["evening","weekends"]`; not yet seen in a nightly run |
 | 2 | Re-sort CAREER tasks: 19 → VENTURES, 2 → PROF_EDUCATION, 1 → LIFE | **written + read back** (CAREER 60 → 38) | undo SQL kept in session scratchpad; ids listed there |
 | 3 | 3 SDLC visuals + ops deck + ops diagrams → JOB | waiting on JOB enum value | owner ruling 2026-11-03 |
-| 4 | Acceptance criteria | in progress (independent ac-writer) | `docs/qc-evidence/AC-job-category.md`, deventerprisesds/journey-voice#80 |
+| 4 | Acceptance criteria | **done**: 88 criteria, 33-row keyword spelling table, 27-title eval set, 19 open rulings | `docs/qc-evidence/AC-job-category.md` @977d2b7, deventerprisesds/journey-voice#80 |
+| 4b | Owner to confirm the slimmed Phase 1 scope (scope grew in the AC pass) | **asked, open** | — |
 | 5 | Build: JOB enum + mappings, classifier rules, keyword lane gate, shared category list, Huddle display | not started | — |
 | 6 | Owner: "Work on my SDLC app" = JOB or VENTURES? | **ruled: JOB by default**; owner may re-file a single task by hand | owner 2026-11-03 |
 | 7 | Owner sees JOB working in the app | **NOT confirmed** | — |
