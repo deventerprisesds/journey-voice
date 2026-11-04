@@ -17,7 +17,7 @@ import {
 import { getTodayInTimezone, localDateToUtcBounds } from "../_shared/timezone.ts";
 import { runWorkSessionPass } from "../_shared/work-session-pass.ts";
 import { activityBusySlots } from "../_shared/activities.ts";
-import { matchKeywordRule } from "../_shared/keyword-rules.ts";
+import { activeWindowNamesForDay, matchKeywordRule } from "../_shared/keyword-rules.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -135,22 +135,12 @@ function getActiveWindows(
   timeWindows: Record<string, TimeWindow>,
   targetDayOfWeek: number
 ): Record<string, { start: number; end: number; totalMinutes: number }> {
-  const isWeekend = targetDayOfWeek === 0 || targetDayOfWeek === 6;
+  // The open-window rule (incl. weekend enforcement) is shared with the daily QC check so both ask the
+  // keyword rule about the same windows -- see _shared/keyword-rules.ts activeWindowNamesForDay.
   const active: Record<string, { start: number; end: number; totalMinutes: number }> = {};
-  
-  for (const [name, win] of Object.entries(timeWindows)) {
-    if (name === 'flexible') continue; // flexible is a fallback, not a real window
-    
-    // WEEKEND ENFORCEMENT: On weekends, only allow the 'weekends' window
-    if (isWeekend && name !== 'weekends') continue;
-    // On weekdays, skip the 'weekends' window
-    if (!isWeekend && name === 'weekends') continue;
-    
-    if (!win.days || !win.days.includes(targetDayOfWeek)) continue;
-    const total = (win.end - win.start) * 60;
-    if (total > 0) {
-      active[name] = { start: win.start, end: win.end, totalMinutes: total };
-    }
+  for (const name of activeWindowNamesForDay(timeWindows, targetDayOfWeek)) {
+    const win = timeWindows[name];
+    active[name] = { start: win.start, end: win.end, totalMinutes: (win.end - win.start) * 60 };
   }
   return active;
 }

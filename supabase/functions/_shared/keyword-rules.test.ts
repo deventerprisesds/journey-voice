@@ -114,3 +114,37 @@ describe('unchanged behaviour', () => {
     assert.equal(matchKeywordRule('Text mom', null, { category: 'LIFE' }), null);
   });
 });
+
+// ── QC parity (verifier finding D-3, loop 1) ─────────────────────────────────────────────────────────────
+// The daily QC check and the nightly scheduler must ask the keyword rule about the SAME open windows. On a
+// weekend the scheduler opens ONLY 'weekends', even though the owner's evening window lists every day; QC used
+// to open evening too, and flagged a Saturday "Family dinner" against dinner->evening.
+import { activeWindowNamesForDay } from './keyword-rules.ts';
+
+// The owner's live timeWindows (read 2026-11-04).
+const OWNER_WINDOWS = {
+  evening: { end: 22, days: [0, 1, 2, 3, 4, 5, 6], start: 19 },
+  morning: { end: 9, days: [1, 2, 3, 4, 5], start: 6 },
+  flexible: { end: 22, days: [0, 1, 2, 3, 4, 5, 6], start: 9 },
+  weekends: { end: 20, days: [0, 6], start: 10 },
+  after_work: { end: 19, days: [1, 2, 3, 4, 5], start: 17 },
+  business_hours: { end: 17, days: [1, 2, 3, 4, 5], start: 9 },
+};
+
+describe('activeWindowNamesForDay (shared by scheduler and QC)', () => {
+  it('Q-1 Saturday and Sunday open only the weekends window', () => {
+    assert.deepEqual(activeWindowNamesForDay(OWNER_WINDOWS, 6), ['weekends']);
+    assert.deepEqual(activeWindowNamesForDay(OWNER_WINDOWS, 0), ['weekends']);
+  });
+  it('Q-2 a weekday opens the four weekday windows and never weekends or flexible', () => {
+    assert.deepEqual(activeWindowNamesForDay(OWNER_WINDOWS, 2).sort(), ['after_work', 'business_hours', 'evening', 'morning']);
+  });
+  it('Q-3 Saturday Family dinner gets no keyword (no false QC warning)', () => {
+    assert.equal(pick('Family dinner', 'LIFE', AFTER, activeWindowNamesForDay(OWNER_WINDOWS, 6)), 'none');
+    assert.equal(pick('Weekend hobby', 'LIFE', AFTER, activeWindowNamesForDay(OWNER_WINDOWS, 6)), 'hobby->weekends');
+  });
+  it('Q-4 an empty or unknown task category is ungated, as before', () => {
+    assert.equal(pick('Email the team', '', AFTER), 'email->business_hours');
+    assert.equal(pick('Email the team', 'NOT_A_CATEGORY', AFTER), 'email->business_hours');
+  });
+});

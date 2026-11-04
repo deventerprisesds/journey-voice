@@ -7,6 +7,7 @@ import {
   WEEKLY_DIGEST_LOCAL_WEEKDAY,
 } from "../_shared/digest-content.ts";
 import {
+import type { TaskCategory } from '../_shared/categories.ts';
   isInQuietHours,
   overdueRemindersAllowed,
   generateOverdueReminders,
@@ -25,7 +26,7 @@ interface Task {
   due_date?: string;
   start_time?: string;
   priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
-  category: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION';
+  category: TaskCategory;
   status: string;
   user_id: string;
 }

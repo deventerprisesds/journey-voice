@@ -99,8 +99,10 @@ export function normalizeCategory(raw: unknown): TaskCategory {
     return 'EDUCATION';
   }
 
-  if (c.includes('career')) return 'CAREER';
-  if (c.includes('work') || c.includes('job') || c.includes('employer')) return 'JOB';
+  if (c.includes('career') || c.includes('network')) return 'CAREER';
+  // Whole words only, so "workout" and "networking" are not JOB.
+  const words = raw.toLowerCase().split(/[^a-z]+/);
+  if (words.some((w) => w === 'work' || w === 'job' || w === 'jobs' || w === 'employer')) return 'JOB';
 
   if (c.includes('venture') || c.includes('startup') || c.includes('business')) return 'VENTURES';
 

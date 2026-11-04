@@ -45,6 +45,9 @@ describe('normalizeCategory (section 3b)', () => {
     ['N-12', 'career', 'CAREER'],
     ['N-13', 'education', 'EDUCATION'],
     ['N-14', 'PERSONAL', 'PERSONAL'],
+    ['N-8', 'networking', 'CAREER'],
+    ['N-15', 'workout', 'LIFE'],
+    ['N-16', 'Work', 'JOB'],
   ];
   for (const [id, input, want] of rows) {
     it(`${id} normalise`, () => assert.equal(normalizeCategory(input), want, JSON.stringify(input)));

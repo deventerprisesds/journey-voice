@@ -40,7 +40,8 @@ export function matchKeywordRule(
 ): KeywordMatch | null {
   if (!keywords || !title) return null;
   const lower = title.toLowerCase();
-  const gated = opts.category !== undefined && opts.category !== null;
+  // Gate only on a REAL category. Unknown / empty / missing category = the old, ungated behaviour.
+  const gated = toCategoryKey(opts.category) !== null;
 
   for (const [keyword, mapping] of Object.entries(keywords)) {
     if (!Array.isArray(mapping) || mapping.length === 0) continue;
@@ -59,4 +60,28 @@ export function matchKeywordRule(
     return { keyword, window, lane };
   }
   return null;
+}
+
+/**
+ * The named windows open on `dayOfWeek` (0 = Sunday) -- the nightly scheduler's rule, shared so the daily QC
+ * check asks the keyword rule about the SAME windows. On Saturday and Sunday ONLY 'weekends' is open, even
+ * where another window's days include the weekend (the owner's evening window lists every day); on weekdays
+ * 'weekends' is closed. 'flexible' is never a window of its own.
+ */
+export function activeWindowNamesForDay(
+  timeWindows: Record<string, { start?: number; end?: number; days?: number[] }> | null | undefined,
+  dayOfWeek: number,
+): string[] {
+  if (!timeWindows) return [];
+  const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+  const out: string[] = [];
+  for (const [name, win] of Object.entries(timeWindows)) {
+    if (name === 'flexible') continue;
+    if (isWeekend && name !== 'weekends') continue;
+    if (!isWeekend && name === 'weekends') continue;
+    if (!win?.days || !win.days.includes(dayOfWeek)) continue;
+    if (((win.end ?? 0) - (win.start ?? 0)) <= 0) continue;
+    out.push(name);
+  }
+  return out;
 }

@@ -12,7 +12,7 @@ import { scoreSchedulingCandidate } from '@/lib/schedulingCandidates';
 import { getTimePartsInTimezone } from '@/lib/date';
 import { Task, ExternalCalendarEvent } from '@/types/task';
 import { logActivity } from '@/utils/activityLogger';
-import { matchKeywordRule } from '../../supabase/functions/_shared/keyword-rules.ts';
+import { activeWindowNamesForDay, matchKeywordRule } from '../../supabase/functions/_shared/keyword-rules.ts';
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -701,17 +701,15 @@ export function buildDailyReviewReasoning(
   return reasoning;
 }
 
-/** Named windows (not 'flexible') open on the weekday of `iso` in `tz` -- the set the scheduler used that day. */
+/** The windows the nightly scheduler had open on the day of `iso` in `tz` (same shared rule, weekends included). */
 function activeWindowNamesOn(
   iso: string,
   tz: string,
-  timeWindows: Record<string, { days?: number[] }> | undefined,
+  timeWindows: Record<string, { start?: number; end?: number; days?: number[] }> | undefined,
 ): string[] | undefined {
   if (!timeWindows) return undefined;
   const wd = new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short' }).format(new Date(iso));
   const day = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(wd);
   if (day < 0) return undefined;
-  return Object.entries(timeWindows)
-    .filter(([name, w]) => name !== 'flexible' && Array.isArray(w?.days) && w.days.includes(day))
-    .map(([name]) => name);
+  return activeWindowNamesForDay(timeWindows, day);
 }
