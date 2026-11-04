@@ -15,6 +15,7 @@ import {
   User,
   BookOpen,
   Briefcase,
+  Building2,
   Rocket,
   Calendar,
   MoreHorizontal,
@@ -28,7 +29,7 @@ import {
   Archive
 } from 'lucide-react';
 import { format } from 'date-fns';
-import { Task, ChecklistItem } from '@/types/task';
+import { Task, ChecklistItem, TaskCategory } from '@/types/task';
 import { isStalePushed } from '@/lib/schedulingCandidates';
 import { formatDateOnly, formatDuration } from '@/lib/date';
 import {
@@ -98,16 +99,21 @@ const priorityBadgeColors = {
   URGENT: 'bg-priority-urgent/10 text-priority-urgent border-priority-urgent/20',
 };
 
-const categoryIcons = {
+// Typed by the shared category list so a category missing here is a type error.
+// PERSONAL is excluded on purpose: it never had an entry in these two maps, so its lookup stays
+// undefined exactly as before (see IMPL-job-screens.md "Findings" for what that means here).
+const categoryIcons: Record<Exclude<TaskCategory, 'PERSONAL'>, typeof User> = {
   LIFE: User,
+  JOB: Building2,
   CAREER: Briefcase,
   VENTURES: Rocket,
   EDUCATION: BookOpen,
   PROF_EDUCATION: BookOpen,
 };
 
-const categoryColors = {
+const categoryColors: Record<Exclude<TaskCategory, 'PERSONAL'>, string> = {
   LIFE: 'bg-category-life/10 text-category-life border-category-life/20',
+  JOB: 'bg-category-job/10 text-category-job border-category-job/20',
   CAREER: 'bg-category-career/10 text-category-career border-category-career/20',
   VENTURES: 'bg-category-ventures/10 text-category-ventures border-category-ventures/20',
   EDUCATION: 'bg-category-education/10 text-category-education border-category-education/20',

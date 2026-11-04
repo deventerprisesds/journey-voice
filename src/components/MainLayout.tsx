@@ -100,6 +100,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
 
   const kanbanTabs: KanbanTab[] = [
     { label: 'Today', path: '/tasks?view=kanban&tab=today' },
+    { label: 'Job', path: '/tasks?view=kanban&tab=job' },
     { label: 'Career', path: '/tasks?view=kanban&tab=career' },
     { label: 'Prof. Education', path: '/tasks?view=kanban&tab=prof_education' },
     { label: 'Ventures', path: '/tasks?view=kanban&tab=ventures' },
