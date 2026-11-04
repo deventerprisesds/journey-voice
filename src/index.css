@@ -68,6 +68,9 @@ All colors MUST be HSL.
     
     /* Category colors */
     --category-life: 168 76% 42%;
+    /* JOB (work for the employer): hue 330 is >=45 degrees from every other category hue
+       (life 168, career 262, ventures 25, education 214). */
+    --category-job: 330 72% 48%;
     --category-career: 262 52% 47%;
     --category-ventures: 25 95% 53%;
     --category-education: 214 87% 55%;
@@ -145,6 +148,10 @@ All colors MUST be HSL.
     --sidebar-accent-foreground: 240 4.8% 95.9%;
     --sidebar-border: 240 3.7% 15.9%;
     --sidebar-ring: 217.2 91.2% 59.8%;
+
+    /* JOB category, slightly lighter for dark backgrounds. The other category tokens are not
+       redefined here and keep inheriting their :root values. */
+    --category-job: 330 72% 58%;
   }
 }
 

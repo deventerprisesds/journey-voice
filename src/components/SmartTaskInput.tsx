@@ -11,6 +11,7 @@ import { Task } from '@/types/task';
 import EditableTaskSuggestion from './EditableTaskSuggestion';
 import { fetchPendingAssignments } from '@/utils/assignmentFetching';
 import { useAssignmentSelection } from '@/contexts/AssignmentSelectionContext';
+import type { TaskCategory } from '@/types/task';
 
 interface SmartTaskInputProps {
   tasks: Task[];
@@ -22,7 +23,7 @@ interface TaskSuggestion {
   title: string;
   description?: string;
   priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
-  category: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION' | 'PROF_EDUCATION';
+  category: TaskCategory;
   estimate_minutes: number;
   scheduledStart: string;
   aiReasoning: string;

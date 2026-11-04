@@ -2,7 +2,7 @@ import React, { useState, useCallback } from 'react';
 import { format, parseISO, differenceInMinutes } from 'date-fns';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import { cn } from '@/lib/utils';
-import { Task, ExternalCalendarEvent } from '@/types/task';
+import { Task, ExternalCalendarEvent, TaskCategory } from '@/types/task';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -188,16 +188,20 @@ const TimeSlotGrid: React.FC<TimeSlotGridProps> = ({
   };
 
   // Category colors using semantic tokens from design system
-  const categoryColors: Record<string, string> = {
+  // Typed by the shared category list so a category missing here is a type error.
+  // PERSONAL is excluded on purpose: it never had an entry here, so its lookup stays undefined (unchanged).
+  const categoryColors: Record<Exclude<TaskCategory, 'PERSONAL'>, string> = {
     LIFE: 'bg-[hsl(var(--category-life))] text-white',
+    JOB: 'bg-[hsl(var(--category-job))] text-white',
     CAREER: 'bg-[hsl(var(--category-career))] text-white',
     VENTURES: 'bg-[hsl(var(--category-ventures))] text-white',
     EDUCATION: 'bg-[hsl(var(--category-education))] text-white',
     PROF_EDUCATION: 'bg-[hsl(var(--category-education))] text-white',
   };
 
-  const categoryBorderColors: Record<string, string> = {
+  const categoryBorderColors: Record<Exclude<TaskCategory, 'PERSONAL'>, string> = {
     LIFE: 'border-l-[hsl(var(--category-life))]',
+    JOB: 'border-l-[hsl(var(--category-job))]',
     CAREER: 'border-l-[hsl(var(--category-career))]',
     VENTURES: 'border-l-[hsl(var(--category-ventures))]',
     EDUCATION: 'border-l-[hsl(var(--category-education))]',

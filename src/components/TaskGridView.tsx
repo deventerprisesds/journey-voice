@@ -27,6 +27,7 @@ import {
 import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
 import { formatDateOnly, formatDuration } from '@/lib/date';
+import type { TaskCategory } from '@/types/task';
 
 interface Task {
   id: string;
@@ -34,7 +35,7 @@ interface Task {
   description?: string;
   status: string;
   priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
-  category: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION' | 'PROF_EDUCATION';
+  category: TaskCategory;
   due_date?: string;
   start_time?: string;
   end_time?: string;

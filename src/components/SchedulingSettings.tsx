@@ -18,6 +18,14 @@ import { Clock, Calendar, TrendingUp, Tag, Key, Target, Plus, X, FileText, Globe
 import { Textarea } from '@/components/ui/textarea';
 import ActivitiesSettings from '@/components/ActivitiesSettings';
 import { TIMEZONE_OPTIONS, getBrowserTimezone, formatTimezoneWithOffset } from '@/lib/timezone';
+import { CATEGORY_KEYS, CATEGORY_LABELS, toCategoryKey } from '../../supabase/functions/_shared/categories.ts';
+
+// Keyword-rule lane Select. A lane that names a category gates the keyword to that category's tasks;
+// any other stored lane (e.g. `flexible`) applies to all tasks and shows as "No category".
+// Radix Select cannot hold an empty-string value, so "No category" uses a sentinel that is never stored.
+const NO_CATEGORY_LANE = '__no_category__';
+/** What a newly added keyword, or an explicit "No category" choice, stores as its lane. */
+const NO_CATEGORY_STORED = 'flexible';
 
 const SchedulingSettings: React.FC = () => {
   const { user } = useAuth();
@@ -759,6 +767,10 @@ const SchedulingSettings: React.FC = () => {
           <CardDescription>
             Configure keywords that trigger specific time windows and board lanes
           </CardDescription>
+          <p className="text-xs text-muted-foreground">
+            A row whose time window is Flexible and whose lane is a category is a name hint for the
+            category AI (e.g. "huddle" &rarr; Ventures) and never moves a task in the schedule.
+          </p>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-3">
@@ -808,23 +820,33 @@ const SchedulingSettings: React.FC = () => {
                     <SelectItem value="weekends">Weekends</SelectItem>
                   </SelectContent>
                 </Select>
-                <Input
-                  value={status}
-                  onChange={(e) =>
+                {/* Lane. The stored value is only rewritten when the user picks an option, so a row
+                    whose stored lane is not a category (shown as "No category") saves back unchanged. */}
+                <Select
+                  value={toCategoryKey(status) ?? NO_CATEGORY_LANE}
+                  onValueChange={(value) =>
                     setConfig({
                       ...config,
                       contextRules: {
                         ...config.contextRules,
                         keywords: {
                           ...config.contextRules.keywords,
-                          [keyword]: [timeWindow, e.target.value],
+                          [keyword]: [timeWindow, value === NO_CATEGORY_LANE ? NO_CATEGORY_STORED : value],
                         },
                       },
                     })
                   }
-                  className="w-[140px]"
-                  placeholder="Status"
-                />
+                >
+                  <SelectTrigger className="w-[200px]" aria-label="Lane">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NO_CATEGORY_LANE}>No category (applies to all)</SelectItem>
+                    {CATEGORY_KEYS.map((key) => (
+                      <SelectItem key={key} value={key}>{CATEGORY_LABELS[key]}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 <Button
                   variant="ghost"
                   size="icon"
@@ -855,7 +877,7 @@ const SchedulingSettings: React.FC = () => {
                   ...config.contextRules,
                   keywords: {
                     ...config.contextRules.keywords,
-                    [`new_keyword_${Date.now()}`]: ['flexible', 'LIFE'],
+                    [`new_keyword_${Date.now()}`]: ['flexible', NO_CATEGORY_STORED],
                   },
                 },
               });

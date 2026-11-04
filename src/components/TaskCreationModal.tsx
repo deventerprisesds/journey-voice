@@ -28,7 +28,7 @@ import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
-import { Task } from '@/types/task';
+import { Task, TaskCategory } from '@/types/task';
 import { fromHHMMToISO } from '@/lib/date';
 import { extractSchedulingContext, loadUserSchedulingConfig } from '@/services/schedulingService';
 import { useAssignmentSelection } from '@/contexts/AssignmentSelectionContext';
@@ -40,7 +40,7 @@ interface ParsedTask {
   title: string;
   description?: string;
   priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
-  category: 'LIFE' | 'CAREER' | 'VENTURES' | 'EDUCATION' | 'PROF_EDUCATION';
+  category: TaskCategory;
   due_date?: string;
   start_time?: string;
   end_time?: string;
@@ -1341,6 +1341,7 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                             </SelectTrigger>
                             <SelectContent>
                               <SelectItem value="LIFE">Life</SelectItem>
+                              <SelectItem value="JOB">Job</SelectItem>
                               <SelectItem value="CAREER">Career</SelectItem>
                               <SelectItem value="VENTURES">Ventures</SelectItem>
                               <SelectItem value="EDUCATION">Education</SelectItem>
@@ -1690,6 +1691,7 @@ const TaskCreationModal: React.FC<TaskCreationModalProps> = ({
                   </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="LIFE">Life</SelectItem>
+                          <SelectItem value="JOB">Job</SelectItem>
                           <SelectItem value="CAREER">Career</SelectItem>
                           <SelectItem value="VENTURES">Ventures</SelectItem>
                           <SelectItem value="EDUCATION">Education</SelectItem>

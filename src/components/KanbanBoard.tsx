@@ -40,7 +40,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { startOfWeek, endOfWeek, startOfMonth, endOfMonth, addWeeks, isWithinInterval, parseISO } from 'date-fns';
 
-import { Task, Board, Column } from '@/types/task';
+import { Task, Board, Column, TaskCategory } from '@/types/task';
 
 interface KanbanBoardProps {
   tasks: Task[];
@@ -93,8 +93,12 @@ const STANDARD_COLUMNS: Column[] = [
 ];
 
 
-const CATEGORY_COLORS: Record<string, { bg: string; border: string; text: string }> = {
+// Typed by the shared category list so a category missing here is a type error. PERSONAL is
+// deliberately excluded: it has never had a bin colour, so PERSONAL tasks keep landing in the
+// "Uncategorized" bin (see getTasksByStatusGroupedByCategory's `!CATEGORY_COLORS[cat]`).
+const CATEGORY_COLORS: Record<Exclude<TaskCategory, 'PERSONAL'>, { bg: string; border: string; text: string }> = {
   LIFE: { bg: 'bg-pink-50', border: 'border-pink-300', text: 'text-pink-700' },
+  JOB: { bg: 'bg-lime-50', border: 'border-lime-300', text: 'text-lime-700' },
   CAREER: { bg: 'bg-blue-50', border: 'border-blue-300', text: 'text-blue-700' },
   PROF_EDUCATION: { bg: 'bg-purple-50', border: 'border-purple-300', text: 'text-purple-700' },
   VENTURES: { bg: 'bg-green-50', border: 'border-green-300', text: 'text-green-700' },
