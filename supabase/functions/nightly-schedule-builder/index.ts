@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { resolveConflictRules, conflictWeightOf } from "../_shared/conflict-rules.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import {
   DEFAULT_TIME_WINDOWS,
@@ -272,6 +273,8 @@ serve(async (req) => {
 
       const { timeWindows, categoryMappings } = resolveConfig(config);
       const categoryWeights = resolveCategoryWeights(config);
+      // Owner-defined "wins when tasks compete" rules (Settings). Empty = today's ordering exactly.
+      const conflictRules = resolveConflictRules(config);
       // Temporary caveat overlay — expired ones filtered here, so no cron is needed.
       const caveats = activeCaveats(config);
       if (caveats.length) {
@@ -1127,6 +1130,11 @@ serve(async (req) => {
             }
 
             // Everyone else (Tier C + non-assignment) competes on the same comparator
+            // Owner conflict rules first. Ordering only decides who gets a window that several candidates
+            // want, so a weight changes nothing when there is room for everyone -- it is conflict-only.
+            const aW = conflictWeightOf(a as any, conflictRules);
+            const bW = conflictWeightOf(b as any, conflictRules);
+            if (aW !== bW) return bW - aW;
             const aPri = (a as any).is_priority ? 1 : 0;
             const bPri = (b as any).is_priority ? 1 : 0;
             if (aPri !== bPri) return bPri - aPri;
