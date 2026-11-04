@@ -23,6 +23,7 @@ const OWNER = 'a3378f93-d655-4913-b2fa-ca5b1d8020f1';
 
 // [id, title, expected, ruled]  -- section 4 of the AC file; E-22 is unscored until ruled, so it is omitted.
 // E-22 ("Prepare slides for client meeting") was ruled JOB on 2026-11-03 (generic work with no owner signal).
+// E-21 was re-ruled VENTURES on 2026-11-04: SDLC work that names an own product is that product's work.
 const ROWS = [
   ['E-1', 'Complete benefits enrollment', 'JOB', true],
   ['E-2', "Prep for my team's standup", 'JOB', true],
@@ -44,7 +45,7 @@ const ROWS = [
   ['E-18', 'Send the Howard County proposal', 'VENTURES', true],
   ['E-19', 'Draft the Boost pitch deck', 'VENTURES', true],
   ['E-20', 'Email Prompto beta testers', 'VENTURES', true],
-  ['E-21', 'Write the SDLC doc for Sidecar', 'JOB', true],
+  ['E-21', 'Write the SDLC doc for Sidecar', 'VENTURES', true],   // owner 2026-11-04: a side project, not work
   ['E-22', 'Prepare slides for client meeting', 'JOB', false],
   ['E-23', 'Take a Power BI course on Coursera', 'EDUCATION', false],
   ['E-24', 'Complete MIT assignment 3', 'PROF_EDUCATION', false],
