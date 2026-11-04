@@ -100,7 +100,9 @@ describe('P3 work-session planner', () => {
   });
 
   it('AC-P3-1c late work still front-loads (no slack left): first session is today', () => {
-    const late = parent({ due_date: '2026-11-01T04:59:59Z' }); // due Sat Oct 31 23:59 ET, finish-by already past
+    // due Wed Nov 4 23:59 ET: finish-by (Oct 28) already past, but a 7-day window remains -- long enough
+    // that an even (centred) spread would NOT start today, so this pins the late front-load rule.
+    const late = parent({ due_date: '2026-11-05T04:59:59Z' });
     const dates = run({ parents: [late] }).creates.map((c) => c.placement.date).sort();
     assert.equal(dates[0], '2026-10-29');
   });
