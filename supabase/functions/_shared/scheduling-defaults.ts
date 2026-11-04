@@ -196,6 +196,22 @@ export function applyCaveats(
 /**
  * Merge user config with defaults. User config takes precedence.
  */
+/**
+ * How strongly a category wins when two tasks want the same slot (added to the candidate score).
+ * Owner 2026-11-04: "education should have heavier weight if a conflict" with Ventures. Seeds only --
+ * a saved `config.categoryWeights` value wins per category (Settings -> Category Mappings).
+ */
+export const DEFAULT_CATEGORY_WEIGHTS: Record<string, number> = { PROF_EDUCATION: 20, EDUCATION: 20 };
+
+export function resolveCategoryWeights(userConfig: any): Record<string, number> {
+  const saved = userConfig?.categoryWeights;
+  const out: Record<string, number> = { ...DEFAULT_CATEGORY_WEIGHTS };
+  if (saved && typeof saved === 'object') {
+    for (const [k, v] of Object.entries(saved)) if (typeof v === 'number' && Number.isFinite(v)) out[k] = v;
+  }
+  return out;
+}
+
 export function resolveConfig(userConfig: any): {
   timeWindows: Record<string, TimeWindow>;
   categoryMappings: Record<string, CategoryMapping>;

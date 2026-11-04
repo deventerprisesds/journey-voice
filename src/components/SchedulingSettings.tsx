@@ -619,6 +619,24 @@ const SchedulingSettings: React.FC = () => {
                   />
                 </div>
                 <div className="space-y-2">
+                  <Label className="text-sm" title="Added to the score when tasks compete for the same time. Higher wins.">Wins conflicts (weight)</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    max="50"
+                    value={(config.categoryWeights ?? DEFAULT_SCHEDULING_CONFIG.categoryWeights ?? {})[category] ?? 0}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        categoryWeights: {
+                          ...(config.categoryWeights ?? DEFAULT_SCHEDULING_CONFIG.categoryWeights ?? {}),
+                          [category]: Math.max(0, parseInt(e.target.value) || 0),
+                        },
+                      })
+                    }
+                  />
+                </div>
+                <div className="space-y-2">
                   <Label className="text-sm">Max Per Day</Label>
                   <Input
                     type="number"
